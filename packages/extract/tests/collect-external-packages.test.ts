@@ -14,16 +14,36 @@ import { afterEach, describe, expect, test } from 'vitest';
 
 import {
   collectExternalPackageSources,
-  excludeCollectedPackages,
   firstOwners,
   importedKitDiagnostics,
+  nativeKitSourceRoot,
+  sourceKitDependencies,
   staleDistIncludesMessage,
-  unresolvableIncludesMessage,
 } from '../pipeline/discover-packages';
 import {
+  BUILT_IN_EXTENSION_POLICY,
+  extensionPolicyJson,
+} from '../pipeline/host-extensions';
+import {
+  INVALID_KIT_SOURCE_CONDITION,
   KIT_SYSTEM_NOT_INCLUDED,
   KIT_WITHOUT_SOURCE_CONDITION,
 } from '../pipeline/manifest-diagnostics';
+
+import type { JsonValue } from '../pipeline/tsconfig-paths';
+
+const native = require('../index-v2.js');
+
+/** The native table's kit source roots, as a session with no host
+ *  conditions and the built-in order reads them. */
+const kitSourceRoot = (rootDir: string, conditions: readonly string[] = []) =>
+  nativeKitSourceRoot(
+    native,
+    rootDir,
+    conditions,
+    {},
+    extensionPolicyJson(BUILT_IN_EXTENSION_POLICY)
+  );
 
 const tempRoots: string[] = [];
 
@@ -60,6 +80,7 @@ function collect(
   return collectExternalPackageSources({
     specifiers: Object.keys(specifierEntries),
     resolveSpecifier: (spec) => specifierEntries[spec],
+    kitSourceRoot: kitSourceRoot(rootDir),
     rootDir,
     extensionsSet: EXTENSIONS,
     hasEntry: () => false,
@@ -253,6 +274,7 @@ describe('collectExternalPackageSources', () => {
         if (spec === 'boom') throw new Error('resolver exploded');
         return null;
       },
+      kitSourceRoot: kitSourceRoot(root),
       rootDir: root,
       extensionsSet: EXTENSIONS,
       hasEntry: () => false,
@@ -336,40 +358,6 @@ describe('collectExternalPackageSources', () => {
       { specifier: 'nope', outcome: 'unresolvable', fileCount: 0 },
       { specifier: '@x/ds', outcome: 'resolved', fileCount: 1 },
     ]);
-  });
-
-  test('unresolvableIncludesMessage names every unresolvable specifier, null when all resolve', () => {
-    expect(
-      unresolvableIncludesMessage([
-        { specifier: '@x/missing', outcome: 'unresolvable', fileCount: 0 },
-        { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
-        { specifier: '@x/typo', outcome: 'unresolvable', fileCount: 0 },
-      ])
-    ).toBe(
-      '[animus-extract] unresolvable include specifier(s): @x/missing, @x/typo'
-    );
-    expect(
-      unresolvableIncludesMessage([
-        { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
-        { specifier: '@x/empty', outcome: 'empty', fileCount: 0 },
-      ])
-    ).toBeNull();
-    // The resolver's reason, and the system file that includes the package.
-    expect(
-      unresolvableIncludesMessage(
-        [
-          {
-            specifier: '@x/blocked',
-            outcome: 'unresolvable',
-            fileCount: 0,
-            reason: "exports no file for '.'",
-          },
-        ],
-        'src/ds.ts'
-      )
-    ).toBe(
-      "[animus-extract] unresolvable include specifier(s) in src/ds.ts: @x/blocked (exports no file for '.')"
-    );
   });
 
   test('records an empty outcome when a resolved package contributes no sources', async () => {
@@ -556,79 +544,7 @@ describe('collectExternalPackageSources', () => {
     });
   });
 
-  test('excludeCollectedPackages excises a rejected specifier atomically', async () => {
-    const root = makeRoot();
-    const kitA = makePackage(join(root, 'packages', 'a'), {
-      'src/index.ts': 'export const a = 1;',
-    });
-    const kitB = makePackage(join(root, 'packages', 'b'), {
-      'src/index.ts': 'export const b = 1;',
-      'src/Card.tsx': 'export const Card = 1;',
-    });
-
-    const collected = await collect(root, {
-      '@x/a': join(kitA, 'src', 'index.ts'),
-      '@x/b': join(kitB, 'src', 'index.ts'),
-    });
-    const admitted = excludeCollectedPackages(
-      collected,
-      new Set(['@x/b']),
-      root
-    );
-
-    expect(admitted.entries.map((e) => e.path)).toEqual([
-      'packages/a/src/index.ts',
-    ]);
-    expect(admitted.packageMap).toEqual({
-      '@x/a': 'packages/a/src/index.ts',
-    });
-    expect([...admitted.sourceEntries.keys()]).toEqual(['@x/a']);
-    expect(admitted.packageDirs).toEqual([join(kitA, 'src')]);
-    expect(firstOwners(admitted.dirOwnerSets)).toEqual({
-      [join(kitA, 'src')]: '@x/a',
-    });
-    expect(admitted.dirOwnerSets).toEqual({
-      [join(kitA, 'src')]: ['@x/a'],
-    });
-    expect(admitted.fileOwners).toEqual({
-      'packages/a/src/index.ts': '@x/a',
-    });
-    // Outcome records are reporting inputs, not membership — untouched.
-    expect(admitted.outcomes).toEqual(collected.outcomes);
-    // A derived root alias under a rejected dir is excised too: nothing may
-    // keep resolving into an excluded package.
-    const subpathCollected = await collect(root, {
-      '@x/b/Card': join(kitB, 'src', 'Card.tsx'),
-    });
-    expect(subpathCollected.packageMap['@x/b']).toBeDefined();
-    const subpathAdmitted = excludeCollectedPackages(
-      subpathCollected,
-      new Set(['@x/b/Card']),
-      root
-    );
-    expect(subpathAdmitted.packageMap).toEqual({});
-    expect(subpathAdmitted.sourceEntries.size).toBe(0);
-  });
-
-  test('staleDistIncludesMessage names every stale package, null when none are stale', () => {
-    expect(
-      staleDistIncludesMessage([
-        { specifier: '@x/kit', outcome: 'stale-dist', fileCount: 3 },
-        { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
-        { specifier: '@x/base', outcome: 'stale-dist', fileCount: 1 },
-      ])
-    ).toBe(
-      '[animus-extract] stale dist for include specifier(s): @x/kit, @x/base — dist entry is older than the newest src/ file; rebuild the package(s) before extracting'
-    );
-    expect(
-      staleDistIncludesMessage([
-        { specifier: '@x/ds', outcome: 'resolved', fileCount: 2 },
-        { specifier: '@x/empty', outcome: 'empty', fileCount: 0 },
-      ])
-    ).toBeNull();
-  });
-
-  test('a kit names its source through the animus export condition or exports that already target source, and an imported kit the system does not include is an error', async () => {
+  test('a kit names its source through the animus export condition or exports that already target source', async () => {
     const root = realpathSync(makeRoot());
     const kit = (
       base: string,
@@ -709,53 +625,6 @@ describe('collectExternalPackageSources', () => {
         'src/types.ts': 'export type T = 1;',
       }
     );
-    kit(
-      join(root, 'node_modules', '@acme', 'stray'),
-      { '.': { animus: './src/index.ts' } },
-      { 'src/index.ts': 'export const Stray = 1;' }
-    );
-
-    // The system extends three kits; the app also imports a fourth.
-    const imports = [
-      '@acme/installed',
-      '@acme/linked',
-      '@acme/legacy',
-      '@acme/stray',
-      'react',
-    ];
-    const engine = {
-      extractFacts: () =>
-        JSON.stringify({
-          parseCount: 1,
-          files: {
-            'src/App.tsx': {
-              parsePanicked: false,
-              imports: imports.map((source) => ({
-                local: 'x',
-                imported: 'x',
-                source,
-              })),
-              exports: [],
-            },
-          },
-        }),
-    };
-    const systemKits = [
-      '@acme/installed/system',
-      '@acme/legacy',
-      '@acme/linked',
-    ];
-    const app = [{ path: 'src/App.tsx', source: '' }];
-    expect(
-      importedKitDiagnostics(app, engine, root, systemKits).map((d) => [
-        d.file,
-        d.component,
-        d.code,
-        d.severity,
-      ])
-    ).toEqual([
-      ['src/App.tsx', '@acme/stray', KIT_SYSTEM_NOT_INCLUDED, 'error'],
-    ]);
 
     const result = await collect(root, {
       '@acme/installed/system': join(installed, 'dist', 'system.mjs'),
@@ -803,6 +672,69 @@ describe('collectExternalPackageSources', () => {
     ]);
   });
 });
+
+// Contract: a kit's root is the package Node locates for its name. A
+// manifest nested below it, as `@bcoe/v8-coverage` publishes
+// `dist/lib/package.json` with its own name, is part of the package.
+test('a manifest nested below the package is no package root', async () => {
+  const root = makeRoot();
+  const pkg = join(root, 'node_modules', 'nested');
+  for (const [file, source] of [
+    [
+      'package.json',
+      JSON.stringify({ name: 'nested', main: 'dist/lib/index' }),
+    ],
+    ['dist/lib/package.json', JSON.stringify({ name: 'nested' })],
+    ['dist/lib/index.js', 'export const Built = 1;'],
+    ['src/index.ts', 'export const Source = 1;'],
+  ]) {
+    mkdirSync(join(pkg, file, '..'), { recursive: true });
+    writeFileSync(join(pkg, file), source);
+  }
+
+  const result = await collect(root, {
+    nested: join(pkg, 'dist', 'lib', 'index.js'),
+  });
+
+  expect(result.entries.map((e) => e.path)).toEqual([
+    'node_modules/nested/src/index.ts',
+  ]);
+  expect(result.diagnostics.map((d) => [d.file, d.code])).toEqual([
+    ['nested', KIT_WITHOUT_SOURCE_CONDITION],
+  ]);
+});
+
+// An entry linked out of the package is not the package's file, so its
+// nested manifest stays the root, as before.
+test.skipIf(process.platform === 'win32')(
+  'an entry linked out of the package keeps its nested root',
+  async () => {
+    const root = makeRoot();
+    const pkg = join(root, 'node_modules', 'kit');
+    for (const [file, source] of [
+      [
+        'package.json',
+        JSON.stringify({ name: 'kit', main: './dist/index.js' }),
+      ],
+      ['dist/package.json', JSON.stringify({ name: 'kit' })],
+      ['dist/src/index.ts', 'export const t = 2;'],
+      ['src/index.ts', 'export const t = 1;'],
+      ['../../cache/index.js', 'export const t = 7;'],
+    ]) {
+      mkdirSync(join(pkg, file, '..'), { recursive: true });
+      writeFileSync(join(pkg, file), source);
+    }
+    symlinkSync(join(root, 'cache', 'index.js'), join(pkg, 'dist', 'index.js'));
+
+    const result = await collect(root, {
+      kit: join(pkg, 'dist', 'index.js'),
+    });
+
+    expect(result.entries.map((e) => e.path)).toEqual([
+      'node_modules/kit/dist/src/index.ts',
+    ]);
+  }
+);
 
 // Contract: a path the filesystem opens under a spelling no directory lists
 // is never read as that file, and an entry read from its runtime target in
@@ -912,5 +844,459 @@ describe('collectExternalPackageSources under exact case', () => {
     expect(result.diagnostics.map((d) => d.message).join('\n')).toContain(
       opens ? 'spelled otherwise on disk' : 'is missing'
     );
+  });
+});
+
+// Contract: discovery reads each kit entry from the file the system loader
+// evaluates (spec §2.2 A3, A5): the same `animus` selection (arrays, nested
+// conditions, a backslash read as `/`), the same source-targeting exports,
+// and the loader's loud refusal of a selected percent-escaped target. Each
+// row: the package's `exports`, its files, the host's runtime entry, the
+// participant's conditions, and the file both read (or the refusal).
+// spike-codex's fixtures from the #331 re-check, and wc's nested condition.
+const JS_FILES = {
+  'src/index.js': 1,
+  'src\\index.js': 5,
+  'src/second.js': 6,
+  'src/a b.js': 2,
+  'src/a%20b.js': 3,
+  'src/a%zzb.js': 4,
+  'dist/index.js': 9,
+};
+const TS_FILES = {
+  'src/index.ts': 1,
+  'src\\index.ts': 5,
+  'src/second.ts': 6,
+  'dist/index.js': 9,
+  'src/a%20b.ts': 3,
+  'src/a b.ts': 2,
+};
+const CONDITION_FILES = {
+  'src/browser.ts': 1,
+  'src/node.ts': 2,
+  'dist/index.js': 9,
+};
+const REFUSED = 'percent-escape unsupported';
+const STOP_FILES = {
+  'src/first.js': 1,
+  'src/second.js': 2,
+  'dist/index.js': 9,
+};
+const conditional = (
+  animus: JsonValue,
+  runtime: JsonValue = './dist/index.js'
+) => ({
+  '.': { animus, import: runtime },
+});
+test.skipIf(process.platform === 'win32').each([
+  [
+    'backslash',
+    conditional('./src\\index.js'),
+    JS_FILES,
+    'dist/index.js',
+    [],
+    'src/index.js',
+  ],
+  [
+    'sugar-backslash',
+    { animus: './src\\index.js', import: './dist/index.js' },
+    JS_FILES,
+    'dist/index.js',
+    [],
+    'src/index.js',
+  ],
+  [
+    'array-backslash',
+    conditional(['./src\\index.js', './src/second.js']),
+    JS_FILES,
+    'dist/index.js',
+    [],
+    'src/index.js',
+  ],
+  [
+    'array-invalid-backslash',
+    conditional(['invalid', './src\\index.js']),
+    JS_FILES,
+    'dist/index.js',
+    [],
+    'src/index.js',
+  ],
+  [
+    'root-array-backslash',
+    [{ animus: './src\\index.js', import: './dist/index.js' }],
+    JS_FILES,
+    'dist/index.js',
+    [],
+    'src/index.js',
+  ],
+  [
+    'percent',
+    conditional('./src/a%20b.js'),
+    JS_FILES,
+    'dist/index.js',
+    [],
+    REFUSED,
+  ],
+  [
+    'percent-malformed',
+    conditional('./src/a%zzb.js'),
+    JS_FILES,
+    'dist/index.js',
+    [],
+    REFUSED,
+  ],
+  [
+    'array-percent',
+    conditional(['./src/a%20b.js', './src/second.js']),
+    JS_FILES,
+    'dist/index.js',
+    [],
+    REFUSED,
+  ],
+  [
+    'array-percent-malformed',
+    conditional(['./src/a%zzb.js', './src/second.js']),
+    JS_FILES,
+    'dist/index.js',
+    [],
+    REFUSED,
+  ],
+  [
+    'array-valid-first',
+    conditional(['./src/second.js', './src/a%20b.js']),
+    JS_FILES,
+    'dist/index.js',
+    [],
+    'src/second.js',
+  ],
+  [
+    'runtime-array-percent',
+    conditional('./src/a%20b.js', ['./dist/index.js', './src/second.js']),
+    JS_FILES,
+    'dist/index.js',
+    [],
+    REFUSED,
+  ],
+  [
+    'sugar-plain-backslash',
+    './src\\index.js',
+    JS_FILES,
+    'src/index.js',
+    [],
+    'src/index.js',
+  ],
+  ['sugar-ts', './src\\index.ts', TS_FILES, 'src/index.ts', [], 'src/index.ts'],
+  [
+    'root-array-ts',
+    ['./src\\index.ts', './src/second.ts'],
+    TS_FILES,
+    'src/index.ts',
+    [],
+    'src/index.ts',
+  ],
+  [
+    'runtime-array-ts',
+    { '.': { import: ['./src\\index.ts', './src/second.ts'] } },
+    TS_FILES,
+    'src/index.ts',
+    [],
+    'src/index.ts',
+  ],
+  [
+    'animus-array-ts',
+    conditional(['./src\\index.ts', './src/second.ts']),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'src/index.ts',
+  ],
+  [
+    'percent-ts',
+    conditional('./src/a%20b.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    REFUSED,
+  ],
+  [
+    'nested-animus-browser',
+    {
+      '.': {
+        animus: { browser: './src/browser.ts', node: './src/node.ts' },
+        browser: './dist/index.js',
+        node: './dist/index.js',
+      },
+    },
+    CONDITION_FILES,
+    'dist/index.js',
+    ['browser'],
+    'src/browser.ts',
+  ],
+  [
+    'dot-slash',
+    conditional('./src/index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'src/index.ts',
+  ],
+  [
+    'empty-segment',
+    conditional('./src//index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'src/index.ts',
+  ],
+  [
+    'no-dot-slash',
+    conditional('src/index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'dist/index.js',
+  ],
+  [
+    'parent-segment',
+    conditional('./src/../src/index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'dist/index.js',
+  ],
+  [
+    'dot-segment',
+    conditional('./src/./index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'dist/index.js',
+  ],
+  [
+    'array-runtime-first',
+    [
+      './src/first.js',
+      { animus: './src/second.js', import: './dist/index.js' },
+    ],
+    STOP_FILES,
+    'src/first.js',
+    [],
+    'src/first.js',
+  ],
+  [
+    'import-before-animus',
+    {
+      '.': {
+        import: './src/first.js',
+        default: { animus: './src/second.js', import: './dist/index.js' },
+      },
+    },
+    STOP_FILES,
+    'src/first.js',
+    [],
+    'src/first.js',
+  ],
+  [
+    'nested-animus-node',
+    {
+      '.': {
+        animus: { browser: './src/browser.ts', node: './src/node.ts' },
+        browser: './dist/index.js',
+        node: './dist/index.js',
+      },
+    },
+    CONDITION_FILES,
+    'dist/index.js',
+    ['node'],
+    'src/node.ts',
+  ],
+])(
+  '%s: discovery reads the file the system loader evaluates',
+  async (name, exports, files, hostEntry, conditions, read) => {
+    const root = realpathSync(makeRoot());
+    const pkg = join(root, 'node_modules', name);
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(
+      join(pkg, 'package.json'),
+      JSON.stringify({ name, type: 'module', exports })
+    );
+    for (const [file, t] of Object.entries(files)) {
+      mkdirSync(join(pkg, file, '..'), { recursive: true });
+      writeFileSync(join(pkg, file), `export const t=${t};\n`);
+    }
+
+    const result = await collect(
+      root,
+      { [name]: join(pkg, hostEntry) },
+      { kitSourceRoot: kitSourceRoot(root, conditions) }
+    );
+    const outcome = result.outcomes[0];
+    const redirected =
+      result.sourceEntries.get(name) ??
+      (result.packageMap[name] && join(root, result.packageMap[name]));
+    const loaded = native.resolveSpecifier(name, root, conditions);
+
+    expect({
+      discovery:
+        outcome.outcome === 'unresolvable'
+          ? outcome.reason
+          : redirected && relative(pkg, redirected),
+      loader: loaded.path ? relative(pkg, loaded.path) : loaded.unresolved,
+      reported: result.diagnostics.some(
+        (d) => d.code === INVALID_KIT_SOURCE_CONDITION
+      ),
+    }).toEqual(
+      read === REFUSED
+        ? {
+            discovery: expect.stringContaining(REFUSED),
+            loader: expect.stringContaining(REFUSED),
+            reported: true,
+          }
+        : { discovery: read, loader: read, reported: read === 'dist/index.js' }
+    );
+  }
+);
+
+// Contract: AQ-3. A kit's source root comes with the rule that chose it: a
+// valid `animus` condition gives its source root and no finding; a kit with
+// none falls back to `src/` and reports kit-without-source-condition; a
+// target outside the package falls back to the runtime entry and reports
+// invalid-source-condition.
+test.each([
+  [
+    { '.': { animus: './src/index.ts', import: './dist/index.js' } },
+    'animus',
+    'src',
+    [],
+  ],
+  [
+    { '.': { import: './dist/index.js' } },
+    'src',
+    'src',
+    [KIT_WITHOUT_SOURCE_CONDITION],
+  ],
+  [
+    { '.': { animus: '../outside.ts', import: './dist/index.js' } },
+    'compiled',
+    'dist',
+    [INVALID_KIT_SOURCE_CONDITION],
+  ],
+])(
+  '%j: the %s rule chooses the source root',
+  async (exports, rule, rootDirName, codes) => {
+    const root = realpathSync(makeRoot());
+    const pkg = join(root, 'node_modules', 'kit');
+    for (const file of ['src/index.ts', 'dist/index.js', '../outside.ts']) {
+      mkdirSync(join(pkg, file, '..'), { recursive: true });
+      writeFileSync(join(pkg, file), 'export const t = 1;\n');
+    }
+    writeFileSync(
+      join(pkg, 'package.json'),
+      JSON.stringify({ name: 'kit', exports })
+    );
+    const host = join(pkg, 'dist', 'index.js');
+
+    const selection = kitSourceRoot(root)('kit', pkg, host);
+    const result = await collect(root, { kit: host });
+
+    expect({
+      rule: selection?.rule,
+      root: selection?.root && relative(pkg, selection.root),
+      codes: result.diagnostics.map((d) => d.code),
+    }).toEqual({ rule, root: rootDirName, codes });
+  }
+);
+
+// Contract: a pattern entry's source facet is read as the loader reads it:
+// `kit/foo` through `./*`'s `animus` target is `src/entries/foo.ts`, never a
+// `src/` guess.
+test('a wildcard entry is read through its animus target', async () => {
+  const root = realpathSync(makeRoot());
+  const pkg = join(root, 'node_modules', 'wild-kit');
+  for (const file of ['src/entries/foo.ts', 'src/foo.ts', 'dist/foo.js']) {
+    mkdirSync(join(pkg, file, '..'), { recursive: true });
+    writeFileSync(join(pkg, file), 'export const t = 1;\n');
+  }
+  writeFileSync(
+    join(pkg, 'package.json'),
+    JSON.stringify({
+      name: 'wild-kit',
+      exports: {
+        './*': { animus: './src/entries/*.ts', import: './dist/*.js' },
+      },
+    })
+  );
+
+  const result = await collect(root, {
+    'wild-kit/foo': join(pkg, 'dist', 'foo.js'),
+  });
+  const loaded = native.resolveSpecifier('wild-kit/foo', root, []);
+
+  expect({
+    discovery: relative(pkg, result.sourceEntries.get('wild-kit/foo') ?? ''),
+    loader: relative(pkg, loaded.path ?? ''),
+  }).toEqual({ discovery: 'src/entries/foo.ts', loader: 'src/entries/foo.ts' });
+});
+
+// Contract: a package is a kit when its manifest declares an `animus`
+// condition anywhere in its `exports` (any entry, subpath or pattern, under
+// any condition, valid or not), as the loader's table reads it. The app's
+// declared source kits and the imported-kit check both read it so, whether
+// or not the package's root entry resolves.
+test.each([
+  ['array', { '.': { animus: ['./src/index.ts'], import: './dist/index.js' } }],
+  [
+    'subpath-only',
+    { './button': { animus: './src/index.ts', import: './dist/index.js' } },
+  ],
+  ['invalid-without-runtime', { '.': { animus: '../outside.ts' } }],
+  [
+    'nested-under-browser',
+    {
+      '.': {
+        browser: { animus: './src/index.ts', default: './dist/index.js' },
+      },
+    },
+  ],
+  ['pattern-only', { './*': { animus: './src/*.ts', import: './dist/*.js' } }],
+])('a %s kit is a kit to both checks', (declaration, exports) => {
+  const name = `${declaration}-kit`;
+  const root = realpathSync(makeRoot());
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({ name: 'app', dependencies: { [name]: '1.0.0' } })
+  );
+  const pkg = join(root, 'node_modules', name);
+  for (const file of ['src/index.ts', 'dist/index.js']) {
+    mkdirSync(join(pkg, file, '..'), { recursive: true });
+    writeFileSync(join(pkg, file), 'export const t = 1;\n');
+  }
+  writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name, exports }));
+  const engine = {
+    declaresKitSource: native.declaresKitSource,
+    extractFacts: () =>
+      JSON.stringify({
+        parseCount: 1,
+        files: {
+          'src/App.tsx': {
+            parsePanicked: false,
+            imports: [{ local: 'x', imported: 'x', source: name }],
+            exports: [],
+          },
+        },
+      }),
+  };
+
+  expect({
+    declared: sourceKitDependencies(root, engine).map((kit) => kit.name),
+    imported: importedKitDiagnostics(
+      [{ path: 'src/App.tsx', source: '' }],
+      engine,
+      root,
+      []
+    ).map((d) => [d.component, d.code]),
+  }).toEqual({
+    declared: [name],
+    imported: [[name, KIT_SYSTEM_NOT_INCLUDED]],
   });
 });

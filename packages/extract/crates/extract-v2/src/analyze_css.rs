@@ -4372,6 +4372,55 @@ fn names_context_provider(
         })
 }
 
+/// Judges each object hand-off the modules record: a hand-off to a function
+/// that does more than read that parameter is a use that may change the
+/// object, like any other, and joins `unsafe_object_uses` unless the module
+/// already has an earlier such use of the binding.
+pub(crate) fn judge_object_handoffs(
+    files: &mut BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) {
+    let unsafe_handoffs: Vec<(String, String, crate::usage_facts::ObjectUse)> = {
+        let files = &*files;
+        let declared = |file: &str, name: &str| -> Option<(String, String)> {
+            let ff = files.get(file)?;
+            match ff.imports.iter().find(|import| import.local == name) {
+                Some(import) => {
+                    let target = resolve_import_source(file, &import.source, files, inputs)?;
+                    let (module, binding) = links.declared(&target, &import.imported)?;
+                    Some(binding_name(links, files, module, binding))
+                }
+                None => Some((file.to_string(), name.to_string())),
+            }
+        };
+        let mut readings_of =
+            |file: &str| files.get(file).map(|ff| std::sync::Arc::clone(&ff.param_readings)).unwrap_or_default();
+        let mut found = Vec::new();
+        for (path, ff) in files {
+            for handoff in &ff.object_handoffs {
+                let read = declared(path, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
+                    crate::usage_facts::reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, &mut readings_of)
+                });
+                if !read {
+                    found.push((path.clone(), handoff.binding.clone(), handoff.used.clone()));
+                }
+            }
+        }
+        found
+    };
+    for (path, binding, used) in unsafe_handoffs {
+        let Some(ff) = files.get_mut(&path) else { continue };
+        let later = |existing: &crate::usage_facts::ObjectUse| existing.line.is_some_and(|line| Some(line) > used.line);
+        match ff.unsafe_object_uses.get(&binding) {
+            Some(existing) if !later(existing) => {}
+            _ => {
+                ff.unsafe_object_uses.insert(binding, used);
+            }
+        }
+    }
+}
+
 /// The contexts some use in any analysed module may change: a member write
 /// or delete, a hand-off to code other than React's context readers. Their
 /// `Provider` is not proven to be React's.
@@ -8373,6 +8422,8 @@ mod tests {
             );
             order.push(path.to_string());
         }
+        let links = crate::link::ProjectLinks::link(&files, inputs);
+        judge_object_handoffs(&mut files, inputs, &links);
         run_with_system_floor(&files, &order, inputs, "animus", total_system_floor)
     }
 
@@ -13011,6 +13062,52 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         .unwrap();
         inputs.theme.insert("space.8".into(), "0.5rem".into());
         analyze(entries, &inputs)
+    }
+
+    /// An object handed to a module-scope function nothing writes stays
+    /// stable when that parameter only reads it, through read-only callees
+    /// at most four calls deep. A write through the parameter or an alias of
+    /// it or through `arguments`, a method call on a member, a return of the
+    /// object, a read-only hand-on to a writer, and a chain past the depth
+    /// all keep it unstable.
+    #[test]
+    fn an_object_handed_to_a_function_that_only_reads_it_stays_stable() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        let chain = |depth: usize| {
+            let functions: String = (0..depth)
+                .map(|i| {
+                    let body = if i + 1 < depth { format!("f{}(o);", i + 1) } else { "return o.Box ? 1 : 0;".to_string() };
+                    format!("function f{i}(o) {{ {body} }}\n")
+                })
+                .collect();
+            format!("{functions}f0(Fam);\n")
+        };
+        let rows: Vec<(String, Option<&str>)> = vec![
+            ("function count(o) { return o.Box ? 1 : 0; }\ncount(Fam);\n".to_string(), None),
+            (chain(5), None),
+            ("register(Fam);\n".to_string(), Some("register")),
+            ("function touch(o) { o.Box = () => null; }\ntouch(Fam);\n".to_string(), Some("touch")),
+            ("function touch(o) { const q = o; q.Box = () => null; }\ntouch(Fam);\n".to_string(), Some("touch")),
+            ("function run(o) { o.Box(); }\nrun(Fam);\n".to_string(), Some("run")),
+            ("function touch(o) { arguments[0].Box = () => null; }\ntouch(Fam);\n".to_string(), Some("touch")),
+            ("function same(o) { return o; }\nsame(Fam).Box = () => null;\n".to_string(), Some("same")),
+            (
+                "function pass(o) { write(o); }\nfunction write(o) { o.Box = () => null; }\npass(Fam);\n".to_string(),
+                Some("pass"),
+            ),
+            (chain(6), Some("f0")),
+        ];
+        for (more, callee) in rows {
+            let fam = format!("import {{ Box }} from './recipe';\nexport const Fam = {{ Box }};\n{more}");
+            let out = analyze_with_logical_space(&[("recipe.tsx", recipe), ("fam.tsx", fam.as_str()), ("app.tsx", app)]);
+            let warned: Vec<bool> =
+                unattributed(&out).iter().map(|d| callee.is_some_and(|c| d.message.contains(&format!("(Fam is passed to {c}() in fam.tsx")))).collect();
+            match callee {
+                None => assert!(warned.is_empty(), "{more}: {:?}", out.diagnostics),
+                Some(_) => assert_eq!(warned, [true], "{more}: {:?}", out.diagnostics),
+            }
+        }
     }
 
     fn unattributed(out: &CssOutput) -> Vec<&CssDiagnostic> {

@@ -28,6 +28,7 @@ import {
   enforceExternalTokenContracts,
   excludeCollectedPackages,
   extractSystemFilePackages,
+  nativeKitSourceRoot,
   importedKitDiagnostics,
   findPackageRoot,
   findSheetAssetSpecifiers,
@@ -1065,17 +1066,13 @@ export class ExtractionSession {
 
   /** The build's authority becomes the system this session committed, with
    *  it and never before: a failed reload leaves the committed one, and the
-   *  context proofs made against it. An unchanged system keeps its proofs. */
+   *  context proofs made against it. A committed reload discards every
+   *  other context's proof, even for an unchanged system: the reload may
+   *  have changed what another context resolves, so each loads again. */
   private commitSystemAuthority(): void {
-    const load = systemLoad(this.system!);
-    const context = this.resolutionContextText();
-    const current = getSystemAuthority(this.key);
-    if (current?.identity === load.identity && current.context === context) {
-      return;
-    }
     setSystemAuthority(this.key, {
-      ...load,
-      context,
+      ...systemLoad(this.system!),
+      context: this.resolutionContextText(),
       label: this.resolutionContextLabel(),
       others: new Map(),
     });
@@ -1232,6 +1229,13 @@ export class ExtractionSession {
 
     const collected = await collectExternalPackageSources({
       extensions: context.extensions,
+      kitSourceRoot: nativeKitSourceRoot(
+        engineApi(this.key),
+        rootDir,
+        context.conditions,
+        context.workspaces,
+        extensionPolicyJson(context.extensions)
+      ),
       specifiers: packageNames,
       resolveSpecifier: (name) =>
         preResolved.entries[name]

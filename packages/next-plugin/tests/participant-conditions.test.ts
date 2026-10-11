@@ -249,4 +249,61 @@ describe('one agreed system authority', () => {
     expect(getSharedCss(owner.key)).toContain('#333333');
     expect(() => other.agreeWithSystemAuthority()).not.toThrow();
   }, 60000);
+
+  /** Contract: a reload's proofs are its own. A reload can change what
+   *  another context resolves while the owner's system stays the same, so
+   *  each committed reload discards every other context's proof. */
+  test('a reload discards every other context proof', async () => {
+    const root = createProject('@kits/ui');
+    const manifestPath = join(
+      root,
+      'node_modules',
+      '@kits',
+      'ui',
+      'package.json'
+    );
+    const exportsTo = (node: string) =>
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          name: '@kits/ui',
+          exports: {
+            '.': {
+              animus: { browser: './src/definition.ts', node },
+              default: './dist/definition.mjs',
+            },
+          },
+        })
+      );
+    // Both conditions select one file: the contexts agree.
+    exportsTo('./src/definition.ts');
+    const participant = (condition: string) => {
+      const session = new ExtractionSession(
+        { system: './src/system.ts' },
+        { build: 'b' }
+      );
+      session.rootDir = root;
+      session.conditions = ['webpack', 'development', condition];
+      return session;
+    };
+    const owner = participant('browser');
+    const other = participant('node');
+    await owner.runFullPipeline();
+    other.agreeWithSystemAuthority();
+
+    // The manifest moves `node` to another file; the owner's reload commits
+    // the same system it had.
+    exportsTo('./src/node.ts');
+    const systemPath = join(root, 'src', 'system.ts');
+    writeFileSync(systemPath, readFileSync(systemPath, 'utf-8'));
+    await owner.handleWatchUpdate({
+      modifiedFiles: new Set([systemPath, manifestPath]),
+      removedFiles: new Set(),
+    });
+
+    expect(getSharedCss(owner.key)).toContain('#333333');
+    expect(() => other.agreeWithSystemAuthority()).toThrow(
+      'SessionConfigurationConflict'
+    );
+  }, 60000);
 });
