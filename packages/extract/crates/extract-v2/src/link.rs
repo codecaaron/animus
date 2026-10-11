@@ -130,7 +130,11 @@ impl ProjectLinks {
             .map(|(path, ff)| {
                 ff.module_record.resolved(|specifier| {
                     match resolve_import_source(path, specifier, files, inputs) {
-                        Some(target) => Request::Module(index[&target]),
+                        Some(target) => match index.get(&target) {
+                            Some(&module) => Request::Module(module),
+                            // A package entry the analysis does not hold.
+                            None => Request::Outside(target),
+                        },
                         None if specifier.starts_with('.') => Request::Outside(format!("{path}::{specifier}")),
                         None => Request::Outside(specifier.clone()),
                     }
