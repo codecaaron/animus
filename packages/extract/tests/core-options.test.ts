@@ -11,6 +11,7 @@ import {
   resolveMode,
   resolveVerbosity,
   STRUCTURAL_EXCLUDE,
+  outputExclusion,
 } from '../pipeline/core-options';
 import { discoverFiles } from '../pipeline/discover-files';
 
@@ -147,6 +148,17 @@ describe('assertKnownOptionKeys', () => {
         warn: () => {},
       })
     ).toThrow(/Invalid mode "prod"/);
+  });
+});
+
+describe('a user exclude list never re-admits output', () => {
+  test("an in-root output directory named '..build' is inside the root and excluded", () => {
+    const dir = outputExclusion('/app', '/app/..build');
+    expect(dir).toBe('..build');
+    const matcher = createExcludeMatcher(['.test.'], dir === null ? [] : [dir]);
+    expect(matcher.matches('/app/..build/index.js', '..build/index.js')).toBe(
+      true
+    );
   });
 });
 
