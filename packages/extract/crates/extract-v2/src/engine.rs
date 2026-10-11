@@ -2472,6 +2472,167 @@ export const App = () => <Box tone="red" />;
         }
     }
 
+    /// What an analysis emits, by the channel that carries it (spec §6.4
+    /// F6): static components, their declarations, system-prop utilities
+    /// and dynamic slots; what it reports losing; what it prunes; and the
+    /// imports each transform removes from its file.
+    #[derive(Debug, Default)]
+    struct Emission {
+        components: std::collections::BTreeSet<String>,
+        declarations: BTreeMap<(String, String, String), String>,
+        utilities: std::collections::BTreeSet<(String, String)>,
+        dynamic_slots: std::collections::BTreeSet<String>,
+        losses: std::collections::BTreeSet<(String, String)>,
+        pruned: std::collections::BTreeSet<(String, String, String)>,
+        removed_imports: std::collections::BTreeSet<(String, String)>,
+    }
+
+    fn emission(files: &[(String, String)]) -> Emission {
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            config_json: Some(r#"{"p":{"property":"padding","scale":"space"},"m":{"property":"margin","scale":"space"}}"#.to_string()),
+            group_registry_json: Some(r#"{"space":["p","m"]}"#.to_string()),
+            theme_json: Some(r#"{"space.4":"0.25rem","space.8":"0.5rem"}"#.to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        let entries: Vec<serde_json::Value> =
+            files.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&engine.analyze(serde_json::Value::Array(entries).to_string(), None).unwrap()).unwrap();
+        let mut out = Emission::default();
+        let keys = |value: &serde_json::Value| value.as_object().map(|map| map.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
+        out.components.extend(keys(&manifest["components"]));
+        for (id, fragments) in manifest["component_fragments"].as_object().into_iter().flatten() {
+            for css in fragments.as_object().into_iter().flatten().filter_map(|(_, css)| css.as_str()) {
+                let mut selector = String::new();
+                for line in css.lines().map(str::trim) {
+                    if let Some(open) = line.strip_suffix('{') {
+                        selector = open.trim().to_string();
+                    } else if let Some((property, value)) = line.strip_suffix(';').and_then(|line| line.split_once(": ")) {
+                        out.declarations.insert((id.clone(), selector.clone(), property.to_string()), value.to_string());
+                    }
+                }
+            }
+        }
+        for (prop, values) in manifest["system_prop_map"].as_object().into_iter().flatten() {
+            out.utilities.extend(keys(values).into_iter().map(|value| (prop.clone(), value)));
+        }
+        out.dynamic_slots.extend(keys(&manifest["dynamic_props"]));
+        let lost = ["animus.chain.unextractable", "animus.chain.stage-evaluation-failed", "animus.chain.skipped-value"];
+        for diagnostic in manifest["diagnostics"].as_array().into_iter().flatten() {
+            if diagnostic["code"].as_str().is_some_and(|code| lost.contains(&code)) {
+                let (file, component) = (diagnostic["file"].as_str(), diagnostic["component"].as_str());
+                out.losses.insert((file.unwrap_or_default().to_string(), component.unwrap_or_default().to_string()));
+            }
+        }
+        for pruned in manifest["report"]["eliminated_details"].as_array().into_iter().flatten() {
+            let field = |key: &str| pruned[key].as_str().unwrap_or_default().to_string();
+            out.pruned.insert((field("component"), field("kind"), field("name")));
+        }
+        // The module each import line names, by its last quoted string.
+        let specifiers = |code: &str| -> std::collections::BTreeSet<String> {
+            code.lines()
+                .filter(|line| line.trim_start().starts_with("import "))
+                .filter_map(|line| line.rsplit(['\'', '"']).nth(1).map(str::to_string))
+                .collect()
+        };
+        for (path, source) in files {
+            let transformed: serde_json::Value = serde_json::from_str(&engine.transform_file(path.clone()).unwrap()).unwrap();
+            let kept = specifiers(transformed["code"].as_str().unwrap_or(source));
+            let removed = specifiers(source).into_iter().filter(|specifier| !kept.contains(specifier));
+            out.removed_imports.extend(removed.map(|specifier| (path.clone(), specifier)));
+        }
+        out
+    }
+
+    /// Each way `head` emits less than `base` without reporting it.
+    fn shrinkage(base: &Emission, head: &Emission) -> Vec<String> {
+        let mut found = Vec::new();
+        // A component id is `file::binding`; a loss names its file and binding.
+        let reported = |id: &str| {
+            id.rsplit_once("::").is_some_and(|(file, binding)| head.losses.contains(&(file.to_string(), binding.to_string())))
+        };
+        found.extend(head.pruned.difference(&base.pruned).map(|pruned| format!("newly pruned {pruned:?}")));
+        found.extend(
+            base.components
+                .iter()
+                .filter(|id| !head.components.contains(*id) && !reported(id))
+                .map(|id| format!("component {id} lost unreported")),
+        );
+        for ((id, selector, property), value) in &base.declarations {
+            match head.declarations.get(&(id.clone(), selector.clone(), property.clone())) {
+                Some(now) if now != value => found.push(format!("{id} {selector} {property} changed from {value} to {now}")),
+                None if !reported(id) => found.push(format!("{id} {selector} {property} lost unreported")),
+                _ => {}
+            }
+        }
+        found.extend(
+            base.utilities
+                .iter()
+                .filter(|(prop, value)| !head.utilities.contains(&(prop.clone(), value.clone())) && !head.dynamic_slots.contains(prop))
+                .map(|utility| format!("utility {utility:?} lost with no dynamic slot")),
+        );
+        found.extend(head.components.difference(&base.components).map(|id| format!("component {id} newly static")));
+        found.extend(
+            head.removed_imports.difference(&base.removed_imports).map(|import| format!("import {import:?} newly removed")),
+        );
+        found
+    }
+
+    /// Contract (spec §6.4 F6, §6.9 FL-11): adding opacity never shrinks
+    /// emission. One opaque module added to an analysis (code run from a
+    /// string, a computed load, a hand-on of any module's namespace, a load
+    /// of a module the analysis cannot find) may turn what it emitted into
+    /// a reported loss, but never prunes more, drops a style or a component
+    /// without a finding naming it, changes a static value, makes a
+    /// component static, or removes an import.
+    #[test]
+    fn adding_opacity_never_shrinks_emission() {
+        let file = |path: &str, source: &str| (path.to_string(), source.to_string());
+        let project = vec![
+            file(
+                "kit.tsx",
+                "export const Box = ds.system({ space: true }).asElement('div');\n\
+                 export const Base = ds.styles({ padding: 4 })\n\
+                   .variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: { margin: 1 }, lg: { margin: 9 } } })\n\
+                   .states({ busy: { opacity: 0.5 } })\n\
+                   .asElement('div');\n",
+            ),
+            file("tokens.ts", "export const pad = { padding: 2 };\n"),
+            file("held.tsx", "import { pad } from './tokens';\nexport const Held = ds.styles({ ...pad }).asElement('span');\n"),
+            file("fam.tsx", "import { Box } from './kit';\nexport const Fam = { Box };\n"),
+            file("skip.tsx", "export const Skip = ds.styles({ color: globalThis.tone, padding: 3 }).asElement('p');\n"),
+            file(
+                "card.tsx",
+                "import { compose } from '@animus-ui/system/compose';\nimport { pad } from './tokens';\n\
+                 const Root = ds.styles({ ...pad }).asElement('div');\n\
+                 export const Card = compose({ Root }, { name: 'Card', shared: {} });\n",
+            ),
+            file(
+                "app.tsx",
+                "import { Base, Box } from './kit';\nimport { Held } from './held';\nimport { Fam } from './fam';\n\
+                 import { Skip } from './skip';\nimport { Card } from './card';\n\
+                 export const App = () => <><Base size='sm' /><Box p={8} /><Fam.Box m={4} /><Held /><Skip /><Card.Root /></>;\n",
+            ),
+        ];
+        let modules: Vec<&str> = project.iter().map(|(path, _)| path.trim_end_matches(".tsx").trim_end_matches(".ts")).collect();
+        let mut injections = vec![
+            "globalThis.run?.(eval);\n".to_string(),
+            "import(globalThis.name);\n".to_string(),
+            "import './not-there.js';\n".to_string(),
+        ];
+        injections.extend(modules.iter().map(|module| format!("import * as ns from './{module}';\nglobalThis.keep?.(ns);\n")));
+        let base = emission(&project);
+        let channels = [base.components.len(), base.declarations.len(), base.utilities.len(), base.pruned.len(), base.losses.len()];
+        assert!(channels.iter().all(|count| *count > 0) && !base.removed_imports.is_empty(), "{base:?}");
+        for injected in injections {
+            let mut files = project.clone();
+            files.push(file("opaque.ts", &injected));
+            let shrunk = shrinkage(&base, &emission(&files));
+            assert!(shrunk.is_empty(), "{injected}{shrunk:#?}");
+        }
+    }
+
     #[test]
     fn external_package_keyframes_collection_resolves_via_named_import() {
         let mut engine = ExtractEngine::new(Some(EngineOptions {
