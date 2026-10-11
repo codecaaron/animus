@@ -93,6 +93,7 @@ impl FamilyIndex {
         ff: &FileFacts,
         files: &BTreeMap<String, FileFacts>,
         inputs: &CssInputs,
+        links: &crate::link::ProjectLinks,
     ) -> FxHashMap<String, String> {
         let mut members = FxHashMap::default();
         let mut add = |prefix: &str, id: usize| {
@@ -125,7 +126,7 @@ impl FamilyIndex {
                 }
                 continue;
             };
-            for name in module_export_names(&module, files, inputs) {
+            for name in module_export_names(&module, files, inputs, links) {
                 if let Some(id) = self.exported(module.clone(), name.clone(), files, inputs) {
                     add(&format!("{namespace}.{name}"), id);
                 }
@@ -497,7 +498,7 @@ impl<'f> ObjectMembers<'f> {
             return Rc::clone(objects);
         }
         let files = self.files;
-        let mut names = module_export_names(module, files, self.inputs);
+        let mut names = module_export_names(module, files, self.inputs, self.links);
         // `export default compose(…)` binds no name to list.
         names.insert("default".to_string());
         let objects: Rc<[Object]> = names.iter().filter_map(|name| self.exported_object(module, name)).collect();
@@ -875,7 +876,12 @@ pub(crate) fn module_export_names(
     module: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> BTreeSet<String> {
+    // An analysed module's exported names are the module table's.
+    if let Some(index) = links.module(module) {
+        return links.table.exported_names(index).names.into_iter().collect();
+    }
     let mut names = BTreeSet::new();
     let mut seen: FxHashSet<String> = FxHashSet::default();
     let mut stack = vec![(module.to_string(), true)];

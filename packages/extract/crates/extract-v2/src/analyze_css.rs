@@ -3037,7 +3037,7 @@ fn exported_component_ids(
         if !seen.insert(module.clone()) {
             continue;
         }
-        for name in crate::family_members::module_export_names(&module, files, inputs) {
+        for name in crate::family_members::module_export_names(&module, files, inputs, links) {
             let namespace =
                 crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs, links);
             match namespace {
@@ -6441,7 +6441,7 @@ fn run_with_system_floor(
         .iter()
         .filter_map(|path| {
             let ff = files.get(path)?;
-            let mut members = family_index.members_for(path, ff, files, inputs);
+            let mut members = family_index.members_for(path, ff, files, inputs, links);
             for tag in written_member_tags(ff) {
                 if members.contains_key(tag) {
                     continue;
