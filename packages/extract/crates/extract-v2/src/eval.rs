@@ -1138,7 +1138,7 @@ pub(crate) struct LostCustomProps {
 /// node as a skip.
 pub(crate) fn take_unevaluated_custom_props(value: &mut StaticValue) -> LostCustomProps {
     let mut lost = LostCustomProps::default();
-    if let StaticValue::Object(configs) = value {
+    if let Some(configs) = value.entries_mut() {
         configs.retain(|(prop, config)| match config {
             StaticValue::Unevaluated(unevaluated) => {
                 lost.configs.push((prop.clone(), unevaluated.clause.clone()));
@@ -1147,7 +1147,7 @@ pub(crate) fn take_unevaluated_custom_props(value: &mut StaticValue) -> LostCust
             _ => true,
         });
         for (prop, config) in configs.iter_mut() {
-            let StaticValue::Object(entries) = config else {
+            let Some(entries) = config.entries_mut() else {
                 continue;
             };
             let transform = entries
@@ -1185,7 +1185,10 @@ fn take_unevaluated_segments(value: &mut StaticValue) -> Vec<(Vec<String>, Strin
 /// array's items are read at the array's own path.
 fn collect_unevaluated(value: &mut StaticValue, path: &[String], lost: &mut Vec<(Vec<String>, String)>) {
     match value {
-        StaticValue::Object(entries) => {
+        StaticValue::Array(items) => items.iter_mut().for_each(|item| collect_unevaluated(item, path, lost)),
+        value => {
+            // A marker node's written fields are traversed, as its JSON was.
+            let Some(entries) = value.entries_mut() else { return };
             entries.retain_mut(|(key, child)| {
                 let at = [path, std::slice::from_ref(key)].concat();
                 match child {
@@ -1202,8 +1205,6 @@ fn collect_unevaluated(value: &mut StaticValue, path: &[String], lost: &mut Vec<
                 }
             });
         }
-        StaticValue::Array(items) => items.iter_mut().for_each(|item| collect_unevaluated(item, path, lost)),
-        _ => {}
     }
 }
 

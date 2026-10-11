@@ -74,28 +74,41 @@ pub enum StaticValue {
 }
 
 impl StaticValue {
-    /// The member `key` of an object.
+    /// The entries a traversal reads: an object's, or those a marker node
+    /// holds as written, as a reader of its JSON saw them.
+    pub fn entries(&self) -> Option<&Vec<(String, StaticValue)>> {
+        match self {
+            StaticValue::Object(entries)
+            | StaticValue::AssetFunction { written: Some(entries), .. }
+            | StaticValue::Unevaluated(Unevaluated { written: Some(entries), .. }) => Some(entries),
+            _ => None,
+        }
+    }
+
+    /// `entries`, to change.
+    pub fn entries_mut(&mut self) -> Option<&mut Vec<(String, StaticValue)>> {
+        match self {
+            StaticValue::Object(entries)
+            | StaticValue::AssetFunction { written: Some(entries), .. }
+            | StaticValue::Unevaluated(Unevaluated { written: Some(entries), .. }) => Some(entries),
+            _ => None,
+        }
+    }
+
+    /// The member `key` among `entries`.
     pub fn get(&self, key: &str) -> Option<&StaticValue> {
-        match self {
-            StaticValue::Object(entries) => entries.iter().find(|(name, _)| name == key).map(|(_, value)| value),
-            _ => None,
-        }
+        self.entries()?.iter().find(|(name, _)| name == key).map(|(_, value)| value)
     }
 
-    /// The member `key` of an object, to change.
+    /// The member `key` among `entries`, to change.
     pub fn get_mut(&mut self, key: &str) -> Option<&mut StaticValue> {
-        match self {
-            StaticValue::Object(entries) => {
-                entries.iter_mut().find(|(name, _)| name == key).map(|(_, value)| value)
-            }
-            _ => None,
-        }
+        self.entries_mut()?.iter_mut().find(|(name, _)| name == key).map(|(_, value)| value)
     }
 
-    /// Sets the member `key` of an object: in place where it has one, as a
-    /// JavaScript object keeps a key's first position, else last.
+    /// Sets the member `key` among `entries`: in place where it has one, as
+    /// a JavaScript object keeps a key's first position, else last.
     pub fn insert(&mut self, key: &str, value: StaticValue) {
-        if let StaticValue::Object(entries) = self {
+        if let Some(entries) = self.entries_mut() {
             match entries.iter_mut().find(|(name, _)| name == key) {
                 Some((_, slot)) => *slot = value,
                 None => entries.push((key.to_string(), value)),
