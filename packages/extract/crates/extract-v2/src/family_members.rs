@@ -196,7 +196,7 @@ impl Reach {
 /// binding, a family by its position, under a module no path names.
 fn object_id(object: &Object) -> ObjectId {
     match object {
-        Object::Facade(module, binding) => ObjectId::new(module, binding),
+        Object::Facade(module, binding) | Object::Context(module, binding) => ObjectId::new(module, binding),
         Object::Family(index) => ObjectId::new("<family>", &index.to_string()),
     }
 }
@@ -213,6 +213,9 @@ enum Object {
     Family(usize),
     /// A facade: (module, binding) of its declaration.
     Facade(String, String),
+    /// A context React's `createContext` builds, whose `Provider` a tag
+    /// reads: (module, binding) of its declaration. Its member table is open.
+    Context(String, String),
 }
 
 /// What one member of an object holds once the object is built.
@@ -430,7 +433,7 @@ impl<'f> ObjectMembers<'f> {
     pub(crate) fn facade_at(&mut self, file: &str, name: &str) -> Option<(String, String)> {
         match self.object_at(file, name)? {
             Object::Facade(module, binding) => Some((module, binding)),
-            Object::Family(_) => None,
+            Object::Family(_) | Object::Context(..) => None,
         }
     }
 
@@ -501,8 +504,8 @@ impl<'f> ObjectMembers<'f> {
         }
     }
 
-    /// The object `name` holds in `module`: a family or facade it declares,
-    /// one a `const` alias names, or one it imports.
+    /// The object `name` holds in `module`: a family, facade or context it
+    /// declares, one a `const` alias names, or one it imports.
     fn local_object(&mut self, module: &str, name: &str) -> Option<Object> {
         let key = (module.to_string(), name.to_string());
         if let Some(found) = self.objects.get(&key) {
@@ -523,6 +526,9 @@ impl<'f> ObjectMembers<'f> {
         }
         if ff.facades.contains_key(name) {
             return Some(Object::Facade(module.to_string(), name.to_string()));
+        }
+        if ff.context_consts.contains(name) {
+            return Some(Object::Context(module.to_string(), name.to_string()));
         }
         if let Some(target) = ff.aliases.get(name) {
             return self.local_object(module, target);
@@ -561,6 +567,8 @@ impl<'f> ObjectMembers<'f> {
                 self.building.remove(object);
                 table
             }
+            // Nothing proves which members a context holds.
+            Object::Context(..) => MemberTable { open: true, ..MemberTable::default() },
         };
         // What changed the object may also have added members.
         if let Some(reason) = self.instability(object) {
@@ -648,15 +656,21 @@ impl<'f> ObjectMembers<'f> {
         table
     }
 
-    /// The first use in the analysed modules that may change `object`, said
-    /// as a clause, or `None` when there is none.
-    fn instability(&mut self, object: &Object) -> Option<String> {
+    /// What the uses in the analysed modules may change, closed once, on
+    /// the first question.
+    pub(crate) fn changes(&mut self) -> &ValueEffects {
         if self.changed.is_none() {
             let changed = self.changed();
             self.changed = Some(changed);
         }
+        self.changed.as_ref().expect("closed above")
+    }
+
+    /// The first use in the analysed modules that may change `object`, said
+    /// as a clause, or `None` when there is none.
+    fn instability(&mut self, object: &Object) -> Option<String> {
         let query = AbsenceQuery::SlotsNotWritten(object_id(object));
-        if let Some(Coverage::Exposed(exposures)) = self.changed.as_ref().map(|changed| changed.covers(&query)) {
+        if let Coverage::Exposed(exposures) = self.changes().covers(&query) {
             return Some(exposures[0].cause().to_string());
         }
         let Object::Facade(module, binding) = object else { return None };
@@ -684,7 +698,9 @@ impl<'f> ObjectMembers<'f> {
     /// module and source order: a use of a binding that holds it, a use that
     /// may write through a package's namespace, a namespace re-export of a
     /// module exporting it, a runtime load of one, or code run from a
-    /// string. Every such use may rebind any member.
+    /// string. Every such use may rebind any member. The objects are facades,
+    /// families and the contexts React's `createContext` builds, whose
+    /// `Provider` a tag reads.
     fn changed(&mut self) -> ValueEffects {
         let files = self.files;
         let inputs = self.inputs;
