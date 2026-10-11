@@ -415,14 +415,16 @@ enum RelativeMiss {
 }
 
 fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, RelativeMiss> {
-    // Appended, not replaced: `./tokens.theme` names `tokens.theme.ts`.
-    let target = base_dir.join(specifier).to_string_lossy().to_string();
+    // Appended, not replaced: `./tokens.theme` names `tokens.theme.ts`. `..`
+    // is taken back lexically, as Node resolves it, so the file checked is
+    // the file opened.
+    let target = resolution::lexical(&base_dir.join(specifier)).to_string_lossy().to_string();
     match resolution::extension_policy().probe(&target, |candidate| resolution::see_within(base_dir, candidate)) {
         resolution::Probe::Found(path) => Ok(path),
         resolution::Probe::CaseMismatch { candidate, actual } => Err(RelativeMiss::CaseMismatch(format!(
             "relative import '{specifier}' from {base_dir:?} names {candidate:?}, but the file on disk is \
-             {actual:?}, which differs only in case: a case-insensitive filesystem loads it and a \
-             case-sensitive one does not — spell the import as the file is spelled"
+             {actual:?}, spelled differently: a case- or normalization-insensitive filesystem loads it and \
+             a sensitive one does not — spell the import as the file is spelled"
         ))),
         resolution::Probe::Absent => Err(RelativeMiss::Absent),
     }
@@ -2635,17 +2637,42 @@ export const ds = tokens;
             assert_eq!(analysis.as_deref(), expected, "analysis: {present:?} {specifier}");
             let _ = fs::remove_dir_all(&dir);
         }
-        // A file that differs from the specifier only in case: the system
-        // side fails loudly naming both spellings, whatever the filesystem's
-        // case rule, and analysis finds no file.
-        let dir = scratch_dir("extension-policy-case");
-        fs::write(dir.join("x.ts"), "export {};\n").expect("write witness");
-        match resolve_relative(&dir, "./X") {
-            Err(RelativeMiss::CaseMismatch(reason)) => {
-                assert!(reason.contains("X.ts") && reason.contains("x.ts"), "{reason}")
+        // A candidate the filesystem opens under a spelling no directory
+        // lists fails loudly, naming the file it opens; where the filesystem
+        // does not open it, the host's exact answer stands. Nothing is
+        // folded: `X.ts` for `./X` beside `x.ts`; `ä.ts` beside `Ä.ts` and an
+        // exact `ä.tsx`; an NFD `é.ts` beside an NFC `é.ts` and an exact NFD
+        // `é.tsx`; and `ς.ts` beside `Σ.ts` and an exact `ς.tsx`, which APFS
+        // opens as `Σ.ts`. Analysis keys each file by its own spelling.
+        let rows: [(&[&str], &str, &str, Option<&str>); 4] = [
+            (&["x.ts"], "./X", "X.ts", None),
+            (&["\u{c4}.ts", "\u{e4}.tsx"], "./\u{e4}", "\u{e4}.ts", Some("\u{e4}.tsx")),
+            (&["\u{e9}.ts", "e\u{301}.tsx"], "./e\u{301}", "e\u{301}.ts", Some("e\u{301}.tsx")),
+            (&["\u{3a3}.ts", "\u{3c2}.tsx"], "./\u{3c2}", "\u{3c2}.ts", Some("\u{3c2}.tsx")),
+        ];
+        for (present, specifier, asked, exact) in rows {
+            let dir = scratch_dir("extension-policy-case");
+            for file in present {
+                fs::write(dir.join(file), "export {};\n").expect("write witness");
             }
-            Ok(path) => panic!("a case-only match resolved to {path}"),
-            Err(RelativeMiss::Absent) => panic!("a case-only match read as absent"),
+            let opens = dir.join(asked).is_file();
+            let resolved = resolve_relative(&dir, specifier);
+            let _ = fs::remove_dir_all(&dir);
+            match (opens, resolved, exact) {
+                (true, Err(RelativeMiss::CaseMismatch(reason)), _) => {
+                    assert!(reason.contains(present[0]), "{specifier}: {reason}")
+                }
+                (false, Ok(path), Some(exact)) => assert!(path.ends_with(exact), "{specifier}: {path}"),
+                (false, Err(RelativeMiss::Absent), None) => {}
+                (opens, Ok(path), _) => panic!("{specifier} (opens {opens}): resolved to {path}"),
+                (opens, Err(miss), _) => panic!(
+                    "{specifier} (opens {opens}): {}",
+                    match miss {
+                        RelativeMiss::Absent => "absent".to_string(),
+                        RelativeMiss::CaseMismatch(reason) => reason,
+                    }
+                ),
+            }
         }
         let analysis = resolution::extension_policy()
             .probe("X", |candidate| match candidate == "x.ts" {
@@ -2654,7 +2681,6 @@ export const ds = tokens;
             })
             .found();
         assert_eq!(analysis, None);
-        let _ = fs::remove_dir_all(&dir);
         // The host's root spelled in another case: only the names a
         // specifier spells are checked, so its imports still resolve where
         // the filesystem opens that root, and are absent where it does not.

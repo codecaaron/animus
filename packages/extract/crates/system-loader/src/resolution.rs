@@ -36,8 +36,9 @@ pub fn extension_policy() -> &'static ExtensionPolicy {
 pub enum Seen {
     /// A file, spelled as the candidate is.
     File,
-    /// A file whose name differs from the candidate only in case, as a
-    /// case-insensitive filesystem matches it: its own spelling.
+    /// A file the filesystem opens under the candidate's spelling though no
+    /// directory lists that spelling (a case- or normalization-insensitive
+    /// filesystem): its real path, as the filesystem reports it.
     CaseOnly(String),
     Missing,
 }
@@ -96,26 +97,21 @@ impl ExtensionPolicy {
     }
 }
 
-/// What the filesystem holds at `candidate`, spelled exactly: a file whose
-/// every name below the directory it shares with `base` matches its
-/// directory's entry, or one that matches only ignoring case (a
-/// case-insensitive filesystem opens it; on a case-sensitive one, a final
-/// name that differs only in case). The shared directory is spelled as
-/// given, as a specifier spells only the path from its importer's directory.
+/// What the filesystem holds at `candidate`: a file it opens under exactly
+/// that spelling, or one it opens although a directory below the one the
+/// candidate shares with `base` lists no entry spelled as the candidate
+/// spells it (a case- or normalization-insensitive filesystem opening
+/// another spelling). Nothing is folded: the filesystem decides what opens,
+/// and its listings decide the spelling, so a file a case-sensitive
+/// filesystem cannot open is simply missing. The shared directory is
+/// spelled as given, as a specifier spells only the path from its
+/// importer's directory and a manifest only the paths in its package.
 pub fn see_within(base: &Path, candidate: &str) -> Seen {
+    // `..` is taken back lexically, as Node and the bundlers resolve a
+    // specifier before opening it, so the file checked is the file opened.
     let path = lexical(Path::new(candidate));
-    if !path.exists() {
-        // A case-sensitive filesystem misses the variant; its directory
-        // still lists it.
-        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
-            return Seen::Missing;
-        };
-        return match entry_named(parent, name) {
-            Some(Entry::CaseOnly(actual)) if parent.join(&actual).is_file() => {
-                Seen::CaseOnly(parent.join(actual).to_string_lossy().to_string())
-            }
-            _ => Seen::Missing,
-        };
+    if !path.is_file() {
+        return Seen::Missing;
     }
     let shared: PathBuf = path
         .components()
@@ -123,52 +119,37 @@ pub fn see_within(base: &Path, candidate: &str) -> Seen {
         .take_while(|(name, base_name)| name == base_name && *name != Component::ParentDir)
         .map(|(name, _)| name)
         .collect();
-    let mut actual = shared.clone();
-    let below = path.strip_prefix(&shared).unwrap_or(&path);
-    let mut differs = false;
-    for component in below.components() {
+    let mut directory = shared.clone();
+    for component in path.strip_prefix(&shared).unwrap_or(&path).components() {
         match component {
-            Component::Normal(name) => match entry_named(&actual, name) {
-                Some(Entry::Exact) => actual.push(name),
-                Some(Entry::CaseOnly(spelled)) => {
-                    actual.push(spelled);
-                    differs = true;
+            Component::Normal(name) => {
+                if !lists(&directory, name) {
+                    let actual = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                    return Seen::CaseOnly(actual.to_string_lossy().to_string());
                 }
-                None => return Seen::Missing,
-            },
-            other => actual.push(other.as_os_str()),
+                directory.push(name);
+            }
+            Component::ParentDir => {
+                directory.pop();
+            }
+            Component::CurDir => {}
+            other => directory.push(other.as_os_str()),
         }
     }
-    match (actual.is_file(), differs) {
-        (false, _) => Seen::Missing,
-        (true, false) => Seen::File,
-        (true, true) => Seen::CaseOnly(actual.to_string_lossy().to_string()),
-    }
+    Seen::File
 }
 
-enum Entry {
-    Exact,
-    CaseOnly(std::ffi::OsString),
-}
-
-/// How `directory` lists `name`: exactly, under another case, or not at all.
-fn entry_named(directory: &Path, name: &std::ffi::OsStr) -> Option<Entry> {
+/// Whether `directory` lists an entry spelled exactly `name`.
+fn lists(directory: &Path, name: &std::ffi::OsStr) -> bool {
     let directory = if directory.as_os_str().is_empty() { Path::new(".") } else { directory };
-    let mut case_only = None;
-    for entry in std::fs::read_dir(directory).ok()?.flatten() {
-        let entry_name = entry.file_name();
-        if entry_name == name {
-            return Some(Entry::Exact);
-        }
-        if case_only.is_none() && entry_name.to_string_lossy().eq_ignore_ascii_case(&name.to_string_lossy()) {
-            case_only = Some(entry_name);
-        }
-    }
-    case_only.map(Entry::CaseOnly)
+    std::fs::read_dir(directory)
+        .map(|entries| entries.flatten().any(|entry| entry.file_name() == name))
+        .unwrap_or(false)
 }
 
-/// `path` with `.` dropped and `..` taken back, without touching the disk.
-fn lexical(path: &Path) -> PathBuf {
+/// `path` with `.` dropped and `..` taken back, without touching the disk,
+/// as Node's `path.resolve` reads a specifier.
+pub fn lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
@@ -183,3 +164,7 @@ fn lexical(path: &Path) -> PathBuf {
     }
     out
 }
+
+
+
+
