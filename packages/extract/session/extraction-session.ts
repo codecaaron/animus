@@ -289,9 +289,11 @@ function isDiskString<Value>(value: Value): value is Value & string {
 /** Rejection of an attempt whose corpus holds an aborted parse. */
 class AbortedParseRejection extends Error {}
 
-/** A system reload a parse hold deferred, refused because its full read
- *  would replace host-supplied bytes the Session holds with the disk's.
- *  Like a hold, it keeps the prior publication and the observed sources. */
+/** A reload refused because its full read would replace host-supplied
+ *  bytes with the disk's: a system reload a parse hold deferred, or a full
+ *  read that reaches a host-supplied file only under another spelling (a
+ *  case-insensitive volume). Like a hold, it keeps the prior publication
+ *  and the observed sources. */
 class DeferredReloadRefusal extends Error {}
 
 function isDiskNumber<Value>(value: Value): value is Value & number {
@@ -1669,8 +1671,12 @@ export class ExtractionSession {
     // be read is lost input, not degradation: error severity fails a strict
     // build.
     const ingestionFailures: ManifestDiagnostic[] = [];
+    // Every path the read reaches, to check that it reaches each host
+    // source under its own spelling.
+    const readPaths = new Set<string>();
     for (const filePath of files) {
       const relPath = relative(rootDir, filePath);
+      readPaths.add(filePath);
       let source: string;
       try {
         const supplied = hostSources.get(filePath);
@@ -1908,8 +1914,9 @@ export class ExtractionSession {
       this.externalSourceEntries = admitted.sourceEntries;
       this.externalSourceSideEffects = admitted.sourceEntrySideEffects;
       for (const entry of admitted.entries) {
-        const source =
-          hostSources.get(resolve(rootDir, entry.path)) ?? entry.source;
+        const entryPath = resolve(rootDir, entry.path);
+        readPaths.add(entryPath);
+        const source = hostSources.get(entryPath) ?? entry.source;
         rawEntries.push({
           path: entry.path,
           source,
@@ -1922,6 +1929,26 @@ export class ExtractionSession {
       this.externalOutputDirs = admitted.outputDirs;
 
       bt.packageResolve = this.elapsed(t);
+
+      // A host source the read reaches only under another spelling would be
+      // published from the disk instead: refuse loudly.
+      const misspelled = [...hostSources.keys()].flatMap((path) => {
+        if (readPaths.has(path)) return [];
+        const lower = path.toLowerCase();
+        const read = [...readPaths].filter(
+          (readPath) => readPath.toLowerCase() === lower
+        );
+        if (read.length === 0) return [];
+        const spellings = read.map((readPath) => relative(rootDir, readPath));
+        return [`${relative(rootDir, path)} (read as ${spellings.join(', ')})`];
+      });
+      if (misspelled.length > 0) {
+        throw new DeferredReloadRefusal(
+          `[${this.driverLabel}] reload not published: the host supplied ` +
+            `bytes for ${misspelled.join(', ')}, which the full read reaches ` +
+            `only under another spelling; the last generation stays served`
+        );
+      }
 
       this.beginStatusAttempt();
       let accepted: SourceIngestionResult;
