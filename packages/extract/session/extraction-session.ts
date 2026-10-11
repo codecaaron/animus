@@ -112,6 +112,7 @@ import type {
   ExternalPackageOutcome,
   KitDescriptorRecord,
 } from '../pipeline/index';
+import type { ResolveSpecifier } from './resolve-packages';
 
 export type SessionOptions = AnimusCoreOptions;
 
@@ -980,23 +981,39 @@ export class ExtractionSession {
 
     bt.fileRead = this.elapsed(t);
 
-    // Workspace walk + require.resolve stays local (the Node-resolution
-    // seam); the traversal and ingest below are the shared collector.
+    // Package resolution: the workspace walk and the exports reader stay
+    // local; anything else resolves as the system loader resolves it. The
+    // traversal and ingest below are the shared collector.
     t = this.now();
+    const resolveSpecifier: ResolveSpecifier = (specifier, fromDir) => {
+      const native = engineApi().resolveSpecifier;
+      if (native === undefined) {
+        throw new Error(
+          'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
+        );
+      }
+      return native(specifier, fromDir);
+    };
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
       engineModuleParser(engineApi()),
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
       (name) => {
-        const entry = resolvePackagesByName(rootDir, [name])[name];
+        const entry = resolvePackagesByName(rootDir, [name], resolveSpecifier)[
+          name
+        ];
         return entry ? resolve(rootDir, entry) : null;
       }
     );
     discoveryDiagnostics.push(
       ...importedKitDiagnostics(rawEntries, engineApi(), rootDir, packageNames)
     );
-    const preResolved = resolvePackagesByName(rootDir, packageNames);
+    const preResolved = resolvePackagesByName(
+      rootDir,
+      packageNames,
+      resolveSpecifier
+    );
 
     // Raw content hashes of every walked external file, keyed by absolute
     // path — recorded before MDX preprocessing so the diff sees raw bytes.

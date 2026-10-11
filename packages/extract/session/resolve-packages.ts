@@ -97,9 +97,17 @@ function resolveImportEntry(rootDir: string, name: string): string | null {
   }
 }
 
+/** A specifier resolved as the system loader resolves it (the native
+ *  module's `resolveSpecifier`): the real path of the file it names. */
+export type ResolveSpecifier = (
+  specifier: string,
+  fromDir: string
+) => { path?: string | null };
+
 export function resolvePackagesByName(
   rootDir: string,
-  names: string[]
+  names: string[],
+  resolveSpecifier: ResolveSpecifier
 ): ResolvedPackageMap {
   if (names.length === 0) return {};
 
@@ -137,9 +145,9 @@ export function resolvePackagesByName(
     }
   } catch {}
 
-  // An ES import first, as the Vite host resolves it; `require.resolve`
-  // still answers for a package without `exports` or without an import or
-  // default target.
+  // An ES import first, as the Vite host resolves it. A package without an
+  // `exports` target for one resolves as the system loader resolves it:
+  // `module` before `main`, which serves only a CommonJS `require`.
   for (const name of nameSet) {
     if (resolved.has(name)) continue;
     const importEntry = resolveImportEntry(rootDir, name);
@@ -147,10 +155,8 @@ export function resolvePackagesByName(
       packageMap[name] = relative(rootDir, importEntry);
       continue;
     }
-    try {
-      const entryPath = require.resolve(name, { paths: [rootDir] });
-      packageMap[name] = relative(rootDir, entryPath);
-    } catch {}
+    const entryPath = resolveSpecifier(name, rootDir).path;
+    if (entryPath) packageMap[name] = relative(rootDir, entryPath);
   }
 
   return packageMap;
