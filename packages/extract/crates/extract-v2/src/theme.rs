@@ -489,20 +489,91 @@ impl Condition {
         }
     }
 
-    /// Whether the prelude names the wrapped rule's subject, as `@scope (&)`
-    /// does; only a scope's prelude does.
-    pub fn names_subject(&self) -> bool {
-        matches!(self, Condition::Scope(q) if crate::selector_subject::has_subject(q))
+    pub fn is_scope(&self) -> bool {
+        matches!(self, Condition::Scope(_))
     }
+}
 
-    /// The prelude with each unquoted `&` of a scope standing for `subject`,
-    /// the selector the wrapped rule's own nesting starts from.
-    pub fn prelude_for(&self, subject: &str) -> Option<String> {
-        match self {
-            Condition::Scope(q) => Some(crate::selector_subject::substitute_subjects(q, subject)),
+/// The preludes wrapping a rule whose own selector is `subject`, outermost
+/// first; `None` when one cannot be written. Within a scope (CSS Cascade 6
+/// §3.5), only the outermost scope's start says `&` for `subject`: a limit,
+/// and a scope nested in another, say it for the enclosing scope root,
+/// `:scope`.
+pub(crate) fn condition_preludes(
+    conditions: &[Condition],
+    subject: &str,
+    media_query: impl Fn(&str) -> Option<String>,
+) -> Option<Vec<String>> {
+    let mut scoped = false;
+    conditions
+        .iter()
+        .map(|condition| match condition {
+            Condition::Breakpoint(bp) => media_query(bp),
+            Condition::Scope(prelude) => {
+                let (start, limit) = scope_parts(prelude);
+                let start_subject = if scoped { ":scope" } else { subject };
+                scoped = true;
+                let start = crate::selector_subject::substitute_subjects(&start, start_subject);
+                let limit = limit.map(|limit| crate::selector_subject::substitute_subjects(&limit, ":scope"));
+                Some(scope_prelude(&start, limit.as_deref()))
+            }
             other => other.prelude().map(str::to_string),
+        })
+        .collect()
+}
+
+/// `@scope (<start>) [to (<limit>)]` as (start, limit); a missing start is
+/// `&`, the rule the scope is written in.
+fn scope_parts(prelude: &str) -> (String, Option<String>) {
+    let rest = prelude.strip_prefix("@scope").unwrap_or(prelude).trim_start();
+    let (start, rest) = match parenthesized(rest) {
+        Some((inner, after)) => (inner.trim().to_string(), after.trim_start()),
+        None => ("&".to_string(), rest),
+    };
+    let limit = rest.strip_prefix("to").map(|limit| {
+        let limit = limit.trim_start();
+        parenthesized(limit).map_or_else(|| limit.trim().to_string(), |(inner, _)| inner.trim().to_string())
+    });
+    (start, limit)
+}
+
+fn scope_prelude(start: &str, limit: Option<&str>) -> String {
+    match limit {
+        Some(limit) => format!("@scope ({start}) to ({limit})"),
+        None => format!("@scope ({start})"),
+    }
+}
+
+/// The text inside a leading `(…)`, and what follows it; quotes and nested
+/// parentheses are skipped.
+fn parenthesized(text: &str) -> Option<(&str, &str)> {
+    if !text.starts_with('(') {
+        return None;
+    }
+    let mut depth = 0;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (at, c) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match (quote, c) {
+            (_, '\\') => escaped = true,
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(') => depth += 1,
+            (None, ')') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&text[1..at], &text[at + 1..]));
+                }
+            }
+            _ => {}
         }
     }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -644,9 +715,35 @@ impl NestFrame {
 
     fn with_condition(&self, condition: Condition, order: ConditionEmitOrder, key: &str, slot: usize) -> Self {
         let mut conditions = self.conditions.clone();
+        // A scope's start takes in the selector the scope is written under,
+        // and a start without `&` is relative to it, as nested CSS reads it.
+        // Inside, nesting starts again from the scope root.
+        let scope = condition.is_scope();
+        let condition = match condition {
+            Condition::Scope(prelude) => {
+                let (start, limit) = scope_parts(&prelude);
+                let anchor = self.selector.clone().unwrap_or_else(|| "&".to_string());
+                let anchors = split_top_level_commas(&anchor);
+                let start: Vec<String> = split_top_level_commas(&start)
+                    .iter()
+                    .flat_map(|branch| {
+                        let branch = branch.trim();
+                        anchors.iter().map(move |anchor| {
+                            if crate::selector_subject::has_subject(branch) {
+                                crate::selector_subject::substitute_subjects(branch, anchor.trim())
+                            } else {
+                                format!("{} {branch}", anchor.trim())
+                            }
+                        })
+                    })
+                    .collect();
+                Condition::Scope(scope_prelude(&start.join(", "), limit.as_deref()))
+            }
+            other => other,
+        };
         conditions.push(condition);
         Self {
-            selector: self.selector.clone(),
+            selector: if scope { None } else { self.selector.clone() },
             conditions,
             emit_order: Some(self.emit_order.clone().unwrap_or(order)),
             block: self.block,
@@ -2328,24 +2425,23 @@ fn push_global_rules(
             }
         }
     }
-    // A scope prelude's `&` is the global's selector, a list kept whole.
+    // A scope's `&` is the global's selector, a list kept whole.
     let scope_subject =
         if split_top_level_commas(selector).len() > 1 { format!(":is({branches})") } else { branches.clone() };
     for group in resolved.conditioned_emission_order() {
-        let preludes: Option<Vec<String>> = group
-            .conditions
-            .iter()
-            .map(|condition| match condition {
-                Condition::Breakpoint(bp) => breakpoints.media_query(bp),
-                other => other.prelude_for(&scope_subject),
-            })
-            .collect();
+        let preludes = condition_preludes(&group.conditions, &scope_subject, |bp| breakpoints.media_query(bp));
         let Some(preludes) = preludes.filter(|p| !p.is_empty()) else {
             continue;
         };
+        // Within a scope the rule is the scope root.
+        let rule = if group.conditions.iter().any(Condition::is_scope) {
+            group.selector.as_deref().map_or_else(|| ":scope".to_string(), |nested| compose_selectors(":scope", nested))
+        } else {
+            subject(&group.selector)
+        };
         for (part, origin) in crate::css::supplied_parts(&group.declarations, &group.suppliers) {
             if !part.is_empty() {
-                placed.push((global_conditioned_rule(&preludes, &subject(&group.selector), &part), origin));
+                placed.push((global_conditioned_rule(&preludes, &rule, &part), origin));
             }
         }
     }

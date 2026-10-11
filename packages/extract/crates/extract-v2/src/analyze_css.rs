@@ -9053,23 +9053,31 @@ mod tests {
                       export const Card = ds.styles({ '@scope (&) to (.not-card)': { '& p': { margin: 0 } } }).asElement('div');\n\
                       export const Bad = ds.styles({ opacity: { _: 1, '@starting-style': 0 } }).asElement('div');\n\
                       export const Alias = ds.styles({ opacity: { _: 1, _starting: 0 } }).asElement('div');\n\
-                      export const Bare = ds.styles({ '@scope': { '& em': { color: 'red' } }, '@scope ([data-label=\"R&D\"])': { color: 'blue' } }).asElement('div');\n\
-                      export const App = () => <><Prose /><Toast /><Card /><Bad /><Alias /><Bare /></>;\n";
+                      export const Bare = ds.styles({ '@scope': { color: 'red', '& em': { color: 'green' } }, '@scope ([data-label=\"R&D\"])': { color: 'blue' } }).asElement('div');\n\
+                      export const Donut = ds.styles({ '@scope (&) to (& > .stop)': { '& p': { color: 'red' } } }).asElement('div');\n\
+                      export const Nest = ds.styles({ '&:hover': { '@scope (&)': { '@scope (& > .inner)': { '& p': { color: 'red' } } } } }).asElement('div');\n\
+                      export const App = () => <><Prose /><Toast /><Card /><Bad /><Alias /><Bare /><Donut /><Nest /></>;\n";
         let out = analyze(&[("a.tsx", source)], &inputs);
         let class = |binding: &str| out.replacement_configs[&format!("a.tsx::{binding}")].class_name.clone().unwrap_or_default();
         let base = out.css.split("@layer anm-base {").nth(1).and_then(|rest| rest.split("\n}\n").next()).unwrap_or_default();
+        // Within a scope the rule is the scope root, `:scope`; only the
+        // outermost start's `&` is the component, and a start without `&` is
+        // relative to it, as nested CSS reads it (CSS Cascade 6 §3.5).
         for wrapped in [
-            format!("@scope (.zz-prose) to ([data-prose-ignore]) {{\n    .{} li {{\n      cursor: pointer;", class("Prose")),
+            format!("@scope (.{} .zz-prose) to ([data-prose-ignore]) {{\n    :scope li {{\n      cursor: pointer;", class("Prose")),
             format!("@starting-style {{\n    .{} {{\n      opacity: 0;", class("Toast")),
             format!("@starting-style {{\n    .{}:hover {{\n      opacity: 0.5;", class("Toast")),
             format!("@starting-style {{\n    .{} {{\n      color: red;", class("Toast")),
-            format!("@scope (.{0}) to (.not-card) {{\n    .{0} p {{\n      margin: 0;", class("Card")),
-            format!("@scope (.{0}) {{\n    .{0} em {{\n      color: red;", class("Bare")),
-            format!("@scope ([data-label=\"R&D\"]) {{\n    .{} {{\n      color: blue;", class("Bare")),
+            format!("@scope (.{}) to (.not-card) {{\n    :scope p {{\n      margin: 0;", class("Card")),
+            format!("@scope (.{}) {{\n    :scope {{\n      color: red;", class("Bare")),
+            format!("@scope (.{}) {{\n    :scope em {{\n      color: green;", class("Bare")),
+            format!("@scope (.{} [data-label=\"R&D\"]) {{\n    :scope {{\n      color: blue;", class("Bare")),
+            format!("@scope (.{}) to (:scope > .stop) {{\n    :scope p {{\n      color: red;", class("Donut")),
+            format!("@scope (.{}:hover) {{\n    @scope (:scope > .inner) {{\n      :scope p {{\n        color: red;", class("Nest")),
         ] {
             assert!(base.contains(&wrapped), "{wrapped}\nmissing from anm-base:\n{}", out.css);
         }
-        assert!(out.sheets.global.contains("@scope (:is(.a, .b) > p) {"), "{}", out.sheets.global);
+        assert!(out.sheets.global.contains("@scope (:is(.a, .b) > p) {\n  :scope em {"), "{}", out.sheets.global);
         let codes: Vec<_> = out.diagnostics.iter().filter_map(|d| Some((d.code.as_deref()?, d.component.as_str()))).collect();
         assert_eq!(
             codes,

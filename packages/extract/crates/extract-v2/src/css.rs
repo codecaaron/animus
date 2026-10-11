@@ -678,34 +678,37 @@ fn write_condition_block(
     if declarations.is_empty() {
         return;
     }
-    // A scope naming `&` scopes to each rule's own outer selector, so each
-    // inner selector takes a wrapper of its own.
-    let subjects: Vec<Option<&String>> = if group.conditions.iter().any(crate::theme::Condition::names_subject) {
+    // A scope's start names each rule's own selector, so each inner selector
+    // takes a wrapper of its own, and within it the rule is the scope root.
+    let subjects: Vec<Option<&String>> = if group.conditions.iter().any(crate::theme::Condition::is_scope) {
         inner_selectors.iter().map(Some).collect()
     } else {
         vec![None]
     };
     for subject in subjects {
-        let mut preludes: Vec<String> = Vec::with_capacity(group.conditions.len());
-        for condition in &group.conditions {
-            let prelude = match condition {
-                crate::theme::Condition::Breakpoint(bp) => breakpoints.media_query(bp),
-                other => subject.map_or_else(|| other.prelude().map(str::to_string), |subject| other.prelude_for(subject)),
-            };
-            match prelude {
-                Some(prelude) => preludes.push(prelude),
-                None => return,
-            }
-        }
-        if preludes.is_empty() {
+        let preludes = match subject {
+            Some(subject) => crate::theme::condition_preludes(&group.conditions, subject, |bp| breakpoints.media_query(bp)),
+            None => group
+                .conditions
+                .iter()
+                .map(|condition| match condition {
+                    crate::theme::Condition::Breakpoint(bp) => breakpoints.media_query(bp),
+                    other => other.prelude().map(str::to_string),
+                })
+                .collect(),
+        };
+        let Some(preludes) = preludes.filter(|preludes| !preludes.is_empty()) else {
             return;
-        }
+        };
         for (depth, prelude) in preludes.iter().enumerate() {
             writeln!(output, "{}{} {{", "  ".repeat(depth + 1), prelude).unwrap();
         }
         let decl_indent = 2 * (preludes.len() + 1);
-        let inners = subject.map_or(inner_selectors, std::slice::from_ref);
-        for inner in inners {
+        let inners: Vec<String> = match subject {
+            Some(_) => vec![":scope".to_string()],
+            None => inner_selectors.to_vec(),
+        };
+        for inner in &inners {
             let sel = match &group.selector {
                 Some(s) => format_composed_pseudo(inner, s),
                 None => inner.clone(),
