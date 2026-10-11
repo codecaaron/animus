@@ -3401,6 +3401,7 @@ fn spread_wrapper_targets(
             continue;
         }
         proxies.forwarding.extend(spans);
+        proxies.may_omit.extend(wrapper.may_omit.iter().copied());
         for pass in &wrapper.passed {
             let values = crate::usage_facts::passed_values(
                 usage,
@@ -12730,6 +12731,29 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             (
                 "const Button = (props) => <R {...props} />;\nexport const App = () => <R size=\"sm\" active />;",
                 vec!["sm"],
+                vec!["active"],
+            ),
+            // Contract: a conditional props split is attributed like a rest
+            // spread, and a spread that may carry nothing also renders the
+            // target with none of them.
+            (
+                "const Button = (props) => { const rest = visible ? props : {}; return <R {...rest} />; };\n\
+                 export const App = () => <Button size=\"sm\" active />;",
+                vec!["sm", "md"],
+                vec!["active"],
+            ),
+            // A type query is no read of the alias, before its declaration
+            // or after.
+            (
+                "const Button = (props) => { const rest = visible ? props : {}; type Rest = typeof rest; return <R {...rest} />; };\n\
+                 export const App = () => <Button size=\"sm\" active />;",
+                vec!["sm", "md"],
+                vec!["active"],
+            ),
+            (
+                "const Button = (props) => { type Rest = typeof rest; const rest = visible ? props : {}; return <R {...rest} />; };\n\
+                 export const App = () => <Button size=\"sm\" active />;",
+                vec!["sm", "md"],
                 vec!["active"],
             ),
         ] {
