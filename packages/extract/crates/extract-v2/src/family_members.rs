@@ -13,7 +13,7 @@ use crate::analyze_css::{
     declared_export, loaded_modules, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
 };
 use crate::facts::{FacadeEntry, FileFacts};
-use animus_system_loader::module_table::{ExportLookup, Terminal};
+use animus_system_loader::module_table::{ExportLookup, ImportName, Request, Terminal};
 
 /// Every compose family, keyed by the names its module gives it.
 pub(crate) struct FamilyIndex {
@@ -154,6 +154,12 @@ impl FamilyIndex {
     fn only(&self, binding: &str) -> Option<usize> {
         self.by_binding.get(binding).copied().flatten()
     }
+}
+
+/// A namespace import of a module the analysis does not read.
+enum UnreadNamespace {
+    Missing,
+    Package,
 }
 
 /// An object whose members a member tag reads.
@@ -658,17 +664,33 @@ impl<'f> ObjectMembers<'f> {
                 let reason = format!("{name} {} in {module}{line}", used.what);
                 let held: Vec<Object> = match name.split_once('.') {
                     // A member of a namespace import.
-                    Some((namespace, member)) => ff
-                        .namespace_imports
-                        .get(namespace)
-                        .and_then(|spec| resolve_import_source(module, spec, files, inputs))
-                        .and_then(|target| self.exported_object(&target, member))
-                        .into_iter()
-                        .collect(),
+                    // A module the analysis cannot find may re-export any
+                    // object under any name: a write through a member of its
+                    // namespace may reach any of them. A package's namespace
+                    // is followed below.
+                    Some((namespace, member)) => match self.unread_namespace(module, ff, namespace) {
+                        Some(UnreadNamespace::Missing) => self.every_exported_object(),
+                        Some(UnreadNamespace::Package) => Vec::new(),
+                        None => match ff
+                            .namespace_imports
+                            .get(namespace)
+                            .and_then(|spec| resolve_import_source(module, spec, files, inputs))
+                        {
+                            Some(target) => match self.exported_object(&target, member) {
+                                Some(object) => vec![object],
+                                None => self.opened_export(&target, member),
+                            },
+                            None => Vec::new(),
+                        },
+                    },
                     None => match ff.namespace_imports.get(name) {
-                        Some(spec) => resolve_import_source(module, spec, files, inputs)
-                            .map(|target| self.exported_objects(&target).to_vec())
-                            .unwrap_or_default(),
+                        Some(spec) => match self.unread_namespace(module, ff, name) {
+                            Some(UnreadNamespace::Package) => Vec::new(),
+                            Some(UnreadNamespace::Missing) => self.every_exported_object(),
+                            None => resolve_import_source(module, spec, files, inputs)
+                                .map(|target| self.namespace_objects(&target))
+                                .unwrap_or_default(),
+                        },
                         None => match self.unresolved_import(module, ff, name) {
                             // An import the analysis cannot follow may be any
                             // object its name names.
@@ -677,7 +699,10 @@ impl<'f> ObjectMembers<'f> {
                                 .get(imported)
                                 .cloned()
                                 .unwrap_or_default(),
-                            None => self.local_object(module, name).into_iter().collect(),
+                            None => match self.local_object(module, name) {
+                                Some(object) => vec![object],
+                                None => self.opened_import(module, ff, name),
+                            },
                         },
                     },
                 };
@@ -686,19 +711,32 @@ impl<'f> ObjectMembers<'f> {
                     found.entry(object).or_insert_with(|| reason.clone());
                 }
             }
+            // A package may re-export our objects (a linked workspace
+            // package) under any name: a use that may write through its
+            // namespace may reach any of them.
+            for (namespace, (subject, used)) in &ff.written_namespaces {
+                if !matches!(self.unread_namespace(module, ff, namespace), Some(UnreadNamespace::Package)) {
+                    continue;
+                }
+                let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
+                let reason = format!("{subject} {} in {module}{line}", used.what);
+                for object in self.every_exported_object() {
+                    found.entry(object).or_insert_with(|| reason.clone());
+                }
+            }
             for (name, spec) in &ff.namespace_exports {
                 let Some(target) = resolve_import_source(module, spec, files, inputs) else {
                     continue;
                 };
                 let reason = format!("{module} re-exports {target} as the namespace {name}");
-                for object in self.exported_objects(&target).iter() {
+                for object in self.namespace_objects(&target) {
                     found.entry(object.clone()).or_insert_with(|| reason.clone());
                 }
             }
             for load in &ff.module_loads {
                 for target in loaded_modules(module, load, files, inputs) {
                     let reason = format!("{module} loads {target} at runtime on line {}", load.line);
-                    for object in self.exported_objects(target).iter() {
+                    for object in self.namespace_objects(target) {
                         found.entry(object.clone()).or_insert_with(|| reason.clone());
                     }
                 }
@@ -715,6 +753,81 @@ impl<'f> ObjectMembers<'f> {
             }
         }
         found
+    }
+
+    /// Every object `module`'s namespace may hold: each export's and, where
+    /// an open route leaves an export or the module's names incomplete,
+    /// every object that route may reach.
+    fn namespace_objects(&mut self, module: &str) -> Vec<Object> {
+        let mut objects = self.exported_objects(module).to_vec();
+        let Some(index) = self.links.module(module) else { return objects };
+        let names = self.links.table.exported_names(index);
+        for name in &names.names {
+            objects.extend(self.opened_export(module, name));
+        }
+        if !names.complete() {
+            objects.extend(self.every_exported_object());
+        }
+        objects
+    }
+
+    /// The objects an import binding of `module` may hold when an open route
+    /// leaves the export it imports incomplete.
+    fn opened_import(&mut self, module: &str, ff: &FileFacts, local: &str) -> Vec<Object> {
+        let Some(import) = ff.imports.iter().find(|import| import.local == local) else { return Vec::new() };
+        let Some(source) = resolve_import_source(module, &import.source, self.files, self.inputs) else {
+            return Vec::new();
+        };
+        self.opened_export(&source, &import.imported)
+    }
+
+    /// The objects `module`'s export `name` may hold when an open route
+    /// leaves the answer incomplete: each object the answer knows, and every
+    /// exported object, since the module the route passes is one the
+    /// analysis does not read and may re-export any object under any name.
+    /// Nothing for a complete answer.
+    fn opened_export(&mut self, module: &str, name: &str) -> Vec<Object> {
+        let Some(index) = self.links.module(module) else { return Vec::new() };
+        let ExportLookup::Incomplete { known, openings } = self.links.table.resolve_export(index, name) else {
+            return Vec::new();
+        };
+        let mut objects = Vec::new();
+        for terminal in known {
+            if let Terminal::Local { module: declaring, binding } = terminal {
+                let (path, local) = crate::analyze_css::binding_name(self.links, self.files, declaring, binding);
+                objects.extend(self.local_object(&path, &local));
+            }
+        }
+        if !openings.is_empty() {
+            objects.extend(self.every_exported_object());
+        }
+        objects
+    }
+
+    /// Whether `module` imports `local` as the namespace of a module the
+    /// analysis does not read: one it cannot find, or a package.
+    fn unread_namespace(&self, module: &str, ff: &FileFacts, local: &str) -> Option<UnreadNamespace> {
+        let (index, binding) = (self.links.module(module)?, ff.bindings.module_binding(local)?);
+        let record = self.links.table.record(index);
+        let import = record
+            .imports
+            .iter()
+            .find(|import| import.local == binding && import.name == ImportName::Namespace)?;
+        match record.requests[import.request] {
+            Request::Unresolved(_) => Some(UnreadNamespace::Missing),
+            Request::Outside(_) => Some(UnreadNamespace::Package),
+            Request::Module(_) => None,
+        }
+    }
+
+    /// Every object any module exports.
+    fn every_exported_object(&mut self) -> Vec<Object> {
+        let modules: Vec<String> = self.files.keys().cloned().collect();
+        let mut objects = Vec::new();
+        for module in &modules {
+            objects.extend(self.exported_objects(module).iter().cloned());
+        }
+        objects
     }
 
     /// The name an import binding of `module` imports, when its source is
