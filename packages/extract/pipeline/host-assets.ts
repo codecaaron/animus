@@ -239,10 +239,19 @@ function loaderNames(request: string): string[] {
     .map((segment) => segment.replace(/\.c?js$/, ''));
 }
 
-/** Loaders whose module is a stylesheet's: its CSS, or its class-name map. */
+/** The stylesheet loaders a chain may hold and stay a stylesheet's: any
+ *  other loader may make the module code. */
 const STYLESHEET_LOADERS = new Set([
   'css-loader',
+  'postcss-loader',
+  'sass-loader',
+  'less-loader',
+  'stylus-loader',
+  'style-loader',
+  'mini-css-extract-plugin',
   'lightningcss-loader',
+  'resolve-url-loader',
+  'next-style-loader',
   'next-flight-css-loader',
 ]);
 
@@ -271,7 +280,7 @@ function ruleEffect(rule: WebpackRule): 'opaque' | 'module' | 'none' {
   if (live.length === 1 && live[0]?.includes('next-image-loader')) {
     return 'opaque';
   }
-  return live.some((names) =>
+  return live.every((names) =>
     names.some((name) => STYLESHEET_LOADERS.has(name))
   )
     ? 'opaque'
@@ -312,10 +321,12 @@ function apply(
 }
 
 /** webpack's or Rspack's classification, from its module rules: a file is
- *  opaque only where every rule that can apply to it makes it an asset or
- *  a stylesheet (`asset*` or `css*` type, Next's image loader, a CSS
- *  loader). A rule that may apply and makes a module, or no rule at all,
- *  leaves it a module. */
+ *  opaque only where its final extension is a built-in asset or stylesheet
+ *  type, and every rule that can apply to it makes it an asset or a
+ *  stylesheet (`asset*` or `css*` type, Next's image loader, a chain of
+ *  stylesheet loaders). A rule that may apply and makes a module, or no
+ *  rule at all, leaves it a module; so does another extension, since a
+ *  conditional rule that does not apply leaves webpack's own module type. */
 export function webpackAssetClassification(
   host: 'webpack' | 'next-webpack' | 'rspack',
   rules: readonly RuleEntry[] | undefined,
@@ -323,6 +334,9 @@ export function webpackAssetClassification(
 ): HostAssetClassification {
   return {
     isAsset: (file, query) => {
+      if (!BUILT_IN_ASSET_RE.test(file) && !STYLESHEET_RE.test(file)) {
+        return false;
+      }
       const found: Array<'opaque' | 'module'> = [];
       effects(rules, file, query, found);
       return found.length > 0 && found.every((effect) => effect === 'opaque');
