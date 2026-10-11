@@ -66,23 +66,6 @@ export function warnLine(diagnostic: ManifestDiagnostic): string {
 export const SELECTOR_UNSUPPORTED_SUBJECT =
   'animus.selector.unsupported-subject';
 
-/** The one matcher for the engine's unresolved-parent chain-drop message;
- *  consumers match through the exported helpers, never their own copy. */
-const UNRESOLVED_PARENT_RE =
-  /chain dropped: could not resolve parent component '([^']+)'/;
-
-type DiagnosticMessage = Pick<ManifestDiagnostic, 'message'>;
-
-export function isUnresolvedParentDrop(diagnostic: DiagnosticMessage): boolean {
-  return UNRESOLVED_PARENT_RE.test(diagnostic.message);
-}
-
-export function unresolvedParentName(
-  diagnostic: DiagnosticMessage
-): string | null {
-  return UNRESOLVED_PARENT_RE.exec(diagnostic.message)?.[1] ?? null;
-}
-
 export interface DiagnosticPolicy {
   /** When true, error-severity diagnostics throw instead of warning. */
   strict?: boolean;
@@ -307,6 +290,17 @@ export const UNIMPORTED_CREATE_SYSTEM =
  *  analysis does (spec §2.2 A7): report only. */
 export const ALIAS_MISMATCH = 'animus.discovery.alias-mismatch';
 
+/** A package the host bundler resolves to a file in no package of its own,
+ *  where discovery reads the installed package instead (spec §2.2 A4):
+ *  report only. */
+export const PACKAGE_MISMATCH = 'animus.discovery.package-mismatch';
+
+/** A system-file kit whose analysed instance is not the one the system
+ *  load evaluated (spec §2.2 A4): its components would be extracted
+ *  against another instance's vocabulary. */
+export const SYSTEM_INSTANCE_MISMATCH =
+  'animus.discovery.system-instance-mismatch';
+
 /** An import the host resolves, from its importer, into another instance
  *  of a discovered package whose file is not analysed and that no source
  *  redirect covers: the importer would render unextracted builder code
@@ -448,6 +442,8 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [UNPROVEN_ROOT_BINDING, 'warn'],
   [UNIMPORTED_CREATE_SYSTEM, 'warn'],
   [ALIAS_MISMATCH, 'warn'],
+  [PACKAGE_MISMATCH, 'warn'],
+  [SYSTEM_INSTANCE_MISMATCH, 'error'],
   [UNREAD_PACKAGE_INSTANCE, 'error'],
   [REPLACED_PACKAGE_INSTANCE, 'warn'],
   [VOCABULARY_COLLISION, 'warn'],
