@@ -64,6 +64,7 @@ export {
   fileSideEffects,
   findPackageRoot,
   nativeKitSourceRoot,
+  nativePackageLocator,
   keepsKitSourceEffects,
   kitSourceModuleSideEffects,
   firstOwners,

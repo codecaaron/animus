@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -938,6 +939,11 @@ test('an imported kit the system does not include is an error', () => {
     // The stand-in table: a kit declares `animus` in its `exports`.
     declaresKitSource: (dir: string) =>
       readFileSync(join(dir, 'package.json'), 'utf-8').includes('"animus"'),
+    // The stand-in locator: the fixture installs every kit at the root.
+    locatePackage: (name: string) => {
+      const dir = join(root, 'node_modules', ...name.split('/'));
+      return existsSync(dir) ? dir : null;
+    },
     extractFacts: () =>
       JSON.stringify({
         parseCount: 1,

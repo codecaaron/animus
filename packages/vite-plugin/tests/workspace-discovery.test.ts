@@ -69,6 +69,13 @@ async function buildWithUnlinkedKit(
       );
       return { path: join(dir, main ?? 'src/index.ts') };
     },
+    // The stand-in locator: the fixture links no workspace into
+    // node_modules, so a declared workspace answers.
+    locatePackage: (
+      name: string,
+      _fromDir: string,
+      workspaces?: Record<string, string>
+    ) => workspaces?.[name] ?? null,
     // The stand-in table: `src/` where the kit has one, else its runtime
     // entry's directory.
     resolveKitSourceRoot: (

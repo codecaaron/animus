@@ -15,6 +15,7 @@ import {
   firstOwners,
   isDeletedSource,
   nativeKitSourceRoot,
+  nativePackageLocator,
   surfaceManifestDiagnostics,
   unreadableSourceDiagnostic,
   validateLayerOrder,
@@ -280,6 +281,7 @@ async function discoverSources(
       workspaces,
       extensionPolicyJson(ctx.extensionPolicy)
     ),
+    locatePackage: nativePackageLocator(ctx.engineApi(), workspaces),
     requireSourceEntry: (specifier) => loaderOnly.has(specifier),
     extensions: ctx.extensionPolicy,
     rootDir: ctx.rootDir,

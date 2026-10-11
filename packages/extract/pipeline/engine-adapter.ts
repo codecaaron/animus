@@ -51,6 +51,14 @@ export interface EngineApi {
   /** Whether the package at `packageDir` declares the kit source condition:
    *  an `animus` key anywhere in its `exports`, read from the manifest. */
   declaresKitSource?: (packageDir: string) => boolean;
+  /** The package `name` as the system loader locates it from `fromDir`,
+   *  the first `node_modules/<name>` up the tree, then the declared
+   *  `workspaces`: its real path, or null where it locates none. */
+  locatePackage?: (
+    name: string,
+    fromDir: string,
+    workspaces?: WorkspacePackages
+  ) => string | null;
   /** A kit's source root as the system loader's table selects it (spec
    *  §2.2 A5), as JSON: the rule that chose it, its entries and invalid
    *  `animus` targets; or `{ "unresolved": why }` where no host imports the
@@ -201,6 +209,11 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         native.declaresKitSource === undefined
           ? undefined
           : (packageDir) => native.declaresKitSource(packageDir),
+      locatePackage:
+        native.locatePackage === undefined
+          ? undefined
+          : (name, fromDir, workspaces) =>
+              native.locatePackage(name, fromDir, workspaces) ?? null,
       resolveKitSourceRoot:
         native.resolveKitSourceRoot === undefined
           ? undefined

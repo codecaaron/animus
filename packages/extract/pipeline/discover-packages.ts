@@ -33,6 +33,7 @@ import { isEngineTransformExtension } from './mdx-preprocessor';
 import { isPathWithinRoot } from './source-identity';
 import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
+import { declaredWorkspacePackages } from './workspace-packages';
 
 import type { EngineApi } from './engine-adapter';
 import type { ExtensionOrder, ProbedFile } from './extension-policy';
@@ -220,6 +221,28 @@ export type KitSourceRootResolver = (
   hostEntry: string | null
 ) => KitSourceSelection | null;
 
+/** Where a package is installed: the package `name` located from
+ *  `fromDir`, at its real path, or null. */
+export type PackageLocator = (name: string, fromDir: string) => string | null;
+
+/** The system loader's package locator under the session's declared
+ *  `workspaces`: the first `node_modules/<name>` up the tree, then the
+ *  workspace of that name. */
+export function nativePackageLocator(
+  engine: Pick<EngineApi, 'locatePackage'>,
+  workspaces: WorkspacePackages
+): PackageLocator {
+  const native = engine.locatePackage;
+  return (name, fromDir) => {
+    if (native === undefined) {
+      throw new Error(
+        'the native engine does not expose locatePackage, which kit discovery needs — rebuild @animus-ui/extract'
+      );
+    }
+    return native(name, fromDir, workspaces);
+  };
+}
+
 /** The native table's kit source roots under one resolution context. */
 export function nativeKitSourceRoot(
   engine: Pick<EngineApi, 'resolveKitSourceRoot'>,
@@ -269,17 +292,6 @@ function realPath(path: string): string {
     return realpathSync(path);
   } catch {
     return path;
-  }
-}
-
-/** The root of the installed package `name` as Node finds it from `fromDir`,
- *  the first `node_modules/<name>` up the directory tree, at its real path,
- *  as host resolvers report a linked package. */
-function locatePackageRoot(name: string, fromDir: string): string | null {
-  for (let dir = fromDir; ; dir = dirname(dir)) {
-    const candidate = join(dir, 'node_modules', name);
-    if (existsSync(join(candidate, 'package.json'))) return realPath(candidate);
-    if (dir === dirname(dir)) return null;
   }
 }
 
@@ -508,6 +520,8 @@ export async function collectExternalPackageSources(opts: {
   unresolvedReason?: (specifier: string) => string | undefined;
   /** Each kit's source root, as the system loader's table selects it. */
   kitSourceRoot: KitSourceRootResolver;
+  /** Where the system loader locates each package from `rootDir`. */
+  locatePackage: PackageLocator;
   rootDir: string;
   extensionsSet: ReadonlySet<string>;
   hasEntry: (relPath: string) => boolean;
@@ -529,6 +543,7 @@ export async function collectExternalPackageSources(opts: {
     resolveSpecifier,
     unresolvedReason,
     kitSourceRoot,
+    locatePackage,
     rootDir,
     extensionsSet,
     hasEntry,
@@ -698,7 +713,7 @@ export async function collectExternalPackageSources(opts: {
     // the host spells the entry. Only where the entry's own real path lies
     // inside it: an entry linked out of the package is not its file.
     let resolvedRoot = absEntry ? findPackageRoot(absEntry) : null;
-    const locatedRoot = packageName && locatePackageRoot(packageName, rootDir);
+    const locatedRoot = packageName && locatePackage(packageName, rootDir);
     if (
       resolvedRoot &&
       locatedRoot &&
@@ -992,14 +1007,18 @@ function declaresKitSource(
  *  `transpilePackages`, and Vite's optimizer prebundles it. */
 export function sourceKitDependencies(
   rootDir: string,
-  engine: Pick<EngineApi, 'declaresKitSource'>
+  engine: Pick<EngineApi, 'declaresKitSource' | 'locatePackage'>
 ): SourceKitDependency[] {
+  const locatePackage = nativePackageLocator(
+    engine,
+    declaredWorkspacePackages(rootDir)
+  );
   const declared = dependencyNames(readPackageManifest(rootDir), [
     'dependencies',
     'devDependencies',
   ]);
   return declared.flatMap((name) => {
-    const pkgRoot = locatePackageRoot(name, rootDir);
+    const pkgRoot = locatePackage(name, rootDir);
     if (pkgRoot === null || !declaresKitSource(engine, pkgRoot)) return [];
     return [
       {
@@ -1031,13 +1050,20 @@ function isPackageSpecifier(specifier: string): boolean {
  */
 export function importedKitDiagnostics(
   files: ReadonlyArray<{ path: string; source: string }>,
-  engine: Pick<EngineApi, 'extractFacts' | 'declaresKitSource'>,
+  engine: Pick<
+    EngineApi,
+    'extractFacts' | 'declaresKitSource' | 'locatePackage'
+  >,
   rootDir: string,
   systemKits: readonly string[]
 ): ManifestDiagnostic[] {
   const { extractFacts } = engine;
   const parsed = files.filter(({ path }) => isEngineTransformExtension(path));
   if (!extractFacts || parsed.length === 0) return [];
+  const locatePackage = nativePackageLocator(
+    engine,
+    declaredWorkspacePackages(rootDir)
+  );
   let facts: ExtractFactsResult;
   try {
     facts = parseInternalWire<ExtractFactsResult>(
@@ -1068,7 +1094,7 @@ export function importedKitDiagnostics(
       const name = bareSpecifierPackageName(specifier);
       if (seen.has(name)) continue;
       seen.add(name);
-      const pkgRoot = locatePackageRoot(name, dirname(resolve(rootDir, path)));
+      const pkgRoot = locatePackage(name, dirname(resolve(rootDir, path)));
       if (pkgRoot && declaresKitSource(engine, pkgRoot)) {
         diagnostics.push({
           file: path,
