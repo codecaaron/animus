@@ -98,8 +98,11 @@ import {
   joinSession,
   sessionKey,
   getOwningWatchSession,
+  getSystemAuthority,
   getWatchTransaction,
   observationQueue,
+  SessionConfigurationConflict,
+  setSystemAuthority,
   resetAnalysisStartedPromise,
   setOwningWatchSession,
   setAnalysisStartedPromise,
@@ -126,7 +129,7 @@ import type {
   PackageResolution,
   SessionResolutionContext,
 } from './resolve-packages';
-import type { SessionKey } from './singleton';
+import type { SessionKey, SystemLoad } from './singleton';
 
 export type SessionOptions = AnimusCoreOptions;
 
@@ -134,6 +137,15 @@ export type SessionOptions = AnimusCoreOptions;
  *  other state is the content hash it was observed with. */
 const REMOVED_OBSERVATION = 'removed';
 const UNREADABLE_OBSERVATION = 'unreadable';
+
+/** A loaded system's identity: its evaluated modules and a fingerprint of
+ *  the whole load. */
+function systemLoad(system: SystemConfig): SystemLoad {
+  return {
+    identity: contentHash(JSON.stringify(system)),
+    dependencies: system.dependencies ?? [],
+  };
+}
 
 /** What the hosting bundler does, which the user does not configure. */
 export interface SessionHost {
@@ -1033,11 +1045,27 @@ export class ExtractionSession {
     try {
       await transaction;
     } catch (error) {
+      // The authority stays the committed system's, with its proofs.
       this.system = priorSystem;
       throw error;
     } finally {
       if (!nested) setWatchTransaction(this.key, null);
     }
+    this.commitSystemAuthority();
+  }
+
+  /** The build's authority becomes the system this session committed, with
+   *  it and never before: a failed reload leaves the committed one, and the
+   *  context proofs made against it. A committed reload discards every
+   *  other context's proof, even for an unchanged system: the reload may
+   *  have changed what another context resolves, so each loads again. */
+  private commitSystemAuthority(): void {
+    setSystemAuthority(this.key, {
+      ...systemLoad(this.system!),
+      context: this.resolutionContextText(),
+      label: this.resolutionContextLabel(),
+      others: new Map(),
+    });
   }
 
   private async runPipelineTransaction(
@@ -1065,15 +1093,7 @@ export class ExtractionSession {
     };
     this.log(`extension order: ${context.extensions.resolverVersion}`);
     let t = this.now();
-    this.system = loadSystemConfig(() => engineApi(this.key), {
-      systemPath: resolvedSystemPath,
-      rootDir,
-      prefix: this.options.prefix,
-      prefixContextualVars: this.options.prefixContextualVars,
-      conditions: context.conditions,
-      workspaces: context.workspaces,
-      extensions: context.extensions,
-    });
+    this.system = this.loadSystemUnder(context);
     this.assetCopyCache.clear();
     this.assetDependencyPaths.clear();
     this.assetDependencyKeys.clear();
@@ -1426,6 +1446,75 @@ export class ExtractionSession {
     snapshot: ReturnType<ExtractionSession['snapshotSourceState']>
   ): void {
     Object.assign(this, snapshot);
+  }
+
+  /** The system under `context`: the one load path for the build's
+   *  authority and for a participant checking its own context. */
+  private loadSystemUnder(context: SessionResolutionContext): SystemConfig {
+    return loadSystemConfig(() => engineApi(this.key), {
+      systemPath: resolve(this.rootDir!, this.options.system),
+      rootDir: this.rootDir!,
+      prefix: this.options.prefix,
+      prefixContextualVars: this.options.prefixContextualVars,
+      conditions: context.conditions,
+      workspaces: context.workspaces,
+      extensions: context.extensions,
+    });
+  }
+
+  /** What the system loader reads of this participant besides the root, as
+   *  stable text: its conditions and extension order. */
+  private resolutionContextText(): string {
+    return JSON.stringify([
+      this.conditions,
+      extensionPolicyJson(this.extensionPolicy),
+    ]);
+  }
+
+  private resolutionContextLabel(): string {
+    return (
+      `${this.driverLabel} with conditions [${this.conditions.join(', ')}] ` +
+      `and extension order ${this.extensionPolicy.resolverVersion}`
+    );
+  }
+
+  /** One agreed system authority (SA5): a participant whose resolution
+   *  context differs from the one the build's system was loaded under loads
+   *  it once under its own, and proceeds only on the same system. Otherwise
+   *  it throws, naming both contexts, whichever participant came first. */
+  agreeWithSystemAuthority(): void {
+    const authority = getSystemAuthority(this.key);
+    if (authority === null) return;
+    const context = this.resolutionContextText();
+    if (context === authority.context) return;
+    let own = authority.others.get(context);
+    if (own === undefined) {
+      own = systemLoad(
+        this.loadSystemUnder({
+          conditions: this.conditions,
+          workspaces: declaredWorkspacePackages(this.rootDir!),
+          extensions: this.extensionPolicy,
+        })
+      );
+      authority.others.set(context, own);
+    }
+    if (own.identity === authority.identity) return;
+    const shared = new Set(authority.dependencies);
+    const mine = new Set(own.dependencies);
+    const differing = [
+      ...authority.dependencies.filter((path) => !mine.has(path)),
+      ...own.dependencies.filter((path) => !shared.has(path)),
+    ].map((path) => relative(this.rootDir!, path));
+    throw new SessionConfigurationConflict(
+      this.key,
+      authority.label,
+      this.resolutionContextLabel(),
+      differing.length > 0
+        ? [`system modules ${differing.join(', ')}`]
+        : ['the evaluated system'],
+      'Every participant of one build must evaluate the same system: give ' +
+        'each compiler conditions that select the same system modules.'
+    );
   }
 
   /** Release this session's publication claim so a successor may publish.
