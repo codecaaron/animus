@@ -1121,7 +1121,12 @@ fn build_bundle(
     let mut marker_offsets: Vec<(usize, String)> = Vec::new();
 
     bundle.push_str(CONSOLE_SHIM);
-    bundle.push_str("const __modules = {};\nconst __require = (n) => __modules[n];\n\n");
+    bundle.push_str("const __modules = {};\nconst __require = (n) => __modules[n];\n");
+    // A module namespace lists its names in code-unit order, as Node lists
+    // them; plain assignment leaves them in the order the module ran.
+    bundle.push_str(
+        "const __namespace = (e) => { const ns = {}; for (const k of Object.keys(e).sort()) ns[k] = e[k]; return ns; };\n\n",
+    );
 
     // Stub modules first, emitted in sorted key order (and with sorted export
     // names) so the same inputs always produce the same bytes.
@@ -1209,7 +1214,7 @@ fn push_module_iife(
     bundle.push('\n');
     let _ = writeln!(
         bundle,
-        "__modules['{}'] = __exports;",
+        "__modules['{}'] = __namespace(__exports);",
         js_quoted(module_path)
     );
     bundle.push_str("})();\n\n");
@@ -2645,6 +2650,33 @@ export const ds = tokens;
         assert!(
             !blocks.contains("motion") && !blocks.contains("animus-kf-ccc"),
             "unregistered export must not carry: {blocks}"
+        );
+    }
+
+    #[test]
+    fn an_acyclic_namespace_lists_its_names_in_code_unit_order() {
+        // Node lists a module namespace's names in code-unit order, whatever
+        // order the module exported them in.
+        let dir = scratch_dir("acyclic-namespace-order");
+        write_fixture(
+            &dir.join("entry.js"),
+            "import * as ns from './a.js';\nconst data = { keys: Object.keys(ns), spread: Object.keys({ ...ns }) };\n\
+             export const ds = { toConfig: () => ({ propConfig: JSON.stringify(data), groupRegistry: '{}' }), \
+             getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [] }) };\n\
+             export const theme = { serialize: () => ({ scalesJson: '{}', variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n",
+        );
+        write_fixture(
+            &dir.join("a.js"),
+            "export const z = 1;\nexport { y } from './c.js';\nexport * as w from './c.js';\nexport * from './d.js';\nexport const a = 2;\nexport default 0;\n",
+        );
+        write_fixture(&dir.join("c.js"), "export const y = 3;\n");
+        write_fixture(&dir.join("d.js"), "export const B = 4;\n");
+        let result = load_system_module(&dir.join("entry.js").to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let _ = fs::remove_dir_all(&dir);
+        let order = r#"["B","a","default","w","y","z"]"#;
+        assert_eq!(
+            result.map(|loaded| loaded.prop_config).as_deref(),
+            Ok(format!(r#"{{"keys":{order},"spread":{order}}}"#).as_str())
         );
     }
 
