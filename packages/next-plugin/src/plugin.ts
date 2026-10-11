@@ -336,6 +336,10 @@ export class AnimusWebpackPlugin {
           if (existsSync(dep)) compilation.fileDependencies.add(dep);
           else compilation.missingDependencies.add(dep);
         }
+        // A path the system load found absent reloads it when created.
+        for (const path of this.session.systemMissingPaths) {
+          compilation.missingDependencies.add(path);
+        }
         for (const dep of this.session.assetDependencyPaths) {
           if (existsSync(dep)) compilation.fileDependencies.add(dep);
           else compilation.missingDependencies.add(dep);
