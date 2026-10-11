@@ -24,7 +24,7 @@ use crate::declarations::{bind_component_declarations, check_surface_overlap, De
 use crate::dynamic_meta::{share_slots, DynamicPropMeta};
 use crate::evaluator::{Admission, EvalError, TransformAdmission, TransformEvaluator};
 use crate::facts::FileFacts;
-use crate::identity::{BindingKind, ImportBinding};
+use crate::identity::ImportBinding;
 use animus_system_loader::module_table::{ExportLookup, Request, Terminal};
 use crate::jsx_scan::{
     ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult,
@@ -3399,12 +3399,8 @@ pub(crate) fn binding_name(
     binding: crate::identity::LocalId,
 ) -> (String, String) {
     let path = &links.paths[module];
-    let declared = files[path].bindings.binding(binding);
-    let name = match declared.kind {
-        BindingKind::DefaultCell => files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone()),
-        _ => declared.name.clone(),
-    };
-    (path.clone(), name)
+    let bindings = &files[path].bindings;
+    (path.clone(), bindings.binding(bindings.held(binding)).name.clone())
 }
 
 /// The (slot, binding) pairs of the compose family `declaring` declares as
