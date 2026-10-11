@@ -107,7 +107,7 @@ async function firstWebpackTurn(
 describe('the webpack first full pass', () => {
   async function firstPass(dev: boolean, mode?: AnimusMode): Promise<void> {
     const root = createProject('animus-next-first-pass-');
-    const wrapped = withAnimus({ system: './src/system.ts', mode })({});
+    const wrapped = withAnimus({ system: './src/system.ts', mode, root })({});
     if (!('webpack' in wrapped)) {
       throw new Error('withAnimus returned the Turbopack branch');
     }
