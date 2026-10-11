@@ -741,6 +741,14 @@ fn unstable_style_statics(
     unstable
 }
 
+/// A computed load `prepare` lists, with the module that makes it.
+#[derive(serde::Serialize)]
+struct ListedLoad {
+    importer: String,
+    #[serde(flatten)]
+    load: crate::loads::HostLoad,
+}
+
 #[napi]
 impl ExtractEngine {
     #[napi(constructor)]
@@ -808,9 +816,10 @@ impl ExtractEngine {
     }
 
     /// Parses `file_entries_json` for the next `analyze` of the same files,
-    /// and returns their input identity and the path each of their
-    /// specifiers probes (`probe_base`), sorted: the bases a session gathers
-    /// host-candidate evidence for, which carries that identity.
+    /// and returns their input identity, the path each of their specifiers
+    /// probes (`probe_base`), sorted, and their computed loads: the bases a
+    /// session gathers host-candidate evidence for, and the loads it lists
+    /// the host's expansions of (spec §6.3), which carry that identity.
     #[napi]
     pub fn prepare(&mut self, file_entries_json: String) -> napi::Result<String> {
         let entries = canonical_entries(&file_entries_json)?;
@@ -820,8 +829,11 @@ impl ExtractEngine {
             entries.into_iter().map(|e| ast_store::FileEntry { path: e.path, source: e.source }).collect(),
         );
         let mut bases = std::collections::BTreeSet::new();
+        let mut loads = Vec::new();
         for ast in store.iter() {
-            for load in crate::loads::collect(ast.program()) {
+            let (all, listed) = crate::loads::collect_listed(ast.program());
+            loads.extend(listed.into_iter().map(|load| ListedLoad { importer: ast.path.clone(), load }));
+            for load in all {
                 if let Some(base) =
                     load.specifier().and_then(|spec| analyze_css::probe_base(&ast.path, spec, &self.opts.css_inputs))
                 {
@@ -830,7 +842,7 @@ impl ExtractEngine {
             }
         }
         self.prepared = Some((kept, store));
-        serde_json::to_string(&serde_json::json!({ "identity": identity, "bases": bases }))
+        serde_json::to_string(&serde_json::json!({ "identity": identity, "bases": bases, "loads": loads }))
             .map_err(|e| napi::Error::from_reason(format!("probe bases: {e}")))
     }
 

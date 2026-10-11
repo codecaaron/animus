@@ -183,9 +183,6 @@ pub struct AnalysisContext {
     /// analysis never reads, spec §2.2 A8): each is an opening of this
     /// analysis, as one of its own probes is.
     pub openings: Vec<IngestionOpening>,
-    /// What the host's bundler expands each computed load to (spec §6.3),
-    /// by importer and the load's byte offset.
-    pub expansions: Vec<HostExpansion>,
 }
 
 /// One computed load's expansion under the host's own semantics: every
@@ -884,6 +881,10 @@ pub struct ProbeEvidence {
     #[serde(default)]
     pub identity: String,
     pub bases: FxHashMap<String, HostCandidate>,
+    /// What the host's bundler expands each computed load `prepare` lists
+    /// to (spec §6.3), by importer and the load's byte offset.
+    #[serde(default)]
+    pub expansions: Vec<HostExpansion>,
 }
 
 /// The path a specifier probes from `from_file`, relative to rootDir: a
@@ -3130,9 +3131,9 @@ pub(crate) fn load_reach<'f, T>(
         return LoadReach::Modules(loaded_modules(file, load, files, inputs));
     }
     let expansion = inputs
-        .analysis_context
-        .expansions
+        .probe_evidence
         .iter()
+        .flat_map(|evidence| &evidence.expansions)
         .find(|expansion| expansion.importer == file && expansion.start == load.start);
     let Some(expansion) = expansion.filter(|expansion| expansion.closed) else {
         return LoadReach::Any("which may load any module, and the host lists no closed expansion of it".to_string());
@@ -13631,6 +13632,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         inputs.probe_evidence = Some(ProbeEvidence {
             generation: 1,
             identity: String::new(),
+            expansions: Vec::new(),
             bases: ["data.json", "icon.svg?url", "styles.css"].into_iter().map(asset).collect(),
         });
         for (mutate, warns) in [
@@ -13671,7 +13673,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
         let warned = |loader: &str, pages: usize, expansion: Option<HostExpansion>| -> Vec<String> {
             let mut inputs = logical_space_inputs();
-            inputs.analysis_context.expansions.extend(expansion);
+            inputs.probe_evidence =
+                Some(ProbeEvidence { expansions: expansion.into_iter().collect(), ..ProbeEvidence::default() });
             let paths: Vec<String> = (0..pages).map(|page| format!("pages/p{page}.js")).collect();
             let mut files = vec![("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("loader.ts", loader)];
             files.extend(paths.iter().map(|path| (path.as_str(), "export const page = 1;\n")));
@@ -13718,6 +13721,78 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let excluded = warned(loader, 3, Some(listed(true, 3, &[("pages/p3.test.js", ExpandedStatus::Unanalysed)])));
         assert!(any("which may load pages/p3.test.js, a module the analysis does not read", excluded.clone()), "{excluded:?}");
         assert_eq!(warned(loader, 3, Some(listed(true, 3, &[("pages/data.json", ExpandedStatus::Opaque)]))), Vec::<String>::new());
+    }
+
+    /// Contract: every computed load analysis reads is one `prepare` lists,
+    /// by the same offset and as written, so a host that expands each listed
+    /// load leaves none unexpanded.
+    #[test]
+    fn every_computed_load_analysis_reads_is_listed() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        let loader = concat!(
+            "export const a = (n) => import(/* webpackInclude: /\\.js$/ */ `./pages/${n}.js`);\n",
+            "export const b = (n) => (require)?.('./data/' + n + '.json');\n",
+            "export const c = require['context']('./ctx', false, /\\.js$/i);\n",
+            "export const d = import.meta.webpackContext('./wc', { regExp: /x/, chunkName: 'c', mode: 'lazy' });\n",
+            "export const e = import.meta.glob(['./g/*.js', '!./g/skip.js'], { query: '?raw', import: 'default' });\n",
+            "export const f = (s) => import(s);\n",
+            "export const g = (o) => import.meta.glob('./h/*.js', o);\n",
+            "export const h = (n) => import(`./raw/${n}.js`, { with: { type: 'raw' } });\n",
+            "export const i = (n, o) => import(`./raw/${n}.js`, o);\n",
+            "export const j = (n) => import(`${n}`);\n",
+            "export const k = (n) => import('' + n);\n",
+            "export const l = import.meta.glob('./h/*.js', false);\n",
+            "export const m = (n) => import(`./pages/${`group/${n}`}.js`);\n",
+            "export const o = (n) => import(`./pages/${'group/' + n}.js`);\n",
+            "export const p = (n) => import(`./q/${n}.js`, { 'with': { type: 'raw' } });\n",
+            "export const q = (n) => import(`./q/${n}.js`, { with: { type: 'raw' }, with: { type: 'code' } });\n",
+        );
+        let allocator = oxc::allocator::Allocator::default();
+        let program = oxc::parser::Parser::new(&allocator, loader, oxc::span::SourceType::ts()).parse().program;
+        let (_, listed) = crate::loads::collect_listed(&program);
+        let listed = serde_json::to_value(&listed).unwrap();
+        let start = |at: &str| loader.find(at).unwrap();
+        assert_eq!(
+            listed,
+            serde_json::json!([
+                { "start": start("import(/*"), "kind": "import", "args": { "quasis": ["./pages/", ".js"], "template": true, "options": null, "comments": ["/* webpackInclude: /\\.js$/ */"] } },
+                { "start": start("(require)"), "kind": "require", "args": { "quasis": ["./data/", ".json"], "template": false, "options": null, "comments": [] } },
+                { "start": start("require['"), "kind": "context", "args": { "dir": "./ctx", "recursive": false, "regExp": { "source": "\\.js$", "flags": "i" }, "include": null, "exclude": null, "mode": null } },
+                { "start": start("import.meta.webpackContext"), "kind": "webpackContext", "args": { "dir": "./wc", "recursive": null, "regExp": { "source": "x", "flags": "" }, "include": null, "exclude": null, "mode": "lazy" } },
+                { "start": start("import.meta.glob(["), "kind": "glob", "args": { "patterns": ["./g/*.js", "!./g/skip.js"], "options": { "query": "?raw", "import": "default" } } },
+                // A bare variable is no template or concatenation, which
+                // hosts read another way, and an argument that is not
+                // written statically, or options that are no object literal,
+                // list no arguments.
+                { "start": start("import(s)"), "kind": "import", "args": null },
+                { "start": start("import.meta.glob('./h/*.js', o)"), "kind": "glob", "args": null },
+                { "start": start("import(`./raw/${n}.js`, {"), "kind": "import", "args": { "quasis": ["./raw/", ".js"], "template": true, "options": { "with": { "type": "raw" } }, "comments": [] } },
+                { "start": start("import(`./raw/${n}.js`, o"), "kind": "import", "args": null },
+                { "start": start("import(`${n}`)"), "kind": "import", "args": { "quasis": ["", ""], "template": true, "options": null, "comments": [] } },
+                { "start": start("import('' + n)"), "kind": "import", "args": { "quasis": ["", ""], "template": false, "options": null, "comments": [] } },
+                { "start": start("import.meta.glob('./h/*.js', false)"), "kind": "glob", "args": null },
+                // A substitution that is text itself, and options with a
+                // quoted or repeated key, list no arguments.
+                { "start": start("import(`./pages/${`"), "kind": "import", "args": null },
+                { "start": start("import(`./pages/${'"), "kind": "import", "args": null },
+                { "start": start("import(`./q/${n}.js`, { '"), "kind": "import", "args": null },
+                { "start": start("import(`./q/${n}.js`, { with: { type: 'raw' }, with"), "kind": "import", "args": null },
+            ])
+        );
+        let files = [("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("loader.ts", loader)];
+        let warned = |inputs: &CssInputs| unattributed(&analyze(&files, inputs)).len();
+        assert!(warned(&logical_space_inputs()) > 0);
+        let mut inputs = logical_space_inputs();
+        let expansions = listed.as_array().unwrap().iter().map(|load| HostExpansion {
+            importer: "loader.ts".to_string(),
+            start: load["start"].as_u64().unwrap() as u32,
+            closed: true,
+            files: Vec::new(),
+        });
+        inputs.probe_evidence = Some(ProbeEvidence { expansions: expansions.collect(), ..ProbeEvidence::default() });
+        assert_eq!(warned(&inputs), 0);
     }
 
     /// Code a module runs from a string can `import()` any module and
@@ -15562,6 +15637,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             inputs.probe_evidence = Some(ProbeEvidence {
                 generation: 1,
                 identity: String::new(),
+                expansions: Vec::new(),
                 bases: [(
                     "twin".to_string(),
                     HostCandidate {
@@ -15609,6 +15685,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             Some(ProbeEvidence {
                 generation: 1,
                 identity: String::new(),
+                expansions: Vec::new(),
                 bases: [(
                     "a".to_string(),
                     HostCandidate { candidate: "a.json".into(), actual: None, analysed_as: None, reading: Some(reading) },
