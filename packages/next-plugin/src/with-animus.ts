@@ -1,6 +1,7 @@
 import {
   AnimusConfigError,
   assembleStylesheet,
+  assertSupportedEngine,
   assertKnownOptionKeys,
   buildPathAliasesJson,
   isEngineTransformExtension,
@@ -20,18 +21,13 @@ import {
   stylesPath,
   systemPropsPath,
 } from '@animus-ui/extract/session';
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 import { resolveAnimusLoaderPath } from './loader-path';
 import { ANIMUS_CSS_MODULE_ID, AnimusWebpackPlugin } from './plugin';
+import { sameDirectory } from './same-directory';
 import {
   ANIMUS_TURBOPACK_RULE_GLOB,
   buildTurbopackConfig,
@@ -152,6 +148,8 @@ export function withAnimus(
 ): <Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>
 ) => WebpackNextConfig<Config> | TurbopackNextConfig<Config> {
+  // Before anything loads the native module (SA2).
+  assertSupportedEngine(options.engine);
   if (!options.system) {
     throw new Error(
       '[animus-extract] Missing required option `system`. ' +
@@ -440,18 +438,6 @@ export function bindTurbopackWatchDeathReport(
  *  source, but Next's server keeps an installed package external, and so
  *  loads its runtime entry, unless the package is transpiled; transpiling
  *  also compiles its TypeScript source. */
-/** Whether two paths name one directory, symlinks resolved. */
-function sameDirectory(a: string, b: string): boolean {
-  const real = (path: string) => {
-    try {
-      return realpathSync(path);
-    } catch {
-      return resolve(path);
-    }
-  };
-  return real(a) === real(b);
-}
-
 let warnedTurbopackCwd = false;
 
 /** Turbopack's loaders get no app dir either, so a cwd that is not the app
