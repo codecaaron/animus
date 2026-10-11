@@ -177,7 +177,10 @@ describe('config resolution', () => {
     );
     const config = await resolveCliConfig({ root, outDir: 'out/animus' }, root);
     const session = createCliSession(config);
-    const patterns = [...session.getExcludeStats().keys()];
+    const { patterns } = createExcludeMatcher(
+      config.options.exclude,
+      session.structuralExclude
+    );
     expect(session.structuralExclude).toEqual(['out/animus/**']);
     expect(patterns).toContain('out/animus/**');
     expect(patterns).toContain('dist');
