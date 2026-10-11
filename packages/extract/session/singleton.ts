@@ -330,45 +330,61 @@ export class SessionConfigurationConflict extends Error {
   }
 }
 
+/** How one option reads as stable text: the field it reads, which the
+ *  classification below checks against its key. */
+interface OptionDigest<Key extends keyof AnimusCoreOptions> {
+  readonly field: Key;
+  text(options: AnimusCoreOptions): string | undefined;
+}
+
+function digestOf<Key extends keyof AnimusCoreOptions>(
+  field: Key
+): OptionDigest<Key> {
+  return {
+    field,
+    text: (options) => {
+      const value = options[field];
+      return value === undefined ? undefined : stableStringify(value);
+    },
+  };
+}
+
 /**
- * The options a build's analysis depends on, each as stable text, which every
- * participant of the build must agree on. `verbose` changes no output, and
- * the root is the key's. Each field is data by its type, so equal text is an
- * equal value; a host's own options are not the build's.
+ * Every option, classified: one a build's analysis depends on, which every
+ * participant must agree on, or one deliberately excluded. `verbose` changes
+ * no output, and the root is the key's. The type checker rejects an option
+ * added to `AnimusCoreOptions` until it is classified here.
  */
+const OPTION_CLASSES = {
+  system: digestOf('system'),
+  exclude: digestOf('exclude'),
+  extensions: digestOf('extensions'),
+  strict: digestOf('strict'),
+  diagnostics: digestOf('diagnostics'),
+  verbose: 'excluded',
+  prefix: digestOf('prefix'),
+  prefixContextualVars: digestOf('prefixContextualVars'),
+  targets: digestOf('targets'),
+  minify: digestOf('minify'),
+  staticCss: digestOf('staticCss'),
+  layers: digestOf('layers'),
+  engine: digestOf('engine'),
+  mode: digestOf('mode'),
+  root: 'excluded',
+} as const satisfies {
+  [Key in keyof AnimusCoreOptions]-?: OptionDigest<Key> | 'excluded';
+};
+
+/** The options a build's analysis depends on, each as stable text; each is
+ *  data by its type, so equal text is an equal value. A host's own options
+ *  are not the build's. */
 function semanticOptions(options: AnimusCoreOptions): Map<string, string> {
-  const fields: Array<[string, string | undefined]> = [
-    ['system', options.system],
-    ['exclude', options.exclude && stableStringify(options.exclude)],
-    ['extensions', options.extensions && stableStringify(options.extensions)],
-    [
-      'strict',
-      options.strict === undefined ? undefined : String(options.strict),
-    ],
-    [
-      'diagnostics',
-      options.diagnostics && stableStringify(options.diagnostics),
-    ],
-    ['prefix', options.prefix],
-    [
-      'prefixContextualVars',
-      options.prefixContextualVars === undefined
-        ? undefined
-        : String(options.prefixContextualVars),
-    ],
-    ['targets', options.targets && stableStringify(options.targets)],
-    [
-      'minify',
-      options.minify === undefined ? undefined : String(options.minify),
-    ],
-    ['staticCss', options.staticCss && stableStringify(options.staticCss)],
-    ['layers', options.layers && stableStringify(options.layers)],
-    ['engine', options.engine],
-    ['mode', options.mode],
-  ];
-  const present = fields.flatMap(([name, text]): Array<[string, string]> =>
-    text === undefined ? [] : [[name, text]]
-  );
+  const present: Array<[string, string]> = [];
+  for (const [name, digest] of Object.entries(OPTION_CLASSES)) {
+    if (digest === 'excluded') continue;
+    const text = digest.text(options);
+    if (text !== undefined) present.push([name, text]);
+  }
   return new Map(present);
 }
 
@@ -491,9 +507,16 @@ export function findSession(key: SessionKey): SessionState | undefined {
   return sessionRegistry().sessions.get(sessionKeyId(key));
 }
 
-/** Ends the session of `key`; a later join starts a new one. */
-export function closeSession(key: SessionKey): void {
-  sessionRegistry().sessions.delete(sessionKeyId(key));
+/** `participant` leaves the build of `key`, which leaves the registry with
+ *  its last participant: its tree is then no live build's, and a later join
+ *  starts it anew. */
+export function leaveSession(key: SessionKey, participant: string): void {
+  const sessions = sessionRegistry().sessions;
+  const id = sessionKeyId(key);
+  const state = sessions.get(id);
+  if (state === undefined) return;
+  state.participants.delete(participant);
+  if (state.participants.size === 0) sessions.delete(id);
 }
 
 /** The registry's global slot, which test harnesses clear. */

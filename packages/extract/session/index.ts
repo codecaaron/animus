@@ -69,10 +69,10 @@ export {
   getSharedSystemProps,
   resetAnalysisStartedPromise,
   setAnalysisStartedPromise,
-  closeSession,
   createBuildId,
   findSession,
   joinSession,
+  leaveSession,
   SessionConfigurationConflict,
   sessionKey,
 } from './singleton';

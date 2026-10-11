@@ -94,6 +94,7 @@ import {
   engineApi,
   findSession,
   joinSession,
+  leaveSession,
   sessionKey,
   getOwningWatchSession,
   getWatchTransaction,
@@ -126,6 +127,9 @@ import type {
 import type { SessionKey } from './singleton';
 
 export type SessionOptions = AnimusCoreOptions;
+
+/** Numbers each session instance as a participant of its build. */
+let participantCount = 0;
 
 /** What the hosting bundler does, which the user does not configure. */
 export interface SessionHost {
@@ -352,6 +356,8 @@ export class ExtractionSession {
    *  does. */
   readonly sessionId: string;
   private joinedKey: SessionKey | null = null;
+  /** This instance as a participant of its build, once joined. */
+  private participant: string | null = null;
   /** Epoch of the last published analysis; null seeds from disk so a
    *  same-session restart with unchanged plans rewrites no bytes. */
   private lastEpochValue: string | null = null;
@@ -409,7 +415,9 @@ export class ExtractionSession {
   get key(): SessionKey {
     if (this.joinedKey === null) {
       const key = sessionKey(this.sessionId, this.rootDir!);
-      joinSession(key, this.driverLabel, this.options);
+      const participant = `${this.driverLabel}#${++participantCount}`;
+      joinSession(key, participant, this.options);
+      this.participant = participant;
       this.joinedKey = key;
     }
     return this.joinedKey;
@@ -1310,11 +1318,17 @@ export class ExtractionSession {
     Object.assign(this, snapshot);
   }
 
-  /** Release this session's publication claim so a successor may publish.
-   *  Idempotent, and scoped to this session's own claim. */
+  /** Release this session's publication claim and leave its build.
+   *  Idempotent. The build's last participant to close retires it, so its
+   *  tree can be pruned once stale. */
   close(): void {
     this.releasePublicationClaim?.();
     this.releasePublicationClaim = null;
+    if (this.joinedKey !== null && this.participant !== null) {
+      leaveSession(this.joinedKey, this.participant);
+    }
+    this.joinedKey = null;
+    this.participant = null;
   }
 
   /** Reset analysis state for a system reload: write guards go back to null
