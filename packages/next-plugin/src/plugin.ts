@@ -324,7 +324,8 @@ export class AnimusWebpackPlugin {
         // so a refreshed dependency set reaches this compilation.
         registerSystemDependencies();
 
-        const css = getSharedCss(this.session.key);
+        // Before its root is known, the session has joined no build.
+        const css = this.session.rootDir ? getSharedCss(this.session.key) : '';
         if (!css || !RawSource) return;
 
         const rootDir = this.session.rootDir || compiler.context;
