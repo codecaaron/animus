@@ -13,6 +13,7 @@ use crate::analyze_css::{
     declared_export, loaded_modules, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
 };
 use crate::facts::{FacadeEntry, FileFacts};
+use animus_system_loader::module_table::{ExportLookup, Terminal};
 
 /// Every compose family, keyed by the names its module gives it.
 pub(crate) struct FamilyIndex {
@@ -441,7 +442,7 @@ impl<'f> ObjectMembers<'f> {
         let files = self.files;
         match path.rsplit_once('.') {
             Some((namespace, name)) => {
-                let module = namespace_path_module(file, files.get(file)?, namespace, files, self.inputs)?;
+                let module = namespace_path_module(file, files.get(file)?, namespace, files, self.inputs, self.links)?;
                 self.exported_object(&module, name)
             }
             None => self.local_object(file, path),
@@ -800,12 +801,19 @@ fn resolve_export(
 /// `export * as name from '…'`, or a namespace import exported again
 /// (`import * as name from '…'; export { name }`), followed through
 /// re-exports and barrels. `None` when `name` is no namespace there.
+///
+/// A module namespace the module table resolves the export to is that
+/// module; any other answer keeps the namespace re-export walk.
 pub(crate) fn namespace_export(
     module: String,
     name: String,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<String> {
+    if let Some(ExportLookup::Resolved(Terminal::Namespace(target))) = links.resolve_export(&module, &name) {
+        return Some(links.paths[target].clone());
+    }
     resolve_namespace(module, name, files, inputs, &mut FxHashSet::default())
 }
 
