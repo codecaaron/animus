@@ -225,6 +225,7 @@ import type {
   ManifestDiagnostic,
   ProjectManifest,
   SourceCorpus,
+  SourceIngestorHost,
   SourceEntryOwnership,
   SourceIdentity,
   SourceIngestionResult,
@@ -407,6 +408,9 @@ export class ExtractionSession {
   /** System-props module id override. Turbopack rejects absolute-path
    *  imports, so its driver sets a virtual id; null injects the abs path. */
   systemPropsModuleId: string | null = null;
+  /** The stylesheet module generated code imports; a host that serves the
+   *  stylesheet itself names its own. */
+  cssModuleId: string = ANIMUS_CSS_MODULE_ID;
   /** Whether the analysis-inputs hydration corpus is written to disk. Only
    *  isolated loader workers replay it; an in-process loader reads memory. */
   persistAnalysisInputs = false;
@@ -514,15 +518,24 @@ export class ExtractionSession {
   // live in the published source corpus.
   private fileCache = new Map<string, { hash: string; source: string }>();
 
-  readonly corpus: SourceCorpus = createSourceCorpus({
-    engineApi: () => this.engine(),
-    prefix: '[animus-next]',
-    strict: () => !!this.options.strict,
-    warn: (message: string) => this.warn(message),
-    reportErrors: () => this.reportErrors(),
-    extensions: () => this.extensionPolicy,
-    rootDir: () => this.rootDir!,
-  });
+  readonly corpus: SourceCorpus = createSourceCorpus(this.corpusHost());
+
+  /** The corpus reads the driver label when it reports, so a host that
+   *  sets `driverLabel` after construction is named in its messages. */
+  private corpusHost(): SourceIngestorHost {
+    const label = () => this.driverLabel;
+    return {
+      engineApi: () => this.engine(),
+      get prefix() {
+        return `[${label()}]`;
+      },
+      strict: () => !!this.options.strict,
+      warn: (message: string) => this.warn(message),
+      reportErrors: () => this.reportErrors(),
+      extensions: () => this.extensionPolicy,
+      rootDir: () => this.rootDir!,
+    };
+  }
 
   // Membership keys (lexical + canonical) for the system's evaluated module
   // files. A failed reload keeps the last set — the stale config still serves.
@@ -2238,7 +2251,7 @@ export class ExtractionSession {
       system,
       emitter: {
         runtimeImport: this.runtimeImport,
-        cssModuleId: ANIMUS_CSS_MODULE_ID,
+        cssModuleId: this.cssModuleId,
         systemPropsModuleId:
           this.systemPropsModuleId ?? systemPropsPath(this.sessionDir),
       },
