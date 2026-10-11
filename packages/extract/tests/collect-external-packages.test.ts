@@ -18,6 +18,7 @@ import {
   firstOwners,
   importedKitDiagnostics,
   nativeKitSourceRoot,
+  sourceKitDependencies,
   staleDistIncludesMessage,
 } from '../pipeline/discover-packages';
 import {
@@ -694,6 +695,7 @@ describe('collectExternalPackageSources', () => {
       'react',
     ];
     const engine = {
+      resolveKitSourceRoot: native.resolveKitSourceRoot,
       extractFacts: () =>
         JSON.stringify({
           parseCount: 1,
@@ -1129,6 +1131,46 @@ test.skipIf(process.platform === 'win32').each([
     'src/browser.ts',
   ],
   [
+    'dot-slash',
+    conditional('./src/index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'src/index.ts',
+  ],
+  [
+    'empty-segment',
+    conditional('./src//index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'src/index.ts',
+  ],
+  [
+    'no-dot-slash',
+    conditional('src/index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'dist/index.js',
+  ],
+  [
+    'parent-segment',
+    conditional('./src/../src/index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'dist/index.js',
+  ],
+  [
+    'dot-segment',
+    conditional('./src/./index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'dist/index.js',
+  ],
+  [
     'nested-animus-node',
     {
       '.': {
@@ -1174,13 +1216,17 @@ test.skipIf(process.platform === 'win32').each([
           ? outcome.reason
           : redirected && relative(pkg, redirected),
       loader: loaded.path ? relative(pkg, loaded.path) : loaded.unresolved,
+      reported: result.diagnostics.some(
+        (d) => d.code === INVALID_KIT_SOURCE_CONDITION
+      ),
     }).toEqual(
       read === REFUSED
         ? {
             discovery: expect.stringContaining(REFUSED),
             loader: expect.stringContaining(REFUSED),
+            reported: false,
           }
-        : { discovery: read, loader: read }
+        : { discovery: read, loader: read, reported: read === 'dist/index.js' }
     );
   }
 );
@@ -1234,3 +1280,55 @@ test.each([
     }).toEqual({ rule, root: rootDirName, codes });
   }
 );
+
+// Contract: a package is a kit when the loader's table reads an `animus`
+// condition on any of its entries, an array-valued one included. The app's
+// declared source kits and the imported-kit check both read it so.
+test('a kit with an array-valued animus condition is a kit to both checks', () => {
+  const root = realpathSync(makeRoot());
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({ name: 'app', dependencies: { 'array-kit': '1.0.0' } })
+  );
+  const pkg = join(root, 'node_modules', 'array-kit');
+  for (const file of ['src/index.ts', 'dist/index.js']) {
+    mkdirSync(join(pkg, file, '..'), { recursive: true });
+    writeFileSync(join(pkg, file), 'export const t = 1;\n');
+  }
+  writeFileSync(
+    join(pkg, 'package.json'),
+    JSON.stringify({
+      name: 'array-kit',
+      exports: {
+        '.': { animus: ['./src/index.ts'], import: './dist/index.js' },
+      },
+    })
+  );
+  const engine = {
+    resolveKitSourceRoot: native.resolveKitSourceRoot,
+    extractFacts: () =>
+      JSON.stringify({
+        parseCount: 1,
+        files: {
+          'src/App.tsx': {
+            parsePanicked: false,
+            imports: [{ local: 'x', imported: 'x', source: 'array-kit' }],
+            exports: [],
+          },
+        },
+      }),
+  };
+
+  expect({
+    declared: sourceKitDependencies(root, engine).map((kit) => kit.name),
+    imported: importedKitDiagnostics(
+      [{ path: 'src/App.tsx', source: '' }],
+      engine,
+      root,
+      []
+    ).map((d) => [d.component, d.code]),
+  }).toEqual({
+    declared: ['array-kit'],
+    imported: [['array-kit', KIT_SYSTEM_NOT_INCLUDED]],
+  });
+});

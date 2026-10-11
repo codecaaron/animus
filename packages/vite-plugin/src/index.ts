@@ -36,9 +36,12 @@ interface SourceKitConfig {
 
 function sourceKitConfig(
   rootDir: string,
-  serving: boolean
+  serving: boolean,
+  engine: Parameters<typeof sourceKitDependencies>[1]
 ): SourceKitConfig | undefined {
-  const kits = sourceKitDependencies(rootDir).filter((kit) => kit.installed);
+  const kits = sourceKitDependencies(rootDir, engine).filter(
+    (kit) => kit.installed
+  );
   if (kits.length === 0) return undefined;
   const names = kits.map((kit) => kit.name);
   const config: SourceKitConfig = {
@@ -184,7 +187,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       const define = { __ANIMUS_DEV__: mode === 'development' };
       const kits = sourceKitConfig(
         resolve(userConfig.root ?? process.cwd()),
-        env.command === 'serve'
+        env.command === 'serve',
+        ctx.engineApi()
       );
       return kits ? { define, ...kits } : { define };
     },
