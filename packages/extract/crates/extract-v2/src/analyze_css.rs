@@ -3517,7 +3517,7 @@ fn lost_through_export<'f>(
     links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, LostThrough<'f>)> {
     let (file, declaration) = declared_binding(links, files, module, name)?;
-    let lost = LostThrough::of(&file, &declaration, files)?;
+    let lost = LostThrough::of_binding(&file, &declaration, files)?;
     Some((file, declaration, lost))
 }
 
@@ -4518,10 +4518,17 @@ impl<'f> LostThrough<'f> {
             .find(|e| e.exported == name && e.source.is_none())
             .and_then(|e| e.local.as_deref())
             .unwrap_or(name);
-        if let Some(target) = ff.aliases.get(local).or_else(|| ff.assigned_aliases.get(local)) {
+        Self::of_binding(file, local, files)
+    }
+
+    /// How the declaration bound to `binding` in `file` loses props, read
+    /// from that binding itself.
+    fn of_binding(file: &str, binding: &str, files: &'f BTreeMap<String, FileFacts>) -> Option<Self> {
+        let ff = files.get(file)?;
+        if let Some(target) = ff.aliases.get(binding).or_else(|| ff.assigned_aliases.get(binding)) {
             return Some(Self::Alias(target));
         }
-        let forwarding = ff.props_forwarding.get(local)?;
+        let forwarding = ff.props_forwarding.get(binding)?;
         Some(Self::Spread(&forwarding.routes))
     }
 
@@ -12871,8 +12878,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     /// A wrapper that loses a prop is the binding the module table resolves
-    /// the import to: one exported under another name is found, and an
-    /// import two stars make ambiguous names no wrapper.
+    /// the import to: one exported under another name is found, an import
+    /// two stars make ambiguous names no wrapper, and the resolved binding
+    /// is never swapped for another that an export spells like it.
     #[test]
     fn a_wrapper_that_loses_props_is_found_as_the_module_table_resolves_it() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
@@ -12901,6 +12909,20 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("app.tsx", app),
         ]);
         assert!(unattributed(&ambiguous).is_empty(), "{:?}", ambiguous.diagnostics);
+        // The resolved binding is the wrapper itself, never the binding an
+        // export of the same spelling names.
+        let crossed = "import { Box } from './recipe';\n\
+                       const Inner = (props) => { const { children, ...rest } = props; return <Box {...rest} />; };\n\
+                       const Other = () => null;\n\
+                       export { Inner as Top, Other as Inner };\n";
+        let crossed = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("one.tsx", crossed),
+            ("index.ts", "export * from './one';\n"),
+            ("app.tsx", app),
+        ]);
+        let warned: Vec<_> = unattributed(&crossed).iter().map(|d| d.dropped.as_deref()).collect();
+        assert_eq!(warned, [Some("marginInlineStart")], "{:?}", crossed.diagnostics);
     }
 
     /// Each wrapper shape the attribution does not follow warns once, at the
