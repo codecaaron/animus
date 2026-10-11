@@ -238,11 +238,6 @@ export {
   esbuildAssetClassification,
   nextImageAssetClassification,
   viteAssetClassification,
-  webpackAssetClassification,
 } from './host-assets';
-export type {
-  HostAssetClassification,
-  RuleEntry,
-  WebpackRule,
-} from './host-assets';
+export type { HostAssetClassification } from './host-assets';
 export { adaptedOriginals } from './probe-evidence';

@@ -13,7 +13,6 @@ import {
   rollupExtensionPolicy,
   viteAssetClassification,
   viteExtensionPolicy,
-  webpackAssetClassification,
   webpackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -40,7 +39,6 @@ import type {
   AnimusMode,
   HostAssetClassification,
   HostExtensionPolicy,
-  RuleEntry,
 } from '@animus-ui/extract/pipeline';
 import type { SessionKey } from '@animus-ui/extract/session';
 import type {
@@ -261,9 +259,6 @@ interface RspackLikeCompiler extends WebpackLikeCompiler {
 interface WebpackLikeCompiler {
   options: {
     mode?: string;
-    module?: {
-      rules?: readonly RuleEntry[];
-    };
     resolve?: {
       conditionNames?: string[];
       extensions?: string[];
@@ -864,10 +859,11 @@ export const unpluginFactory: UnpluginFactory<
       compiler.options.resolve ?? {},
       compiler.webpack?.version ?? compiler.rspack?.rspackVersion
     );
-    hostAssets = webpackAssetClassification(
-      meta.framework === 'rspack' ? 'rspack' : 'webpack',
-      compiler.options.module?.rules,
-      compiler.webpack?.version ?? compiler.rspack?.rspackVersion
+    // webpack's rules are not modelled: a conditional rule may never apply,
+    // so the built-in list answers (spec §2.2 A8).
+    hostAssets = builtInAssetClassification(
+      'hostOptionUnreadable',
+      `${meta.framework === 'rspack' ? 'rspack' : 'webpack'} rules not modelled`
     );
     watching = () => compiler.watchMode === true;
     const DefinePlugin =

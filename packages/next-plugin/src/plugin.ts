@@ -2,7 +2,7 @@ import {
   AnimusConfigError,
   assertSupportedEngine,
   buildPathAliasesJson,
-  webpackAssetClassification,
+  builtInAssetClassification,
   webpackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -27,7 +27,6 @@ import { resolveAnimusLoaderPath } from './loader-path';
 import { sameDirectory } from './same-directory';
 
 import type { AnimusNextOptions } from './types';
-import type { RuleEntry } from '@animus-ui/extract/pipeline';
 
 export { ANIMUS_CSS_MODULE_ID } from '@animus-ui/extract/session';
 
@@ -143,9 +142,6 @@ type Compiler = {
     watchOptions?: {
       ignored?: WatchIgnored;
     };
-    module?: {
-      rules?: readonly RuleEntry[];
-    };
   };
   webpack?: {
     version?: string;
@@ -255,10 +251,11 @@ export class AnimusWebpackPlugin {
     const resolve = compiler.options?.resolve;
     const names = resolve?.conditionNames ?? [];
     this.session.conditions = names.filter((name) => name !== '...');
-    this.session.assetClassification = webpackAssetClassification(
-      'next-webpack',
-      compiler.options?.module?.rules,
-      compiler.webpack?.version
+    // webpack's rules are not modelled: a conditional rule may never apply,
+    // so the built-in list answers (spec §2.2 A8).
+    this.session.assetClassification = builtInAssetClassification(
+      'hostOptionUnreadable',
+      'next-webpack rules not modelled'
     );
     this.session.extensionPolicy = webpackExtensionPolicy(
       'next-webpack',

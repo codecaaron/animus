@@ -8,7 +8,6 @@ import {
   builtInAssetClassification,
   esbuildAssetClassification,
   viteAssetClassification,
-  webpackAssetClassification,
 } from '../../pipeline/host-assets';
 import { webpackExtensionPolicy } from '../../pipeline/host-extensions';
 import { hostCandidate } from '../../pipeline/probe-evidence';
@@ -70,36 +69,6 @@ describe('webpackExtensionPolicy', () => {
 // known asset types, less svg, and its CSS languages) answers, labelled with
 // its reason. Where the host's reading is uncertain, a file is not opaque.
 describe('host asset classification', () => {
-  // `a.svg` matches Next's image loader, but svg is no built-in type (an
-  // SVGR-style rule makes it a module), so it stays a module.
-  it("reads webpack's asset rules and Next's image loader, nested and logical", () => {
-    const classified = webpackAssetClassification(
-      'next-webpack',
-      [
-        { test: /\.m?js$/, loader: 'babel-loader' },
-        {
-          oneOf: [
-            { test: /\.(png|svg)$/i, loader: 'next-image-loader' },
-            {
-              test: { and: [/\.woff2$/, { not: /legacy/ }] },
-              type: 'asset/resource',
-            },
-            '...',
-            false,
-          ],
-        },
-      ],
-      '5.98.0'
-    );
-
-    expect(
-      ['a.png', 'a.svg', 'f.woff2', 'legacy/f.woff2', 'a.js', 'a.json'].map(
-        (path) => classified.isAsset(path, '')
-      )
-    ).toEqual([true, false, true, false, false, false]);
-    expect(classified.resolverVersion).toBe('next-webpack@5.98.0 captured');
-  });
-
   it("reads esbuild's loader map and Vite's assetsInclude", () => {
     const esbuild = esbuildAssetClassification({
       '.png': 'file',
@@ -122,6 +91,9 @@ describe('host asset classification', () => {
     ]).toEqual([true, false]);
   });
 
+  // webpack, Rspack and Next-webpack answer with it too: their rules are
+  // not modelled, as a conditional rule may never apply. dx-codex's
+  // witnesses: a `.data` webpack runs as code is no built-in type.
   it('answers with the built-in list, less svg, where no host classifies', () => {
     const builtIn = builtInAssetClassification(
       'hostOptionUnreadable',
@@ -137,119 +109,12 @@ describe('host asset classification', () => {
         'a.json',
         'globals.css',
         'x.css.ts',
+        'selected.data',
       ].map((path) => builtIn.isAsset(path, ''))
-    ).toEqual([true, true, true, false, false, true, false]);
+    ).toEqual([true, true, true, false, false, true, false, false]);
     expect(builtIn.resolverVersion).toBe(
       `built-in (hostOptionUnreadable: rollup; ${BUILT_IN_ASSET_SOURCE})`
     );
-  });
-
-  it('reads a webpack file as opaque only where every rule that can apply agrees', () => {
-    const read = (
-      file: string,
-      rules: Parameters<typeof webpackAssetClassification>[1]
-    ) => webpackAssetClassification('webpack', rules).isAsset(file, '');
-    const data = '/app/src/selected.data';
-
-    expect([
-      read(data, [
-        {
-          oneOf: [
-            { test: /\.data$/, type: 'javascript/auto' },
-            { test: /\.data$/, type: 'asset/resource' },
-          ],
-        },
-      ]),
-      read(data, [
-        { test: /\.data$/, type: 'asset/resource' },
-        { test: /\.data$/, type: 'javascript/auto' },
-      ]),
-      read(data, [
-        { test: /\.data$/, exclude: /selected/, type: 'asset/resource' },
-      ]),
-      read(data, [
-        {
-          include: '/elsewhere',
-          rules: [{ test: /\.data$/, type: 'asset/resource' }],
-        },
-      ]),
-      read(data, [
-        { test: /\.data$/, type: 'asset/resource' },
-        { test: /\.data$/, issuer: /\.css$/, type: 'javascript/auto' },
-      ]),
-      read(data, [
-        { test: /\.data$/, resourceQuery: /raw/, type: 'asset/source' },
-      ]),
-      read(data, [
-        { test: /\.data$/, include: '/app/src', type: 'asset/resource' },
-      ]),
-      read('/app/src/logo.png', [
-        { test: /\.png$/, include: '/app/src', type: 'asset/resource' },
-      ]),
-    ]).toEqual([false, false, false, false, false, false, false, true]);
-
-    const nextCss = {
-      oneOf: [
-        {
-          test: /\.css$/,
-          issuer: /_document/,
-          use: { loader: 'error-loader' },
-        },
-        {
-          test: /\.css$/,
-          issuerLayer: 'app',
-          use: [
-            '/n/loaders/next-flight-css-loader.js',
-            { loader: '/n/loaders/css-loader/src' },
-          ],
-        },
-      ],
-    };
-    expect([
-      read('/app/globals.css', [nextCss]),
-      read('/app/globals.css', [
-        nextCss,
-        { test: /\.css$/, use: 'postcss-loader' },
-      ]),
-    ]).toEqual([true, true]);
-  });
-
-  // dx-codex's witnesses from Next 15.5's live client rules: a rule whose
-  // conditions are unread (`issuer`) may never apply, and webpack compiles
-  // `.data` as `javascript/auto`; a CSS loader beside any other loader may
-  // export code.
-  it('keeps a webpack file a module outside the built-in types, or beside a non-stylesheet loader', () => {
-    const read = (
-      file: string,
-      rules: Parameters<typeof webpackAssetClassification>[1]
-    ) => webpackAssetClassification('next-webpack', rules).isAsset(file, '');
-    const cssUrls = {
-      oneOf: [
-        {
-          issuer: /\.(css|scss|sass)$/,
-          exclude: [/\.(js|mjs|jsx|ts|tsx)$/, /\.html$/, /\.json$/],
-          type: 'asset/resource',
-        },
-      ],
-    };
-
-    expect([
-      read('/app/selected.data', [cssUrls]),
-      read('/app/logo.png', [cssUrls]),
-      read('/app/globals.css', [
-        { test: /\.css$/, use: ['inject-loader', 'css-loader'] },
-      ]),
-      read('/app/globals.css', [
-        {
-          test: /\.css$/,
-          use: [
-            '/n/mini-css-extract-plugin/loader.js',
-            'css-loader',
-            'postcss-loader',
-          ],
-        },
-      ]),
-    ]).toEqual([false, true, false, true]);
   });
 
   it("reads esbuild's loader for a file by its longest extension, exact case", () => {
