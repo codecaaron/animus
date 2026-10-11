@@ -473,9 +473,27 @@ fn unstable_style_statics(
     inputs: &analyze_css::CssInputs,
     readings_of: &mut ReadingsOf<'_>,
 ) -> BTreeMap<(String, String), (String, crate::flow::Uncertainty)> {
-    let declaration = |(module, binding): (ModuleIndex, LocalId)| -> (String, String) {
-        let path = &links.paths[module];
-        (path.clone(), lowered[path].bindings.binding(binding).name.clone())
+    // The declarations a binding names: itself or, for `export default
+    // X`'s cell, X, whose object the cell shares, through each binding X's
+    // import may be.
+    let declarations = |start: (ModuleIndex, LocalId)| -> Vec<(String, String)> {
+        let (mut found, mut seen, mut work) = (Vec::new(), std::collections::BTreeSet::new(), vec![start]);
+        while let Some((module, binding)) = work.pop() {
+            if !seen.insert((module, binding)) {
+                continue;
+            }
+            let path = &links.paths[module];
+            let bindings = &lowered[path].bindings;
+            let held = bindings.held(binding);
+            let imports = &links.table.record(module).imports;
+            match imports.iter().find(|import| held != binding && import.local == held) {
+                Some(import) => {
+                    work.extend(possible_bindings(links, links.table.resolve_request(module, import.request, &import.name)))
+                }
+                None => found.push((path.clone(), bindings.binding(held).name.clone())),
+            }
+        }
+        found
     };
     // The declarations a module's binding may name: itself, or each binding
     // what it imports may be.
@@ -486,7 +504,7 @@ fn unstable_style_statics(
             Some(links.table.resolve_request(module, import.request, &import.name))
         });
         match imported {
-            Some(lookup) => possible_bindings(links, lookup).into_iter().map(declaration).collect(),
+            Some(lookup) => possible_bindings(links, lookup).into_iter().flat_map(declarations).collect(),
             None => vec![(file.to_string(), name.to_string())],
         }
     };
@@ -507,7 +525,12 @@ fn unstable_style_statics(
         let (imports, _) = modules.get(file)?;
         match imports.iter().find(|import| import.local == name) {
             Some(import) => {
-                import_binding(file, &import.source, &import.imported, links, files, inputs).map(declaration)
+                // Only one declaration answers for a callee.
+                let declared = import_binding(file, &import.source, &import.imported, links, files, inputs);
+                match declared.map(declarations).as_deref() {
+                    Some([one]) => Some(one.clone()),
+                    _ => None,
+                }
             }
             None => Some((file.to_string(), name.to_string())),
         }
@@ -524,7 +547,7 @@ fn unstable_style_statics(
         }
         found.sort();
         found.dedup();
-        found.into_iter().map(declaration).collect()
+        found.into_iter().flat_map(declarations).collect()
     };
     // Whether a static may be an object: an object or array, the `asset`
     // function, or what evaluation could not settle. No use can change a
@@ -559,8 +582,8 @@ fn unstable_style_statics(
                 ExportLookup::Incomplete { known, .. } => known,
                 ExportLookup::Absent | ExportLookup::Ambiguous(_) => Vec::new(),
             };
-            for exported in local_bindings(terminals) {
-                flow.export(object(declaration(exported)), path, &name);
+            for declared in local_bindings(terminals).flat_map(declarations) {
+                flow.export(object(declared), path, &name);
             }
         }
     }
@@ -597,11 +620,11 @@ fn unstable_style_statics(
         // namespace's member, every export of a namespace used whole, or
         // the binding's own.
         let targets_of = |name: &str| -> Vec<(String, String)> {
-            let exposed = |name: Option<&str>| exposed_bindings(links, name).into_iter().map(declaration).collect();
+            let exposed = |name: Option<&str>| exposed_bindings(links, name).into_iter().flat_map(declarations).collect();
             let targets: Vec<(String, String)> = match name.split_once('.') {
                 Some((namespace, member)) => match namespace_of(file, namespace) {
                     Some(Request::Module(target)) => {
-                        exported(&links.paths[*target], member).into_iter().map(declaration).collect()
+                        exported(&links.paths[*target], member).into_iter().flat_map(declarations).collect()
                     }
                     Some(Request::Unresolved(_)) => exposed(Some(member)),
                     Some(Request::Outside(_)) | None => Vec::new(),
@@ -887,19 +910,32 @@ impl ExtractEngine {
 
         // Names some module exports an object static under, by name alone:
         // a module that imports none of them and declares no object static
-        // has no use to scan.
+        // has no use to scan. `export default X` exports X's object too, and
+        // an imported X may be one.
+        let is_object = |path: &str, local: &str| {
+            matches!(statics_by_file[path].get(local), Some(crate::static_value::StaticValue::Object(_)))
+        };
+        let default_object = |path: &str| {
+            let bindings = &lowered_by_file[path].bindings;
+            match bindings.default_export {
+                Some(crate::identity::DefaultExport::Snapshot { cell, of: Some(_) }) => {
+                    let held = &bindings.binding(bindings.held(cell)).name;
+                    is_object(path, held) || bindings.module_import(held).is_some()
+                }
+                _ => false,
+            }
+        };
         let object_exports: rustc_hash::FxHashSet<&str> = imports_by_file
             .iter()
             .flat_map(|(path, (_, exports))| {
-                let statics = &statics_by_file[path];
-                exports.iter().filter(move |export| {
-                    export.source.is_some()
-                        || export.local.as_ref().is_some_and(|local| {
-                            matches!(statics.get(local), Some(crate::static_value::StaticValue::Object(_)))
-                        })
-                })
+                exports
+                    .iter()
+                    .filter(|export| {
+                        export.source.is_some() || export.local.as_ref().is_some_and(|local| is_object(path, local))
+                    })
+                    .map(|export| export.exported.as_str())
+                    .chain(default_object(path).then_some("default"))
             })
-            .map(|export| export.exported.as_str())
             .collect();
         for ast in store.iter() {
             let program = ast.program();
@@ -2294,6 +2330,60 @@ export const App = () => <Box tone="red" />;
             ]);
             let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
+        }
+        // `export default pad` holds `pad`'s object, so a write through the
+        // default reaches it: by default import, a re-export by name, a star
+        // past that, the namespace's `default`, a hand-off, or a further
+        // module's `export default` of the imported `pad`. A read through the
+        // default changes nothing.
+        // Each row: its name, the route's modules, and whether `pad` still
+        // extracts.
+        type Row<'r> = (&'r str, &'r [(&'r str, &'r str)], bool);
+        let default_rows: [Row<'_>; 7] = [
+            ("default import written", &[("mutate.js", "import d from './tokens.js';\nd.padding = 9;\n")], false),
+            (
+                "default re-exported by name, written",
+                &[
+                    ("named.js", "export { default as p } from './tokens.js';\n"),
+                    ("mutate.js", "import { p } from './named.js';\np.padding = 9;\n"),
+                ],
+                false,
+            ),
+            (
+                "default re-exported by name behind a star, written",
+                &[
+                    ("named.js", "export { default as p } from './tokens.js';\n"),
+                    ("barrel.js", "export * from './named.js';\n"),
+                    ("mutate.js", "import { p } from './barrel.js';\np.padding = 9;\n"),
+                ],
+                false,
+            ),
+            ("the namespace's default written", &[("mutate.js", "import * as ns from './tokens.js';\nns.default.padding = 9;\n")], false),
+            ("default handed on", &[("mutate.js", "import d from './tokens.js';\nregister(d);\n")], false),
+            (
+                "an imported default re-exported by default, written",
+                &[
+                    ("defaults.js", "import { pad } from './tokens.js';\nexport default pad;\n"),
+                    ("mutate.js", "import d from './defaults.js';\nd.padding = 9;\n"),
+                ],
+                false,
+            ),
+            ("default only read", &[("mutate.js", "import d from './tokens.js';\nexport const read = () => d.padding;\n")], true),
+        ];
+        for (row, route, extracts) in default_rows {
+            let mut files = vec![
+                serde_json::json!({ "path": "tokens.js", "source": "const pad = { padding: 4 };\nexport { pad };\nexport default pad;\n" }),
+                serde_json::json!({
+                    "path": "reader.tsx",
+                    "source": "import './mutate.js';\nimport { pad } from './tokens.js';\n\
+                               export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+                }),
+            ];
+            files.extend(route.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })));
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let out: serde_json::Value =
+                serde_json::from_str(&engine.analyze(serde_json::Value::Array(files).to_string(), None).unwrap()).unwrap();
+            assert_eq!(out["css"].as_str().unwrap_or_default().contains("padding"), extracts, "{row}: {}", out["css"]);
         }
         // A type query of eval, or a schema builder's own `Function` member
         // (TypeBox's `Type.Function`), runs nothing, and a type query of a
