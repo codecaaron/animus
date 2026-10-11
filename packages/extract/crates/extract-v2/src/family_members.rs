@@ -13,6 +13,7 @@ use crate::analyze_css::{
     declared_export, loaded_modules, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
 };
 use crate::facts::{FacadeEntry, FileFacts};
+use animus_system_loader::module_table::{ExportLookup, Terminal};
 
 /// Every compose family, keyed by the names its module gives it.
 pub(crate) struct FamilyIndex {
@@ -92,6 +93,7 @@ impl FamilyIndex {
         ff: &FileFacts,
         files: &BTreeMap<String, FileFacts>,
         inputs: &CssInputs,
+        links: &crate::link::ProjectLinks,
     ) -> FxHashMap<String, String> {
         let mut members = FxHashMap::default();
         let mut add = |prefix: &str, id: usize| {
@@ -106,7 +108,7 @@ impl FamilyIndex {
         }
         for import in &ff.imports {
             let id = match resolve_import_source(file, &import.source, files, inputs) {
-                Some(module) => self.exported(module, import.imported.clone(), files, inputs),
+                Some(module) => self.exported(&module, import.imported.clone(), files, links),
                 // A default import is named by its local binding.
                 None if import.imported == "default" => self.only(&import.local),
                 None => self.only(&import.imported),
@@ -124,8 +126,8 @@ impl FamilyIndex {
                 }
                 continue;
             };
-            for name in module_export_names(&module, files, inputs) {
-                if let Some(id) = self.exported(module.clone(), name.clone(), files, inputs) {
+            for name in module_export_names(&module, files, inputs, links) {
+                if let Some(id) = self.exported(&module, name.clone(), files, links) {
                     add(&format!("{namespace}.{name}"), id);
                 }
             }
@@ -135,15 +137,17 @@ impl FamilyIndex {
 
     /// The family `module` exports as `name`, following re-exports and
     /// barrels.
+    /// The family `module`'s export `name` declares, as the module table
+    /// resolves it: an ambiguous or open export declares none.
     fn exported(
         &self,
-        module: String,
+        module: &str,
         name: String,
         files: &BTreeMap<String, FileFacts>,
-        inputs: &CssInputs,
+        links: &crate::link::ProjectLinks,
     ) -> Option<usize> {
-        let key = follow_exports(module, name, files, inputs)?;
-        self.exports.get(&key).copied()
+        let (declaring, exported, declared) = declared_export(module, name, files, links)?;
+        self.exports.get(&(declaring.clone(), exported)).or_else(|| self.locals.get(&(declaring, declared))).copied()
     }
 
     /// The only family bound to `binding` anywhere in the analysis.
@@ -273,7 +277,7 @@ impl<'f> ObjectMembers<'f> {
         let (root, rest) = name.split_once('.').map_or((name, None), |(root, rest)| (root, Some(rest)));
         let declared = match ff.imports.iter().find(|import| import.local == root) {
             Some(import) => resolve_import_source(module, &import.source, self.files, self.inputs)
-                .and_then(|source| declared_export(&source, import.imported.clone(), self.files, self.inputs))
+                .and_then(|source| declared_export(&source, import.imported.clone(), self.files, self.links))
                 .map(|(declaring, _, binding)| (declaring, binding)),
             None => Some((module.to_string(), root.to_string())),
         };
@@ -441,7 +445,7 @@ impl<'f> ObjectMembers<'f> {
         let files = self.files;
         match path.rsplit_once('.') {
             Some((namespace, name)) => {
-                let module = namespace_path_module(file, files.get(file)?, namespace, files, self.inputs)?;
+                let module = namespace_path_module(file, files.get(file)?, namespace, files, self.inputs, self.links)?;
                 self.exported_object(&module, name)
             }
             None => self.local_object(file, path),
@@ -483,7 +487,7 @@ impl<'f> ObjectMembers<'f> {
     /// and barrels.
     fn exported_object(&mut self, module: &str, name: &str) -> Option<Object> {
         let (declaring, exported, declared) =
-            declared_export(module, name.to_string(), self.files, self.inputs)?;
+            declared_export(module, name.to_string(), self.files, self.links)?;
         if let Some(&id) = self.families.exports.get(&(declaring.clone(), exported)) {
             return Some(Object::Family(id));
         }
@@ -496,7 +500,7 @@ impl<'f> ObjectMembers<'f> {
             return Rc::clone(objects);
         }
         let files = self.files;
-        let mut names = module_export_names(module, files, self.inputs);
+        let mut names = module_export_names(module, files, self.inputs, self.links);
         // `export default compose(…)` binds no name to list.
         names.insert("default".to_string());
         let objects: Rc<[Object]> = names.iter().filter_map(|name| self.exported_object(module, name)).collect();
@@ -738,127 +742,55 @@ impl<'f> ObjectMembers<'f> {
     }
 }
 
-/// The module that declares the name `module` exports as `name`, and the
-/// name it declares there: `export { X as Y } from '…'`, `export * from '…'`
-/// (every source is tried, in order), and an imported name exported again
-/// (`import { X } from '…'; export { X }` or `export default X`). `None` when
-/// no route reaches a declaration.
-pub(crate) fn follow_exports(
-    module: String,
-    name: String,
-    files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-) -> Option<(String, String)> {
-    resolve_export(module, name, files, inputs, &mut FxHashSet::default())
-}
-
-fn resolve_export(
-    file: String,
-    name: String,
-    files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-    visited: &mut FxHashSet<(String, String)>,
-) -> Option<(String, String)> {
-    if !visited.insert((file.clone(), name.clone())) {
-        return None;
-    }
-    let ff = files.get(&file)?;
-    // An imported name exported again leads on to its module.
-    let reexported_import = |local: &str, visited: &mut FxHashSet<(String, String)>| {
-        let import = ff.imports.iter().find(|import| import.local == local)?;
-        let next = resolve_import_source(&file, &import.source, files, inputs)?;
-        resolve_export(next, import.imported.clone(), files, inputs, visited)
-    };
-    if let Some(export) = ff.exports.iter().find(|e| e.exported == name) {
-        return match (&export.source, &export.original, &export.local) {
-            (Some(spec), Some(original), _) => {
-                let next = resolve_import_source(&file, spec, files, inputs)?;
-                resolve_export(next, original.clone(), files, inputs, visited)
-            }
-            (None, _, Some(local)) if ff.imports.iter().any(|import| import.local == *local) => {
-                reexported_import(local, visited)
-            }
-            _ => Some((file.clone(), name.clone())),
-        };
-    }
-    if name == "default" {
-        return match &ff.default_export_binding {
-            Some(local) if ff.imports.iter().any(|import| import.local == *local) => {
-                reexported_import(local, visited)
-            }
-            _ => Some((file.clone(), name.clone())),
-        };
-    }
-    // `export *` never carries a default export.
-    ff.star_exports
-        .iter()
-        .filter_map(|spec| resolve_import_source(&file, spec, files, inputs))
-        .find_map(|module| resolve_export(module, name.clone(), files, inputs, visited))
-}
-
-/// The module `module` exports as the namespace `name`:
-/// `export * as name from '…'`, or a namespace import exported again
-/// (`import * as name from '…'; export { name }`), followed through
-/// re-exports and barrels. `None` when `name` is no namespace there.
+/// The module `module` exports as the namespace `name`, as the module
+/// table resolves it: a module namespace, or a binding that holds one
+/// (`import * as ns …; export default ns`). An absent, ambiguous or open
+/// answer, and any other binding, are no namespace.
 pub(crate) fn namespace_export(
     module: String,
     name: String,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<String> {
-    resolve_namespace(module, name, files, inputs, &mut FxHashSet::default())
+    match links.resolve_export(&module, &name)? {
+        ExportLookup::Resolved(Terminal::Namespace(target)) => Some(links.paths[target].clone()),
+        ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) => {
+            let (path, held) = crate::analyze_css::binding_name(links, files, declaring, binding);
+            held_namespace(&path, files.get(&path)?, &held, files, inputs)
+        }
+        _ => None,
+    }
 }
 
-fn resolve_namespace(
-    file: String,
-    name: String,
+/// The module the binding `binding` of `file` holds as a namespace import.
+pub(crate) fn held_namespace(
+    file: &str,
+    ff: &FileFacts,
+    binding: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
-    visited: &mut FxHashSet<(String, String)>,
 ) -> Option<String> {
-    if !visited.insert((file.clone(), name.clone())) {
-        return None;
-    }
-    let ff = files.get(&file)?;
-    if let Some(spec) = ff.namespace_exports.get(&name) {
-        return resolve_import_source(&file, spec, files, inputs);
-    }
-    if let Some(export) = ff.exports.iter().find(|e| e.exported == name) {
-        return match (&export.source, &export.original, &export.local) {
-            (Some(spec), Some(original), _) => {
-                let next = resolve_import_source(&file, spec, files, inputs)?;
-                resolve_namespace(next, original.clone(), files, inputs, visited)
-            }
-            (None, _, Some(local)) => local_namespace(&file, ff, local, files, inputs, visited),
-            _ => None,
-        };
-    }
-    if name == "default" {
-        let local = ff.default_export_binding.as_deref()?;
-        return local_namespace(&file, ff, local, files, inputs, visited);
-    }
-    ff.star_exports
-        .iter()
-        .filter_map(|spec| resolve_import_source(&file, spec, files, inputs))
-        .find_map(|module| resolve_namespace(module, name.clone(), files, inputs, visited))
+    resolve_import_source(file, ff.namespace_imports.get(binding)?, files, inputs)
 }
 
 /// The module a local binding of `file` holds as a namespace: a namespace
-/// import, or a named import of a namespace another module exports.
+/// import, or a named import of a namespace another module exports, as the
+/// module table resolves it.
 pub(crate) fn local_namespace(
     file: &str,
     ff: &FileFacts,
     local: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
-    visited: &mut FxHashSet<(String, String)>,
+    links: &crate::link::ProjectLinks,
 ) -> Option<String> {
-    if let Some(spec) = ff.namespace_imports.get(local) {
-        return resolve_import_source(file, spec, files, inputs);
+    if ff.namespace_imports.contains_key(local) {
+        return held_namespace(file, ff, local, files, inputs);
     }
     let import = ff.imports.iter().find(|import| import.local == local)?;
-    let next = resolve_import_source(file, &import.source, files, inputs)?;
-    resolve_namespace(next, import.imported.clone(), files, inputs, visited)
+    let module = resolve_import_source(file, &import.source, files, inputs)?;
+    namespace_export(module, import.imported.clone(), files, inputs, links)
 }
 
 /// Every name `module` exports, including through its `export *` sources,
@@ -867,7 +799,12 @@ pub(crate) fn module_export_names(
     module: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> BTreeSet<String> {
+    // An analysed module's exported names are the module table's.
+    if let Some(index) = links.module(module) {
+        return links.table.exported_names(index).names.into_iter().collect();
+    }
     let mut names = BTreeSet::new();
     let mut seen: FxHashSet<String> = FxHashSet::default();
     let mut stack = vec![(module.to_string(), true)];

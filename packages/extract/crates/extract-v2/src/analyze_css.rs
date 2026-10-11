@@ -911,16 +911,9 @@ fn module_declaration(
     };
     match lookup {
         ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) => {
-            let path = &links.paths[declaring];
-            let declared = files[path].bindings.binding(binding);
-            let name = match declared.kind {
-                BindingKind::DefaultCell => {
-                    files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone())
-                }
-                _ => declared.name.clone(),
-            };
-            let locally_defined = declares_locally(&files[path], &name);
-            Some((path.clone(), name, locally_defined, barrel))
+            let (path, name) = binding_name(links, files, declaring, binding);
+            let locally_defined = declares_locally(&files[&path], &name);
+            Some((path, name, locally_defined, barrel))
         }
         ExportLookup::Resolved(Terminal::Namespace(_) | Terminal::External { .. }) => {
             Some((module, imported.to_string(), false, barrel))
@@ -2412,6 +2405,7 @@ fn resolve_compose_slot_class<'a>(
     binding: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     id_to_class: &FxHashMap<&str, &'a str>,
 ) -> Option<&'a str> {
     let binding = resolve_alias_terminal(family_file, binding, files);
@@ -2425,8 +2419,7 @@ fn resolve_compose_slot_class<'a>(
         .iter()
         .find(|import| import.local == binding)?;
     let source_file = resolve_import_source(family_file, &imported.source, files, inputs)?;
-    let (defining_file, defining_name) =
-        follow_reexports(source_file, imported.imported.clone(), files, inputs);
+    let (defining_file, defining_name) = declared_binding(links, files, &source_file, &imported.imported)?;
     let defining_id = format!("{}::{}", defining_file, defining_name);
     id_to_class.get(defining_id.as_str()).copied()
 }
@@ -2573,10 +2566,11 @@ fn resolve_usage_identity(
     local: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
 ) -> Vec<String> {
-    resolve_identity(file, local, files, inputs, evaluated_ids, Some(ids_by_binding))
+    resolve_identity(file, local, files, inputs, links, evaluated_ids, Some(ids_by_binding))
 }
 
 /// The components `local` names in `file` through that file's own
@@ -2588,9 +2582,10 @@ fn resolve_declared_identity(
     local: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
-    let ids = resolve_identity(file, local, files, inputs, evaluated_ids, None);
+    let ids = resolve_identity(file, local, files, inputs, links, evaluated_ids, None);
     if !ids.is_empty() {
         return ids;
     }
@@ -2610,18 +2605,14 @@ fn resolve_declared_identity(
             .map(|source| (source, member.to_string())),
         Some(_) => None,
     };
-    let Some((declaring_file, exported)) = imported.and_then(|(source, name)| {
+    // The binding the module table resolves the export to.
+    let Some((declaring_file, _, declared)) = imported.and_then(|(source, name)| {
         let module = resolve_import_source(file, source, files, inputs)?;
-        crate::family_members::follow_exports(module, name, files, inputs)
+        declared_export(&module, name, files, links)
     }) else {
         return ids;
     };
-    let declared = files
-        .get(&declaring_file)
-        .and_then(|ff| ff.exports.iter().find(|e| e.exported == exported && e.source.is_none()))
-        .and_then(|e| e.local.clone())
-        .unwrap_or(exported);
-    resolve_identity(&declaring_file, &declared, files, inputs, evaluated_ids, None)
+    resolve_identity(&declaring_file, &declared, files, inputs, links, evaluated_ids, None)
 }
 
 /// With `ids_by_binding`, a name the file's declarations and imports do not
@@ -2631,6 +2622,7 @@ fn resolve_identity(
     local: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: Option<&IdsByBinding>,
 ) -> Vec<String> {
@@ -2639,7 +2631,19 @@ fn resolve_identity(
     // Dotted member path: the root resolves through the import table and the
     // last segment names the component there (`const Compound = { Item }`).
     if let Some((path_head, last)) = local.rsplit_once('.') {
+        // A member of an imported namespace is the export the module table
+        // resolves it to.
+        if let Some(module) =
+            files.get(file).and_then(|ff| namespace_path_module(file, ff, path_head, files, inputs, links))
+        {
+            return import_identity(&module, last, files, links, evaluated_ids, &by_bare_name);
+        }
         let root = path_head.split('.').next().unwrap_or(path_head);
+        // A namespace the module table rejects names no member: none is
+        // picked by its spelling.
+        if files.get(file).is_some_and(|ff| namespace_root_rejected(file, ff, root, files, inputs, links)) {
+            return Vec::new();
+        }
         // An imported root (named or namespace) names its module, and one the
         // analysis cannot resolve names nothing here.
         let root_file = match files.get(file).map(|ff| {
@@ -2665,53 +2669,86 @@ fn resolve_identity(
         .and_then(|ff| ff.imports.iter().find(|i| i.local == local))
     {
         if let Some(source_file) = resolve_import_source(file, &imp.source, files, inputs) {
-            let imported_id = format!("{}::{}", source_file, imp.imported);
-            if evaluated_ids.contains(&imported_id) {
-                return vec![imported_id];
-            }
-            // Without this walk a renamed consumer's usage never reaches the
-            // chain, and another consumer prunes the variant it renders.
-            let (mut terminal_file, mut terminal_name) =
-                follow_reexports(source_file, imp.imported.clone(), files, inputs);
-            let mut hop_guard: FxHashSet<(String, String)> = FxHashSet::default();
-            loop {
-                let terminal_id = format!("{}::{}", terminal_file, terminal_name);
-                if evaluated_ids.contains(&terminal_id) {
-                    return vec![terminal_id];
-                }
-                if !hop_guard.insert((terminal_file.clone(), terminal_name.clone())) {
-                    break;
-                }
-                let Some(ff) = files.get(&terminal_file) else {
-                    break;
-                };
-                if let Some(local) = ff
-                    .exports
-                    .iter()
-                    .find(|e| e.exported == terminal_name && e.source.is_none())
-                    .and_then(|e| e.local.clone())
-                {
-                    if local != terminal_name {
-                        terminal_name = local;
-                        continue;
-                    }
-                }
-                let Some(hop) = ff.imports.iter().find(|i| i.local == terminal_name) else {
-                    break;
-                };
-                let Some(next) = resolve_import_source(&terminal_file, &hop.source, files, inputs)
-                else {
-                    break;
-                };
-                let (next_file, next_name) =
-                    follow_reexports(next, hop.imported.clone(), files, inputs);
-                terminal_file = next_file;
-                terminal_name = next_name;
-            }
+            return import_identity(&source_file, &imp.imported, files, links, evaluated_ids, &by_bare_name);
         }
         return by_bare_name(&imp.imported);
     }
     by_bare_name(local)
+}
+
+/// Whether the root `root` of a dotted path in `file` names a namespace the
+/// module table rejects: a namespace import of an analysed module, or a
+/// named import whose export is absent, ambiguous, open, or a namespace.
+/// The path reaches here only when a segment did not resolve. An import of
+/// an object, or of a module outside the analysis, is no such rejection.
+fn namespace_root_rejected(
+    file: &str,
+    ff: &FileFacts,
+    root: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> bool {
+    let analysed = |source: &str| {
+        resolve_import_source(file, source, files, inputs).filter(|module| links.module(module).is_some())
+    };
+    if let Some(source) = ff.namespace_imports.get(root) {
+        return analysed(source).is_some();
+    }
+    let Some(import) = ff.imports.iter().find(|import| import.local == root) else { return false };
+    let Some(module) = analysed(&import.source) else { return false };
+    match links.resolve_export(&module, &import.imported) {
+        Some(ExportLookup::Resolved(Terminal::Namespace(_))) => true,
+        Some(ExportLookup::Resolved(Terminal::Local { .. })) => {
+            crate::family_members::namespace_export(module, import.imported.clone(), files, inputs, links).is_some()
+        }
+        Some(ExportLookup::Resolved(Terminal::External { .. })) | None => false,
+        Some(ExportLookup::Absent | ExportLookup::Ambiguous(_) | ExportLookup::Incomplete { .. }) => true,
+    }
+}
+
+/// The components `module`'s export `name` may be, as the module table
+/// resolves it. The answer is final:
+/// - **A binding's component** when the table resolves the export to a
+///   binding an evaluated component is bound to. For `export default X`'s
+///   cell, that is X's component.
+/// - **Ambiguous or open:** every known terminal's component, plus every
+///   component bound to the imported name, since an open answer may name
+///   another.
+/// - **Absent:** nothing; the module exports no such name.
+/// - **Otherwise:** every component bound to the imported name.
+fn import_identity(
+    module: &str,
+    name: &str,
+    files: &BTreeMap<String, FileFacts>,
+    links: &crate::link::ProjectLinks,
+    evaluated_ids: &FxHashSet<String>,
+    by_bare_name: &dyn Fn(&str) -> Vec<String>,
+) -> Vec<String> {
+    let component = |terminal: &Terminal<crate::identity::LocalId>| match terminal {
+        Terminal::Local { module, binding } => {
+            let (path, name) = binding_name(links, files, *module, *binding);
+            Some(format!("{path}::{name}")).filter(|id| evaluated_ids.contains(id))
+        }
+        Terminal::Namespace(_) | Terminal::External { .. } => None,
+    };
+    let known = match links.resolve_export(module, name) {
+        Some(ExportLookup::Resolved(terminal)) => match component(&terminal) {
+            Some(id) => return vec![id],
+            None => Vec::new(),
+        },
+        Some(ExportLookup::Ambiguous(terminals) | ExportLookup::Incomplete { known: terminals, .. }) => terminals,
+        // The module exports no such name: the import names nothing.
+        Some(ExportLookup::Absent) => return Vec::new(),
+        None => Vec::new(),
+    };
+    let mut ids: Vec<String> = known.iter().filter_map(component).collect();
+    for id in by_bare_name(name) {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
 }
 
 /// Every member tag a file writes, as a JSX tag or a `createElement` type.
@@ -2735,12 +2772,13 @@ fn namespace_member_ids(
     ff: &FileFacts,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<(String, Vec<String>)> {
     written_member_tags(ff)
         .into_iter()
         .filter_map(|tag| {
-            let ids = member_path_ids(file, ff, tag, false, files, inputs, evaluated_ids);
+            let ids = member_path_ids(file, ff, tag, false, files, inputs, links, evaluated_ids);
             (!ids.is_empty()).then(|| (tag.to_string(), ids))
         })
         .collect()
@@ -2750,6 +2788,7 @@ fn namespace_member_ids(
 /// bindings: `ui.R`, `ui.sub.R`, `sub.R` through a named import of a
 /// namespace, and a family's slot (`ui.sub.Card.Body`). With `slots`, an
 /// exported compose family hands over its slots, as a value use does.
+#[allow(clippy::too_many_arguments)]
 fn member_path_ids(
     file: &str,
     ff: &FileFacts,
@@ -2757,26 +2796,27 @@ fn member_path_ids(
     slots: bool,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
     let Some((namespace, name)) = path.rsplit_once('.') else {
         return Vec::new();
     };
-    if let Some(module) = namespace_path_module(file, ff, namespace, files, inputs) {
-        return export_ids(&module, name.to_string(), slots, files, inputs, evaluated_ids);
+    if let Some(module) = namespace_path_module(file, ff, namespace, files, inputs, links) {
+        return export_ids(&module, name.to_string(), slots, files, inputs, links, evaluated_ids);
     }
     // `ui.sub.Card.Body`: a slot of a family the namespace exports.
     let slot_ids = || {
         let (namespace, family) = namespace.rsplit_once('.')?;
-        let module = namespace_path_module(file, ff, namespace, files, inputs)?;
+        let module = namespace_path_module(file, ff, namespace, files, inputs, links)?;
         let (declaring, exported, declared) =
-            declared_export(&module, family.to_string(), files, inputs)?;
+            declared_export(&module, family.to_string(), files, links)?;
         Some(
             exported_family_slots(&declaring, &exported, &declared, files)
                 .into_iter()
                 .filter(|(slot, _)| slot == name)
                 .flat_map(|(_, binding)| {
-                    resolve_identity(&declaring, binding, files, inputs, evaluated_ids, None)
+                    resolve_identity(&declaring, binding, files, inputs, links, evaluated_ids, None)
                 })
                 .collect(),
         )
@@ -3032,6 +3072,7 @@ fn exported_component_ids(
     module: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
     let mut ids = Vec::new();
@@ -3041,12 +3082,12 @@ fn exported_component_ids(
         if !seen.insert(module.clone()) {
             continue;
         }
-        for name in crate::family_members::module_export_names(&module, files, inputs) {
+        for name in crate::family_members::module_export_names(&module, files, inputs, links) {
             let namespace =
-                crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs);
+                crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs, links);
             match namespace {
                 Some(namespace) => modules.push(namespace),
-                None => ids.extend(export_ids(&module, name, true, files, inputs, evaluated_ids)),
+                None => ids.extend(export_ids(&module, name, true, files, inputs, links, evaluated_ids)),
             }
         }
     }
@@ -3061,39 +3102,85 @@ fn export_ids(
     slots: bool,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
-    let Some((declaring, exported, declared)) = declared_export(module, name, files, inputs) else {
+    let Some((declaring, exported, declared)) = declared_export(module, name, files, links) else {
         return Vec::new();
     };
-    let mut ids = resolve_identity(&declaring, &declared, files, inputs, evaluated_ids, None);
+    let mut ids = resolve_identity(&declaring, &declared, files, inputs, links, evaluated_ids, None);
     if slots {
         for (_, slot) in exported_family_slots(&declaring, &exported, &declared, files) {
-            ids.extend(resolve_identity(&declaring, slot, files, inputs, evaluated_ids, None));
+            ids.extend(resolve_identity(&declaring, slot, files, inputs, links, evaluated_ids, None));
         }
     }
     ids
 }
 
-/// Where `module`'s export `name` is declared: the declaring file, the
-/// name it exports there, and the local binding it declares.
+/// Where `module`'s export `name` is declared, as the module table resolves
+/// it: the declaring file, the name it exports there, and the local binding
+/// it declares. Only a binding the table resolves the export to is
+/// declared: the export name is the one asked for when the declaring
+/// module exports the binding so, else its first; for `export default X`
+/// the binding is X, as the facts name it. A namespace, an export of a
+/// module outside the analysis, and an absent, ambiguous or open answer
+/// declare nothing.
 pub(crate) fn declared_export(
     module: &str,
     name: String,
     files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, String)> {
-    let (declaring, exported) =
-        crate::family_members::follow_exports(module.to_string(), name, files, inputs)?;
-    let ff = files.get(&declaring)?;
-    let declared = ff
-        .exports
+    let ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) = links.resolve_export(module, &name)?
+    else {
+        return None;
+    };
+    let exports: Vec<&String> = links
+        .table
+        .record(declaring)
+        .local_exports
         .iter()
-        .find(|e| e.exported == exported && e.source.is_none())
-        .and_then(|e| e.local.clone())
-        .or_else(|| ff.default_export_binding.clone().filter(|_| exported == "default"))
-        .unwrap_or_else(|| exported.clone());
-    Some((declaring, exported, declared))
+        .filter(|(_, exported)| *exported == binding)
+        .map(|(exported_as, _)| exported_as)
+        .collect();
+    let exported = exports.iter().find(|exported_as| **exported_as == &name).or(exports.first())?.to_string();
+    let (path, declared) = binding_name(links, files, declaring, binding);
+    Some((path, exported, declared))
+}
+
+/// The binding the module table resolves `module`'s export `name` to, as
+/// the facts name it: its declaring file and binding. `None` for any other
+/// answer: absent, ambiguous, open, a namespace, an export of a module
+/// outside the analysis, or a module the analysis does not hold.
+fn declared_binding(
+    links: &crate::link::ProjectLinks,
+    files: &BTreeMap<String, FileFacts>,
+    module: &str,
+    name: &str,
+) -> Option<(String, String)> {
+    match links.resolve_export(module, name)? {
+        ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) => {
+            Some(binding_name(links, files, declaring, binding))
+        }
+        _ => None,
+    }
+}
+
+/// A resolved binding's file and name; for `export default X`'s cell, X,
+/// as the facts name it.
+pub(crate) fn binding_name(
+    links: &crate::link::ProjectLinks,
+    files: &BTreeMap<String, FileFacts>,
+    module: usize,
+    binding: crate::identity::LocalId,
+) -> (String, String) {
+    let path = &links.paths[module];
+    let declared = files[path].bindings.binding(binding);
+    let name = match declared.kind {
+        BindingKind::DefaultCell => files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone()),
+        _ => declared.name.clone(),
+    };
+    (path.clone(), name)
 }
 
 /// The (slot, binding) pairs of the compose family `declaring` declares as
@@ -3125,20 +3212,14 @@ pub(crate) fn namespace_path_module(
     path: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<String> {
     let mut segments = path.split('.');
     let local = segments.next()?;
-    let mut module = crate::family_members::local_namespace(
-        file,
-        ff,
-        local,
-        files,
-        inputs,
-        &mut FxHashSet::default(),
-    )?;
+    let mut module = crate::family_members::local_namespace(file, ff, local, files, inputs, links)?;
     for segment in segments {
         let segment = segment.to_string();
-        module = crate::family_members::namespace_export(module, segment, files, inputs)?;
+        module = crate::family_members::namespace_export(module, segment, files, inputs, links)?;
     }
     Some(module)
 }
@@ -3163,6 +3244,7 @@ fn spread_wrapper_targets(
     file: &str,
     ff: &FileFacts,
     (files, inputs): (&BTreeMap<String, FileFacts>, &CssInputs),
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
     styles_from: &dyn Fn(&str, &str) -> bool,
 ) -> WrapperTargets {
@@ -3180,6 +3262,7 @@ fn spread_wrapper_targets(
         ff: &'s FileFacts,
         files: &'s BTreeMap<String, FileFacts>,
         inputs: &'s CssInputs,
+        links: &'s crate::link::ProjectLinks,
         evaluated_ids: &'s FxHashSet<String>,
         styles_from: &'s dyn Fn(&str, &str) -> bool,
         /// Each element by its opening-element span.
@@ -3218,6 +3301,7 @@ fn spread_wrapper_targets(
                         tag,
                         self.files,
                         self.inputs,
+                        self.links,
                         self.evaluated_ids,
                     );
                     // A member tag, or a component-like name, that resolves to
@@ -3272,6 +3356,7 @@ fn spread_wrapper_targets(
         ff,
         files,
         inputs,
+        links,
         evaluated_ids,
         styles_from,
         elements: usage
@@ -3293,7 +3378,7 @@ fn spread_wrapper_targets(
             .chains
             .iter()
             .filter(|chain| chain.descriptor.terminal == TerminalKind::AsComponent && chain.descriptor.tag == *name)
-            .map(|chain| resolve_declared_identity(file, &chain.descriptor.binding, files, inputs, evaluated_ids))
+            .map(|chain| resolve_declared_identity(file, &chain.descriptor.binding, files, inputs, links, evaluated_ids))
             .collect();
         // Each object member that holds it is one of this module's facades.
         let holders = ff
@@ -3358,6 +3443,7 @@ fn spread_wrapper_targets(
 /// warns.
 /// `takes_system_prop(file, name, prop)`: whether `name`, as `file` declares
 /// or imports it, is an extracted component taking `prop` as a system prop.
+#[allow(clippy::too_many_arguments)]
 fn unattributed_system_props(
     file: &str,
     ff: &FileFacts,
@@ -3365,6 +3451,7 @@ fn unattributed_system_props(
     attributed: &dyn Fn(&str) -> bool,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
 ) -> Vec<CssDiagnostic> {
     let mut reported: FxHashSet<(&str, Vec<&str>)> = FxHashSet::default();
@@ -3379,7 +3466,7 @@ fn unattributed_system_props(
         if !tag.starts_with(|c: char| c.is_ascii_uppercase()) || !(imported || local) {
             continue;
         }
-        let Some((declaration_file, declaration, lost)) = lost_through_binding(file, tag, files, inputs) else {
+        let Some((declaration_file, declaration, lost)) = lost_through_binding(file, tag, files, inputs, links) else {
             continue;
         };
         warnings.extend(lost_props_warning(
@@ -3389,6 +3476,7 @@ fn unattributed_system_props(
             props,
             (&declaration_file, &declaration, &lost),
             (files, inputs),
+            links,
             takes_system_prop,
             &mut reported,
         ));
@@ -3452,44 +3540,30 @@ fn lost_through_binding<'f>(
     binding: &str,
     files: &'f BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, LostThrough<'f>)> {
     let ff = files.get(file)?;
     match ff.imports.iter().find(|import| import.local == binding) {
         Some(import) => {
             let module = resolve_import_source(file, &import.source, files, inputs)?;
-            lost_through_export(module, import.imported.clone(), files, inputs, &mut FxHashSet::default())
+            lost_through_export(&module, &import.imported, files, links)
         }
         None => LostThrough::of(file, binding, files).map(|lost| (file.to_string(), binding.to_string(), lost)),
     }
 }
 
 /// The declaration `module` exports as `name` that loses the props it is
-/// passed, followed through re-exports and imported names exported again,
-/// then through `export *` when the module exports no `name` of its own.
+/// passed: the binding the module table resolves the export to. An
+/// ambiguous or open export names none.
 fn lost_through_export<'f>(
-    module: String,
-    name: String,
+    module: &str,
+    name: &str,
     files: &'f BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-    visited: &mut FxHashSet<(String, String)>,
+    links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, LostThrough<'f>)> {
-    if !visited.insert((module.clone(), name.clone())) {
-        return None;
-    }
-    let (file, declaration) = follow_reexports(module, name, files, inputs);
-    if let Some(lost) = LostThrough::of(&file, &declaration, files) {
-        return Some((file, declaration, lost));
-    }
-    let ff = files.get(&file)?;
-    // `export *` never carries a default export, nor a name the module
-    // exports itself.
-    if declaration == "default" || ff.exports.iter().any(|export| export.exported == declaration) {
-        return None;
-    }
-    ff.star_exports
-        .iter()
-        .filter_map(|spec| resolve_import_source(&file, spec, files, inputs))
-        .find_map(|next| lost_through_export(next, declaration.clone(), files, inputs, visited))
+    let (file, declaration) = declared_binding(links, files, module, name)?;
+    let lost = LostThrough::of_binding(&file, &declaration, files)?;
+    Some((file, declaration, lost))
 }
 
 /// The extracted component taking `prop` that `lost`, read in `file`, hands
@@ -3500,6 +3574,7 @@ fn component_reached(
     lost: &LostThrough<'_>,
     prop: &str,
     (files, inputs): (&BTreeMap<String, FileFacts>, &CssInputs),
+    links: &crate::link::ProjectLinks,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
     visited: &mut FxHashSet<(String, String)>,
 ) -> Option<(String, Option<String>)> {
@@ -3507,11 +3582,11 @@ fn component_reached(
         if takes_system_prop(file, target, prop) {
             return Some((target.clone(), None));
         }
-        let (next_file, next, next_lost) = lost_through_binding(file, target, files, inputs)?;
+        let (next_file, next, next_lost) = lost_through_binding(file, target, files, inputs, links)?;
         if !visited.insert((next_file.clone(), next)) {
             return None;
         }
-        let (component, _) = component_reached(&next_file, &next_lost, prop, (files, inputs), takes_system_prop, visited)?;
+        let (component, _) = component_reached(&next_file, &next_lost, prop, (files, inputs), links, takes_system_prop, visited)?;
         Some((component, Some(target.clone())))
     })
 }
@@ -3526,12 +3601,13 @@ fn lost_props_warning<'u>(
     props: Vec<&'u str>,
     (declaration_file, declaration, lost): (&str, &str, &LostThrough<'_>),
     analysis: (&BTreeMap<String, FileFacts>, &CssInputs),
+    links: &crate::link::ProjectLinks,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
     reported: &mut FxHashSet<(&'u str, Vec<&'u str>)>,
 ) -> Option<CssDiagnostic> {
     let takes = |prop: &str| {
         let mut visited = FxHashSet::from_iter([(declaration_file.to_string(), declaration.to_string())]);
-        component_reached(declaration_file, lost, prop, analysis, takes_system_prop, &mut visited)
+        component_reached(declaration_file, lost, prop, analysis, links, takes_system_prop, &mut visited)
     };
     let mut props: Vec<&str> = props.into_iter().filter(|prop| takes(prop).is_some()).collect();
     props.sort_unstable();
@@ -3607,12 +3683,14 @@ fn passed_system_props<'u>(
 /// one that named an extracted component when the object was built, but
 /// which something may have changed since, or one that names a function
 /// component forwarding its props (`LostThrough`).
+#[allow(clippy::too_many_arguments)]
 fn untraced_member_system_props(
     file: &str,
     ff: &FileFacts,
     member_expr_bindings: &FxHashMap<String, String>,
     objects: &mut crate::family_members::ObjectMembers<'_>,
     (files, inputs): (&BTreeMap<String, FileFacts>, &CssInputs),
+    links: &crate::link::ProjectLinks,
     component_takes: &dyn Fn(&str, &str) -> bool,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
 ) -> Vec<CssDiagnostic> {
@@ -3632,7 +3710,7 @@ fn untraced_member_system_props(
             Some(Member::Unstable(component, reason)) if !call => (component, reason),
             Some(Member::Bound { module, binding }) if member => {
                 if let Some((declaration_file, declaration, lost)) =
-                    lost_through_binding(&module, &binding, files, inputs)
+                    lost_through_binding(&module, &binding, files, inputs, links)
                 {
                     warnings.extend(lost_props_warning(
                         file,
@@ -3641,6 +3719,7 @@ fn untraced_member_system_props(
                         props,
                         (&declaration_file, &declaration, &lost),
                         (files, inputs),
+                        links,
                         takes_system_prop,
                         &mut reported,
                     ));
@@ -4002,8 +4081,9 @@ fn bounded_prop_tags(
         };
         Some((declaring, binding))
     };
-    // Whether `module` is `declaring`, or re-exports from it at any depth:
-    // `export … from`, or an import it exports again (`export { F }`).
+    // Whether `module` is `declaring`, or re-exports from it at any depth,
+    // as the module table links them: by name, as a namespace, through
+    // `export *`, or as `export default` of an imported binding.
     let reexports_from = |module: &String, declaring: &String| {
         let mut seen: FxHashSet<String> = FxHashSet::default();
         let mut pending = vec![module.clone()];
@@ -4014,26 +4094,24 @@ fn bounded_prop_tags(
             if !seen.insert(next.clone()) {
                 continue;
             }
-            let Some(ff) = files.get(&next) else { continue };
-            let exported_imports = ff.imports.iter().filter(|import| {
-                ff.default_export_binding.as_ref() == Some(&import.local)
-                    || ff.exports.iter().any(|export| export.source.is_none() && export.local.as_ref() == Some(&import.local))
+            let Some(index) = links.module(&next) else { continue };
+            pending.extend(links.table.reexported_modules(index).map(|target| links.paths[target].clone()));
+            // `export default X` of an imported X, named or a namespace.
+            let default_import = files.get(&next).and_then(|ff| {
+                let local = ff.default_export_binding.as_ref()?;
+                let named = ff.imports.iter().find(|import| &import.local == local).map(|import| &import.source);
+                named.or_else(|| ff.namespace_imports.get(local))
             });
-            let sources = ff
-                .exports
-                .iter()
-                .filter_map(|export| export.source.as_ref())
-                .chain(&ff.star_exports)
-                .chain(ff.namespace_exports.values())
-                .chain(exported_imports.map(|import| &import.source));
-            pending.extend(sources.filter_map(|source| resolve_import_source(&next, source, files, inputs)));
+            if let Some(source) = default_import {
+                pending.extend(resolve_import_source(&next, source, files, inputs));
+            }
         }
         false
     };
     // A namespace member path (`ns.X`) a module reads, as a declaration.
     let namespace_declared = |file: &str, ff: &FileFacts, path: &str| {
         let (namespace, member) = path.rsplit_once('.')?;
-        let module = namespace_path_module(file, ff, namespace, files, inputs)?;
+        let module = namespace_path_module(file, ff, namespace, files, inputs, links)?;
         let (declaring, binding, _, _) = module_declaration(module, member, files, inputs, links)?;
         Some((declaring, binding))
     };
@@ -4115,7 +4193,7 @@ fn bounded_prop_tags(
                     .chains
                     .iter()
                     .filter(|chain| chain.descriptor.terminal == TerminalKind::AsComponent && chain.descriptor.tag == *name)
-                    .map(|chain| resolve_declared_identity(path, &chain.descriptor.binding, files, inputs, evaluated_ids))
+                    .map(|chain| resolve_declared_identity(path, &chain.descriptor.binding, files, inputs, links, evaluated_ids))
                     .collect();
                 if outers.len() != uses.as_component || outers.iter().any(Vec::is_empty) {
                     return false;
@@ -4484,10 +4562,17 @@ impl<'f> LostThrough<'f> {
             .find(|e| e.exported == name && e.source.is_none())
             .and_then(|e| e.local.as_deref())
             .unwrap_or(name);
-        if let Some(target) = ff.aliases.get(local).or_else(|| ff.assigned_aliases.get(local)) {
+        Self::of_binding(file, local, files)
+    }
+
+    /// How the declaration bound to `binding` in `file` loses props, read
+    /// from that binding itself.
+    fn of_binding(file: &str, binding: &str, files: &'f BTreeMap<String, FileFacts>) -> Option<Self> {
+        let ff = files.get(file)?;
+        if let Some(target) = ff.aliases.get(binding).or_else(|| ff.assigned_aliases.get(binding)) {
             return Some(Self::Alias(target));
         }
-        let forwarding = ff.props_forwarding.get(local)?;
+        let forwarding = ff.props_forwarding.get(binding)?;
         Some(Self::Spread(&forwarding.routes))
     }
 
@@ -4812,7 +4897,7 @@ fn opaque_delivery(
     let delivered = tags
         .iter()
         .flat_map(|(file, tag)| {
-            resolve_usage_identity(file, tag, files, inputs, evaluated_ids, ids_by_binding).into_iter().chain(
+            resolve_usage_identity(file, tag, files, inputs, links, evaluated_ids, ids_by_binding).into_iter().chain(
                 wrapper_targets.get(file).and_then(|wrappers| wrappers.get(tag)).into_iter().flatten().cloned(),
             )
         })
@@ -6406,9 +6491,9 @@ fn run_with_system_floor(
             binding_name,
             files,
             inputs,
+            links,
             &evaluated_ids,
-            &ids_by_binding,
-        )
+            &ids_by_binding,)
     };
     let family_index = crate::family_members::FamilyIndex::build(files, |family_file, binding| {
         match resolve_slot_ids(family_file, binding).as_slice() {
@@ -6417,7 +6502,7 @@ fn run_with_system_floor(
         }
     });
     let declared_component = |file: &str, binding: &str| {
-        match resolve_declared_identity(file, binding, files, inputs, &evaluated_ids).as_slice() {
+        match resolve_declared_identity(file, binding, files, inputs, links, &evaluated_ids).as_slice() {
             [only] => Some(only.clone()),
             _ => None,
         }
@@ -6430,7 +6515,7 @@ fn run_with_system_floor(
         .iter()
         .filter_map(|path| {
             let ff = files.get(path)?;
-            let mut members = family_index.members_for(path, ff, files, inputs);
+            let mut members = family_index.members_for(path, ff, files, inputs, links);
             for tag in written_member_tags(ff) {
                 if members.contains_key(tag) {
                     continue;
@@ -6548,7 +6633,7 @@ fn run_with_system_floor(
     };
     let all_wrappers: FxHashMap<&String, WrapperTargets> = files
         .iter()
-        .map(|(path, ff)| (path, spread_wrapper_targets(path, ff, (files, inputs), &evaluated_ids, &styles_from)))
+        .map(|(path, ff)| (path, spread_wrapper_targets(path, ff, (files, inputs), links, &evaluated_ids, &styles_from)))
         .collect();
     let held_ids = |module: &String, wrapper: &str| {
         all_wrappers
@@ -6583,7 +6668,7 @@ fn run_with_system_floor(
         let mut unattributed_imports: Vec<&str> = Vec::new();
         for (name, from_import) in bound_names {
             let mut ids =
-                resolve_usage_identity(path, name, files, inputs, &evaluated_ids, &ids_by_binding);
+                resolve_usage_identity(path, name, files, inputs, links, &evaluated_ids, &ids_by_binding);
             // An imported facade built with `Object.assign(T, …)` is `T`.
             if ids.is_empty() && from_import {
                 if let Some(crate::family_members::Member::Stable(component)) = object_members.root(path, name) {
@@ -6615,7 +6700,7 @@ fn run_with_system_floor(
         // `<B>` renders as `R` when this file's own declarations and imports
         // settle it.
         for alias in ff.aliases.keys().chain(ff.assigned_aliases.keys()) {
-            let ids = resolve_declared_identity(path, alias, files, inputs, &evaluated_ids);
+            let ids = resolve_declared_identity(path, alias, files, inputs, links, &evaluated_ids);
             if ids.is_empty() || global_lookup.attribution.get(alias.as_str()) == Some(&ids) {
                 continue;
             }
@@ -6665,7 +6750,7 @@ fn run_with_system_floor(
         // `<ui.R>` through `import * as ui` renders what the namespace's
         // module exports as `R`, followed through barrels.
         let mut members_with_namespaces: Option<FxHashMap<String, String>> = None;
-        for (tag, ids) in namespace_member_ids(path, ff, files, inputs, &evaluated_ids) {
+        for (tag, ids) in namespace_member_ids(path, ff, files, inputs, links, &evaluated_ids) {
             file_lookup
                 .get_or_insert_with(|| global_lookup.clone())
                 .publish(&tag, &ids, &usage_sources);
@@ -6698,7 +6783,7 @@ fn run_with_system_floor(
             system_props_by_id.get(id).is_some_and(|props| props.contains(prop))
         };
         let takes_system_prop = |file: &str, name: &str, prop: &str| {
-            resolve_declared_identity(file, name, files, inputs, &evaluated_ids)
+            resolve_declared_identity(file, name, files, inputs, links, &evaluated_ids)
                 .iter()
                 .any(|id| component_takes(id, prop))
         };
@@ -6712,6 +6797,7 @@ fn run_with_system_floor(
             &attributed,
             files,
             inputs,
+            links,
             &takes_system_prop,
         ));
         diagnostics.extend(untraced_member_system_props(
@@ -6720,6 +6806,7 @@ fn run_with_system_floor(
             member_expr_bindings,
             &mut object_members,
             (files, inputs),
+            links,
             &component_takes,
             &takes_system_prop,
         ));
@@ -6840,7 +6927,7 @@ fn run_with_system_floor(
             let opened = sites.entry((load.line, load.call.as_str())).or_default();
             for module in loaded_modules(path, load, files, inputs) {
                 let ids = exports_by_module.entry(module).or_insert_with(|| {
-                    exported_component_ids(module, files, inputs, &evaluated_ids)
+                    exported_component_ids(module, files, inputs, links, &evaluated_ids)
                 });
                 opened.extend(ids.iter().cloned());
             }
@@ -6882,9 +6969,9 @@ fn run_with_system_floor(
             for (dot, _) in name.match_indices('.') {
                 let prefix = &name[..dot];
                 escaped_ids.extend(
-                    resolve_declared_identity(path, prefix, files, inputs, &evaluated_ids)
+                    resolve_declared_identity(path, prefix, files, inputs, links, &evaluated_ids)
                         .into_iter()
-                        .chain(member_path_ids(path, ff, prefix, false, files, inputs, &evaluated_ids))
+                        .chain(member_path_ids(path, ff, prefix, false, files, inputs, links, &evaluated_ids))
                         .filter(|id| {
                             evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsClass)
                         }),
@@ -6892,9 +6979,9 @@ fn run_with_system_floor(
             }
             // A namespace object hands over everything its module exports, and
             // a member of one at any depth (`ui.sub.X`) that component.
-            match namespace_path_module(path, ff, name, files, inputs) {
+            match namespace_path_module(path, ff, name, files, inputs, links) {
                 Some(module) => {
-                    escaped_ids.extend(exported_component_ids(&module, files, inputs, &evaluated_ids));
+                    escaped_ids.extend(exported_component_ids(&module, files, inputs, links, &evaluated_ids));
                 }
                 None => escaped_ids.extend(member_path_ids(
                     path,
@@ -6903,8 +6990,8 @@ fn run_with_system_floor(
                     true,
                     files,
                     inputs,
-                    &evaluated_ids,
-                )),
+                    links,
+                    &evaluated_ids,)),
             }
             // An escaping facade or alias hands over its members, and one
             // member of it that component.
@@ -6941,7 +7028,7 @@ fn run_with_system_floor(
                 continue;
             }
             if let Some((declaring, binding, _)) = resolve_export(path, source, original, files, inputs, links) {
-                escaped_ids.extend(resolve_declared_identity(&declaring, &binding, files, inputs, &evaluated_ids));
+                escaped_ids.extend(resolve_declared_identity(&declaring, &binding, files, inputs, links, &evaluated_ids));
             }
         }
         // Through the file's own declarations and imports only: an outside
@@ -6952,8 +7039,8 @@ fn run_with_system_floor(
                 name,
                 files,
                 inputs,
-                &evaluated_ids,
-            ));
+                links,
+                &evaluated_ids,));
         }
     }
     // An element handed to code outside the analysis renders with options
@@ -6988,10 +7075,10 @@ fn run_with_system_floor(
     let receiver_ids = |path: &str, ff: &FileFacts, tag: &str| {
         let mut ids = match tag.contains('.') {
             true => Vec::new(),
-            false => resolve_declared_identity(path, tag, files, inputs, &evaluated_ids),
+            false => resolve_declared_identity(path, tag, files, inputs, links, &evaluated_ids),
         };
         ids.extend(member_bindings.get(path).and_then(|members| members.get(tag)).cloned());
-        ids.extend(member_path_ids(path, ff, tag, false, files, inputs, &evaluated_ids));
+        ids.extend(member_path_ids(path, ff, tag, false, files, inputs, links, &evaluated_ids));
         ids
     };
     // A component object some module writes a member of (`R.render = Slot`)
@@ -7002,8 +7089,8 @@ fn run_with_system_floor(
         for used in ff.value_escapes.iter().chain(ff.unsafe_object_uses.keys()) {
             let prefixes = used.match_indices('.').map(|(dot, _)| &used[..dot]).chain(std::iter::once(used.as_str()));
             for prefix in prefixes {
-                changed_ids.extend(resolve_declared_identity(path, prefix, files, inputs, &evaluated_ids));
-                changed_ids.extend(member_path_ids(path, ff, prefix, false, files, inputs, &evaluated_ids));
+                changed_ids.extend(resolve_declared_identity(path, prefix, files, inputs, links, &evaluated_ids));
+                changed_ids.extend(member_path_ids(path, ff, prefix, false, files, inputs, links, &evaluated_ids));
             }
         }
     }
@@ -7834,7 +7921,7 @@ fn run_with_system_floor(
             continue;
         }
         let target_ids =
-            resolve_usage_identity(file_path, tag, files, inputs, &evaluated_ids, &ids_by_binding);
+            resolve_usage_identity(file_path, tag, files, inputs, links, &evaluated_ids, &ids_by_binding);
         for id in target_ids {
             if let Some(variant_config) = variant_configs_for_ledger.get(&id) {
                 let used = usage_ledger.variant_usage.entry(id.clone()).or_default();
@@ -7934,6 +8021,7 @@ fn run_with_system_floor(
                 &family.root_binding,
                 files,
                 inputs,
+                links,
                 &id_to_class,
             ) else {
                 emit_compose_slot_bail(
@@ -7955,6 +8043,7 @@ fn run_with_system_floor(
                     binding,
                     files,
                     inputs,
+                    links,
                     &id_to_class,
                 ) {
                     Some(class) => child_slots.push((binding.as_str(), class)),
@@ -11310,6 +11399,123 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     #[test]
+    fn a_default_exported_namespace_keeps_its_members() {
+        // `import * as ns …; export default ns`: the default import is the
+        // namespace, and its member's system props extract.
+        let recipe = "export const R = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let out = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("index.ts", "import * as ns from './recipe';\nexport default ns;\n"),
+            ("app.tsx", "import ui from './index';\nexport const App = () => <ui.R marginInlineStart={8} />;\n"),
+        ]);
+        assert!(out.css.contains("margin-inline-start: 0.5rem;"), "{}", out.css);
+        assert!(
+            !out.diagnostics.iter().any(|d| d.code.as_deref().is_some_and(|code| code.starts_with("animus.usage.identity-uncertain"))),
+            "{:?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn a_rejected_namespace_names_no_member_by_its_spelling() {
+        // A namespace import the module table finds ambiguous, open or absent
+        // names nothing, even beside a same-spelled component of that module.
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let root = "const Root = ds.styles({ display: 'flex' }).asElement('div');\nexport const Use = () => <Root />;\n";
+        let files: BTreeMap<String, FileFacts> = [
+            ("x.ts", "export const Root = ds.styles({ display: 'grid' }).asElement('div');".to_string()),
+            ("y.ts", "export const Root = ds.styles({ display: 'block' }).asElement('div');".to_string()),
+            ("a.ts", "export * as ns from './x';".to_string()),
+            ("b.ts", "export * as ns from './y';".to_string()),
+            ("both.ts", format!("export * from './a';\nexport * from './b';\n{root}")),
+            ("open.ts", format!("export * from './a';\nexport * from './missing';\n{root}")),
+            ("none.ts", format!("export const other = 1;\n{root}")),
+            (
+                "app.ts",
+                "import { ns as amb } from './both';\nimport { ns as opn } from './open';\nimport { ns as abs } from './none';".to_string(),
+            ),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let ast = crate::owned_ast::OwnedAst::parse(path.to_string(), source, &counter);
+            (path.to_string(), crate::facts::extract_file_facts(&ast))
+        })
+        .collect();
+        let inputs = test_inputs();
+        let links = crate::link::ProjectLinks::link(&files, &inputs);
+        let evaluated: FxHashSet<String> =
+            ["x.ts::Root", "y.ts::Root", "both.ts::Root", "open.ts::Root", "none.ts::Root"].into_iter().map(String::from).collect();
+        let by_binding: IdsByBinding =
+            [("Root".to_string(), evaluated.iter().cloned().collect::<Vec<_>>())].into_iter().collect();
+        for tag in ["amb.Root", "opn.Root", "abs.Root"] {
+            let ids = resolve_identity("app.ts", tag, &files, &inputs, &links, &evaluated, Some(&by_binding));
+            assert!(ids.is_empty(), "{tag}: {ids:?}");
+        }
+    }
+
+    #[test]
+    fn an_exported_namespace_is_one_only_where_the_module_table_resolves_it() {
+        // Two stars bringing in different namespaces, or one beside an
+        // unresolved path, name no namespace.
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let files: BTreeMap<String, FileFacts> = [
+            ("x.ts", "export const X = 1;"),
+            ("y.ts", "export const Y = 1;"),
+            ("a.ts", "export * as ns from './x';"),
+            ("b.ts", "export * as ns from './y';"),
+            ("both.ts", "export * from './a';\nexport * from './b';"),
+            ("open.ts", "export * from './a';\nexport * from './missing';"),
+            ("one.ts", "export * from './a';"),
+            ("app.ts", "import { ns } from './both';\nimport { ns as only } from './one';"),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let ast = crate::owned_ast::OwnedAst::parse(path.to_string(), source.to_string(), &counter);
+            (path.to_string(), crate::facts::extract_file_facts(&ast))
+        })
+        .collect();
+        let inputs = test_inputs();
+        let links = crate::link::ProjectLinks::link(&files, &inputs);
+        let namespace = |module: &str| {
+            crate::family_members::namespace_export(module.to_string(), "ns".to_string(), &files, &inputs, &links)
+        };
+        assert_eq!(namespace("both.ts"), None);
+        assert_eq!(namespace("open.ts"), None);
+        assert_eq!(namespace("one.ts"), Some("x.ts".to_string()));
+        // A named import of such a namespace holds the same answer.
+        let held = |local: &str| {
+            crate::family_members::local_namespace("app.ts", &files["app.ts"], local, &files, &inputs, &links)
+        };
+        assert_eq!(held("ns"), None);
+        assert_eq!(held("only"), Some("x.ts".to_string()));
+    }
+
+    #[test]
+    fn a_family_export_is_declared_only_where_the_module_table_resolves_it() {
+        // An ambiguous or open export declares nothing; only a resolved
+        // binding is declared, and never the first star's candidate.
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let files: BTreeMap<String, FileFacts> = [
+            ("a.ts", "export const X = 1;"),
+            ("b.ts", "export const X = 2;"),
+            ("both.ts", "export * from './a';\nexport * from './b';"),
+            ("open.ts", "export * from './a';\nexport * from './missing';"),
+            ("one.ts", "export * from './a';"),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let ast = crate::owned_ast::OwnedAst::parse(path.to_string(), source.to_string(), &counter);
+            (path.to_string(), crate::facts::extract_file_facts(&ast))
+        })
+        .collect();
+        let links = crate::link::ProjectLinks::link(&files, &test_inputs());
+        let declared = |module: &str| declared_export(module, "X".to_string(), &files, &links);
+        assert_eq!(declared("both.ts"), None);
+        assert_eq!(declared("open.ts"), None);
+        assert_eq!(declared("one.ts"), Some(("a.ts".to_string(), "X".to_string(), "X".to_string())));
+    }
+
+    #[test]
     fn an_extension_parent_its_module_does_not_export_is_not_inherited() {
         // The module table resolves no export `Parent`: the import names
         // nothing, so the extension is refused rather than inheriting.
@@ -11625,6 +11831,35 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    #[test]
+    fn compose_slots_resolve_through_local_export_renames() {
+        // `const Foo = …; export { Foo as Bar }`: the slot imported as `Bar`
+        // is the component bound to `Foo`.
+        let out = analyze(
+            &[
+                (
+                    "slots.tsx",
+                    "const RootImpl = ds.styles({ display: 'flex' }).asElement('div');\n\
+                     const BodyImpl = ds\n\
+                       .variant({ prop: 'size', variants: { sm: { p: 8 } } })\n\
+                       .asElement('div');\n\
+                     export { RootImpl as Root, BodyImpl as Body };\n",
+                ),
+                (
+                    "card.tsx",
+                    "import { Root, Body } from './slots';\n\
+                     export const Card = compose({ Root, Body }, { name: 'Card', shared: { size: true } });\n\
+                     export const App = () => <Card.Root><Card.Body size=\"sm\" /></Card.Root>;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+        let root = class_of(&out, "slots.tsx::RootImpl");
+        let body = class_of(&out, "slots.tsx::BodyImpl");
+        assert!(out.sheets.variants.contains(&format!(".{root}--size-sm .{body}")), "{}", out.sheets.variants);
+        assert!(!out.diagnostics.iter().any(|d| d.kind == "bail"), "{:?}", out.diagnostics);
+    }
+
     const RECIPE: &str = "export const R = ds.styles({})\n\
         .variant({ prop: 'size', defaultVariant: 'md', variants: { sm: { padding: '1px' }, md: { padding: '2px' }, lg: { padding: '3px' } } })\n\
         .states({ active: { display: 'flex' }, busy: { display: 'grid' } })\n\
@@ -11643,6 +11878,93 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             .filter(|state| out.css.contains(&format!(".{class}--{state}")))
             .collect();
         (sizes, states)
+    }
+
+    #[test]
+    fn a_family_star_exported_twice_or_openly_names_no_member() {
+        // `ui.Card` is ambiguous through two stars, or open beside an
+        // unresolved one: `ui.Card.Root` names no component, so the recipe
+        // `Card.Root` builds keeps every option.
+        let family = |recipe: &str| {
+            format!("import {{ R }} from './{recipe}';\nexport const Card = compose({{ Root: R }}, {{ name: 'Card' }});\n")
+        };
+        let app = "import * as ui from './barrel';\nexport const App = () => <ui.Card.Root size=\"sm\" active />;\n";
+        let other = "export const R = ds.styles({ display: 'grid' }).asElement('div');\n";
+        let a = family("r");
+        let b = family("other");
+        let every = (vec!["sm", "md", "lg"], vec!["active", "busy"]);
+        for (barrel, expected) in [
+            ("export * from './a';\nexport * from './b';\n", every.clone()),
+            ("export * from './a';\nexport * from './missing';\n", every),
+            ("export * from './a';\n", (vec!["sm"], vec!["active"])),
+        ] {
+            let kept = kept_options(&[
+                ("r.tsx", RECIPE),
+                ("other.tsx", other),
+                ("a.tsx", a.as_str()),
+                ("b.tsx", b.as_str()),
+                ("barrel.tsx", barrel),
+                ("app.tsx", app),
+            ]);
+            assert_eq!(kept, expected, "{barrel}");
+        }
+    }
+
+    #[test]
+    fn an_ambiguous_import_reaches_every_candidate_component() {
+        // `X` comes through two stars as `A` and as `B`: the use reaches both
+        // candidates, not only an unrelated component also named X.
+        let options = |out: &CssOutput, id: &str| {
+            let class = class_of(out, id);
+            let sizes: Vec<&str> =
+                ["sm", "md", "lg"].into_iter().filter(|size| out.css.contains(&format!(".{class}--size-{size}"))).collect();
+            let states: Vec<&str> =
+                ["active", "busy"].into_iter().filter(|state| out.css.contains(&format!(".{class}--{state}"))).collect();
+            (sizes, states)
+        };
+        let a = RECIPE.replace("export const R", "const A") + "export { A as X };\n";
+        let b = RECIPE.replace("export const R", "const B") + "export { B as X };\n";
+        let out = analyze(
+            &[
+                ("a.tsx", a.as_str()),
+                ("b.tsx", b.as_str()),
+                ("c.tsx", "export const X = ds.styles({ display: 'grid' }).asElement('div');\n"),
+                ("barrel.tsx", "export * from './a';\nexport * from './b';\n"),
+                ("app.tsx", "import { X } from './barrel';\nexport const App = () => <X size=\"sm\" active />;\n"),
+            ],
+            &test_inputs(),
+        );
+        assert_eq!(options(&out, "a.tsx::A"), (vec!["sm"], vec!["active"]));
+        assert_eq!(options(&out, "b.tsx::B"), (vec!["sm"], vec!["active"]));
+    }
+
+    #[test]
+    fn an_import_names_a_component_only_as_the_module_table_resolves_it() {
+        // A namespace member the module does not export names nothing, and a
+        // declared identity through an ambiguous star is every candidate,
+        // never the first star's.
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let component = "ds.styles({ display: 'flex' }).asElement('div')";
+        let files: BTreeMap<String, FileFacts> = [
+            ("r.tsx", format!("const R = {component};\nexport const Other = 1;\n")),
+            ("a.tsx", format!("export const X = {component};\n")),
+            ("b.tsx", format!("export const X = {component};\n")),
+            ("barrel.tsx", "export * from './a';\nexport * from './b';\n".to_string()),
+            ("app.tsx", "import * as ns from './r';\nimport { X } from './barrel';\n".to_string()),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let ast = crate::owned_ast::OwnedAst::parse(path.to_string(), source, &counter);
+            (path.to_string(), crate::facts::extract_file_facts(&ast))
+        })
+        .collect();
+        let inputs = test_inputs();
+        let links = crate::link::ProjectLinks::link(&files, &inputs);
+        let evaluated: FxHashSet<String> = ["r.tsx::R", "a.tsx::X", "b.tsx::X"].into_iter().map(String::from).collect();
+        assert!(resolve_identity("app.tsx", "ns.R", &files, &inputs, &links, &evaluated, None).is_empty());
+        let mut declared = resolve_declared_identity("app.tsx", "X", &files, &inputs, &links, &evaluated);
+        declared.sort();
+        assert_eq!(declared, ["a.tsx::X", "b.tsx::X"]);
     }
 
     #[test]
@@ -12699,6 +13021,54 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             .iter()
             .filter(|d| d.code.as_deref() == Some(UNATTRIBUTED_SYSTEM_PROPS))
             .collect()
+    }
+
+    /// A wrapper that loses a prop is the binding the module table resolves
+    /// the import to: one exported under another name is found, an import
+    /// two stars make ambiguous names no wrapper, and the resolved binding
+    /// is never swapped for another that an export spells like it.
+    #[test]
+    fn a_wrapper_that_loses_props_is_found_as_the_module_table_resolves_it() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let wrapper = |name: &str| {
+            format!(
+                "import {{ Box }} from './recipe';\n\
+                 const {name} = (props) => {{ const {{ children, ...rest }} = props; return <Box {{...rest}} />; }};\n\
+                 export {{ {name} as Top }};\n"
+            )
+        };
+        let app = "import { Top } from './index';\nexport const App = () => <Top marginInlineStart={8} />;\n";
+        let (one, two) = (wrapper("Inner"), wrapper("Other"));
+        let renamed = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("one.tsx", one.as_str()),
+            ("index.ts", "export * from './one';\n"),
+            ("app.tsx", app),
+        ]);
+        let warned: Vec<_> = unattributed(&renamed).iter().map(|d| d.dropped.as_deref()).collect();
+        assert_eq!(warned, [Some("marginInlineStart")], "{:?}", renamed.diagnostics);
+        let ambiguous = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("one.tsx", one.as_str()),
+            ("two.tsx", two.as_str()),
+            ("index.ts", "export * from './one';\nexport * from './two';\n"),
+            ("app.tsx", app),
+        ]);
+        assert!(unattributed(&ambiguous).is_empty(), "{:?}", ambiguous.diagnostics);
+        // The resolved binding is the wrapper itself, never the binding an
+        // export of the same spelling names.
+        let crossed = "import { Box } from './recipe';\n\
+                       const Inner = (props) => { const { children, ...rest } = props; return <Box {...rest} />; };\n\
+                       const Other = () => null;\n\
+                       export { Inner as Top, Other as Inner };\n";
+        let crossed = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("one.tsx", crossed),
+            ("index.ts", "export * from './one';\n"),
+            ("app.tsx", app),
+        ]);
+        let warned: Vec<_> = unattributed(&crossed).iter().map(|d| d.dropped.as_deref()).collect();
+        assert_eq!(warned, [Some("marginInlineStart")], "{:?}", crossed.diagnostics);
     }
 
     /// Each wrapper shape the attribution does not follow warns once, at the
