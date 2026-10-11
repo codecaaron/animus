@@ -38,7 +38,7 @@ import {
   releaseEngineHandle,
   sessionKey,
 } from '@animus-ui/extract/session';
-import { statSync } from 'fs';
+import { rmSync, statSync } from 'fs';
 import { isAbsolute, join, relative, resolve } from 'path';
 
 import {
@@ -365,6 +365,13 @@ export class PluginContext {
   assetCopyDir: string | null = null;
   /** specifier → the source file its dev copy was made from. */
   assetSourceBySpecifier = new Map<string, string>();
+  /** source → its copies, oldest first: the current and the previous. */
+  private assetCopyHistory = new Map<string, string[]>();
+  /** Specifiers whose copy the dev server does not serve, warned once. */
+  private unservedAssetCopies = new Set<string>();
+  /** Whether the dev server serves `path`, by Vite's `server.fs` rule;
+   *  set in `configResolved`. */
+  servesFile: (path: string) => boolean = () => true;
 
   assetResolutionFailures = new Set<string>();
 
@@ -856,13 +863,42 @@ export class PluginContext {
   devAssetUrl(specifier: string, absPath: string): string {
     if (this.assetCopyDir === null) return this.devFsUrl(absPath);
     const { fileName } = writeAssetCopy(absPath, this.assetCopyDir);
+    const copyPath = join(this.assetCopyDir, fileName);
+    if (!this.servesFile(copyPath)) {
+      if (!this.unservedAssetCopies.has(specifier)) {
+        this.unservedAssetCopies.add(specifier);
+        this.warn(
+          `[animus-extract] the copy of asset() ${specifier} is not served under server.fs; serving the live file instead, so an edit keeps its URL`
+        );
+      }
+      return this.devFsUrl(absPath);
+    }
     // Watched once its copy exists, wherever it lives: an edit makes the
     // next copy.
     if (this.assetSourceBySpecifier.get(specifier) !== absPath) {
       this.devServer?.watcher?.add(absPath);
     }
     this.assetSourceBySpecifier.set(specifier, absPath);
-    return this.devFsUrl(join(this.assetCopyDir, fileName));
+    this.retainAssetCopy(absPath, fileName);
+    return this.devFsUrl(copyPath);
+  }
+
+  /** Keeps each source's current copy and the one before it; an asset
+   *  edit reloads the page, so an older URL is never fetched again. A copy
+   *  another source still keeps is never removed. */
+  private retainAssetCopy(source: string, fileName: string): void {
+    const history = this.assetCopyHistory.get(source) ?? [];
+    if (history[history.length - 1] !== fileName) history.push(fileName);
+    this.assetCopyHistory.set(source, history);
+    while (history.length > 2) {
+      const oldest = history.shift()!;
+      const kept = [...this.assetCopyHistory.values()].some((copies) =>
+        copies.includes(oldest)
+      );
+      if (!kept && this.assetCopyDir !== null) {
+        rmSync(join(this.assetCopyDir, oldest), { force: true });
+      }
+    }
   }
 
   /** Whether `absFile` is the source of a dev asset copy. */

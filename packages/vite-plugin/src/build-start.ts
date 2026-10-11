@@ -23,34 +23,13 @@ import {
   unreadableSourceDiagnostic,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
-import { isLockHolderAlive } from '@animus-ui/extract/session';
-import { readdirSync, readFileSync, rmSync } from 'fs';
-import { basename, dirname, join, relative, resolve } from 'path';
+import { readFileSync } from 'fs';
+import { basename, dirname, relative, resolve } from 'path';
+
+import { sweepAbandonedCopyDirs } from './asset-copy-dirs';
 
 import type { DiscoveredSources, PluginContext } from './context';
 import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
-
-/** The copy roots this process has swept: once per process. */
-const sweptCopyRoots = new Set<string>();
-
-/** Removes the asset copies of processes that are no longer running. A live
- *  server, here or in another process, keeps every copy it serves. */
-function sweepDeadProcessCopies(copyRoot: string): void {
-  if (sweptCopyRoots.has(copyRoot)) return;
-  sweptCopyRoots.add(copyRoot);
-  let entries: string[];
-  try {
-    entries = readdirSync(copyRoot);
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    const pid = Number(entry);
-    if (!Number.isInteger(pid) || pid === process.pid) continue;
-    if (isLockHolderAlive(pid)) continue;
-    rmSync(join(copyRoot, entry), { recursive: true, force: true });
-  }
-}
 
 /**
  * `resolveSpecifier` maps a specifier to an absolute id. `emitAsset` is
@@ -124,7 +103,7 @@ export async function runBuildStart(
   const assetSpecifiers = ctx.sheetAssetSpecifiers();
   ctx.assetSourceBySpecifier.clear();
   if (ctx.assetCopyDir !== null)
-    sweepDeadProcessCopies(dirname(ctx.assetCopyDir));
+    sweepAbandonedCopyDirs(dirname(ctx.assetCopyDir));
   for (const specifier of assetSpecifiers) {
     const resolvedPath = await resolveSpecifier(specifier);
     if (!resolvedPath) {

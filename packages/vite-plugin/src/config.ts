@@ -8,6 +8,7 @@ import {
 import { join, resolve } from 'path';
 import { isFileLoadingAllowed } from 'vite';
 
+import { processCopyDir } from './asset-copy-dirs';
 import { resolveLightningTargets } from './css';
 
 import type { PluginContext } from './context';
@@ -34,13 +35,11 @@ export function applyResolvedConfig(
   // them, by Vite's own rule: strict mode, `server.fs.allow` and
   // `server.fs.deny` together. Each process copies into its own directory.
   if (!ctx.isProd) {
-    const copyDir = resolve(
-      config.cacheDir,
-      'animus-assets',
-      String(process.pid)
-    );
+    const copyDir = resolve(config.cacheDir, 'animus-assets', processCopyDir());
     const served = isFileLoadingAllowed(config, join(copyDir, 'asset'));
     ctx.assetCopyDir = served ? copyDir : null;
+    // Each copy is checked again by its own path: a deny may name a file.
+    ctx.servesFile = (path) => isFileLoadingAllowed(config, path);
     if (!served) {
       ctx.warn(
         `[animus-extract] asset() copies in ${copyDir} are not served under server.fs; serving the live files instead, so an edited asset keeps its URL`
