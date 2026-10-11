@@ -59,17 +59,6 @@ export async function runBuildStart(
     if (ctx.isProd || ctx.sessionOutcome?.kind !== 'held') throw error;
     ctx.warn(error instanceof Error ? error.message : String(error));
   }
-  // Until the hot path moves onto the Session, it reads the sources the
-  // Session holds.
-  if (!ctx.isProd) {
-    ctx.mutateFileCache((cache) => {
-      cache.clear();
-      for (const [path, entry] of session.publishedSources) {
-        cache.set(path, { hash: entry.hash, source: entry.source });
-      }
-    });
-  }
-
   if (ctx.verbose) {
     const propCount = Object.keys(JSON.parse(ctx.system.propConfigJson)).length;
     const groupCount = Object.keys(
@@ -127,7 +116,8 @@ export async function runBuildStart(
       }
     }
   }
-  // From here on, runAnalysis owns late-appearing specifiers (dev resets).
+  // From here on, each adopted publication resolves late-appearing
+  // specifiers (dev resets).
   ctx.assetPassComplete = true;
 
   if (ctx.storedManifest) {

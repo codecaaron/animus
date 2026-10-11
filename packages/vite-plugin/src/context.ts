@@ -1,36 +1,18 @@
 import {
-  adaptedOriginals,
-  assertRuntimeImportSuppliesTerminals,
   buildSystemPropsModule,
   BUILT_IN_EXTENSION_POLICY,
   builtInAssetClassification,
-  clearEngineCache,
   contentHash,
-  createSourceCorpus,
-  declaredWorkspacePackages,
   DEFAULT_EXTENSIONS,
   DEFAULT_RUNTIME_IMPORT,
-  DiagnosticFailure,
-  diffFilePlans,
-  enforceExternalTokenContracts,
   findSheetAssetSpecifiers,
-  generatedModuleCode,
-  isDeletedSource,
-  loadSystemConfig,
   parseFilesJson,
-  projectExternalFileOwners,
-  reportSurvivingAssetPlaceholders,
   resolveAssetFile,
   resolveVerbosity,
-  runProjectAnalysis,
   runStructuralSelfCheck,
-  serializeStaticCss,
-  snapshotFilePlans,
-  staleDistIncludesMessage,
   substituteSheetAssets,
   writeAssetCopy,
   toWatchKeys,
-  unresolvableIncludesMessage,
 } from '@animus-ui/extract/pipeline';
 import {
   CoalescingWindow,
@@ -41,8 +23,8 @@ import {
   releaseEngineHandle,
   sessionKey,
 } from '@animus-ui/extract/session';
-import { rmSync, statSync } from 'fs';
-import { isAbsolute, join, relative, resolve } from 'path';
+import { rmSync } from 'fs';
+import { join, resolve } from 'path';
 
 import {
   RESOLVED_COMPONENTS_ID,
@@ -52,7 +34,6 @@ import {
   VIRTUAL_SYSTEM_PROPS_ID,
 } from './constants';
 import { HotUpdateEvents } from './hot-update-events';
-import { invalidateFileModules } from './module-invalidation';
 
 import type { LightningTargets } from './css';
 import type { AnimusExtractOptions } from './index';
@@ -62,15 +43,8 @@ import type {
   ExternalPackageOutcome,
   HostAssetClassification,
   HostExtensionPolicy,
-  KitDescriptorRecord,
-  ManifestDiagnostic,
   ManifestSheets,
-  IngestionOpening,
-  ProjectAnalysisResult,
   ProjectManifest,
-  RawSourceEntry,
-  SourceCorpus,
-  SourceIngestionResult,
   SystemConfig,
 } from '@animus-ui/extract/pipeline';
 import type {
@@ -99,28 +73,6 @@ function emptySystemConfig(): SystemConfig {
 export interface ObservedOutcome {
   outcome: SessionOutcome;
   systemPropsChanged: boolean;
-}
-
-// Serializes analysis transactions per context: two interleaved
-// ingest→analyze→publish sections publish from different cache snapshots.
-const analysisChains = new WeakMap<PluginContext, Promise<void>>();
-
-/** Runs `task` after every analysis transaction already scheduled for this
- *  context. Entry points only — a nested call waits on its own chain. */
-export function runExclusiveAnalysis<T>(
-  ctx: PluginContext,
-  task: () => Promise<T>
-): Promise<T> {
-  const chain = analysisChains.get(ctx) ?? Promise.resolve();
-  const result = chain.then(task);
-  analysisChains.set(
-    ctx,
-    result.then(
-      () => undefined,
-      () => undefined
-    )
-  );
-  return result;
 }
 
 function generateSystemPropsModule(ctx: PluginContext): string {
@@ -162,17 +114,6 @@ export function systemPropsModuleSource(ctx: PluginContext): string {
   return source;
 }
 
-/** Drop a deleted or renamed-away raw original from the dev file cache.
- *  Generated MDX/Svelte children live only in the published corpus. */
-export function pruneFileCache(
-  cache: Map<string, { hash: string; source: string }>,
-  rootDir: string,
-  absPath: string
-): boolean {
-  const rel = relative(rootDir, resolve(absPath));
-  return cache.delete(rel);
-}
-
 const NO_SHEETS: AssetSheets = {
   variableCss: '',
   globalCss: '',
@@ -184,7 +125,6 @@ export class PluginContext {
   readonly verbose: boolean;
   /** The higher tier: `verbose: 'trace'` or `ANIMUS_DEBUG=trace`. */
   readonly tracing: boolean;
-  readonly staticCssJson: string | null;
 
   isProd = false;
   /** Serving or watching: an error-level diagnostic reports, and only a
@@ -197,9 +137,6 @@ export class PluginContext {
   logger: Logger | null = null;
 
   system: SystemConfig = emptySystemConfig();
-  /** Whether a system has loaded, so a failed reload has one to keep. */
-  private systemLoaded = false;
-
   lcssTargets: LightningTargets = {};
 
   pathAliasesJson: string | null = null;
@@ -279,41 +216,6 @@ export class PluginContext {
   storedAdmittedTransformsJson = '{}';
   storedTypedSystemPropsJson = '[]';
 
-  readonly fileCache: ReadonlyMap<string, { hash: string; source: string }> =
-    new Map();
-
-  /** Mutation attempts against `fileCache`, for memos that must not key on
-   *  `size` — a delete plus an unrelated create leaves it unchanged. */
-  fileCacheGeneration = 0;
-
-  /** The one mutator of the raw-source cache: every add, replacement and
-   *  deletion goes through here so no write escapes the counter above. */
-  mutateFileCache<T>(
-    mutate: (cache: Map<string, { hash: string; source: string }>) => T
-  ): T {
-    // SAFETY: `fileCache` is a Map typed as ReadonlyMap so writes funnel here;
-    // this is the one place allowed to write it, and it bumps the counter.
-    const cache = this.fileCache as Map<
-      string,
-      { hash: string; source: string }
-    >;
-    const result = mutate(cache);
-    this.fileCacheGeneration += 1;
-    return result;
-  }
-
-  /** Generated MDX/Svelte paths never enter `fileCache` — they live only in
-   *  this corpus's published projection. */
-  readonly corpus: SourceCorpus = createSourceCorpus({
-    engineApi: () => this.engineApi(),
-    prefix: '[animus-extract]',
-    strict: () => !!this.options.strict,
-    warn: (message: string) => this.warn(message),
-    reportErrors: () => this.reportErrors(),
-    extensions: () => this.extensionPolicy,
-    rootDir: () => this.rootDir,
-  });
-
   rawExtensionFallbacks = new Set<string>();
 
   /** Original path → hash of bytes whose parse aborted in a rejected attempt;
@@ -321,11 +223,6 @@ export class PluginContext {
    *  raw so the host reports its own syntax error instead of receiving the
    *  previous module from the retained engine. */
   readonly abortedParseHashes = new Map<string, string>();
-
-  /** A system reload is pending: the next analysis attempt loads the latest
-   *  system. A parse hold keeps it pending and the published system served;
-   *  new dependency watch keys stay registered meanwhile. */
-  systemReloadOwed = false;
 
   /** The one mutator of a file's fallback state — every raw-serve exit of the
    *  transform hook reports here, except aborted bytes, which never execute.
@@ -344,8 +241,6 @@ export class PluginContext {
   private readonly reloadWindow = new CoalescingWindow(() => {
     this.devServer?.hot?.send({ type: 'full-reload' });
   });
-
-  packageMap: Record<string, string> = {};
 
   base = '/';
 
@@ -372,29 +267,13 @@ export class PluginContext {
   assetPassComplete = false;
 
   externalPackageDirs: string[] = [];
-  /** Those whose package is linked rather than installed. */
-  externalLinkedDirs: string[] = [];
-  /** Those read from their package's compiled output. */
-  externalOutputDirs: string[] = [];
-
-  externalDirOwners: Record<string, string> = {};
-
   /** specifier → whether its redirected source entry has side effects, from
    *  the owning package's `sideEffects`; absent leaves Vite's default. */
   externalSourceSideEffects = new Map<string, boolean>();
 
-  externalFileOwners: Record<string, string> = {};
-
   externalSourceEntries = new Map<string, string>();
 
   externalPackageOutcomes: ExternalPackageOutcome[] = [];
-  /** The analysed kits' descriptors, from the last discovery. */
-  kitDescriptors: KitDescriptorRecord[] = [];
-  /** Configured files buildStart or a late rediscovery could not read.
-   *  Later analyses read no files themselves, so they replay these until the
-   *  file is read into the cache or deleted. */
-  ingestionFailureDiagnostics: ManifestDiagnostic[] = [];
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   devServer: any;
 
@@ -433,7 +312,6 @@ export class PluginContext {
     engineApiOverride?: () => any
   ) {
     this.options = options;
-    this.staticCssJson = serializeStaticCss(options.staticCss);
     const verbosity = resolveVerbosity(
       options.verbose,
       process.env.ANIMUS_DEBUG
@@ -454,7 +332,8 @@ export class PluginContext {
     const rehydrateFilesJson = (filesJsonRaw: string): string => {
       if (!filesJsonRaw.includes('"source":""')) return filesJsonRaw;
       const entries = parseFilesJson(filesJsonRaw, 'animus-extract');
-      const analysisEntries = this.corpus.published.analysisEntries;
+      const analysisEntries =
+        this.session?.corpus.published.analysisEntries ?? new Map();
       for (const entry of entries) {
         if (entry.source === '') {
           entry.source = analysisEntries.get(entry.path)?.source ?? '';
@@ -584,7 +463,6 @@ export class PluginContext {
     if (publication === null) return;
     const manifest = publication.manifest;
     this.system = publication.system;
-    this.systemLoaded = true;
     this.resolvedSystemPath = resolve(this.rootDir, this.options.system);
     const keys = new Set<string>();
     for (const path of [
@@ -600,7 +478,6 @@ export class PluginContext {
     this.storedSheets = manifest.sheets;
     this.globalCss = publication.analysisGlobalCss;
     this.resolvedComponentCss = publication.analysisComponentCss;
-    this.packageMap = publication.packageMap;
     this.reverseProvenance = manifest.reverse_provenance;
     this.storedSystemPropMapJson = JSON.stringify(manifest.system_prop_map);
     this.storedDynamicPropsJson = JSON.stringify(manifest.dynamic_props);
@@ -611,16 +488,11 @@ export class PluginContext {
       manifest.typed_system_props
     );
     this.externalPackageDirs = session.externalPackageDirs;
-    this.externalLinkedDirs = session.externalLinkedDirs;
-    this.externalOutputDirs = session.externalOutputDirs;
-    this.externalDirOwners = session.externalDirOwners;
-    this.externalFileOwners = session.externalFileOwners;
     this.externalSourceEntries.clear();
     for (const [specifier, entry] of session.externalSourceEntries) {
       this.externalSourceEntries.set(specifier, entry);
     }
     this.externalSourceSideEffects = session.externalSourceSideEffects;
-    this.kitDescriptors = session.kitDescriptors;
     this.externalPackageOutcomes = session.lastExternalOutcomes;
     this.registerSystemWatchPaths();
     this.applyAssetSubstitutions();
@@ -680,306 +552,6 @@ export class PluginContext {
       throw new Error(message, cause === undefined ? undefined : { cause });
     }
     report(message);
-  }
-
-  /** Load the system into `this.system`. On failure the previous config is
-   *  kept; strict mode throws instead, and strict development reports the
-   *  failure once a system has loaded, since there is one to keep. */
-  loadSystem(): void {
-    this.resolvedSystemPath = resolve(this.rootDir, this.options.system);
-    // The entry is always a member, even before any successful load or when
-    // a failed non-strict reload keeps a stale dependency set.
-    for (const key of toWatchKeys(this.resolvedSystemPath)) {
-      this.systemDependencyKeys.add(key);
-    }
-
-    try {
-      this.system = loadSystemConfig(this.engineApi, {
-        systemPath: this.resolvedSystemPath,
-        rootDir: this.rootDir,
-        prefix: this.options.prefix,
-        prefixContextualVars: this.options.prefixContextualVars,
-        conditions: this.resolveConditions,
-        workspaces: declaredWorkspacePackages(this.rootDir),
-        extensions: this.extensionPolicy,
-      });
-      // Includes each manifest whose `exports` selected a module, so an edit
-      // to one reloads the system too.
-      const deps = this.system.dependencies ?? [];
-      const keys = new Set<string>();
-      for (const key of toWatchKeys(this.resolvedSystemPath)) keys.add(key);
-      for (const dep of deps) {
-        for (const key of toWatchKeys(dep)) keys.add(key);
-      }
-      this.systemDependencyKeys = keys;
-      this.systemDependencyPaths = deps;
-      this.registerSystemWatchPaths();
-      this.systemLoaded = true;
-    } catch (e) {
-      const message = `[animus-extract] Failed to load system from ${this.resolvedSystemPath}: ${e}`;
-      // No system to keep: startup is fatal in every mode, as a build is
-      // (row 8). A reload keeps the last good system.
-      if (!this.systemLoaded) throw new Error(message, { cause: e });
-      if (this.options.strict) {
-        this.strictFailure(message, e);
-        return;
-      }
-      console.warn(
-        `[animus-extract] Failed to load system from ${this.resolvedSystemPath}:`,
-        e
-      );
-    }
-  }
-
-  /** The read failures still standing: a file stops counting once the cache
-   *  holds a read of it or it is gone, as in the shared session, so it stops
-   *  warning and stops holding pruning off. */
-  private unsettledIngestionFailures(): ManifestDiagnostic[] {
-    return this.ingestionFailureDiagnostics.filter(({ file }) => {
-      if (this.fileCache.has(file)) return false;
-      try {
-        statSync(resolve(this.rootDir, file));
-        return true;
-      } catch (err) {
-        return !isDeletedSource(err);
-      }
-    });
-  }
-
-  /** Runs project analysis and updates every manifest-derived state. Returns
-   *  false when nothing published, and the caller must roll its cache back.
-   *  While a source is skipped or unreadable, its renders are unseen, so
-   *  nothing is pruned. */
-  runAnalysis(
-    fileEntries: Array<{ path: string; source: string; hash?: string }>,
-    skippedOriginals: readonly string[] = [],
-    openings: readonly IngestionOpening[] = [],
-    adapted: ReadonlyMap<string, readonly string[]> = new Map()
-  ): boolean {
-    const ingestionFailures = this.unsettledIngestionFailures();
-    let result: ProjectAnalysisResult;
-    try {
-      result = runProjectAnalysis(this.engineApi, {
-        fileEntries,
-        packageMap: this.packageMap,
-        system: this.system,
-        emitter: {
-          runtimeImport: this.options.runtimeImport ?? DEFAULT_RUNTIME_IMPORT,
-          cssModuleId: VIRTUAL_CSS_ID,
-        },
-        pathAliasesJson: this.pathAliasesJson,
-        staticCssJson: this.staticCssJson,
-        externalDirs: this.externalPackageDirs.map((dir) =>
-          relative(this.rootDir, dir)
-        ),
-        rootDir: this.rootDir,
-        assets: this.assetClassification,
-        adapted,
-        devMode: !this.emissionProd,
-        // Rollup leaves an `import(expr)` it cannot read unbundled.
-        analysisContext: {
-          skippedSources: [
-            ...skippedOriginals,
-            ...ingestionFailures.map((d) => d.file),
-          ].map((file) =>
-            isAbsolute(file) ? relative(this.rootDir, file) : file
-          ),
-          unbundledComputedImports: true,
-          openings: [...openings],
-          packageDirs: this.externalPackageDirs.map((dir) =>
-            relative(this.rootDir, dir)
-          ),
-          linkedDirs: this.externalLinkedDirs.map((dir) =>
-            relative(this.rootDir, dir)
-          ),
-          outputDirs: this.externalOutputDirs.map((dir) =>
-            relative(this.rootDir, dir)
-          ),
-          extensions: this.extensionPolicy,
-        },
-        warn: (m) => this.warn(m),
-        info: (m) => this.log(m),
-        strict: this.options.strict,
-        diagnostics: this.options.diagnostics,
-        reportErrors: this.reportErrors(),
-        extraDiagnostics: ingestionFailures,
-        kitDescriptors: this.kitDescriptors,
-      });
-    } catch (e) {
-      const message = `[animus-extract] analyzeProject failed: ${e}`;
-      // A diagnostic at `error` level fails a build as a strict failure
-      // does; a dev server reports it instead and never reaches here.
-      if (e instanceof DiagnosticFailure) {
-        throw new Error(message, { cause: e });
-      }
-      if (this.options.strict) {
-        // Nothing published to keep: development stops as a build does.
-        if (this.storedManifest === null) {
-          throw new Error(message, { cause: e });
-        }
-        this.strictFailure(message, e);
-        return false;
-      }
-      console.warn('[animus-extract] analyzeProject failed:', e);
-      return false;
-    }
-
-    assertRuntimeImportSuppliesTerminals(
-      this.options.runtimeImport,
-      result.manifest
-    );
-    reportSurvivingAssetPlaceholders(generatedModuleCode(result.manifest), {
-      strict: this.options.strict,
-      warn: (message) => this.warn(message),
-      reportErrors: this.reportErrors(),
-      prefix: '[animus-extract]',
-      surface: 'generated runtime modules',
-    });
-
-    this.storedManifest = result.manifest;
-    this.storedManifestJson = result.manifestJson;
-    // Forgotten only with a published analysis: an unpublished one rolls the
-    // read file's cache entry back, and its failure must still stand.
-    this.ingestionFailureDiagnostics = ingestionFailures;
-
-    this.storedSystemPropMapJson = JSON.stringify(
-      result.manifest.system_prop_map
-    );
-    this.storedDynamicPropsJson = JSON.stringify(result.manifest.dynamic_props);
-    this.storedAdmittedTransformsJson = JSON.stringify(
-      result.manifest.admitted_transforms
-    );
-    this.storedTypedSystemPropsJson = JSON.stringify(
-      result.manifest.typed_system_props
-    );
-
-    this.reverseProvenance = result.manifest.reverse_provenance;
-
-    this.storedSheets = result.manifest.sheets;
-
-    this.globalCss = result.globalCss;
-    this.resolvedComponentCss = result.componentCss;
-
-    this.applyAssetSubstitutions();
-
-    return true;
-  }
-
-  /** The one ingest → quarantine → analyze → publish transaction. The corpus
-   *  publishes only on success. `afterIngestion` runs after quarantine even
-   *  when an aborted parse rejects the attempt; `beforeAnalysis` runs only
-   *  once the attempt will analyze. A rejection names its aborted originals
-   *  and holds publication: development callers keep their cache's latest
-   *  sources, valid edits included, for the repair to publish together. In
-   *  every strictness mode it fails a production build, which has no
-   *  generation to keep, and only warns in development: the host reports the
-   *  syntax error itself, and a throw would leave its client on the failed
-   *  module. The publication that ends a hold invalidates the modules of
-   *  every original whose admitted bytes changed meanwhile and returns them
-   *  as `redeliver`, for a hot update to push to the client. An owed system
-   *  reload loads the latest system for the attempt: a hold restores the
-   *  published one and keeps the reload owed, any other outcome completes
-   *  the reload's invalidation. */
-  async analyzeIngested(options?: {
-    rawEntries?: readonly RawSourceEntry[];
-    afterIngestion?: (ingested: SourceIngestionResult) => void;
-    beforeAnalysis?: (accepted: SourceIngestionResult) => void;
-  }): Promise<{
-    ok: boolean;
-    accepted: SourceIngestionResult;
-    /** Original path → hash of the bytes whose parse aborted. */
-    abortedOriginals?: ReadonlyMap<string, string>;
-    endedHold: boolean;
-    redeliver: string[];
-  }> {
-    const holding = this.abortedParseHashes.size > 0;
-    const previous = this.corpus.published.ownership;
-    const reloadingSystem = this.systemReloadOwed;
-    const prevPlans = reloadingSystem
-      ? snapshotFilePlans(this.storedManifest)
-      : null;
-    const publishedSystem = this.system;
-    let published = false;
-    try {
-      if (reloadingSystem) this.loadSystem();
-      const accepted = await this.corpus.prepare(
-        options?.rawEntries ?? {
-          fileCache: this.fileCache,
-          externalFileOwners: this.externalFileOwners,
-        }
-      );
-      options?.afterIngestion?.(accepted);
-      const rejection = this.corpus.rejection(accepted);
-      if (rejection) {
-        for (const [path, hash] of rejection.originals) {
-          this.abortedParseHashes.set(path, hash);
-        }
-        if (this.isProd) throw new Error(rejection.message);
-        this.warn(rejection.message);
-        return {
-          ok: false,
-          accepted,
-          abortedOriginals: rejection.originals,
-          endedHold: false,
-          redeliver: [],
-        };
-      }
-      // Strict ingestion diagnostics throw before the cache is cleared, so a
-      // rejected reset leaves the last-good transform engine usable.
-      if (reloadingSystem) clearEngineCache(this.engineApi);
-      options?.beforeAnalysis?.(accepted);
-      const ok =
-        this.runAnalysis(
-          accepted.analysisEntries,
-          accepted.skippedOriginals,
-          accepted.openings,
-          // The ingestion being analysed publishes only after its analysis.
-          adaptedOriginals(accepted.ownership)
-        ) !== false;
-      if (!ok) return { ok, accepted, endedHold: false, redeliver: [] };
-      this.publishSourceIngestion(accepted);
-      published = true;
-      this.abortedParseHashes.clear();
-      if (!holding) return { ok, accepted, endedHold: false, redeliver: [] };
-      const redeliver = Object.values(accepted.ownership)
-        .filter(
-          (owner) =>
-            previous[owner.originalPath]?.originalHash !== owner.originalHash
-        )
-        .map((owner) => owner.originalPath);
-      invalidateFileModules(this, redeliver);
-      return { ok, accepted, endedHold: true, redeliver };
-    } finally {
-      // Only a publication ends a hold.
-      const systemHeld = reloadingSystem && this.abortedParseHashes.size > 0;
-      if (systemHeld) {
-        this.system = publishedSystem;
-      } else if (reloadingSystem) {
-        this.systemReloadOwed = false;
-        // A type-only definition module has no import edge, so importer
-        // propagation cannot deliver its new bytes — evict changed plans.
-        // A system reload has no caller-side plan diff of its own.
-        if (published && prevPlans) {
-          invalidateFileModules(
-            this,
-            diffFilePlans(prevPlans, snapshotFilePlans(this.storedManifest))
-          );
-        }
-      }
-      // A held reload re-serves the published system's unchanged bytes, so
-      // only a completed one reloads the client.
-      if (reloadingSystem) this.invalidateSystemReloadModules(!systemHeld);
-    }
-  }
-
-  publishSourceIngestion(result: SourceIngestionResult): void {
-    this.corpus.publish(result);
-    this.externalFileOwners = projectExternalFileOwners(
-      result,
-      this.externalFileOwners
-    );
-
-    this.enforceExternalTokenContracts();
   }
 
   devFsUrl(absPath: string): string {
@@ -1165,33 +737,6 @@ export class PluginContext {
     // Virtual-module HMR path matching is fragile for programmatic sends, so
     // a reload delivers the regenerated CSS; the window coalesces a burst.
     this.reloadWindow.note();
-  }
-
-  /** An unresolvable `.includes()` specifier or a stale dist entry under an
-   *  extended package warns, and fails the build under `strict` (strict
-   *  development reports it). */
-  enforceIncludeResolution(): void {
-    for (const message of [
-      unresolvableIncludesMessage(this.externalPackageOutcomes),
-      staleDistIncludesMessage(this.externalPackageOutcomes),
-    ]) {
-      if (message === null) continue;
-      if (this.options.strict) this.strictFailure(message);
-      else this.warn(message);
-    }
-  }
-
-  enforceExternalTokenContracts(): void {
-    enforceExternalTokenContracts({
-      diagnostics: this.storedManifest?.diagnostics,
-      fileOwners: this.externalFileOwners,
-      dirOwners: this.externalDirOwners,
-      sourceThemeManifestsJson: this.system.sourceThemeManifestsJson,
-      strict: this.options.strict,
-      prefix: '[animus-extract]',
-      warn: (message: string) => this.warn(message),
-      reportErrors: this.reportErrors(),
-    });
   }
 
   runSelfVerify(): void {

@@ -436,9 +436,9 @@ export class ExtractionSession {
   /** Those read from their package's compiled output. */
   externalOutputDirs: string[] = [];
   /** Absolute package dir → owning specifier (cross-source correlation). */
-  externalDirOwners: Record<string, string> = {};
+  private externalDirOwners: Record<string, string> = {};
   /** rootDir-relative external file → owning specifier (correlation join). */
-  externalFileOwners: Record<string, string> = {};
+  private externalFileOwners: Record<string, string> = {};
   /** External package specifier → absolute source entry path. */
   externalSourceEntries = new Map<string, string>();
   /** Specifier → its source entry's side effects, from the owning package's
