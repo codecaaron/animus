@@ -802,19 +802,14 @@ fn resolve_export(
 /// (`import * as name from '…'; export { name }`), followed through
 /// re-exports and barrels. `None` when `name` is no namespace there.
 ///
-/// A module namespace the module table resolves the export to is that
-/// module; any other answer keeps the namespace re-export walk.
-pub(crate) fn namespace_export(
-    module: String,
-    name: String,
-    files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-    links: &crate::link::ProjectLinks,
-) -> Option<String> {
-    if let Some(ExportLookup::Resolved(Terminal::Namespace(target))) = links.resolve_export(&module, &name) {
-        return Some(links.paths[target].clone());
+/// Only a module namespace the module table resolves the export to is a
+/// namespace: an absent, ambiguous or open answer, a binding and an
+/// export of a module outside the analysis are none.
+pub(crate) fn namespace_export(module: String, name: String, links: &crate::link::ProjectLinks) -> Option<String> {
+    match links.resolve_export(&module, &name)? {
+        ExportLookup::Resolved(Terminal::Namespace(target)) => Some(links.paths[target].clone()),
+        _ => None,
     }
-    resolve_namespace(module, name, files, inputs, &mut FxHashSet::default())
 }
 
 fn resolve_namespace(

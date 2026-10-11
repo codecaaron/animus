@@ -3038,7 +3038,7 @@ fn exported_component_ids(
         }
         for name in crate::family_members::module_export_names(&module, files, inputs) {
             let namespace =
-                crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs, links);
+                crate::family_members::namespace_export(module.clone(), name.clone(), links);
             match namespace {
                 Some(namespace) => modules.push(namespace),
                 None => ids.extend(export_ids(&module, name, true, files, inputs, links, evaluated_ids)),
@@ -3152,7 +3152,7 @@ pub(crate) fn namespace_path_module(
     )?;
     for segment in segments {
         let segment = segment.to_string();
-        module = crate::family_members::namespace_export(module, segment, files, inputs, links)?;
+        module = crate::family_members::namespace_export(module, segment, links)?;
     }
     Some(module)
 }
@@ -11276,6 +11276,33 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "{}",
             out.sheets.base
         );
+    }
+
+    #[test]
+    fn an_exported_namespace_is_one_only_where_the_module_table_resolves_it() {
+        // Two stars bringing in different namespaces, or one beside an
+        // unresolved path, name no namespace.
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let files: BTreeMap<String, FileFacts> = [
+            ("x.ts", "export const X = 1;"),
+            ("y.ts", "export const Y = 1;"),
+            ("a.ts", "export * as ns from './x';"),
+            ("b.ts", "export * as ns from './y';"),
+            ("both.ts", "export * from './a';\nexport * from './b';"),
+            ("open.ts", "export * from './a';\nexport * from './missing';"),
+            ("one.ts", "export * from './a';"),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let ast = crate::owned_ast::OwnedAst::parse(path.to_string(), source.to_string(), &counter);
+            (path.to_string(), crate::facts::extract_file_facts(&ast))
+        })
+        .collect();
+        let links = crate::link::ProjectLinks::link(&files, &test_inputs());
+        let namespace = |module: &str| crate::family_members::namespace_export(module.to_string(), "ns".to_string(), &links);
+        assert_eq!(namespace("both.ts"), None);
+        assert_eq!(namespace("open.ts"), None);
+        assert_eq!(namespace("one.ts"), Some("x.ts".to_string()));
     }
 
     #[test]
