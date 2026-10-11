@@ -81,138 +81,149 @@ suite('kit publication', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const engine = require('../index-v2.js');
 
-  it('passes a complete package and names the file, import and cause of each gap', () => {
-    // Every target, relative import and package is published or declared.
-    expect(
-      kitPublicationFailures(
-        kit(['src', 'helpers', 'dist'], '../helpers/palette'),
-        engine
-      )
-    ).toEqual([]);
+  // Each case runs `npm pack --dry-run` (about a second each on a dev
+  // machine, more under a parallel verify), so the default 5 s is too short.
+  const NPM_PACK_BUDGET_MS = 60_000;
 
-    expect(
-      kitPublicationFailures(kit(['dist'], '../helpers/palette'), engine)
-    ).toEqual([
-      'package.json: the "animus" target of exports["."], src/index.ts, is not in the published files',
-    ]);
-    // `export *` and a literal `import()` are followed like imports.
-    expect(
-      kitPublicationFailures(
-        kit(['src/index.ts', 'helpers', 'dist'], '../helpers/palette'),
-        engine
-      )
-    ).toEqual([
-      "src/index.ts: import './parts' resolves to src/parts.ts, which is not in the published files",
-    ]);
-    expect(
-      kitPublicationFailures(kit(['src', 'dist'], '../helpers/palette'), engine)
-    ).toEqual([
-      "src/index.ts: import '../helpers/palette' resolves to helpers/palette.ts, which is not in the published files",
-    ]);
-    expect(
-      kitPublicationFailures(
-        kit(['src', 'helpers', 'dist'], '../helpers/missing'),
-        engine
-      )
-    ).toEqual([
-      "src/index.ts: import '../helpers/missing' resolves to no file in the package",
-    ]);
-    expect(
-      kitPublicationFailures(
-        kit(['src', 'helpers', 'dist'], '@acme/workspace-theme'),
-        engine
-      )
-    ).toEqual([
-      "src/index.ts: import '@acme/workspace-theme' names the package @acme/workspace-theme, which package.json does not declare in dependencies, peerDependencies or optionalDependencies",
-    ]);
+  it(
+    'passes a complete package and names the file, import and cause of each gap',
+    () => {
+      // Every target, relative import and package is published or declared.
+      expect(
+        kitPublicationFailures(
+          kit(['src', 'helpers', 'dist'], '../helpers/palette'),
+          engine
+        )
+      ).toEqual([]);
 
-    // npm's own rules decide what publishes: `.npmignore`, and brace globs.
-    expect(
-      kitPublicationFailures(
-        kit(null, '../helpers/palette', (_, write) =>
-          write('.npmignore', 'helpers/\n')
-        ),
-        engine
-      )
-    ).toEqual([
-      "src/index.ts: import '../helpers/palette' resolves to helpers/palette.ts, which is not in the published files",
-    ]);
-    expect(
-      kitPublicationFailures(
-        kit(['src/**/*.{ts,tsx}', 'helpers', 'dist'], '../helpers/palette'),
-        engine
-      )
-    ).toEqual([]);
-    // A relative import must stay in the package.
-    expect(
-      kitPublicationFailures(
-        kit(null, '../../outside', (_, write) =>
-          write('../outside.ts', 'export const palette = {};')
-        ),
-        engine
-      )
-    ).toEqual([
-      "src/index.ts: import '../../outside' resolves to ../outside.ts, outside the package",
-    ]);
-    // A build's artifacts inside the package ship unless npm leaves them out.
-    const artifacts = (files: string[] | null) => {
-      const root = kit(files, '../helpers/palette', (_, write) =>
-        write('.animus/styles.css', '')
-      );
-      return kitPublicationFailures(root, engine, join(root, '.animus'));
-    };
-    expect(artifacts(null)).toEqual([
-      '.animus/: npm pack would publish this build-artifact directory (1 files) — add ".animus/" to .npmignore or .gitignore, or list the published files in package.json "files"',
-    ]);
-    expect(artifacts(['src', 'helpers', 'dist'])).toEqual([]);
-    // A template `import()` with no expressions names its module.
-    expect(
-      kitPublicationFailures(
-        kit(['src', 'dist'], '../helpers/palette', (_, write) =>
-          write(
-            'src/parts.ts',
-            'export const part = import(`../helpers/lazy`);'
-          )
-        ),
-        engine
-      )
-    ).toEqual([
-      "src/index.ts: import '../helpers/palette' resolves to helpers/palette.ts, which is not in the published files",
-      "src/parts.ts: import '../helpers/lazy' resolves to no file in the package",
-    ]);
-    // A nested or pattern `animus` target is checked as an exact one is.
-    expect(
-      kitPublicationFailures(
-        kit(['src', 'helpers', 'dist'], '../helpers/palette', (manifest) => {
-          manifest.exports = {
-            '.': { animus: './src/index.ts', import: './dist/index.js' },
-            './extra': { browser: { animus: './src/missing.ts' } },
-            './parts/*': { animus: './src/parts/*.ts' },
-          };
-        }),
-        engine
-      )
-    ).toEqual([
-      'package.json: the "animus" target of exports["./extra"], ./src/missing.ts, does not exist in the package',
-      'package.json: the "animus" target of exports["./parts/*"], ./src/parts/*.ts, matches no file in the package',
-    ]);
-    // Node puts one subpath into every `*`, so `a-b` is no target of `*-*`.
-    expect(
-      kitPublicationFailures(
-        kit(
-          ['src', 'helpers', 'dist', 'parts/a-a.js'],
-          '../helpers/palette',
-          (manifest, write) => {
+      expect(
+        kitPublicationFailures(kit(['dist'], '../helpers/palette'), engine)
+      ).toEqual([
+        'package.json: the "animus" target of exports["."], src/index.ts, is not in the published files',
+      ]);
+      // `export *` and a literal `import()` are followed like imports.
+      expect(
+        kitPublicationFailures(
+          kit(['src/index.ts', 'helpers', 'dist'], '../helpers/palette'),
+          engine
+        )
+      ).toEqual([
+        "src/index.ts: import './parts' resolves to src/parts.ts, which is not in the published files",
+      ]);
+      expect(
+        kitPublicationFailures(
+          kit(['src', 'dist'], '../helpers/palette'),
+          engine
+        )
+      ).toEqual([
+        "src/index.ts: import '../helpers/palette' resolves to helpers/palette.ts, which is not in the published files",
+      ]);
+      expect(
+        kitPublicationFailures(
+          kit(['src', 'helpers', 'dist'], '../helpers/missing'),
+          engine
+        )
+      ).toEqual([
+        "src/index.ts: import '../helpers/missing' resolves to no file in the package",
+      ]);
+      expect(
+        kitPublicationFailures(
+          kit(['src', 'helpers', 'dist'], '@acme/workspace-theme'),
+          engine
+        )
+      ).toEqual([
+        "src/index.ts: import '@acme/workspace-theme' names the package @acme/workspace-theme, which package.json does not declare in dependencies, peerDependencies or optionalDependencies",
+      ]);
+
+      // npm's own rules decide what publishes: `.npmignore`, and brace globs.
+      expect(
+        kitPublicationFailures(
+          kit(null, '../helpers/palette', (_, write) =>
+            write('.npmignore', 'helpers/\n')
+          ),
+          engine
+        )
+      ).toEqual([
+        "src/index.ts: import '../helpers/palette' resolves to helpers/palette.ts, which is not in the published files",
+      ]);
+      expect(
+        kitPublicationFailures(
+          kit(['src/**/*.{ts,tsx}', 'helpers', 'dist'], '../helpers/palette'),
+          engine
+        )
+      ).toEqual([]);
+      // A relative import must stay in the package.
+      expect(
+        kitPublicationFailures(
+          kit(null, '../../outside', (_, write) =>
+            write('../outside.ts', 'export const palette = {};')
+          ),
+          engine
+        )
+      ).toEqual([
+        "src/index.ts: import '../../outside' resolves to ../outside.ts, outside the package",
+      ]);
+      // A build's artifacts inside the package ship unless npm leaves them out.
+      const artifacts = (files: string[] | null) => {
+        const root = kit(files, '../helpers/palette', (_, write) =>
+          write('.animus/styles.css', '')
+        );
+        return kitPublicationFailures(root, engine, join(root, '.animus'));
+      };
+      expect(artifacts(null)).toEqual([
+        '.animus/: npm pack would publish this build-artifact directory (1 files) — add ".animus/" to .npmignore or .gitignore, or list the published files in package.json "files"',
+      ]);
+      expect(artifacts(['src', 'helpers', 'dist'])).toEqual([]);
+      // A template `import()` with no expressions names its module.
+      expect(
+        kitPublicationFailures(
+          kit(['src', 'dist'], '../helpers/palette', (_, write) =>
+            write(
+              'src/parts.ts',
+              'export const part = import(`../helpers/lazy`);'
+            )
+          ),
+          engine
+        )
+      ).toEqual([
+        "src/index.ts: import '../helpers/palette' resolves to helpers/palette.ts, which is not in the published files",
+        "src/parts.ts: import '../helpers/lazy' resolves to no file in the package",
+      ]);
+      // A nested or pattern `animus` target is checked as an exact one is.
+      expect(
+        kitPublicationFailures(
+          kit(['src', 'helpers', 'dist'], '../helpers/palette', (manifest) => {
             manifest.exports = {
               '.': { animus: './src/index.ts', import: './dist/index.js' },
-              './parts/*': { animus: './parts/*-*.js' },
+              './extra': { browser: { animus: './src/missing.ts' } },
+              './parts/*': { animus: './src/parts/*.ts' },
             };
-            write('parts/a-a.js', 'export const part = 1;');
-            write('parts/a-b.js', 'export const part = 2;');
-          }
-        ),
-        engine
-      )
-    ).toEqual([]);
-  });
+          }),
+          engine
+        )
+      ).toEqual([
+        'package.json: the "animus" target of exports["./extra"], ./src/missing.ts, does not exist in the package',
+        'package.json: the "animus" target of exports["./parts/*"], ./src/parts/*.ts, matches no file in the package',
+      ]);
+      // Node puts one subpath into every `*`, so `a-b` is no target of `*-*`.
+      expect(
+        kitPublicationFailures(
+          kit(
+            ['src', 'helpers', 'dist', 'parts/a-a.js'],
+            '../helpers/palette',
+            (manifest, write) => {
+              manifest.exports = {
+                '.': { animus: './src/index.ts', import: './dist/index.js' },
+                './parts/*': { animus: './parts/*-*.js' },
+              };
+              write('parts/a-a.js', 'export const part = 1;');
+              write('parts/a-b.js', 'export const part = 2;');
+            }
+          ),
+          engine
+        )
+      ).toEqual([]);
+    },
+    NPM_PACK_BUDGET_MS
+  );
 });
