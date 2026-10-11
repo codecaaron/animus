@@ -96,12 +96,25 @@ pub fn strip_typescript_module(source: &str, file_path: &str) -> Result<String, 
 }
 
 /// What a resolution resolves under (pipeline spec §2.2): the host's export
-/// conditions, in its order, and the session root's declared workspace
-/// packages, by name, at their canonical directories.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// conditions, in its order, the session root's declared workspace
+/// packages, by name, at their canonical directories, and the host's
+/// extension order (A2), which no probe reads yet: the built-in policy
+/// answers until each host's order is measured against it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolutionContext {
     pub conditions: Vec<String>,
     pub workspaces: BTreeMap<String, PathBuf>,
+    pub extensions: resolution::ExtensionPolicy,
+}
+
+impl Default for ResolutionContext {
+    fn default() -> Self {
+        Self {
+            conditions: Vec::new(),
+            workspaces: BTreeMap::new(),
+            extensions: resolution::extension_policy().clone(),
+        }
+    }
 }
 
 /// Resolve a bare specifier to an absolute file path and the `package.json`
@@ -1005,15 +1018,17 @@ fn build_bundle(
         let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, path);
         let _ = writeln!(
             bundle,
-            "const {} = (function*(){{ const __exports = __modules['{}'];",
+            "const {} = (function*(){{",
             generator(path),
-            js_quoted(path)
         );
         bundle.push_str(&module.link);
+        // The module's own scope declares nothing the loader adds, so any
+        // name but `__modules` is the module's to declare.
         for (name, read) in linker.getters(path) {
             let _ = writeln!(
                 bundle,
-                "Object.defineProperty(__exports, '{}', {{ enumerable: true, get: () => {} }});",
+                "Object.defineProperty(__modules['{}'], '{}', {{ enumerable: true, get: () => {} }});",
+                js_quoted(path),
                 js_quoted(&name),
                 read
             );
@@ -2649,7 +2664,7 @@ export const ds = tokens;
         /// A case's name, its modules, and the loaded propConfig or a part
         /// of the load's error.
         type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], Result<&'a str, &'a str>);
-        let cases: [Case; 16] = [
+        let cases: [Case; 19] = [
             (
                 "hoisted-live",
                 &[
@@ -2781,6 +2796,39 @@ export const ds = tokens;
                     ("entry", "import f from './b.js';\nconst __default = 7;\nexport default 3;\nconst data = { ok: __default, f: f(), name: f.name };\n"),
                 ],
                 Ok(r#"{"ok":7,"f":4,"name":"default"}"#),
+            ),
+            (
+                // An anonymous default function or class is named `default`;
+                // one with its own static `name` keeps it.
+                "anonymous-default-names",
+                &[
+                    ("arrow", "export default () => 1;\n"),
+                    ("fexpr", "export default (function () {});\n"),
+                    ("cls", "export default class {}\n"),
+                    ("clsname", "export default class { static name = 'own'; }\n"),
+                    ("fdecl", "export default function () {}\n"),
+                    ("entry", "import a from './arrow.js';\nimport f from './fexpr.js';\nimport c from './cls.js';\n\
+                        import n from './clsname.js';\nimport d from './fdecl.js';\n\
+                        const data = { a: a.name, f: f.name, c: c.name, n: n.name, d: d.name };\n"),
+                ],
+                Ok(r#"{"a":"default","f":"default","c":"default","n":"own","d":"default"}"#),
+            ),
+            (
+                // The loader declares nothing in a module's scope.
+                "authored-exports-name",
+                &[
+                    ("exp", "const __exports = 7;\nexport const seen = __exports;\n"),
+                    ("entry", "import { seen } from './exp.js';\nconst data = { seen };\n"),
+                ],
+                Ok(r#"{"seen":7}"#),
+            ),
+            (
+                "reserved-modules-name",
+                &[
+                    ("cell", "const __modules = 1;\nexport const x = __modules;\n"),
+                    ("entry", "import { x } from './cell.js';\nconst data = { x };\n"),
+                ],
+                Err("declares `__modules`, which the system loader reserves"),
             ),
             (
                 "missing-import",

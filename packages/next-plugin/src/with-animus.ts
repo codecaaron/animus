@@ -8,6 +8,7 @@ import {
   readTsconfigAliasPairs,
   resolveMode,
   sourceKitDependencies,
+  turbopackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
   ExtractionSession,
@@ -89,6 +90,9 @@ type NextWebpackHook = (
 interface NextConfigBoundary {
   webpack?: NextWebpackHook | null;
   turbopack?: TurbopackOptions;
+  /** The legacy home of Turbopack's options, which Next still merges into
+   *  `turbopack` for a config written before the key moved. */
+  experimental?: { turbo?: { resolveExtensions?: string[] } };
 }
 
 type CallableNextConfig = (
@@ -428,8 +432,13 @@ function turbopackConfig<Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>,
   options: AnimusNextOptions
 ): TurbopackNextConfig<Config> {
+  // Turbopack's extension order as Next merges it: `turbopack`, else the
+  // legacy `experimental.turbo`; its documented default without either.
+  const resolveExtensions =
+    nextConfig.turbopack?.resolveExtensions ??
+    nextConfig.experimental?.turbo?.resolveExtensions;
   const load = (phase: string): Promise<TurbopackNextConfigObject<Config>> =>
-    loadTurbopackFragment(options, phase).then((fragment) =>
+    loadTurbopackFragment(options, phase, resolveExtensions).then((fragment) =>
       mergeTurbopackFragment(nextConfig, fragment)
     );
   function then<Resolved = TurbopackNextConfigObject<Config>, Rejected = never>(
@@ -469,16 +478,23 @@ let liveTurbopackLoad: {
 
 function loadTurbopackFragment(
   options: AnimusNextOptions,
-  phase: string
+  phase: string,
+  resolveExtensions: readonly string[] | undefined
 ): Promise<TurbopackConfigFragment> {
   // `next dev <subdir>` under Turbopack is a known gap: no dir reaches a
   // config module, so cwd is the only root signal. Next 16's `turbopack.root`
   // is the workspace root, broader than the app dir, so adopting it widens
   // the scan instead of closing the gap.
   const rootDir = process.cwd();
-  const key = JSON.stringify([phase, rootDir]);
+  // The extension order is part of the analysis a load shares.
+  const key = JSON.stringify([phase, rootDir, resolveExtensions ?? null]);
   if (liveTurbopackLoad?.key === key) return liveTurbopackLoad.fragment;
-  const fragment = analyzeForTurbopack(options, phase, rootDir);
+  const fragment = analyzeForTurbopack(
+    options,
+    phase,
+    rootDir,
+    resolveExtensions
+  );
   const load = { key, fragment };
   liveTurbopackLoad = load;
   fragment.catch(() => {
@@ -490,7 +506,8 @@ function loadTurbopackFragment(
 async function analyzeForTurbopack(
   options: AnimusNextOptions,
   phase: string,
-  rootDir: string
+  rootDir: string,
+  resolveExtensions: readonly string[] | undefined
 ): Promise<TurbopackConfigFragment> {
   const development = phase === PHASE_DEVELOPMENT_SERVER;
   const { mode } = resolveMode(options.mode, () =>
@@ -510,6 +527,7 @@ async function analyzeForTurbopack(
   // diagnostic reports there and the session keeps publishing.
   session.development = development;
   session.rootDir = rootDir;
+  session.extensionPolicy = turbopackExtensionPolicy(resolveExtensions);
   const aliasPairs = readTsconfigAliasPairs(rootDir);
   const builtAliases = buildPathAliasesJson(aliasPairs, rootDir);
   if (builtAliases) {

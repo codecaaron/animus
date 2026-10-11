@@ -3090,7 +3090,7 @@ fn exported_component_ids(
         if !seen.insert(module.clone()) {
             continue;
         }
-        for name in crate::family_members::module_export_names(&module, files, inputs, links) {
+        for name in crate::family_members::module_export_names(&module, links) {
             let namespace =
                 crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs, links);
             match namespace {
@@ -4067,12 +4067,7 @@ fn bounded_prop_tags(
     // The declaration a module's name or default import resolves to, through
     // any barrel.
     let declared = |file: &str, ff: &FileFacts, name: &str| {
-        let (declaring, binding, _) = resolve_declaration(file, ff, name, files, inputs, links)?;
-        let binding = match binding.as_str() {
-            "default" => files.get(&declaring)?.default_export_binding.clone().unwrap_or(binding),
-            _ => binding,
-        };
-        Some((declaring, binding))
+        resolve_declaration(file, ff, name, files, inputs, links).map(|(declaring, binding, _)| (declaring, binding))
     };
     // Whether `module` is `declaring`, or re-exports from it at any depth,
     // as the module table links them: by name, as a namespace, through
@@ -4480,10 +4475,6 @@ fn uncertain_tag_reason(
                 false => resolve_declaration(file, ff, tag, files, inputs, links).and_then(
                     |(declaring_file, binding, local)| {
                         let dff = files.get(&declaring_file)?;
-                        let binding = match binding.as_str() {
-                            "default" => dff.default_export_binding.clone().unwrap_or(binding),
-                            _ => binding,
-                        };
                         // `export function` and `export class` record no export
                         // fact, so a declaration the file does not import is
                         // its own.

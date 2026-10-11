@@ -76,7 +76,7 @@ export declare function engineVersion(): string
  */
 export declare function extractFacts(fileEntriesJson: string): string
 
-export declare function loadSystemModule(systemPath: string, rootDir: string, exportName?: string | undefined | null, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null): NapiSystemConfig
+export declare function loadSystemModule(systemPath: string, rootDir: string, exportName?: string | undefined | null, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null): NapiSystemConfig
 
 /**
  * Each file's run-time module specifiers, for the kit publication check:
@@ -159,4 +159,4 @@ export interface NapiSystemConfig {
  * policy; a package through `exports` (its `animus` source condition, then
  * `conditions`, `import` and `default`), then `module`, then `main`.
  */
-export declare function resolveSpecifier(specifier: string, fromDir: string, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null): NapiResolvedSpecifier
+export declare function resolveSpecifier(specifier: string, fromDir: string, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null): NapiResolvedSpecifier
