@@ -153,6 +153,17 @@ export interface NapiSystemConfig {
 }
 
 /**
+ * A kit's source root (spec §2.2 A5), as JSON: the package located from
+ * `from_dir` as the system loader locates it, the rule that chose the root
+ * (`animus`, `source-exports`, `src` or `compiled`), its entries, its
+ * invalid `animus` targets, and the runtime entry (`host_entry`, the file
+ * the host resolves, where given); or `{ "unresolved": why }` where no host
+ * imports the specifier. `package_dir` is the package discovery located,
+ * where it located one.
+ */
+export declare function resolveKitSourceRoot(specifier: string, fromDir: string, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null, hostEntry?: string | undefined | null, packageDir?: string | undefined | null): string
+
+/**
  * Resolves `specifier` from `from_dir` as the system loader resolves its
  * imports, so a host lane can resolve a file or package the way a system's
  * evaluation does: a relative or absolute path through the extension

@@ -14,6 +14,7 @@ import {
   importedKitDiagnostics,
   firstOwners,
   isDeletedSource,
+  nativeKitSourceRoot,
   surfaceManifestDiagnostics,
   unreadableSourceDiagnostic,
   validateLayerOrder,
@@ -272,6 +273,13 @@ async function discoverSources(
   const collected = await collectExternalPackageSources({
     specifiers: packageSpecifiers,
     resolveSpecifier,
+    kitSourceRoot: nativeKitSourceRoot(
+      ctx.engineApi(),
+      ctx.rootDir,
+      ctx.resolveConditions,
+      workspaces,
+      extensionPolicyJson(ctx.extensionPolicy)
+    ),
     requireSourceEntry: (specifier) => loaderOnly.has(specifier),
     extensions: ctx.extensionPolicy,
     rootDir: ctx.rootDir,

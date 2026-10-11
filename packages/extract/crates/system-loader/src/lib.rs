@@ -14,9 +14,12 @@ use oxc::span::SourceType;
 use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::{Context, Function, Object, Runtime};
 
+mod kit_source;
 mod linked;
 pub mod module_table;
 pub mod resolution;
+
+pub use kit_source::{resolve_kit_source_root, KitSourceRoot, KitSourceRule};
 use serde::{Deserialize, Serialize};
 
 /// Serialized system configuration returned by `load_system_module()`.
@@ -133,7 +136,7 @@ pub fn resolve_bare_specifier(
         // for a workspace package nothing links there.
         Err(missing) => context.workspaces.get(pkg_name).map(|dir| dir.join("package.json")).ok_or(missing)?,
     };
-    select_package_entry(pkg_json_path, subpath, context, specifier)
+    select_package_entry(pkg_json_path, subpath, context, specifier, true)
 }
 
 /// `path` with its links and `.` segments resolved, as `require.resolve`
@@ -154,6 +157,7 @@ fn select_package_entry(
     subpath: &str,
     context: &ResolutionContext,
     specifier: &str,
+    source_first: bool,
 ) -> Result<(String, PathBuf), String> {
     let conditions = &context.conditions;
     let pkg_dir = pkg_json_path
@@ -175,7 +179,8 @@ fn select_package_entry(
         // A source target that is missing or differs from its file only in
         // case, which discovery reports, falls back to the runtime entry; a
         // runtime target differing only in case names no file.
-        for source in [true, false] {
+        let facets: &[bool] = if source_first { &[true, false] } else { &[false] };
+        for &source in facets {
             if let Some(resolved) = resolve_exports_entry(exports, export_key, source, conditions) {
                 // Node reads a target as a URL and decodes its escapes; each
                 // decoding rule is another way to name a file Node refuses,
@@ -333,6 +338,16 @@ fn resolve_exports_pattern(
     source: bool,
     conditions: &[String],
 ) -> Option<String> {
+    let (value, matched) = best_exports_pattern(exports, lookup_key)?;
+    Some(target_path(&resolve_condition_value(value, source, conditions)?.replace('*', matched)))
+}
+
+/// The `exports` pattern Node selects for `lookup_key`, with the part its
+/// `*` matches; none where no pattern matches or Node refuses the match.
+fn best_exports_pattern<'e, 'k>(
+    exports: &'e serde_json::Map<String, serde_json::Value>,
+    lookup_key: &'k str,
+) -> Option<(&'e serde_json::Value, &'k str)> {
     let mut best: Option<(&str, &str, &serde_json::Value)> = None;
 
     for (pattern, value) in exports {
@@ -365,7 +380,7 @@ fn resolve_exports_pattern(
     if refused_pattern_match(matched) {
         return None;
     }
-    Some(target_path(&resolve_condition_value(value, source, conditions)?.replace('*', matched)))
+    Some((value, matched))
 }
 
 /// The path an `exports` target names, read as Node reads a URL: a raw
@@ -450,13 +465,15 @@ fn condition_target(value: &serde_json::Value, source: bool, conditions: &[Strin
 }
 
 /// A package target Node accepts: relative to the package root (`./`), with
-/// no `..` or `node_modules` segment taking it out of the package.
+/// no `.`, `..` or `node_modules` segment after it
+/// (`ERR_INVALID_PACKAGE_TARGET`). An empty segment loads. Discovery reads
+/// a kit's source targets by the same rule (`isPackageTarget`).
 fn valid_package_target(target: &str) -> bool {
     target.starts_with("./")
         && !target
             .split(['/', '\\'])
             .skip(1)
-            .any(|segment| segment == ".." || segment.eq_ignore_ascii_case("node_modules"))
+            .any(|segment| segment == "." || segment == ".." || segment.eq_ignore_ascii_case("node_modules"))
 }
 
 /// `specifier` resolved from `from_dir` as the system loader resolves its

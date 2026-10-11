@@ -107,15 +107,14 @@ export function setSharedExternalSideEffects(
 /** Structural view of the target session, declared here rather than imported
  *  so the singleton never depends on the session module it serves. */
 export interface WatchBatchTarget {
-  ingestForwardedBatch(changes: {
-    modifiedFiles?: ReadonlySet<string>;
-    removedFiles?: ReadonlySet<string>;
-  }): Promise<void>;
+  /** Starts one attempt over the build's untaken observations; false when
+   *  this session cannot analyze. */
+  startObservedAttempt(): boolean;
 }
 
 /**
  * The only session of a build that can run watch analysis. A non-owning
- * session forwards its batch here; dropping it loses files only that
+ * session's observations queue for it; dropping them loses files only that
  * watcher sees.
  */
 export function getOwningWatchSession(
@@ -203,6 +202,31 @@ export function setReplacementEpoch(key: SessionKey, epoch: string): void {
  */
 export function getWatchTransaction(key: SessionKey): Promise<void> | null {
   return findSession(key)?.watchTransaction ?? null;
+}
+
+/**
+ * The build's watch observations, recorded before any await so an attempt
+ * that rejects never erases one it did not take (SA20). An observation's
+ * state is its content hash, `removed` or `unreadable`.
+ */
+export interface ObservationQueue {
+  /** The latest revision handed to a recording caller. */
+  revision: number;
+  /** Each path no attempt has taken yet, with its latest state. */
+  readonly untaken: Map<string, string>;
+  /** Each waiting caller's revision, and the attempt that took it once one
+   *  has. */
+  readonly revisions: Map<number, Promise<void> | null>;
+  /** The active attempt and the states it took: an equivalent observation
+   *  joins it rather than run again. */
+  active: {
+    readonly taken: ReadonlyMap<string, string>;
+    readonly transaction: Promise<void>;
+  } | null;
+}
+
+export function observationQueue(key: SessionKey): ObservationQueue {
+  return joined(key).observations;
 }
 
 /** A system as one resolution context loaded it: the evaluated modules and
@@ -435,6 +459,7 @@ export interface SessionState {
   analysisStarted: Promise<void> | null;
   /** The one in-flight watch-analysis transaction. */
   watchTransaction: Promise<void> | null;
+  observations: ObservationQueue;
   systemAuthority: SystemAuthority | null;
   manifestJson: string | null;
   sharedCss: string;
@@ -500,6 +525,12 @@ export function joinSession(
       authority: null,
       analysisStarted: null,
       watchTransaction: null,
+      observations: {
+        revision: 0,
+        untaken: new Map(),
+        revisions: new Map(),
+        active: null,
+      },
       systemAuthority: null,
       manifestJson: null,
       sharedCss: '',

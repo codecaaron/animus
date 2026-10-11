@@ -28,6 +28,7 @@ import {
   enforceExternalTokenContracts,
   excludeCollectedPackages,
   extractSystemFilePackages,
+  nativeKitSourceRoot,
   importedKitDiagnostics,
   findPackageRoot,
   findSheetAssetSpecifiers,
@@ -99,6 +100,7 @@ import {
   getOwningWatchSession,
   getSystemAuthority,
   getWatchTransaction,
+  observationQueue,
   SessionConfigurationConflict,
   setSystemAuthority,
   resetAnalysisStartedPromise,
@@ -130,6 +132,11 @@ import type {
 import type { SessionKey, SystemLoad } from './singleton';
 
 export type SessionOptions = AnimusCoreOptions;
+
+/** An observation's state when its file is gone, or cannot be read; any
+ *  other state is the content hash it was observed with. */
+const REMOVED_OBSERVATION = 'removed';
+const UNREADABLE_OBSERVATION = 'unreadable';
 
 /** A loaded system's identity: its evaluated modules and a fingerprint of
  *  the whole load. */
@@ -527,8 +534,8 @@ export class ExtractionSession {
     return this.scanConfigMemo;
   }
 
-  /** Concurrent entries wait for publication, then ingest their own batch;
-   *  content hashes coalesce observations the prior analysis covered. */
+  /** Records the batch before any await, so an attempt that rejects never
+   *  erases it, and settles with the attempt that takes it (SA20). */
   async handleWatchUpdate(changes: WatchChanges): Promise<void> {
     try {
       await this.routeWatchUpdate(changes);
@@ -545,47 +552,140 @@ export class ExtractionSession {
     const hasBatch =
       (changes.modifiedFiles?.size ?? 0) > 0 ||
       (changes.removedFiles?.size ?? 0) > 0;
+    if (hasBatch) {
+      await this.awaitObservation(this.recordObservation(changes));
+      return;
+    }
+    // No observation: an in-flight attempt answers the call, and otherwise
+    // the owner runs it (absent change sets probe every file).
     const inflight = getWatchTransaction(this.key);
     if (inflight) {
       await inflight;
-      if (!hasBatch) return;
-    }
-
-    // Non-owning instance: each compiler child watches its own files, so a
-    // batch only this one observes is forwarded, never dropped. Keep this
-    // check AFTER the join above: an initial full pipeline registers its
-    // owner on publication. An empty or absent follower batch stays a no-op.
-    if (!this.system) {
-      const owner = getOwningWatchSession(this.key);
-      if (owner && owner !== this && hasBatch) {
-        await owner.ingestForwardedBatch(changes);
-      }
       return;
     }
-
-    await this.ingestForwardedBatch(changes);
+    if (this.system) await this.runWatchAttempt(changes);
   }
 
-  /** The shared owner gate for local and forwarded batches. Every waiter
-   *  rechecks the slot so distinct batches publish in arrival order. */
-  async ingestForwardedBatch(changes: WatchChanges): Promise<void> {
-    if (!this.system) return;
-    for (;;) {
-      const inflight = getWatchTransaction(this.key);
-      if (!inflight) break;
-      await inflight;
+  /** Queues the batch's observations under a new revision, synchronously.
+   *  A batch equivalent to what the active attempt took joins that attempt:
+   *  a second compiler's report of the same edit never analyzes it twice. */
+  private recordObservation(changes: WatchChanges): number {
+    const queue = observationQueue(this.key);
+    const observed = new Map<string, string>();
+    for (const path of changes.modifiedFiles ?? []) {
+      let state: string;
+      try {
+        state = contentHash(readFileSync(path, 'utf-8'));
+      } catch {
+        state = UNREADABLE_OBSERVATION;
+      }
+      observed.set(path, state);
     }
-    // Register before processing: a nested full system reload must inherit
-    // this gate rather than clear it while the enclosing batch is active.
+    for (const path of changes.removedFiles ?? []) {
+      observed.set(path, REMOVED_OBSERVATION);
+    }
+    const revision = ++queue.revision;
+    const active = queue.active;
+    // A path with a queued observation is never equivalent: this newer
+    // observation supersedes the queued one, so it is queued in its place.
+    if (
+      active !== null &&
+      [...observed].every(
+        ([path, state]) =>
+          !queue.untaken.has(path) && active.taken.get(path) === state
+      )
+    ) {
+      queue.revisions.set(revision, active.transaction);
+      return revision;
+    }
+    for (const [path, state] of observed) queue.untaken.set(path, state);
+    queue.revisions.set(revision, null);
+    return revision;
+  }
+
+  /** Settles with the attempt that takes `revision`. Another attempt's
+   *  rejection is its own callers': this observation runs after it. */
+  private async awaitObservation(revision: number): Promise<void> {
+    const queue = observationQueue(this.key);
+    for (;;) {
+      const taken = queue.revisions.get(revision);
+      if (taken !== null && taken !== undefined) {
+        queue.revisions.delete(revision);
+        await taken;
+        return;
+      }
+      const inflight = getWatchTransaction(this.key);
+      if (inflight) {
+        await inflight.catch(() => undefined);
+        continue;
+      }
+      const owner = this.system ? this : getOwningWatchSession(this.key);
+      if (owner === null || !owner.startObservedAttempt()) {
+        // No session of the build can analyze yet: the observation stays
+        // queued for the owner's next attempt.
+        queue.revisions.delete(revision);
+        return;
+      }
+    }
+  }
+
+  /** Starts one attempt over every untaken observation of the build. */
+  startObservedAttempt(): boolean {
+    if (!this.system) return false;
+    const taken = this.takeObservations();
+    const modifiedFiles = new Set<string>();
+    const removedFiles = new Set<string>();
+    for (const [path, state] of taken) {
+      (state === REMOVED_OBSERVATION ? removedFiles : modifiedFiles).add(path);
+    }
+    this.settleTaken(
+      taken,
+      this.runWatchAttempt({ modifiedFiles, removedFiles })
+    );
+    return true;
+  }
+
+  /** Every untaken observation of the build, which the caller's attempt
+   *  now covers. */
+  private takeObservations(): Map<string, string> {
+    const queue = observationQueue(this.key);
+    const taken = new Map(queue.untaken);
+    queue.untaken.clear();
+    return taken;
+  }
+
+  /** `transaction` settles every waiting revision, and is the active
+   *  attempt equivalent observations join until it settles. */
+  private settleTaken(
+    taken: Map<string, string>,
+    transaction: Promise<void>
+  ): void {
+    const queue = observationQueue(this.key);
+    for (const [revision, attempt] of queue.revisions) {
+      if (attempt === null) queue.revisions.set(revision, transaction);
+    }
+    queue.active = { taken, transaction };
+    const settle = () => {
+      if (queue.active?.transaction === transaction) queue.active = null;
+    };
+    transaction.then(settle, settle);
+  }
+
+  /** Registers one attempt in the build's single-flight slot before it
+   *  processes, so a nested full system reload inherits the gate rather
+   *  than clear it, and clears the slot when it settles either way. */
+  private runWatchAttempt(changes: WatchChanges): Promise<void> {
     const transaction = Promise.resolve().then(() =>
       this.processWatchUpdate(changes)
     );
     setWatchTransaction(this.key, transaction);
-    try {
-      await transaction;
-    } finally {
-      setWatchTransaction(this.key, null);
-    }
+    const settle = () => {
+      if (getWatchTransaction(this.key) === transaction) {
+        setWatchTransaction(this.key, null);
+      }
+    };
+    transaction.then(settle, settle);
+    return transaction;
   }
 
   private async processWatchUpdate(changes: WatchChanges): Promise<void> {
@@ -934,8 +1034,14 @@ export class ExtractionSession {
     const priorSystem = this.system;
 
     const nested = getWatchTransaction(this.key) !== null;
+    // A top-level full read covers every observation queued before it, so
+    // it settles them; one queued after it runs next.
+    const taken = nested ? null : this.takeObservations();
     const transaction = this.runPipelineTransaction(pending);
-    if (!nested) setWatchTransaction(this.key, transaction);
+    if (taken !== null) {
+      setWatchTransaction(this.key, transaction);
+      this.settleTaken(taken, transaction);
+    }
     try {
       await transaction;
     } catch (error) {
@@ -1113,6 +1219,13 @@ export class ExtractionSession {
 
     const collected = await collectExternalPackageSources({
       extensions: context.extensions,
+      kitSourceRoot: nativeKitSourceRoot(
+        engineApi(this.key),
+        rootDir,
+        context.conditions,
+        context.workspaces,
+        extensionPolicyJson(context.extensions)
+      ),
       specifiers: packageNames,
       resolveSpecifier: (name) =>
         preResolved.entries[name]
