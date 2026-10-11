@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use animus_system_loader::module_table::{
-    ExportLookup, Import, ImportName, ModuleIndex, ModuleRecord, ModuleTable, Request, RequestId,
+    ExportLookup, Import, ImportName, ModuleIndex, ModuleRecord, ModuleTable, Request, RequestId, Terminal,
 };
 use oxc::ast::ast::{Program, Statement};
 use oxc::syntax::module_record::{
@@ -205,13 +205,23 @@ pub struct ProjectLinks {
 
 impl ProjectLinks {
     pub fn link(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> Self {
+        Self::of_records(files, |ff| &ff.module_record, inputs)
+    }
+
+    /// The links of each file's record, `record` reading it from the file's
+    /// entry.
+    pub(crate) fn of_records<T>(
+        files: &BTreeMap<String, T>,
+        record: impl Fn(&T) -> &OwnedModuleRecord,
+        inputs: &CssInputs,
+    ) -> Self {
         let paths: Vec<String> = files.keys().cloned().collect();
         let index: BTreeMap<String, ModuleIndex> =
             paths.iter().enumerate().map(|(position, path)| (path.clone(), position)).collect();
         let records = files
             .iter()
-            .map(|(path, ff)| {
-                ff.module_record.resolved(|specifier| {
+            .map(|(path, file)| {
+                record(file).resolved(|specifier| {
                     match resolve_import_source(path, specifier, files, inputs) {
                         Some(target) => match index.get(&target) {
                             Some(&module) => Request::Module(module),
@@ -239,6 +249,23 @@ impl ProjectLinks {
     /// ResolveExport for export `name` of the module at `path`.
     pub fn resolve_export(&self, path: &str, name: &str) -> Option<ExportLookup<LocalId>> {
         Some(self.table.resolve_export(self.module(path)?, name))
+    }
+
+    /// The declaring module and binding export `name` of the module at
+    /// `path` resolves to. `None` for any other answer: absent, ambiguous,
+    /// open, a namespace, an export of a module outside the analysis, or a
+    /// module the analysis does not hold.
+    pub fn declared(&self, path: &str, name: &str) -> Option<(ModuleIndex, LocalId)> {
+        match self.resolve_export(path, name)? {
+            ExportLookup::Resolved(Terminal::Local { module, binding }) => Some((module, binding)),
+            _ => None,
+        }
+    }
+
+    /// The names `module` exports its binding `binding` as.
+    pub fn exported_as(&self, module: ModuleIndex, binding: LocalId) -> impl Iterator<Item = &str> + '_ {
+        let exports = &self.table.record(module).local_exports;
+        exports.iter().filter(move |(_, exported)| *exported == binding).map(|(name, _)| name.as_str())
     }
 }
 

@@ -3,7 +3,10 @@
 
 use std::collections::BTreeMap;
 
+use crate::identity::LocalId;
+use crate::link::ProjectLinks;
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
+use animus_system_loader::module_table::ModuleIndex;
 
 const SYSTEM_PROPS_MODULE_ID: &str = "virtual:animus/system-props";
 
@@ -313,65 +316,18 @@ type ModuleFacts = BTreeMap<
 >;
 
 /// Where an import of `imported` from `source` in `path` is declared: the
-/// module, and the name it exports there, through re-exports and barrels.
-/// `None` when no route ends at a local export.
-fn chase_import<T>(
+/// module and its binding. `None` unless the import resolves to a local
+/// binding.
+fn import_binding<T>(
     path: &str,
     source: &str,
     imported: &str,
-    modules: &ModuleFacts,
+    links: &ProjectLinks,
     files: &BTreeMap<String, T>,
     inputs: &analyze_css::CssInputs,
-) -> Option<(String, String)> {
-    let direct_file = analyze_css::resolve_import_source(path, source, files, inputs)?;
-    chase_export(direct_file, imported.to_string(), modules, files, inputs)
-}
-
-/// `chase_import` from the module `file` and its export `name`.
-fn chase_export<T>(
-    file: String,
-    name: String,
-    modules: &ModuleFacts,
-    files: &BTreeMap<String, T>,
-    inputs: &analyze_css::CssInputs,
-) -> Option<(String, String)> {
-    let export_exists = modules
-        .get(&file)
-        .is_some_and(|(_, exps)| exps.iter().any(|e| e.exported == name));
-    if !export_exists {
-        return None;
-    }
-    let mut resolved_file = file;
-    let mut resolved_name = name;
-    let mut seen: rustc_hash::FxHashSet<(String, String)> = rustc_hash::FxHashSet::default();
-    let mut hops = 0usize;
-    while hops < 32 && seen.insert((resolved_file.clone(), resolved_name.clone())) {
-        hops += 1;
-        let (imps, exps) = modules.get(&resolved_file)?;
-        let exp = exps.iter().find(|e| e.exported == resolved_name)?;
-        if exp.source.is_none() {
-            // A local export of an import, as a compiler writes a barrel
-            // (`import { x as y } …; export { y as x }`), continues to that
-            // import's module.
-            let barrel = exp
-                .local
-                .as_ref()
-                .and_then(|local| imps.iter().find(|i| &i.local == local));
-            let Some(import) = barrel else {
-                return exp.local.is_some().then_some((resolved_file, resolved_name));
-            };
-            resolved_file =
-                analyze_css::resolve_import_source(&resolved_file, &import.source, files, inputs)?;
-            resolved_name = import.imported.clone();
-            continue;
-        }
-        let (Some(spec), Some(original)) = (&exp.source, &exp.original) else {
-            return None;
-        };
-        resolved_file = analyze_css::resolve_import_source(&resolved_file, spec, files, inputs)?;
-        resolved_name = original.clone();
-    }
-    None
+) -> Option<(ModuleIndex, LocalId)> {
+    let target = analyze_css::resolve_import_source(path, source, files, inputs)?;
+    links.declared(&target, imported)
 }
 
 /// The modules a file loads at runtime by a literal specifier:
@@ -401,38 +357,6 @@ fn literal_module_loads(program: &oxc::ast::ast::Program<'_>) -> Vec<String> {
     loads.0
 }
 
-/// Each `export function` and `export default function` declaration, as the
-/// export facts a callee's resolution follows; module export facts list
-/// variables and specifiers only.
-fn function_exports(program: &oxc::ast::ast::Program<'_>) -> Vec<crate::usage_facts::ExportFact> {
-    use oxc::ast::ast::{Declaration, ExportDefaultDeclarationKind, Statement};
-    let export = |exported: &str, local: &str| crate::usage_facts::ExportFact {
-        exported: exported.to_string(),
-        local: Some(local.to_string()),
-        source: None,
-        original: None,
-    };
-    program
-        .body
-        .iter()
-        .filter_map(|stmt| match stmt {
-            Statement::ExportNamedDeclaration(named) => match &named.declaration {
-                Some(Declaration::FunctionDeclaration(func)) => {
-                    func.id.as_ref().map(|id| export(&id.name, &id.name))
-                }
-                _ => None,
-            },
-            Statement::ExportDefaultDeclaration(default) => match &default.declaration {
-                ExportDefaultDeclarationKind::FunctionDeclaration(func) => {
-                    func.id.as_ref().map(|id| export("default", &id.name))
-                }
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect()
-}
-
 /// One module's functions, each with how its parameters treat an object.
 type FunctionReadings = std::rc::Rc<BTreeMap<String, Vec<crate::usage_facts::ParamReading>>>;
 /// A module's function readings, scanned on first request.
@@ -457,39 +381,35 @@ struct StyleModule {
 fn unstable_style_statics(
     style: &BTreeMap<String, StyleModule>,
     modules: &ModuleFacts,
-    function_modules: &ModuleFacts,
+    links: &ProjectLinks,
+    lowered: &BTreeMap<String, crate::link::Lowered>,
     files: &BTreeMap<String, rustc_hash::FxHashMap<String, serde_json::Value>>,
     inputs: &analyze_css::CssInputs,
     readings_of: &mut ReadingsOf<'_>,
 ) -> BTreeMap<(String, String), String> {
-    let local_of = |file: &str, exported: &str| -> Option<String> {
-        modules.get(file)?.1.iter().find(|e| e.exported == exported)?.local.clone()
-    };
-    let declaration = |found: Option<(String, String)>| -> Option<(String, String)> {
-        let (file, exported) = found?;
-        let local = local_of(&file, &exported)?;
-        Some((file, local))
+    let declaration = |(module, binding): (ModuleIndex, LocalId)| -> (String, String) {
+        let path = &links.paths[module];
+        (path.clone(), lowered[path].bindings.binding(binding).name.clone())
     };
     // The declaration a module's binding names: itself, or what it imports.
     let declared = |file: &str, name: &str| -> Option<(String, String)> {
         let (imports, _) = modules.get(file)?;
         match imports.iter().find(|import| import.local == name) {
-            Some(import) => declaration(chase_import(file, &import.source, &import.imported, modules, files, inputs)),
+            Some(import) => {
+                import_binding(file, &import.source, &import.imported, links, files, inputs).map(declaration)
+            }
             None => Some((file.to_string(), name.to_string())),
         }
     };
     let every_export = |target: &str| -> Vec<(String, String)> {
-        modules
-            .get(target)
-            .map(|(_, exports)| {
-                exports
-                    .iter()
-                    .filter_map(|export| {
-                        declaration(chase_export(target.to_string(), export.exported.clone(), modules, files, inputs))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        let Some(module) = links.module(target) else { return Vec::new() };
+        links
+            .table
+            .exported_names(module)
+            .names
+            .iter()
+            .filter_map(|name| links.declared(target, name).map(declaration))
+            .collect()
     };
     // Whether the function `function` of `file` only reads the object passed
     // as its parameter `index`, through the read-only callees it passes the
@@ -517,26 +437,6 @@ fn unstable_style_statics(
             None => false,
         })
     }
-    // The declaration a module's binding of a function names, through its
-    // exported function declarations too.
-    let declared_function = |file: &str, name: &str| -> Option<(String, String)> {
-        let (imports, _) = function_modules.get(file)?;
-        match imports.iter().find(|import| import.local == name) {
-            Some(import) => {
-                let (target, exported) =
-                    chase_import(file, &import.source, &import.imported, function_modules, files, inputs)?;
-                let local = function_modules
-                    .get(&target)?
-                    .1
-                    .iter()
-                    .find(|export| export.exported == exported)?
-                    .local
-                    .clone()?;
-                Some((target, local))
-            }
-            None => Some((file.to_string(), name.to_string())),
-        }
-    };
     // Whether a declaration's static is an object or array: no use can
     // change a primitive.
     let mutable = |(file, local): &(String, String)| {
@@ -566,7 +466,7 @@ fn unstable_style_statics(
                     .namespace_imports
                     .get(namespace)
                     .and_then(|spec| analyze_css::resolve_import_source(file, spec, files, inputs))
-                    .and_then(|target| declaration(chase_export(target, member.to_string(), modules, files, inputs)))
+                    .and_then(|target| links.declared(&target, member).map(declaration))
                     .into_iter()
                     .collect(),
                 None => match module.namespace_imports.get(name) {
@@ -583,8 +483,8 @@ fn unstable_style_statics(
         for handoff in &module.facts.handoffs {
             let Some(target) = declared(file, &handoff.binding).filter(|target| mutable(target)) else { continue };
             let read = !nested(&target)
-                && declared_function(file, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
-                    reads_only(&callee_file, &callee_name, handoff.index, 0, &declared_function, readings_of)
+                && declared(file, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
+                    reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
                 });
             if !read {
                 unstable.entry(target).or_insert_with(|| said(file, &handoff.binding, &handoff.used));
@@ -779,17 +679,18 @@ impl ExtractEngine {
         > = std::collections::BTreeMap::new();
         let mut imports_by_file: ModuleFacts = std::collections::BTreeMap::new();
         let mut style_modules: BTreeMap<String, StyleModule> = BTreeMap::new();
-        let mut static_exports_by_file: std::collections::BTreeMap<
-            String,
-            rustc_hash::FxHashMap<String, serde_json::Value>,
-        > = std::collections::BTreeMap::new();
-        let mut complete_static_exports_by_file: std::collections::BTreeMap<
-            String,
-            rustc_hash::FxHashMap<String, serde_json::Value>,
-        > = std::collections::BTreeMap::new();
         // Each file's Lower output, before anything reads across files.
         let mut lowered_by_file: BTreeMap<String, crate::link::Lowered> =
             store.iter().map(|ast| (ast.path.clone(), crate::link::Lowered::of(ast))).collect();
+        // Static enrichment and mutation targets read explicit exports only,
+        // never through `export *`.
+        let explicit: BTreeMap<String, crate::link::OwnedModuleRecord> = lowered_by_file
+            .iter()
+            .map(|(path, lowered)| {
+                (path.clone(), crate::link::OwnedModuleRecord { star_exports: Vec::new(), ..lowered.record.clone() })
+            })
+            .collect();
+        let links = ProjectLinks::of_records(&explicit, |record| record, &self.opts.css_inputs);
         for ast in store.iter() {
             let program = ast.program();
             let statics = if crate::analyze_css::is_external_file(&ast.path, &self.opts.css_inputs.external_dirs) {
@@ -863,22 +764,11 @@ impl ExtractEngine {
                 )
             }))
         };
-        // Only a handed-on object needs a callee resolved.
-        let handoffs = style_modules.values().any(|module| !module.facts.handoffs.is_empty());
-        let function_modules: ModuleFacts = imports_by_file
-            .iter()
-            .filter(|_| handoffs)
-            .map(|(path, (imports, exports))| {
-                let program = programs[path.as_str()];
-                let mut exports = exports.clone();
-                exports.extend(function_exports(program));
-                (path.clone(), (imports.clone(), exports))
-            })
-            .collect();
         for ((file, local), reason) in unstable_style_statics(
             &style_modules,
             &imports_by_file,
-            &function_modules,
+            &links,
+            &lowered_by_file,
             &statics_by_file,
             &self.opts.css_inputs,
             &mut readings_of,
@@ -894,27 +784,6 @@ impl ExtractEngine {
                     None => crate::eval::lost_marker(reason),
                 };
             }
-        }
-
-        for (path, (_, exports)) in &imports_by_file {
-            let statics = &statics_by_file[path];
-            let complete_statics = &complete_statics_by_file[path];
-            let mut static_exports = rustc_hash::FxHashMap::default();
-            let mut complete_static_exports = rustc_hash::FxHashMap::default();
-            for exp in exports {
-                if let Some(local) = &exp.local {
-                    // A relative `asset()` specifier means its own file's
-                    // directory, which an importer cannot carry.
-                    if let Some(value) = statics.get(local).filter(|value| !crate::eval::carries_relative_asset(value)) {
-                        static_exports.insert(exp.exported.clone(), value.clone());
-                    }
-                    if let Some(value) = complete_statics.get(local) {
-                        complete_static_exports.insert(exp.exported.clone(), value.clone());
-                    }
-                }
-            }
-            static_exports_by_file.insert(path.clone(), static_exports);
-            complete_static_exports_by_file.insert(path.clone(), complete_static_exports);
         }
 
         let keyframes_registry: rustc_hash::FxHashMap<String, serde_json::Value> = self
@@ -959,27 +828,32 @@ impl ExtractEngine {
             let mut extra = rustc_hash::FxHashMap::default();
             let mut usage_extra = rustc_hash::FxHashMap::default();
             for imp in imports {
-                let Some((resolved_file, resolved_name)) = chase_import(
+                let Some((module, binding)) = import_binding(
                     path,
                     &imp.source,
                     &imp.imported,
-                    &imports_by_file,
+                    &links,
                     &statics_by_file,
                     &self.opts.css_inputs,
                 ) else {
                     continue;
                 };
-                if let Some(export_map) = static_exports_by_file.get(&resolved_file) {
-                    if let Some(val) = export_map.get(&resolved_name) {
-                        extra.insert(imp.local.clone(), val.clone());
-                    }
+                let resolved_file = links.paths[module].clone();
+                let local = &lowered_by_file[&resolved_file].bindings.binding(binding).name;
+                // A relative `asset()` specifier means its own file's
+                // directory, which an importer cannot carry.
+                if let Some(val) = statics_by_file[&resolved_file]
+                    .get(local)
+                    .filter(|value| !crate::eval::carries_relative_asset(value))
+                {
+                    extra.insert(imp.local.clone(), val.clone());
                 }
-                if let Some(export_map) = complete_static_exports_by_file.get(&resolved_file) {
-                    if let Some(val) = export_map.get(&resolved_name) {
-                        usage_extra.insert(imp.local.clone(), val.clone());
-                    }
+                if let Some(val) = complete_statics_by_file[&resolved_file].get(local) {
+                    usage_extra.insert(imp.local.clone(), val.clone());
                 }
-                if let Some(kf) = keyframes_registry.get(&resolved_name) {
+                // A registered collection, by a name its module exports it as.
+                let registered = links.exported_as(module, binding).find_map(|name| keyframes_registry.get(name));
+                if let Some(kf) = registered {
                     extra.insert(imp.local.clone(), kf.clone());
                     usage_extra.insert(imp.local.clone(), kf.clone());
                 } else if crate::analyze_css::is_external_file(&resolved_file, output_dirs) {

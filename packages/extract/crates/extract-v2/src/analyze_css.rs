@@ -3131,39 +3131,23 @@ pub(crate) fn declared_export(
     files: &BTreeMap<String, FileFacts>,
     links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, String)> {
-    let ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) = links.resolve_export(module, &name)?
-    else {
-        return None;
-    };
-    let exports: Vec<&String> = links
-        .table
-        .record(declaring)
-        .local_exports
-        .iter()
-        .filter(|(_, exported)| *exported == binding)
-        .map(|(exported_as, _)| exported_as)
-        .collect();
-    let exported = exports.iter().find(|exported_as| **exported_as == &name).or(exports.first())?.to_string();
+    let (declaring, binding) = links.declared(module, &name)?;
+    let exports: Vec<&str> = links.exported_as(declaring, binding).collect();
+    let exported = exports.iter().find(|exported_as| **exported_as == name).or(exports.first())?.to_string();
     let (path, declared) = binding_name(links, files, declaring, binding);
     Some((path, exported, declared))
 }
 
-/// The binding the module table resolves `module`'s export `name` to, as
-/// the facts name it: its declaring file and binding. `None` for any other
-/// answer: absent, ambiguous, open, a namespace, an export of a module
-/// outside the analysis, or a module the analysis does not hold.
+/// The binding `ProjectLinks::declared` finds for `module`'s export
+/// `name`, as the facts name it: its declaring file and binding.
 fn declared_binding(
     links: &crate::link::ProjectLinks,
     files: &BTreeMap<String, FileFacts>,
     module: &str,
     name: &str,
 ) -> Option<(String, String)> {
-    match links.resolve_export(module, name)? {
-        ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) => {
-            Some(binding_name(links, files, declaring, binding))
-        }
-        _ => None,
-    }
+    let (declaring, binding) = links.declared(module, name)?;
+    Some(binding_name(links, files, declaring, binding))
 }
 
 /// A resolved binding's file and name; for `export default X`'s cell, X,
