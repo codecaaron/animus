@@ -1,10 +1,12 @@
 import { contentHash, createExcludeMatcher } from '@animus-ui/extract/pipeline';
 import { COALESCING_WINDOW_MS } from '@animus-ui/extract/session';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
@@ -113,6 +115,17 @@ function makeEnvironment(name: string, moduleIds: string[]) {
 }
 
 const VIRTUAL_IDS = [RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID];
+
+/** Whether the temp volume ignores case, so two spellings name one file. */
+function caseInsensitiveVolume(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), 'animus-case-'));
+  try {
+    writeFileSync(join(dir, 'Probe'), '');
+    return existsSync(join(dir, 'probe'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 /** The change set for an edit whose settled bytes Vite's `read()` handed
  *  over: the file as it now reads on disk. */
@@ -515,8 +528,8 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
 
   /** A dev context over a kit workspace with a Session behind it, started,
    *  whose system load fails while `systemLoadFails` is set. */
-  async function startedContext() {
-    const { app } = createKitWorkspace();
+  async function startedContext(exclude?: string[]) {
+    const { parent, app } = createKitWorkspace();
     const file = join(app, 'src', 'Button.tsx');
     writeFileSync(file, 'export const Button = 1;\n');
     const state = { systemLoadFails: false };
@@ -526,36 +539,39 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
         imports: systemImportFacts(KIT_SYSTEM_SOURCE),
       },
     });
-    const ctx = new PluginContext({ system: './src/system.ts' }, () => ({
-      loadSystemModule: () => {
-        if (state.systemLoadFails) throw new Error('planned system failure');
-        return {
-          propConfig: '{}',
-          groupRegistry: '{}',
-          scalesJson: '{}',
-          variableMapJson: '{}',
-          variableCss: '',
-          dependencies: [],
-        };
-      },
-      extractFacts: (filesJson: string) => {
-        // SAFETY: the Session's own JSON.stringify of its file entries.
-        const entries = JSON.parse(filesJson) as Array<{
-          path: string;
-          source: string;
-        }>;
-        // SAFETY: the facts double above serializes this shape.
-        const facts = JSON.parse(systemFacts(filesJson)) as {
-          files: Record<string, FactFile>;
-        };
-        // The parser stops before the end of a source holding `= ;`.
-        for (const { path, source } of entries) {
-          if (source.includes('= ;')) facts.files[path] = abortedFacts(path);
-        }
-        return JSON.stringify(facts);
-      },
-      analyzeProject: () => JSON.stringify(makeManifest()),
-    }));
+    const ctx = new PluginContext(
+      { system: './src/system.ts', exclude },
+      () => ({
+        loadSystemModule: () => {
+          if (state.systemLoadFails) throw new Error('planned system failure');
+          return {
+            propConfig: '{}',
+            groupRegistry: '{}',
+            scalesJson: '{}',
+            variableMapJson: '{}',
+            variableCss: '',
+            dependencies: [],
+          };
+        },
+        extractFacts: (filesJson: string) => {
+          // SAFETY: the Session's own JSON.stringify of its file entries.
+          const entries = JSON.parse(filesJson) as Array<{
+            path: string;
+            source: string;
+          }>;
+          // SAFETY: the facts double above serializes this shape.
+          const facts = JSON.parse(systemFacts(filesJson)) as {
+            files: Record<string, FactFile>;
+          };
+          // The parser stops before the end of a source holding `= ;`.
+          for (const { path, source } of entries) {
+            if (source.includes('= ;')) facts.files[path] = abortedFacts(path);
+          }
+          return JSON.stringify(facts);
+        },
+        analyzeProject: () => JSON.stringify(makeManifest()),
+      })
+    );
     applyResolvedConfig(
       ctx,
       await resolveConfig(
@@ -580,7 +596,7 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
         modules: [],
         read,
       });
-    return { app, file, ctx, state, update };
+    return { parent, app, file, ctx, state, update };
   }
 
   it('caches the retried content, not the empty file on disk', async () => {
@@ -643,6 +659,103 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     writeFileSync(broken, repairedAgain);
     await update(broken, async () => repairedAgain);
     expect(publishedCard()).toBe(card20);
+    ctx.close();
+  });
+
+  // Two spellings name one file only on a case-insensitive volume.
+  it.skipIf(!caseInsensitiveVolume())(
+    'a full read that reaches host bytes only under another spelling refuses',
+    async () => {
+      // A debt retry takes an edit Vite reports as src/button.tsx while the
+      // full read discovers src/Button.tsx: it must not publish the disk.
+      const { app, file, ctx, state, update } = await startedContext();
+      const publishedButton = () =>
+        ctx.session?.corpus.published.analysisEntries.get('src/Button.tsx')
+          ?.source;
+      const button12 = 'export const Button = 12;\n';
+      writeFileSync(file, '');
+      await update(file, async () => button12);
+
+      state.systemLoadFails = true;
+      await update(join(app, 'src', 'system.ts'));
+      await flushSystemReload(ctx);
+      state.systemLoadFails = false;
+
+      await expect(
+        update(
+          join(app, 'src', 'button.tsx'),
+          async () => 'export const Button = 30;\n'
+        )
+      ).rejects.toThrow(
+        /reload not published: .*src\/button\.tsx \(read as src\/Button\.tsx\)/
+      );
+      expect(publishedButton()).toBe(button12);
+      ctx.close();
+    }
+  );
+
+  /** A failed system reload leaves a debt, so the next batch runs a full
+   *  read; Button is published from host bytes over an empty disk. */
+  async function owedReloadOverHostBytes(exclude?: string[]) {
+    const started = await startedContext(exclude);
+    const { app, file, ctx, state, update } = started;
+    writeFileSync(file, '');
+    await update(file, async () => 'export const Button = 12;\n');
+    state.systemLoadFails = true;
+    await update(join(app, 'src', 'system.ts'));
+    await flushSystemReload(ctx);
+    state.systemLoadFails = false;
+    const publishedButton = () =>
+      ctx.session?.corpus.published.analysisEntries.get('src/Button.tsx')
+        ?.source;
+    return { ...started, publishedButton };
+  }
+
+  // Two spellings name two files only on a case-sensitive volume.
+  it.skipIf(caseInsensitiveVolume())(
+    'a host source for an excluded file never refuses for a distinct file spelled alike',
+    async () => {
+      const { app, file, ctx, publishedButton } = await owedReloadOverHostBytes(
+        ['**/Ignored.ts']
+      );
+      const excluded = join(app, 'src', 'Ignored.ts');
+      writeFileSync(excluded, 'export const ignored = 1;\n');
+      writeFileSync(
+        join(app, 'src', 'ignored.ts'),
+        'export const other = 1;\n'
+      );
+      const button30 = 'export const Button = 30;\n';
+      writeFileSync(file, button30);
+
+      await ctx.session!.handleWatchUpdate({
+        modifiedFiles: new Set([excluded, file]),
+        sources: new Map([
+          [excluded, 'export const ignored = 2;\n'],
+          [file, button30],
+        ]),
+      });
+      expect(publishedButton()).toBe(button30);
+      ctx.close();
+    }
+  );
+
+  it('a full read that reaches host bytes only through a symlinked alias refuses', async () => {
+    const { parent, app, ctx, publishedButton } =
+      await owedReloadOverHostBytes();
+    // An alias outside the root names the root's src directory.
+    const alias = join(parent, 'alias-src');
+    symlinkSync(join(app, 'src'), alias, 'dir');
+    const aliased = join(alias, 'Button.tsx');
+
+    await expect(
+      ctx.session!.handleWatchUpdate({
+        modifiedFiles: new Set([aliased]),
+        sources: new Map([[aliased, 'export const Button = 30;\n']]),
+      })
+    ).rejects.toThrow(
+      /reload not published: .*alias-src\/Button\.tsx \(read as src\/Button\.tsx\)/
+    );
+    expect(publishedButton()).toBe('export const Button = 12;\n');
     ctx.close();
   });
 
