@@ -350,6 +350,9 @@ export class PluginContext {
   /** Creates the build's Session from the resolved config: Vite's engine,
    *  logger and core options, kept in memory. */
   createSession(): ExtractionSession {
+    // A config resolved again (once per environment) supersedes the Session
+    // the last one built; it leaves the registry before it is replaced.
+    this.session?.close();
     const options = this.options;
     const session = new ExtractionSession(
       {
@@ -483,6 +486,14 @@ export class PluginContext {
     this.externalSourceSideEffects = session.externalSourceSideEffects;
     this.externalPackageOutcomes = session.lastExternalOutcomes;
     this.applyAssetSubstitutions();
+  }
+
+  /** Retires this context's build when Vite closes it: the Session leaves
+   *  the registry (with its manifest and watch state) and the engine handle
+   *  is released, injected engine or not. The next build start rejoins. */
+  close(): void {
+    this.session?.close();
+    this.releaseEngine();
   }
 
   /** Releases this context's engine handle: a standalone one, which no

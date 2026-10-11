@@ -207,9 +207,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     // The end of a build, and of a dev server, which Vite closes the same
-    // way: the context's engine is released with it.
+    // way: the context's Session and engine are retired with it.
     closeBundle() {
-      ctx.releaseEngine();
+      ctx.close();
     },
 
     async buildStart() {

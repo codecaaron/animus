@@ -44,6 +44,8 @@ export async function runBuildStart(
   // System load, discovery, package collection and analysis are the
   // Session's; Vite serves its publication and substitutes asset URLs.
   const session = ctx.session ?? ctx.createSession();
+  // An earlier environment's closeBundle closed it: it joins its build again.
+  session.reattach();
   session.hostResolve = resolveSpecifier;
   // A build fails on an aborted parse. A dev server starts through it with
   // a warning and serves no component CSS until an edit repairs the source.
