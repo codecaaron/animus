@@ -245,6 +245,7 @@ pub struct ForwardRoute {
 /// `const X = { key: … }` holds is keyed `X.key`, a name no binding has.
 pub fn collect_props_forwarding(
     program: &Program<'_>,
+    scoping: &Scoping,
 ) -> std::collections::BTreeMap<String, PropsForwarding> {
     use oxc::ast::ast::ExportDefaultDeclarationKind;
     let mut components: Vec<(&str, Option<ComponentFunction<'_, '_>>)> = Vec::new();
@@ -279,7 +280,7 @@ pub fn collect_props_forwarding(
         .into_iter()
         .filter_map(|(name, function)| Some((name.to_string(), function?)))
         .chain(held)
-        .filter_map(|(name, function)| Some((name, props_forwarding(function)?)))
+        .filter_map(|(name, function)| Some((name, props_forwarding(function, scoping)?)))
         .collect()
 }
 
@@ -375,20 +376,23 @@ impl<'b, 'a> ComponentFunction<'b, 'a> {
     }
 }
 
-fn props_forwarding(function: ComponentFunction<'_, '_>) -> Option<PropsForwarding> {
+fn props_forwarding(function: ComponentFunction<'_, '_>, scoping: &Scoping) -> Option<PropsForwarding> {
     use oxc::ast::ast::BindingPattern;
     let mut pattern = &function.props?.pattern;
     while let BindingPattern::AssignmentPattern(assignment) = pattern {
         pattern = &assignment.left;
     }
-    let (named, spread) = match pattern {
-        BindingPattern::BindingIdentifier(id) => (Vec::new(), id.name.to_string()),
+    let (named, binding) = match pattern {
+        BindingPattern::BindingIdentifier(id) => (Vec::new(), id.as_ref()),
         BindingPattern::ObjectPattern(object) => object_rest(object)?,
         _ => return None,
     };
+    // The props, by binding: a name a nested scope declares again is not it.
+    let props = Props { scoping, symbol: binding.symbol_id.get()? };
     let mut routes = Vec::new();
-    let mut route = |named: Vec<String>, spread: &str, derived: bool| {
+    let mut route = |named: Vec<String>, spread: SymbolId, derived: bool| {
         let mut scan = SpreadTargets {
+            props: &props,
             spread,
             targets: Vec::new(),
         };
@@ -397,74 +401,227 @@ fn props_forwarding(function: ComponentFunction<'_, '_>) -> Option<PropsForwardi
             routes.push(ForwardRoute { named, targets: scan.targets, derived });
         }
     };
-    route(named.clone(), &spread, false);
+    route(named.clone(), props.symbol, false);
     // `const { a, ...rest } = props` in the body, then `{...rest}`: neither
     // the props the parameter names nor the ones the body names reach the
     // tags `rest` is spread into.
     // `const [styling, behavior] = splitProps(props, KEYS)` or `const
     // styling = pick(props)`: what a call the props are passed to returns
-    // may carry any of them.
-    for statement in &function.body.statements {
-        for (body_named, rest) in destructured_rests(statement, &spread) {
-            route(named.iter().cloned().chain(body_named).collect(), &rest, false);
-        }
-        for derived in call_results(statement, &spread) {
-            route(named.clone(), &derived, true);
-        }
+    // may carry any of them, and so may a conditional with it as one
+    // alternative. `const rest = visible ? props : {}` spreads the props or
+    // nothing. Each declaration counts, in a block or a nested function too.
+    let mut declarations = PropsDeclarations { props: &props, rests: Vec::new(), values: Vec::new() };
+    declarations.visit_function_body(function.body);
+    for (body_named, rest) in declarations.rests {
+        route(named.iter().cloned().chain(body_named).collect(), rest, false);
+    }
+    for (bound, derived) in declarations.values {
+        route(named.clone(), bound, derived);
     }
     (!routes.is_empty()).then_some(PropsForwarding { routes })
 }
 
-/// The names a statement binds to what a call taking `props` as an argument
-/// returns: every name its pattern binds, through defaults and nesting.
-fn call_results(statement: &Statement<'_>, props: &str) -> Vec<String> {
-    let Statement::VariableDeclaration(declaration) = statement else { return Vec::new() };
-    let mut names = Vec::new();
-    for declarator in &declaration.declarations {
-        let Some(Expression::CallExpression(call)) =
-            declarator.init.as_ref().map(crate::chain_walk::unwrap_type_assertions)
-        else {
-            continue;
-        };
-        let takes_props = call.arguments.iter().any(|argument| {
-            argument.as_expression().map(crate::chain_walk::unwrap_type_assertions)
-                .is_some_and(|argument| matches!(argument, Expression::Identifier(id) if id.name == props))
-        });
-        if !takes_props {
-            continue;
-        }
-        bound_names(&declarator.id, &mut names);
-    }
-    names
+/// A component's props parameter, or its rest element, by binding.
+struct Props<'s> {
+    scoping: &'s Scoping,
+    symbol: SymbolId,
 }
 
-/// Every name a binding pattern binds, through defaults, nesting and rests.
-fn bound_names(pattern: &oxc::ast::ast::BindingPattern<'_>, names: &mut Vec<String>) {
+impl Props<'_> {
+    /// Whether `expr` reads the binding `symbol`.
+    fn reads(&self, expr: &Expression<'_>, symbol: SymbolId) -> bool {
+        matches!(crate::chain_walk::unwrap_type_assertions(expr), Expression::Identifier(id)
+            if id.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id()) == Some(symbol))
+    }
+
+    fn is(&self, expr: &Expression<'_>) -> bool {
+        self.reads(expr, self.symbol)
+    }
+
+    /// What `expr` may evaluate to, alternative by alternative, through
+    /// conditionals and logical operators, each operand only where its
+    /// outcome can occur: `visible && props` is nothing or the props, and
+    /// `false && props` only nothing.
+    fn alternatives(&self, expr: &Expression<'_>, kinds: &mut Alternatives) {
+        use oxc::ast::ast::{ArrayExpressionElement, LogicalOperator, ObjectPropertyKind};
+        let holds_props = |expr: &Expression<'_>| self.is(expr);
+        // A literal or a call holding the props may carry any of them.
+        match crate::chain_walk::unwrap_type_assertions(expr) {
+            Expression::ConditionalExpression(conditional) => {
+                let test = self.outcomes(&conditional.test);
+                if test.truthy {
+                    self.alternatives(&conditional.consequent, kinds);
+                }
+                if test.falsy {
+                    self.alternatives(&conditional.alternate, kinds);
+                }
+            }
+            Expression::LogicalExpression(logical) => {
+                let left = self.outcomes(&logical.left);
+                let (left_flows, right_runs) = match logical.operator {
+                    LogicalOperator::And => {
+                        // A falsy left spreads nothing.
+                        kinds.omits |= left.falsy;
+                        (false, left.truthy)
+                    }
+                    LogicalOperator::Or => (left.truthy, left.falsy),
+                    LogicalOperator::Coalesce => (left.present, left.nullish),
+                };
+                if left_flows {
+                    self.alternatives(&logical.left, kinds);
+                }
+                if right_runs {
+                    self.alternatives(&logical.right, kinds);
+                }
+            }
+            expr if self.is(expr) => kinds.props = true,
+            Expression::CallExpression(call)
+                if call.arguments.iter().any(|argument| argument.as_expression().is_some_and(holds_props)) =>
+            {
+                kinds.derived = true;
+            }
+            Expression::ObjectExpression(object) if object.properties.is_empty() => kinds.omits = true,
+            Expression::ObjectExpression(object)
+                if object.properties.iter().any(|property| match property {
+                    ObjectPropertyKind::ObjectProperty(property) => holds_props(&property.value),
+                    ObjectPropertyKind::SpreadProperty(spread) => holds_props(&spread.argument),
+                }) =>
+            {
+                kinds.derived = true;
+            }
+            Expression::ArrayExpression(array)
+                if array.elements.iter().any(|element| match element {
+                    ArrayExpressionElement::SpreadElement(spread) => holds_props(&spread.argument),
+                    element => element.as_expression().is_some_and(holds_props),
+                }) =>
+            {
+                kinds.derived = true;
+            }
+            Expression::NullLiteral(_) => kinds.omits = true,
+            Expression::BooleanLiteral(literal) if !literal.value => kinds.omits = true,
+            expr if self.is_undefined(expr) => kinds.omits = true,
+            _ => kinds.other = true,
+        }
+    }
+
+    fn is_undefined(&self, expr: &Expression<'_>) -> bool {
+        matches!(expr, Expression::Identifier(id)
+            if id.name == "undefined"
+                && id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).symbol_id().is_none()))
+    }
+
+    /// Which outcomes `expr` can have as an operand: any, unless it is a
+    /// literal.
+    fn outcomes(&self, expr: &Expression<'_>) -> Outcomes {
+        let fixed = |truthy: bool, nullish: bool| Outcomes { truthy, falsy: !truthy, nullish, present: !nullish };
+        match crate::chain_walk::unwrap_type_assertions(expr) {
+            Expression::NullLiteral(_) => fixed(false, true),
+            expr if self.is_undefined(expr) => fixed(false, true),
+            Expression::BooleanLiteral(literal) => fixed(literal.value, false),
+            Expression::NumericLiteral(literal) => fixed(literal.value != 0.0 && !literal.value.is_nan(), false),
+            Expression::StringLiteral(literal) => fixed(!literal.value.is_empty(), false),
+            Expression::ObjectExpression(_)
+            | Expression::ArrayExpression(_)
+            | Expression::ArrowFunctionExpression(_)
+            | Expression::FunctionExpression(_) => fixed(true, false),
+            _ => Outcomes { truthy: true, falsy: true, nullish: true, present: true },
+        }
+    }
+}
+
+/// The outcomes an operand can have.
+struct Outcomes {
+    truthy: bool,
+    falsy: bool,
+    nullish: bool,
+    present: bool,
+}
+
+/// The kinds of a value's alternatives: the props themselves, what may
+/// carry any of them, nothing, or anything else.
+#[derive(Default)]
+struct Alternatives {
+    props: bool,
+    derived: bool,
+    omits: bool,
+    other: bool,
+}
+
+/// The body's declarations of what the props, alternative by alternative,
+/// may be.
+struct PropsDeclarations<'p, 's> {
+    props: &'p Props<'s>,
+    /// Each `const { a, b, ...rest } = props`: the keys it names and its
+    /// rest binding.
+    rests: Vec<(Vec<String>, SymbolId)>,
+    /// Each binding of a value whose every alternative is the props, may
+    /// carry any of them, or spreads nothing, and whether it may carry what
+    /// the props do not (a call's result, a destructured part).
+    values: Vec<(SymbolId, bool)>,
+}
+
+impl<'a> Visit<'a> for PropsDeclarations<'_, '_> {
+    fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+        use oxc::ast::ast::BindingPattern;
+        if let Some(init) = &declarator.init {
+            match &declarator.id {
+                BindingPattern::ObjectPattern(object) if self.props.is(init) => {
+                    if let Some((named, rest)) = object_rest(object) {
+                        self.rests.extend(rest.symbol_id.get().map(|rest| (named, rest)));
+                    }
+                }
+                pattern => {
+                    let mut kinds = Alternatives::default();
+                    self.props.alternatives(init, &mut kinds);
+                    if !kinds.other && (kinds.props || kinds.derived) {
+                        match pattern {
+                            BindingPattern::BindingIdentifier(id) => {
+                                self.values.extend(id.symbol_id.get().map(|id| (id, kinds.derived)));
+                            }
+                            _ if !kinds.derived && !kinds.omits => {}
+                            pattern => {
+                                let mut bound = Vec::new();
+                                bound_symbols(pattern, &mut bound);
+                                self.values.extend(bound.into_iter().map(|symbol| (symbol, true)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+    }
+}
+
+/// Every binding a binding pattern binds, through defaults, nesting and rests.
+fn bound_symbols(pattern: &oxc::ast::ast::BindingPattern<'_>, bound: &mut Vec<SymbolId>) {
     use oxc::ast::ast::BindingPattern;
     match pattern {
-        BindingPattern::BindingIdentifier(id) => names.push(id.name.to_string()),
-        BindingPattern::AssignmentPattern(assignment) => bound_names(&assignment.left, names),
+        BindingPattern::BindingIdentifier(id) => bound.extend(id.symbol_id.get()),
+        BindingPattern::AssignmentPattern(assignment) => bound_symbols(&assignment.left, bound),
         BindingPattern::ArrayPattern(array) => {
             for element in array.elements.iter().flatten() {
-                bound_names(element, names);
+                bound_symbols(element, bound);
             }
             if let Some(rest) = &array.rest {
-                bound_names(&rest.argument, names);
+                bound_symbols(&rest.argument, bound);
             }
         }
         BindingPattern::ObjectPattern(object) => {
             for property in &object.properties {
-                bound_names(&property.value, names);
+                bound_symbols(&property.value, bound);
             }
             if let Some(rest) = &object.rest {
-                bound_names(&rest.argument, names);
+                bound_symbols(&rest.argument, bound);
             }
         }
     }
 }
 
 /// `{ a, b, ...rest }`: the keys it names and its rest binding.
-fn object_rest(object: &oxc::ast::ast::ObjectPattern<'_>) -> Option<(Vec<String>, String)> {
+fn object_rest<'b, 'a>(
+    object: &'b oxc::ast::ast::ObjectPattern<'a>,
+) -> Option<(Vec<String>, &'b oxc::ast::ast::BindingIdentifier<'a>)> {
     let oxc::ast::ast::BindingPattern::BindingIdentifier(rest) = &object.rest.as_ref()?.argument else {
         return None;
     };
@@ -473,39 +630,30 @@ fn object_rest(object: &oxc::ast::ast::ObjectPattern<'_>) -> Option<(Vec<String>
         .iter()
         .filter_map(|property| property.key.static_name().map(|key| key.to_string()))
         .collect();
-    Some((named, rest.name.to_string()))
+    Some((named, rest.as_ref()))
 }
 
-/// Each `const { a, b, ...rest } = props` of a statement: the keys it names
-/// and its rest binding, when it destructures `props` itself.
-fn destructured_rests(statement: &Statement<'_>, props: &str) -> Vec<(Vec<String>, String)> {
-    use oxc::ast::ast::BindingPattern;
-    let Statement::VariableDeclaration(declaration) = statement else { return Vec::new() };
-    declaration
-        .declarations
-        .iter()
-        .filter_map(|declarator| {
-            let init = crate::chain_walk::unwrap_type_assertions(declarator.init.as_ref()?);
-            if !matches!(init, Expression::Identifier(id) if id.name == props) {
-                return None;
-            }
-            let BindingPattern::ObjectPattern(object) = &declarator.id else { return None };
-            object_rest(object)
-        })
-        .collect()
-}
-
-struct SpreadTargets<'s> {
-    spread: &'s str,
+/// The tags a binding is spread whole into, by binding. The props parameter
+/// is also spread as a value whose every alternative is the props or nothing
+/// (`{...(visible && props)}`).
+struct SpreadTargets<'p, 's> {
+    props: &'p Props<'s>,
+    spread: SymbolId,
     targets: Vec<String>,
 }
 
-impl<'a> Visit<'a> for SpreadTargets<'_> {
+impl<'a> Visit<'a> for SpreadTargets<'_, '_> {
     fn visit_jsx_opening_element(&mut self, elem: &JSXOpeningElement<'a>) {
+        let carries = |argument: &Expression<'_>| {
+            if self.props.reads(argument, self.spread) {
+                return true;
+            }
+            let mut kinds = Alternatives::default();
+            self.props.alternatives(argument, &mut kinds);
+            self.spread == self.props.symbol && kinds.props && !kinds.derived && !kinds.other
+        };
         let spreads = elem.attributes.iter().any(|attr| {
-            matches!(attr, JSXAttributeItem::SpreadAttribute(spread)
-                if matches!(crate::chain_walk::unwrap_type_assertions(&spread.argument),
-                    Expression::Identifier(id) if id.name == self.spread))
+            matches!(attr, JSXAttributeItem::SpreadAttribute(spread) if carries(&spread.argument))
         });
         let tag = match &elem.name {
             JSXElementName::IdentifierReference(id) => Some(id.name.to_string()),
