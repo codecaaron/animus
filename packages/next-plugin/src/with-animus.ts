@@ -90,6 +90,9 @@ type NextWebpackHook = (
 interface NextConfigBoundary {
   webpack?: NextWebpackHook | null;
   turbopack?: TurbopackOptions;
+  /** The legacy home of Turbopack's options, which Next still merges into
+   *  `turbopack` for a config written before the key moved. */
+  experimental?: { turbo?: { resolveExtensions?: string[] } };
 }
 
 type CallableNextConfig = (
@@ -429,8 +432,11 @@ function turbopackConfig<Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>,
   options: AnimusNextOptions
 ): TurbopackNextConfig<Config> {
-  // Turbopack's extension order, or its documented default.
-  const resolveExtensions = nextConfig.turbopack?.resolveExtensions;
+  // Turbopack's extension order as Next merges it: `turbopack`, else the
+  // legacy `experimental.turbo`; its documented default without either.
+  const resolveExtensions =
+    nextConfig.turbopack?.resolveExtensions ??
+    nextConfig.experimental?.turbo?.resolveExtensions;
   const load = (phase: string): Promise<TurbopackNextConfigObject<Config>> =>
     loadTurbopackFragment(options, phase, resolveExtensions).then((fragment) =>
       mergeTurbopackFragment(nextConfig, fragment)
@@ -480,7 +486,8 @@ function loadTurbopackFragment(
   // is the workspace root, broader than the app dir, so adopting it widens
   // the scan instead of closing the gap.
   const rootDir = process.cwd();
-  const key = JSON.stringify([phase, rootDir]);
+  // The extension order is part of the analysis a load shares.
+  const key = JSON.stringify([phase, rootDir, resolveExtensions ?? null]);
   if (liveTurbopackLoad?.key === key) return liveTurbopackLoad.fragment;
   const fragment = analyzeForTurbopack(
     options,

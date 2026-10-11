@@ -19,6 +19,11 @@ pub struct ExtensionPolicy {
     /// An emitted extension (`./x.js`), and the source extensions it names
     /// (`x.ts`), tried in order.
     pub node_next: Vec<(String, Vec<String>)>,
+    /// A host's configured alias of an emitted extension (webpack's
+    /// `extensionAlias`): its sequence replaces the literal try, in order
+    /// (spec §2.2 A2). Captured only; no probe reads it yet.
+    #[serde(default)]
+    pub alias: Vec<(String, Vec<String>)>,
 }
 
 /// The one extension policy.

@@ -9,6 +9,7 @@ import {
   DEFAULT_EXTENSIONS,
   discoverFiles,
   engineModuleParser,
+  extensionPolicyJson,
   extractSystemFilePackages,
   importedKitDiagnostics,
   firstOwners,
@@ -205,7 +206,8 @@ async function discoverSources(
         specifier,
         ctx.rootDir,
         ctx.resolveConditions,
-        workspaces
+        workspaces,
+        extensionPolicyJson(ctx.extensionPolicy)
       );
     if (loaded?.path) loaderOnly.add(specifier);
     return loaded?.path ?? null;

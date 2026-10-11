@@ -10,9 +10,17 @@ import { EXTENSION_POLICY } from './extension-policy';
 export interface HostExtensionPolicy {
   /** Appended to the base, then to `{base}/index`. */
   readonly appended: readonly string[];
-  /** An emitted extension, and the source extensions it names, in order. */
+  /** An emitted extension, and the source extensions it names, in order,
+   *  tried after the literal spelling. */
   readonly nodeNext: ReadonlyArray<
     readonly [emitted: string, sources: readonly string[]]
+  >;
+  /** A configured alias of an emitted extension (webpack's
+   *  `extensionAlias`): the sequence replaces the literal try for it, in its
+   *  order, so `'.js': ['.ts']` never finds an existing `y.js` (spec §2.2
+   *  A2). */
+  readonly alias: ReadonlyArray<
+    readonly [emitted: string, sequence: readonly string[]]
   >;
   /** Where the order came from: `<host>[@version] captured` when read from
    *  the host's resolved configuration, `<host>[@version] default` when the
@@ -28,6 +36,7 @@ export interface HostExtensionPolicy {
 export const BUILT_IN_EXTENSION_POLICY: HostExtensionPolicy = {
   appended: EXTENSION_POLICY.appended,
   nodeNext: EXTENSION_POLICY.nodeNext,
+  alias: [],
   resolverVersion: 'built-in',
 };
 
@@ -54,6 +63,8 @@ const ESBUILD_OUTPUTS: Substitutions = [
 export const HOST_DEFAULT_EXTENSIONS = {
   vite: ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json'],
   webpack: ['.js', '.json', '.wasm'],
+  /** Rspack 1's documented default; later versions document another. */
+  rspack1: ['.js', '.json', '.wasm'],
   turbopack: ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.json'],
   esbuild: ['.tsx', '.ts', '.jsx', '.js', '.css', '.json'],
 } as const;
@@ -75,44 +86,63 @@ export function viteExtensionPolicy(
   return {
     appended: [...extensions],
     nodeNext: TYPESCRIPT_OUTPUTS,
+    alias: [],
     resolverVersion: label('vite', version, 'captured'),
   };
 }
 
-/** webpack's or Rspack's `resolve.extensions` (`...` standing for the
- *  bundler's defaults) and `resolve.extensionAlias`, the bundler's only
- *  substitution. An alias list naming the emitted extension keeps it as
- *  the literal spelling, which the policy tries first. */
+/** One `resolve` block of webpack's or Rspack's configuration. */
+interface WebpackResolveBlock {
+  readonly extensions?: readonly string[];
+  readonly extensionAlias?: Readonly<Record<string, string | string[]>>;
+}
+
+/** webpack's or Rspack's resolved order for an ESM import: the root
+ *  `resolve` with `byDependency.esm` merged over it as the bundler merges
+ *  it, a `...` standing for what it extends. `extensionAlias` is kept whole
+ *  and in order. Where neither sets extensions, the bundler's documented
+ *  default stands in; for Rspack only version 1's is known. */
 export function webpackExtensionPolicy(
   host: string,
-  resolve: {
-    readonly extensions?: readonly string[];
-    readonly extensionAlias?: Readonly<Record<string, string | string[]>>;
+  resolve: WebpackResolveBlock & {
+    readonly byDependency?: Readonly<
+      Record<string, WebpackResolveBlock | undefined>
+    >;
   },
   version?: string
 ): HostExtensionPolicy {
-  const extensions = resolve.extensions;
+  const esm = resolve.byDependency?.esm;
+  const unset =
+    resolve.extensions === undefined && esm?.extensions === undefined;
+  const rspack = host === 'rspack';
+  const defaults: readonly string[] | null = !rspack
+    ? HOST_DEFAULT_EXTENSIONS.webpack
+    : version?.startsWith('1.')
+      ? HOST_DEFAULT_EXTENSIONS.rspack1
+      : null;
+  if (unset && defaults === null) {
+    return {
+      ...BUILT_IN_EXTENSION_POLICY,
+      resolverVersion: `built-in (hostOptionUnreadable: ${host}${version ? `@${version}` : ''} defaults)`,
+    };
+  }
+  const extend = (
+    list: readonly string[] | undefined,
+    base: readonly string[]
+  ): readonly string[] =>
+    list === undefined
+      ? base
+      : list.flatMap((extension) => (extension === '...' ? base : [extension]));
+  const root = extend(resolve.extensions, defaults ?? []);
+  const alias = { ...resolve.extensionAlias, ...esm?.extensionAlias };
   return {
-    appended:
-      extensions === undefined
-        ? [...HOST_DEFAULT_EXTENSIONS.webpack]
-        : extensions.flatMap((extension) =>
-            extension === '...' ? HOST_DEFAULT_EXTENSIONS.webpack : [extension]
-          ),
-    nodeNext: Object.entries(resolve.extensionAlias ?? {}).map(
-      ([emitted, aliases]) =>
-        [
-          emitted,
-          (Array.isArray(aliases) ? aliases : [aliases]).filter(
-            (alias) => alias !== emitted
-          ),
-        ] as const
+    appended: [...extend(esm?.extensions, root)],
+    nodeNext: [],
+    alias: Object.entries(alias).map(
+      ([emitted, sequence]) =>
+        [emitted, Array.isArray(sequence) ? [...sequence] : [sequence]] as const
     ),
-    resolverVersion: label(
-      host,
-      version,
-      extensions === undefined ? 'default' : 'captured'
-    ),
+    resolverVersion: label(host, version, unset ? 'default' : 'captured'),
   };
 }
 
@@ -126,6 +156,7 @@ export function turbopackExtensionPolicy(
   return {
     appended: [...(resolveExtensions ?? HOST_DEFAULT_EXTENSIONS.turbopack)],
     nodeNext: [],
+    alias: [],
     resolverVersion: label(
       'turbopack',
       nextVersion,
@@ -142,6 +173,7 @@ export function esbuildExtensionPolicy(
   return {
     appended: [...(resolveExtensions ?? HOST_DEFAULT_EXTENSIONS.esbuild)],
     nodeNext: ESBUILD_OUTPUTS,
+    alias: [],
     resolverVersion: label(
       'esbuild',
       version,
@@ -170,5 +202,6 @@ export function extensionPolicyJson(policy: HostExtensionPolicy): string {
   return JSON.stringify({
     appended: policy.appended,
     nodeNext: policy.nodeNext,
+    alias: policy.alias,
   });
 }

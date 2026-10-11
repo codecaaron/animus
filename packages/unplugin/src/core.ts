@@ -253,14 +253,24 @@ interface WebpackLikeCompiler {
       conditionNames?: string[];
       extensions?: string[];
       extensionAlias?: Record<string, string | string[]>;
+      byDependency?: Record<
+        string,
+        | {
+            extensions?: string[];
+            extensionAlias?: Record<string, string | string[]>;
+          }
+        | undefined
+      >;
     };
   };
   /** Set once `watch()` starts, before the first compilation. */
   watchMode?: boolean;
   webpack?: {
+    version?: string;
     DefinePlugin?: new (defs: Record<string, string>) => WebpackLikeApplied;
   };
   rspack?: {
+    rspackVersion?: string;
     DefinePlugin?: new (defs: Record<string, string>) => WebpackLikeApplied;
   };
   hooks: {
@@ -817,10 +827,11 @@ export const unpluginFactory: UnpluginFactory<
     hostConditions = (compiler.options.resolve?.conditionNames ?? []).filter(
       (name) => name !== '...'
     );
-    hostExtensions = webpackExtensionPolicy(meta.framework, {
-      extensions: compiler.options.resolve?.extensions,
-      extensionAlias: compiler.options.resolve?.extensionAlias,
-    });
+    hostExtensions = webpackExtensionPolicy(
+      meta.framework,
+      compiler.options.resolve ?? {},
+      compiler.webpack?.version ?? compiler.rspack?.rspackVersion
+    );
     watching = () => compiler.watchMode === true;
     const DefinePlugin =
       compiler.webpack?.DefinePlugin ?? compiler.rspack?.DefinePlugin;

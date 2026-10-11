@@ -125,6 +125,14 @@ type Compiler = {
       conditionNames?: string[];
       extensions?: string[];
       extensionAlias?: Record<string, string | string[]>;
+      byDependency?: Record<
+        string,
+        | {
+            extensions?: string[];
+            extensionAlias?: Record<string, string | string[]>;
+          }
+        | undefined
+      >;
     };
     watchOptions?: {
       ignored?: WatchIgnored;
@@ -233,10 +241,7 @@ export class AnimusWebpackPlugin {
     this.session.conditions = names.filter((name) => name !== '...');
     this.session.extensionPolicy = webpackExtensionPolicy(
       'next-webpack',
-      {
-        extensions: resolve?.extensions,
-        extensionAlias: resolve?.extensionAlias,
-      },
+      resolve ?? {},
       compiler.webpack?.version
     );
   }
