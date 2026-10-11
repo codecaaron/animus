@@ -27,8 +27,14 @@ import {
   SESSION_ASSETS_DIR,
   TURBOPACK_SYSTEM_PROPS_ID,
 } from '@animus-ui/extract/session';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 
 import { resolveHostMode, resolveHostOptions } from './options';
 
@@ -78,6 +84,9 @@ export interface HostState {
   redirectTargets: Set<string>;
   externalPackageDirs: string[];
   watchPaths: string[];
+  /** The paths the last system load found absent; creating one reloads
+   *  the system. */
+  missingPaths: string[];
   transformFile:
     | ((
         source: string,
@@ -93,6 +102,20 @@ export interface HostState {
   listedFiles: ReadonlySet<string>;
 }
 
+/** Each absent path's nearest existing ancestor directory. Paths under
+ *  `node_modules` are left out: an install is not an edit, and a recursive
+ *  watch there would be large. */
+export function creationWatchDirs(missing: readonly string[]): string[] {
+  const dirs = new Set<string>();
+  for (const path of missing) {
+    if (path.split(sep).includes('node_modules')) continue;
+    let dir = dirname(path);
+    while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir);
+    if (existsSync(dir)) dirs.add(dir);
+  }
+  return [...dirs];
+}
+
 export function createHostState(): HostState {
   return {
     pipeline: null,
@@ -105,6 +128,7 @@ export function createHostState(): HostState {
     redirectTargets: new Set(),
     externalPackageDirs: [],
     watchPaths: [],
+    missingPaths: [],
     transformFile: null,
     sessionDir: null,
     key: null,
@@ -457,6 +481,7 @@ export const unpluginFactory: UnpluginFactory<
           ...session.systemMissingPaths,
           join(root, 'tsconfig.json'),
         ];
+        state.missingPaths = [...session.systemMissingPaths];
         throw error;
       }
       state.sessionDir = getSessionArtifactDir(session.key);
@@ -484,6 +509,7 @@ export const unpluginFactory: UnpluginFactory<
       for (const dep of session.assetDependencyPaths) watchPaths.add(dep);
       watchPaths.add(join(root, 'tsconfig.json'));
       state.watchPaths = [...watchPaths];
+      state.missingPaths = [...session.systemMissingPaths];
       state.transformFile = engineApi(session.key).transformFile;
     });
   }
@@ -545,10 +571,17 @@ export const unpluginFactory: UnpluginFactory<
   }
 
   /** Analysis is a filesystem walk, so watch mode misses edits to
-   *  analyzed-but-unimported files. esbuild has no watch-file seam. */
+   *  analyzed-but-unimported files. esbuild has no watch-file seam. Rollup's
+   *  and Rolldown's watchers never report the creation of a watched absent
+   *  file under inotify, so they also watch each absent path's nearest
+   *  existing directory, whose new files they do report. */
   function registerWatchTargets(context: UnpluginBuildContext): void {
     if (meta.framework === 'esbuild') return;
-    for (const path of state.watchPaths) {
+    const paths =
+      meta.framework === 'rollup' || meta.framework === 'rolldown'
+        ? [...state.watchPaths, ...creationWatchDirs(state.missingPaths)]
+        : state.watchPaths;
+    for (const path of paths) {
       try {
         context.addWatchFile(path);
       } catch {}
