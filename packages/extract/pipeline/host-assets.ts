@@ -41,7 +41,7 @@ const VITE_OPAQUE_QUERY_RE = /[?&](?:url|raw)\b/;
 
 /** The built-in classification, where no host's can be read or is not
  *  modelled (webpack's and Rspack's rules, as a conditional rule may never
- *  apply): Vite's known asset types, less `svg`, its CSS languages
+ *  apply): Vite's known asset types, `svg` included, its CSS languages
  *  (`BUILT_IN_ASSET_SOURCE`) and JSON, read with Vite's queries. */
 export function builtInAssetClassification(
   reason: 'noHost' | 'hostOptionUnreadable',
