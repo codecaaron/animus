@@ -30,7 +30,9 @@ import {
 } from '@animus-ui/extract/pipeline';
 import {
   createBuildId,
+  engineFactory,
   engineHandle,
+  releaseEngineHandle,
   sessionKey,
 } from '@animus-ui/extract/session';
 import { statSync } from 'fs';
@@ -63,6 +65,7 @@ import type {
   SourceIngestionResult,
   SystemConfig,
 } from '@animus-ui/extract/pipeline';
+import type { SessionKey } from '@animus-ui/extract/session';
 import type { Logger } from 'vite';
 
 function emptySystemConfig(): SystemConfig {
@@ -339,6 +342,11 @@ export class PluginContext {
   /** Every native extraction call goes through this one accessor. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly engineApi: () => any;
+  /** The native module's stateless lookups, before the root resolves: the
+   *  shared factory, which registers no handle. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly kitEngine: () => any = engineFactory;
+  private engineKey: SessionKey | null = null;
 
   constructor(
     options: AnimusExtractOptions,
@@ -360,10 +368,12 @@ export class PluginContext {
 
     if (engineApiOverride) {
       this.engineApi = engineApiOverride;
+      this.kitEngine = engineApiOverride;
       return;
     }
     // This context is one build: its engine state is its own in the one
-    // engine-handle store, keyed once the root is known.
+    // engine-handle store, keyed once the root is resolved and released
+    // when the context closes.
     const build = createBuildId();
     const rehydrateFilesJson = (filesJsonRaw: string): string => {
       if (!filesJsonRaw.includes('"source":""')) return filesJsonRaw;
@@ -376,11 +386,26 @@ export class PluginContext {
       }
       return JSON.stringify(entries);
     };
-    this.engineApi = () =>
-      engineHandle(sessionKey(build, this.rootDir || process.cwd()), {
+    this.engineApi = () => {
+      if (!this.rootDir) {
+        throw new Error(
+          '[animus-extract] the engine was used before the Vite root resolved'
+        );
+      }
+      this.engineKey ??= sessionKey(build, this.rootDir);
+      return engineHandle(this.engineKey, {
         label: 'animus-extract',
         rehydrateFilesJson,
       })();
+    };
+  }
+
+  /** Releases this context's engine handle: a standalone one, which no
+   *  joined build retires. The next use makes a fresh one. */
+  releaseEngine(): void {
+    if (this.engineKey === null) return;
+    releaseEngineHandle(this.engineKey);
+    this.engineKey = null;
   }
 
   log(msg: string): void {

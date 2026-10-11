@@ -322,7 +322,7 @@ export function setEngineFactoryLoaderForTests(load: (() => any) | null): void {
  *  failure is an EnvironmentFailure, and is not cached: the next use tries
  *  the load again. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function engineFactory(): any {
+export function engineFactory(): any {
   const registry = sessionRegistry();
   if (registry.factory === null) {
     try {
@@ -385,6 +385,12 @@ export function engineHandle(
     engines.set(id, api);
   }
   return api;
+}
+
+/** Releases a standalone handle, one no joined build retires: its host
+ *  calls this when it closes. */
+export function releaseEngineHandle(key: SessionKey): void {
+  sessionRegistry().engines.delete(sessionKeyId(key));
 }
 
 /**
