@@ -2,11 +2,8 @@
 //! keys, context flag) read from top-level statements.
 
 use oxc::ast::ast::{
-    Argument, BindingPattern, Declaration, Expression, ImportDeclarationSpecifier,
-    ObjectPropertyKind, Program, Statement,
+    Argument, BindingPattern, Declaration, Expression, ObjectPropertyKind, Program, Statement,
 };
-use oxc::semantic::SemanticBuilder;
-use oxc::span::GetSpan;
 
 use super::value_eval::eval_property_key;
 
@@ -56,63 +53,6 @@ pub fn scan_compose_calls(program: &Program) -> Vec<ComposeFamilyInfo> {
         }
     }
     families
-}
-
-/// The `compose` / `composeWithContext` imports this file still uses outside
-/// `families`, through any local name (`compose`, or `compose as c`), as
-/// (imported name, source) pairs. The family calls are replaced, so only these
-/// imports must survive; the transform keeps a name only for a source it would
-/// strip. References resolve through the file's semantic scoping, so a
-/// parameter that shadows the import, or a `typeof` type query, is no use of
-/// it.
-pub fn compose_callees_referenced_outside(
-    program: &Program,
-    families: &[ComposeFamilyInfo],
-) -> Vec<(String, String)> {
-    if families.is_empty() {
-        return Vec::new();
-    }
-    // Reference spans come from the node table, which is opt-in.
-    let semantic = SemanticBuilder::new()
-        .with_build_nodes(true)
-        .build(program)
-        .semantic;
-    let scoping = semantic.scoping();
-    let used_outside = |local: &str| {
-        scoping
-            .get_root_binding(local.into())
-            .is_some_and(|symbol| {
-                scoping
-                    .get_resolved_references(symbol)
-                    .filter(|reference| reference.is_value())
-                    .any(|reference| {
-                        let span = semantic.nodes().get_node(reference.node_id()).span();
-                        !families
-                            .iter()
-                            .any(|family| family.span.0 <= span.start && span.end <= family.span.1)
-                    })
-            })
-    };
-    let mut in_use: Vec<(String, String)> = Vec::new();
-    for stmt in &program.body {
-        let Statement::ImportDeclaration(import) = stmt else {
-            continue;
-        };
-        for specifier in import.specifiers.iter().flatten() {
-            let ImportDeclarationSpecifier::ImportSpecifier(named) = specifier else {
-                continue;
-            };
-            let imported = named.imported.name();
-            if !matches!(imported.as_str(), "compose" | "composeWithContext") {
-                continue;
-            }
-            let entry = (imported.to_string(), import.source.value.to_string());
-            if !in_use.contains(&entry) && used_outside(named.local.name.as_str()) {
-                in_use.push(entry);
-            }
-        }
-    }
-    in_use
 }
 
 fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFamilyInfo>) {
