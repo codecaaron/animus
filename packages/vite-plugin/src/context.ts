@@ -496,10 +496,11 @@ export class PluginContext {
       this.registerSystemWatchPaths();
       this.systemLoaded = true;
     } catch (e) {
+      const message = `[animus-extract] Failed to load system from ${this.resolvedSystemPath}: ${e}`;
+      // No system to keep: startup is fatal in every mode, as a build is
+      // (row 8). A reload keeps the last good system.
+      if (!this.systemLoaded) throw new Error(message, { cause: e });
       if (this.options.strict) {
-        const message = `[animus-extract] Failed to load system from ${this.resolvedSystemPath}: ${e}`;
-        // No system to keep: development stops at startup as a build does.
-        if (!this.systemLoaded) throw new Error(message, { cause: e });
         this.strictFailure(message, e);
         return;
       }
