@@ -9099,7 +9099,8 @@ mod tests {
                 "fadeIn": { "name": "animus-kf-honfj9", "frames": frames },
                 "ease": { "name": "animus-kf-ease", "frames": frames },
                 "fadeOut": { "name": "animus-kf-out", "frames": frames },
-                "glow": { "name": "fadeOut", "frames": frames }
+                "glow": { "name": "fadeOut", "frames": frames },
+                "infinite": { "name": "animus-kf-infinite", "frames": frames }
             }
         }));
         let source = "export const Card = ds.styles({ animation: 'fadeIn 1s ease' }).asElement('div');\n\
@@ -9112,29 +9113,38 @@ mod tests {
                       export const Named = ds.styles({ animationName: 'fadeOut' }).asElement('i');\n\
                       export const Calm = ds.styles({ _motion: { animation: 'fadeIn 2s' } }).asElement('i');\n\
                       export const Bogus = ds.styles({ '@bogus x': { animation: 'fadeIn 2s' } }).asElement('i');\n\
+                      export const Stepped = ds.styles({ animation: '1s steps(2) ease' }).asElement('i');\n\
+                      export const Shouty = ds.styles({ animation: '1s EASE ease' }).asElement('i');\n\
+                      export const Counted = ds.styles({ animation: '1s 3 infinite' }).asElement('i');\n\
+                      export const Varied = ds.styles({ animation: 'var(--motion) fadeIn 1s' }).asElement('i');\n\
                       export const Box = ds.system({ motion: true }).asElement('div');\n\
                       export const App = () => <><Card /><Pill /><Spin /><Note /><Joined /><Escaped /><Loud /><Named /><Calm /><Bogus />\
+                      <Stepped /><Shouty /><Counted /><Varied />\
                       <Box animation=\"fadeIn 2s\" /><Box animation={{ _: 'fadeIn 3s' }} /></>;\n";
         let out = analyze(&[("a.tsx", source)], &inputs);
         let mut warned: Vec<_> = out
             .diagnostics
             .iter()
             .filter(|d| d.code.as_deref() == Some("animus.keyframes.raw-alias-string"))
-            .map(|d| (d.component.as_str(), d.offset, d.message.contains("'fadeIn'")))
+            .map(|d| (d.component.as_str(), d.offset, d.message.split('\'').nth(3).unwrap_or_default()))
             .collect();
         warned.sort();
         // A definition is located at its chain, a use at the attribute. Only
-        // an animation's name is read: a comment, a function, a keyword that
-        // fills another longhand and a generated name are not.
+        // an animation's name is read: a comment, a function, a keyword, a
+        // timing function or a number that fills another longhand, and a
+        // generated name are not, and a shorthand holding `var()` names none.
         let at = |written: &str| source.find(written).map(|at| at as u32);
         let mut expected = vec![
-            ("Box", at("animation=\"fadeIn 2s\""), true),
-            ("Box", at("animation={{"), true),
-            ("Calm", at("ds.styles({ _motion"), true),
-            ("Card", at("ds.styles({ animation: 'fadeIn 1s ease'"), true),
-            ("Escaped", at("ds.styles({ animationName: 'fade"), true),
-            ("Joined", at("ds.styles({ animation: 'fadeIn/**/"), true),
-            ("Loud", at("ds.styles({ animation: 'fadeIn 1s!"), true),
+            ("Box", at("animation=\"fadeIn 2s\""), "fadeIn"),
+            ("Box", at("animation={{"), "fadeIn"),
+            ("Calm", at("ds.styles({ _motion"), "fadeIn"),
+            ("Card", at("ds.styles({ animation: 'fadeIn 1s ease'"), "fadeIn"),
+            ("Counted", at("ds.styles({ animation: '1s 3"), "infinite"),
+            ("Escaped", at("ds.styles({ animationName: 'fade"), "fadeIn"),
+            ("Joined", at("ds.styles({ animation: 'fadeIn/**/"), "fadeIn"),
+            ("Loud", at("ds.styles({ animation: 'fadeIn 1s!"), "fadeIn"),
+            ("Shouty", at("ds.styles({ animation: '1s EASE"), "ease"),
+            ("Stepped", at("ds.styles({ animation: '1s steps"), "ease"),
         ];
         expected.sort();
         assert_eq!(warned, expected, "{:#?}", out.diagnostics);

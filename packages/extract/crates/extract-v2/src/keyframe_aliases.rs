@@ -163,8 +163,9 @@ fn admits_block(key: &str, ctx: &ResolveContext) -> bool {
     }
 }
 
-/// The keywords each other longhand of the `animation` shorthand takes; the
-/// first of a group in an animation fills that longhand, not the name.
+/// The keywords each other longhand of the `animation` shorthand takes, by
+/// slot: timing, iteration count, direction, fill mode and play state. The
+/// first of a slot in an animation fills it, not the name.
 const SHORTHAND_KEYWORDS: [&[&str]; 5] = [
     &["ease", "ease-in", "ease-out", "ease-in-out", "linear", "step-start", "step-end"],
     &["infinite"],
@@ -172,55 +173,89 @@ const SHORTHAND_KEYWORDS: [&[&str]; 5] = [
     &["none", "forwards", "backwards", "both"],
     &["running", "paused"],
 ];
+const TIMING: usize = 0;
+const ITERATION: usize = 1;
+/// The functions that give a timing.
+const TIMING_FUNCTIONS: [&str; 3] = ["cubic-bezier", "steps", "linear"];
+
+/// One top-level component of an animation, as the shorthand's slots read it.
+enum Part<'a> {
+    Ident(Cow<'a, str>),
+    /// A component that fills a slot: a timing function, or a number, the
+    /// iteration count.
+    Fills(usize),
+    /// Anything else, a time among them.
+    Other,
+}
 
 /// The animation names a value gives, one per comma-separated animation, as
 /// CSS reads it: comments are trivia, escapes are decoded, nothing inside a
 /// function or after `!` is a name. An `animation-name` animation is a name
 /// only as a single identifier. In the shorthand (CSS Animations §4.9), each
-/// identifier first fills the longhand whose keyword it is, while that
-/// longhand is unset; the first one left over is the name.
+/// keyword (in any ASCII case), timing function or number first fills its
+/// longhand while that is unset, and the first identifier left over is the
+/// name; a shorthand holding `var()` has slots no one can read, so it names
+/// nothing.
 fn animation_names(value: &str, shorthand: bool) -> Vec<Cow<'_, str>> {
     use crate::css_tokens::Kind;
+    let tokens = crate::css_tokens::tokenize(value);
+    if shorthand && tokens.iter().any(|token| token.kind == Kind::Function && token.value.eq_ignore_ascii_case("var")) {
+        return Vec::new();
+    }
     let mut names = Vec::new();
     let mut depth = 0usize;
-    let mut idents: Vec<Cow<'_, str>> = Vec::new();
-    let mut other = false;
+    let mut parts: Vec<Part<'_>> = Vec::new();
     let mut priority = false;
-    for token in crate::css_tokens::tokenize(value) {
+    for token in tokens {
         match token.kind {
             Kind::Whitespace => {}
+            Kind::Delim(b')') => depth = depth.saturating_sub(1),
+            _ if depth > 0 => {
+                if matches!(token.kind, Kind::Function | Kind::Delim(b'(')) {
+                    depth += 1;
+                }
+            }
             Kind::Function => {
                 depth += 1;
-                other = true;
+                let timing = TIMING_FUNCTIONS.iter().any(|name| token.value.eq_ignore_ascii_case(name));
+                parts.push(if timing { Part::Fills(TIMING) } else { Part::Other });
             }
             Kind::Delim(b'(') => depth += 1,
-            Kind::Delim(b')') => depth = depth.saturating_sub(1),
-            _ if depth > 0 || priority => {}
-            Kind::Delim(b',') => {
-                names.extend(animation_name(std::mem::take(&mut idents), other, shorthand));
-                other = false;
-            }
+            _ if priority => {}
+            Kind::Delim(b',') => names.extend(animation_name(std::mem::take(&mut parts), shorthand)),
             Kind::Delim(b'!') => priority = true,
-            Kind::Ident => idents.push(token.value),
-            _ => other = true,
+            Kind::Ident => parts.push(Part::Ident(token.value)),
+            Kind::Numeric if value[token.start..token.end].parse::<f64>().is_ok() => parts.push(Part::Fills(ITERATION)),
+            _ => parts.push(Part::Other),
         }
     }
-    names.extend(animation_name(idents, other, shorthand));
+    names.extend(animation_name(parts, shorthand));
     names
 }
 
-/// One animation's name from its top-level identifiers, `other` telling
-/// whether anything else was written.
-fn animation_name(mut idents: Vec<Cow<'_, str>>, other: bool, shorthand: bool) -> Option<Cow<'_, str>> {
+/// One animation's name from its top-level components.
+fn animation_name(parts: Vec<Part<'_>>, shorthand: bool) -> Option<Cow<'_, str>> {
     if !shorthand {
-        return (idents.len() == 1 && !other).then(|| idents.remove(0));
+        let [Part::Ident(name)] = <[Part<'_>; 1]>::try_from(parts).ok()? else { return None };
+        return Some(name);
     }
     let mut filled = [false; SHORTHAND_KEYWORDS.len()];
-    idents.into_iter().find(|ident| match SHORTHAND_KEYWORDS.iter().position(|keywords| keywords.contains(&ident.as_ref())) {
-        Some(group) if !filled[group] => {
-            filled[group] = true;
-            false
+    let mut fill = |slot: usize| !std::mem::replace(&mut filled[slot], true);
+    for part in parts {
+        match part {
+            Part::Fills(slot) => {
+                fill(slot);
+            }
+            Part::Ident(ident) => {
+                let slot = SHORTHAND_KEYWORDS
+                    .iter()
+                    .position(|keywords| keywords.iter().any(|keyword| ident.eq_ignore_ascii_case(keyword)));
+                if !slot.is_some_and(&mut fill) {
+                    return Some(ident);
+                }
+            }
+            Part::Other => {}
         }
-        _ => true,
-    })
+    }
+    None
 }
