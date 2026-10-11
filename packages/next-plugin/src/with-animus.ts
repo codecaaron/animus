@@ -7,6 +7,7 @@ import {
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
+  outputExclusion,
   readTsconfigAliasPairs,
   resolveMode,
   sourceKitDependencies,
@@ -237,6 +238,9 @@ export function withAnimus(
           { development: context.dev === true, build }
         );
         plugin.setRootDir(rootDir);
+        if (nextConfig.distDir) {
+          plugin.excludeOutputDir(resolve(rootDir, nextConfig.distDir));
+        }
         const sessionDir = plugin.sessionDir;
 
         if (!existsSync(sessionDir)) {
@@ -486,11 +490,15 @@ function turbopackConfig<Config extends NextOwnedConfig>(
   const resolveExtensions =
     nextConfig.turbopack?.resolveExtensions ??
     nextConfig.experimental?.turbo?.resolveExtensions;
+  const outputExclude = nextConfig.distDir
+    ? outputExclusion(appRoot, resolve(appRoot, nextConfig.distDir))
+    : null;
   const load = (phase: string): Promise<TurbopackNextConfigObject<Config>> =>
     loadTurbopackFragment(
       options,
       phase,
       resolveExtensions,
+      outputExclude,
       build,
       appRoot
     ).then((fragment) => mergeTurbopackFragment(nextConfig, fragment));
@@ -546,6 +554,7 @@ function loadTurbopackFragment(
   options: AnimusNextOptions,
   phase: string,
   resolveExtensions: readonly string[] | undefined,
+  outputExclude: string | null,
   build: string,
   rootDir: string
 ): Promise<TurbopackConfigFragment> {
@@ -558,6 +567,7 @@ function loadTurbopackFragment(
     phase,
     rootDir,
     resolveExtensions,
+    outputExclude,
     build
   );
   const load = { key, fragment };
@@ -573,6 +583,7 @@ async function analyzeForTurbopack(
   phase: string,
   rootDir: string,
   resolveExtensions: readonly string[] | undefined,
+  outputExclude: string | null,
   build: string
 ): Promise<TurbopackConfigFragment> {
   const development = phase === PHASE_DEVELOPMENT_SERVER;
@@ -596,6 +607,7 @@ async function analyzeForTurbopack(
   // diagnostic reports there and the session keeps publishing.
   session.development = development;
   session.rootDir = rootDir;
+  if (outputExclude !== null) session.structuralExclude = [outputExclude];
   session.extensionPolicy = turbopackExtensionPolicy(resolveExtensions);
   const aliasPairs = readTsconfigAliasPairs(rootDir);
   const builtAliases = buildPathAliasesJson(aliasPairs, rootDir);

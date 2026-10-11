@@ -16,6 +16,7 @@ import {
   isDeletedSource,
   nativeKitSourceRoot,
   surfaceManifestDiagnostics,
+  unmatchedExcludeLines,
   unreadableSourceDiagnostic,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
@@ -62,7 +63,17 @@ export async function runBuildStart(
     );
   }
 
+  // One matcher per buildStart, which a development rediscovery reuses.
+  // Refreshed in case `options` was mutated between server lifecycles.
+  ctx.excludeMatcher = createExcludeMatcher(
+    ctx.options.exclude,
+    ctx.outputExclude === null ? [] : [ctx.outputExclude]
+  );
+  ctx.extensionsSet = new Set(ctx.options.extensions ?? DEFAULT_EXTENSIONS);
   const discovered = await discoverSources(ctx, resolveSpecifier);
+  for (const line of unmatchedExcludeLines(ctx.excludeMatcher)) {
+    console.error(line);
+  }
   // The system's imports and its packages' manifests decide discovery, so a
   // development system reload repeats it. Discovery decides the files; a
   // cached file keeps the source the hot path last read.
@@ -213,14 +224,10 @@ async function discoverSources(
     if (loaded?.path) loaderOnly.add(specifier);
     return loaded?.path ?? null;
   };
-  // Refresh in case `options` was mutated between server lifecycles.
-  ctx.excludeMatcher = createExcludeMatcher(ctx.options.exclude);
-  const excludePatterns = ctx.excludeMatcher;
-  ctx.extensionsSet = new Set(ctx.options.extensions ?? DEFAULT_EXTENSIONS);
   const filePaths = discoverFiles(
     ctx.rootDir,
     ctx.rootDir,
-    excludePatterns,
+    ctx.excludeMatcher,
     ctx.extensionsSet
   );
 

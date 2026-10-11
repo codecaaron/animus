@@ -3,6 +3,8 @@
  * default exclusions, and mode authority cannot drift per driver.
  */
 
+import { isAbsolute, relative } from 'path';
+
 import { DIAGNOSTIC_LEVELS } from './manifest-diagnostics';
 
 import type { DiagnosticLevels } from './manifest-diagnostics';
@@ -299,8 +301,12 @@ export interface ExcludeMatcher {
   /** Effective list: structural ∪ (user ?? replaceable defaults). */
   readonly patterns: readonly string[];
   /** Per-pattern hit counts over this matcher's lifetime; zero hits after
-   *  discovery means the pattern matched nothing. */
+   *  discovery means the pattern matched nothing. A user pattern counts
+   *  every path it matches, whichever pattern excludes the path. */
   stats(): ReadonlyMap<string, number>;
+  /** The user's patterns that have matched nothing yet; none without a
+   *  user list. */
+  unmatched(): string[];
   /** True when the path is excluded; both path forms are tested. */
   matches(fullPath: string, relativePath: string): boolean;
   explain(fullPath: string, relativePath: string): string | null;
@@ -377,28 +383,54 @@ export function createExcludeMatcher(
   for (const pattern of extraStructural) {
     if (!merged.includes(pattern)) merged.push(pattern);
   }
-  for (const pattern of userPatterns ?? REPLACEABLE_DEFAULT_EXCLUDE) {
+  const userList = userPatterns ?? REPLACEABLE_DEFAULT_EXCLUDE;
+  for (const pattern of userList) {
     if (!merged.includes(pattern)) merged.push(pattern);
   }
   const compiled = merged.map(
-    (pattern) => [pattern, compilePattern(pattern)] as const
+    (pattern) =>
+      [pattern, compilePattern(pattern), userList.includes(pattern)] as const
   );
   const hits = new Map<string, number>(merged.map((p) => [p, 0]));
   const explain = (full: string, rel: string): string | null => {
-    for (const [pattern, test] of compiled) {
-      if (test(full, rel)) {
-        hits.set(pattern, (hits.get(pattern) ?? 0) + 1);
-        return pattern;
-      }
+    let excludedBy: string | null = null;
+    for (const [pattern, test, isUser] of compiled) {
+      // Past the first match, only the user's patterns are still counted.
+      if (excludedBy !== null && !isUser) continue;
+      if (!test(full, rel)) continue;
+      hits.set(pattern, (hits.get(pattern) ?? 0) + 1);
+      excludedBy ??= pattern;
     }
-    return null;
+    return excludedBy;
   };
   return {
     patterns: merged,
     matches: (full, rel) => explain(full, rel) !== null,
     explain,
     stats: () => hits,
+    unmatched: () =>
+      (userPatterns ?? []).filter((pattern) => hits.get(pattern) === 0),
   };
+}
+
+/** One line per user pattern that matched nothing, which every host
+ *  prints to stderr after its first discovery, as the CLI always has. */
+export function unmatchedExcludeLines(matcher: ExcludeMatcher): string[] {
+  return matcher
+    .unmatched()
+    .map((pattern) => `[animus] exclude pattern '${pattern}' matched nothing`);
+}
+
+/**
+ * A host's output directory as a structural exclusion: an anchored glob,
+ * never a substring ('out' would drop every path containing it), so a user
+ * list, which replaces the defaults, never re-admits output. Null when the
+ * directory is outside the root or is the root itself.
+ */
+export function outputExclusion(root: string, outDir: string): string | null {
+  const rel = relative(root, outDir);
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return null;
+  return `${rel.split('\\').join('/')}/**`;
 }
 
 /** How a resolved value was decided; surfaced by `--print-config`. */

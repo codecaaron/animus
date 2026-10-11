@@ -3,6 +3,7 @@ import {
   buildPathAliasesJson,
   KIT_DESCRIPTOR_FILE,
   kitPublicationFailures,
+  outputExclusion,
   readTsconfigAliasPairs,
   runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
@@ -85,13 +86,11 @@ export function createCliSession(config: ResolvedCliConfig): ExtractionSession {
         `--root at the source tree.`
     );
   }
+  const anchored = outputExclusion(root, outDir);
   if (
-    !relOut.startsWith('..') &&
+    anchored !== null &&
     !config.excludePatterns.some((p) => relOut.includes(p) || p === relOut)
   ) {
-    // Anchored glob, never a substring: 'out' would drop every path
-    // containing it. Structural, not the user list, which replaces defaults.
-    const anchored = `${relOut.split('\\').join('/')}/**`;
     session.structuralExclude = [anchored];
     err(
       `outDir ${relOut} is inside the root — auto-excluded from discovery (pattern '${anchored}')`
@@ -227,12 +226,6 @@ export function reportDiscoveryOutcomes(
     err(
       `include '${specifier}': ${outcome}${outcome === 'resolved' ? ` (${files} files)` : ''}`
     );
-  }
-  const stats = session.getExcludeStats();
-  for (const pattern of config.options.exclude ?? []) {
-    if ((stats.get(pattern) ?? 0) === 0) {
-      err(`exclude pattern '${pattern}' matched nothing`);
-    }
   }
 }
 

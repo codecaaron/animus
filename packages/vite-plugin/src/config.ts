@@ -1,8 +1,10 @@
 import {
   buildPathAliasesJson,
+  outputExclusion,
   resolveMode,
   viteExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
+import { resolve } from 'path';
 
 import { resolveLightningTargets } from './css';
 
@@ -26,6 +28,10 @@ export function applyResolvedConfig(
       config.command === 'build' ? 'production' : 'development'
     ).mode === 'production';
   ctx.rootDir = config.root;
+  ctx.outputExclude = outputExclusion(
+    config.root,
+    resolve(config.root, config.build.outDir)
+  );
   // Vite substitutes the mode for its `development|production` condition.
   ctx.resolveConditions = config.resolve.conditions.map((condition) =>
     condition === 'development|production'

@@ -2,6 +2,7 @@ import {
   AnimusConfigError,
   assertSupportedEngine,
   buildPathAliasesJson,
+  outputExclusion,
   webpackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -477,6 +478,13 @@ export class AnimusWebpackPlugin {
 
   setRootDir(rootDir: string): void {
     this.session.rootDir = rootDir;
+  }
+
+  /** Keeps Next's output directory out of discovery, whatever the user's
+   *  exclude list says. Call after `setRootDir`. */
+  excludeOutputDir(outDir: string): void {
+    const pattern = outputExclusion(this.session.rootDir!, outDir);
+    if (pattern !== null) this.session.structuralExclude = [pattern];
   }
 
   /** Adopts `compiler.context` only when no config-time root exists: every

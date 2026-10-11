@@ -56,6 +56,7 @@ import {
   toWatchKeys,
   isDeletedSource,
   unreadableSourceDiagnostic,
+  unmatchedExcludeLines,
   unresolvableIncludesMessage,
   walkPackageSources,
   engineModuleParser,
@@ -534,12 +535,6 @@ export class ExtractionSession {
     excludeMatcher: ExcludeMatcher;
     extensionsSet: ReadonlySet<string>;
   } | null = null;
-
-  /** Per-pattern exclusion hit counts from this session's matcher —
-   *  driver-consumed reporting surface (dead-pattern visibility). */
-  getExcludeStats(): ReadonlyMap<string, number> {
-    return this.resolveScanConfig().excludeMatcher.stats();
-  }
 
   /** Resolve the scan configuration from options — the single source of the
    *  exclude/extension policy shared by the full and incremental pipelines. */
@@ -1172,6 +1167,12 @@ export class ExtractionSession {
       excludeMatcher,
       extensionsSet
     );
+    // Once per build: its first full discovery, before anything publishes.
+    if (getManifestJson(this.key) === null) {
+      for (const line of unmatchedExcludeLines(excludeMatcher)) {
+        console.error(line);
+      }
+    }
 
     bt.fileDiscovery = this.elapsed(t);
 

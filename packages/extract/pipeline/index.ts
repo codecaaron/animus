@@ -42,10 +42,12 @@ export {
   createExcludeMatcher,
   DEFAULT_EXCLUDE,
   DRIVER_NAMESPACES,
+  outputExclusion,
   REPLACEABLE_DEFAULT_EXCLUDE,
   STRUCTURAL_EXCLUDE,
   resolveMode,
   resolveVerbosity,
+  unmatchedExcludeLines,
 } from './core-options';
 export { compareDiscoveryOrder, discoverFiles } from './discover-files';
 export type {

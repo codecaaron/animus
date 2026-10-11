@@ -1,7 +1,6 @@
 import {
   buildSystemPropsModule,
   contentHash,
-  createExcludeMatcher,
   DiagnosticFailure,
   DEFAULT_EXTENSIONS,
   clearEngineCache,
@@ -205,7 +204,13 @@ export class PluginContext {
 
   extensionsSet: ReadonlySet<string>;
 
-  excludeMatcher: ExcludeMatcher;
+  /** Built once per buildStart, before any discovery, from the user's
+   *  exclude list and the output directory. */
+  excludeMatcher!: ExcludeMatcher;
+
+  /** Vite's output directory as a structural exclusion; null outside the
+   *  root. Set in `configResolved`. */
+  outputExclude: string | null = null;
 
   // `null` means no analysis has published yet; a failed analysis leaves the
   // previous manifest current instead of clearing it.
@@ -370,7 +375,6 @@ export class PluginContext {
     this.verbose = verbosity !== 'quiet';
     this.tracing = verbosity === 'trace';
     this.extensionsSet = new Set(options.extensions ?? DEFAULT_EXTENSIONS);
-    this.excludeMatcher = createExcludeMatcher(options.exclude);
 
     if (engineApiOverride) {
       this.engineApi = engineApiOverride;
