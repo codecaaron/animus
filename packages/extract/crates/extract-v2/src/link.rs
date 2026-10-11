@@ -265,7 +265,14 @@ mod tests {
             ("thenable.js", "export const then = () => {};"),
             ("namespaces.ts", "export namespace Types { export type X = 1; } export namespace Values { export const v = 1; } type T = 1; export { T };"),
             ("typed-reexports.ts", "import { v } from './types';\nexport { type v as tv };\nexport type { v as tv2 };\nexport { v as rv };"),
-            ("ambient.ts", "declare const q: number;\nexport { q };\nexport const real = 1;"),
+            (
+                "ambient.ts",
+                "declare const q: number;\ndeclare function g(): void;\ndeclare class C {}\ndeclare enum E { A }\ndeclare namespace D { export const d: number; }\nexport { q, g, C, E, D };\nexport const real = 1;",
+            ),
+            (
+                "merged.ts",
+                "function f() {}\ndeclare namespace f { export type T = 1; }\ndeclare namespace N { export function fn(): void; }\nnamespace N { export const v = 1; }\nexport { f, N };",
+            ),
         ]);
         let module = |path: &str| links.module(path).unwrap();
         let local = |path: &str, name: &str| Terminal::Local {
@@ -311,6 +318,8 @@ mod tests {
         assert_eq!(links.table.exported_names(module("typed-reexports.ts")).names, ["rv"]);
         assert_eq!(resolve("typed-reexports.ts", "rv"), ExportLookup::Resolved(local("types.ts", "v")));
         assert_eq!(links.table.exported_names(module("ambient.ts")).names, ["real"]);
+        // A runtime declaration merged with an ambient one is a value.
+        assert_eq!(links.table.exported_names(module("merged.ts")).names, ["f", "N"]);
         // A star of an unanalysed module is open, never absent.
         let ExportLookup::Incomplete { known, openings } = resolve("open.js", "x") else {
             panic!("an open star leaves the answer open");
