@@ -573,9 +573,14 @@ export class ExtractionSession {
     }
     const revision = ++queue.revision;
     const active = queue.active;
+    // A path with a queued observation is never equivalent: this newer
+    // observation supersedes the queued one, so it is queued in its place.
     if (
       active !== null &&
-      [...observed].every(([path, state]) => active.taken.get(path) === state)
+      [...observed].every(
+        ([path, state]) =>
+          !queue.untaken.has(path) && active.taken.get(path) === state
+      )
     ) {
       queue.revisions.set(revision, active.transaction);
       return revision;
@@ -614,15 +619,35 @@ export class ExtractionSession {
   /** Starts one attempt over every untaken observation of the build. */
   startObservedAttempt(): boolean {
     if (!this.system) return false;
-    const queue = observationQueue(this.key);
-    const taken = new Map(queue.untaken);
-    queue.untaken.clear();
+    const taken = this.takeObservations();
     const modifiedFiles = new Set<string>();
     const removedFiles = new Set<string>();
     for (const [path, state] of taken) {
       (state === REMOVED_OBSERVATION ? removedFiles : modifiedFiles).add(path);
     }
-    const transaction = this.runWatchAttempt({ modifiedFiles, removedFiles });
+    this.settleTaken(
+      taken,
+      this.runWatchAttempt({ modifiedFiles, removedFiles })
+    );
+    return true;
+  }
+
+  /** Every untaken observation of the build, which the caller's attempt
+   *  now covers. */
+  private takeObservations(): Map<string, string> {
+    const queue = observationQueue(this.key);
+    const taken = new Map(queue.untaken);
+    queue.untaken.clear();
+    return taken;
+  }
+
+  /** `transaction` settles every waiting revision, and is the active
+   *  attempt equivalent observations join until it settles. */
+  private settleTaken(
+    taken: Map<string, string>,
+    transaction: Promise<void>
+  ): void {
+    const queue = observationQueue(this.key);
     for (const [revision, attempt] of queue.revisions) {
       if (attempt === null) queue.revisions.set(revision, transaction);
     }
@@ -631,7 +656,6 @@ export class ExtractionSession {
       if (queue.active?.transaction === transaction) queue.active = null;
     };
     transaction.then(settle, settle);
-    return true;
   }
 
   /** Registers one attempt in the build's single-flight slot before it
@@ -997,8 +1021,14 @@ export class ExtractionSession {
     const priorSystem = this.system;
 
     const nested = getWatchTransaction(this.key) !== null;
+    // A top-level full read covers every observation queued before it, so
+    // it settles them; one queued after it runs next.
+    const taken = nested ? null : this.takeObservations();
     const transaction = this.runPipelineTransaction(pending);
-    if (!nested) setWatchTransaction(this.key, transaction);
+    if (taken !== null) {
+      setWatchTransaction(this.key, transaction);
+      this.settleTaken(taken, transaction);
+    }
     try {
       await transaction;
     } catch (error) {
