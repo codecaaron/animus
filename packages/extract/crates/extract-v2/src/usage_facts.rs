@@ -2166,8 +2166,10 @@ pub(crate) fn function_param_readings(
 ) -> BTreeMap<String, Vec<ParamReading>> {
     use oxc::ast::ast::{BindingPattern, Declaration, ExportDefaultDeclarationKind, FormalParameters};
     // A function with no body (an ambient `declare function` or an overload
-    // signature) may do anything with its arguments.
+    // signature) may do anything with its arguments. A function that reads
+    // its own `arguments` object reaches every argument past its parameters.
     let mut functions: Vec<(String, &FormalParameters<'_>, bool)> = Vec::new();
+    let mut by_arguments: FxHashSet<String> = FxHashSet::default();
     for stmt in &program.body {
         let declaration = match stmt {
             Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
@@ -2175,6 +2177,9 @@ pub(crate) fn function_param_readings(
                 if let ExportDefaultDeclarationKind::FunctionDeclaration(func) = &export.declaration {
                     if let Some(id) = &func.id {
                         functions.push((id.name.to_string(), &func.params, func.body.is_some()));
+                        if func.body.as_ref().is_some_and(|body| reads_own_arguments(body)) {
+                            by_arguments.insert(id.name.to_string());
+                        }
                     }
                 }
                 None
@@ -2185,6 +2190,9 @@ pub(crate) fn function_param_readings(
             Some(Declaration::FunctionDeclaration(func)) => {
                 if let Some(id) = &func.id {
                     functions.push((id.name.to_string(), &func.params, func.body.is_some()));
+                    if func.body.as_ref().is_some_and(|body| reads_own_arguments(body)) {
+                        by_arguments.insert(id.name.to_string());
+                    }
                 }
             }
             Some(Declaration::VariableDeclaration(var)) if var.kind == oxc::ast::ast::VariableDeclarationKind::Const => {
@@ -2196,6 +2204,9 @@ pub(crate) fn function_param_readings(
                         }
                         Some(Expression::FunctionExpression(func)) => {
                             functions.push((id.name.to_string(), &func.params, func.body.is_some()));
+                            if func.body.as_ref().is_some_and(|body| reads_own_arguments(body)) {
+                                by_arguments.insert(id.name.to_string());
+                            }
                         }
                         _ => {}
                     }
@@ -2232,7 +2243,7 @@ pub(crate) fn function_param_readings(
         let reassigned = scoping
             .get_root_binding(name.as_str().into())
             .is_some_and(|symbol| scoping.get_resolved_references(symbol).any(oxc::semantic::Reference::is_write));
-        if reassigned {
+        if reassigned || by_arguments.contains(name) {
             reading.iter_mut().for_each(|param| *param = ParamReading::Unsafe);
         }
         readings.insert(name.clone(), reading);
@@ -2255,6 +2266,32 @@ pub(crate) fn function_param_readings(
     };
     scan.visit_program(program);
     scan.readings
+}
+
+/// Whether a function body reads its own `arguments` object, also from an
+/// arrow inside it. A nested function has its own; a module is strict, so
+/// nothing else is named `arguments`.
+fn reads_own_arguments(body: &oxc::ast::ast::FunctionBody<'_>) -> bool {
+    struct Scan {
+        found: bool,
+        nested: usize,
+    }
+    impl<'a> Visit<'a> for Scan {
+        fn visit_function(&mut self, func: &oxc::ast::ast::Function<'a>, flags: oxc::semantic::ScopeFlags) {
+            self.nested += 1;
+            oxc::ast_visit::walk::walk_function(self, func, flags);
+            self.nested -= 1;
+        }
+
+        fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+            if self.nested == 0 && ident.name == "arguments" {
+                self.found = true;
+            }
+        }
+    }
+    let mut scan = Scan { found: false, nested: 0 };
+    scan.visit_function_body(body);
+    scan.found
 }
 
 /// Visits each value reference to a watched parameter and records how it

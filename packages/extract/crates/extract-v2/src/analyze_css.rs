@@ -13067,8 +13067,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// An object handed to a module-scope function nothing writes stays
     /// stable when that parameter only reads it, through read-only callees
     /// at most four calls deep. A write through the parameter or an alias of
-    /// it, a method call on a member, a return of the object, a read-only
-    /// hand-on to a writer, and a chain past the depth all keep it unstable.
+    /// it or through `arguments`, a method call on a member, a return of the
+    /// object, a read-only hand-on to a writer, and a chain past the depth
+    /// all keep it unstable.
     #[test]
     fn an_object_handed_to_a_function_that_only_reads_it_stays_stable() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
@@ -13089,6 +13090,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("function touch(o) { o.Box = () => null; }\ntouch(Fam);\n".to_string(), Some("touch")),
             ("function touch(o) { const q = o; q.Box = () => null; }\ntouch(Fam);\n".to_string(), Some("touch")),
             ("function run(o) { o.Box(); }\nrun(Fam);\n".to_string(), Some("run")),
+            ("function touch(o) { arguments[0].Box = () => null; }\ntouch(Fam);\n".to_string(), Some("touch")),
             ("function same(o) { return o; }\nsame(Fam).Box = () => null;\n".to_string(), Some("same")),
             (
                 "function pass(o) { write(o); }\nfunction write(o) { o.Box = () => null; }\npass(Fam);\n".to_string(),
