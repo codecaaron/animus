@@ -2776,7 +2776,11 @@ export const App = () => <Box tone="red" />;
                    .asElement('div');\n",
             ),
             file("tokens.ts", "export const pad = { padding: 2 };\n"),
-            file("held.tsx", "import { pad } from './tokens';\nexport const Held = ds.styles({ ...pad }).asElement('span');\n"),
+            file(
+                "held.tsx",
+                "import { pad } from './tokens';\nexport const Held = ds.styles({ ...pad }).asElement('span');\n\
+                 export const HeldChild = Held.extend().styles({ color: 'red' }).asElement('span');\n",
+            ),
             file("fam.tsx", "import { Box } from './kit';\nexport const Fam = { Box };\n"),
             file("skip.tsx", "export const Skip = ds.styles({ color: globalThis.tone, padding: 3 }).asElement('p');\n"),
             file(
@@ -2787,9 +2791,9 @@ export const App = () => <Box tone="red" />;
             ),
             file(
                 "app.tsx",
-                "import { Base, Box } from './kit';\nimport { Held } from './held';\nimport { Fam } from './fam';\n\
+                "import { Base, Box } from './kit';\nimport { Held, HeldChild } from './held';\nimport { Fam } from './fam';\n\
                  import { Skip } from './skip';\nimport { Card } from './card';\n\
-                 export const App = () => <><Base size='sm' /><Box p={8} /><Fam.Box m={4} /><Held /><Skip /><Card.Root /></>;\n",
+                 export const App = () => <><Base size='sm' /><Box p={8} /><Fam.Box m={4} /><Held /><HeldChild /><Skip /><Card.Root /></>;\n",
             ),
         ];
         let modules: Vec<&str> = project.iter().map(|(path, _)| path.trim_end_matches(".tsx").trim_end_matches(".ts")).collect();
