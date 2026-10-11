@@ -34,7 +34,7 @@ export {
 } from './runtime-import';
 export type { DiscoveryResolver, HostResolve } from './host-package-resolver';
 export { AliasAgreementCache, compareAliases } from './alias-agreement';
-export type { AliasAgreement, AliasComparison } from './alias-agreement';
+export type { AliasAgreement } from './alias-agreement';
 export { discoveryResolver } from './host-package-resolver';
 export type {
   AnimusCoreOptions,
