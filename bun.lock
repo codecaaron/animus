@@ -307,6 +307,9 @@
         "@animus-ui/extract": "workspace:*",
         "unplugin": "^3.3.0",
       },
+      "devDependencies": {
+        "rollup": "^4.63.1",
+      },
     },
     "packages/vite-plugin": {
       "name": "@animus-ui/vite-plugin",
