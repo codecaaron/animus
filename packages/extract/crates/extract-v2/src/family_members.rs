@@ -658,16 +658,22 @@ impl<'f> ObjectMembers<'f> {
                 let reason = format!("{name} {} in {module}{line}", used.what);
                 let held: Vec<Object> = match name.split_once('.') {
                     // A member of a namespace import.
-                    Some((namespace, member)) => ff
-                        .namespace_imports
-                        .get(namespace)
-                        .and_then(|spec| resolve_import_source(module, spec, files, inputs))
-                        .and_then(|target| self.exported_object(&target, member))
-                        .into_iter()
-                        .collect(),
+                    Some((namespace, member)) => {
+                        match ff
+                            .namespace_imports
+                            .get(namespace)
+                            .and_then(|spec| resolve_import_source(module, spec, files, inputs))
+                        {
+                            Some(target) => match self.exported_object(&target, member) {
+                                Some(object) => vec![object],
+                                None => self.opened_export(&target, member),
+                            },
+                            None => Vec::new(),
+                        }
+                    }
                     None => match ff.namespace_imports.get(name) {
                         Some(spec) => resolve_import_source(module, spec, files, inputs)
-                            .map(|target| self.exported_objects(&target).to_vec())
+                            .map(|target| self.namespace_objects(&target))
                             .unwrap_or_default(),
                         None => match self.unresolved_import(module, ff, name) {
                             // An import the analysis cannot follow may be any
@@ -677,7 +683,10 @@ impl<'f> ObjectMembers<'f> {
                                 .get(imported)
                                 .cloned()
                                 .unwrap_or_default(),
-                            None => self.local_object(module, name).into_iter().collect(),
+                            None => match self.local_object(module, name) {
+                                Some(object) => vec![object],
+                                None => self.opened_import(module, ff, name),
+                            },
                         },
                     },
                 };
@@ -691,20 +700,82 @@ impl<'f> ObjectMembers<'f> {
                     continue;
                 };
                 let reason = format!("{module} re-exports {target} as the namespace {name}");
-                for object in self.exported_objects(&target).iter() {
+                for object in self.namespace_objects(&target) {
                     found.entry(object.clone()).or_insert_with(|| reason.clone());
                 }
             }
             for load in &ff.module_loads {
                 for target in loaded_modules(module, load, files, inputs) {
                     let reason = format!("{module} loads {target} at runtime on line {}", load.line);
-                    for object in self.exported_objects(target).iter() {
+                    for object in self.namespace_objects(target) {
                         found.entry(object.clone()).or_insert_with(|| reason.clone());
                     }
                 }
             }
         }
         found
+    }
+
+    /// Every object `module`'s namespace may hold: each export's and, where
+    /// an open route leaves an export or the module's names incomplete,
+    /// every object that route may reach.
+    fn namespace_objects(&mut self, module: &str) -> Vec<Object> {
+        let mut objects = self.exported_objects(module).to_vec();
+        let Some(index) = self.links.module(module) else { return objects };
+        let names = self.links.table.exported_names(index);
+        for name in &names.names {
+            objects.extend(self.opened_export(module, name));
+        }
+        if !names.complete() {
+            objects.extend(self.exposed(None));
+        }
+        objects
+    }
+
+    /// The objects an import binding of `module` may hold when an open route
+    /// leaves the export it imports incomplete.
+    fn opened_import(&mut self, module: &str, ff: &FileFacts, local: &str) -> Vec<Object> {
+        let Some(import) = ff.imports.iter().find(|import| import.local == local) else { return Vec::new() };
+        let Some(source) = resolve_import_source(module, &import.source, self.files, self.inputs) else {
+            return Vec::new();
+        };
+        self.opened_export(&source, &import.imported)
+    }
+
+    /// The objects `module`'s export `name` may hold when an open route
+    /// leaves the answer incomplete: each object the answer knows, and every
+    /// object exported under the name the route was asked for (under any
+    /// name, when it was asked for a whole namespace). Nothing for a
+    /// complete answer.
+    fn opened_export(&mut self, module: &str, name: &str) -> Vec<Object> {
+        let Some(index) = self.links.module(module) else { return Vec::new() };
+        let ExportLookup::Incomplete { known, openings } = self.links.table.resolve_export(index, name) else {
+            return Vec::new();
+        };
+        let mut objects = Vec::new();
+        for terminal in known {
+            if let Terminal::Local { module: declaring, binding } = terminal {
+                let (path, local) = crate::analyze_css::binding_name(self.links, self.files, declaring, binding);
+                objects.extend(self.local_object(&path, &local));
+            }
+        }
+        for opening in openings {
+            objects.extend(self.exposed(opening.name.as_deref()));
+        }
+        objects
+    }
+
+    /// Every object a module exports under `name`, or under any name.
+    fn exposed(&mut self, name: Option<&str>) -> Vec<Object> {
+        let modules: Vec<String> = self.files.keys().cloned().collect();
+        let mut objects = Vec::new();
+        for module in &modules {
+            match name {
+                Some(name) => objects.extend(self.exported_object(module, name)),
+                None => objects.extend(self.exported_objects(module).iter().cloned()),
+            }
+        }
+        objects
     }
 
     /// The name an import binding of `module` imports, when its source is
