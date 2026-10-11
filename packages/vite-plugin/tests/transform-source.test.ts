@@ -256,8 +256,6 @@ describe('transform: new-file invalidation is unconditional', () => {
     );
 
     expect(probe.submissions).toHaveLength(1);
-    expect(probe.ctx.storedSystemPropMapJson).toBe('{}');
-    expect(probe.ctx.storedDynamicPropsJson).toBe('{}');
     expect(probe.extractedInvalidations).toBe(1);
   });
 

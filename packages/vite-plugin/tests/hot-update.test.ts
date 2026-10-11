@@ -1,4 +1,8 @@
-import { contentHash, createExcludeMatcher } from '@animus-ui/extract/pipeline';
+import {
+  buildSystemPropsModule,
+  contentHash,
+  createExcludeMatcher,
+} from '@animus-ui/extract/pipeline';
 import { COALESCING_WINDOW_MS } from '@animus-ui/extract/session';
 import {
   existsSync,
@@ -800,6 +804,14 @@ function observedContext(root: string) {
       analysisGlobalCss: '',
       analysisComponentCss: '',
       styles: '',
+      // Built from the same inputs as the Session builds it.
+      systemPropsModule: buildSystemPropsModule({
+        systemPropMapJson: JSON.stringify(manifest.system_prop_map),
+        groupRegistryJson: system.groupRegistryJson,
+        dynamicProps: manifest.dynamic_props,
+        admittedTransforms: manifest.admitted_transforms,
+        typedSystemProps: manifest.typed_system_props,
+      }),
       system,
       packageMap: {},
       ownership: {},
@@ -912,7 +924,7 @@ describe('hotUpdate gates system-props invalidation on a changed map', () => {
 
     const modules = await dispatch(ctx, client.environment, 81);
 
-    expect(ctx.storedSystemPropMapJson).toBe('{}');
+    expect(ctx.systemPropsModule).toContain('export const systemPropMap = {};');
     expect(client.invalidated).toEqual(VIRTUAL_IDS);
     expect(modules?.map((m) => m.id)).toEqual(VIRTUAL_IDS);
   });
