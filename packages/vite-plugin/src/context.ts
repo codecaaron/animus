@@ -120,6 +120,12 @@ const NO_SHEETS: AssetSheets = {
   componentCss: '',
 };
 
+/** One environment's build, as Vite hands it to a hook: the object is its
+ *  identity, the name its key. */
+export interface BuildingEnvironment {
+  readonly name: string;
+}
+
 export class PluginContext {
   readonly options: AnimusExtractOptions;
   readonly verbose: boolean;
@@ -489,15 +495,19 @@ export class PluginContext {
     this.applyAssetSubstitutions();
   }
 
+  /** The environment a host without environments builds as. */
+  readonly singleEnvironment: BuildingEnvironment = { name: 'build' };
+
   /** Each environment whose build started and has not closed, by name. A
    *  custom `buildApp` builds a shared plugin's environments in parallel, so
    *  the context's build retires with the last of them, not the first. */
-  private readonly openBuilds = new Map<string, object>();
+  private readonly openBuilds = new Map<string, BuildingEnvironment>();
 
   /** Opens `environment`'s build. Builds are tracked by environment, not by
    *  generation, so a second build of an active environment, or a second
    *  environment under an active name, is refused. */
-  openBuild(name: string, environment: object): void {
+  openBuild(environment: BuildingEnvironment): void {
+    const { name } = environment;
     const open = this.openBuilds.get(name);
     if (open === environment) {
       throw new Error(
@@ -519,8 +529,10 @@ export class PluginContext {
    *  one environment twice (a failed build), close one that never started
    *  (dev), or close a build this context refused, so only the environment
    *  that opened an entry removes it. */
-  closeBuild(name: string, environment: object): boolean {
-    if (this.openBuilds.get(name) === environment) this.openBuilds.delete(name);
+  closeBuild(environment: BuildingEnvironment): boolean {
+    if (this.openBuilds.get(environment.name) === environment) {
+      this.openBuilds.delete(environment.name);
+    }
     return this.openBuilds.size === 0;
   }
 
