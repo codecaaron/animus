@@ -3067,10 +3067,14 @@ fn member_path_ids(
 /// unless the host says its bundler leaves it unbundled (Vite, Rollup,
 /// Turbopack), in which case it loads code outside the bundle and reaches
 /// no analysed module.
-pub(crate) fn loaded_modules<'f>(
+/// How many modules one load may reach before it counts as reaching any
+/// (spec §6.3, the load-set bound).
+pub(crate) const LOAD_SET_LIMIT: usize = 64;
+
+pub(crate) fn loaded_modules<'f, T>(
     file: &str,
     load: &crate::loads::ModuleLoad,
-    files: &'f BTreeMap<String, FileFacts>,
+    files: &'f BTreeMap<String, T>,
     inputs: &CssInputs,
 ) -> Vec<&'f String> {
     use crate::loads::LoadTarget;
@@ -3134,10 +3138,10 @@ pub(crate) fn loaded_modules<'f>(
 /// which also covers absolute file keys; an alias is expanded. A prefix into
 /// an analysed package names that package's modules, or every module when
 /// its directory is unknown, and one into any other package names none.
-fn modules_under<'f>(
+fn modules_under<'f, T>(
     file: &str,
     prefix: &str,
-    files: &'f BTreeMap<String, FileFacts>,
+    files: &'f BTreeMap<String, T>,
     inputs: &CssInputs,
     keep: impl Fn(&str) -> bool,
 ) -> Vec<&'f String> {
@@ -13570,6 +13574,28 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 &inputs,
             );
             assert_eq!(unattributed(&out).len(), usize::from(warns), "{mutate}: {:?}", out.diagnostics);
+        }
+    }
+
+    /// A computed load reaches each module its expansion may load, up to the
+    /// bound (spec §6.3, 64 modules); past it, it may load any module, so
+    /// every member table is unproven.
+    #[test]
+    fn a_load_past_the_bound_reaches_any_exported_object() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        let loader = "export const open = (name) => import(`./pages/${name}.js`);\n";
+        for (pages, warns) in [(LOAD_SET_LIMIT, false), (LOAD_SET_LIMIT + 1, true)] {
+            let paths: Vec<String> = (0..pages).map(|page| format!("pages/p{page}.js")).collect();
+            let mut files = vec![("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("loader.ts", loader)];
+            files.extend(paths.iter().map(|path| (path.as_str(), "export const page = 1;\n")));
+            let out = analyze_with_logical_space(&files);
+            let warned = unattributed(&out);
+            assert_eq!(warned.len(), usize::from(warns), "{pages} pages: {:?}", out.diagnostics);
+            if warns {
+                assert!(warned[0].message.contains(&format!("which may load any of {pages} modules")), "{:?}", warned[0].message);
+            }
         }
     }
 

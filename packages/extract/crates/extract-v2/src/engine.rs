@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::identity::LocalId;
 use crate::link::ProjectLinks;
-use crate::loads::{LoadKind, Spelling};
+use crate::loads::LoadKind;
 use crate::usage_facts::{reads_only, ReadingsOf};
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
 use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, Request, Terminal};
@@ -455,7 +455,7 @@ struct StyleModule {
     /// See `FileFacts::written_namespaces`.
     written_namespaces: crate::usage_facts::WrittenNamespaces,
     namespace_exports: BTreeMap<String, String>,
-    loads: Vec<String>,
+    loads: Vec<crate::loads::ModuleLoad>,
     /// The modules its `import` and `export … from` declarations load.
     imports: Vec<String>,
     /// How it runs code from a string, which can load any module.
@@ -651,7 +651,6 @@ fn unstable_style_statics(
             .namespace_exports
             .iter()
             .map(|(name, spec)| (spec, format!("as the namespace {name}")));
-        let loads = module.loads.iter().map(|spec| (spec, "at runtime".to_string()));
         // A module the analysis cannot find runs when this one imports it,
         // bindings or not, and may re-export any static.
         for spec in &module.imports {
@@ -660,7 +659,7 @@ fn unstable_style_statics(
                 flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
             }
         }
-        for (spec, how) in reexports.chain(loads) {
+        for (spec, how) in reexports {
             if let Some(unread) = crate::link::unread_source(file, spec, files, inputs) {
                 let reason = format!("{file} hands on {spec} {how}, and {}", unread.clause());
                 flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
@@ -670,6 +669,32 @@ fn unstable_style_statics(
                 continue;
             };
             hand_on(&mut flow, &target, &format!("{file} hands on {target} {how}"));
+        }
+        // A runtime load hands on every module it may load: the one a
+        // literal names, or each one a template, a context or a glob may
+        // reach, up to the bound.
+        for load in &module.loads {
+            if let crate::loads::LoadTarget::Specifier(spec) = &load.target {
+                if let Some(unread) = crate::link::unread_source(file, spec, files, inputs) {
+                    let reason = format!("{file} hands on {spec} at runtime, and {}", unread.clause());
+                    flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+                    continue;
+                }
+            }
+            let targets = analyze_css::loaded_modules(file, load, files, inputs);
+            if targets.len() > analyze_css::LOAD_SET_LIMIT {
+                let reason = format!(
+                    "{file} loads {} at runtime on line {}, which may load any of {} modules",
+                    load.call,
+                    load.line,
+                    targets.len()
+                );
+                flow.open(ReasonId::UnexpandedHostLoad, Region::of(RegionAtom::AllExports), reason);
+                continue;
+            }
+            for target in targets {
+                hand_on(&mut flow, target, &format!("{file} hands on {target} at runtime"));
+            }
         }
         // Code from a string can `import()` any module and change what it
         // exports.
@@ -942,13 +967,7 @@ impl ExtractEngine {
                     loads: lowered_by_file[&ast.path]
                         .loads
                         .iter()
-                        .filter(|load| {
-                            matches!(
-                                load.kind,
-                                LoadKind::DynamicImport | LoadKind::Call { require: true } | LoadKind::WrappedRequire
-                            ) && matches!(load.spelling, Spelling::String | Spelling::Template)
-                        })
-                        .filter_map(|load| load.specifier().map(str::to_string))
+                        .filter_map(|load| load.module_load(ast.source()))
                         .collect(),
                     imports: lowered_by_file[&ast.path]
                         .loads
@@ -2273,6 +2292,17 @@ export const App = () => <Box tone="red" />;
             ("missing module import()", "await import('./generated.js').then((m) => { m.pad.padding = 9; });", "{ ...pad }"),
             ("missing module side-effect import", "import './generated.js';", "{ ...pad }"),
             ("missing module imported by absolute path", "import '/workspace/generated.js';", "{ ...pad }"),
+            // A computed load hands on every module it may load.
+            (
+                "template import() that may load the module",
+                "const name = 'tokens';\nawait import(`./${name}.js`).then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
+            (
+                "eager glob that loads the module",
+                "const modules = import.meta.glob('./*.js', { eager: true });\nmodules['./tokens.js'].pad.padding = 9;",
+                "{ ...pad }",
+            ),
             // Code from a string can load and change any module (PF3).
             (
                 "eval loads the module",

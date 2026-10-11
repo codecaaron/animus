@@ -797,7 +797,20 @@ impl<'f> ObjectMembers<'f> {
                         flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
                     }
                 }
-                for target in loaded_modules(module, load, files, inputs) {
+                let targets = loaded_modules(module, load, files, inputs);
+                // A load that may reach more modules than the bound may
+                // reach any.
+                if targets.len() > crate::analyze_css::LOAD_SET_LIMIT {
+                    let reason = format!(
+                        "{module} loads {} at runtime on line {}, which may load any of {} modules",
+                        load.call,
+                        load.line,
+                        targets.len()
+                    );
+                    flow.open(ReasonId::UnexpandedHostLoad, Region::of(RegionAtom::AllExports), reason);
+                    continue;
+                }
+                for target in targets {
                     let reason = format!("{module} loads {target} at runtime on line {}", load.line);
                     self.namespace_reach(target).record(&mut flow, Vec::new(), &reason);
                 }
