@@ -6,7 +6,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { ExtractionSession } from '../../extract/session/extraction-session';
 import { sessionArtifactDir } from '../../extract/session/session-paths';
-import { getManifestJson, getSharedCss } from '../../extract/session/singleton';
+import {
+  getManifestJson,
+  getSharedCss,
+  sessionKey,
+} from '../../extract/session/singleton';
 import {
   BUTTON_SOURCE,
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
@@ -101,6 +105,10 @@ function createProject(): string {
 }
 
 const OPTIONS: AnimusNextOptions = { system: './src/system.ts' };
+/** The build every plugin of a test joins, as `withAnimus` gives one
+ *  `next build`; the registry is reset after each test. */
+const BUILD = 'plugin-test-build';
+const keyOf = (root: string) => sessionKey(BUILD, root);
 
 class FakeRawSource {
   private readonly content: string;
@@ -315,7 +323,7 @@ describe('AnimusWebpackPlugin.apply', () => {
     const { compiler, runHandlers, watchRunHandlers, compilationHandlers } =
       createCompiler(root, { name: 'edge-server' });
 
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler);
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS, { build: BUILD }), compiler);
 
     expect(runHandlers).toHaveLength(0);
     expect(watchRunHandlers).toHaveLength(0);
@@ -327,7 +335,7 @@ describe('AnimusWebpackPlugin.apply', () => {
     const { compiler, runHandlers, watchRunHandlers, compilationHandlers } =
       createCompiler(root, { name: 'server' });
 
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler);
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS, { build: BUILD }), compiler);
 
     expect(runHandlers).toHaveLength(1);
     expect(watchRunHandlers).toHaveLength(1);
@@ -348,7 +356,7 @@ describe('production run (full pipeline)', () => {
       alias,
       conditionNames: ['source', '...'],
     });
-    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(plugin, compiler);
 
     await runHandlers[0](compiler);
@@ -419,7 +427,7 @@ describe('production run (full pipeline)', () => {
         '@empty': [],
       },
     });
-    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(plugin, compiler);
 
     await runHandlers[0](compiler);
@@ -461,7 +469,7 @@ describe('production run (full pipeline)', () => {
   test('writes styles.css and system-props.js and publishes shared state', async () => {
     const root = createProject();
     const { compiler, runHandlers } = createCompiler(root);
-    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(plugin, compiler);
 
     await runHandlers[0](compiler);
@@ -478,9 +486,9 @@ describe('production run (full pipeline)', () => {
       css.search(/@layer anm-global\s*\{/)
     );
 
-    expect(css.startsWith(getSharedCss())).toBe(true);
+    expect(css.startsWith(getSharedCss(keyOf(root)))).toBe(true);
     expect(css).toContain('__animusSession');
-    expect(getManifestJson()).toBe(analyzeResult(0));
+    expect(getManifestJson(keyOf(root))).toBe(analyzeResult(0));
 
     const sysProps = readFileSync(
       artifactPath(root, plugin, 'system-props.js'),
@@ -497,7 +505,7 @@ describe('production run (full pipeline)', () => {
   test('writes the session-enveloped manifest disk artifact and hash-guards rewrites', async () => {
     const root = createProject();
     const { compiler, watchRunHandlers } = createCompiler(root);
-    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(plugin, compiler);
 
     await watchRunHandlers[0](compiler);
@@ -525,7 +533,10 @@ describe('production run (full pipeline)', () => {
   test('post-processing: minify collapses the body; declaration and variables stay verbatim', async () => {
     const root = createProject();
     const { compiler, runHandlers } = createCompiler(root);
-    const plugin = new AnimusWebpackPlugin({ ...OPTIONS, minify: true });
+    const plugin = new AnimusWebpackPlugin(
+      { ...OPTIONS, minify: true },
+      { build: BUILD }
+    );
     applyPlugin(plugin, compiler);
 
     await runHandlers[0](compiler);
@@ -541,10 +552,13 @@ describe('production run (full pipeline)', () => {
     nextComponentCss = '.card{backdrop-filter:blur(8px);}';
     const root = createProject();
     const { compiler, runHandlers } = createCompiler(root);
-    const plugin = new AnimusWebpackPlugin({
-      ...OPTIONS,
-      targets: 'safari 15',
-    });
+    const plugin = new AnimusWebpackPlugin(
+      {
+        ...OPTIONS,
+        targets: 'safari 15',
+      },
+      { build: BUILD }
+    );
     applyPlugin(plugin, compiler);
 
     await runHandlers[0](compiler);
@@ -558,7 +572,7 @@ describe('production run (full pipeline)', () => {
     nextComponentCss = '.broken { color: ; @}}';
     const root = createProject();
     const { compiler, runHandlers } = createCompiler(root);
-    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(plugin, compiler);
 
     await runHandlers[0](compiler);
@@ -575,7 +589,7 @@ describe('production run (full pipeline)', () => {
   test('processAssets injects shared CSS into absolute- and relative-named assets', async () => {
     const root = createProject();
     const { compiler, runHandlers, compilationHandlers } = createCompiler(root);
-    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(plugin, compiler);
     const absName = artifactPath(root, plugin, 'styles.css');
 
@@ -591,20 +605,22 @@ describe('production run (full pipeline)', () => {
     const abs = createCompilation([absName]);
     compilationHandlers[0](abs.compilation);
     abs.taps[0].fn({});
-    expect(abs.assets.get(absName)?.source()).toBe(getSharedCss());
+    expect(abs.assets.get(absName)?.source()).toBe(getSharedCss(keyOf(root)));
 
     const rel = createCompilation(['.animus/styles.css']);
     compilationHandlers[0](rel.compilation);
     rel.taps[0].fn({});
-    expect(rel.assets.get('.animus/styles.css')?.source()).toBe(getSharedCss());
+    expect(rel.assets.get('.animus/styles.css')?.source()).toBe(
+      getSharedCss(keyOf(root))
+    );
   });
 
   test('client and server compilers dedupe into a single analysis; both inject CSS', async () => {
     const root = createProject();
     const client = createCompiler(root);
     const server = createCompiler(root, { name: 'server' });
-    const clientPlugin = new AnimusWebpackPlugin(OPTIONS);
-    const serverPlugin = new AnimusWebpackPlugin(OPTIONS);
+    const clientPlugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
+    const serverPlugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(clientPlugin, client.compiler);
     applyPlugin(serverPlugin, server.compiler);
 
@@ -619,8 +635,8 @@ describe('production run (full pipeline)', () => {
     const comp = createCompilation([absName]);
     server.compilationHandlers[0](comp.compilation);
     comp.taps[0].fn({});
-    expect(comp.assets.get(absName)?.source()).toBe(getSharedCss());
-    expect(getSharedCss()).not.toBe('');
+    expect(comp.assets.get(absName)?.source()).toBe(getSharedCss(keyOf(root)));
+    expect(getSharedCss(keyOf(root))).not.toBe('');
   });
 
   test('warn-kind manifest diagnostics surface via console.warn; unknown kinds stay silent', async () => {
@@ -645,7 +661,7 @@ describe('production run (full pipeline)', () => {
     );
     const root = createProject();
     const { compiler, runHandlers } = createCompiler(root);
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler);
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS, { build: BUILD }), compiler);
 
     await runHandlers[0](compiler);
 
@@ -663,7 +679,7 @@ describe('watch mode (dev/HMR)', () => {
   test('first watchRun is a full pipeline; a content change triggers incremental analysis without reloading the system', async () => {
     const root = createProject();
     const { compiler, watchRunHandlers } = createCompiler(root);
-    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(plugin, compiler);
 
     await watchRunHandlers[0](compiler);
@@ -692,13 +708,13 @@ describe('watch mode (dev/HMR)', () => {
 
     const css = readFileSync(artifactPath(root, plugin, 'styles.css'), 'utf-8');
     expect(css).toMatch(/\.btn\s*\{\s*margin:\s*16px/);
-    expect(css.startsWith(getSharedCss())).toBe(true);
+    expect(css.startsWith(getSharedCss(keyOf(root)))).toBe(true);
   });
 
   test('unchanged files trigger no re-analysis on subsequent watchRuns', async () => {
     const root = createProject();
     const { compiler, watchRunHandlers } = createCompiler(root);
-    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(plugin, compiler);
 
     await watchRunHandlers[0](compiler);
@@ -720,7 +736,7 @@ describe('watch mode (dev/HMR)', () => {
   test('a system file change reloads the system: cache cleared, system reloaded, full pipeline re-run', async () => {
     const root = createProject();
     const { compiler, watchRunHandlers } = createCompiler(root);
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler);
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS, { build: BUILD }), compiler);
 
     await watchRunHandlers[0](compiler);
     const clearsBefore = mocks.clearAnalysisCache.mock.calls.length;
@@ -742,7 +758,7 @@ describe('watch mode (dev/HMR)', () => {
   test('with modifiedFiles present, only listed files are re-read; others replay from cache', async () => {
     const root = createProject();
     const { compiler, watchRunHandlers } = createCompiler(root);
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler);
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS, { build: BUILD }), compiler);
 
     await watchRunHandlers[0](compiler);
 
@@ -765,7 +781,7 @@ describe('watch mode (dev/HMR)', () => {
   test('removedFiles prunes cache entries and triggers re-analysis without ghosts', async () => {
     const root = createProject();
     const { compiler, watchRunHandlers } = createCompiler(root);
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler);
+    applyPlugin(new AnimusWebpackPlugin(OPTIONS, { build: BUILD }), compiler);
 
     await watchRunHandlers[0](compiler);
     rmSync(join(root, 'src', 'Button.tsx'));
@@ -785,8 +801,14 @@ describe('watch mode (dev/HMR)', () => {
     const root = createProject();
     const owner = createCompiler(root);
     const follower = createCompiler(root, { name: 'server' });
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), owner.compiler);
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), follower.compiler);
+    applyPlugin(
+      new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+      owner.compiler
+    );
+    applyPlugin(
+      new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+      follower.compiler
+    );
 
     await owner.watchRunHandlers[0](owner.compiler);
     await follower.watchRunHandlers[0](follower.compiler); // awaits shared promise
@@ -809,8 +831,14 @@ describe('watch mode (dev/HMR)', () => {
     const root = createProject();
     const owner = createCompiler(root);
     const follower = createCompiler(root, { name: 'server' });
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), owner.compiler);
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), follower.compiler);
+    applyPlugin(
+      new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+      owner.compiler
+    );
+    applyPlugin(
+      new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+      follower.compiler
+    );
 
     await owner.watchRunHandlers[0](owner.compiler);
     await follower.watchRunHandlers[0](follower.compiler);
@@ -846,7 +874,7 @@ describe('retired v1 engine selection', () => {
     const saved = process.env.ANIMUS_ENGINE;
     process.env.ANIMUS_ENGINE = 'v1';
     try {
-      expect(() => new AnimusWebpackPlugin(OPTIONS)).toThrow(
+      expect(() => new AnimusWebpackPlugin(OPTIONS, { build: BUILD })).toThrow(
         RETIRED_ENGINE_MESSAGE
       );
     } finally {

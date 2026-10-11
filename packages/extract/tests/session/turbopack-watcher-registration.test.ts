@@ -81,9 +81,13 @@ function createProject(): string {
 
 function makeSession(
   root: string,
-  runCycle: (changes: WatchChanges) => Promise<void> = async () => {}
+  runCycle: (changes: WatchChanges) => Promise<void> = async () => {},
+  build?: string
 ): ExtractionSession {
-  const session = new ExtractionSession({ system: './src/system.ts' });
+  const session = new ExtractionSession(
+    { system: './src/system.ts' },
+    { build }
+  );
   session.rootDir = root;
   vi.spyOn(session, 'handleWatchUpdate').mockImplementation(runCycle);
   return session;
@@ -263,16 +267,23 @@ describe('startTurbopackWatcher OS registration', () => {
 describe('project-watch claim outcomes', () => {
   test('a duplicate root claim is reported as such, never as a platform failure', () => {
     const root = createProject();
-    const first = startTurbopackWatcher(makeSession(root), root, {
+    const owner = makeSession(root);
+    const first = startTurbopackWatcher(owner, root, {
       debounceMs: 20,
       watchFn: fakeWatch,
     });
     expect(first.kind).toBe('started');
     try {
-      const second = startTurbopackWatcher(makeSession(root), root, {
-        debounceMs: 20,
-        watchFn: fakeWatch,
-      });
+      // Another participant of the same build; another build of the root
+      // watches it for itself.
+      const second = startTurbopackWatcher(
+        makeSession(root, undefined, owner.sessionId),
+        root,
+        {
+          debounceMs: 20,
+          watchFn: fakeWatch,
+        }
+      );
       expect(second).toEqual({ kind: 'already-watched' });
     } finally {
       startedHandle(first).close();

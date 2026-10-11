@@ -16,7 +16,7 @@ import {
   snapshotFilePlans,
 } from '../../pipeline';
 import { ExtractionSession } from '../../session/extraction-session';
-import { SINGLETON_GLOBAL_KEYS } from '../../session/singleton';
+import { SESSION_REGISTRY_KEY } from '../../session/singleton';
 
 import type {
   AnalysisSourceEntry,
@@ -24,8 +24,12 @@ import type {
   ManifestComponentDescriptor,
   ProjectManifest,
 } from '../../pipeline';
-import type { SessionOptions } from '../../session/extraction-session';
+import type {
+  SessionHost,
+  SessionOptions,
+} from '../../session/extraction-session';
 import type { CliLockRecord } from '../../session/published-set';
+import type { SessionKey } from '../../session/singleton';
 
 /** The engine-free tests' stand-in for the native `resolveSpecifier`: a
  *  package as Node's `require.resolve` finds it, else a declared workspace's
@@ -56,26 +60,36 @@ export const requireResolveSpecifier: NonNullable<
   }
 };
 
-export const ANIMUS_GLOBAL_KEYS = SINGLETON_GLOBAL_KEYS;
-
-type AnimusGlobalKey = (typeof ANIMUS_GLOBAL_KEYS)[number];
+/** The key of the build a participant joined most recently: a harness that
+ *  drives one host build reads that build's state through it. */
+export function latestSessionKey(): SessionKey {
+  // SAFETY: singleton.ts is the only writer of this symbol, and it stores
+  // exactly this shape, entries in join order.
+  const holder = globalThis as typeof globalThis & {
+    [SESSION_REGISTRY_KEY]?: { sessions: Map<string, { key: SessionKey }> };
+  };
+  const states = [...(holder[SESSION_REGISTRY_KEY]?.sessions.values() ?? [])];
+  const latest = states[states.length - 1];
+  if (latest === undefined)
+    throw new Error('no participant has joined a build');
+  return latest.key;
+}
 
 /**
- * Restores through saved property descriptors: the singleton's slot value
- * types are private, so no value is named or inspected here.
+ * Clears the session registry, every build's state, for one test, and
+ * restores it through its saved property descriptor. The engine-API test
+ * seam lives outside the registry and survives.
  */
 export function resetAnimusGlobals(): () => void {
-  const saved = new Map<AnimusGlobalKey, PropertyDescriptor>();
-  for (const key of ANIMUS_GLOBAL_KEYS) {
-    const descriptor = Object.getOwnPropertyDescriptor(globalThis, key);
-    if (descriptor !== undefined) saved.set(key, descriptor);
-    Object.assign(globalThis, { [key]: undefined });
-  }
+  const saved = Object.getOwnPropertyDescriptor(
+    globalThis,
+    SESSION_REGISTRY_KEY
+  );
+  Reflect.deleteProperty(globalThis, SESSION_REGISTRY_KEY);
   return () => {
-    // Keys absent before the reset keep the own `undefined` the clearing wrote.
-    for (const [key, descriptor] of saved) {
-      Object.defineProperty(globalThis, key, descriptor);
-    }
+    Reflect.deleteProperty(globalThis, SESSION_REGISTRY_KEY);
+    if (saved !== undefined)
+      Object.defineProperty(globalThis, SESSION_REGISTRY_KEY, saved);
   };
 }
 
@@ -264,21 +278,26 @@ export function createKitWorkspace(
 
 export function makeSession(
   root: string,
-  options: Partial<SessionOptions> = {}
+  options: Partial<SessionOptions> = {},
+  host: SessionHost = {}
 ): ExtractionSession {
-  const session = new ExtractionSession({
-    system: './src/system.ts',
-    ...options,
-  });
+  const session = new ExtractionSession(
+    {
+      system: './src/system.ts',
+      ...options,
+    },
+    host
+  );
   session.rootDir = root;
   return session;
 }
 
 export async function startSession(
   root: string,
-  options: Partial<SessionOptions> = {}
+  options: Partial<SessionOptions> = {},
+  host: SessionHost = {}
 ): Promise<ExtractionSession> {
-  const session = makeSession(root, options);
+  const session = makeSession(root, options, host);
   await session.runFullPipeline();
   return session;
 }

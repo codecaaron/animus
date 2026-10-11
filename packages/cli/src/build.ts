@@ -31,6 +31,7 @@ import {
 
 import type { ResolvedCliConfig } from './config';
 import type { ProjectManifest } from '@animus-ui/extract/pipeline';
+import type { SessionKey } from '@animus-ui/extract/session';
 
 export class ExtractionFailure extends Error {}
 export class UsageFailure extends Error {}
@@ -121,7 +122,7 @@ export function publishSharedPayloads(
 ): PublishOutcome {
   const { root, outDir, options } = config;
 
-  const analyzed = getAnalyzedHashes();
+  const analyzed = getAnalyzedHashes(session.key);
   const fileCount = analyzed?.size ?? 0;
   if (fileCount === 0) {
     throw new ExtractionFailure(
@@ -132,9 +133,9 @@ export function publishSharedPayloads(
 
   // Raw shared state, never the enveloped session artifacts: published
   // bytes carry no per-invocation identity.
-  const manifestJson = getManifestJson() ?? '';
-  const stylesCss = getSharedCss();
-  const systemPropsJs = getSharedSystemProps();
+  const manifestJson = getManifestJson(session.key) ?? '';
+  const stylesCss = getSharedCss(session.key);
+  const systemPropsJs = getSharedSystemProps(session.key);
   // Re-parsing the MB-scale manifest every cycle only to count keys is the
   // costly path; the parse survives as the fallback readability check.
   let componentCount = session.lastComponentCount ?? -1;
@@ -242,10 +243,10 @@ export interface BuildFlags {
 
 /** Writes the analysed kit's descriptor at the root, from the manifest the
  *  build published. */
-function writeKitDescriptor(root: string): string {
+function writeKitDescriptor(root: string, key: SessionKey): string {
   // SAFETY: the session's own `analyze()` output, which `ProjectManifest`
   // mirrors; anything that is not JSON throws here.
-  const manifest = JSON.parse(getManifestJson() ?? '') as ProjectManifest;
+  const manifest = JSON.parse(getManifestJson(key) ?? '') as ProjectManifest;
   const path = join(root, KIT_DESCRIPTOR_FILE);
   writeFileSync(
     path,
@@ -292,7 +293,7 @@ export async function runBuild(
       // the published files and declared dependencies.
       const failures = kitPublicationFailures(
         config.root,
-        engineApi(),
+        engineApi(session.key),
         config.outDir
       );
       if (failures.length > 0) {
@@ -300,7 +301,7 @@ export async function runBuild(
           `the kit is not ready to publish: an installed consumer would fail on missing source, or receive this build's artifacts:\n${failures.map((line) => `  - ${line}`).join('\n')}`
         );
       }
-      err(`kit descriptor → ${writeKitDescriptor(config.root)}`);
+      err(`kit descriptor → ${writeKitDescriptor(config.root, session.key)}`);
     }
 
     reportDiscoveryOutcomes(config, session);

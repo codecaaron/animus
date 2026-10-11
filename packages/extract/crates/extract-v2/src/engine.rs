@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::identity::LocalId;
 use crate::link::ProjectLinks;
+use crate::loads::{LoadKind, Spelling};
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
 use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, Request, Terminal};
 
@@ -377,33 +378,6 @@ fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>) -> Vec
     found.sort();
     found.dedup();
     found
-}
-
-/// The modules a file loads at runtime by a literal specifier:
-/// `import('./x')` and `require('./x')`.
-fn literal_module_loads(program: &oxc::ast::ast::Program<'_>) -> Vec<String> {
-    use oxc::ast::ast::{Argument, CallExpression, Expression, ImportExpression};
-    use oxc::ast_visit::Visit;
-    struct Loads(Vec<String>);
-    impl<'a> Visit<'a> for Loads {
-        fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
-            if let Expression::StringLiteral(literal) = &import.source {
-                self.0.push(literal.value.to_string());
-            }
-            oxc::ast_visit::walk::walk_import_expression(self, import);
-        }
-        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-            if call.callee.is_specific_id("require") {
-                if let Some(Argument::StringLiteral(literal)) = call.arguments.first() {
-                    self.0.push(literal.value.to_string());
-                }
-            }
-            oxc::ast_visit::walk::walk_call_expression(self, call);
-        }
-    }
-    let mut loads = Loads(Vec::new());
-    loads.visit_program(program);
-    loads.0
 }
 
 /// How a module runs code from a string, which can load any module: it
@@ -898,7 +872,17 @@ impl ExtractEngine {
                 StyleModule {
                     facts,
                     namespace_exports: crate::usage_facts::collect_namespace_exports(module),
-                    loads: literal_module_loads(program),
+                    loads: lowered_by_file[&ast.path]
+                        .loads
+                        .iter()
+                        .filter(|load| {
+                            matches!(
+                                load.kind,
+                                LoadKind::DynamicImport | LoadKind::Call { require: true } | LoadKind::WrappedRequire
+                            ) && load.spelling == Spelling::String
+                        })
+                        .filter_map(|load| load.specifier().map(str::to_string))
+                        .collect(),
                     dynamic_code: dynamic_code(program, &lowered_by_file[&ast.path].scoping),
                 },
             );
@@ -906,23 +890,19 @@ impl ExtractEngine {
 
         // A static that some use may change before a style reads it stands
         // as a marker naming that use, so every reader refuses it.
-        // A function's parameter readings, scanned only for the modules a
-        // handed-on object's callee resolves to.
         let programs: BTreeMap<&str, &oxc::ast::ast::Program<'_>> =
             store.iter().map(|ast| (ast.path.as_str(), ast.program())).collect();
-        let mut readings_cache: BTreeMap<String, FunctionReadings> = BTreeMap::new();
-        let mut readings_of = |file: &str| {
-            std::rc::Rc::clone(readings_cache.entry(file.to_string()).or_insert_with(|| {
-                std::rc::Rc::new(
-                    programs
-                        .get(file)
-                        .map(|program| {
-                            crate::usage_facts::function_param_readings(program, &lowered_by_file[file].scoping)
-                        })
-                        .unwrap_or_default(),
-                )
-            }))
-        };
+        // Each module's functions, with how their parameters treat an
+        // object, read while the module's scopes are at hand.
+        let readings_by_file: BTreeMap<String, FunctionReadings> = store
+            .iter()
+            .map(|ast| {
+                let readings =
+                    crate::usage_facts::function_param_readings(ast.program(), &lowered_by_file[&ast.path].scoping);
+                (ast.path.clone(), std::rc::Rc::new(readings))
+            })
+            .collect();
+        let mut readings_of = |file: &str| readings_by_file.get(file).cloned().unwrap_or_default();
         for ((file, local), reason) in unstable_style_statics(
             &style_modules,
             &imports_by_file,
@@ -2367,7 +2347,8 @@ export const App = () => <Box tone="red" />;
     /// directly, through 31 or 32 re-export hops, through a star cycle, or
     /// through a star the analysis cannot open (a missing module or a
     /// package) or from a missing module itself, or as a member of a missing
-    /// module's namespace. A reader through a star is refused whatever the
+    /// module's namespace, or loads its module through a parenthesized
+    /// `require`. A reader through a star is refused whatever the
     /// mutator does: a load of a module with an open star, a computed
     /// `import()` or `require()`, a default alias, or a rename behind an
     /// open star.
@@ -2405,6 +2386,11 @@ export const App = () => <Box tone="red" />;
             ),
             ("missing module star", "./tokens", vec![file("a.ts", "export * from './external';\n"), mutate("./a")]),
             ("package star", "./tokens", vec![file("a.ts", "export * from 'some-package';\n"), mutate("./a")]),
+            (
+                "parenthesized require",
+                "./tokens",
+                vec![file("mutate.ts", "(require)('./tokens').pad.padding = 9;\n")],
+            ),
             ("missing module import", "./tokens", vec![mutate("./missing")]),
             ("read through a closed star", "./closed", vec![closed(), open(), mutate("./open")]),
             ("import() of an open star", "./closed", vec![closed(), open(), file("mutate.ts", "import('./open');\n")]),

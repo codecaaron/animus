@@ -6,7 +6,7 @@ import {
 import {
   CLI_LOCK_HEARTBEAT_INTERVAL_MS,
   collectSessionAssets,
-  getSessionArtifactDir,
+  sessionArtifactDir,
   verifyCommitRecord,
 } from '@animus-ui/extract/session';
 import { spawnSync } from 'node:child_process';
@@ -1024,14 +1024,13 @@ describe('bin shim', () => {
 
 describe('session-tree cleanup ownership', () => {
   test('a run that never constructed a session deletes no session tree', async () => {
-    const rootA = makeRoot();
-    await expect(runBuild(await projectConfig(rootA))).rejects.toThrow();
-    const slotDir = getSessionArtifactDir();
-    expect(slotDir?.startsWith(rootA)).toBe(true);
-    mkdirSync(slotDir!, { recursive: true });
-    writeFileSync(join(slotDir!, 'manifest.json'), '{}');
+    // A tree an earlier build of the same root left behind.
+    const root = makeRoot();
+    const slotDir = sessionArtifactDir(root, 'an-earlier-build');
+    mkdirSync(slotDir, { recursive: true });
+    writeFileSync(join(slotDir, 'manifest.json'), '{}');
 
-    const configB = await projectConfig(makeRoot());
+    const configB = await projectConfig(root);
     Object.defineProperty(configB, 'excludePatterns', {
       get(): string[] {
         throw new Error('session construction failed');
@@ -1041,7 +1040,7 @@ describe('session-tree cleanup ownership', () => {
       'session construction failed'
     );
 
-    expect(existsSync(join(slotDir!, 'manifest.json'))).toBe(true);
+    expect(existsSync(join(slotDir, 'manifest.json'))).toBe(true);
   });
 });
 
