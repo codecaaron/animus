@@ -528,6 +528,11 @@ pub struct FileFacts {
     /// context or a glob): their exports render where usage cannot follow.
     #[serde(skip)]
     pub(crate) module_loads: Vec<crate::loads::ModuleLoad>,
+    /// The specifiers of this file's bindingless runtime imports
+    /// (`import './x'`): the host loads each for its effects, so each is
+    /// probed (spec §2.2 A8).
+    #[serde(skip)]
+    pub(crate) bindingless_imports: Vec<String>,
     /// Top-level functions and classes, and `const` bindings of a function or
     /// class expression, that nothing in the file writes: a tag that names
     /// one renders an ordinary component, not an Animus one.
@@ -1609,6 +1614,11 @@ pub(crate) fn extract_file_facts_from_static_maps(
         value_escapes,
         spread_wrappers,
         module_loads: loads.iter().filter_map(|load| load.module_load(source)).collect(),
+        bindingless_imports: loads
+            .iter()
+            .filter(|load| load.kind == crate::loads::LoadKind::Import { runtime: true, bindingless: true })
+            .filter_map(|load| load.specifier().map(str::to_string))
+            .collect(),
         dynamic_code,
         ordinary_components,
         context_consts,

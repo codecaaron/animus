@@ -14,8 +14,9 @@ use oxc::span::Span;
 /// What a load is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadKind {
-    /// An `import` declaration; `runtime` unless type stripping erases it.
-    Import { runtime: bool },
+    /// An `import` declaration; `runtime` unless type stripping erases it,
+    /// and `bindingless` for `import './x'` or `import {} from './x'`.
+    Import { runtime: bool, bindingless: bool },
     /// `export … from` or `export * from`; `runtime` likewise.
     Reexport { runtime: bool },
     /// `import(…)`.
@@ -82,6 +83,7 @@ pub fn collect(program: &Program<'_>) -> Vec<Load> {
     for stmt in &program.body {
         let (kind, source, span) = match stmt {
             Statement::ImportDeclaration(import) => {
+                let bindingless = import.specifiers.as_ref().is_none_or(|specifiers| specifiers.is_empty());
                 let runtime = import.import_kind != ImportOrExportKind::Type
                     && match &import.specifiers {
                         // A side-effect import, or `import {} from`, still loads.
@@ -94,7 +96,7 @@ pub fn collect(program: &Program<'_>) -> Vec<Load> {
                             _ => true,
                         }),
                     };
-                (LoadKind::Import { runtime }, &import.source, import.span)
+                (LoadKind::Import { runtime, bindingless }, &import.source, import.span)
             }
             Statement::ExportNamedDeclaration(export) => {
                 let Some(source) = &export.source else { continue };

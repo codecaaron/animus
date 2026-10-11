@@ -13,7 +13,7 @@ use crate::loads::{LoadKind, Spelling};
 pub fn runtime_specifiers(program: &Program<'_>) -> Vec<String> {
     let loads = crate::loads::collect(program);
     let declared = loads.iter().filter(|load| {
-        matches!(load.kind, LoadKind::Import { runtime: true } | LoadKind::Reexport { runtime: true })
+        matches!(load.kind, LoadKind::Import { runtime: true, .. } | LoadKind::Reexport { runtime: true })
     });
     let dynamic = loads
         .iter()

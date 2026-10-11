@@ -784,8 +784,9 @@ pub struct HostCandidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HostReading {
-    /// An asset under the host's captured classification: an opaque value
-    /// with no exports or effects, Resolved(asset).
+    /// An asset or a stylesheet under the host's captured classification,
+    /// or a file a query (`?raw`, `?url`) loads as a string: an opaque value
+    /// with no exports or effects on app objects, Resolved(asset).
     Asset,
     /// An adapted original (`.mdx`, `.svelte`), read through its analysis
     /// children.
@@ -890,8 +891,14 @@ pub fn resolve_import_source<T>(
 
 /// Whether the analysis leaves a source unseen: a skipped source, or a
 /// probe that ended Incomplete. Either may render any option, so nothing is
-/// pruned.
-fn analysis_incomplete(inputs: &CssInputs) -> bool {
+/// pruned. A bindingless import binds nothing usage follows, but the host
+/// loads it for its effects, so it is probed here.
+fn analysis_incomplete(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> bool {
+    for (file, ff) in files {
+        for spec in &ff.bindingless_imports {
+            resolve_import_source(file, spec, files, inputs);
+        }
+    }
     !inputs.analysis_context.skipped_sources.is_empty()
         || inputs.incomplete_probes.lock().map(|incomplete| !incomplete.is_empty()).unwrap_or(true)
 }
@@ -7520,7 +7527,7 @@ fn run_with_system_floor(
         }
         false => FxHashSet::default(),
     };
-    let usage_complete = !analysis_incomplete(inputs)
+    let usage_complete = !analysis_incomplete(files, inputs)
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
             || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, links, &ordinary_members, &package_members, &bounded_tags));

@@ -16,15 +16,16 @@ export interface HostCandidate {
   actual: string | null;
   /** The analysed module the candidate is, where the analysis holds one. */
   analysedAs: string | null;
-  /** How the analysis reads a candidate it holds no module for (spec
-   *  §2.2 A8); absent where it holds one, or the spelling differs. */
+  /** How the analysis reads a candidate it holds no module for, or one a
+   *  query loads as an opaque value (spec §2.2 A8); absent where it reads
+   *  the module, or the spelling differs. */
   reading?: 'asset' | 'adapted' | 'unanalysed';
 }
 
 /** What a session knows beside the analysed paths. */
 export interface HostReadings {
-  /** The host's asset classification. */
-  isAsset?(path: string): boolean;
+  /** The host's asset and stylesheet classification. */
+  isAsset?(file: string, query: string): boolean;
   /** Each adapted original (`.mdx`, `.svelte`) and its analysis children. */
   adapted?: ReadonlyMap<string, readonly string[]>;
 }
@@ -62,12 +63,23 @@ export function hostCandidate(
   readings: HostReadings = {},
   root: string = realRoot(rootDir)
 ): HostCandidate | null {
-  const candidates = policyCandidates(base, { policy: order });
-  for (const [index, candidate] of candidates.entries()) {
-    if (analysed.has(candidate)) {
-      return { candidate, actual: null, analysedAs: candidate };
+  // A query (`./x.js?raw`) selects how the host loads the file, not which
+  // file: the file is probed without it, and the host reads it with it.
+  const at = base.indexOf('?');
+  const query = at === -1 ? '' : base.slice(at);
+  const candidates = policyCandidates(at === -1 ? base : base.slice(0, at), {
+    policy: order,
+  });
+  for (const [index, file] of candidates.entries()) {
+    const candidate = `${file}${query}`;
+    const opaque = () => readings.isAsset?.(join(rootDir, file), query);
+    if (analysed.has(file)) {
+      // `?raw` or `?url` loads an analysed module as a string.
+      return query !== '' && opaque()
+        ? { candidate, actual: null, analysedAs: null, reading: 'asset' }
+        : { candidate, actual: null, analysedAs: file };
     }
-    const seen = seeOnDisk(join(rootDir, candidate), rootDir);
+    const seen = seeOnDisk(join(rootDir, file), rootDir);
     if (seen.kind === 'missing') continue;
     if (seen.kind === 'case-only') {
       return {
@@ -76,7 +88,7 @@ export function hostCandidate(
         analysedAs: null,
       };
     }
-    const children = readings.adapted?.get(candidate);
+    const children = readings.adapted?.get(file);
     if (children !== undefined) {
       return {
         candidate,
@@ -92,7 +104,7 @@ export function hostCandidate(
       candidate,
       actual: null,
       analysedAs: null,
-      reading: readings.isAsset?.(candidate) ? 'asset' : 'unanalysed',
+      reading: opaque() ? 'asset' : 'unanalysed',
     };
   }
   return null;

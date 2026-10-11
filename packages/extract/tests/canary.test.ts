@@ -493,3 +493,47 @@ test('a Svelte resolver call stops at an unanalysed host-first file', async () =
     ).length,
   }).toEqual({ attributed: false, skipped: 1 });
 });
+
+// Contract: a bindingless import is probed like any other (spec §2.2 A8):
+// the host loads it for its effects. Under the CLI's built-in
+// classification, a file it opens that analysis never reads (`.data`, a
+// `.js` with a query that keeps it code) leaves usage incomplete, so R's
+// `lg`, which only that file could render, keeps its CSS; a stylesheet, or a
+// file `?raw` loads as a string, is opaque, and `lg` is pruned.
+test.each([
+  ['./selected.data', true],
+  ['./selected.js?foo', true],
+  ['./selected.js?raw', false],
+  ['./globals.css', false],
+])("a bindingless import of '%s' keeps lg: %s", (specifier, kept) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-bindingless-')));
+  const analysed = {
+    'r.ts':
+      "export const R = ds.styles({}).variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: { padding: '1px' }, lg: { padding: '99px' } } }).asElement('div');\n",
+    'app.tsx': `import { R } from './r';\nimport '${specifier}';\nexport const App = () => <R size="sm" />;\n`,
+  } satisfies Record<string, string>;
+  for (const [path, source] of Object.entries(analysed)) {
+    writeFileSync(join(root, path), source);
+  }
+  writeFileSync(join(root, 'selected.data'), "R.render({ size: 'lg' });\n");
+  writeFileSync(join(root, 'selected.js'), "R.render({ size: 'lg' });\n");
+  writeFileSync(join(root, 'globals.css'), 'body { margin: 0; }\n');
+  const filesJson = JSON.stringify(
+    Object.entries(analysed).map(([path, source]) => ({ path, source }))
+  );
+  const engine = new v2.ExtractEngine({});
+  const prepared = JSON.parse(engine.prepare(filesJson));
+  const evidence = gatherProbeEvidence(
+    root,
+    new Set(Object.keys(analysed)),
+    undefined,
+    { isAsset: builtInAssetClassification('noHost').isAsset }
+  )(prepared.bases, prepared.identity);
+  const manifest = JSON.parse(engine.analyze(filesJson, evidence));
+  rmSync(root, { recursive: true, force: true });
+
+  expect({
+    sm: manifest.css.includes('padding: 1px'),
+    lg: manifest.css.includes('padding: 99px'),
+  }).toEqual({ sm: true, lg: kept });
+});
