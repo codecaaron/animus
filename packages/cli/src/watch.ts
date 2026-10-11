@@ -22,6 +22,7 @@ import type { PublishOutcome } from './build';
 import type { ResolvedCliConfig } from './config';
 import type {
   ExtractionSession,
+  SessionKey,
   TurbopackWatcherHandle,
   TurbopackWatchOutcome,
 } from '@animus-ui/extract/session';
@@ -93,11 +94,11 @@ export function formatCyclePublishFailure<Thrown>(
   return `watch cycle publication rejected — keeping last-good artifacts in ${outDir}: ${String(error)}`;
 }
 
-function currentPayloadKey(): string {
+function currentPayloadKey(key: SessionKey): string {
   return [
-    contentHash(getManifestJson() ?? ''),
-    contentHash(getSharedCss()),
-    contentHash(getSharedSystemProps()),
+    contentHash(getManifestJson(key) ?? ''),
+    contentHash(getSharedCss(key)),
+    contentHash(getSharedSystemProps(key)),
   ].join(':');
 }
 
@@ -155,7 +156,7 @@ export async function runWatch(
   const { session, claim } = startup;
   let lastPublication = startup.publication;
   let publications = 1;
-  let lastPublishedKey = currentPayloadKey();
+  let lastPublishedKey = currentPayloadKey(session.key);
 
   return new Promise<number>((resolvePromise) => {
     // The session watcher unrefs every handle, so the CLI holds its own
@@ -271,7 +272,7 @@ export async function runWatch(
         );
         return;
       }
-      const key = currentPayloadKey();
+      const key = currentPayloadKey(session.key);
       if (key === lastPublishedKey) return;
       let outcome: { componentCount: number; fileCount: number };
       try {

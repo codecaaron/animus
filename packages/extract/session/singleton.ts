@@ -1,9 +1,4 @@
 import { randomUUID } from 'crypto';
-
-/**
- * globalThis-backed so the ESM plugin copy and the CJS webpack-loader copy
- * share one store; module scope alone gives each copy its own instance.
- */
 import { realpathSync } from 'fs';
 import { resolve } from 'path';
 
@@ -12,159 +7,87 @@ import { createV2EngineApi } from '../pipeline/index';
 import type { AnimusCoreOptions } from '../pipeline/core-options';
 import type { V2ExtractEngine } from '../pipeline/index';
 
-const MANIFEST_KEY = '__animus_manifest_json__';
-const ANALYSIS_STARTED_KEY = '__animus_analysis_started__';
-const SHARED_CSS_KEY = '__animus_shared_css__';
-const SHARED_SYSTEM_PROPS_KEY = '__animus_shared_system_props__';
-const SHARED_EXTERNAL_DIRS_KEY = '__animus_external_pkg_dirs__';
-const SHARED_EXTERNAL_ENTRIES_KEY = '__animus_external_source_entries__';
-const SHARED_EXTERNAL_SIDE_EFFECTS_KEY = '__animus_external_side_effects__';
-const ANALYZED_HASHES_KEY = '__animus_analyzed_hashes__';
-const REPLACEMENT_EPOCH_KEY = '__animus_replacement_epoch__';
-const WATCH_TRANSACTION_KEY = '__animus_watch_transaction__';
-const PROCESS_SESSION_ID_KEY = '__animus_process_session_id__';
-const SESSION_ARTIFACT_DIR_KEY = '__animus_session_artifact_dir__';
-const OWNING_WATCH_SESSION_KEY = '__animus_owning_watch_session__';
-const EXCLUSIVE_SESSION_OWNER_KEY = '__animus_exclusive_session_owner__';
-const ENGINE_KEY = '__animus_engine__';
-const V2_ENGINE_KEY = '__animus_v2_engine__';
-const V2_SENT_SOURCES_KEY = '__animus_v2_sent_sources__';
-const V2_DRIFT_WARNED_KEY = '__animus_v2_drift_warned__';
-const ENGINE_API_OVERRIDE_KEY = '__animus_engine_api_override__';
-
-interface AnimusSingletonStore {
-  [MANIFEST_KEY]: string | null;
-  [ANALYSIS_STARTED_KEY]: Promise<void> | null;
-  [SHARED_CSS_KEY]: string;
-  [SHARED_SYSTEM_PROPS_KEY]: string;
-  [SHARED_EXTERNAL_DIRS_KEY]: string[];
-  [SHARED_EXTERNAL_ENTRIES_KEY]: Map<string, string>;
-  [SHARED_EXTERNAL_SIDE_EFFECTS_KEY]: Map<string, boolean>;
-  [ANALYZED_HASHES_KEY]: Map<string, string> | null;
-  [REPLACEMENT_EPOCH_KEY]: string | null;
-  [WATCH_TRANSACTION_KEY]: Promise<void> | null;
-  [PROCESS_SESSION_ID_KEY]: string | undefined;
-  [SESSION_ARTIFACT_DIR_KEY]: string | null;
-  [OWNING_WATCH_SESSION_KEY]: WatchBatchTarget | null;
-  [EXCLUSIVE_SESSION_OWNER_KEY]: string | undefined;
-  [ENGINE_KEY]: AnimusEngine | undefined;
-  [V2_ENGINE_KEY]: V2ExtractEngine | null;
-  [V2_SENT_SOURCES_KEY]: Map<string, string> | null | undefined;
-  [V2_DRIFT_WARNED_KEY]: boolean | undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [ENGINE_API_OVERRIDE_KEY]: (() => any) | undefined;
-}
-
-// SAFETY: this module is the sole owner of these fixed globalThis keys, and
-// every write through the store is checked against AnimusSingletonStore.
-const singletonGlobal = globalThis as typeof globalThis & AnimusSingletonStore;
-const singletonStore: AnimusSingletonStore = singletonGlobal;
-
-const isSingletonString = <Value>(value: Value): value is Value & string => {
-  if (Object(value) === value) return false;
-  try {
-    String.prototype.valueOf.call(value);
-    return true;
-  } catch {
-    return false;
+/**
+ * A build's shared state lives in one registry on `globalThis`, keyed by its
+ * `SessionKey`, so the ESM plugin copy and the CJS webpack-loader copy of
+ * this module find the same entry, and two builds of one root never share
+ * one. A reader of a build no participant has joined gets the empty value;
+ * a writer must have joined it.
+ */
+function joined(key: SessionKey): SessionState {
+  const state = findSession(key);
+  if (state === undefined) {
+    throw new Error(`[animus] no participant has joined build ${key.build} of ${key.root}`);
   }
-};
-
-export function getManifestJson(): string | null {
-  return singletonStore[MANIFEST_KEY];
+  return state;
 }
 
-export function setManifestJson(json: string): void {
-  singletonStore[MANIFEST_KEY] = json;
+export function getManifestJson(key: SessionKey): string | null {
+  return findSession(key)?.manifestJson ?? null;
+}
+
+export function setManifestJson(key: SessionKey, json: string): void {
+  joined(key).manifestJson = json;
 }
 
 /**
  * A latch over the most recently STARTED analysis, never cleared on settle:
  * non-null means one was scheduled. In-flight lives in getWatchTransaction.
  */
-export function getAnalysisStartedPromise(): Promise<void> | null {
-  return singletonStore[ANALYSIS_STARTED_KEY];
+export function getAnalysisStartedPromise(key: SessionKey): Promise<void> | null {
+  return findSession(key)?.analysisStarted ?? null;
 }
 
-export function setAnalysisStartedPromise(promise: Promise<void>): void {
-  singletonStore[ANALYSIS_STARTED_KEY] = promise;
+export function setAnalysisStartedPromise(key: SessionKey, promise: Promise<void>): void {
+  joined(key).analysisStarted = promise;
 }
 
-export function resetAnalysisStartedPromise(): void {
-  singletonStore[ANALYSIS_STARTED_KEY] = null;
+export function resetAnalysisStartedPromise(key: SessionKey): void {
+  const state = findSession(key);
+  if (state !== undefined) state.analysisStarted = null;
 }
 
-export function getSharedCss(): string {
-  return singletonStore[SHARED_CSS_KEY] || '';
+export function getSharedCss(key: SessionKey): string {
+  return findSession(key)?.sharedCss ?? '';
 }
 
-export function setSharedCss(css: string): void {
-  singletonStore[SHARED_CSS_KEY] = css;
+export function setSharedCss(key: SessionKey, css: string): void {
+  joined(key).sharedCss = css;
 }
 
-export function getSharedSystemProps(): string {
-  return singletonStore[SHARED_SYSTEM_PROPS_KEY] || '';
+export function getSharedSystemProps(key: SessionKey): string {
+  return findSession(key)?.sharedSystemProps ?? '';
 }
 
-export function setSharedSystemProps(content: string): void {
-  singletonStore[SHARED_SYSTEM_PROPS_KEY] = content;
+export function setSharedSystemProps(key: SessionKey, content: string): void {
+  joined(key).sharedSystemProps = content;
 }
 
-export function getSharedExternalDirs(): string[] {
-  return singletonStore[SHARED_EXTERNAL_DIRS_KEY] || [];
+export function getSharedExternalDirs(key: SessionKey): string[] {
+  return findSession(key)?.externalDirs ?? [];
 }
 
-export function setSharedExternalDirs(dirs: string[]): void {
-  singletonStore[SHARED_EXTERNAL_DIRS_KEY] = dirs;
+export function setSharedExternalDirs(key: SessionKey, dirs: string[]): void {
+  joined(key).externalDirs = dirs;
 }
 
-export function getSharedExternalEntries(): Map<string, string> {
-  return singletonStore[SHARED_EXTERNAL_ENTRIES_KEY] || new Map();
+export function getSharedExternalEntries(key: SessionKey): Map<string, string> {
+  return findSession(key)?.externalEntries ?? new Map();
 }
 
-export function setSharedExternalEntries(entries: Map<string, string>): void {
-  singletonStore[SHARED_EXTERNAL_ENTRIES_KEY] = entries;
+export function setSharedExternalEntries(key: SessionKey, entries: Map<string, string>): void {
+  joined(key).externalEntries = entries;
 }
 
 /** Specifier → its source entry's side effects, published with the shared
  *  entries; absent leaves the bundler's own classification. */
-export function getSharedExternalSideEffects(): Map<string, boolean> {
-  return singletonStore[SHARED_EXTERNAL_SIDE_EFFECTS_KEY] || new Map();
+export function getSharedExternalSideEffects(key: SessionKey): Map<string, boolean> {
+  return findSession(key)?.externalSideEffects ?? new Map();
 }
 
-export function setSharedExternalSideEffects(
-  sideEffects: Map<string, boolean>
-): void {
-  singletonStore[SHARED_EXTERNAL_SIDE_EFFECTS_KEY] = sideEffects;
+export function setSharedExternalSideEffects(key: SessionKey, sideEffects: Map<string, boolean>): void {
+  joined(key).externalSideEffects = sideEffects;
 }
-
-type NullableSingletonKey =
-  | typeof ANALYZED_HASHES_KEY
-  | typeof REPLACEMENT_EPOCH_KEY
-  | typeof WATCH_TRANSACTION_KEY
-  | typeof SESSION_ARTIFACT_DIR_KEY
-  | typeof OWNING_WATCH_SESSION_KEY;
-
-interface AnimusSingletonSlot<Key extends NullableSingletonKey> {
-  get(): AnimusSingletonStore[Key];
-  set(value: AnimusSingletonStore[Key]): void;
-}
-
-function globalSlot<Key extends NullableSingletonKey>(
-  key: Key
-): AnimusSingletonSlot<Key> {
-  return {
-    get: () => singletonStore[key] ?? null,
-    set: (value) => {
-      singletonStore[key] = value;
-    },
-  };
-}
-
-const analyzedHashesSlot = globalSlot(ANALYZED_HASHES_KEY);
-const replacementEpochSlot = globalSlot(REPLACEMENT_EPOCH_KEY);
-const watchTransactionSlot = globalSlot(WATCH_TRANSACTION_KEY);
-const sessionArtifactDirSlot = globalSlot(SESSION_ARTIFACT_DIR_KEY);
 
 /** Structural view of the target session, declared here rather than imported
  *  so the singleton never depends on the session module it serves. */
@@ -175,115 +98,87 @@ export interface WatchBatchTarget {
   }): Promise<void>;
 }
 
-const owningWatchSessionSlot = globalSlot(OWNING_WATCH_SESSION_KEY);
-
 /**
- * The only session that can run watch analysis. A non-owning session forwards
- * its batch here; dropping it loses files only that watcher sees.
+ * The only session of a build that can run watch analysis. A non-owning
+ * session forwards its batch here; dropping it loses files only that
+ * watcher sees.
  */
-export function getOwningWatchSession(): WatchBatchTarget | null {
-  return owningWatchSessionSlot.get();
+export function getOwningWatchSession(key: SessionKey): WatchBatchTarget | null {
+  return findSession(key)?.authority ?? null;
 }
 
-export function setOwningWatchSession(session: WatchBatchTarget | null): void {
-  owningWatchSessionSlot.set(session);
+export function setOwningWatchSession(key: SessionKey, session: WatchBatchTarget | null): void {
+  joined(key).authority = session;
 }
 
 /**
  * Per-file content hashes of the last published analysis (relPath → hash of
  * the exact bytes analyzed), including files that produced zero entries.
  */
-export function getAnalyzedHashes(): ReadonlyMap<string, string> | null {
-  return analyzedHashesSlot.get();
+export function getAnalyzedHashes(key: SessionKey): ReadonlyMap<string, string> | null {
+  return findSession(key)?.analyzedHashes ?? null;
 }
 
-export function setAnalyzedHashes(hashes: Map<string, string>): void {
-  analyzedHashesSlot.set(hashes);
-}
-
-/**
- * Session identity is per process: the first caller claims a fresh id and
- * every later one adopts it, so all compilers share one artifact tree.
- */
-export function claimProcessSessionId(): string {
-  const existing = singletonStore[PROCESS_SESSION_ID_KEY];
-  if (isSingletonString(existing) && existing.length > 0) return existing;
-  const fresh = randomUUID();
-  singletonStore[PROCESS_SESSION_ID_KEY] = fresh;
-  return fresh;
+export function setAnalyzedHashes(key: SessionKey, hashes: Map<string, string>): void {
+  joined(key).analyzedHashes = hashes;
 }
 
 /**
- * Two CONCURRENT drive loops in one process would share one session tree and
- * clobber each other; sequential claim/release cycles are legal.
+ * One participant publishes a build's analysis, holding this claim until it
+ * closes: a second publisher would clobber its artifacts. Two builds never
+ * exclude each other; sequential claim and release cycles are legal.
  */
-export function claimExclusiveSessionOwner(label: string): () => void {
-  const active = singletonStore[EXCLUSIVE_SESSION_OWNER_KEY];
-  if (isSingletonString(active)) {
+export function claimExclusiveSessionOwner(key: SessionKey, label: string): () => void {
+  const state = joined(key);
+  const active = state.activeAttempt;
+  if (active !== null) {
     throw new Error(
-      `[animus] a second Animus host ("${label}") started while "${active}" ` +
-        `is still active in this process. The extraction session is ` +
-        `process-global (one session tree, one manifest), so concurrent ` +
-        `hosts would clobber each other's analysis. Run one Animus-enabled ` +
-        `config per process, or make the builds sequential.`
+      `[animus] "${label}" started an analysis of build ${key.build} of ${key.root}, ` +
+        `which "${active}" publishes. A build's participants share one analysis; run it ` +
+        `once and let the others read its results.`
     );
   }
-  singletonStore[EXCLUSIVE_SESSION_OWNER_KEY] = label;
+  state.activeAttempt = label;
   return () => {
-    if (singletonStore[EXCLUSIVE_SESSION_OWNER_KEY] === label) {
-      delete singletonStore[EXCLUSIVE_SESSION_OWNER_KEY];
-    }
+    if (state.activeAttempt === label) state.activeAttempt = null;
   };
 }
 
 /**
- * Absolute artifact directory of the OWNING session's last publication. The
+ * Absolute artifact directory of the build's last publication. The
  * Turbopack loader runs out of process and receives it via options instead.
  */
-export function getSessionArtifactDir(): string | null {
-  return sessionArtifactDirSlot.get();
+export function getSessionArtifactDir(key: SessionKey): string | null {
+  return findSession(key)?.artifactDir ?? null;
 }
 
-export function setSessionArtifactDir(dir: string): void {
-  sessionArtifactDirSlot.set(dir);
+export function setSessionArtifactDir(key: SessionKey, dir: string): void {
+  joined(key).artifactDir = dir;
 }
 
 /**
  * Replacement epoch of the last published analysis, written AFTER the
  * manifest so an epoch reader always sees at least that generation's manifest.
  */
-export function getReplacementEpoch(): string | null {
-  return replacementEpochSlot.get();
+export function getReplacementEpoch(key: SessionKey): string | null {
+  return findSession(key)?.replacementEpoch ?? null;
 }
 
-export function setReplacementEpoch(epoch: string): void {
-  replacementEpochSlot.set(epoch);
+export function setReplacementEpoch(key: SessionKey, epoch: string): void {
+  joined(key).replacementEpoch = epoch;
 }
 
 /**
- * The one in-flight watch-analysis transaction: a compiler that did not start
- * it joins this promise rather than read a pre-transaction generation.
+ * The build's one in-flight watch-analysis transaction: a participant that
+ * did not start it joins this promise rather than read a pre-transaction
+ * generation.
  */
-export function getWatchTransaction(): Promise<void> | null {
-  return watchTransactionSlot.get();
+export function getWatchTransaction(key: SessionKey): Promise<void> | null {
+  return findSession(key)?.watchTransaction ?? null;
 }
 
-export function setWatchTransaction(transaction: Promise<void> | null): void {
-  watchTransactionSlot.set(transaction);
-}
-
-export type AnimusEngine = 'v2';
-
-/** Engine selection travels through the singleton so non-owning compilers
- *  and the webpack loader honor the owner's choice. */
-export function setSharedEngine(engine: AnimusEngine): void {
-  singletonStore[ENGINE_KEY] = engine;
-}
-
-export function getSharedEngine(): AnimusEngine {
-  // Fallback mirrors the plugin default so a loader read that races the
-  // owning constructor cannot split the process across engines.
-  return singletonStore[ENGINE_KEY] || 'v2';
+export function setWatchTransaction(key: SessionKey, transaction: Promise<void> | null): void {
+  joined(key).watchTransaction = transaction;
 }
 
 /** Single choke-point for every native extraction call; the NAPI module's
@@ -294,72 +189,58 @@ export function requireEngine(): any {
   return require('@animus-ui/extract');
 }
 
-/**
- * The one engine API for this process: the instance, its analyze-time
- * sources, and the drift flag live on globalThis so both copies share them.
- */
-const v2EngineApi = createV2EngineApi({
-  // Driver-neutral: every driver reaches this one instance, so a
-  // host-branded label misattributes drift warnings.
-  label: 'animus',
-  isV2: () => getSharedEngine() === 'v2',
-  loadNativeEngine: requireEngine,
-  passThroughUnknownPaths: true,
-  store: {
-    getEngine: () => singletonStore[V2_ENGINE_KEY],
-    setEngine: (engine) => {
-      singletonStore[V2_ENGINE_KEY] = engine;
-    },
-    getSentSources: () => singletonStore[V2_SENT_SOURCES_KEY] ?? null,
-    setSentSources: (sources) => {
-      singletonStore[V2_SENT_SOURCES_KEY] = sources;
-    },
-    getDriftWarned: () => Boolean(singletonStore[V2_DRIFT_WARNED_KEY]),
-    setDriftWarned: (value) => {
-      singletonStore[V2_DRIFT_WARNED_KEY] = value;
-    },
-  },
-});
+const ENGINE_API_OVERRIDE_KEY = '__animus_engine_api_override__';
+
+// SAFETY: this module is the sole owner of this fixed globalThis key, which
+// holds only the engine-API test seam.
+const overrideGlobal = globalThis as typeof globalThis & {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [ENGINE_API_OVERRIDE_KEY]?: () => any;
+};
 
 /**
- * Test seam, set once at module top level: this key stays OUT of
- * SINGLETON_GLOBAL_KEYS so a per-test reset cannot strip the override.
+ * Test seam, set once at module top level: it lives outside the session
+ * registry so a per-test reset cannot strip the override.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function setEngineApiOverride(api: (() => any) | null): void {
-  singletonStore[ENGINE_API_OVERRIDE_KEY] = api ?? undefined;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function engineApi(): any {
-  const override = singletonStore[ENGINE_API_OVERRIDE_KEY];
-  return override ? override() : v2EngineApi();
+  overrideGlobal[ENGINE_API_OVERRIDE_KEY] = api ?? undefined;
 }
 
 /**
- * Every globalThis key this module owns except the engine-api override, which
- * a per-test reset must not clear. Test harnesses clear exactly this list.
+ * The build's engine API: the native factory loads once per process, and
+ * each build holds its own engine instance, analyze-time sources and drift
+ * flag in its registry entry.
  */
-export const SINGLETON_GLOBAL_KEYS = [
-  MANIFEST_KEY,
-  ANALYSIS_STARTED_KEY,
-  SHARED_CSS_KEY,
-  SHARED_SYSTEM_PROPS_KEY,
-  SHARED_EXTERNAL_DIRS_KEY,
-  SHARED_EXTERNAL_ENTRIES_KEY,
-  SHARED_EXTERNAL_SIDE_EFFECTS_KEY,
-  ANALYZED_HASHES_KEY,
-  REPLACEMENT_EPOCH_KEY,
-  WATCH_TRANSACTION_KEY,
-  PROCESS_SESSION_ID_KEY,
-  SESSION_ARTIFACT_DIR_KEY,
-  OWNING_WATCH_SESSION_KEY,
-  EXCLUSIVE_SESSION_OWNER_KEY,
-  ENGINE_KEY,
-  V2_ENGINE_KEY,
-  V2_SENT_SOURCES_KEY,
-  V2_DRIFT_WARNED_KEY,
-] as const;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function engineApi(key: SessionKey): any {
+  const override = overrideGlobal[ENGINE_API_OVERRIDE_KEY];
+  if (override) return override();
+  const state = joined(key);
+  state.api ??= createV2EngineApi({
+    // Driver-neutral: every participant of the build reaches this one
+    // instance, so a host-branded label misattributes drift warnings.
+    label: 'animus',
+    isV2: () => true,
+    loadNativeEngine: requireEngine,
+    passThroughUnknownPaths: true,
+    store: {
+      getEngine: () => state.engine,
+      setEngine: (engine) => {
+        state.engine = engine;
+      },
+      getSentSources: () => state.sentSources,
+      setSentSources: (sources) => {
+        state.sentSources = sources;
+      },
+      getDriftWarned: () => state.driftWarned,
+      setDriftWarned: (value) => {
+        state.driftWarned = value;
+      },
+    },
+  });
+  return state.api();
+}
 
 /** The participant protocol a `SessionKey` was made under; a participant
  *  from a copy speaking another version never joins its session. */
@@ -468,7 +349,7 @@ export interface SessionState {
   readonly established: string;
   readonly options: ReadonlyMap<string, string>;
   readonly participants: Set<string>;
-  /** The participant whose analysis attempt is active: one per session. */
+  /** The participant that publishes the build's analysis: one per build. */
   activeAttempt: string | null;
   /** The session that runs this build's analysis; others join its results
    *  and forward their watch batches to it. */
@@ -498,6 +379,9 @@ export interface SessionState {
   engine: V2ExtractEngine | null;
   sentSources: Map<string, string> | null;
   driftWarned: boolean;
+  /** The build's engine API over the fields above, made on first use. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  api: (() => any) | null;
 }
 
 const SESSION_REGISTRY = Symbol.for('animus.session-registry.v1');
@@ -551,6 +435,7 @@ export function joinSession(
       engine: null,
       sentSources: null,
       driftWarned: false,
+      api: null,
     };
     sessions.set(id, state);
     return state;

@@ -15,6 +15,7 @@ import {
 import {
   ANIMUS_CSS_MODULE_ID,
   collectSessionAssets,
+  createBuildId,
   engineApi,
   ExtractionSession,
   getAnalyzedHashes,
@@ -25,6 +26,7 @@ import {
   SESSION_ASSETS_DIR,
   TURBOPACK_SYSTEM_PROPS_ID,
 } from '@animus-ui/extract/session';
+import type { SessionKey } from '@animus-ui/extract/session';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 
@@ -82,6 +84,9 @@ export interface HostState {
       ) => { code: string; hasComponents: boolean })
     | null;
   sessionDir: string | null;
+  /** The build of the root this plugin instance analyses, once a pipeline
+   *  run's session joined it. */
+  key: SessionKey | null;
 }
 
 export function createHostState(): HostState {
@@ -97,6 +102,7 @@ export function createHostState(): HostState {
     watchPaths: [],
     transformFile: null,
     sessionDir: null,
+    key: null,
   };
 }
 
@@ -132,8 +138,8 @@ export async function drivePipeline(
   try {
     await attempt;
   } catch (error) {
-    if (!state.sessionDir) {
-      state.sessionDir = getSessionArtifactDir();
+    if (!state.sessionDir && state.key !== null) {
+      state.sessionDir = getSessionArtifactDir(state.key);
     }
     disposeSessionDir(state, removeDir);
     throw error;
@@ -316,6 +322,8 @@ export const unpluginFactory: UnpluginFactory<
 > = (rawOptions, meta) => {
   const { root, options, watch } = resolveHostOptions(rawOptions);
   const state = createHostState();
+  // One build per plugin instance: each pipeline run's session joins it.
+  const build = createBuildId();
   let activeSession: ExtractionSession | null = null;
   let modeOracle: AnimusMode | null = null;
   /** Whether the host is watching, where an error-level diagnostic reports
@@ -392,7 +400,7 @@ export const unpluginFactory: UnpluginFactory<
       state.mode = mode;
       const session = new ExtractionSession(
         { ...options, mode },
-        { unbundledComputedImports }
+        { unbundledComputedImports, build }
       );
       activeSession = session;
       session.development = watching();
@@ -406,30 +414,31 @@ export const unpluginFactory: UnpluginFactory<
       if (builtAliases) {
         session.pathAliasesJson = builtAliases.json;
       }
+      state.key = session.key;
       await session.runFullPipeline();
-      state.sessionDir = getSessionArtifactDir();
-      const analyzed = getAnalyzedHashes();
+      state.sessionDir = getSessionArtifactDir(session.key);
+      const analyzed = getAnalyzedHashes(session.key);
       if (!analyzed || analyzed.size === 0) {
         throw new Error(
           `[animus] discovery found zero source files under ${root} — ` +
             `check the plugin's \`root\` and \`exclude\` options`
         );
       }
-      state.cssText = getSharedCss();
-      state.systemPropsJs = getSharedSystemProps();
+      state.cssText = getSharedCss(session.key);
+      state.systemPropsJs = getSharedSystemProps(session.key);
       state.kitRedirects = new Map(session.externalSourceEntries);
       state.kitSideEffects = new Map(session.externalSourceSideEffects);
       state.redirectTargets = new Set(state.kitRedirects.values());
       state.externalPackageDirs = [...session.externalPackageDirs];
       const watchPaths = new Set<string>();
-      for (const key of getAnalyzedHashes()?.keys() ?? []) {
+      for (const key of getAnalyzedHashes(session.key)?.keys() ?? []) {
         watchPaths.add(resolve(root, key));
       }
       for (const dep of session.systemDependencyPaths) watchPaths.add(dep);
       for (const dep of session.assetDependencyPaths) watchPaths.add(dep);
       watchPaths.add(join(root, 'tsconfig.json'));
       state.watchPaths = [...watchPaths];
-      state.transformFile = engineApi().transformFile;
+      state.transformFile = engineApi(session.key).transformFile;
     });
   }
 
@@ -610,13 +619,16 @@ export const unpluginFactory: UnpluginFactory<
       await joinPipeline();
       const filePath = moduleFilePath(id);
       let output = code;
-      if (isEngineTransformExtension(filePath)) {
+      // The key is the build a pipeline run joined; before one, there is
+      // no analysis to read.
+      const key = state.key;
+      if (key !== null && isEngineTransformExtension(filePath)) {
         // Captured once per pipeline run: a per-module engineApi() call
         // pays a require for every module in the graph.
-        const transformFile = state.transformFile ?? engineApi().transformFile;
+        const transformFile = state.transformFile ?? engineApi(key).transformFile;
         const transformed = transformWithEngine(output, filePath, {
           rootDir: root,
-          manifestJson: getManifestJson() ?? '',
+          manifestJson: getManifestJson(key) ?? '',
           transformFile,
         });
         if (transformed !== null) output = transformed;

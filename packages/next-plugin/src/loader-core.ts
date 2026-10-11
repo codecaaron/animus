@@ -9,6 +9,11 @@ export interface LoaderPolicyOptions {
    *  source, as a non-strict one does, instead of failing the module. */
   development?: boolean;
   cssImportTarget?: string;
+  /** The build the config wrapper created, which the loader reads the
+   *  analysis of. */
+  build?: string;
+  /** The root that build's plugin analyses. */
+  root?: string;
 }
 
 export interface LoaderContextBase<

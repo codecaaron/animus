@@ -11,6 +11,7 @@ import {
   turbopackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
+  createBuildId,
   ExtractionSession,
   runSessionPipeline,
   startTurbopackWatcher,
@@ -188,12 +189,17 @@ export function withAnimus(
     );
   }
 
+  // One build per config load: every compiler, the loaders and the
+  // Turbopack workers take part in it, and another `next` process of the
+  // same root is another build.
+  const build = createBuildId();
+
   return <Config extends NextOwnedConfig>(
     authoredConfig: NextConfigInput<Config>
   ): WebpackNextConfig<Config> | TurbopackNextConfig<Config> => {
     const nextConfig = withSourceKits(authoredConfig, process.cwd());
     if (resolveTurbopackMode(options)) {
-      return turbopackConfig(nextConfig, options);
+      return turbopackConfig(nextConfig, options, build);
     }
 
     const existingWebpack = nextConfig.webpack;
@@ -214,7 +220,7 @@ export function withAnimus(
         );
         const plugin = new AnimusWebpackPlugin(
           { ...options, mode },
-          { development: context.dev === true }
+          { development: context.dev === true, build }
         );
         plugin.setRootDir(rootDir);
         const sessionDir = plugin.sessionDir;
@@ -380,6 +386,8 @@ export function withAnimus(
                 strict: options.strict,
                 development: context.dev === true,
                 cssImportTarget: options.cssImportTarget,
+                build,
+                root: rootDir,
               },
             },
           ],
@@ -430,7 +438,8 @@ function withSourceKits<Config extends NextOwnedConfig>(
 
 function turbopackConfig<Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>,
-  options: AnimusNextOptions
+  options: AnimusNextOptions,
+  build: string
 ): TurbopackNextConfig<Config> {
   // Turbopack's extension order as Next merges it: `turbopack`, else the
   // legacy `experimental.turbo`; its documented default without either.
@@ -438,7 +447,7 @@ function turbopackConfig<Config extends NextOwnedConfig>(
     nextConfig.turbopack?.resolveExtensions ??
     nextConfig.experimental?.turbo?.resolveExtensions;
   const load = (phase: string): Promise<TurbopackNextConfigObject<Config>> =>
-    loadTurbopackFragment(options, phase, resolveExtensions).then((fragment) =>
+    loadTurbopackFragment(options, phase, resolveExtensions, build).then((fragment) =>
       mergeTurbopackFragment(nextConfig, fragment)
     );
   function then<Resolved = TurbopackNextConfigObject<Config>, Rejected = never>(
@@ -479,7 +488,8 @@ let liveTurbopackLoad: {
 function loadTurbopackFragment(
   options: AnimusNextOptions,
   phase: string,
-  resolveExtensions: readonly string[] | undefined
+  resolveExtensions: readonly string[] | undefined,
+  build: string
 ): Promise<TurbopackConfigFragment> {
   // `next dev <subdir>` under Turbopack is a known gap: no dir reaches a
   // config module, so cwd is the only root signal. Next 16's `turbopack.root`
@@ -493,7 +503,8 @@ function loadTurbopackFragment(
     options,
     phase,
     rootDir,
-    resolveExtensions
+    resolveExtensions,
+    build
   );
   const load = { key, fragment };
   liveTurbopackLoad = load;
@@ -507,7 +518,8 @@ async function analyzeForTurbopack(
   options: AnimusNextOptions,
   phase: string,
   rootDir: string,
-  resolveExtensions: readonly string[] | undefined
+  resolveExtensions: readonly string[] | undefined,
+  build: string
 ): Promise<TurbopackConfigFragment> {
   const development = phase === PHASE_DEVELOPMENT_SERVER;
   const { mode } = resolveMode(options.mode, () =>
@@ -516,7 +528,7 @@ async function analyzeForTurbopack(
   // Turbopack leaves an `import(expr)` it cannot read unbundled.
   const session = new ExtractionSession(
     { ...options, mode },
-    { unbundledComputedImports: true }
+    { unbundledComputedImports: true, build }
   );
   // A replaced session's watcher would keep the root claimed for it.
   liveTurbopackSession?.close();

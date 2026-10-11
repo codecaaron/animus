@@ -16,7 +16,6 @@ import {
   resetAnalysisStartedPromise,
   sessionArtifactDir,
   setAnalysisStartedPromise,
-  setSharedEngine,
   stylesPath,
   TURBOPACK_SYSTEM_PROPS_ID,
 } from '@animus-ui/extract/session';
@@ -179,12 +178,13 @@ export class AnimusWebpackPlugin {
    *  compilation keeps publishing, whatever the emission mode. */
   constructor(
     options: AnimusNextOptions,
-    { development = false }: { development?: boolean } = {}
+    { development = false, build }: { development?: boolean; build?: string } = {}
   ) {
     this.options = options;
     assertNoRetiredEngineSelection(options.engine);
-    setSharedEngine(options.engine ?? 'v2');
-    this.session = new ExtractionSession(options);
+    // Every compiler of one `next build` joins the build its config wrapper
+    // created; a plugin made alone is a build of its own.
+    this.session = new ExtractionSession(options, { build });
     this.session.development = development;
     // Transforms import the virtual id, which the module factory resolves to
     // this session's system-props module: a transform a persistent cache
@@ -324,7 +324,7 @@ export class AnimusWebpackPlugin {
         // so a refreshed dependency set reaches this compilation.
         registerSystemDependencies();
 
-        const css = getSharedCss();
+        const css = getSharedCss(this.session.key);
         if (!css || !RawSource) return;
 
         const rootDir = this.session.rootDir || compiler.context;
@@ -346,14 +346,14 @@ export class AnimusWebpackPlugin {
       this.extractAliases(_compiler);
       this.extractConditions(_compiler);
 
-      const existing = getAnalysisStartedPromise();
+      const existing = getAnalysisStartedPromise(this.session.key);
       if (existing) {
         await existing;
         return;
       }
 
       const promise = this.session.runFullPipeline();
-      setAnalysisStartedPromise(promise);
+      setAnalysisStartedPromise(this.session.key, promise);
       await promise;
     });
 
@@ -378,23 +378,23 @@ export class AnimusWebpackPlugin {
    *  last successful one. */
   private async analyzeWatchTurn(compiler: Compiler): Promise<void> {
     if (!this.initialized) {
-      let startup = getAnalysisStartedPromise();
+      let startup = getAnalysisStartedPromise(this.session.key);
       if (!startup) {
         startup = this.session.runFullPipeline();
-        setAnalysisStartedPromise(startup);
+        setAnalysisStartedPromise(this.session.key, startup);
       }
       try {
         await startup;
       } catch (err) {
         // A rejected startup must not answer every later watchRun: the
         // next one re-runs it against the repaired sources.
-        if (getAnalysisStartedPromise() === startup) {
-          resetAnalysisStartedPromise();
+        if (getAnalysisStartedPromise(this.session.key) === startup) {
+          resetAnalysisStartedPromise(this.session.key);
         }
         throw err;
       }
       this.initialized = true;
-      this.lastBuiltEpoch = getReplacementEpoch();
+      this.lastBuiltEpoch = getReplacementEpoch(this.session.key);
       // A failed startup's compilation passed every module through
       // untransformed: rebuild them all.
       this.epochMovedForNextCompilation = this.watchFailure !== null;
@@ -406,7 +406,7 @@ export class AnimusWebpackPlugin {
       removedFiles: compiler.removedFiles,
     });
 
-    const epoch = getReplacementEpoch();
+    const epoch = getReplacementEpoch(this.session.key);
     this.epochMovedForNextCompilation =
       this.lastBuiltEpoch !== null &&
       epoch !== null &&
@@ -466,13 +466,13 @@ export class AnimusWebpackPlugin {
   getExternalPackageDirs(): string[] {
     return this.session.externalPackageDirs.length > 0
       ? this.session.externalPackageDirs
-      : getSharedExternalDirs();
+      : getSharedExternalDirs(this.session.key);
   }
 
   getExternalSourceEntries(): Map<string, string> {
     return this.session.externalSourceEntries.size > 0
       ? this.session.externalSourceEntries
-      : getSharedExternalEntries();
+      : getSharedExternalEntries(this.session.key);
   }
 
   /** The classification of the entries `getExternalSourceEntries` returns,
@@ -480,6 +480,6 @@ export class AnimusWebpackPlugin {
   getExternalSourceSideEffects(): Map<string, boolean> {
     return this.session.externalSourceEntries.size > 0
       ? this.session.externalSourceSideEffects
-      : getSharedExternalSideEffects();
+      : getSharedExternalSideEffects(this.session.key);
   }
 }

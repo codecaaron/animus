@@ -69,5 +69,11 @@ export {
   getSharedSystemProps,
   resetAnalysisStartedPromise,
   setAnalysisStartedPromise,
-  setSharedEngine,
+  closeSession,
+  createBuildId,
+  findSession,
+  joinSession,
+  SessionConfigurationConflict,
+  sessionKey,
 } from './singleton';
+export type { SessionKey, SessionState } from './singleton';
