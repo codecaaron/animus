@@ -501,57 +501,58 @@ export const unpluginFactory: UnpluginFactory<
     });
   }
 
-  /** Each Rollup-family environment build that started and has not
-   *  ended, by name. A Vite buildApp can build environments in parallel on
-   *  one plugin instance; they share one pipeline and one Session, retired
-   *  by the last to end. Builds are tracked by environment, not by
-   *  generation, so a second build of an active environment, or a second
-   *  environment under an active name, is refused. webpack-like hosts run
+  /** Each Rollup-family environment build that started and has not ended,
+   *  by name, with the promise its end settles. A Vite buildApp can build
+   *  environments in parallel on one plugin instance; they share one
+   *  pipeline and one Session, retired by the last to end. A build of an
+   *  environment whose build is open (a reused builder, or a second
+   *  environment under one name) waits for that build's end, so each build
+   *  ends only its own generation, once, in buildEnd. webpack-like hosts run
    *  one compile at a time and are not tracked. */
-  const openBuilds = new Map<string, BuildingEnvironment>();
+  const openBuilds = new Map<
+    string,
+    { environment: BuildingEnvironment; ended: Promise<void>; end(): void }
+  >();
   const singleEnvironment: BuildingEnvironment = { name: 'build' };
   const tracksEnvironments =
     meta.framework === 'rollup' ||
     meta.framework === 'rolldown' ||
     meta.framework === 'vite';
 
-  /** Opens this hook's environment build; whether another environment's
-   *  build was already open. */
-  function openEnvironmentBuild(context: UnpluginBuildContext): boolean {
+  function environmentOf(context: UnpluginBuildContext): BuildingEnvironment {
+    return hasEnvironment(context) ? context.environment : singleEnvironment;
+  }
+
+  /** Opens this hook's environment build once no build under its name is
+   *  open; whether another environment's build is open, whose pipeline this
+   *  build shares. */
+  async function openEnvironmentBuild(
+    context: UnpluginBuildContext
+  ): Promise<boolean> {
     if (!tracksEnvironments) return false;
-    const environment = hasEnvironment(context)
-      ? context.environment
-      : singleEnvironment;
-    const { name } = environment;
-    const open = openBuilds.get(name);
-    if (open === environment) {
-      throw new Error(
-        `[animus] a previous build of environment ${name} is still running ` +
-          `on this plugin instance; wait for it to finish before building ` +
-          `it again`
-      );
+    const environment = environmentOf(context);
+    for (;;) {
+      const open = openBuilds.get(environment.name);
+      if (open === undefined) break;
+      await open.ended;
     }
-    if (open !== undefined) {
-      throw new Error(
-        `[animus] two environments named ${name} build on this plugin ` +
-          `instance at once; give each environment its own name`
-      );
-    }
-    openBuilds.set(name, environment);
+    let end = () => {};
+    const ended = new Promise<void>((settle) => {
+      end = settle;
+    });
+    openBuilds.set(environment.name, { environment, ended, end });
     return openBuilds.size > 1;
   }
 
   /** Ends this hook's environment build; whether none is left open. Only
-   *  the environment that opened an entry removes it, since a refused
-   *  build ends too. */
+   *  the build that opened an entry ends it. */
   function closeEnvironmentBuild(context: UnpluginBuildContext): boolean {
     if (!tracksEnvironments) return true;
-    const environment = hasEnvironment(context)
-      ? context.environment
-      : singleEnvironment;
-    if (openBuilds.get(environment.name) === environment) {
-      openBuilds.delete(environment.name);
-    }
+    const environment = environmentOf(context);
+    const open = openBuilds.get(environment.name);
+    if (open === undefined || open.environment !== environment) return false;
+    openBuilds.delete(environment.name);
+    open.end();
     return openBuilds.size === 0;
   }
 
@@ -630,7 +631,7 @@ export const unpluginFactory: UnpluginFactory<
       try {
         // Another environment's build already runs this build's pipeline
         // (a parallel Vite buildApp): share it rather than claim again.
-        if (openEnvironmentBuild(this)) await joinPipeline();
+        if (await openEnvironmentBuild(this)) await joinPipeline();
         else await startPipeline();
       } finally {
         registerWatchTargets(this);
