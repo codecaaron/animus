@@ -254,6 +254,20 @@ export {
   viteAssetClassification,
 } from './host-assets';
 export type { HostAssetClassification } from './host-assets';
+export { viteHostExpander, viteLoadExpander } from './vite-expansions';
+export { webpackHostExpander, webpackLoadExpander } from './webpack-expansions';
+export type {
+  WebpackOptionsReading,
+  WebpackResolveReading,
+  WebpackRuleEntry,
+  WebpackRuleReading,
+} from './webpack-expansions';
+export type {
+  ExpandedPath,
+  HostLoadExpander,
+  ListedArgs,
+  ListedLoad,
+} from './host-expansions';
 export { adaptedOriginals } from './probe-evidence';
 export type { ServedFiles } from './served-files';
 export { droppedExtensionMessage, servedFiles } from './served-files';

@@ -493,6 +493,10 @@ pub struct FileFacts {
     /// load any module and change what it exports.
     #[serde(skip)]
     pub(crate) dynamic_code: Option<&'static str>,
+    /// How the module lets a loader escape (`reads module.require`), which
+    /// can load any module and change what it exports.
+    #[serde(skip)]
+    pub(crate) loader_escape: Option<&'static str>,
     /// Extensions of an `Object.member` parent, which are never chains.
     #[serde(skip)]
     pub member_parent_extensions: Vec<chain_walk::MemberParentExtension>,
@@ -531,10 +535,15 @@ pub struct FileFacts {
     /// components they spread their props into.
     #[serde(skip)]
     pub(crate) spread_wrappers: BTreeMap<String, crate::usage_facts::SpreadWrapper>,
-    /// Modules this file loads at runtime (`import()`, `require()`, a
-    /// context or a glob): their exports render where usage cannot follow.
+    /// Modules this file loads at runtime (`import()`, `require()`, wrapped
+    /// or not, a context or a glob): their exports render where usage cannot
+    /// follow.
     #[serde(skip)]
     pub(crate) module_loads: Vec<crate::loads::ModuleLoad>,
+    /// Each `import` and `export … from` declaration the compiler keeps,
+    /// bindings or not: the module it names runs when this one loads.
+    #[serde(skip)]
+    pub(crate) runtime_imports: Vec<crate::loads::ModuleLoad>,
     /// The specifiers of this file's bindingless runtime imports
     /// (`import './x'`): the host loads each for its effects, so each is
     /// probed (spec §2.2 A8).
@@ -1267,8 +1276,15 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let program = ast.program();
     // The engine lowers every file before static enrichment; any other
     // caller lowers this one here.
-    let crate::link::Lowered { scoping, bindings, record: module_record, loads, readings: param_readings, dynamic_code } =
-        lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
+    let crate::link::Lowered {
+        scoping,
+        bindings,
+        record: module_record,
+        loads,
+        readings: param_readings,
+        dynamic_code,
+        loader_escape,
+    } = lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
     let source = ast.source();
     let directive_prologue = program.directives.last().map(|last| {
         let end = extend_directive_trailing_trivia(source, last.span.end);
@@ -1664,12 +1680,14 @@ pub(crate) fn extract_file_facts_from_static_maps(
         value_escapes,
         spread_wrappers,
         module_loads: loads.iter().filter_map(|load| load.module_load(source)).collect(),
+        runtime_imports: loads.iter().filter_map(|load| load.runtime_import(source)).collect(),
         bindingless_imports: loads
             .iter()
             .filter(|load| load.kind == crate::loads::LoadKind::Import { runtime: true, bindingless: true })
             .filter_map(|load| load.specifier().map(str::to_string))
             .collect(),
         dynamic_code,
+        loader_escape,
         ordinary_components,
         context_consts,
         prop_tags,

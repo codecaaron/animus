@@ -22,7 +22,8 @@ use rustc_hash::FxHashSet;
 pub type OwnedModuleRecord = ModuleRecord<LocalId, String>;
 
 /// One file's Lower output: its identity table, owned module record,
-/// module loads, parameter readings and how it runs code from a string, and
+/// module loads, parameter readings, how it runs code from a string or lets a
+/// loader escape, and
 /// the semantic build all but the loads were read from, which fact
 /// extraction reuses rather than building again.
 pub(crate) struct Lowered {
@@ -34,6 +35,8 @@ pub(crate) struct Lowered {
     pub(crate) readings: crate::usage_facts::ParamReadings,
     /// How the module runs code from a string, if it does.
     pub(crate) dynamic_code: Option<&'static str>,
+    /// How the module lets a loader escape, if it does.
+    pub(crate) loader_escape: Option<&'static str>,
 }
 
 impl Lowered {
@@ -49,7 +52,8 @@ impl Lowered {
         let record = copy_module_record(module_record, &bindings, program.source_text, program);
         let readings = std::sync::Arc::new(crate::usage_facts::function_param_readings(program, &scoping));
         let dynamic_code = crate::usage_facts::dynamic_code(program, &scoping);
-        Self { scoping, bindings, record, loads: crate::loads::collect(program), readings, dynamic_code }
+        let loader_escape = crate::usage_facts::loader_escape(program, &scoping);
+        Self { scoping, bindings, record, loads: crate::loads::collect(program), readings, dynamic_code, loader_escape }
     }
 }
 
@@ -203,6 +207,111 @@ fn export_name(name: &ExportExportName<'_>) -> Option<String> {
     }
 }
 
+/// What a specifier names, as the analysis resolves it.
+pub(crate) enum Named {
+    /// A module the analysis holds.
+    Module(String),
+    /// A package the analysis does not hold: its entry's path, or the
+    /// specifier when it resolves to no file.
+    Package(String),
+    /// A path, written or through an alias, that names no file the
+    /// analysis holds.
+    Nothing,
+}
+
+/// What `specifier`, written in `path`, names.
+pub(crate) fn named<T>(path: &str, specifier: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> Named {
+    match resolve_import_source(path, specifier, files, inputs) {
+        Some(target) if files.contains_key(&target) => Named::Module(target),
+        Some(target) => Named::Package(target),
+        None if names_a_path(specifier) || expand_alias(specifier, &inputs.path_aliases).is_some() => Named::Nothing,
+        None => Named::Package(specifier.to_string()),
+    }
+}
+
+/// Whether `specifier` names a file by its path rather than a package: a
+/// relative or absolute POSIX path, a Windows drive or UNC path, or a
+/// `file:` URL.
+fn names_a_path(specifier: &str) -> bool {
+    let bytes = specifier.as_bytes();
+    let drive = bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'/' | b'\\');
+    specifier.starts_with('.') || specifier.starts_with('/') || specifier.starts_with('\\') || specifier.starts_with("file:") || drive
+}
+
+/// The specifiers that name a module built into Node 24, from
+/// `module.builtinModules` (`scripts/node-builtins.ts` writes the list); any
+/// `node:` specifier names one too. None imports a module the analysis holds.
+fn node_builtins() -> &'static FxHashSet<String> {
+    static BUILTINS: std::sync::OnceLock<FxHashSet<String>> = std::sync::OnceLock::new();
+    BUILTINS.get_or_init(|| {
+        serde_json::from_str(include_str!("node_builtins.json")).expect("node_builtins.json is generated valid JSON")
+    })
+}
+
+/// Whether `identity`, a package `Named` names, is a module built into
+/// Node.
+pub(crate) fn is_node_builtin(identity: &str) -> bool {
+    identity.starts_with("node:") || node_builtins().contains(identity)
+}
+
+/// A module a load or re-export names that the analysis does not read and
+/// that may import modules the analysis holds, and so re-export any of
+/// their objects.
+pub(crate) enum Unread {
+    /// A package the analysis does not hold, other than one built into
+    /// Node.
+    Package,
+    /// A path that names no file the analysis holds: one it excluded, one
+    /// generated later, or one in a language it does not read. A file the
+    /// host reads as an opaque value imports nothing.
+    Missing,
+}
+
+impl Unread {
+    /// Why the module may re-export any analysed object, said as a clause.
+    pub(crate) fn clause(&self) -> &'static str {
+        match self {
+            Unread::Package => "a package the analysis does not read may re-export any module",
+            Unread::Missing => "a module the analysis cannot find may re-export any module",
+        }
+    }
+
+    pub(crate) fn reason(&self) -> crate::flow::ReasonId {
+        match self {
+            Unread::Package => crate::flow::ReasonId::SkippedSource,
+            Unread::Missing => crate::flow::ReasonId::UnresolvedSpecifier,
+        }
+    }
+}
+
+/// What `specifier`, written in `path`, names when the analysis does not
+/// read it and it may re-export analysed objects.
+pub(crate) fn unread_source<T>(
+    path: &str,
+    specifier: &str,
+    files: &BTreeMap<String, T>,
+    inputs: &CssInputs,
+) -> Option<Unread> {
+    match named(path, specifier, files, inputs) {
+        Named::Package(identity) if !is_node_builtin(&identity) => Some(Unread::Package),
+        Named::Nothing if !host_reads_opaque(path, specifier, inputs) => Some(Unread::Missing),
+        _ => None,
+    }
+}
+
+/// Whether the host reads what `specifier`, written in `path`, names as an
+/// opaque value or through analysis children (spec §2.2 A8): an asset, a
+/// stylesheet, JSON, a file a query loads as a string, or an adapted
+/// original. Without the host's reading, a file is not opaque.
+fn host_reads_opaque(path: &str, specifier: &str, inputs: &CssInputs) -> bool {
+    let base = crate::analyze_css::probe_base(path, specifier, inputs);
+    let host = base.and_then(|base| inputs.probe_evidence.as_ref()?.bases.get(&base).cloned());
+    matches!(
+        host.and_then(|host| host.reading),
+        Some(crate::analyze_css::HostReading::Asset | crate::analyze_css::HostReading::Adapted)
+    )
+}
+
 /// Every analysed module's record, linked: modules in path order, each
 /// request resolved as the analysis resolves specifiers.
 pub struct ProjectLinks {
@@ -229,21 +338,10 @@ impl ProjectLinks {
         let records = files
             .iter()
             .map(|(path, file)| {
-                record(file).resolved(|specifier| {
-                    match resolve_import_source(path, specifier, files, inputs) {
-                        Some(target) => match index.get(&target) {
-                            Some(&module) => Request::Module(module),
-                            // A package entry the analysis does not hold.
-                            None => Request::Outside(target),
-                        },
-                        // A path, written or through an alias, that names no
-                        // file the analysis holds resolved to nothing.
-                        None if specifier.starts_with('.') || expand_alias(specifier, &inputs.path_aliases).is_some() => {
-                            Request::Unresolved(format!("{path}::{specifier}"))
-                        }
-                        // A package the analysis does not hold.
-                        None => Request::Outside(specifier.clone()),
-                    }
+                record(file).resolved(|specifier| match named(path, specifier, files, inputs) {
+                    Named::Module(target) => Request::Module(index[&target]),
+                    Named::Package(identity) => Request::Outside(identity),
+                    Named::Nothing => Request::Unresolved(format!("{path}::{specifier}")),
                 })
             })
             .collect();

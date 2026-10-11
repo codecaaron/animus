@@ -10,9 +10,10 @@ use std::rc::Rc;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analyze_css::{
-    declared_export, loaded_modules, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
+    declared_export, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
 };
 use crate::facts::{FacadeEntry, FileFacts};
+use crate::loads::LoadTarget;
 use crate::flow::{AbsenceQuery, ChangeKind, Coverage, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom, ValueEffects};
 use animus_system_loader::module_table::{ExportLookup, ImportName, OpeningReason, Request, Terminal};
 
@@ -784,14 +785,48 @@ impl<'f> ObjectMembers<'f> {
                 flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
             }
             for (name, spec) in &ff.namespace_exports {
+                if let Some(unread) = crate::link::unread_source(module, spec, files, inputs) {
+                    let reason = format!("{module} re-exports {spec} as the namespace {name}, and {}", unread.clause());
+                    flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+                    continue;
+                }
                 let Some(target) = resolve_import_source(module, spec, files, inputs) else {
                     continue;
                 };
                 let reason = format!("{module} re-exports {target} as the namespace {name}");
                 self.namespace_reach(&target).record(&mut flow, Vec::new(), &reason);
             }
+            // A module the analysis cannot find runs when this one loads it
+            // by declaration, bindings or not, and may re-export any object.
+            for import in &ff.runtime_imports {
+                let LoadTarget::Specifier(spec) = &import.target else { continue };
+                if let Some(unread @ crate::link::Unread::Missing) = crate::link::unread_source(module, spec, files, inputs) {
+                    let reason = format!("{module} imports {spec} on line {}, and {}", import.line, unread.clause());
+                    flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+                }
+            }
+            // A glob of several patterns is one call: judged once.
+            let mut calls = std::collections::BTreeSet::new();
             for load in &ff.module_loads {
-                for target in loaded_modules(module, load, files, inputs) {
+                if !calls.insert(load.start) && !matches!(load.target, LoadTarget::Specifier(_)) {
+                    continue;
+                }
+                if let LoadTarget::Specifier(spec) = &load.target {
+                    if let Some(unread) = crate::link::unread_source(module, spec, files, inputs) {
+                        let reason =
+                            format!("{module} loads {spec} at runtime on line {}, and {}", load.line, unread.clause());
+                        flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+                    }
+                }
+                let targets = match crate::analyze_css::load_reach(module, load, files, inputs) {
+                    crate::analyze_css::LoadReach::Modules(targets) => targets,
+                    crate::analyze_css::LoadReach::Any(why) => {
+                        let reason = format!("{module} loads {} at runtime on line {}, {why}", load.call, load.line);
+                        flow.open(ReasonId::UnexpandedHostLoad, Region::of(RegionAtom::AllExports), reason);
+                        continue;
+                    }
+                };
+                for target in targets {
                     let reason = format!("{module} loads {target} at runtime on line {}", load.line);
                     self.namespace_reach(target).record(&mut flow, Vec::new(), &reason);
                 }
@@ -801,6 +836,12 @@ impl<'f> ObjectMembers<'f> {
             if let Some(how) = ff.dynamic_code {
                 let reason = format!("{module} {how}, so code from a string can load and change any module");
                 flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), reason);
+            }
+            // An escaped loader can load any module under a name the
+            // analysis never sees.
+            if let Some(how) = ff.loader_escape {
+                let reason = format!("{module} {how}, so it can load any module and change what it exports");
+                flow.open(ReasonId::OpaqueEffect, Region::of(RegionAtom::AllExports), reason);
             }
         }
         flow.close()
@@ -869,8 +910,9 @@ impl<'f> ObjectMembers<'f> {
             .imports
             .iter()
             .find(|import| import.local == binding && import.name == ImportName::Namespace)?;
-        match record.requests[import.request] {
+        match &record.requests[import.request] {
             Request::Unresolved(_) => Some(UnreadNamespace::Missing),
+            Request::Outside(identity) if crate::link::is_node_builtin(identity) => None,
             Request::Outside(_) => Some(UnreadNamespace::Package),
             Request::Module(_) => None,
         }
