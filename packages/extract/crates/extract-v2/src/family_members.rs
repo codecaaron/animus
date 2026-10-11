@@ -196,7 +196,7 @@ impl Reach {
 /// binding, a family by its position, under a module no path names.
 fn object_id(object: &Object) -> ObjectId {
     match object {
-        Object::Facade(module, binding) => ObjectId::new(module, binding),
+        Object::Facade(module, binding) | Object::Context(module, binding) => ObjectId::new(module, binding),
         Object::Family(index) => ObjectId::new("<family>", &index.to_string()),
     }
 }
@@ -213,6 +213,9 @@ enum Object {
     Family(usize),
     /// A facade: (module, binding) of its declaration.
     Facade(String, String),
+    /// A context React's `createContext` builds, whose `Provider` a tag
+    /// reads: (module, binding) of its declaration. It has no member table.
+    Context(String, String),
 }
 
 /// What one member of an object holds once the object is built.
@@ -430,7 +433,7 @@ impl<'f> ObjectMembers<'f> {
     pub(crate) fn facade_at(&mut self, file: &str, name: &str) -> Option<(String, String)> {
         match self.object_at(file, name)? {
             Object::Facade(module, binding) => Some((module, binding)),
-            Object::Family(_) => None,
+            Object::Family(_) | Object::Context(..) => None,
         }
     }
 
@@ -501,8 +504,8 @@ impl<'f> ObjectMembers<'f> {
         }
     }
 
-    /// The object `name` holds in `module`: a family or facade it declares,
-    /// one a `const` alias names, or one it imports.
+    /// The object `name` holds in `module`: a family, facade or context it
+    /// declares, one a `const` alias names, or one it imports.
     fn local_object(&mut self, module: &str, name: &str) -> Option<Object> {
         let key = (module.to_string(), name.to_string());
         if let Some(found) = self.objects.get(&key) {
@@ -524,6 +527,9 @@ impl<'f> ObjectMembers<'f> {
         if ff.facades.contains_key(name) {
             return Some(Object::Facade(module.to_string(), name.to_string()));
         }
+        if ff.context_consts.contains(name) {
+            return Some(Object::Context(module.to_string(), name.to_string()));
+        }
         if let Some(target) = ff.aliases.get(name) {
             return self.local_object(module, target);
         }
@@ -534,21 +540,6 @@ impl<'f> ObjectMembers<'f> {
 
     /// The object `module` exports as `name`, followed through re-exports
     /// and barrels.
-    /// The context React's `createContext` builds that `module` exports
-    /// under `name`, if it exports one.
-    fn exported_context(&self, module: &str, name: &str) -> Option<ObjectId> {
-        let (declaring, _, declared) = declared_export(module, name.to_string(), self.files, self.links)?;
-        self.files[&declaring].context_consts.contains(&declared).then(|| ObjectId::new(&declaring, &declared))
-    }
-
-    /// The context React's `createContext` builds that the binding a use in
-    /// `module` names (`Ctx`, or `Ctx.Provider`) declares, if any.
-    fn context_of(&self, module: &str, ff: &FileFacts, name: &str) -> Option<ObjectId> {
-        let root = name.split('.').next().unwrap_or(name);
-        let (declaring, binding, _) = resolve_declaration(module, ff, root, self.files, self.inputs, self.links)?;
-        self.files.get(&declaring)?.context_consts.contains(&binding).then(|| ObjectId::new(&declaring, &binding))
-    }
-
     fn exported_object(&mut self, module: &str, name: &str) -> Option<Object> {
         let (declaring, exported, declared) =
             declared_export(module, name.to_string(), self.files, self.links)?;
@@ -576,6 +567,7 @@ impl<'f> ObjectMembers<'f> {
                 self.building.remove(object);
                 table
             }
+            Object::Context(..) => MemberTable::default(),
         };
         // What changed the object may also have added members.
         if let Some(reason) = self.instability(object) {
@@ -722,9 +714,6 @@ impl<'f> ObjectMembers<'f> {
                 if let Some(object) = self.exported_object(module, name) {
                     flow.export(object_id(&object), module, name);
                 }
-                if let Some(context) = self.exported_context(module, name) {
-                    flow.export(context, module, name);
-                }
             }
         }
         let mut by_name: Option<FxHashMap<String, Vec<Object>>> = None;
@@ -781,11 +770,6 @@ impl<'f> ObjectMembers<'f> {
                 // A write to an assigned facade's target changes the facade.
                 let facades = self.facades_on(module, ff, name);
                 reach.record(&mut flow, facades, &reason);
-                // A use of a context other than React's context readers may
-                // change its `Provider`.
-                if let Some(context) = self.context_of(module, ff, name) {
-                    flow.change(context, Vec::new(), ChangeKind::Escape, reason);
-                }
             }
             // A package may re-export our objects (a linked workspace
             // package) under any name: a use that may write through its

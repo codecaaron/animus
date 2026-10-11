@@ -10897,6 +10897,26 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let files = [("kit.tsx", kit), ("contexts.tsx", contexts), ("other.ts", other), ("app.tsx", app)];
             assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{other}");
         }
+        // A use reaches the context however it is named: through a namespace
+        // member path, a renamed re-export, a star, a default that holds it or
+        // a local alias.
+        let renamed = "export { Shared as Renamed } from './contexts';\n";
+        let star = "export * from './contexts';\n";
+        let default = "import { Shared } from './contexts';\nexport default Shared;\n";
+        for (barrel, other) in [
+            ("", "import * as contexts from './contexts';\ncontexts.Shared.Provider = pick();\n"),
+            ("", "import * as contexts from './contexts';\ndelete contexts.Shared.Provider;\n"),
+            ("", "import * as contexts from './contexts';\nconsume(contexts.Shared);\n"),
+            (renamed, "import * as b from './barrel';\nb.Renamed.Provider = pick();\n"),
+            (star, "import * as b from './barrel';\nb.Shared.Provider = pick();\n"),
+            (default, "import D from './barrel';\nD.Provider = pick();\n"),
+            (default, "import * as b from './barrel';\nb.default.Provider = pick();\n"),
+            ("", "import { Shared } from './contexts';\nconst Alias = Shared;\nAlias.Provider = pick();\n"),
+        ] {
+            let files =
+                [("kit.tsx", kit), ("contexts.tsx", contexts), ("barrel.ts", barrel), ("other.ts", other), ("app.tsx", app)];
+            assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), ["p"], "{barrel}{other}");
+        }
     }
 
     /// A tag whose type a function's own prop chooses (`createElement(as ??
