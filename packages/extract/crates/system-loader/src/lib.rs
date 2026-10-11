@@ -2535,7 +2535,11 @@ export const ds = tokens;
     /// evaluation, on disk, and for an analysis, in its file set.
     #[test]
     fn one_extension_policy_answers_system_and_analysis_alike() {
-        let witnesses: [(&[&str], &str, &str); 8] = [
+        // Each row: the files present, the specifier, the file it names. The
+        // competing rows pin the order: appended extensions, index files and
+        // NodeNext sources each in policy order, an appended file before an
+        // index, and the literal spelling before any source it stands for.
+        let witnesses: [(&[&str], &str, &str); 15] = [
             (&["x.ts"], "./x.js", "x.ts"),
             (&["x.js", "x.ts"], "./x.js", "x.js"),
             (&["x.tsx"], "./x.jsx", "x.tsx"),
@@ -2544,13 +2548,23 @@ export const ds = tokens;
             (&["x.ts"], "./x.JS", "x.ts"),
             (&["x.jsx"], "./x", "x.jsx"),
             (&["x.mjs"], "./x", "x.mjs"),
+            (&["x.ts", "x.tsx", "x.js", "x.jsx", "x.mjs"], "./x", "x.ts"),
+            (&["x.tsx", "x.js"], "./x", "x.tsx"),
+            (&["x.jsx", "x.mjs"], "./x", "x.jsx"),
+            (&["x/index.ts", "x/index.tsx", "x/index.js"], "./x", "x/index.ts"),
+            (&["x.ts", "x/index.ts"], "./x", "x.ts"),
+            (&["x.ts", "x.tsx", "x.jsx"], "./x.js", "x.ts"),
+            (&["x.tsx", "x.jsx"], "./x.js", "x.tsx"),
         ];
         for (index, (present, specifier, expected)) in witnesses.into_iter().enumerate() {
             let dir = scratch_dir(&format!("extension-policy-{index}"));
             for file in present {
-                fs::write(dir.join(file), "export {};\n").expect("write witness");
+                let path = dir.join(file);
+                fs::create_dir_all(path.parent().expect("a witness file has a directory")).expect("create directory");
+                fs::write(path, "export {};\n").expect("write witness");
             }
-            let system = resolve_relative(&dir, specifier).map(|path| path.rsplit('/').next().unwrap_or_default().to_string());
+            let prefix = format!("{}/", dir.to_string_lossy());
+            let system = resolve_relative(&dir, specifier).map(|path| path.trim_start_matches(&prefix).trim_start_matches("./").to_string());
             let base = specifier.trim_start_matches("./");
             let analysis = resolution::EXTENSION_POLICY.probe(base, |candidate| present.contains(&candidate));
             assert_eq!(system.as_deref(), Ok(expected), "system: {present:?} {specifier}");
