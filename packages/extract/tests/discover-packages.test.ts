@@ -847,6 +847,7 @@ function collectedKits(
     outcomes: [],
     diagnostics: [],
     kitDescriptors: [],
+    packageInstances: {},
   };
   for (const [specifier, pkg, files] of specifiers) {
     const dir = `/r/packages/${pkg}/src`;
