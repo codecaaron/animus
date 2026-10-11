@@ -111,7 +111,7 @@ describe('host asset classification', () => {
         'x.css.ts',
         'selected.data',
       ].map((path) => builtIn.isAsset(path, ''))
-    ).toEqual([true, true, true, false, false, true, false, false]);
+    ).toEqual([true, true, true, false, true, true, false, false]);
     expect(builtIn.resolverVersion).toBe(
       `built-in (hostOptionUnreadable: rollup; ${BUILT_IN_ASSET_SOURCE})`
     );

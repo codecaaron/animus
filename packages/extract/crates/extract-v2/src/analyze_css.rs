@@ -104,6 +104,9 @@ pub struct CssInputs {
     /// Each probe this analysis ended Incomplete: its importer, specifier,
     /// the candidate, and the spelling the host's filesystem opens.
     pub incomplete_probes: std::sync::Mutex<BTreeSet<IncompleteProbe>>,
+    /// Probes whose host opens an opaque file before a later analysed
+    /// candidate: resolved, but reported.
+    pub shadowing_probes: std::sync::Mutex<BTreeSet<ShadowingProbe>>,
     /// `{ definitionKey: sourceText }` for the loaded system's configured
     /// transforms, keyed as its props' `transformId` (or, for a system that
     /// predates identities, their name).
@@ -312,6 +315,7 @@ impl CssInputs {
             analysis_context: AnalysisContext::default(),
             probe_evidence: None,
             incomplete_probes: Default::default(),
+            shadowing_probes: Default::default(),
             dev_mode,
             numeric_properties: FxHashSet::default(),
             system_hash,
@@ -816,10 +820,22 @@ pub struct IncompleteProbe {
     pub why: Opening,
 }
 
+/// A probe whose host opens an opaque file (an asset, a stylesheet, JSON)
+/// ahead of `later`, the analysed candidate a fall-through would have read.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ShadowingProbe {
+    pub importer: String,
+    pub specifier: String,
+    pub opened: String,
+    pub later: String,
+}
+
 /// How a probe ends.
 enum ProbeOutcome {
     Found(String),
     Incomplete { candidate: String, opened: String, why: Opening },
+    /// Resolved(asset) ahead of a later analysed candidate.
+    Shadowing { opened: String, later: String },
     Absent,
 }
 
@@ -881,6 +897,19 @@ pub fn resolve_import_source<T>(
                     candidate,
                     opened,
                     why,
+                });
+            }
+            None
+        }
+        // The host opens an opaque file: no module, and the later
+        // candidate it shadows is reported (spec §2.2 A8).
+        ProbeOutcome::Shadowing { opened, later } => {
+            if let Ok(mut shadowing) = inputs.shadowing_probes.lock() {
+                shadowing.insert(ShadowingProbe {
+                    importer: from_file.to_string(),
+                    specifier: spec.to_string(),
+                    opened,
+                    later,
                 });
             }
             None
@@ -949,7 +978,13 @@ fn probe_files<T>(base: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -
             return ProbeOutcome::Found(module.clone());
         }
         match host.reading {
-            Some(HostReading::Asset | HostReading::Adapted) => return ProbeOutcome::Absent,
+            Some(HostReading::Asset) => {
+                return match in_set() {
+                    Some(later) => ProbeOutcome::Shadowing { opened: host.candidate.clone(), later },
+                    None => ProbeOutcome::Absent,
+                };
+            }
+            Some(HostReading::Adapted) => return ProbeOutcome::Absent,
             Some(HostReading::Unanalysed) => {
                 return ProbeOutcome::Incomplete {
                     candidate: host.candidate.clone(),
@@ -8227,6 +8262,21 @@ fn run_with_system_floor(
             )),
             Opening::Skipped { later: None } => {}
         }
+    }
+    let shadowing: Vec<ShadowingProbe> =
+        inputs.shadowing_probes.lock().map(|probes| probes.iter().cloned().collect()).unwrap_or_default();
+    for ShadowingProbe { importer, specifier, opened, later } in &shadowing {
+        diagnostics.push(diagnostic(
+            importer,
+            specifier,
+            "warn",
+            format!(
+                "'{specifier}' opens {opened}, which the host loads as an opaque value, so analysis reads no \
+                 module for it, never the later {later:?} — name {later:?} in the import if it is the module \
+                 meant"
+            ),
+            Some(RESOLVE_SKIPPED_SOURCE),
+        ));
     }
 
     // A skipped source, or a file a probe's host opens that analysis never

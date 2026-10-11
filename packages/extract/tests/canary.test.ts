@@ -381,26 +381,29 @@ test('a mismatched Svelte resolver call keeps the variant it renders', async () 
 });
 
 // Contract: the probe stops at the host's first candidate (spec §2.2 A8).
-// Under an order that tries `.json` first, `./a` beside `a.json` (outside
-// the analysed set) and `a.ts` ends at `a.json`, reported as a skipped
-// source, and the child is never linked to `a.ts`; under the default order
-// `a.ts` is the parent. A host-classified asset ends a probe with no finding.
+// Under an order that tries `.json` first, `./a` beside `a.json` and `a.ts`
+// ends at `a.json`, which the host loads as opaque JSON: the child is never
+// linked to `a.ts`, and the skipped source is reported, since analysis would
+// otherwise have read `a.ts`. The same for an asset, `a.png` before `a.tsx`.
+// Under the default order `a.ts` is the parent. A host-classified asset with
+// no later analysed candidate ends a probe with no finding.
 test.each([
-  [['.json', '.ts', '.js'], null, 1],
-  [undefined, 'a.ts::Parent', 0],
+  ['a.json', 'a.ts', ['.json', '.ts', '.js'], null, 1],
+  ['a.png', 'a.tsx', ['.png', '.tsx', '.ts'], null, 1],
+  ['a.json', 'a.ts', undefined, 'a.ts::Parent', 0],
 ])(
-  "analysis stops './a' where the host order %j stops",
-  (appended, parent, skipped) => {
+  "analysis stops './a' at %s before %s where the host order %j stops",
+  (opaque, module, appended, parent, skipped) => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-skipped-')));
     const analysed = {
-      'a.ts': "export const Parent = ds.styles({ p: 9 }).asElement('div');\n",
+      [module]: "export const Parent = ds.styles({ p: 9 }).asElement('div');\n",
       'app.tsx':
         "import { Parent } from './a';\nimport logo from './logo.png';\nexport const Child = Parent.extend().styles({ m: 1 }).asElement('div');\nexport const App = () => <Child data-logo={logo} />;\n",
     } satisfies Record<string, string>;
     for (const [path, source] of Object.entries(analysed)) {
       writeFileSync(join(root, path), source);
     }
-    writeFileSync(join(root, 'a.json'), '{ "p": 4 }\n');
+    writeFileSync(join(root, opaque), '{ "p": 4 }\n');
     writeFileSync(join(root, 'logo.png'), '');
     const order =
       appended === undefined
@@ -431,7 +434,8 @@ test.each([
       skipped: manifest.diagnostics.filter(
         (d: { code?: string; message: string }) =>
           d.code === 'animus.resolve.skipped-source' &&
-          d.message.includes('a.json')
+          d.message.includes(opaque) &&
+          d.message.includes(module)
       ).length,
       resolve: manifest.diagnostics.filter((d: { code?: string }) =>
         d.code?.startsWith('animus.resolve.')
@@ -498,13 +502,14 @@ test('a Svelte resolver call stops at an unanalysed host-first file', async () =
 // the host loads it for its effects. Under the CLI's built-in
 // classification, a file it opens that analysis never reads (`.data`, a
 // `.js` with a query that keeps it code) leaves usage incomplete, so R's
-// `lg`, which only that file could render, keeps its CSS; a stylesheet, or a
-// file `?raw` loads as a string, is opaque, and `lg` is pruned.
+// `lg`, which only that file could render, keeps its CSS; a stylesheet,
+// JSON, or a file `?raw` loads as a string, is opaque, and `lg` is pruned.
 test.each([
   ['./selected.data', true],
   ['./selected.js?foo', true],
   ['./selected.js?raw', false],
   ['./globals.css', false],
+  ['./data.json', false],
 ])("a bindingless import of '%s' keeps lg: %s", (specifier, kept) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-bindingless-')));
   const analysed = {
@@ -518,6 +523,44 @@ test.each([
   writeFileSync(join(root, 'selected.data'), "R.render({ size: 'lg' });\n");
   writeFileSync(join(root, 'selected.js'), "R.render({ size: 'lg' });\n");
   writeFileSync(join(root, 'globals.css'), 'body { margin: 0; }\n');
+  writeFileSync(join(root, 'data.json'), '{ "size": "lg" }\n');
+  const filesJson = JSON.stringify(
+    Object.entries(analysed).map(([path, source]) => ({ path, source }))
+  );
+  const engine = new v2.ExtractEngine({});
+  const prepared = JSON.parse(engine.prepare(filesJson));
+  const evidence = gatherProbeEvidence(
+    root,
+    new Set(Object.keys(analysed)),
+    undefined,
+    { isAsset: builtInAssetClassification('noHost').isAsset }
+  )(prepared.bases, prepared.identity);
+  const manifest = JSON.parse(engine.analyze(filesJson, evidence));
+  rmSync(root, { recursive: true, force: true });
+
+  expect({
+    sm: manifest.css.includes('padding: 1px'),
+    lg: manifest.css.includes('padding: 99px'),
+  }).toEqual({ sm: true, lg: kept });
+});
+
+// Contract: a default-bound JSON import is opaque data (spec §2.2 A8): it
+// stops no pruning, and its values are never read statically, so a prop it
+// feeds keeps every option.
+test.each([
+  ['<R size="sm" data-cfg={cfg} />', false],
+  ['<R size={cfg.size} />', true],
+])('a JSON import rendered as %s keeps lg: %s', (render, kept) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-json-')));
+  const analysed = {
+    'r.ts':
+      "export const R = ds.styles({}).variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: { padding: '1px' }, lg: { padding: '99px' } } }).asElement('div');\n",
+    'app.tsx': `import { R } from './r';\nimport cfg from './data.json';\nexport const App = () => ${render};\n`,
+  } satisfies Record<string, string>;
+  for (const [path, source] of Object.entries(analysed)) {
+    writeFileSync(join(root, path), source);
+  }
+  writeFileSync(join(root, 'data.json'), '{ "size": "lg" }\n');
   const filesJson = JSON.stringify(
     Object.entries(analysed).map(([path, source]) => ({ path, source }))
   );

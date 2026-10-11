@@ -6,11 +6,11 @@ import {
   BUILT_IN_STYLESHEET_TYPES,
 } from './built-in-asset-types';
 
-/** Which files a host loads as opaque values (spec §2.2 A8): an asset, or a
- *  stylesheet, with no JS exports or effects on app objects (a CSS module's
- *  class-name map is opaque data). An opaque file the host opens is
- *  Resolved(asset). Where the host's reading is uncertain, a file is not
- *  opaque. */
+/** Which files a host loads as opaque values (spec §2.2 A8): an asset, a
+ *  stylesheet or JSON, with no code and no effects on app objects (a CSS
+ *  module's class-name map, or JSON's values, are opaque data, never read
+ *  statically). An opaque file the host opens is Resolved(asset). Where the
+ *  host's reading is uncertain, a file is not opaque. */
 export interface HostAssetClassification {
   /** Whether the host loads `file`, requested with `query` (`''`, or the
    *  specifier's `?…`), as an opaque value. */
@@ -31,14 +31,18 @@ const STYLESHEET_RE = new RegExp(
   `\\.(?:${BUILT_IN_STYLESHEET_TYPES.join('|')})$`
 );
 
+/** JSON, as Vite's json plugin, webpack's `json` type, esbuild's `json`
+ *  loader and Turbopack read it: the final extension, exact case. */
+const JSON_RE = /\.json$/;
+
 /** The queries Vite answers with a string whatever the file holds: `?url`
  *  and `?raw`. Any other query keeps the file's own reading. */
 const VITE_OPAQUE_QUERY_RE = /[?&](?:url|raw)\b/;
 
 /** The built-in classification, where no host's can be read or is not
  *  modelled (webpack's and Rspack's rules, as a conditional rule may never
- *  apply): Vite's known asset types, less `svg`, and its CSS languages
- *  (`BUILT_IN_ASSET_SOURCE`), read with Vite's queries. */
+ *  apply): Vite's known asset types, less `svg`, its CSS languages
+ *  (`BUILT_IN_ASSET_SOURCE`) and JSON, read with Vite's queries. */
 export function builtInAssetClassification(
   reason: 'noHost' | 'hostOptionUnreadable',
   detail?: string
@@ -47,14 +51,15 @@ export function builtInAssetClassification(
     isAsset: (file, query) =>
       VITE_OPAQUE_QUERY_RE.test(query) ||
       BUILT_IN_ASSET_RE.test(file) ||
-      STYLESHEET_RE.test(file),
+      STYLESHEET_RE.test(file) ||
+      JSON_RE.test(file),
     resolverVersion: `built-in (${reason}${detail ? `: ${detail}` : ''}; ${BUILT_IN_ASSET_SOURCE})`,
   };
 }
 
 /** Vite's own classification: `?url` and `?raw`, its known asset types and
  *  the user's `assetsInclude`, as `ResolvedConfig.assetsInclude` answers,
- *  and its CSS languages (`isCSSRequest`). */
+ *  its CSS languages (`isCSSRequest`), and its json plugin's JSON. */
 export function viteAssetClassification(
   assetsInclude: (file: string) => boolean,
   version?: string
@@ -63,7 +68,8 @@ export function viteAssetClassification(
     isAsset: (file, query) =>
       VITE_OPAQUE_QUERY_RE.test(query) ||
       assetsInclude(file) ||
-      STYLESHEET_RE.test(file),
+      STYLESHEET_RE.test(file) ||
+      JSON_RE.test(file),
     resolverVersion: `${version ? `vite@${version}` : 'vite'} captured`,
   };
 }
@@ -86,7 +92,7 @@ const ESBUILD_DEFAULT_LOADERS = {
 } satisfies Readonly<Record<string, string>>;
 
 /** esbuild loaders whose module is an opaque value: a URL, the file's bytes
- *  or text, or a stylesheet. `copy` keeps the file as code. */
+ *  or text, a stylesheet, or JSON. `copy` keeps the file as code. */
 const ESBUILD_OPAQUE_LOADERS = new Set([
   'file',
   'dataurl',
@@ -96,6 +102,7 @@ const ESBUILD_OPAQUE_LOADERS = new Set([
   'css',
   'local-css',
   'global-css',
+  'json',
 ]);
 
 /** esbuild's classification, from its `loader` map: the loader esbuild
@@ -126,8 +133,8 @@ export function esbuildAssetClassification(
 
 /** Turbopack's classification under Next: Next's static-image table
  *  (`nextImageLoaderRegex`), unless `images.disableStaticImages`, and its
- *  stylesheets (`regexLikeCss`), as the installed `next` declares them.
- *  Built-in where Next cannot be read. */
+ *  stylesheets (`regexLikeCss`), as the installed `next` declares them,
+ *  and JSON. Built-in where Next cannot be read. */
 export function nextImageAssetClassification(
   rootDir: string,
   disableStaticImages: boolean
@@ -150,6 +157,7 @@ export function nextImageAssetClassification(
     }
     return {
       isAsset: (file) =>
+        JSON_RE.test(file) ||
         regexLikeCss.test(file) ||
         (!disableStaticImages && nextImageLoaderRegex.test(file)),
       resolverVersion: `from next@${version}`,
