@@ -7,6 +7,7 @@ import {
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
+  nextImageAssetClassification,
   outputExclusion,
   readTsconfigAliasPairs,
   resolveMode,
@@ -499,6 +500,7 @@ function turbopackConfig<Config extends NextOwnedConfig>(
       phase,
       resolveExtensions,
       outputExclude,
+      nextConfig.images?.disableStaticImages === true,
       build,
       appRoot
     ).then((fragment) => mergeTurbopackFragment(nextConfig, fragment));
@@ -555,11 +557,17 @@ function loadTurbopackFragment(
   phase: string,
   resolveExtensions: readonly string[] | undefined,
   outputExclude: string | null,
+  disableStaticImages: boolean,
   build: string,
   rootDir: string
 ): Promise<TurbopackConfigFragment> {
   // The extension order is part of the analysis a load shares.
-  const key = JSON.stringify([phase, rootDir, resolveExtensions ?? null]);
+  const key = JSON.stringify([
+    phase,
+    rootDir,
+    resolveExtensions ?? null,
+    disableStaticImages,
+  ]);
   const owner = turbopackOwner(build);
   if (owner.load?.key === key) return owner.load.fragment;
   const fragment = analyzeForTurbopack(
@@ -568,6 +576,7 @@ function loadTurbopackFragment(
     rootDir,
     resolveExtensions,
     outputExclude,
+    disableStaticImages,
     build
   );
   const load = { key, fragment };
@@ -584,6 +593,7 @@ async function analyzeForTurbopack(
   rootDir: string,
   resolveExtensions: readonly string[] | undefined,
   outputExclude: string | null,
+  disableStaticImages: boolean,
   build: string
 ): Promise<TurbopackConfigFragment> {
   const development = phase === PHASE_DEVELOPMENT_SERVER;
@@ -609,6 +619,10 @@ async function analyzeForTurbopack(
   session.rootDir = rootDir;
   if (outputExclude !== null) session.structuralExclude = [outputExclude];
   session.extensionPolicy = turbopackExtensionPolicy(resolveExtensions);
+  session.assetClassification = nextImageAssetClassification(
+    rootDir,
+    disableStaticImages
+  );
   const aliasPairs = readTsconfigAliasPairs(rootDir);
   const builtAliases = buildPathAliasesJson(aliasPairs, rootDir);
   if (builtAliases) {

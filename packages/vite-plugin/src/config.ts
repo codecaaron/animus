@@ -2,6 +2,7 @@ import {
   buildPathAliasesJson,
   outputExclusion,
   resolveMode,
+  viteAssetClassification,
   viteExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
@@ -42,6 +43,7 @@ export function applyResolvedConfig(
   );
   // Vite's extension order, with its defaults applied.
   ctx.extensionPolicy = viteExtensionPolicy(config.resolve.extensions);
+  ctx.assetClassification = viteAssetClassification(config.assetsInclude);
   ctx.log(`extension order: ${ctx.extensionPolicy.resolverVersion}`);
   ctx.logger = config.logger;
   // Public base for dev /@fs asset URLs (build URLs are resolved by Vite's
