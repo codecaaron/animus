@@ -152,16 +152,23 @@ async function analyzeChangedFile(
     return { kind: 'ignored' };
   }
 
-  // Vite's `read` retries on the empty content an atomic save exposes, so
-  // the Session reads the settled bytes.
+  // Vite's `read` retries on the empty content an atomic save exposes, and
+  // returns the settled bytes while the disk may still be empty: the
+  // Session analyzes those bytes, not a second read of the disk.
+  let settled: string | undefined;
   try {
-    if (read) await read();
+    settled = read ? await read() : undefined;
   } catch {
     return { kind: 'ignored' };
   }
 
   const hmrStart = performance.now();
-  const outcomes = await ctx.submitChanges(changesOf('update', absFile));
+  const changes = changesOf('update', absFile);
+  const outcomes = await ctx.submitChanges(
+    settled === undefined
+      ? changes
+      : { ...changes, sources: new Map([[absFile, settled]]) }
+  );
   const last = outcomes.at(-1)?.outcome;
   // Nothing published: the Session read no change.
   if (last === undefined) {
