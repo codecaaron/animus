@@ -16,6 +16,7 @@ import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
 import {
   adaptedOriginals,
   assembleStylesheet,
+  buildPathAliasesJson,
   buildSystemPropsModule,
   BUILT_IN_EXTENSION_POLICY,
   builtInAssetClassification,
@@ -45,6 +46,7 @@ import {
   outputSourceGuard,
   outputSourceMessage,
   postProcessCss,
+  readTsconfigAliasPairs,
   projectExternalFileOwners,
   resolveAssetFile,
   resolveLightningTargets,
@@ -59,6 +61,7 @@ import {
   reportSurvivingAssetPlaceholders,
   substituteSheetAssets,
   toWatchKeys,
+  tsconfigChainPaths,
   isDeletedSource,
   unreadableSourceDiagnostic,
   unmatchedExcludeLines,
@@ -257,6 +260,26 @@ interface SystemDependencies {
   hashes: Map<string, string>;
 }
 
+/** A file's content hash, or '' when it cannot be read. */
+function fileHashOrEmpty(path: string): string {
+  try {
+    return contentHash(readFileSync(path, 'utf-8'));
+  } catch {
+    return '';
+  }
+}
+
+/** The first file whose content no longer has its recorded hash: an
+ *  unreadable or deleted file reads as '', which mismatches a real one. */
+function firstChangedFile(
+  hashes: ReadonlyMap<string, string>
+): string | undefined {
+  for (const [path, hash] of hashes) {
+    if (fileHashOrEmpty(path) !== hash) return path;
+  }
+  return undefined;
+}
+
 /** Bundler-agnostic extraction pipeline: system load, source ingestion,
  *  analysis, emission, and watch-cycle diffing. Carries no bundler types. */
 export class ExtractionSession {
@@ -264,6 +287,16 @@ export class ExtractionSession {
   rootDir: string | null = null;
   /** Serialized path aliases, harvested by the adapter from bundler config. */
   pathAliasesJson: string | null = null;
+  /** The host's aliases are the project's tsconfig `paths`: each full pass
+   *  re-reads them, so a tsconfig edit takes effect. */
+  aliasesFromTsconfig = false;
+  /** The root package.json and the tsconfig chain, absent files included:
+   *  a change to any is a configuration change, which runs the full pass. */
+  configInputPaths: string[] = [];
+  private configInputKeys = new Set<string>();
+  /** Each configuration input's content hash at the last full pass, ''
+   *  for an absent one: the probe's basis when the host reports nothing. */
+  private configInputHashes = new Map<string, string>();
   /** The host's export conditions, in its order, for the system loader. */
   conditions: readonly string[] = [];
   /** The host's extension order, as its adapter captured it; the built-in
@@ -787,21 +820,15 @@ export class ExtractionSession {
     // module set. Keys are lexical and canonical, so symlinked paths match.
     let assetChanged = false;
     let systemHit: string | undefined;
+    let configHit: string | undefined;
     try {
-      if (!changes.modifiedFiles && !changes.removedFiles) {
-        // No change sets (webpack's first watchRun): probe the dependency
-        // files by content hash.
-        for (const [dep, hash] of this.systemDependencyHashes) {
-          let current = '';
-          try {
-            current = contentHash(readFileSync(dep, 'utf-8'));
-          } catch {
-            // unreadable/deleted → hash stays '' and mismatches a real one
-          }
-          if (current !== hash) {
-            systemHit = dep;
-            break;
-          }
+      if (changed.length === 0) {
+        // No changes from the host (webpack's first watchRun, or empty
+        // sets): probe the dependency and configuration files by content
+        // hash.
+        systemHit = firstChangedFile(this.systemDependencyHashes);
+        if (systemHit === undefined) {
+          configHit = firstChangedFile(this.configInputHashes);
         }
       } else {
         systemHit = changed.find((path) =>
@@ -813,12 +840,17 @@ export class ExtractionSession {
       this.warn(`HMR system-reload check failed: ${String(err)}`);
     }
 
+    configHit ??= changed.find((path) =>
+      toWatchKeys(path).some((key) => this.configInputKeys.has(key))
+    );
     const debtRetry = this.systemReloadOwed && this.heldRejection === null;
-    if (systemHit || debtRetry) {
+    if (systemHit || configHit || debtRetry) {
       this.log(
         systemHit
           ? `system reload: system dependency changed (${relative(rootDir, systemHit)})`
-          : 'system reload: retrying the reload a failure left owed'
+          : configHit
+            ? `system reload: configuration changed (${relative(rootDir, configHit)})`
+            : 'system reload: retrying the reload a failure left owed'
       );
       this.resetForHmr();
       try {
@@ -1174,6 +1206,26 @@ export class ExtractionSession {
     this.commitSystemAuthority();
   }
 
+  /** Records the configuration inputs and, for a tsconfig-aliased host,
+   *  re-reads its aliases. */
+  private readConfigInputs(rootDir: string): void {
+    this.configInputPaths = [
+      join(rootDir, 'package.json'),
+      ...tsconfigChainPaths(rootDir),
+    ];
+    this.configInputKeys = new Set(
+      this.configInputPaths.flatMap((path) => toWatchKeys(path))
+    );
+    this.configInputHashes = new Map(
+      this.configInputPaths.map((path) => [path, fileHashOrEmpty(path)])
+    );
+    if (this.aliasesFromTsconfig) {
+      this.pathAliasesJson =
+        buildPathAliasesJson(readTsconfigAliasPairs(rootDir), rootDir)?.json ??
+        null;
+    }
+  }
+
   /** What hosts watch for assets, and what the last-good generation
    *  reported about its kits and packages, which a failed full pass must
    *  leave in place. */
@@ -1242,6 +1294,7 @@ export class ExtractionSession {
     const rootDir = this.rootDir!;
     const priorSourceState = this.snapshotSourceState();
     const resolvedSystemPath = resolve(rootDir, this.options.system);
+    this.readConfigInputs(rootDir);
 
     // One resolution context, which system loading and package resolution
     // both read: the host's conditions and extension order, and the session

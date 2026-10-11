@@ -1,10 +1,8 @@
 import {
   buildKitDescriptor,
-  buildPathAliasesJson,
   KIT_DESCRIPTOR_FILE,
   kitPublicationFailures,
   outputExclusion,
-  readTsconfigAliasPairs,
   runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -101,11 +99,8 @@ export function createCliSession(config: ResolvedCliConfig): ExtractionSession {
   // Every cycle republishes the whole assets set, so a superseded copy
   // would ship in a tree a fresh build of the same source never produces.
   session.staleAssetPruning = 'every-cycle';
-  const aliasPairs = readTsconfigAliasPairs(root);
-  const builtAliases = buildPathAliasesJson(aliasPairs, root);
-  if (builtAliases) {
-    session.pathAliasesJson = builtAliases.json;
-  }
+  // Each full pass re-reads the tsconfig aliases.
+  session.aliasesFromTsconfig = true;
   return session;
 }
 
