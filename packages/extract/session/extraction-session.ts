@@ -33,6 +33,7 @@ import {
   hashReplacementPlans,
   isExcludedPackageRelativePath,
   isPathWithinRoot,
+  declaredWorkspacePackages,
   loadSystemConfig,
   postProcessCss,
   projectExternalFileOwners,
@@ -910,6 +911,9 @@ export class ExtractionSession {
     const priorSourceState = this.snapshotSourceState();
     const resolvedSystemPath = resolve(rootDir, this.options.system);
 
+    // The session root's declared workspaces: one capture, which system
+    // loading and package resolution both read.
+    const workspaces = declaredWorkspacePackages(rootDir);
     let t = this.now();
     this.system = loadSystemConfig(engineApi, {
       systemPath: resolvedSystemPath,
@@ -917,6 +921,7 @@ export class ExtractionSession {
       prefix: this.options.prefix,
       prefixContextualVars: this.options.prefixContextualVars,
       conditions: this.conditions,
+      workspaces,
     });
     this.assetCopyCache.clear();
     this.assetDependencyPaths.clear();
@@ -981,25 +986,20 @@ export class ExtractionSession {
 
     bt.fileRead = this.elapsed(t);
 
-    // Package resolution, under the host's conditions as system loading has
-    // them: the workspace walk only locates a package, and every entry is
-    // selected as the system loader selects it. The traversal and ingest
-    // below are the shared collector.
+    // Package resolution, as system loading resolves: under the host's
+    // conditions and the same workspaces, every answer the loader's. The
+    // traversal and ingest below are the shared collector.
     t = this.now();
-    const native = (name: 'resolveSpecifier' | 'resolvePackageEntry') => {
-      const found = engineApi()[name];
-      if (found === undefined) {
-        throw new Error(
-          `the native engine does not expose ${name}, which package resolution needs — rebuild @animus-ui/extract`
-        );
-      }
-      return found;
-    };
     const packageResolution: PackageResolution = {
-      resolveSpecifier: (specifier, fromDir, conditions) =>
-        native('resolveSpecifier')(specifier, fromDir, [...conditions]),
-      resolvePackageEntry: (packageDir, conditions) =>
-        native('resolvePackageEntry')(packageDir, undefined, [...conditions]),
+      resolveSpecifier: (specifier, fromDir, conditions, declared) => {
+        const native = engineApi().resolveSpecifier;
+        if (native === undefined) {
+          throw new Error(
+            'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
+          );
+        }
+        return native(specifier, fromDir, [...conditions], declared);
+      },
     };
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = await extractSystemFilePackages(
@@ -1011,7 +1011,8 @@ export class ExtractionSession {
           rootDir,
           [name],
           packageResolution,
-          this.conditions
+          this.conditions,
+          workspaces
         ).entries[name];
         return entry ? resolve(rootDir, entry) : null;
       }
@@ -1023,7 +1024,8 @@ export class ExtractionSession {
       rootDir,
       packageNames,
       packageResolution,
-      this.conditions
+      this.conditions,
+      workspaces
     );
 
     // Raw content hashes of every walked external file, keyed by absolute
