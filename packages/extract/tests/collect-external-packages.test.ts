@@ -14,9 +14,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 
 import {
   collectExternalPackageSources,
-  excludeCollectedPackages,
   firstOwners,
-  importedKitDiagnostics,
   nativeKitSourceRoot,
   staleDistIncludesMessage,
 } from '../pipeline/discover-packages';
@@ -26,7 +24,6 @@ import {
 } from '../pipeline/host-extensions';
 import {
   INVALID_KIT_SOURCE_CONDITION,
-  KIT_SYSTEM_NOT_INCLUDED,
   KIT_WITHOUT_SOURCE_CONDITION,
 } from '../pipeline/manifest-diagnostics';
 
@@ -544,61 +541,7 @@ describe('collectExternalPackageSources', () => {
     });
   });
 
-  test('excludeCollectedPackages excises a rejected specifier atomically', async () => {
-    const root = makeRoot();
-    const kitA = makePackage(join(root, 'packages', 'a'), {
-      'src/index.ts': 'export const a = 1;',
-    });
-    const kitB = makePackage(join(root, 'packages', 'b'), {
-      'src/index.ts': 'export const b = 1;',
-      'src/Card.tsx': 'export const Card = 1;',
-    });
-
-    const collected = await collect(root, {
-      '@x/a': join(kitA, 'src', 'index.ts'),
-      '@x/b': join(kitB, 'src', 'index.ts'),
-    });
-    const admitted = excludeCollectedPackages(
-      collected,
-      new Set(['@x/b']),
-      root
-    );
-
-    expect(admitted.entries.map((e) => e.path)).toEqual([
-      'packages/a/src/index.ts',
-    ]);
-    expect(admitted.packageMap).toEqual({
-      '@x/a': 'packages/a/src/index.ts',
-    });
-    expect([...admitted.sourceEntries.keys()]).toEqual(['@x/a']);
-    expect(admitted.packageDirs).toEqual([join(kitA, 'src')]);
-    expect(firstOwners(admitted.dirOwnerSets)).toEqual({
-      [join(kitA, 'src')]: '@x/a',
-    });
-    expect(admitted.dirOwnerSets).toEqual({
-      [join(kitA, 'src')]: ['@x/a'],
-    });
-    expect(admitted.fileOwners).toEqual({
-      'packages/a/src/index.ts': '@x/a',
-    });
-    // Outcome records are reporting inputs, not membership — untouched.
-    expect(admitted.outcomes).toEqual(collected.outcomes);
-    // A derived root alias under a rejected dir is excised too: nothing may
-    // keep resolving into an excluded package.
-    const subpathCollected = await collect(root, {
-      '@x/b/Card': join(kitB, 'src', 'Card.tsx'),
-    });
-    expect(subpathCollected.packageMap['@x/b']).toBeDefined();
-    const subpathAdmitted = excludeCollectedPackages(
-      subpathCollected,
-      new Set(['@x/b/Card']),
-      root
-    );
-    expect(subpathAdmitted.packageMap).toEqual({});
-    expect(subpathAdmitted.sourceEntries.size).toBe(0);
-  });
-
-  test('a kit names its source through the animus export condition or exports that already target source, and an imported kit the system does not include is an error', async () => {
+  test('a kit names its source through the animus export condition or exports that already target source', async () => {
     const root = realpathSync(makeRoot());
     const kit = (
       base: string,
@@ -679,53 +622,6 @@ describe('collectExternalPackageSources', () => {
         'src/types.ts': 'export type T = 1;',
       }
     );
-    kit(
-      join(root, 'node_modules', '@acme', 'stray'),
-      { '.': { animus: './src/index.ts' } },
-      { 'src/index.ts': 'export const Stray = 1;' }
-    );
-
-    // The system extends three kits; the app also imports a fourth.
-    const imports = [
-      '@acme/installed',
-      '@acme/linked',
-      '@acme/legacy',
-      '@acme/stray',
-      'react',
-    ];
-    const engine = {
-      extractFacts: () =>
-        JSON.stringify({
-          parseCount: 1,
-          files: {
-            'src/App.tsx': {
-              parsePanicked: false,
-              imports: imports.map((source) => ({
-                local: 'x',
-                imported: 'x',
-                source,
-              })),
-              exports: [],
-            },
-          },
-        }),
-    };
-    const systemKits = [
-      '@acme/installed/system',
-      '@acme/legacy',
-      '@acme/linked',
-    ];
-    const app = [{ path: 'src/App.tsx', source: '' }];
-    expect(
-      importedKitDiagnostics(app, engine, root, systemKits).map((d) => [
-        d.file,
-        d.component,
-        d.code,
-        d.severity,
-      ])
-    ).toEqual([
-      ['src/App.tsx', '@acme/stray', KIT_SYSTEM_NOT_INCLUDED, 'error'],
-    ]);
 
     const result = await collect(root, {
       '@acme/installed/system': join(installed, 'dist', 'system.mjs'),
@@ -978,6 +874,11 @@ const CONDITION_FILES = {
   'dist/index.js': 9,
 };
 const REFUSED = 'percent-escape unsupported';
+const STOP_FILES = {
+  'src/first.js': 1,
+  'src/second.js': 2,
+  'dist/index.js': 9,
+};
 const conditional = (
   animus: JsonValue,
   runtime: JsonValue = './dist/index.js'
@@ -1129,6 +1030,30 @@ test.skipIf(process.platform === 'win32').each([
     'src/browser.ts',
   ],
   [
+    'array-runtime-first',
+    [
+      './src/first.js',
+      { animus: './src/second.js', import: './dist/index.js' },
+    ],
+    STOP_FILES,
+    'src/first.js',
+    [],
+    'src/first.js',
+  ],
+  [
+    'import-before-animus',
+    {
+      '.': {
+        import: './src/first.js',
+        default: { animus: './src/second.js', import: './dist/index.js' },
+      },
+    },
+    STOP_FILES,
+    'src/first.js',
+    [],
+    'src/first.js',
+  ],
+  [
     'nested-animus-node',
     {
       '.': {
@@ -1174,13 +1099,17 @@ test.skipIf(process.platform === 'win32').each([
           ? outcome.reason
           : redirected && relative(pkg, redirected),
       loader: loaded.path ? relative(pkg, loaded.path) : loaded.unresolved,
+      reported: result.diagnostics.some(
+        (d) => d.code === INVALID_KIT_SOURCE_CONDITION
+      ),
     }).toEqual(
       read === REFUSED
         ? {
             discovery: expect.stringContaining(REFUSED),
             loader: expect.stringContaining(REFUSED),
+            reported: true,
           }
-        : { discovery: read, loader: read }
+        : { discovery: read, loader: read, reported: false }
     );
   }
 );
@@ -1234,3 +1163,34 @@ test.each([
     }).toEqual({ rule, root: rootDirName, codes });
   }
 );
+
+// Contract: a pattern entry's source facet is read as the loader reads it:
+// `kit/foo` through `./*`'s `animus` target is `src/entries/foo.ts`, never a
+// `src/` guess.
+test('a wildcard entry is read through its animus target', async () => {
+  const root = realpathSync(makeRoot());
+  const pkg = join(root, 'node_modules', 'wild-kit');
+  for (const file of ['src/entries/foo.ts', 'src/foo.ts', 'dist/foo.js']) {
+    mkdirSync(join(pkg, file, '..'), { recursive: true });
+    writeFileSync(join(pkg, file), 'export const t = 1;\n');
+  }
+  writeFileSync(
+    join(pkg, 'package.json'),
+    JSON.stringify({
+      name: 'wild-kit',
+      exports: {
+        './*': { animus: './src/entries/*.ts', import: './dist/*.js' },
+      },
+    })
+  );
+
+  const result = await collect(root, {
+    'wild-kit/foo': join(pkg, 'dist', 'foo.js'),
+  });
+  const loaded = native.resolveSpecifier('wild-kit/foo', root, []);
+
+  expect({
+    discovery: relative(pkg, result.sourceEntries.get('wild-kit/foo') ?? ''),
+    loader: relative(pkg, loaded.path ?? ''),
+  }).toEqual({ discovery: 'src/entries/foo.ts', loader: 'src/entries/foo.ts' });
+});

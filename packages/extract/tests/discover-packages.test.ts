@@ -4,15 +4,23 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import {
+  excludeCollectedPackages,
   extractSystemFilePackages,
+  firstOwners,
+  importedKitDiagnostics,
   probeAbsolutePathSpecifier,
   staleDistIncludesMessage,
   unresolvableIncludesMessage,
 } from '../pipeline/discover-packages';
 import { webpackExtensionPolicy } from '../pipeline/host-extensions';
+import { KIT_SYSTEM_NOT_INCLUDED } from '../pipeline/manifest-diagnostics';
 
-import type { ModuleRecord } from '../pipeline/discover-packages';
+import type {
+  CollectedExternalPackages,
+  ModuleRecord,
+} from '../pipeline/discover-packages';
 import type { ManifestDiagnostic } from '../pipeline/manifest-diagnostics';
+import type { JsonValue } from '../pipeline/tsconfig-paths';
 
 const writeFixture = (contents: string): string => {
   const dir = mkdtempSync(join(tmpdir(), 'discover-packages-'));
@@ -811,4 +819,142 @@ describe('external-package outcome messages', () => {
       ])
     ).toBeNull();
   });
+});
+
+/** The collector's output for kits under `/r/packages` with no source
+ *  condition, as it records them: each specifier, its package, its files. */
+function collectedKits(
+  specifiers: Array<[specifier: string, pkg: 'a' | 'b', files: string[]]>
+): CollectedExternalPackages {
+  const collected: CollectedExternalPackages = {
+    entries: [],
+    packageMap: {},
+    sourceEntries: new Map(),
+    sourceEntrySideEffects: new Map(),
+    packageDirs: [],
+    linkedDirs: [],
+    outputDirs: [],
+    dirOwnerSets: {},
+    dirExtensions: {},
+    fileOwners: {},
+    outcomes: [],
+    diagnostics: [],
+    kitDescriptors: [],
+  };
+  for (const [specifier, pkg, files] of specifiers) {
+    const dir = `/r/packages/${pkg}/src`;
+    const owner = `@x/${pkg}`;
+    for (const file of files) {
+      const path = `packages/${pkg}/src/${file}`;
+      collected.entries.push({ path, source: '' });
+      collected.fileOwners[path] = specifier;
+    }
+    collected.packageMap[specifier] = `packages/${pkg}/src/${files[0]}`;
+    collected.sourceEntries.set(specifier, `${dir}/${files[0]}`);
+    if (specifier !== owner) {
+      collected.packageMap[owner] = `packages/${pkg}/src/index.ts`;
+      collected.sourceEntries.set(owner, `${dir}/index.ts`);
+    }
+    collected.packageDirs.push(dir);
+    collected.linkedDirs.push(dir);
+    collected.dirOwnerSets[dir] = [specifier];
+    collected.dirExtensions[dir] = ['.ts', '.tsx', '.mdx'];
+    collected.outcomes.push({
+      specifier,
+      outcome: 'resolved',
+      fileCount: files.length,
+    });
+  }
+  return collected;
+}
+
+describe('excludeCollectedPackages', () => {
+  test('excises a rejected specifier atomically', () => {
+    const collected = collectedKits([
+      ['@x/a', 'a', ['index.ts']],
+      ['@x/b', 'b', ['index.ts', 'Card.tsx']],
+    ]);
+    const admitted = excludeCollectedPackages(
+      collected,
+      new Set(['@x/b']),
+      '/r'
+    );
+
+    expect(admitted.entries.map((e) => e.path)).toEqual([
+      'packages/a/src/index.ts',
+    ]);
+    expect(admitted.packageMap).toEqual({ '@x/a': 'packages/a/src/index.ts' });
+    expect([...admitted.sourceEntries.keys()]).toEqual(['@x/a']);
+    expect(admitted.packageDirs).toEqual(['/r/packages/a/src']);
+    expect(firstOwners(admitted.dirOwnerSets)).toEqual({
+      '/r/packages/a/src': '@x/a',
+    });
+    expect(admitted.dirOwnerSets).toEqual({ '/r/packages/a/src': ['@x/a'] });
+    expect(admitted.fileOwners).toEqual({ 'packages/a/src/index.ts': '@x/a' });
+    // Outcome records are reporting inputs, not membership — untouched.
+    expect(admitted.outcomes).toEqual(collected.outcomes);
+  });
+
+  test('a derived root alias under a rejected dir is excised too', () => {
+    // Nothing may keep resolving into an excluded package.
+    const collected = collectedKits([
+      ['@x/b/Card', 'b', ['Card.tsx', 'index.ts']],
+    ]);
+    expect(collected.packageMap['@x/b']).toBeDefined();
+    const admitted = excludeCollectedPackages(
+      collected,
+      new Set(['@x/b/Card']),
+      '/r'
+    );
+
+    expect(admitted.packageMap).toEqual({});
+    expect(admitted.sourceEntries.size).toBe(0);
+  });
+});
+
+// Contract: an imported kit the application's system does not include is an
+// error; a kit the system includes, a package with no source condition, and
+// a non-kit import are not.
+test('an imported kit the system does not include is an error', () => {
+  const root = mkdtempSync(join(tmpdir(), 'discover-packages-'));
+  const pkg = (name: string, exports?: JsonValue): void => {
+    const dir = join(root, 'node_modules', ...name.split('/'));
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'index.ts'), 'export const t = 1;\n');
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, exports }));
+  };
+  const source = { '.': { animus: './src/index.ts' } };
+  pkg('@acme/included', source);
+  pkg('@acme/legacy');
+  pkg('@acme/stray', source);
+  const imports = ['@acme/included', '@acme/legacy', '@acme/stray', 'react'];
+  const engine = {
+    extractFacts: () =>
+      JSON.stringify({
+        parseCount: 1,
+        files: {
+          'src/App.tsx': {
+            parsePanicked: false,
+            imports: imports.map((specifier) => ({
+              local: 'x',
+              imported: 'x',
+              source: specifier,
+            })),
+            exports: [],
+          },
+        },
+      }),
+  };
+
+  const found = importedKitDiagnostics(
+    [{ path: 'src/App.tsx', source: '' }],
+    engine,
+    root,
+    ['@acme/included', '@acme/legacy']
+  );
+  rmSync(root, { recursive: true, force: true });
+
+  expect(found.map((d) => [d.file, d.component, d.code, d.severity])).toEqual([
+    ['src/App.tsx', '@acme/stray', KIT_SYSTEM_NOT_INCLUDED, 'error'],
+  ]);
 });

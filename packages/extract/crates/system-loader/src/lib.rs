@@ -338,6 +338,16 @@ fn resolve_exports_pattern(
     source: bool,
     conditions: &[String],
 ) -> Option<String> {
+    let (value, matched) = best_exports_pattern(exports, lookup_key)?;
+    Some(target_path(&resolve_condition_value(value, source, conditions)?.replace('*', matched)))
+}
+
+/// The `exports` pattern Node selects for `lookup_key`, with the part its
+/// `*` matches; none where no pattern matches or Node refuses the match.
+fn best_exports_pattern<'e, 'k>(
+    exports: &'e serde_json::Map<String, serde_json::Value>,
+    lookup_key: &'k str,
+) -> Option<(&'e serde_json::Value, &'k str)> {
     let mut best: Option<(&str, &str, &serde_json::Value)> = None;
 
     for (pattern, value) in exports {
@@ -370,7 +380,7 @@ fn resolve_exports_pattern(
     if refused_pattern_match(matched) {
         return None;
     }
-    Some(target_path(&resolve_condition_value(value, source, conditions)?.replace('*', matched)))
+    Some((value, matched))
 }
 
 /// The path an `exports` target names, read as Node reads a URL: a raw
