@@ -9,6 +9,7 @@
 //! module does not export, or exports ambiguously, fails the load.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::path::Path;
 
 use oxc::allocator::Allocator;
@@ -103,8 +104,25 @@ pub(crate) enum ExportTarget {
     Namespace { from: String },
 }
 
-/// The assignment target a write to an imported binding becomes.
-const READ_ONLY_TARGET: &str = "__modules[(() => { throw new TypeError('Assignment to constant variable.'); })()]";
+/// Bundle code that runs before any module: `__modules['#import'](read).value`
+/// is an imported binding as an assignment target. Reading it reads the
+/// binding, so a compound or logical assignment, an update and a
+/// destructuring read and short-circuit as Node does, and only the write
+/// itself throws. The key names no module, and it is not enumerable, so
+/// scans over `__modules` skip it.
+pub(crate) const PRELUDE: &str = "Object.defineProperty(__modules, '#import', { value: (read) => ({ get value() { return read(); }, \
+     set value(_) { throw new TypeError('Assignment to constant variable.'); } }) });\n";
+
+/// A name for the module's own binding of its default export that the
+/// module neither declares nor reads: a name it uses may not be taken.
+fn default_binding_name(scoping: &oxc::semantic::Scoping) -> String {
+    let taken: HashSet<&str> =
+        scoping.symbol_names().chain(scoping.root_unresolved_references().keys().map(|name| name.as_str())).collect();
+    std::iter::once("__default".to_string())
+        .chain((1..).map(|n| format!("__default{n}")))
+        .find(|name| !taken.contains(name.as_str()))
+        .expect("an unbounded sequence holds a free name")
+}
 
 /// A module rewritten for linking: its exports, stars and imports link every
 /// graph; its link code and body make the bundle.
@@ -146,8 +164,8 @@ pub(crate) fn rewrite_module_for_linking(
 
     let mut edits: Vec<Edit> = Vec::new();
     let mut removed: Vec<(usize, usize)> = Vec::new();
-    // Each imported binding, by symbol, as the read of its module's export,
-    // and by local name, as what exporting it exports.
+    // Each imported binding, by symbol, as the module export it reads, and
+    // by local name, as what exporting it exports.
     let mut imported = HashMap::new();
     let mut import_targets: HashMap<String, ExportTarget> = HashMap::new();
     let mut module = LinkedModule {
@@ -159,6 +177,7 @@ pub(crate) fn rewrite_module_for_linking(
         import_refs: Vec::new(),
     };
     let mut local_exports: Vec<(String, String)> = Vec::new();
+    let default_name = default_binding_name(scoping);
     let mut remove = |edits: &mut Vec<Edit>, start: u32, end: u32| {
         removed.push((start as usize, end as usize));
         edits.push(Edit { start: start as usize, end: end as usize, text: String::new() });
@@ -187,9 +206,7 @@ pub(crate) fn rewrite_module_for_linking(
                         local.name.to_string(),
                         ExportTarget::Indirect { from: from.clone(), name: name.clone() },
                     );
-                    // `(0, …)`: a read in any expression position, and a call
-                    // through it gets no `this`, as an imported function's does.
-                    imported.insert(local.symbol_id(), format!("(0, {})", export_read(&from, &name)));
+                    imported.insert(local.symbol_id(), export_read(&from, &name));
                 }
                 remove(&mut edits, decl.span.start, decl.span.end);
             }
@@ -228,12 +245,13 @@ pub(crate) fn rewrite_module_for_linking(
                             edits.push(Edit {
                                 start: function.params.span.start as usize,
                                 end: function.params.span.start as usize,
-                                text: " __default".to_string(),
+                                text: format!(" {default_name}"),
                             });
-                            module.link.push_str(
-                                "Object.defineProperty(__default, 'name', { value: 'default', configurable: true });\n",
+                            let _ = writeln!(
+                                module.link,
+                                "Object.defineProperty({default_name}, 'name', {{ value: 'default', configurable: true }});"
                             );
-                            local_exports.push(("default".to_string(), "__default".to_string()));
+                            local_exports.push(("default".to_string(), default_name.clone()));
                         }
                     },
                     ExportDefaultDeclarationKind::ClassDeclaration(class) if class.id.is_some() => {
@@ -241,7 +259,7 @@ pub(crate) fn rewrite_module_for_linking(
                         local_exports.push(("default".to_string(), id));
                     }
                     kind => {
-                        edits.push(Edit { text: "const __default = ".to_string(), ..prefix });
+                        edits.push(Edit { text: format!("const {default_name} = "), ..prefix });
                         if matches!(kind, ExportDefaultDeclarationKind::ClassDeclaration(_)) {
                             edits.push(Edit {
                                 start: decl.span.end as usize,
@@ -249,7 +267,7 @@ pub(crate) fn rewrite_module_for_linking(
                                 text: ";".to_string(),
                             });
                         }
-                        local_exports.push(("default".to_string(), "__default".to_string()));
+                        local_exports.push(("default".to_string(), default_name.clone()));
                         continue;
                     }
                 }
@@ -277,7 +295,7 @@ pub(crate) fn rewrite_module_for_linking(
 
     // Each import reference's edit, and the local name it refers to.
     let mut refs: HashMap<(usize, usize), &str> = HashMap::new();
-    for (&symbol, read) in &imported {
+    for (&symbol, cell) in &imported {
         for reference in scoping.get_resolved_references(symbol) {
             let node = reference.node_id();
             let span = semantic.nodes().get_node(node).span();
@@ -287,12 +305,18 @@ pub(crate) fn rewrite_module_for_linking(
             }
             // An imported binding is read-only: writing it throws when the
             // write runs, as Node throws, and the module still loads.
-            let read = if reference.is_write() { READ_ONLY_TARGET } else { read.as_str() };
+            // `(0, …)`: a read in any expression position, and a call through
+            // it gets no `this`, as an imported function's does.
+            let read = if reference.is_write() {
+                format!("__modules['#import'](() => {cell}).value")
+            } else {
+                format!("(0, {cell})")
+            };
             // A shorthand property's span is its name's.
             let text = match semantic.nodes().parent_kind(node) {
                 AstKind::ObjectProperty(property) if property.shorthand => format!("{}: {}", &source[start..end], read),
                 AstKind::AssignmentTargetPropertyIdentifier(_) => format!("{}: {}", &source[start..end], read),
-                _ => read.to_string(),
+                _ => read,
             };
             let edit = Edit { start, end, text };
             refs.insert((start, end), scoping.symbol_name(symbol));

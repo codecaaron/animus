@@ -856,7 +856,9 @@ fn build_bundle(
     let mut marker_offsets: Vec<(usize, String)> = Vec::new();
 
     bundle.push_str(CONSOLE_SHIM);
-    bundle.push_str("const __modules = {};\n\n");
+    bundle.push_str("const __modules = {};\n");
+    bundle.push_str(linked::PRELUDE);
+    bundle.push('\n');
 
     // Stub modules first, emitted in sorted key order (and with sorted export
     // names) so the same inputs always produce the same bytes.
@@ -2384,24 +2386,26 @@ export const ds = tokens;
         );
     }
 
-    /// Contract: a system whose module graph has an import cycle loads as
-    /// Node loads it. Each module evaluates once, after the modules it imports
-    /// outside its cycle. A hoisted function, an anonymous default function,
+    /// Contract: a system's module graph, with or without an import cycle,
+    /// loads as Node loads it. Each module evaluates once, after the modules
+    /// it imports outside its cycle. A hoisted function, an anonymous default function,
     /// a namespace import and a name `export *` brings in are all readable
     /// before their module evaluates, and every import, including one from
     /// outside the cycle, reads the exporting binding live, `export *`
     /// included when star exports form a cycle. An import of a name the
     /// module does not export, or a re-export that resolves to no binding or
-    /// ambiguously, fails the load, naming the module.
+    /// ambiguously, fails the load, naming the module. A write to an import
+    /// throws at the write, and the loader's default binding takes no name
+    /// the module uses.
     #[test]
-    fn cyclic_module_graph_evaluates_with_node_semantics() {
+    fn module_graphs_evaluate_with_node_semantics() {
         const PROTOCOL: &str = "export const ds = { toConfig: () => ({ propConfig: JSON.stringify(data), groupRegistry: '{}' }), \
              getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [] }) };\n\
              export const theme = { serialize: () => ({ scalesJson: '{}', variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n";
         /// A case's name, its modules, and the loaded propConfig or a part
         /// of the load's error.
         type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], Result<&'a str, &'a str>);
-        let cases: [Case; 13] = [
+        let cases: [Case; 16] = [
             (
                 "hoisted-live",
                 &[
@@ -2494,6 +2498,47 @@ export const ds = tokens;
                 Ok(r#"{"same":true}"#),
             ),
             (
+                // A write to an import reads and evaluates what it would
+                // write, then throws at the write.
+                "import-writes-throw-at-the-write",
+                &[
+                    ("m", "export const log = [];\nexport let v = 0;\nexport let n = { valueOf() { log.push('valueOf'); return 1; } };\n"),
+                    ("entry", "import { v, n, log } from './m.js';\n\
+                        const attempt = (write) => { try { write(); } catch (e) { log.push(e.constructor.name); } };\n\
+                        attempt(() => { v = (log.push('rhs'), 2); });\n\
+                        attempt(() => { v += (log.push('compound'), 2); });\n\
+                        attempt(() => { n++; });\n\
+                        attempt(() => { ({ v } = { get v() { log.push('get'); return 3; } }); });\n\
+                        attempt(() => { [v] = [(log.push('element'), 4)]; });\n\
+                        const data = { log, v };\n"),
+                ],
+                Ok(r#"{"log":["rhs","TypeError","compound","TypeError","valueOf","TypeError","get","TypeError","element","TypeError"],"v":0}"#),
+            ),
+            (
+                "import-logical-assignment-short-circuits",
+                &[
+                    ("m", "export let one = 1;\nexport let zero = 0;\n"),
+                    ("entry", "import { one, zero } from './m.js';\n\
+                        const seen = [];\n\
+                        const rhs = (x) => { seen.push(x); return x; };\n\
+                        one ||= rhs('or');\none ??= rhs('nullish');\nzero &&= rhs('and');\n\
+                        let thrown = null;\n\
+                        try { zero ||= rhs('written'); } catch (e) { thrown = e.constructor.name; }\n\
+                        const data = { seen, thrown, one, zero };\n"),
+                ],
+                Ok(r#"{"seen":["written"],"thrown":"TypeError","one":1,"zero":0}"#),
+            ),
+            (
+                // The loader names a default export's binding itself, never
+                // taking a name the module declares.
+                "authored-default-name",
+                &[
+                    ("b", "const __default = 4;\nexport default function () { return __default; }\n"),
+                    ("entry", "import f from './b.js';\nconst __default = 7;\nexport default 3;\nconst data = { ok: __default, f: f(), name: f.name };\n"),
+                ],
+                Ok(r#"{"ok":7,"f":4,"name":"default"}"#),
+            ),
+            (
                 "missing-import",
                 &[
                     ("entry", "import { nope } from './b.js';\nconst data = { nope };\n"),
@@ -2523,7 +2568,7 @@ export const ds = tokens;
             ),
         ];
         for (name, files, expected) in cases {
-            let dir = scratch_dir(&format!("cyclic-{name}"));
+            let dir = scratch_dir(&format!("node-{name}"));
             for (file, source) in files {
                 let source = if *file == "entry" { format!("{source}{PROTOCOL}") } else { source.to_string() };
                 write_fixture(&dir.join(format!("{file}.js")), &source);
