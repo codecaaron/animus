@@ -188,6 +188,46 @@ describe('transform: dev output carries the bridge import, prod is engine-verbat
   });
 });
 
+describe('transform: a dropped extension is never served raw', () => {
+  // Contract (SA1, spec §12.2 row 11): a file whose extension the analysis
+  // dropped over a parent it could not resolve fails its transform in every
+  // mode, naming the component, parent and specifier; served untransformed,
+  // its builder code would render with empty classes.
+  for (const isProd of [false, true]) {
+    it(`fails the transform in ${isProd ? 'a build' : 'development'}`, async () => {
+      const probe = makeContextProbe(ROOT, {
+        isProd,
+        storedManifest: makeManifest({
+          missing_inputs: [
+            {
+              file: 'src/Fancy.tsx',
+              component: 'Fancy',
+              parent: 'Parent',
+              specifier: './Parent',
+              base: 'src/Parent',
+              outcome: 'absent',
+            },
+          ],
+        }),
+        storedManifestJson: '{}',
+        storedSheets: SHEETS,
+      });
+      // The Session holds the file, so development does not re-detect it.
+      probe.session.heldSources.set('src/Fancy.tsx', { hash: 'h', source: '' });
+
+      await expect(
+        transformSource(
+          probe.ctx,
+          "export const Fancy = Parent.extend().asElement('div');",
+          join(ROOT, 'src/Fancy.tsx')
+        )
+      ).rejects.toThrow(
+        "cannot serve src/Fancy.tsx: 'Fancy' extends 'Parent' from './Parent'"
+      );
+    });
+  }
+});
+
 describe('transform: dependencies resolved outside the root are not new files', () => {
   // Vite realpaths module ids, so a symlinked package's dist file arrives with
   // no `node_modules` segment and the dependency filter never sees it.
@@ -380,13 +420,14 @@ describe('transform: new-file invalidation is unconditional', () => {
           return [
             published(probe, {
               manifest: makeManifest({
-                diagnostics: [
+                missing_inputs: [
                   {
                     file: 'New.tsx',
                     component: 'Child',
-                    kind: 'bail',
-                    message:
-                      "chain dropped: could not resolve parent component 'Base'",
+                    parent: 'Base',
+                    specifier: './Base',
+                    base: 'Base',
+                    outcome: 'absent',
                   },
                 ],
               }),

@@ -7,10 +7,11 @@ import { relative } from 'path';
 
 import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
 import { invalidateFileModules } from './module-invalidation';
-import { reconcileSourceCorpus, unresolvedDropFiles } from './rediscovery';
+import { droppedExtensions, reconcileSourceCorpus } from './rediscovery';
 import { applyPublished, changesOf, mergePublished } from './session-outcomes';
 
 import type { ObservedOutcome, PluginContext } from './context';
+import type { ManifestMissingInput } from '@animus-ui/extract/pipeline';
 
 /**
  * The import goes after the directive prologue: above it, 'use client'
@@ -48,10 +49,16 @@ export function extendingFiles(
   return files;
 }
 
-function rawFallbackDescendants(ctx: PluginContext, relPath: string): string[] {
-  return [...extendingFiles(ctx, [relPath])]
-    .filter((file) => file !== relPath && ctx.rawExtensionFallbacks.has(file))
-    .sort();
+/** Why a file dropped over its extension parent is not served. */
+function droppedExtensionMessage(drop: ManifestMissingInput): string {
+  const from = drop.specifier === null ? '' : ` from '${drop.specifier}'`;
+  return (
+    `[animus-extract] cannot serve ${drop.file}: '${drop.component}' ` +
+    `extends '${drop.parent}'${from}, which the analysis could not resolve ` +
+    `(${drop.outcome}); serving it untransformed would render it without ` +
+    `its styles. Make the parent an analysed Animus component, or remove ` +
+    `the extension.`
+  );
 }
 
 export async function transformSource(
@@ -154,38 +161,12 @@ export async function transformSource(
       );
     }
     if (!ctx.storedManifest.files[relativePath]?.length) {
-      // SA1's one remaining exception, which row 11 retires: a file dropped
-      // because its extension parent did not resolve serves raw as the
-      // runtime fallback the barrier below guards.
-      // Recording a raw serve caused by an unresolved extension parent
-      // makes the barrier below withhold that parent's extracted serve.
-      ctx.recordFallbackState(
-        relativePath,
-        unresolvedDropFiles(ctx).has(relativePath)
-      );
+      // An extension dropped over a parent the analysis could not resolve
+      // is never served untransformed, in any mode: its builder code would
+      // render with empty classes (SA1).
+      const drop = droppedExtensions(ctx).get(relativePath);
+      if (drop !== undefined) throw new Error(droppedExtensionMessage(drop));
       return null;
-    }
-  }
-
-  // Never serve an extracted extension ancestor while a descendant serves
-  // the raw fallback: the child `.extend()`s it and hits the runtime guard.
-  // Keep this block OUTSIDE the try below, which wraps engine errors, so
-  // the withhold throws as itself; invalidate the conflicted descendants
-  // before throwing.
-  if (!ctx.isProd && ctx.rawExtensionFallbacks.size > 0) {
-    const conflicted = rawFallbackDescendants(ctx, relativePath);
-    if (conflicted.length > 0) {
-      invalidateFileModules(ctx, conflicted);
-      ctx.invalidateExtractedModules();
-      // One-shot, so a consumer the reloaded page never re-imports cannot
-      // withhold its ancestor forever. This retires a withhold, not a serve.
-      for (const file of conflicted) ctx.rawExtensionFallbacks.delete(file);
-      throw new Error(
-        `ANIMUS_COMPOSITION_RECOVERING: '${relativePath}' extracted while ` +
-          `extension consumer(s) ${conflicted.join(', ')} are still serving ` +
-          `the runtime fallback — recovering via reload; this resolves on ` +
-          `the next request.`
-      );
     }
   }
 
@@ -216,7 +197,6 @@ export async function transformSource(
       // exactly these bytes to decide whether an update carries anything new.
       ctx.recordTransformOutput(relativePath, outputCode);
     }
-    ctx.recordFallbackState(relativePath, false);
 
     return { code: outputCode, map: null };
   } catch (e) {

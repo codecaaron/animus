@@ -205,6 +205,7 @@ export type { CssDiagnosticLike } from './error-diagnostics';
 export { assertNoErrorDiagnostics } from './error-diagnostics';
 export type {
   ManifestComponentDescriptor,
+  ManifestMissingInput,
   ManifestComponentSheets,
   ManifestSheets,
   ProjectManifest,
@@ -218,12 +219,10 @@ export {
   DIAGNOSTIC_LEVELS,
   DiagnosticFailure,
   INVALID_PROPERTY_REGISTRATION,
-  isUnresolvedParentDrop,
   surfaceManifestDiagnostics,
   isDeletedSource,
   noKitFilesDiagnostics,
   unreadableSourceDiagnostic,
-  unresolvedParentName,
   VOCABULARY_COLLISION,
   VOCABULARY_LEGACY_VERB,
   systemLoadDiagnostics,
