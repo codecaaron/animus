@@ -1,7 +1,5 @@
 import {
   assembleStylesheet,
-  createExcludeMatcher,
-  DEFAULT_EXTENSIONS,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
@@ -34,17 +32,12 @@ export async function runBuildStart(
     ctx.log(`Custom layers: [${ctx.options.layers.join(', ')}]`);
   }
 
-  // One matcher per buildStart, which the hot path's classification reads.
-  // Refreshed in case `options` was mutated between server lifecycles.
-  ctx.excludeMatcher = createExcludeMatcher(
-    ctx.options.exclude,
-    ctx.outputExclude === null ? [] : [ctx.outputExclude]
-  );
-  ctx.extensionsSet = new Set(ctx.options.extensions ?? DEFAULT_EXTENSIONS);
-
   // System load, discovery, package collection and analysis are the
   // Session's; Vite serves its publication and substitutes asset URLs.
   const session = ctx.session ?? ctx.createSession();
+  // The hot path classifies file events by the Session's own scan policy.
+  ctx.excludeMatcher = session.scanConfig.excludeMatcher;
+  ctx.extensionsSet = session.scanConfig.extensionsSet;
   // An earlier environment's closeBundle closed it: it joins its build again.
   session.reattach();
   session.hostResolve = resolveSpecifier;

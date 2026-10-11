@@ -66,7 +66,7 @@ describe('webpackExtensionPolicy', () => {
 
 // Contract: a host's asset and stylesheet classification is read from its
 // own configuration (spec §2.2 A8); without one, the built-in list (Vite's
-// known asset types, less svg, and its CSS languages) answers, labelled with
+// known asset types, svg included, and its CSS languages) answers, labelled with
 // its reason. Where the host's reading is uncertain, a file is not opaque.
 describe('host asset classification', () => {
   it("reads esbuild's loader map and Vite's assetsInclude", () => {
@@ -94,7 +94,7 @@ describe('host asset classification', () => {
   // webpack, Rspack and Next-webpack answer with it too: their rules are
   // not modelled, as a conditional rule may never apply. dx-codex's
   // witnesses: a `.data` webpack runs as code is no built-in type.
-  it('answers with the built-in list, less svg, where no host classifies', () => {
+  it('answers with the built-in list, svg included, where no host classifies', () => {
     const builtIn = builtInAssetClassification(
       'hostOptionUnreadable',
       'rollup'
@@ -111,7 +111,7 @@ describe('host asset classification', () => {
         'x.css.ts',
         'selected.data',
       ].map((path) => builtIn.isAsset(path, ''))
-    ).toEqual([true, true, true, false, true, true, false, false]);
+    ).toEqual([true, true, true, true, true, true, false, false]);
     expect(builtIn.resolverVersion).toBe(
       `built-in (hostOptionUnreadable: rollup; ${BUILT_IN_ASSET_SOURCE})`
     );

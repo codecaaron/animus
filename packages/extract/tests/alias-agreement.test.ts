@@ -14,6 +14,7 @@ import { describe, expect, test } from 'vitest';
 import {
   AliasAgreementCache,
   compareAliases,
+  packageReadRecord,
 } from '../pipeline/alias-agreement';
 import { buildPathAliasesJson } from '../pipeline/path-aliases';
 
@@ -124,6 +125,75 @@ describe('compareAliases', () => {
       expect({ again, resolvedAgain: resolved.length }).toEqual({
         again: mismatch,
         resolvedAgain: 0,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('package instances', () => {
+  // Contract: an import the host resolves, from its importer, to a file
+  // extraction never read is reported (spec §2.2 A4, SA1): another
+  // instance's file is an error, or a warning where a source redirect
+  // serves the instance read instead; an unanalysed file of the instance
+  // read that declares builder chains (a compiled subpath) is an error. An
+  // analysed file, or one with no chains, is no finding.
+  test('an importer resolving another instance is reported', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'animus-package-instances-'))
+    );
+    const read = join(root, 'node_modules', 'kit');
+    const nested = join(root, 'src', 'node_modules', 'kit');
+    for (const dir of [read, nested]) {
+      mkdirSync(join(dir, 'dist'), { recursive: true });
+      writeFileSync(join(dir, 'package.json'), '{"name":"kit"}');
+      writeFileSync(join(dir, 'dist', 'index.js'), 'export const Box = 1;\n');
+    }
+    // A compiled subpath of the instance read: builder chains, unanalysed.
+    writeFileSync(join(read, 'dist', 'other.js'), 'builder\n');
+    writeFileSync(join(read, 'dist', 'util.js'), 'helper\n');
+    const compare = (resolved: string, redirected: string[] = []) =>
+      compareAliases({
+        rootDir: root,
+        fileEntries: [
+          { path: 'src/App.tsx', source: 'a', hash: 'a' },
+          { path: 'node_modules/kit/dist/index.js', source: 'b', hash: 'b' },
+        ],
+        pathAliasesJson: null,
+        order: undefined,
+        readings: {},
+        moduleSpecifiers: () =>
+          JSON.stringify({ files: { 'src/App.tsx': ['kit', './local'] } }),
+        resolve: async (specifier) => (specifier === 'kit' ? resolved : null),
+        cache: new AliasAgreementCache(),
+        packages: packageReadRecord({
+          rootDir: root,
+          roots: { kit: read },
+          redirected: new Set(redirected),
+          analysed: ['src/App.tsx', 'node_modules/kit/dist/index.js'],
+          rendersBuilder: (file) => file.endsWith('other.js'),
+        }),
+      }).then(({ findings }) =>
+        findings.map(({ file, code, kind }) => `${file} ${code} ${kind}`)
+      );
+    try {
+      expect({
+        read: await compare(join(read, 'dist', 'index.js')),
+        unread: await compare(join(nested, 'dist', 'index.js')),
+        replaced: await compare(join(nested, 'dist', 'index.js'), ['kit']),
+        compiledSubpath: await compare(join(read, 'dist', 'other.js')),
+        helperSubpath: await compare(join(read, 'dist', 'util.js')),
+      }).toEqual({
+        read: [],
+        unread: ['src/App.tsx animus.discovery.unread-package-instance error'],
+        replaced: [
+          'src/App.tsx animus.discovery.replaced-package-instance warn',
+        ],
+        compiledSubpath: [
+          'src/App.tsx animus.discovery.unread-package-instance error',
+        ],
+        helperSubpath: [],
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
