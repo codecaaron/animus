@@ -403,6 +403,9 @@ pub struct FileFacts {
     /// the enriched usage reads.
     #[serde(skip)]
     pub bindings: Arc<crate::identity::BindingTable>,
+    /// The module's runtime imports and exports, for linking.
+    #[serde(skip)]
+    pub module_record: Arc<crate::link::OwnedModuleRecord>,
     /// compose() families found in this file.
     pub compose: Vec<ComposeFamilyInfo>,
     /// Sources of `export * from '…'`.
@@ -1517,6 +1520,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &assigned_targets,
     );
 
+    let module_record = crate::link::copy_module_record(ast.module_record(), &bindings, ast.source());
+
     FileFacts {
         path: ast.path.clone(),
         directive_prologue,
@@ -1533,6 +1538,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage,
         usage_enriched: Some(usage_enriched),
         bindings: Arc::new(bindings),
+        module_record: Arc::new(module_record),
         compose,
         star_exports: crate::usage_facts::collect_star_exports(ast.module_record()),
         namespace_exports: crate::usage_facts::collect_namespace_exports(ast.module_record()),
