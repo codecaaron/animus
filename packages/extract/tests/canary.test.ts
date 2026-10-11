@@ -359,10 +359,20 @@ test('a mismatched Svelte resolver call keeps the variant it renders', async () 
   )(prepared.bases, prepared.identity);
   const manifest = JSON.parse(engine.analyze(filesJson, evidence));
   rmSync(root, { recursive: true, force: true });
-  const badge = manifest.components['src/Definition.ts::badge'].class_name;
+  // The badge the loud call reaches: `Definition.ts`'s where the
+  // filesystem opens the variant, else the exact `definition.tsx`'s.
+  const components: Record<string, { file: string; class_name: string }> =
+    manifest.components;
+  const reached = Object.values(components).find(
+    (component) =>
+      component.file ===
+      (opensVariant ? 'src/Definition.ts' : 'src/definition.tsx')
+  );
 
   expect({
-    loud: manifest.css.includes(`.${badge}--tone-loud`),
+    loud:
+      reached !== undefined &&
+      manifest.css.includes(`.${reached.class_name}--tone-loud`),
     mismatch: manifest.diagnostics.some(
       (d: { code?: string }) => d.code === 'animus.resolve.case-mismatch'
     ),
