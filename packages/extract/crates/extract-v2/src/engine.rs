@@ -2333,6 +2333,18 @@ export const App = () => <Box tone="red" />;
             ("require.bind", "const name = './tokens.js';\nrequire.bind(null)(name).pad.padding = 9;", "{ ...pad }"),
             ("the global object's require", "const name = './tokens.js';\nglobalThis.require(name).pad.padding = 9;", "{ ...pad }"),
             ("module.require", "const name = './tokens.js';\nmodule.require(name).pad.padding = 9;", "{ ...pad }"),
+            ("an alias of module", "const name = './tokens.js';\nconst m = module;\nm.require(name).pad.padding = 9;", "{ ...pad }"),
+            (
+                "require destructured from module",
+                "const name = './tokens.js';\nconst { require: r } = module;\nr.call(module, name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            ("a computed member of module", "const name = './tokens.js';\nconst k = 'require';\nmodule[k](name).pad.padding = 9;", "{ ...pad }"),
+            (
+                "a computed member of the required builtin",
+                "const name = './tokens.js';\nconst m = require('node:module'), k = 'createRequire';\nm[k](__filename)(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
             (
                 "a createRequire result",
                 "import { createRequire } from 'node:module';\nconst name = './tokens.js';\ncreateRequire(import.meta.url)(name).pad.padding = 9;",
@@ -2386,15 +2398,30 @@ export const App = () => <Box tone="red" />;
                 "{ ...pad }",
             ),
         ];
-        for (row, mutation, read) in rows {
+        // An ambient declaration binds no loader.
+        let ambient = [
+            (
+                "an ambient require",
+                "declare const require: any;\nconst name = './tokens.js';\nconst r = require;\nr(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
+                "an ambient module",
+                "declare const module: any;\nconst name = './tokens.js';\nmodule.require(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+        ];
+        let rows = (rows.map(|(row, mutation, read)| (row, "mutate.js", mutation, read)).into_iter())
+            .chain(ambient.map(|(row, mutation, read)| (row, "mutate.cts", mutation, read)));
+        for (row, path, mutation, read) in rows {
             let mut engine = ExtractEngine::new(None).unwrap();
             let files = serde_json::json!([
                 { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
-                { "path": "mutate.js", "source": format!("{mutation}\n") },
+                { "path": path, "source": format!("{mutation}\n") },
                 {
                     "path": "reader.tsx",
                     "source": format!(
-                        "import './mutate.js';\nimport {{ pad }} from './tokens.js';\n\
+                        "import './{path}';\nimport {{ pad }} from './tokens.js';\n\
                          export const C = ds.styles({read}).asElement('div');\nexport const App = () => <C />;\n"
                     ),
                 },
@@ -2411,6 +2438,7 @@ export const App = () => <Box tone="red" />;
             ("type query", "export type Evaluate = typeof eval;\n"),
             ("a direct require of another module", "require('./typebox');\n"),
             ("typeof require", "export const loads = typeof require === 'function';\n"),
+            ("module.exports", "module.exports = { loaded: module.loaded };\n"),
             (
                 "a type query of arguments in a read-only callee",
                 "import { pad } from './tokens';\nfunction read(o) { type Args = typeof arguments; return o.padding; }\nread(pad);\n",

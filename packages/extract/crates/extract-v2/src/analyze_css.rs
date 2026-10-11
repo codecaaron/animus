@@ -13751,12 +13751,14 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
-    /// A loader read anywhere but as a direct callee (an alias, a call
-    /// through `call`, `apply`, `bind` or a sequence, `module.require`, the
-    /// global object's `require`, or a `createRequire` result) can load any
-    /// module and rebind what an exported object holds, so a member tag of
-    /// one rendered elsewhere is not proven. A direct `require` of a literal
-    /// path reaches only that module.
+    /// A loader read anywhere but as a direct callee or a member that loads
+    /// nothing (an alias, a call through `call`, `apply`, `bind` or a
+    /// sequence, `module.require`, a computed member, the global object's
+    /// `require`, or a `createRequire` result) can load any module and rebind
+    /// what an exported object holds, so a member tag of one rendered
+    /// elsewhere is not proven. An ambient declaration binds no loader. A
+    /// direct `require` of a literal path reaches only that module, and
+    /// `module.exports` loads nothing.
     #[test]
     fn an_escaped_loader_may_rebind_any_exported_object() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
@@ -13768,33 +13770,46 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             };
         }
         let handed = Some("hands on require other than as a direct call");
-        for (loader, reason) in [
-            ("export const open = (name) => (0, require)(name);\n", handed),
-            ("const r = require;\nexport const open = (name) => r(name);\n", handed),
-            ("export const open = (name) => require.call(null, name);\n", handed),
-            ("export const open = (name) => require.apply(null, [name]);\n", handed),
-            ("export const open = (name) => require.bind(null)(name);\n", handed),
-            ("export const open = (name) => globalThis.require(name);\n", Some("reads require from the global object")),
-            ("export const open = (name) => module.require(name);\n", Some("reads module.require")),
-            (create!("export const open = (name) => createRequire(import.meta.url)(name);\n"), Some("reads createRequire")),
+        let module = Some("reads module other than through a member that loads nothing");
+        for (path, loader, reason) in [
+            ("loader.ts", "export const open = (name) => (0, require)(name);\n", handed),
+            ("loader.ts", "const r = require;\nexport const open = (name) => r(name);\n", handed),
+            ("loader.ts", "export const open = (name) => require.call(null, name);\n", handed),
+            ("loader.ts", "export const open = (name) => require.apply(null, [name]);\n", handed),
+            ("loader.ts", "export const open = (name) => require.bind(null)(name);\n", handed),
+            ("loader.ts", "export const open = (name) => globalThis.require(name);\n", Some("reads require from the global object")),
+            ("loader.ts", "export const open = (name) => module.require(name);\n", module),
+            ("loader.ts", create!("export const open = (name) => createRequire(import.meta.url)(name);\n"), Some("reads createRequire")),
             (
+                "loader.ts",
                 create!("const load = createRequire(import.meta.url);\nexport const open = (name) => load(name);\n"),
                 Some("reads createRequire"),
             ),
-            ("export const x = require('./x');\n", None),
+            ("loader.cts", "declare const require: any;\nconst r = require;\nexport const open = (name) => r(name);\n", handed),
+            ("loader.cts", "declare const module: any;\nexport const open = (name) => module.require(name);\n", module),
+            ("loader.ts", "const m = module;\nexport const open = (name) => m.require(name);\n", module),
+            ("loader.ts", "const { require: r } = module;\nexport const open = (name) => r.call(module, name);\n", module),
+            ("loader.ts", "const k = 'require';\nexport const open = (name) => module[k](name);\n", module),
+            (
+                "loader.ts",
+                "const m = require('node:module'), k = 'createRequire';\nexport const open = (name) => m[k](__filename)(name);\n",
+                Some("reads node:module other than through a member that loads nothing"),
+            ),
+            ("loader.ts", "export const x = require('./x');\n", None),
+            ("loader.ts", "module.exports = { loaded: module.loaded };\n", None),
         ] {
             let out = analyze_with_logical_space(&[
                 ("recipe.tsx", recipe),
                 ("fam.tsx", fam),
                 ("x.ts", "export const x = 1;\n"),
-                ("loader.ts", loader),
+                (path, loader),
                 ("app.tsx", app),
             ]);
             let warned: Vec<&str> = unattributed(&out).iter().map(|d| d.message.as_str()).collect();
             match reason {
                 Some(reason) => assert!(
                     warned.len() == 1
-                        && warned[0].contains(&format!("(loader.ts {reason}, so it can load any module and change what it exports)")),
+                        && warned[0].contains(&format!("({path} {reason}, so it can load any module and change what it exports)")),
                     "{loader}: {warned:?}"
                 ),
                 None => assert!(warned.is_empty(), "{loader}: {warned:?}"),
