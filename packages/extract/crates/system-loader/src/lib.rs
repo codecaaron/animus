@@ -309,6 +309,25 @@ fn condition_target(value: &serde_json::Value, source: bool, conditions: &[Strin
     }
 }
 
+/// `specifier` resolved from `from_dir` as the system loader resolves its
+/// imports: a relative or absolute path through the extension policy, or a
+/// package through its manifest (`resolve_bare_specifier`). The file's real
+/// path, with that of the `package.json` that selected it for a package;
+/// otherwise why it names no file.
+pub fn resolve_specifier(
+    specifier: &str,
+    from_dir: &str,
+    conditions: &[String],
+) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let real = |path: PathBuf| fs::canonicalize(&path).unwrap_or(path);
+    if specifier.starts_with('.') || specifier.starts_with('/') {
+        resolve_relative(Path::new(from_dir), specifier).map(|path| (real(PathBuf::from(path)), None))
+    } else {
+        resolve_bare_specifier(specifier, from_dir, conditions)
+            .map(|(path, manifest)| (real(PathBuf::from(path)), Some(real(manifest))))
+    }
+}
+
 fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, String> {
     // Appended, not replaced: `./tokens.theme` names `tokens.theme.ts`.
     let target = base_dir.join(specifier).to_string_lossy().to_string();
