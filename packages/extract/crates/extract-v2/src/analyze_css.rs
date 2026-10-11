@@ -98,6 +98,9 @@ pub struct CssInputs {
     /// Directory prefixes, relative to rootDir, of external packages.
     pub external_dirs: Vec<String>,
     pub analysis_context: AnalysisContext,
+    /// The host's first candidate for each probe base, as the session
+    /// gathered it at ingest; none where no session did.
+    pub probe_evidence: Option<ProbeEvidence>,
     /// `{ definitionKey: sourceText }` for the loaded system's configured
     /// transforms, keyed as its props' `transformId` (or, for a system that
     /// predates identities, their name).
@@ -277,6 +280,7 @@ impl CssInputs {
             declaration_scales: DeclarationScales::default(),
             external_dirs: parse("externalDirsJson", external_dirs_json)?,
             analysis_context: AnalysisContext::default(),
+            probe_evidence: None,
             dev_mode,
             numeric_properties: FxHashSet::default(),
             system_hash,
@@ -713,19 +717,40 @@ fn extract_layer_content(layer_block: &str) -> String {
     String::new()
 }
 
-/// Resolve an import specifier against the analyzed file set. Re-export hops
-/// are not followed here; the module table follows them.
-pub fn resolve_import_source<T>(
-    from_file: &str,
-    spec: &str,
-    files: &BTreeMap<String, T>,
-    inputs: &CssInputs,
-) -> Option<String> {
+/// What the host's filesystem opens for one probe base (spec §2.2 A2, A8):
+/// the first of its candidates, in the host's order, the host opens as a
+/// file. The session gathers it at ingest (§2.3), so analysis never reads
+/// the filesystem.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostCandidate {
+    /// The candidate, spelled as the probe spells it.
+    pub candidate: String,
+    /// The spelling the filesystem lists, where it differs: a case- or
+    /// normalization-insensitive host opens the candidate as this file.
+    pub actual: Option<String>,
+    /// The analysed module the candidate is, where the analysis holds one:
+    /// the candidate itself, or the analysis child of an adapted original.
+    pub analysed_as: Option<String>,
+}
+
+/// The host-candidate evidence for one analysis, by probe base, from one
+/// ingest generation, gathered for the files whose `input_identity` it
+/// carries: evidence for other files is never read.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct ProbeEvidence {
+    pub generation: u64,
+    #[serde(default)]
+    pub identity: String,
+    pub bases: FxHashMap<String, HostCandidate>,
+}
+
+/// The path a specifier probes from `from_file`, relative to rootDir: a
+/// relative specifier joined lexically, or an alias's expansion. None for a
+/// package, which the package map answers.
+pub fn probe_base(from_file: &str, spec: &str, inputs: &CssInputs) -> Option<String> {
     if !spec.starts_with('.') {
-        if let Some(expanded) = expand_alias(spec, &inputs.path_aliases) {
-            return probe_files(&expanded, files, inputs);
-        }
-        return inputs.package_map.get(spec).cloned();
+        return expand_alias(spec, &inputs.path_aliases);
     }
     let dir: Vec<&str> = match from_file.rfind('/') {
         Some(pos) => from_file[..pos].split('/').collect(),
@@ -741,13 +766,48 @@ pub fn resolve_import_source<T>(
             s => parts.push(s),
         }
     }
-    let base = parts.join("/");
-    probe_files(&base, files, inputs)
+    Some(parts.join("/"))
+}
+
+/// Resolve an import specifier against the analyzed file set. Re-export hops
+/// are not followed here; the module table follows them.
+pub fn resolve_import_source<T>(
+    from_file: &str,
+    spec: &str,
+    files: &BTreeMap<String, T>,
+    inputs: &CssInputs,
+) -> Option<String> {
+    match probe_base(from_file, spec, inputs) {
+        Some(base) => probe_files(&base, files, inputs),
+        None => inputs.package_map.get(spec).cloned(),
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every base a probe looked up on this thread, for the coverage
+    /// contract between `prepare` and analysis.
+    pub(crate) static PROBED: std::cell::RefCell<std::collections::BTreeSet<String>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
 /// The analyzed file `base` names, through the host's extension order.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> Option<String> {
     use animus_system_loader::resolution::{extension_policy, Seen};
+    #[cfg(test)]
+    PROBED.with(|probed| probed.borrow_mut().insert(base.to_string()));
+    // The session's evidence answers in one lookup where the host's first
+    // candidate is an analysed module spelled as the probe spells it.
+    let evidenced = inputs
+        .probe_evidence
+        .as_ref()
+        .and_then(|evidence| evidence.bases.get(base))
+        .filter(|host| host.actual.is_none())
+        .and_then(|host| host.analysed_as.as_ref())
+        .filter(|module| files.contains_key(module.as_str()));
+    if let Some(module) = evidenced {
+        return Some(module.clone());
+    }
     // The analyzed set is keyed by each file's own spelling, so a lookup is
     // exact: a specifier that differs only in case names no analyzed file.
     let policy = match &inputs.analysis_context.extensions {
@@ -13106,6 +13166,37 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             match callee {
                 None => assert!(warned.is_empty(), "{more}: {:?}", out.diagnostics),
                 Some(_) => assert_eq!(warned, [true], "{more}: {:?}", out.diagnostics),
+            }
+        }
+    }
+
+    /// Code a module runs from a string can `import()` any module and
+    /// rebind what an exported object holds, so a member tag of one
+    /// rendered elsewhere is not proven; a module running none leaves it.
+    #[test]
+    fn code_run_from_a_string_may_rebind_any_exported_object() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        for (runner, reason) in [
+            ("export const run = (source) => eval(source);\n", Some("runner.ts reads eval")),
+            ("export const run = (source) => new Function(source)();\n", Some("runner.ts reads Function")),
+            ("export const run = (source) => source.length;\n", None),
+        ] {
+            let out = analyze_with_logical_space(&[
+                ("recipe.tsx", recipe),
+                ("fam.tsx", fam),
+                ("runner.ts", runner),
+                ("app.tsx", app),
+            ]);
+            let warned: Vec<&str> = unattributed(&out).iter().map(|d| d.message.as_str()).collect();
+            match reason {
+                Some(reason) => assert!(
+                    warned.len() == 1
+                        && warned[0].contains(&format!("({reason}, so code from a string can load and change any module)")),
+                    "{runner}: {warned:?}"
+                ),
+                None => assert!(warned.is_empty(), "{runner}: {warned:?}"),
             }
         }
     }

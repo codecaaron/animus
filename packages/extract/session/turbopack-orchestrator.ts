@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync, watch } from 'fs';
 import { join, relative } from 'path';
 
-import { DEFAULT_WATCH_DEBOUNCE_MS } from './extraction-session';
+import { COALESCING_WINDOW_MS, CoalescingWindow } from './coalescing-window';
 import {
   ANIMUS_ARTIFACT_DIR,
   TURBOPACK_SYSTEM_PROPS_ID,
@@ -64,7 +64,7 @@ export function startTurbopackWatcher(
   options: TurbopackWatcherOptions = {}
 ): TurbopackWatchOutcome {
   const {
-    debounceMs = DEFAULT_WATCH_DEBOUNCE_MS,
+    debounceMs = COALESCING_WINDOW_MS,
     watchFn = watch,
     holdEvents = false,
   } = options;
@@ -78,7 +78,6 @@ export function startTurbopackWatcher(
 
   const pendingPaths = new Set<string>();
   const watchers = new Map<string, ReturnType<typeof watch>>();
-  let timer: ReturnType<typeof setTimeout> | null = null;
   let updateChain: Promise<void> = Promise.resolve();
   let closed = false;
   let died = false;
@@ -112,7 +111,6 @@ export function startTurbopackWatcher(
   };
 
   const flush = (): void => {
-    timer = null;
     const modifiedFiles = new Set<string>();
     const removedFiles = new Set<string>();
     for (const path of pendingPaths) {
@@ -121,7 +119,7 @@ export function startTurbopackWatcher(
     pendingPaths.clear();
 
     updateChain = updateChain.then(() => {
-      // Clearing the debounce timer does not retract a thunk already chained
+      // Cancelling the window does not retract a thunk already chained
       // behind an in-flight cycle; entering the session after teardown races.
       if (closed) return;
       return session
@@ -137,6 +135,8 @@ export function startTurbopackWatcher(
     });
   };
 
+  const coalescing = new CoalescingWindow(flush, debounceMs);
+
   const rollbackPendingExternal = (): void => {
     for (const watcher of pendingOpened.values()) {
       watcher.close();
@@ -148,8 +148,7 @@ export function startTurbopackWatcher(
   const closeAll = (): void => {
     if (closed) return;
     closed = true;
-    if (timer) clearTimeout(timer);
-    timer = null;
+    coalescing.cancel();
     for (const watcher of watchers.values()) {
       watcher.close();
     }
@@ -185,10 +184,7 @@ export function startTurbopackWatcher(
         `[animus-extract] Turbopack debounce status update failed: ${String(err)}`
       );
     }
-    if (!timer) {
-      timer = setTimeout(flush, debounceMs);
-      timer.unref?.();
-    }
+    coalescing.note();
   };
 
   const onEvent = (baseDir: string, filename: string | Buffer | null): void => {
@@ -316,7 +312,8 @@ export function startTurbopackWatcher(
     onDied: null,
     deliverHeldEvents: () => {
       holdingEvents = false;
-      if (pendingPaths.size > 0) flush();
+      // Startup bypasses the window.
+      if (pendingPaths.size > 0) coalescing.flush();
       return updateChain;
     },
     // After close() no new cycle can be scheduled, so awaiting this drains the

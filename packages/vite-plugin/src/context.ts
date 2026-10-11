@@ -29,6 +29,7 @@ import {
   runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
 import {
+  CoalescingWindow,
   createBuildId,
   engineFactory,
   engineHandle,
@@ -289,7 +290,10 @@ export class PluginContext {
 
   readonly hotUpdateEvents = new HotUpdateEvents();
 
-  private pendingReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Coalesces a burst of invalidations into one full reload. */
+  private readonly reloadWindow = new CoalescingWindow(() => {
+    this.devServer?.hot?.send({ type: 'full-reload' });
+  });
 
   packageMap: Record<string, string> = {};
 
@@ -543,6 +547,7 @@ export class PluginContext {
         externalDirs: this.externalPackageDirs.map((dir) =>
           relative(this.rootDir, dir)
         ),
+        rootDir: this.rootDir,
         devMode: !this.emissionProd,
         // Rollup leaves an `import(expr)` it cannot read unbundled.
         analysisContext: {
@@ -932,12 +937,8 @@ export class PluginContext {
     }
 
     // Virtual-module HMR path matching is fragile for programmatic sends, so
-    // a reload delivers the regenerated CSS; the timer coalesces a burst.
-    if (this.pendingReloadTimer) return;
-    this.pendingReloadTimer = setTimeout(() => {
-      this.pendingReloadTimer = null;
-      this.devServer?.hot?.send({ type: 'full-reload' });
-    }, 100);
+    // a reload delivers the regenerated CSS; the window coalesces a burst.
+    this.reloadWindow.note();
   }
 
   /** An unresolvable `.includes()` specifier or a stale dist entry under an

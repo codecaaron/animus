@@ -23,6 +23,9 @@ function nativeTransformingWith(
 ) {
   return {
     ExtractEngine: class {
+      prepare(): string {
+        throw new Error('prepare() must not run during a transform');
+      }
       analyze(): string {
         return '{}';
       }
