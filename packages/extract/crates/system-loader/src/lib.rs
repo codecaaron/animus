@@ -105,8 +105,43 @@ pub fn resolve_bare_specifier(
     conditions: &[String],
 ) -> Result<(String, PathBuf), String> {
     let (pkg_name, subpath) = split_specifier(specifier);
-
     let pkg_json_path = find_package_json(pkg_name, from_dir)?;
+    select_package_entry(pkg_json_path, subpath, conditions, specifier)
+}
+
+/// The entry `subpath` (`""` or `"."` for the root, else `./x` or `/x`) of
+/// the package in `package_dir`, selected as `resolve_bare_specifier`
+/// selects it once it has found the package: for a package located some
+/// other way, such as a workspace.
+pub fn resolve_package_entry(
+    package_dir: &Path,
+    subpath: &str,
+    conditions: &[String],
+) -> Result<(PathBuf, PathBuf), String> {
+    let label = format!("{}{}", package_dir.display(), subpath.trim_start_matches('.'));
+    select_package_entry(package_dir.join("package.json"), subpath, conditions, &label)
+        .map(|(path, manifest)| (real_path(PathBuf::from(path)), real_path(manifest)))
+}
+
+/// `path` with its links and `.` segments resolved, as `require.resolve`
+/// and Vite return it; as given when it cannot be.
+fn real_path(path: PathBuf) -> PathBuf {
+    fs::canonicalize(&path).unwrap_or(path)
+}
+
+/// The file the package whose manifest is `pkg_json_path` names for
+/// `subpath`, as Node's ESM resolver selects it, a kit's source first:
+/// `exports` alone where it exists (its valid `animus` target, else the
+/// first of `conditions`, `import` and `default` in the object's order);
+/// otherwise `module`, `main` and a root `index`, or the subpath, as files or
+/// directories through the extension policy. Every path that resolves a
+/// package's entry goes through it.
+fn select_package_entry(
+    pkg_json_path: PathBuf,
+    subpath: &str,
+    conditions: &[String],
+    specifier: &str,
+) -> Result<(String, PathBuf), String> {
     let pkg_dir = pkg_json_path
         .parent()
         .ok_or_else(|| format!("invalid package.json path: {:?}", pkg_json_path))?;
@@ -123,33 +158,41 @@ pub fn resolve_bare_specifier(
         for source in [true, false] {
             if let Some(resolved) = resolve_exports_entry(exports, export_key, source, conditions) {
                 let abs_path = pkg_dir.join(&resolved);
-                if abs_path.exists() {
+                if abs_path.is_file() {
                     return Ok((abs_path.to_string_lossy().to_string(), pkg_json_path));
                 }
             }
         }
+        // `exports` answers alone, as Node reads it: a blocked or unmatched
+        // export never falls back to `module` or `main`.
+        return Err(format!(
+            "could not resolve '{}': {:?} exports no file for '{}' under the conditions {:?}",
+            specifier, pkg_json_path, export_key, conditions
+        ));
     }
 
-    if subpath.is_empty() || subpath == "." {
-        if let Some(module_field) = pkg_json.get("module").and_then(|v| v.as_str()) {
-            let abs_path = pkg_dir.join(module_field);
-            if abs_path.exists() {
-                return Ok((abs_path.to_string_lossy().to_string(), pkg_json_path));
-            }
-        }
-
-        if let Some(main_field) = pkg_json.get("main").and_then(|v| v.as_str()) {
-            let abs_path = pkg_dir.join(main_field);
-            if abs_path.exists() {
-                return Ok((abs_path.to_string_lossy().to_string(), pkg_json_path));
-            }
-        }
-    }
-
-    Err(format!(
-        "could not resolve '{}': no matching export, module, or main field in {:?}",
-        specifier, pkg_json_path
-    ))
+    // A package without `exports`: `module`, then `main`, each as a file or
+    // a directory's index through the extension policy, then an `index` at
+    // its root, as Node's legacy resolution reads them; a subpath names a
+    // file or directory in the package.
+    let probe = |entry: &str| {
+        resolution::extension_policy()
+            .probe(&pkg_dir.join(entry).to_string_lossy(), |candidate| Path::new(candidate).is_file())
+    };
+    let legacy = match subpath.trim_start_matches('.').trim_start_matches('/') {
+        "" => ["module", "main"]
+            .iter()
+            .filter_map(|field| pkg_json.get(*field).and_then(|value| value.as_str()))
+            .find_map(probe)
+            .or_else(|| probe("index")),
+        subpath => probe(subpath),
+    };
+    legacy.map(|path| (path, pkg_json_path.clone())).ok_or_else(|| {
+        format!(
+            "could not resolve '{}': no module, main or index file in {:?}",
+            specifier, pkg_dir
+        )
+    })
 }
 
 fn split_specifier(specifier: &str) -> (&str, &str) {
@@ -290,23 +333,51 @@ enum Target {
 
 fn condition_target(value: &serde_json::Value, source: bool, conditions: &[String]) -> Target {
     match value {
-        serde_json::Value::String(s) => Target::Found(s.clone()),
-        serde_json::Value::Null => Target::Blocked,
+        serde_json::Value::String(target) if valid_package_target(target) => Target::Found(target.clone()),
+        // Node refuses a target that leaves the package.
+        serde_json::Value::String(_) | serde_json::Value::Null => Target::Blocked,
+        // Fallbacks: the first target that resolves.
+        serde_json::Value::Array(targets) => {
+            let mut blocked = false;
+            for target in targets {
+                match condition_target(target, source, conditions) {
+                    Target::Found(target) => return Target::Found(target),
+                    Target::Blocked => blocked = true,
+                    Target::Unmatched => {}
+                }
+            }
+            if blocked { Target::Blocked } else { Target::Unmatched }
+        }
         serde_json::Value::Object(obj) => {
-            let animus = obj.get("animus").filter(|_| source);
+            // A kit's source counts only where it is a valid target; otherwise
+            // its runtime conditions answer, and discovery reports the source.
+            let animus = obj
+                .get("animus")
+                .filter(|_| source)
+                .map(|value| condition_target(value, source, conditions))
+                .filter(|target| matches!(target, Target::Found(_)));
             let matched = obj.iter().filter(|(key, _)| {
                 matches!(key.as_str(), "import" | "default")
                     || conditions.iter().any(|condition| condition == *key)
             });
             animus
                 .into_iter()
-                .chain(matched.map(|(_, value)| value))
-                .map(|value| condition_target(value, source, conditions))
+                .chain(matched.map(|(_, value)| condition_target(value, source, conditions)))
                 .find(|target| !matches!(target, Target::Unmatched))
                 .unwrap_or(Target::Unmatched)
         }
         _ => Target::Unmatched,
     }
+}
+
+/// A package target Node accepts: relative to the package root (`./`), with
+/// no `..` or `node_modules` segment taking it out of the package.
+fn valid_package_target(target: &str) -> bool {
+    target.starts_with("./")
+        && !target
+            .split(['/', '\\'])
+            .skip(1)
+            .any(|segment| segment == ".." || segment.eq_ignore_ascii_case("node_modules"))
 }
 
 /// `specifier` resolved from `from_dir` as the system loader resolves its
@@ -319,19 +390,18 @@ pub fn resolve_specifier(
     from_dir: &str,
     conditions: &[String],
 ) -> Result<(PathBuf, Option<PathBuf>), String> {
-    let real = |path: PathBuf| fs::canonicalize(&path).unwrap_or(path);
     if specifier.starts_with('.') || specifier.starts_with('/') {
-        resolve_relative(Path::new(from_dir), specifier).map(|path| (real(PathBuf::from(path)), None))
+        resolve_relative(Path::new(from_dir), specifier).map(|path| (real_path(PathBuf::from(path)), None))
     } else {
         resolve_bare_specifier(specifier, from_dir, conditions)
-            .map(|(path, manifest)| (real(PathBuf::from(path)), Some(real(manifest))))
+            .map(|(path, manifest)| (real_path(PathBuf::from(path)), Some(real_path(manifest))))
     }
 }
 
 fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, String> {
     // Appended, not replaced: `./tokens.theme` names `tokens.theme.ts`.
     let target = base_dir.join(specifier).to_string_lossy().to_string();
-    resolution::SYSTEM_EVALUATION
+    resolution::extension_policy()
         .probe(&target, |candidate| Path::new(candidate).is_file())
         .ok_or_else(|| format!("could not resolve '{}' from {:?}", specifier, base_dir))
 }
@@ -507,13 +577,15 @@ fn extract_import_specifiers(source: &str, file_path: &str) -> Vec<ImportInfo> {
 }
 
 /// Crawl a system entry's module graph: (importing module, specifier) →
-/// canonical path, canonical path → stripped source, stub export names, and
-/// the canonical `package.json` files whose fields selected a module.
+/// canonical path, canonical path → stripped source, stub export names, the
+/// canonical `package.json` files whose fields selected a module, and each
+/// TypeScript module's type-only export names, which the strip erases.
 type DependencyResolution = (
     HashMap<(String, String), String>,
     HashMap<String, String>,
     HashMap<String, HashSet<String>>,
     HashSet<String>,
+    HashMap<String, HashSet<String>>,
 );
 
 pub fn resolve_all_deps(
@@ -525,6 +597,7 @@ pub fn resolve_all_deps(
     let mut source_map: HashMap<String, String> = HashMap::new();
     let mut stub_exports: HashMap<String, HashSet<String>> = HashMap::new();
     let mut manifests: HashSet<String> = HashSet::new();
+    let mut type_exports: HashMap<String, HashSet<String>> = HashMap::new();
     let mut visited: HashSet<String> = HashSet::new();
     let mut queue: VecDeque<String> = VecDeque::new();
     // canonical path → the bare specifier that pulled in a non-workspace
@@ -557,19 +630,24 @@ pub fn resolve_all_deps(
             }
         }
 
-        let is_ts = current_path.ends_with(".ts") || current_path.ends_with(".tsx");
+        // Every source the extension policy can resolve to that is not plain
+        // JavaScript: TypeScript in any module flavour, and JSX.
+        let is_ts = [".ts", ".tsx", ".mts", ".cts", ".jsx"].iter().any(|extension| current_path.ends_with(extension));
         let processed = if is_ts {
+            let types = type_only_export_names(&raw_source, &current_path);
+            if !types.is_empty() {
+                type_exports.insert(current_path.clone(), types);
+            }
             strip_typescript_module(&raw_source, &current_path)?
         } else {
             raw_source.clone()
         };
 
-        let mut import_infos = extract_import_specifiers(&raw_source, &current_path);
-        if is_ts {
-            // The strip's JSX transform adds an automatic-runtime import the
-            // authored source lacks; the evaluated module needs its stub.
-            import_infos.extend(extract_import_specifiers(&processed, &current_path));
-        }
+        // The imports the evaluated module makes: for TypeScript, those that
+        // survive the strip, which erases an import only a type uses and adds
+        // the JSX transform's automatic-runtime import. A module that only an
+        // erased import names is never crawled.
+        let import_infos = extract_import_specifiers(&processed, &current_path);
 
         let current_dir = Path::new(&current_path)
             .parent()
@@ -602,8 +680,15 @@ pub fn resolve_all_deps(
                             queue.push_back(canonical);
                         }
                     }
+                    // The evaluated module makes this import, so it would
+                    // read as undefined.
                     Err(_) => {
-                        // Unresolvable relative imports may be type-only.
+                        return Err(format!(
+                            "relative import '{}' in '{}' names no file, and the module \
+                             evaluates it (it is not a type-only import), so the system cannot \
+                             load — check the path and the file's extension",
+                            spec, current_path
+                        ));
                     }
                 }
             } else if spec.starts_with("node:") {
@@ -661,7 +746,28 @@ pub fn resolve_all_deps(
         source_map.insert(current_path.clone(), processed);
     }
 
-    Ok((specifier_map, source_map, stub_exports, manifests))
+    Ok((specifier_map, source_map, stub_exports, manifests, type_exports))
+}
+
+/// The names a TypeScript module exports as types only: `export interface`,
+/// `export type`, and their re-exports. The strip erases them, so a
+/// re-export or import of one that omits `type` finds no binding at link
+/// time, where a bundler without isolated modules accepts it.
+fn type_only_export_names(source: &str, file_path: &str) -> HashSet<String> {
+    let allocator = Allocator::default();
+    let source_type = SourceType::from_path(Path::new(file_path)).unwrap_or_else(|_| SourceType::ts().with_module(true));
+    let parsed = Parser::new(&allocator, source, source_type).parse();
+    let record = &parsed.module_record;
+    record
+        .local_export_entries
+        .iter()
+        .chain(&record.indirect_export_entries)
+        .filter(|entry| entry.is_type)
+        .filter_map(|entry| match &entry.export_name {
+            oxc::syntax::module_record::ExportExportName::Name(name) => Some(name.name.to_string()),
+            _ => None,
+        })
+        .collect()
 }
 
 struct RewriteOp {
@@ -771,30 +877,13 @@ fn rewrite_module_for_bundle(
             }
 
             Statement::ExportNamedDeclaration(decl) => {
-                if let Some(source_lit) = &decl.source {
-                    let spec = source_lit.value.to_string();
-                    let require_literal = js_quoted(
-                        &specifier_map
-                            .get(&(canonical_path.to_string(), spec.clone()))
-                            .cloned()
-                            .unwrap_or_else(|| stub_key(&spec)),
-                    );
-
-                    let mut assignments = Vec::new();
-                    for es in &decl.specifiers {
-                        // Arbitrary module namespace names are legal ES2022,
-                        // so export names take the same escape.
-                        let local_str = js_quoted(&module_export_name(&es.local));
-                        let exported_str = js_quoted(&module_export_name(&es.exported));
-                        assignments.push(format!(
-                            "__exports['{}'] = __require('{}')['{}']",
-                            exported_str, require_literal, local_str
-                        ));
-                    }
+                if decl.source.is_some() {
+                    // The module table resolves a re-export; its value is
+                    // assigned after the module runs.
                     ops.push(RewriteOp {
                         start: decl.span.start as usize,
                         end: decl.span.end as usize,
-                        replacement: format!("{};", assignments.join(";\n")),
+                        replacement: String::new(),
                     });
                 } else if !decl.specifiers.is_empty() {
                     for es in &decl.specifiers {
@@ -803,6 +892,14 @@ fn rewrite_module_for_bundle(
                             module_export_name(&es.local),
                         ));
                     }
+                    ops.push(RewriteOp {
+                        start: decl.span.start as usize,
+                        end: decl.span.end as usize,
+                        replacement: String::new(),
+                    });
+                } else if decl.declaration.is_none() {
+                    // `export {}`, which the strip leaves in a module that
+                    // exports only types, exports nothing.
                     ops.push(RewriteOp {
                         start: decl.span.start as usize,
                         end: decl.span.end as usize,
@@ -843,31 +940,13 @@ fn rewrite_module_for_bundle(
                 }
             }
 
+            // The module table resolves what `export *` and `export * as`
+            // bring in; their values are assigned after the module runs.
             Statement::ExportAllDeclaration(decl) => {
-                let spec = decl.source.value.to_string();
-                let require_literal = js_quoted(
-                    &specifier_map
-                        .get(&(canonical_path.to_string(), spec.clone()))
-                        .cloned()
-                        .unwrap_or_else(|| stub_key(&spec)),
-                );
-                // `|| {}` guards a registry miss: assigning `undefined` would
-                // leave surrounding code reading exports that never appear.
-                let replacement = match &decl.exported {
-                    Some(exported) => format!(
-                        "__exports['{}'] = __require('{}') || {{}};",
-                        js_quoted(&module_export_name(exported)),
-                        require_literal
-                    ),
-                    None => format!(
-                        "Object.assign(__exports, __require('{}') || {{}});",
-                        require_literal
-                    ),
-                };
                 ops.push(RewriteOp {
                     start: decl.span.start as usize,
                     end: decl.span.end as usize,
-                    replacement,
+                    replacement: String::new(),
                 });
             }
 
@@ -1077,6 +1156,7 @@ fn build_bundle(
     specifier_map: &HashMap<(String, String), String>,
     source_map: &HashMap<String, String>,
     stub_exports: &HashMap<String, HashSet<String>>,
+    type_exports: &HashMap<String, HashSet<String>>,
     entry_path: &str,
 ) -> Result<(String, BundleLayout), String> {
     let mut bundle =
@@ -1085,7 +1165,12 @@ fn build_bundle(
     let mut marker_offsets: Vec<(usize, String)> = Vec::new();
 
     bundle.push_str(CONSOLE_SHIM);
-    bundle.push_str("const __modules = {};\nconst __require = (n) => __modules[n];\n\n");
+    bundle.push_str("const __modules = {};\nconst __require = (n) => __modules[n];\n");
+    // A module namespace lists its names in code-unit order, as Node lists
+    // them; plain assignment leaves them in the order the module ran.
+    bundle.push_str(
+        "const __namespace = (e) => { const ns = {}; for (const k of Object.keys(e).sort()) ns[k] = e[k]; return ns; };\n\n",
+    );
 
     // Stub modules first, emitted in sorted key order (and with sorted export
     // names) so the same inputs always produce the same bytes.
@@ -1113,17 +1198,24 @@ fn build_bundle(
     let order = match topological_sort(specifier_map, source_map, entry_path) {
         Ok(order) => order,
         Err(_) => {
-            return build_linked_bundle(
-                specifier_map,
-                source_map,
-                stub_exports,
-                entry_path,
-                bundle,
-                marker_offsets,
-                stub_specifiers,
-            )
+            let prelude = Prelude { bundle, marker_offsets, stub_specifiers };
+            return build_linked_bundle(specifier_map, source_map, stub_exports, type_exports, entry_path, prelude);
         }
     };
+    // Every module's names come from the shared module table, as a cyclic
+    // graph's do: an import or re-export that links to nothing fails here,
+    // before any module runs.
+    let mut modules: HashMap<String, linked::LinkedModule> = HashMap::with_capacity(order.len());
+    for path in &order {
+        let module = linked::rewrite_module_for_linking(&source_map[path], path, specifier_map)?;
+        modules.insert(path.clone(), module);
+    }
+    let linker = linked::Linker::new(&modules, stub_exports, type_exports);
+    let mut paths: Vec<&String> = order.iter().collect();
+    paths.sort();
+    for path in paths {
+        linker.check_links(path)?;
+    }
     let mut module_spans = Vec::with_capacity(order.len());
 
     for module_path in &order {
@@ -1134,6 +1226,7 @@ fn build_bundle(
             module_path,
             source_map,
             specifier_map,
+            &linker.forwarded(module_path),
         )?;
     }
 
@@ -1157,12 +1250,21 @@ fn push_module_iife(
     module_path: &String,
     source_map: &HashMap<String, String>,
     specifier_map: &HashMap<(String, String), String>,
+    forwarded: &[(String, String)],
 ) -> Result<(), String> {
     let source = source_map
         .get(module_path)
         .ok_or_else(|| format!("module '{}' not found in source_map", module_path))?;
 
-    let rewritten = rewrite_module_for_bundle(source, module_path, specifier_map)?;
+    let mut rewritten = rewrite_module_for_bundle(source, module_path, specifier_map)?;
+    // What the module re-exports, or `export *` brings in, reads the binding
+    // it resolves to, once the modules it imports have run.
+    if !forwarded.is_empty() {
+        rewritten.push('\n');
+        for (name, read) in forwarded {
+            let _ = writeln!(rewritten, "__exports['{}'] = {};", js_quoted(name), read);
+        }
+    }
 
     marker_offsets.push((bundle.len(), module_path.clone()));
     let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, module_path);
@@ -1173,11 +1275,19 @@ fn push_module_iife(
     bundle.push('\n');
     let _ = writeln!(
         bundle,
-        "__modules['{}'] = __exports;",
+        "__modules['{}'] = __namespace(__exports);",
         js_quoted(module_path)
     );
     bundle.push_str("})();\n\n");
     Ok(())
+}
+
+/// What a bundle holds before its modules: the shims and stub modules, where
+/// each stub starts, and the stubs' specifiers.
+struct Prelude {
+    bundle: String,
+    marker_offsets: Vec<(usize, String)>,
+    stub_specifiers: Vec<String>,
 }
 
 /// The bundle of a graph with an import cycle (see `linked`), after the
@@ -1189,11 +1299,11 @@ fn build_linked_bundle(
     specifier_map: &HashMap<(String, String), String>,
     source_map: &HashMap<String, String>,
     stub_exports: &HashMap<String, HashSet<String>>,
+    type_exports: &HashMap<String, HashSet<String>>,
     entry_path: &str,
-    mut bundle: String,
-    mut marker_offsets: Vec<(usize, String)>,
-    stub_specifiers: Vec<String>,
+    prelude: Prelude,
 ) -> Result<(String, BundleLayout), String> {
+    let Prelude { mut bundle, mut marker_offsets, stub_specifiers } = prelude;
     let order = linked::evaluation_order(specifier_map, source_map, entry_path);
     let mut paths: Vec<&String> = source_map.keys().collect();
     paths.sort();
@@ -1202,7 +1312,7 @@ fn build_linked_bundle(
         let module = linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map)?;
         modules.insert((*path).clone(), module);
     }
-    let linker = linked::Linker { modules: &modules, stubs: stub_exports };
+    let linker = linked::Linker::new(&modules, stub_exports, type_exports);
     for path in &paths {
         linker.check_links(path)?;
     }
@@ -1963,7 +2073,7 @@ pub fn load_system_module(
     export_name: Option<&str>,
     conditions: &[String],
 ) -> Result<SystemConfig, String> {
-    let (specifier_map, source_map, stub_exports, manifests) =
+    let (specifier_map, source_map, stub_exports, manifests, type_exports) =
         resolve_all_deps(system_path, root_dir, conditions)?;
 
     let entry_path = fs::canonicalize(system_path)
@@ -1971,7 +2081,7 @@ pub fn load_system_module(
         .to_string_lossy()
         .to_string();
 
-    let (bundle, layout) = build_bundle(&specifier_map, &source_map, &stub_exports, &entry_path)?;
+    let (bundle, layout) = build_bundle(&specifier_map, &source_map, &stub_exports, &type_exports, &entry_path)?;
     let mut config = execute_bundle(&bundle, &layout, &entry_path, export_name)?;
     config.global_style_blocks = config
         .global_style_blocks
@@ -2163,7 +2273,7 @@ export const ds = tokens;
             "console.log('hello');\nconsole.warn('warned');\nconsole.error('erred');\n",
         );
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &HashMap::new(), "/entry.js").unwrap();
+            build_bundle(&HashMap::new(), &source_map, &HashMap::new(), &HashMap::new(), "/entry.js").unwrap();
 
         assert!(bundle.starts_with("globalThis.console"));
         eval_bundle(&bundle).expect("top-level console calls must not abort the bundle");
@@ -2184,7 +2294,7 @@ export const ds = tokens;
             "import { space as dsSpace } from 'react';\nconst applied = dsSpace();\n",
         );
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &stub_exports, "/entry.js").unwrap();
+            build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
 
         assert!(bundle.contains("__exports['space'] = noop;"), "{bundle}");
         assert!(
@@ -2215,12 +2325,9 @@ export const ds = tokens;
             "export { space as dsSpace } from 'react';\nexport * from 'react-dom';\n",
         );
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &stub_exports, "/entry.js").unwrap();
+            build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
 
-        assert!(
-            bundle.contains("__exports['dsSpace'] = __require('__stub__/react')['space']"),
-            "{bundle}"
-        );
+        assert!(bundle.contains("__exports['dsSpace'] = __modules['__stub__/react']['space'];"), "{bundle}");
         eval_bundle(&bundle).expect("re-export from a stub must not read a property of undefined");
     }
 
@@ -2228,12 +2335,10 @@ export const ds = tokens;
     fn export_star_never_assigns_undefined() {
         let source_map = single_module("/entry.js", "export * from 'react';\n");
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &HashMap::new(), "/entry.js").unwrap();
+            build_bundle(&HashMap::new(), &source_map, &HashMap::new(), &HashMap::new(), "/entry.js").unwrap();
 
-        assert!(
-            bundle.contains("Object.assign(__exports, __require('__stub__/react') || {})"),
-            "{bundle}"
-        );
+        // An unregistered module brings in no name, so nothing is assigned.
+        assert!(!bundle.contains("__exports['"), "{bundle}");
         eval_bundle(&bundle).expect("`export *` from an unregistered module must not throw");
     }
 
@@ -2243,21 +2348,26 @@ export const ds = tokens;
             ("/entry.ts".to_string(), "pkg".to_string()),
             "/canonical/pkg.ts".to_string(),
         )]);
+        // The module table binds the name; the rewrite only drops the syntax.
         assert_eq!(
-            rewrite_module_for_bundle("export * as ns from 'pkg';", "/entry.ts", &resolved_map)
-                .unwrap(),
-            "__exports['ns'] = __require('/canonical/pkg.ts') || {};"
+            rewrite_module_for_bundle("export * as ns from 'pkg';", "/entry.ts", &resolved_map).unwrap(),
+            ""
         );
+        let source_map = HashMap::from([
+            ("/entry.ts".to_string(), "export * as ns from 'pkg';\n".to_string()),
+            ("/canonical/pkg.ts".to_string(), "export const v = 7;\n".to_string()),
+        ]);
+        let (bundle, _) = build_bundle(&resolved_map, &source_map, &HashMap::new(), &HashMap::new(), "/entry.ts").unwrap();
+        assert!(bundle.contains("__exports['ns'] = __modules['/canonical/pkg.ts'];"), "{bundle}");
+        let checked = format!("{bundle}\nif (__modules['/entry.ts'].ns.v !== 7) throw new Error('ns is not pkg');\n");
+        eval_bundle(&checked).expect("`export * as ns` binds pkg's namespace");
 
         let stub_exports =
             HashMap::from([(stub_key("react"), HashSet::from(["space".to_string()]))]);
         let source_map = single_module("/entry.js", "export * as R from 'react';\n");
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &stub_exports, "/entry.js").unwrap();
-        assert!(
-            bundle.contains("__exports['R'] = __require('__stub__/react') || {}"),
-            "{bundle}"
-        );
+            build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
+        assert!(bundle.contains("__exports['R'] = __modules['__stub__/react'];"), "{bundle}");
         assert!(
             !bundle.contains("Object.assign(__exports, __require('__stub__/react')"),
             "namespace form must not spread into __exports: {bundle}"
@@ -2282,7 +2392,7 @@ export const ds = tokens;
         ]);
 
         let (bundle, _) =
-            build_bundle(&specifier_map, &source_map, &HashMap::new(), &entry).unwrap();
+            build_bundle(&specifier_map, &source_map, &HashMap::new(), &HashMap::new(), &entry).unwrap();
 
         eval_bundle(&bundle).expect("a quoted module path must produce an evaluable bundle");
     }
@@ -2292,7 +2402,7 @@ export const ds = tokens;
         let stub_exports = HashMap::from([(stub_key("it's-a-module"), HashSet::new())]);
         let source_map = single_module("/entry.js", "import x from \"it's-a-module\";\n");
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &stub_exports, "/entry.js").unwrap();
+            build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
 
         eval_bundle(&bundle).expect("a quoted stub specifier must produce an evaluable bundle");
     }
@@ -2301,7 +2411,7 @@ export const ds = tokens;
     fn arbitrary_module_namespace_names_stay_valid_js() {
         let source_map = single_module("/entry.js", "const v = 1;\nexport { v as \"it's\" };\n");
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &HashMap::new(), "/entry.js").unwrap();
+            build_bundle(&HashMap::new(), &source_map, &HashMap::new(), &HashMap::new(), "/entry.js").unwrap();
 
         eval_bundle(&bundle).expect("a quoted export name must produce an evaluable bundle");
     }
@@ -2326,9 +2436,9 @@ export const ds = tokens;
 
         let source_map = single_module("/entry.js", "const value = 1;\n");
         let (first, layout) =
-            build_bundle(&HashMap::new(), &source_map, &first_stubs, "/entry.js").unwrap();
+            build_bundle(&HashMap::new(), &source_map, &first_stubs, &HashMap::new(), "/entry.js").unwrap();
         let (second, _) =
-            build_bundle(&HashMap::new(), &source_map, &second_stubs, "/entry.js").unwrap();
+            build_bundle(&HashMap::new(), &source_map, &second_stubs, &HashMap::new(), "/entry.js").unwrap();
 
         assert_eq!(first, second, "stub emission must not depend on map order");
         assert_eq!(
@@ -2359,7 +2469,7 @@ export const ds = tokens;
         let stub_exports = HashMap::from([(stub_key("react"), HashSet::new())]);
 
         let (bundle, layout) =
-            build_bundle(&specifier_map, &source_map, &stub_exports, "/b.js").unwrap();
+            build_bundle(&specifier_map, &source_map, &stub_exports, &HashMap::new(), "/b.js").unwrap();
         let error = execute_bundle(&bundle, &layout, "/b.js", None)
             .expect_err("a throwing bundle must fail the load");
 
@@ -2392,6 +2502,125 @@ export const ds = tokens;
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create scratch dir");
         dir
+    }
+
+    /// A package's entry is selected as Node's ESM resolver selects it, a
+    /// kit's `animus` source first: `exports` answers alone (arrays by their
+    /// first valid target, conditions in the object's order, an invalid
+    /// source target falling back to the runtime one); without `exports`,
+    /// `module`, `main` and a root `index` resolve as files or directories.
+    #[test]
+    fn package_entries_follow_node_esm_selection() {
+        let dir = scratch_dir("package-entries");
+        let package = |name: &str, manifest: serde_json::Value, files: &[&str]| {
+            let root = dir.join("node_modules").join(name);
+            fs::create_dir_all(&root).expect("create package");
+            fs::write(root.join("package.json"), manifest.to_string()).expect("write manifest");
+            for file in files {
+                let path = root.join(file);
+                fs::create_dir_all(path.parent().expect("file has a directory")).expect("create directory");
+                fs::write(path, "export {};\n").expect("write file");
+            }
+        };
+        package("legacy-main", serde_json::json!({ "main": "index" }), &["index.js"]);
+        package("default-index", serde_json::json!({ "name": "default-index" }), &["index.js"]);
+        package("legacy-subpath", serde_json::json!({ "main": "./main.js" }), &["main.js", "lib/part.js"]);
+        package("blocked", serde_json::json!({ "exports": { ".": null }, "module": "./esm.js" }), &["esm.js"]);
+        package("unexported", serde_json::json!({ "exports": { ".": "./index.js" }, "main": "./index.js" }), &["index.js", "other.js"]);
+        package("array", serde_json::json!({ "exports": { ".": ["./esm.js"] }, "main": "./cjs.js" }), &["esm.js", "cjs.js"]);
+        package(
+            "conditions",
+            serde_json::json!({ "exports": { ".": { "browser": "./browser.js", "import": "./import.js" } } }),
+            &["browser.js", "import.js"],
+        );
+        package(
+            "import-first",
+            serde_json::json!({ "exports": { ".": { "import": "./import.js", "browser": "./browser.js" } } }),
+            &["browser.js", "import.js"],
+        );
+        package(
+            "escaping-source",
+            serde_json::json!({ "exports": { ".": { "animus": "../escape.ts", "import": "./runtime.js" } } }),
+            &["runtime.js"],
+        );
+        fs::write(dir.join("node_modules/escape.ts"), "export {};\n").expect("write escape");
+        let from = dir.to_string_lossy().to_string();
+        let resolved = |specifier: &str, conditions: &[&str]| {
+            let conditions: Vec<String> = conditions.iter().map(|condition| condition.to_string()).collect();
+            resolve_bare_specifier(specifier, &from, &conditions)
+                .map(|(path, _)| path.rsplit("node_modules/").next().unwrap_or_default().replace("/./", "/"))
+        };
+        assert_eq!(resolved("legacy-main", &[]).as_deref(), Ok("legacy-main/index.js"));
+        assert_eq!(resolved("default-index", &[]).as_deref(), Ok("default-index/index.js"));
+        assert_eq!(resolved("legacy-subpath/lib/part", &[]).as_deref(), Ok("legacy-subpath/lib/part.js"));
+        assert!(resolved("blocked", &[]).is_err(), "a blocked export never falls back to module");
+        assert!(resolved("unexported/other.js", &[]).is_err(), "an unexported subpath never falls back");
+        assert_eq!(resolved("array", &[]).as_deref(), Ok("array/esm.js"));
+        assert_eq!(resolved("conditions", &["browser"]).as_deref(), Ok("conditions/browser.js"));
+        assert_eq!(resolved("conditions", &[]).as_deref(), Ok("conditions/import.js"));
+        assert_eq!(resolved("import-first", &["browser"]).as_deref(), Ok("import-first/import.js"));
+        assert_eq!(resolved("escaping-source", &[]).as_deref(), Ok("escaping-source/runtime.js"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Contract: one extension policy answers system and analysis resolution
+    /// alike. Each witness resolves to the same file for a system's
+    /// evaluation, on disk, and for an analysis, in its file set.
+    #[test]
+    fn one_extension_policy_answers_system_and_analysis_alike() {
+        // Each row: the files present, the specifier, the file it names. The
+        // competing rows pin the order: appended extensions, index files and
+        // NodeNext sources each in policy order, an appended file before an
+        // index, and the literal spelling before any source it stands for.
+        let witnesses: [(&[&str], &str, &str); 15] = [
+            (&["x.ts"], "./x.js", "x.ts"),
+            (&["x.js", "x.ts"], "./x.js", "x.js"),
+            (&["x.tsx"], "./x.jsx", "x.tsx"),
+            (&["x.mts"], "./x.mjs", "x.mts"),
+            (&["x.cts"], "./x.cjs", "x.cts"),
+            (&["x.ts"], "./x.JS", "x.ts"),
+            (&["x.jsx"], "./x", "x.jsx"),
+            (&["x.mjs"], "./x", "x.mjs"),
+            (&["x.ts", "x.tsx", "x.js", "x.jsx", "x.mjs"], "./x", "x.ts"),
+            (&["x.tsx", "x.js"], "./x", "x.tsx"),
+            (&["x.jsx", "x.mjs"], "./x", "x.jsx"),
+            (&["x/index.ts", "x/index.tsx", "x/index.js"], "./x", "x/index.ts"),
+            (&["x.ts", "x/index.ts"], "./x", "x.ts"),
+            (&["x.ts", "x.tsx", "x.jsx"], "./x.js", "x.ts"),
+            (&["x.tsx", "x.jsx"], "./x.js", "x.tsx"),
+        ];
+        for (index, (present, specifier, expected)) in witnesses.into_iter().enumerate() {
+            let dir = scratch_dir(&format!("extension-policy-{index}"));
+            for file in present {
+                let path = dir.join(file);
+                fs::create_dir_all(path.parent().expect("a witness file has a directory")).expect("create directory");
+                fs::write(path, "export {};\n").expect("write witness");
+            }
+            let prefix = format!("{}/", dir.to_string_lossy());
+            let system = resolve_relative(&dir, specifier).map(|path| path.trim_start_matches(&prefix).trim_start_matches("./").to_string());
+            let base = specifier.trim_start_matches("./");
+            let analysis = resolution::extension_policy().probe(base, |candidate| present.contains(&candidate));
+            assert_eq!(system.as_deref(), Ok(expected), "system: {present:?} {specifier}");
+            assert_eq!(analysis.as_deref(), Some(expected), "analysis: {present:?} {specifier}");
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A relative import the evaluated module makes and that names no file
+    /// fails the crawl, naming it; an import only a type uses is erased with
+    /// it, so the module it names, and that module's own imports, are never
+    /// crawled.
+    #[test]
+    fn only_evaluated_imports_are_crawled_and_must_resolve() {
+        let dir = scratch_dir("evaluated-imports");
+        write_fixture(&dir.join("erased.ts"), "import { Shape } from './types';\ntype T = Shape;\nexport default {};\n");
+        write_fixture(&dir.join("types.ts"), "import './missing';\nexport interface Shape {}\n");
+        write_fixture(&dir.join("value.ts"), "import { size } from './tokens';\nexport const s = size;\n");
+        let crawl = |entry: &str| resolve_all_deps(&dir.join(entry).to_string_lossy(), &dir.to_string_lossy(), &[]);
+        assert!(crawl("erased.ts").is_ok(), "{:?}", crawl("erased.ts").err());
+        let error = crawl("value.ts").err().unwrap_or_default();
+        assert!(error.contains("'./tokens'") && error.contains("value.ts"), "{error}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Host-binding evidence follows each definition's own authored callable,
@@ -2553,6 +2782,96 @@ export const ds = tokens;
         );
     }
 
+    #[test]
+    fn a_systems_explicit_reexport_is_never_overridden_by_a_star() {
+        // Contract: an explicit export wins over a name `export *` brings in,
+        // whatever their order, as Node links them, on the acyclic path as on
+        // the cyclic one. A TypeScript type re-exported or imported without
+        // `type` links to nothing and fails nothing, as a bundler without
+        // isolated modules accepts it, and a module exporting only types loads.
+        const PROTOCOL: &str = "export const ds = { toConfig: () => ({ propConfig: JSON.stringify(data), groupRegistry: '{}' }), \
+             getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [] }) };\n\
+             export const theme = { serialize: () => ({ scalesJson: '{}', variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n";
+        /// A case's name, its files, and the loaded propConfig.
+        type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a str);
+        let cases: [Case; 4] = [
+            (
+                "explicit-beats-star",
+                &[
+                    ("entry.js", "import { y } from './a.js';\nconst data = { y };\n"),
+                    ("a.js", "export { y } from './c.js';\nexport * from './d.js';\n"),
+                    ("c.js", "export const y = 'explicit';\n"),
+                    ("d.js", "export const y = 'star';\n"),
+                ],
+                r#"{"y":"explicit"}"#,
+            ),
+            (
+                "type-re-export",
+                &[
+                    ("entry.ts", "import { v } from './barrel';\nconst data = { v };\n"),
+                    ("barrel.ts", "export { Props } from './types';\nexport const v = 1;\n"),
+                    ("types.ts", "export interface Props { a: 1 }\nexport const t = 2;\n"),
+                ],
+                r#"{"v":1}"#,
+            ),
+            (
+                "type-import-then-export",
+                &[
+                    ("entry.ts", "import { v } from './barrel';\nconst data = { v };\n"),
+                    ("barrel.ts", "import { Props } from './types';\nexport { Props };\nexport const v = 1;\n"),
+                    ("types.ts", "export interface Props { a: 1 }\nexport const t = 2;\n"),
+                ],
+                r#"{"v":1}"#,
+            ),
+            (
+                "types-only-module",
+                &[
+                    ("entry.ts", "import { Props } from './types';\nconst p: Props = { a: 1 };\nconst data = { a: p.a };\n"),
+                    ("types.ts", "export interface Props { a: 1 }\n"),
+                ],
+                r#"{"a":1}"#,
+            ),
+        ];
+        for (name, files, expected) in cases {
+            let dir = scratch_dir(&format!("acyclic-{name}"));
+            for (file, source) in files {
+                let source = if file.starts_with("entry.") { format!("{source}{PROTOCOL}") } else { source.to_string() };
+                write_fixture(&dir.join(file), &source);
+            }
+            let entry = files.iter().find(|(file, _)| file.starts_with("entry.")).map(|(file, _)| dir.join(file)).unwrap();
+            let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+            let _ = fs::remove_dir_all(&dir);
+            assert_eq!(result.map(|loaded| loaded.prop_config).as_deref(), Ok(expected), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_acyclic_namespace_lists_its_names_in_code_unit_order() {
+        // Node lists a module namespace's names in code-unit order, whatever
+        // order the module exported them in.
+        let dir = scratch_dir("acyclic-namespace-order");
+        write_fixture(
+            &dir.join("entry.js"),
+            "import * as ns from './a.js';\nconst data = { keys: Object.keys(ns), spread: Object.keys({ ...ns }) };\n\
+             export const ds = { toConfig: () => ({ propConfig: JSON.stringify(data), groupRegistry: '{}' }), \
+             getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [] }) };\n\
+             export const theme = { serialize: () => ({ scalesJson: '{}', variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n",
+        );
+        write_fixture(
+            &dir.join("a.js"),
+            "export const z = 1;\nexport { y } from './c.js';\nexport * as w from './c.js';\nexport * from './d.js';\nexport const a = 2;\nexport default 0;\n",
+        );
+        write_fixture(&dir.join("c.js"), "export const y = 3;\n");
+        write_fixture(&dir.join("d.js"), "export const B = 4;\n");
+        let result = load_system_module(&dir.join("entry.js").to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let _ = fs::remove_dir_all(&dir);
+        let order = r#"["B","a","default","w","y","z"]"#;
+        assert_eq!(
+            result.map(|loaded| loaded.prop_config).as_deref(),
+            Ok(format!(r#"{{"keys":{order},"spread":{order}}}"#).as_str())
+        );
+    }
+
     /// Contract: a system whose module graph has an import cycle loads as
     /// Node loads it. Each module evaluates once, after the modules it imports
     /// outside its cycle. A hoisted function, an anonymous default function,
@@ -2570,7 +2889,7 @@ export const ds = tokens;
         /// A case's name, its modules, and the loaded propConfig or a part
         /// of the load's error.
         type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], Result<&'a str, &'a str>);
-        let cases: [Case; 10] = [
+        let cases: [Case; 13] = [
             (
                 "hoisted-live",
                 &[
@@ -2632,6 +2951,35 @@ export const ds = tokens;
                     ("entry", "import { value, bump } from './a.js';\nbump();\nconst data = { value };\n"),
                 ],
                 Ok(r#"{"value":8}"#),
+            ),
+            (
+                "namespace-key-order",
+                &[
+                    ("entry", "import * as ns from './a.js';\nconst data = { keys: Object.keys(ns) };\n"),
+                    ("a", "export const z = 1;\nexport { y } from './c.js';\nexport * as w from './c.js';\nexport const a = 2;\n"),
+                    ("c", "import './entry.js';\nexport const y = 3;\n"),
+                ],
+                Ok(r#"{"keys":["a","w","y","z"]}"#),
+            ),
+            (
+                // React's real exports hold no `x`, so Node takes b's.
+                "stub-star-yields-to-module",
+                &[
+                    ("entry", "import { x } from './a.js';\nimport * as ns from './a.js';\nconst data = { x, keys: Object.keys(ns) };\n"),
+                    ("a", "import './entry.js';\nexport * from 'react';\nexport * from './b.js';\n"),
+                    ("b", "export const x = 'b';\n"),
+                ],
+                Ok(r#"{"x":"b","keys":["x"]}"#),
+            ),
+            (
+                // React has `useState` and React DOM does not, so Node takes
+                // React's.
+                "stub-star-yields-to-stub",
+                &[
+                    ("entry", "import { useState } from './a.js';\nimport { useState as direct } from 'react';\nconst data = { same: useState === direct };\n"),
+                    ("a", "import './entry.js';\nexport * from 'react';\nexport * from 'react-dom';\n"),
+                ],
+                Ok(r#"{"same":true}"#),
             ),
             (
                 "missing-import",
@@ -3634,7 +3982,7 @@ export const ds = tokens;
         let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
         let _ = fs::remove_dir_all(&dir);
 
-        let (specifier_map, source_map, stub_exports, _) =
+        let (specifier_map, source_map, stub_exports, _, _) =
             result.expect("a resolvable bare specifier must be crawled");
         assert!(
             stub_exports.is_empty(),
@@ -3680,7 +4028,7 @@ export const ds = tokens;
         let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
         let _ = fs::remove_dir_all(&dir);
 
-        let (specifier_map, _, stub_exports, _) =
+        let (specifier_map, _, stub_exports, _, _) =
             result.expect("type-only imports must not participate in resolution");
         assert!(specifier_map.is_empty(), "{specifier_map:?}");
         assert!(stub_exports.is_empty(), "{stub_exports:?}");

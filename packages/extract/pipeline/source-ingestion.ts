@@ -1,6 +1,7 @@
 import { posix } from 'node:path';
 
 import { contentHash } from './content-hash';
+import { policyCandidates } from './extension-policy';
 import { parseInternalWire } from './internal-wire';
 import { SKIPPED_SOURCE_COST } from './manifest-diagnostics';
 import { preprocessMdx, type PreprocessMdxResult } from './mdx-preprocessor';
@@ -217,18 +218,6 @@ export interface SourceIngestionOptions {
   adaptSvelte?: typeof adaptSvelteSource;
 }
 
-const RELATIVE_PROBE_SUFFIXES = [
-  '',
-  '.ts',
-  '.tsx',
-  '.js',
-  '.jsx',
-  '/index.ts',
-  '/index.tsx',
-  '/index.js',
-  '/index.jsx',
-] as const;
-
 function extension(path: string): string {
   const basename = posix.basename(path);
   const dot = basename.lastIndexOf('.');
@@ -239,39 +228,18 @@ function canonicalResolverPath(path: string): string {
   return posix.normalize(path.replaceAll('\\', '/'));
 }
 
-/** NodeNext relative specifiers carry the EMITTED extension (`./x.js` for
- *  `x.ts`); the literal spelling is probed first, so a `.js` neighbor wins.
- *  The extractor's twin is `ANALYSIS_SOURCE` in `crates/system-loader/src/resolution.rs`. */
-interface NodeNextExtensionMap {
-  readonly [emitted: string]: readonly string[] | undefined;
-}
-
-const NODE_NEXT_EXTENSION_MAP: NodeNextExtensionMap = {
-  '.js': ['.ts', '.tsx', '.jsx'],
-  '.jsx': ['.tsx'],
-  '.mjs': ['.mts'],
-  '.cjs': ['.cts'],
-};
-
-/** The paths a relative specifier can name from `importerPath`, in probe
- *  order: as written with each source suffix, then a NodeNext emitted
- *  extension's sources. Empty for a non-relative specifier. */
+/** The paths a relative specifier can name from `importerPath`, in the
+ *  extension policy's probe order. Empty for a non-relative specifier. */
 export function relativeSourceCandidates(
   importerPath: string,
   specifier: string
 ): string[] {
   if (!specifier.startsWith('.')) return [];
-  const base = posix.normalize(
-    posix.join(posix.dirname(canonicalResolverPath(importerPath)), specifier)
+  return policyCandidates(
+    posix.normalize(
+      posix.join(posix.dirname(canonicalResolverPath(importerPath)), specifier)
+    )
   );
-  const explicitExtension = extension(base);
-  return [
-    ...RELATIVE_PROBE_SUFFIXES.map((suffix) => `${base}${suffix}`),
-    ...(NODE_NEXT_EXTENSION_MAP[explicitExtension] ?? []).map(
-      (sourceExtension) =>
-        `${base.slice(0, -explicitExtension.length)}${sourceExtension}`
-    ),
-  ];
 }
 
 function resolveRelativeSource(

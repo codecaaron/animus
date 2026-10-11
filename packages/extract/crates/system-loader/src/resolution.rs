@@ -1,44 +1,34 @@
 //! The order in which a relative or aliased specifier's candidate files are
-//! tried: one probe that both the system loader and the extractor resolve
-//! through. Each still passes the list it has always used; the two lists
-//! differ (see `SYSTEM_EVALUATION` and `ANALYSIS_SOURCE`), and are to become
-//! one policy.
+//! tried: one policy, through which both the system loader and the
+//! extractor resolve, so a specifier names the same file for a system's
+//! evaluation and for an analysis. `extension_policy.json` is generated from
+//! `EXTENSION_POLICY` in `packages/extract/pipeline/extension-policy.ts`,
+//! which source ingestion reads (`node packages/extract/scripts/extension-policy.ts --write`).
+
+use std::sync::OnceLock;
 
 /// The candidate files a specifier's base path names, in the order they are
 /// tried: the base itself, the base with each appended extension, its
 /// `index` with each, then the NodeNext sources an emitted extension stands
-/// for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// for, whatever the emitted extension's case.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExtensionPolicy {
     /// Appended to the base, then to `{base}/index`.
-    pub appended: &'static [&'static str],
+    pub appended: Vec<String>,
     /// An emitted extension (`./x.js`), and the source extensions it names
     /// (`x.ts`), tried in order.
-    pub node_next: &'static [(&'static str, &'static [&'static str])],
-    /// Whether an emitted extension matches whatever its case.
-    pub node_next_ignores_case: bool,
+    pub node_next: Vec<(String, Vec<String>)>,
 }
 
-/// The system loader's list, for the modules a system's evaluation reads.
-pub const SYSTEM_EVALUATION: ExtensionPolicy = ExtensionPolicy {
-    appended: &[".ts", ".tsx", ".js", ".mjs"],
-    node_next: &[(".js", &[".ts", ".tsx"])],
-    node_next_ignores_case: false,
-};
-
-/// The extractor's list, for the sources an analysis reads. It mirrors
-/// `resolveRelativeSource` and `NODE_NEXT_EXTENSION_MAP` in
-/// `packages/extract/pipeline/source-ingestion.ts`.
-pub const ANALYSIS_SOURCE: ExtensionPolicy = ExtensionPolicy {
-    appended: &[".ts", ".tsx", ".js", ".jsx"],
-    node_next: &[
-        (".js", &[".ts", ".tsx", ".jsx"]),
-        (".jsx", &[".tsx"]),
-        (".mjs", &[".mts"]),
-        (".cjs", &[".cts"]),
-    ],
-    node_next_ignores_case: true,
-};
+/// The one extension policy.
+pub fn extension_policy() -> &'static ExtensionPolicy {
+    static POLICY: OnceLock<ExtensionPolicy> = OnceLock::new();
+    POLICY.get_or_init(|| {
+        serde_json::from_str(include_str!("extension_policy.json"))
+            .expect("extension_policy.json is generated valid JSON")
+    })
+}
 
 impl ExtensionPolicy {
     /// The first candidate for `base` that `exists`, in policy order. The
@@ -52,12 +42,7 @@ impl ExtensionPolicy {
             .or_else(|| {
                 self.node_next.iter().find_map(|(emitted, sources)| {
                     let split = base.len().checked_sub(emitted.len())?;
-                    let suffix = base.get(split..)?;
-                    let matches = match self.node_next_ignores_case {
-                        true => suffix.eq_ignore_ascii_case(emitted),
-                        false => suffix == *emitted,
-                    };
-                    if !matches {
+                    if !base.get(split..)?.eq_ignore_ascii_case(emitted) {
                         return None;
                     }
                     let stem = &base[..split];

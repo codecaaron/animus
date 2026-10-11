@@ -104,7 +104,8 @@ pub(crate) enum ExportTarget {
     Namespace { from: String },
 }
 
-/// A module of a cyclic graph, rewritten for linking.
+/// A module rewritten for linking: its exports, stars and imports link every
+/// graph; its link code and body make a cyclic graph's bundle.
 pub(crate) struct LinkedModule {
     /// Its own export names, in source order.
     pub exports: Vec<(String, ExportTarget)>,
@@ -298,85 +299,128 @@ pub(crate) fn rewrite_module_for_linking(
     Ok(module)
 }
 
-/// How a module's export name resolves, as Node's ResolveExport finds it.
-#[derive(Clone, PartialEq, Eq)]
-enum Resolution {
-    /// The binding it reads: its identity (a module and its local binding,
-    /// a module's namespace, or a stub's property), which ambiguity compares,
-    /// and the expression that reads it directly.
-    Found { binding: String, read: String },
-    Missing,
-    Ambiguous,
-}
-
-/// Static resolution of the export names of a cyclic graph's modules.
+/// The export relation of a system's modules, cyclic or not, answered by the shared
+/// module table. A stub is a module outside the graph: an import of it names
+/// its export without proving it, and `export *` of it is open. The loader
+/// builds each stub's object, so it closes that opening itself: a star of a
+/// stub brings in the stub's own names, each reading the stub's property, and
+/// supplies any other name only when no analysed branch or other stub does.
 pub(crate) struct Linker<'a> {
-    pub modules: &'a HashMap<String, LinkedModule>,
-    /// Stub modules: placeholders whose exports are not known, so any name
-    /// resolves to the stub's property, as it reads outside a cycle.
-    pub stubs: &'a HashMap<String, HashSet<String>>,
+    table: crate::module_table::ModuleTable<String>,
+    keys: Vec<String>,
+    index: HashMap<String, crate::module_table::ModuleIndex>,
+    stubs: &'a HashMap<String, HashSet<String>>,
+    /// Each TypeScript module's type-only export names, which its stripped
+    /// record no longer holds.
+    type_exports: &'a HashMap<String, HashSet<String>>,
 }
 
-impl Linker<'_> {
-    fn resolve(&self, module: &str, name: &str, set: &mut HashSet<(String, String)>) -> Resolution {
-        if self.stubs.contains_key(module) {
-            return Resolution::Found { binding: format!("{module}\0{name}"), read: export_read(module, name) };
-        }
-        let Some(linked) = self.modules.get(module) else {
-            return Resolution::Missing;
-        };
-        // A circular request resolves to nothing, as in Node.
-        if !set.insert((module.to_string(), name.to_string())) {
-            return Resolution::Missing;
-        }
-        if let Some((_, target)) = linked.exports.iter().find(|(exported, _)| exported == name) {
-            return match target {
-                // The defining module's own getter reads the binding itself.
-                ExportTarget::Local(local) => {
-                    Resolution::Found { binding: format!("{module}\0{local}"), read: export_read(module, name) }
-                }
-                ExportTarget::Indirect { from, name } => self.resolve(from, name, set),
-                ExportTarget::Namespace { from } => Resolution::Found {
-                    binding: format!("{from}\0*"),
-                    read: format!("__modules['{}']", js_quoted(from)),
-                },
+impl<'a> Linker<'a> {
+    pub fn new(
+        modules: &HashMap<String, LinkedModule>,
+        stubs: &'a HashMap<String, HashSet<String>>,
+        type_exports: &'a HashMap<String, HashSet<String>>,
+    ) -> Self {
+        use crate::module_table::{Import, ImportName, ModuleRecord, ModuleTable, Request};
+        let mut keys: Vec<String> = modules.keys().cloned().collect();
+        keys.sort();
+        let index: HashMap<String, usize> = keys.iter().enumerate().map(|(at, key)| (key.clone(), at)).collect();
+        let mut records: Vec<ModuleRecord<String>> = Vec::with_capacity(keys.len());
+        for key in &keys {
+            let linked = &modules[key];
+            let mut requests: Vec<Request> = Vec::new();
+            let mut request = |from: &str| {
+                let target = match index.get(from) {
+                    Some(&at) => Request::Module(at),
+                    None if stubs.contains_key(from) => Request::Outside(from.to_string()),
+                    None => Request::Unresolved(from.to_string()),
+                };
+                requests.iter().position(|known| *known == target).unwrap_or_else(|| {
+                    requests.push(target);
+                    requests.len() - 1
+                })
             };
-        }
-        if name == "default" {
-            return Resolution::Missing;
-        }
-        let mut found = Resolution::Missing;
-        for star in &linked.stars {
-            match self.resolve(star, name, set) {
-                Resolution::Ambiguous => return Resolution::Ambiguous,
-                Resolution::Missing => {}
-                resolution if found == Resolution::Missing => found = resolution,
-                Resolution::Found { binding, .. } => {
-                    if !matches!(&found, Resolution::Found { binding: first, .. } if *first == binding) {
-                        return Resolution::Ambiguous;
+            let mut record = ModuleRecord {
+                requests: Vec::new(),
+                imports: Vec::new(),
+                local_exports: Vec::new(),
+                indirect_exports: Vec::new(),
+                namespace_exports: Vec::new(),
+                star_exports: Vec::new(),
+                default_cells: Vec::new(),
+            };
+            for (exported, target) in &linked.exports {
+                match target {
+                    ExportTarget::Local(local) => record.local_exports.push((exported.clone(), local.clone())),
+                    ExportTarget::Indirect { from, name } => {
+                        record.indirect_exports.push((exported.clone(), request(from), name.clone()));
                     }
+                    ExportTarget::Namespace { from } => record.namespace_exports.push((exported.clone(), request(from))),
                 }
             }
+            for star in &linked.stars {
+                record.star_exports.push(request(star));
+            }
+            for (from, name) in &linked.imports {
+                record.imports.push(Import { local: String::new(), request: request(from), name: ImportName::Name(name.clone()) });
+            }
+            record.requests = requests;
+            records.push(record);
         }
-        found
+        Self { table: ModuleTable::new(records), keys, index, stubs, type_exports }
     }
 
-    fn exported_names(&self, module: &str, visited: &mut HashSet<String>, names: &mut Vec<String>) {
-        if !visited.insert(module.to_string()) {
-            return;
+    /// Export `name` of `module`, with each open star of a stub closed: the
+    /// stub supplies `name` when it has that name, or when neither an analysed
+    /// branch nor another stub has it. One terminal resolves, two are
+    /// ambiguous.
+    fn resolve(&self, module: usize, name: &str) -> crate::module_table::ExportLookup<String> {
+        use crate::module_table::{ExportLookup, OpeningReason, Terminal};
+        match self.table.resolve_export(module, name) {
+            ExportLookup::Incomplete { mut known, openings } => {
+                let has = |stub: &String| self.stubs[stub].contains(name);
+                let provided = !known.is_empty()
+                    || openings.iter().any(|opening| matches!(&opening.reason, OpeningReason::OutsideStar(stub) if has(stub)));
+                for opening in openings {
+                    match opening.reason {
+                        OpeningReason::OutsideStar(stub) if provided && !has(&stub) => {}
+                        OpeningReason::OutsideStar(stub) => {
+                            let terminal = Terminal::External { module: stub, export: Some(name.to_string()) };
+                            if !known.contains(&terminal) {
+                                known.push(terminal);
+                            }
+                        }
+                        OpeningReason::UnresolvedRequest(_) => {}
+                    }
+                }
+                match known.len() {
+                    0 => ExportLookup::Absent,
+                    1 => ExportLookup::Resolved(known.remove(0)),
+                    _ => ExportLookup::Ambiguous(known),
+                }
+            }
+            lookup => lookup,
         }
-        if let Some(stub) = self.stubs.get(module) {
-            let mut stub_names: Vec<&String> = stub.iter().collect();
-            stub_names.sort();
-            names.extend(stub_names.into_iter().cloned());
-            return;
-        }
-        let Some(linked) = self.modules.get(module) else { return };
-        names.extend(linked.exports.iter().map(|(exported, _)| exported.clone()));
-        for star in &linked.stars {
-            let mut star_names = Vec::new();
-            self.exported_names(star, visited, &mut star_names);
-            names.extend(star_names.into_iter().filter(|name| name != "default"));
+    }
+
+    /// The expression that reads `terminal` directly: a module's own getter
+    /// for the binding (the export name it was asked for, when that name
+    /// reads it), a namespace's export object, or a stub's property.
+    fn read(&self, terminal: &crate::module_table::Terminal<String>, asked: &str) -> Option<String> {
+        use crate::module_table::Terminal;
+        match terminal {
+            Terminal::Local { module, binding } => {
+                let exports = &self.table.record(*module).local_exports;
+                let name = exports
+                    .iter()
+                    .find(|(exported, local)| exported == asked && local == binding)
+                    .or_else(|| exports.iter().find(|(_, local)| local == binding))
+                    .map(|(exported, _)| exported)?;
+                Some(export_read(&self.keys[*module], name))
+            }
+            Terminal::Namespace(module) => Some(format!("__modules['{}']", js_quoted(&self.keys[*module]))),
+            Terminal::External { module, export: Some(name) } => Some(export_read(module, name)),
+            Terminal::External { module, export: None } => Some(format!("__modules['{}']", js_quoted(module))),
         }
     }
 
@@ -384,54 +428,87 @@ impl Linker<'_> {
     /// name and the expression its getter returns. A local export reads its
     /// binding; every other name, re-exported or brought in by `export *`,
     /// reads the binding it resolves to directly, never through another
-    /// module's forwarding getter. An ambiguous star name is left out, as
-    /// Node leaves it out of the namespace.
+    /// module's forwarding getter. An ambiguous name is left out, as Node
+    /// leaves it out of the namespace.
     pub fn getters(&self, module: &str) -> Vec<(String, String)> {
-        let mut names = Vec::new();
-        self.exported_names(module, &mut HashSet::new(), &mut names);
-        let locals: HashMap<&str, &str> = self.modules[module]
-            .exports
-            .iter()
-            .filter_map(|(exported, target)| match target {
-                ExportTarget::Local(local) => Some((exported.as_str(), local.as_str())),
-                _ => None,
-            })
-            .collect();
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut getters = Vec::new();
-        for name in names {
-            if !seen.insert(name.clone()) {
-                continue;
-            }
-            if let Some(local) = locals.get(name.as_str()) {
-                getters.push((name, local.to_string()));
-            } else if let Resolution::Found { read, .. } = self.resolve(module, &name, &mut HashSet::new()) {
-                getters.push((name, read));
+        use crate::module_table::{ExportLookup, OpeningReason};
+        let at = self.index[module];
+        let record = self.table.record(at);
+        let exported = self.table.exported_names(at);
+        let mut names = exported.names;
+        for opening in &exported.openings {
+            if let OpeningReason::OutsideStar(stub) = &opening.reason {
+                let mut stub_names: Vec<&String> = self.stubs[stub].iter().filter(|name| *name != "default").collect();
+                stub_names.sort();
+                for name in stub_names {
+                    if !names.contains(name) {
+                        names.push(name.clone());
+                    }
+                }
             }
         }
+        let mut getters = Vec::new();
+        for name in names {
+            if let Some((_, local)) = record.local_exports.iter().find(|(exported, _)| *exported == name) {
+                getters.push((name, local.clone()));
+            } else if let ExportLookup::Resolved(terminal) = self.resolve(at, &name) {
+                if let Some(read) = self.read(&terminal, &name) {
+                    getters.push((name, read));
+                }
+            }
+        }
+        // A module namespace lists its names in code-unit order, as Node
+        // lists them.
+        getters.sort_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));
         getters
     }
 
+    /// The getters of `module`'s names that do not read one of its own
+    /// bindings: what it re-exports, and what `export *` brings in.
+    pub fn forwarded(&self, module: &str) -> Vec<(String, String)> {
+        let record = self.table.record(self.index[module]);
+        self.getters(module)
+            .into_iter()
+            .filter(|(name, _)| !record.local_exports.iter().any(|(exported, _)| exported == name))
+            .collect()
+    }
+
     /// Fails as Node fails to link: an import of a name its module does not
-    /// export, or exports ambiguously through `export *`, and a re-export
-    /// (`export { x } from`) that does not resolve.
+    /// export, or exports ambiguously through `export *`, a re-export that
+    /// does not resolve, and either through a module the graph does not hold.
     pub fn check_links(&self, module: &str) -> Result<(), String> {
-        let linked = &self.modules[module];
-        let reexports = linked.exports.iter().filter_map(|(exported, target)| match target {
-            ExportTarget::Indirect { .. } => Some(("re-exports", exported.as_str(), module)),
-            _ => None,
+        use crate::module_table::{ExportLookup, ImportName, Request, LINK_ABSENT_IMPORT, LINK_AMBIGUOUS_IMPORT};
+        let at = self.index[module];
+        let record = self.table.record(at);
+        // A re-export is named by the name it exports, as Node names it.
+        let reexports =
+            record.indirect_exports.iter().map(|(exported, request, name)| ("re-exports", exported.as_str(), *request, name.as_str()));
+        let imports = record.imports.iter().filter_map(|import| match &import.name {
+            ImportName::Name(name) => Some(("imports", name.as_str(), import.request, name.as_str())),
+            ImportName::Namespace => None,
         });
-        let imports = linked.imports.iter().map(|(from, name)| ("imports", name.as_str(), from.as_str()));
-        for (verb, name, from) in imports.chain(reexports) {
-            let problem = match self.resolve(from, name, &mut HashSet::new()) {
-                Resolution::Found { .. } => continue,
-                Resolution::Missing if verb == "re-exports" => "which resolves to no binding",
-                Resolution::Missing => "which does not export it",
-                Resolution::Ambiguous => "which resolves it ambiguously through `export *`",
+        for (verb, shown, request, name) in imports.chain(reexports) {
+            let (from, lookup) = match &record.requests[request] {
+                Request::Module(target) => (self.keys[*target].clone(), self.resolve(*target, name)),
+                // A stub's object answers any name.
+                Request::Outside(_) => continue,
+                Request::Unresolved(key) => (key.clone(), ExportLookup::Absent),
+            };
+            // A type a TypeScript module exports, imported or re-exported
+            // without `type`: the strip erased it, and a bundler without
+            // isolated modules erases the import too, so it links to nothing
+            // and fails nothing.
+            let erased_type = || self.type_exports.get(&from).is_some_and(|types| types.contains(name));
+            let (code, problem) = match lookup {
+                ExportLookup::Resolved(_) => continue,
+                ExportLookup::Absent if erased_type() => continue,
+                ExportLookup::Ambiguous(_) => (LINK_AMBIGUOUS_IMPORT, "which resolves it ambiguously through `export *`"),
+                _ if verb == "re-exports" => (LINK_ABSENT_IMPORT, "which resolves to no binding"),
+                _ => (LINK_ABSENT_IMPORT, "which does not export it"),
             };
             let target = if verb == "re-exports" { String::new() } else { format!(" from '{from}'") };
             return Err(format!(
-                "module '{module}' {verb} '{name}'{target}, {problem}; the system loader links this cyclic \
+                "module '{module}' {verb} '{shown}'{target}, {problem} ({code}); the system loader links this \
                  module graph as Node does, and Node rejects this too"
             ));
         }
