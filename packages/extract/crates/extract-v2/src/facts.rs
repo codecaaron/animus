@@ -1524,6 +1524,11 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &assigned_targets,
     );
 
+    // `export default X` of a module binding X names X.
+    let default_export_binding = match bindings.default_export {
+        Some(crate::identity::DefaultExport::Snapshot { of: Some(of), .. }) => Some(bindings.binding(of).name.clone()),
+        _ => None,
+    };
 
     FileFacts {
         path: ast.path.clone(),
@@ -1545,7 +1550,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         compose,
         star_exports: crate::usage_facts::collect_star_exports(ast.module_record()),
         namespace_exports: crate::usage_facts::collect_namespace_exports(ast.module_record()),
-        default_export_binding: crate::usage_facts::collect_default_export_binding(program),
+        default_export_binding,
         builder_import_references,
         aliases: const_initializers.aliases,
         assigned_aliases: const_initializers.assigned,

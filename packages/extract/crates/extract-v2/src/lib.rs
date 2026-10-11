@@ -117,12 +117,16 @@ pub fn load_system_module(
     root_dir: String,
     export_name: Option<String>,
     conditions: Option<Vec<String>>,
+    workspaces: Option<std::collections::HashMap<String, String>>,
+    extension_policy_json: Option<String>,
 ) -> napi::Result<NapiSystemConfig> {
+    let context = resolution_context(conditions, workspaces, extension_policy_json)
+        .map_err(napi::Error::from_reason)?;
     let config = animus_system_loader::load_system_module(
         &system_path,
         &root_dir,
         export_name.as_deref(),
-        conditions.as_deref().unwrap_or_default(),
+        &context,
     )
     .map_err(napi::Error::from_reason)?;
 
@@ -148,6 +152,29 @@ pub fn load_system_module(
     })
 }
 
+/// The host's export conditions, in its order, the session root's declared
+/// workspace packages (name → canonical directory), which a package lookup
+/// consults after `node_modules`, and the host's extension order as JSON
+/// (`{ appended, nodeNext }`), the built-in policy when absent.
+fn resolution_context(
+    conditions: Option<Vec<String>>,
+    workspaces: Option<std::collections::HashMap<String, String>>,
+    extension_policy_json: Option<String>,
+) -> Result<animus_system_loader::ResolutionContext, String> {
+    Ok(animus_system_loader::ResolutionContext {
+        conditions: conditions.unwrap_or_default(),
+        workspaces: workspaces
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, dir)| (name, std::path::PathBuf::from(dir)))
+            .collect(),
+        extensions: match extension_policy_json {
+            Some(json) => serde_json::from_str(&json).map_err(|error| format!("invalid extension policy: {error}"))?,
+            None => animus_system_loader::resolution::extension_policy().clone(),
+        },
+    })
+}
+
 /// A specifier as the system loader resolves it: the real path of the file
 /// it names, with that of the `package.json` that selected it for a
 /// package, or why it names none.
@@ -164,32 +191,16 @@ pub struct NapiResolvedSpecifier {
 /// policy; a package through `exports` (its `animus` source condition, then
 /// `conditions`, `import` and `default`), then `module`, then `main`.
 #[napi]
-pub fn resolve_specifier(specifier: String, from_dir: String, conditions: Option<Vec<String>>) -> NapiResolvedSpecifier {
-    NapiResolvedSpecifier::from(animus_system_loader::resolve_specifier(
-        &specifier,
-        &from_dir,
-        conditions.as_deref().unwrap_or_default(),
-    ))
-}
-
-/// Selects the entry `subpath` (omitted for the root, else `./x`) of the
-/// package in `package_dir` as the system loader selects a package's entry
-/// once it has found it: for a package located another way, such as a
-/// workspace. `exports` (its `animus` source condition, then `conditions`,
-/// `import` and `default`), then for the root `module`, then `main`.
-#[napi]
-pub fn resolve_package_entry(
-    package_dir: String,
-    subpath: Option<String>,
+pub fn resolve_specifier(
+    specifier: String,
+    from_dir: String,
     conditions: Option<Vec<String>>,
+    workspaces: Option<std::collections::HashMap<String, String>>,
+    extension_policy_json: Option<String>,
 ) -> NapiResolvedSpecifier {
     NapiResolvedSpecifier::from(
-        animus_system_loader::resolve_package_entry(
-            std::path::Path::new(&package_dir),
-            subpath.as_deref().unwrap_or_default(),
-            conditions.as_deref().unwrap_or_default(),
-        )
-        .map(|(path, manifest)| (path, Some(manifest))),
+        resolution_context(conditions, workspaces, extension_policy_json)
+            .and_then(|context| animus_system_loader::resolve_specifier(&specifier, &from_dir, &context)),
     )
 }
 

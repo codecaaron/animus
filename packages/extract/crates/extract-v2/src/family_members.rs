@@ -126,7 +126,7 @@ impl FamilyIndex {
                 }
                 continue;
             };
-            for name in module_export_names(&module, files, inputs, links) {
+            for name in module_export_names(&module, links) {
                 if let Some(id) = self.exported(&module, name.clone(), files, links) {
                     add(&format!("{namespace}.{name}"), id);
                 }
@@ -499,8 +499,7 @@ impl<'f> ObjectMembers<'f> {
         if let Some(objects) = self.exported.get(module) {
             return Rc::clone(objects);
         }
-        let files = self.files;
-        let mut names = module_export_names(module, files, self.inputs, self.links);
+        let mut names = module_export_names(module, self.links);
         // `export default compose(…)` binds no name to list.
         names.insert("default".to_string());
         let objects: Rc<[Object]> = names.iter().filter_map(|name| self.exported_object(module, name)).collect();
@@ -795,38 +794,7 @@ pub(crate) fn local_namespace(
 
 /// Every name `module` exports, including through its `export *` sources,
 /// which never carry a default export.
-pub(crate) fn module_export_names(
-    module: &str,
-    files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-    links: &crate::link::ProjectLinks,
-) -> BTreeSet<String> {
-    // An analysed module's exported names are the module table's.
-    if let Some(index) = links.module(module) {
-        return links.table.exported_names(index).names.into_iter().collect();
-    }
-    let mut names = BTreeSet::new();
-    let mut seen: FxHashSet<String> = FxHashSet::default();
-    let mut stack = vec![(module.to_string(), true)];
-    while let Some((file, direct)) = stack.pop() {
-        if !seen.insert(file.clone()) {
-            continue;
-        }
-        let Some(ff) = files.get(&file) else { continue };
-        names.extend(
-            ff.exports
-                .iter()
-                .map(|e| &e.exported)
-                .chain(ff.namespace_exports.keys())
-                .filter(|exported| direct || *exported != "default")
-                .cloned(),
-        );
-        stack.extend(
-            ff.star_exports
-                .iter()
-                .filter_map(|spec| resolve_import_source(&file, spec, files, inputs))
-                .map(|next| (next, false)),
-        );
-    }
-    names
+pub(crate) fn module_export_names(module: &str, links: &crate::link::ProjectLinks) -> BTreeSet<String> {
+    // A module outside the analysis exports nothing it can name.
+    links.module(module).map_or_else(BTreeSet::new, |index| links.table.exported_names(index).names.into_iter().collect())
 }

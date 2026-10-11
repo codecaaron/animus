@@ -25,7 +25,7 @@ use crate::dynamic_meta::{share_slots, DynamicPropMeta};
 use crate::evaluator::{EvalError, TransformEvaluator};
 use crate::facts::FileFacts;
 use crate::identity::{BindingKind, ImportBinding};
-use animus_system_loader::module_table::{ExportLookup, Terminal};
+use animus_system_loader::module_table::{ExportLookup, Request, Terminal};
 use crate::jsx_scan::{
     ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult,
 };
@@ -711,7 +711,7 @@ fn extract_layer_content(layer_block: &str) -> String {
 }
 
 /// Resolve an import specifier against the analyzed file set. Re-export hops
-/// are not followed here; callers use `follow_reexports`.
+/// are not followed here; the module table follows them.
 pub fn resolve_import_source<T>(
     from_file: &str,
     spec: &str,
@@ -755,54 +755,36 @@ fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
         .found()
 }
 
-/// Follow `export { X as Y } from '...'` hops, and local exports of an
-/// import (`import { X as y } from '...'; export { y as Y }`, as a compiler
-/// writes a barrel), to the file defining the name. Cycle-guarded; an
-/// unresolvable hop returns the last node reached.
-pub fn follow_reexports(
-    file: String,
-    name: String,
+/// The first module on the module table's route for `module`'s export
+/// `name` that exports an import it makes (`import { x } from …; export { x }`,
+/// as a compiler writes a barrel). Stars are not followed.
+fn route_barrel(
+    module: &str,
+    name: &str,
     files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-) -> (String, String) {
-    let (file, name, _) = follow_reexports_traced(file, name, files, inputs);
-    (file, name)
-}
-
-/// `follow_reexports`, also naming the first barrel left through a local
-/// export of an import.
-fn follow_reexports_traced(
-    mut file: String,
-    mut name: String,
-    files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-) -> (String, String, Option<String>) {
-    let mut barrel = None;
-    let mut seen: FxHashSet<(String, String)> = FxHashSet::default();
-    while seen.insert((file.clone(), name.clone())) {
-        let Some(ff) = files.get(&file) else { break };
-        let Some(exp) = ff.exports.iter().find(|e| e.exported == name) else {
-            break;
-        };
-        let (spec, original, through_import) = match (&exp.source, &exp.original) {
-            (Some(spec), Some(original)) => (spec, original, false),
-            (None, _) => {
-                let import = exp.local.as_ref().and_then(|local| ff.imports.iter().find(|i| &i.local == local));
-                let Some(import) = import else { break };
-                (&import.source, &import.imported, true)
-            }
-            _ => break,
-        };
-        let Some(next) = resolve_import_source(&file, spec, files, inputs) else {
-            break;
-        };
-        if through_import && barrel.is_none() {
-            barrel = Some(file.clone());
+    links: &crate::link::ProjectLinks,
+) -> Option<String> {
+    let mut at = links.module(module)?;
+    let mut name = name.to_string();
+    let mut seen: FxHashSet<(usize, String)> = FxHashSet::default();
+    while seen.insert((at, name.clone())) {
+        let path = &links.paths[at];
+        let ff = &files[path];
+        let exports_import = ff.exports.iter().any(|export| {
+            export.exported == name
+                && export.source.is_none()
+                && export.local.as_ref().is_some_and(|local| ff.imports.iter().any(|import| &import.local == local))
+        });
+        if exports_import {
+            return Some(path.clone());
         }
-        name = original.clone();
-        file = next;
+        let record = links.table.record(at);
+        let (_, request, imported) = record.indirect_exports.iter().find(|(exported, ..)| *exported == name)?;
+        let Request::Module(next) = record.requests[*request] else { return None };
+        at = next;
+        name = imported.clone();
     }
-    (file, name, barrel)
+    None
 }
 
 /// `Some(true)` = an extractable chain, `Some(false)` = a chain that failed
@@ -891,7 +873,7 @@ fn resolve_export_traced(
     links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, bool, Option<String>)> {
     let module = resolve_import_source(file_path, specifier, files, inputs)?;
-    module_declaration(module, imported, files, inputs, links)
+    module_declaration(module, imported, files, links)
 }
 
 /// Where `module`'s export `imported` is declared, as the module table
@@ -909,10 +891,9 @@ fn module_declaration(
     module: String,
     imported: &str,
     files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, bool, Option<String>)> {
-    let (_, _, barrel) = follow_reexports_traced(module.clone(), imported.to_string(), files, inputs);
+    let barrel = route_barrel(&module, imported, files, links);
     // A module outside the analysis declares nothing here.
     let Some(lookup) = links.resolve_export(&module, imported) else {
         return Some((module, imported.to_string(), false, barrel));
@@ -3090,7 +3071,7 @@ fn exported_component_ids(
         if !seen.insert(module.clone()) {
             continue;
         }
-        for name in crate::family_members::module_export_names(&module, files, inputs, links) {
+        for name in crate::family_members::module_export_names(&module, links) {
             let namespace =
                 crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs, links);
             match namespace {
@@ -4067,12 +4048,7 @@ fn bounded_prop_tags(
     // The declaration a module's name or default import resolves to, through
     // any barrel.
     let declared = |file: &str, ff: &FileFacts, name: &str| {
-        let (declaring, binding, _) = resolve_declaration(file, ff, name, files, inputs, links)?;
-        let binding = match binding.as_str() {
-            "default" => files.get(&declaring)?.default_export_binding.clone().unwrap_or(binding),
-            _ => binding,
-        };
-        Some((declaring, binding))
+        resolve_declaration(file, ff, name, files, inputs, links).map(|(declaring, binding, _)| (declaring, binding))
     };
     // Whether `module` is `declaring`, or re-exports from it at any depth,
     // as the module table links them: by name, as a namespace, through
@@ -4105,7 +4081,7 @@ fn bounded_prop_tags(
     let namespace_declared = |file: &str, ff: &FileFacts, path: &str| {
         let (namespace, member) = path.rsplit_once('.')?;
         let module = namespace_path_module(file, ff, namespace, files, inputs, links)?;
-        let (declaring, binding, _, _) = module_declaration(module, member, files, inputs, links)?;
+        let (declaring, binding, _, _) = module_declaration(module, member, files, links)?;
         Some((declaring, binding))
     };
     // Whether the component `outer` builds forwards the prop only as written
@@ -4480,10 +4456,6 @@ fn uncertain_tag_reason(
                 false => resolve_declaration(file, ff, tag, files, inputs, links).and_then(
                     |(declaring_file, binding, local)| {
                         let dff = files.get(&declaring_file)?;
-                        let binding = match binding.as_str() {
-                            "default" => dff.default_export_binding.clone().unwrap_or(binding),
-                            _ => binding,
-                        };
                         // `export function` and `export class` record no export
                         // fact, so a declaration the file does not import is
                         // its own.

@@ -1,10 +1,11 @@
 import {
+  caseMismatchReason,
   contentHash,
   discoverFiles,
   isPathWithinRoot,
   isDeletedSource,
   isUnresolvedParentDrop,
-  resolveAbsolutePathSpecifier,
+  probeAbsolutePathSpecifier,
   unreadableSourceDiagnostic,
   unresolvedParentName,
 } from '@animus-ui/extract/pipeline';
@@ -231,10 +232,32 @@ function warnInadmissibleParents(
     const specifier = importSpecifierFor(consumer.source, drop.parent);
     if (!specifier || !specifier.startsWith('.')) continue;
 
-    const resolved = resolveAbsolutePathSpecifier(
-      resolve(ctx.rootDir, dirname(drop.file), specifier)
+    const importerDir = resolve(ctx.rootDir, dirname(drop.file));
+    const probed = probeAbsolutePathSpecifier(
+      resolve(importerDir, specifier),
+      undefined,
+      importerDir
     );
-    if (!resolved) continue;
+    if (probed.kind === 'absent') continue;
+    if (probed.kind === 'case-mismatch') {
+      // Neither found nor absent: a case-sensitive filesystem loads no file.
+      const mismatch = caseMismatchReason(
+        `the import '${specifier}'`,
+        {
+          candidate: relative(ctx.rootDir, probed.candidate),
+          actual: relative(ctx.rootDir, probed.actual),
+        },
+        'spell the import as the file is spelled.'
+      );
+      const verdictKey = `${drop.file}\0${drop.parent}\0${mismatch}`;
+      if (warned.has(verdictKey)) continue;
+      warned.add(verdictKey);
+      ctx.warn(
+        `cannot extract '${drop.component}': parent '${drop.parent}' is unresolved: ${mismatch}`
+      );
+      continue;
+    }
+    const resolved = probed.path;
     const relPath = relative(ctx.rootDir, resolved);
 
     const excludedBy = excludeMatcher.explain(resolved, relPath);
