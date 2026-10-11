@@ -13,6 +13,7 @@ import { transformWithEngine } from '../../unplugin/src/core';
 import { transformSource } from '../../vite-plugin/src/transform';
 import { makeContextProbe } from '../../vite-plugin/tests/context-probe';
 import { makeManifest } from '../../vite-plugin/tests/manifest-fixture';
+import animusLoader from '../src/loader';
 import { transformWithManifest } from '../src/loader-core';
 import animusTurbopackLoader from '../src/turbopack-loader';
 
@@ -57,6 +58,45 @@ describe('a transform failure never serves builder source', () => {
         opts: { development: true },
       })
     ).toThrow(/engine down/);
+  });
+
+  test('webpack loader: a file the analysis extracted but the engine finds empty throws', () => {
+    const transform = (filename: string) =>
+      transformWithManifest({
+        source: BUILDER_SOURCE,
+        filename,
+        manifestJson: JSON.stringify({
+          files: {
+            'src/Button.tsx': ['src/Button.tsx::Button'],
+            'src/use.tsx': [],
+          },
+        }),
+        engineApi: () => ({
+          transformFile: (source: string) => ({
+            code: source,
+            hasComponents: false,
+          }),
+        }),
+        opts: {},
+      });
+
+    expect(() => transform('src/Button.tsx')).toThrow(/src\/Button\.tsx/);
+    // A usage-only file and one outside the analysis stay valid.
+    expect(transform('src/use.tsx')).toBe(BUILDER_SOURCE);
+    expect(transform('src/other.tsx')).toBe(BUILDER_SOURCE);
+  });
+
+  test('webpack loader: a loader with no build config is refused', () => {
+    expect(() =>
+      animusLoader.call(
+        {
+          resourcePath: '/proj/src/Button.tsx',
+          rootContext: '/proj',
+          getOptions: () => ({}),
+        },
+        BUILDER_SOURCE
+      )
+    ).toThrow(expect.objectContaining({ name: 'AnimusConfigError' }));
   });
 
   test('Turbopack loader: no committed analysis and no status throws', async () => {
