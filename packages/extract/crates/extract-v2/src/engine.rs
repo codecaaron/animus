@@ -691,6 +691,12 @@ fn unstable_style_statics(
             }
         }
         for (name, used, at) in &module.facts.uses {
+            // A namespace used whole may change anything its module exports,
+            // as the member tables read it.
+            if let Some(Request::Module(target)) = namespace_of(file, name).filter(|_| !name.contains('.')) {
+                hand_on(&mut flow, &links.paths[*target], &said(file, name, used));
+                continue;
+            }
             for target in targets_of(name) {
                 for (path, kind) in changes_of(&target, at) {
                     flow.change(object(target.clone()), path, kind, said(file, name, used));
