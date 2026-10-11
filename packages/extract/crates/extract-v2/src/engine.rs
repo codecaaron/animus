@@ -651,9 +651,9 @@ fn unstable_style_statics(
             .map(|(name, spec)| (spec, format!("as the namespace {name}")));
         let loads = module.loads.iter().map(|spec| (spec, "at runtime".to_string()));
         for (spec, how) in reexports.chain(loads) {
-            if crate::link::unread_package(file, spec, files, inputs).is_some() {
-                let reason = format!("{file} hands on {spec} {how}, and {}", crate::link::unread_clause(spec, inputs));
-                flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
+            if let Some(unread) = crate::link::unread_source(file, spec, files, inputs) {
+                let reason = format!("{file} hands on {spec} {how}, and {}", unread.clause(spec, inputs));
+                flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
                 continue;
             }
             let Some(target) = analyze_css::resolve_import_source(file, spec, files, inputs) else {
@@ -2244,6 +2244,8 @@ export const App = () => <Box tone="red" />;
             // A template literal with no substitution is a literal specifier.
             ("package import(), template literal", "await import(`@local/proxy`).then((m) => { m.pad.padding = 9; });", "{ ...pad }"),
             ("package require(), template literal", "require(`@local/proxy`).pad.padding = 9;", "{ ...pad }"),
+            // A path the analysis cannot find may be a module at run time.
+            ("missing module import()", "await import('./generated.js').then((m) => { m.pad.padding = 9; });", "{ ...pad }"),
             // Code from a string can load and change any module (PF3).
             (
                 "eval loads the module",

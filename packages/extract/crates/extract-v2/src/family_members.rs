@@ -769,12 +769,9 @@ impl<'f> ObjectMembers<'f> {
                 flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
             }
             for (name, spec) in &ff.namespace_exports {
-                if crate::link::unread_package(module, spec, files, inputs).is_some() {
-                    let reason = format!(
-                        "{module} re-exports {spec} as the namespace {name}, and {}",
-                        crate::link::unread_clause(spec, inputs)
-                    );
-                    flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
+                if let Some(unread) = crate::link::unread_source(module, spec, files, inputs) {
+                    let reason = format!("{module} re-exports {spec} as the namespace {name}, and {}", unread.clause(spec, inputs));
+                    flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
                     continue;
                 }
                 let Some(target) = resolve_import_source(module, spec, files, inputs) else {
@@ -785,13 +782,10 @@ impl<'f> ObjectMembers<'f> {
             }
             for load in &ff.module_loads {
                 if let LoadTarget::Specifier(spec) = &load.target {
-                    if crate::link::unread_package(module, spec, files, inputs).is_some() {
-                        let reason = format!(
-                            "{module} loads {spec} at runtime on line {}, and {}",
-                            load.line,
-                            crate::link::unread_clause(spec, inputs)
-                        );
-                        flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
+                    if let Some(unread) = crate::link::unread_source(module, spec, files, inputs) {
+                        let reason =
+                            format!("{module} loads {spec} at runtime on line {}, and {}", load.line, unread.clause(spec, inputs));
+                        flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
                     }
                 }
                 for target in loaded_modules(module, load, files, inputs) {

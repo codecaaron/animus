@@ -258,19 +258,60 @@ pub(crate) fn unread_clause(specifier: &str, inputs: &CssInputs) -> String {
     }
 }
 
-/// The package `specifier`, written in `path`, names when the analysis
-/// does not read it and it may import modules the analysis holds, and so
-/// re-export any of their objects.
-pub(crate) fn unread_package<T>(
+/// A module a load or re-export names that the analysis does not read and
+/// that may import modules the analysis holds, and so re-export any of
+/// their objects.
+pub(crate) enum Unread {
+    /// A package the analysis does not hold, other than one built into
+    /// Node or found disjoint.
+    Package,
+    /// A path that names no file the analysis holds: one it excluded, one
+    /// generated later, or one in a language it does not read. A data or
+    /// asset file imports nothing.
+    Missing,
+}
+
+impl Unread {
+    /// Why the module `specifier` names may re-export any analysed object,
+    /// said as a clause.
+    pub(crate) fn clause(&self, specifier: &str, inputs: &CssInputs) -> String {
+        match self {
+            Unread::Package => unread_clause(specifier, inputs),
+            Unread::Missing => "a module the analysis cannot find may re-export any module".to_string(),
+        }
+    }
+
+    pub(crate) fn reason(&self) -> crate::flow::ReasonId {
+        match self {
+            Unread::Package => crate::flow::ReasonId::SkippedSource,
+            Unread::Missing => crate::flow::ReasonId::UnresolvedSpecifier,
+        }
+    }
+}
+
+/// What `specifier`, written in `path`, names when the analysis does not
+/// read it and it may re-export analysed objects.
+pub(crate) fn unread_source<T>(
     path: &str,
     specifier: &str,
     files: &BTreeMap<String, T>,
     inputs: &CssInputs,
-) -> Option<String> {
+) -> Option<Unread> {
     match named(path, specifier, files, inputs) {
-        Named::Package(identity) if !imports_nothing_analysed(&identity, inputs) => Some(identity),
+        Named::Package(identity) if !imports_nothing_analysed(&identity, inputs) => Some(Unread::Package),
+        Named::Nothing if !names_data(specifier) => Some(Unread::Missing),
         _ => None,
     }
+}
+
+/// The extensions of data and style files, which import no module of code.
+const DATA_EXTENSIONS: [&str; 8] = [".json", ".css", ".scss", ".sass", ".less", ".styl", ".pcss", ".postcss"];
+
+/// Whether `specifier` names a data, style or asset file rather than code.
+fn names_data(specifier: &str) -> bool {
+    let path = specifier.split('?').next().unwrap_or(specifier).to_ascii_lowercase();
+    animus_system_loader::asset_import_reason(specifier).is_some()
+        || DATA_EXTENSIONS.iter().any(|extension| path.ends_with(extension))
 }
 
 /// Every analysed module's record, linked: modules in path order, each
