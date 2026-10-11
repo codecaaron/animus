@@ -11,7 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import {
@@ -188,6 +188,32 @@ afterEach(() => {
 });
 
 describe('withAnimus Turbopack wiring', () => {
+  test('from a parent directory, root names the app the Turbopack session reads', async () => {
+    const root = createProject();
+    process.chdir(dirname(root));
+    const config = await loadBuildConfig(
+      withAnimus({
+        system: './src/system.ts',
+        root,
+        turbopack: { mode: 'on' },
+      })({})
+    );
+    expect(animusLoaderOptions(turbopackOptions(config)).rootDir).toBe(root);
+  });
+
+  test('without root, a current directory with no Next config warns at startup', () => {
+    const root = createProject();
+    process.chdir(dirname(root));
+    const warned: string[] = [];
+    vi.spyOn(console, 'warn').mockImplementation((...parts: unknown[]) => {
+      warned.push(parts.map(String).join(' '));
+    });
+    withAnimus({ system: './src/system.ts', turbopack: { mode: 'on' } })({});
+    expect(warned.some((line) => line.includes('holds no next.config'))).toBe(
+      true
+    );
+  });
+
   /** Contract: two builds of one root never share state. Two config
    *  wrappers of one root are two builds, each analysed with its own
    *  options. */

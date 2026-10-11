@@ -93,6 +93,20 @@ export function resetAnimusGlobals(): () => void {
   };
 }
 
+/** The engine-handle store's size: the handles hosts still hold. */
+export function engineHandleCount(): number {
+  const registry: unknown = Object.getOwnPropertyDescriptor(
+    globalThis,
+    SESSION_REGISTRY_KEY
+  )?.value;
+  // SAFETY: the session registry's own global slot, whose `engines` map is
+  // the engine-handle store.
+  return (
+    (registry as { engines?: ReadonlyMap<string, () => EngineApi> })?.engines
+      ?.size ?? 0
+  );
+}
+
 export const SYSTEM_CONFIG = {
   propConfig: '{"props":{}}',
   groupRegistry: '{"groups":{}}',
