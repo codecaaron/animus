@@ -643,11 +643,20 @@ pub fn resolve_all_deps(
             raw_source.clone()
         };
 
+        let stripped_imports = is_ts.then(|| extract_import_specifiers(&processed, &current_path));
         let mut import_infos = extract_import_specifiers(&raw_source, &current_path);
-        if is_ts {
+        // What the evaluated module still imports: one the strip erased,
+        // used only as a type, may name no file.
+        let evaluated_specifiers: HashSet<String> = stripped_imports
+            .as_ref()
+            .unwrap_or(&import_infos)
+            .iter()
+            .map(|info| info.specifier.clone())
+            .collect();
+        if let Some(stripped_imports) = stripped_imports {
             // The strip's JSX transform adds an automatic-runtime import the
             // authored source lacks; the evaluated module needs its stub.
-            import_infos.extend(extract_import_specifiers(&processed, &current_path));
+            import_infos.extend(stripped_imports);
         }
 
         let current_dir = Path::new(&current_path)
@@ -681,9 +690,17 @@ pub fn resolve_all_deps(
                             queue.push_back(canonical);
                         }
                     }
-                    Err(_) => {
-                        // Unresolvable relative imports may be type-only.
+                    // An import only a type uses is erased with it; one the
+                    // evaluated module still makes would read as undefined.
+                    Err(_) if evaluated_specifiers.contains(spec) => {
+                        return Err(format!(
+                            "relative import '{}' in '{}' names no file, and the module \
+                             evaluates it (it is not a type-only import), so the system cannot \
+                             load — check the path and the file's extension",
+                            spec, current_path
+                        ));
                     }
+                    Err(_) => {}
                 }
             } else if spec.starts_with("node:") {
                 return Err(format!(
