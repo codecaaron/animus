@@ -53,7 +53,9 @@ export class ResetCoalescer {
       this.running = false;
       if (this.due) {
         this.due = false;
-        void this.runReset();
+        // The follow-up covers every request so far: flushing starts it and
+        // closes a newer window, which would otherwise run it again.
+        void this.window.flush();
       }
     }
   }
