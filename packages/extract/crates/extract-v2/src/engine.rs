@@ -8,7 +8,7 @@ use crate::link::ProjectLinks;
 use crate::loads::{LoadKind, Spelling};
 use crate::usage_facts::{reads_only, ReadingsOf};
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
-use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, Request, Terminal};
+use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, OpeningReason, Request, Terminal};
 
 const SYSTEM_PROPS_MODULE_ID: &str = "virtual:animus/system-props";
 
@@ -448,7 +448,7 @@ fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>) -> Vec
         // A module the analysis cannot find may export any binding under
         // any name, the one asked for included.
         let name = match opening.reason {
-            animus_system_loader::module_table::OpeningReason::UnresolvedRequest(_) => None,
+            OpeningReason::UnresolvedRequest(_) => None,
             _ => opening.name.as_deref(),
         };
         found.extend(exposed_bindings(links, name));
@@ -533,7 +533,7 @@ fn unstable_style_statics(
             ExportLookup::Resolved(Terminal::External { module, export: None }) => Some(Request::Outside(module)),
             ExportLookup::Incomplete { known, openings } if known.is_empty() => {
                 openings.into_iter().find_map(|opening| match opening.reason {
-                    animus_system_loader::module_table::OpeningReason::UnresolvedRequest(specifier)
+                    OpeningReason::UnresolvedRequest(specifier)
                         if opening.name.is_none() =>
                     {
                         Some(Request::Unresolved(specifier))
@@ -658,7 +658,7 @@ fn unstable_style_statics(
                 for opening in openings {
                     let reason_id = match opening.reason {
                         animus_system_loader::module_table::OpeningReason::OutsideStar(_) => ReasonId::OpaqueStar,
-                        animus_system_loader::module_table::OpeningReason::UnresolvedRequest(_) => {
+                        OpeningReason::UnresolvedRequest(_) => {
                             ReasonId::UnresolvedSpecifier
                         }
                     };
@@ -678,32 +678,27 @@ fn unstable_style_statics(
         // The declarations a use's name stands for that hold an object: a
         // namespace's member, every export of a namespace used whole, or
         // the binding's own.
+        // A module the analysis cannot find may re-export any object under
+        // any name, so a use through its namespace may reach every exported
+        // object, as the member tables read it.
         let targets_of = |name: &str| -> Vec<(String, String)> {
+            let anywhere = || exposed_bindings(links, None).into_iter().flat_map(declarations).collect();
             let targets: Vec<(String, String)> = match name.split_once('.') {
                 Some((namespace, member)) => match namespace_of(file, namespace) {
                     Some(Request::Module(target)) => {
                         exported(&links.paths[target], member).into_iter().flat_map(declarations).collect()
                     }
-                    Some(Request::Unresolved(_) | Request::Outside(_)) | None => Vec::new(),
+                    Some(Request::Unresolved(_)) => anywhere(),
+                    Some(Request::Outside(_)) | None => Vec::new(),
                 },
                 None => match namespace_of(file, name) {
                     Some(Request::Module(target)) => every_export(&links.paths[target]),
-                    Some(Request::Unresolved(_) | Request::Outside(_)) => Vec::new(),
+                    Some(Request::Unresolved(_)) => anywhere(),
+                    Some(Request::Outside(_)) => Vec::new(),
                     None => possible(file, name),
                 },
             };
             targets.into_iter().filter(|target| mutable(target)).collect()
-        };
-        // A module the analysis cannot find may re-export any object under
-        // any name, so a use through its namespace may reach every exported
-        // object, as the member tables read it.
-        let unread = |flow: &mut FlowBuilder, name: &str, reason: String| {
-            let namespace = name.split_once('.').map_or(name, |(namespace, _)| namespace);
-            let missing = matches!(namespace_of(file, namespace), Some(Request::Unresolved(_)));
-            if missing {
-                flow.open(ReasonId::UnresolvedSpecifier, Region::of(RegionAtom::AllExports), reason);
-            }
-            missing
         };
         // A function hands a nested object on to whatever it hands
         // members to, so only an object of primitives passes as a read.
@@ -732,9 +727,6 @@ fn unstable_style_statics(
                 hand_on(&mut flow, &links.paths[target], &said(file, name, used));
                 continue;
             }
-            if unread(&mut flow, name, said(file, name, used)) {
-                continue;
-            }
             for target in targets_of(name) {
                 for (path, kind) in changes_of(&target, at) {
                     flow.change(object(target.clone()), path, kind, said(file, name, used));
@@ -742,9 +734,6 @@ fn unstable_style_statics(
             }
         }
         for (name, used) in &module.facts.flat_reads {
-            if unread(&mut flow, name, format!("{}, and it holds a nested object", said(file, name, used))) {
-                continue;
-            }
             for target in targets_of(name).into_iter().filter(|target| nested(target)) {
                 for path in nested_members(&target) {
                     let reason = format!("{}, and it holds a nested object", said(file, name, used));
