@@ -289,11 +289,6 @@ function isDiskString<Value>(value: Value): value is Value & string {
 /** Rejection of an attempt whose corpus holds an aborted parse. */
 class AbortedParseRejection extends Error {}
 
-/** A system reload a parse hold deferred, refused because its full read
- *  would replace host-supplied bytes the Session holds with the disk's.
- *  Like a hold, it keeps the prior publication and the observed sources. */
-class DeferredReloadRefusal extends Error {}
-
 function isDiskNumber<Value>(value: Value): value is Value & number {
   return (
     Object(value) !== value &&
@@ -1070,6 +1065,7 @@ export class ExtractionSession {
       { hash: string; source: string } | null
     >();
     const priorExternalFileOwners = { ...this.externalFileOwners };
+    const priorHostSuppliedKeys = new Set(this.hostSuppliedKeys);
     const recordPrior = (key: string) => {
       if (!priorCacheEntries.has(key)) {
         priorCacheEntries.set(key, this.fileCache.get(key) ?? null);
@@ -1255,16 +1251,6 @@ export class ExtractionSession {
           this.log(
             'system reload: publishing the reload a parse hold deferred'
           );
-          const stale = this.staleHostSuppliedSources(changes.sources);
-          if (stale.length > 0) {
-            throw new DeferredReloadRefusal(
-              `[${this.driverLabel}] system reload not published: its full ` +
-                `read would take ${stale.join(', ')} from disk, which does ` +
-                `not hold the bytes the host supplied; the last generation ` +
-                `stays served, and the reload publishes with the next ` +
-                `change once the disk holds them`
-            );
-          }
           this.resetForHmr();
           await this.runFullPipeline(pending, changes.sources);
           return;
@@ -1282,13 +1268,9 @@ export class ExtractionSession {
         setAnalysisStartedPromise(this.key, promise);
         await promise;
       } catch (err) {
-        if (
-          err instanceof AbortedParseRejection ||
-          err instanceof DeferredReloadRefusal
-        ) {
-          // An aborted parse holds publication, and a refused deferred reload
-          // keeps it: keep every observed source, valid edits included, for
-          // the attempt that publishes them together.
+        if (err instanceof AbortedParseRejection) {
+          // An aborted parse holds publication: keep every observed source,
+          // valid edits included, for the repair to publish together.
           commitObservedBatch();
         } else {
           // Roll the cache back: the failed attempt published nothing, so
@@ -1300,6 +1282,7 @@ export class ExtractionSession {
             else this.fileCache.set(key, prior);
           }
           this.externalFileOwners = priorExternalFileOwners;
+          this.hostSuppliedKeys = priorHostSuppliedKeys;
         }
         if (this.statusAttemptOpen) {
           this.debouncePending.clear();
@@ -1332,26 +1315,31 @@ export class ExtractionSession {
     throw new AbortedParseRejection(rejection.message);
   }
 
-  /** Held sources whose bytes the host supplied and which the disk no
-   *  longer matches: a full read not carrying them (`carried`) would
-   *  publish the disk's bytes in their place. */
-  private staleHostSuppliedSources(
-    carried: ReadonlyMap<string, string> | undefined
-  ): string[] {
-    const stale: string[] = [];
+  /** The held bytes the host supplied, by absolute path: every full read
+   *  takes them in place of the disk, which may not hold them yet. */
+  private heldHostSources(): Map<string, string> {
+    const sources = new Map<string, string>();
     for (const key of this.hostSuppliedKeys) {
       const held = this.fileCache.get(key);
-      const abs = resolve(this.rootDir!, key);
-      if (held === undefined || carried?.has(abs)) continue;
-      let onDisk: string | null;
-      try {
-        onDisk = readFileSync(abs, 'utf-8');
-      } catch {
-        onDisk = null;
-      }
-      if (onDisk === null || contentHash(onDisk) !== held.hash) stale.push(key);
+      if (held) sources.set(resolve(this.rootDir!, key), held.source);
     }
-    return stale.sort();
+    return sources;
+  }
+
+  /** Keeps what a held full read observed, as an incremental hold keeps its
+   *  batch: the attempt that ends the hold reads these bytes. */
+  private holdObservedEntries(
+    entries: readonly FileEntry[],
+    supplied: ReadonlySet<string>
+  ): void {
+    for (const entry of entries) {
+      this.fileCache.set(entry.path, {
+        hash: entry.hash,
+        source: entry.source,
+      });
+      if (supplied.has(entry.path)) this.hostSuppliedKeys.add(entry.path);
+      else this.hostSuppliedKeys.delete(entry.path);
+    }
   }
 
   /** `raw` is the attempt's input by original path, from which a
@@ -1361,7 +1349,10 @@ export class ExtractionSession {
   private publishSourceIngestion(
     result: SourceIngestionResult,
     pass: 'full' | 'incremental',
-    raw: (path: string) => { hash?: string; source: string } | undefined
+    raw: (path: string) => { hash?: string; source: string } | undefined,
+    /** A full read's host-supplied paths; an incremental pass keeps the
+     *  membership its batch recorded. */
+    supplied?: ReadonlySet<string>
   ): void {
     const endedHold = this.heldRejection !== null;
     const previousOwnership = this.corpus.published.ownership;
@@ -1382,6 +1373,9 @@ export class ExtractionSession {
       }
     }
     this.fileCache = held;
+    this.hostSuppliedKeys = new Set(
+      [...(supplied ?? this.hostSuppliedKeys)].filter((key) => held.has(key))
+    );
     this.corpus.publish(result);
     const staged = this.stagedPublication;
     if (staged === null) return;
@@ -1450,7 +1444,11 @@ export class ExtractionSession {
     const taken = observations?.taken ?? null;
     const transaction = this.runPipelineTransaction(
       pending,
-      new Map([...(observations?.sources ?? []), ...sources])
+      new Map([
+        ...this.heldHostSources(),
+        ...(observations?.sources ?? []),
+        ...sources,
+      ])
     );
     if (taken !== null) {
       setWatchTransaction(this.key, transaction);
@@ -1669,14 +1667,16 @@ export class ExtractionSession {
     // be read is lost input, not degradation: error severity fails a strict
     // build.
     const ingestionFailures: ManifestDiagnostic[] = [];
+    // The paths read from host-supplied bytes, which become the held set's
+    // once this read is published or held.
+    const supplied = new Set<string>();
     for (const filePath of files) {
       const relPath = relative(rootDir, filePath);
       let source: string;
       try {
-        const supplied = hostSources.get(filePath);
-        source = supplied ?? readFileSync(filePath, 'utf-8');
-        if (supplied === undefined) this.hostSuppliedKeys.delete(relPath);
-        else this.hostSuppliedKeys.add(relPath);
+        const hostSource = hostSources.get(filePath);
+        source = hostSource ?? readFileSync(filePath, 'utf-8');
+        if (hostSource !== undefined) supplied.add(relPath);
       } catch (err) {
         if (!isDeletedSource(err)) {
           ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
@@ -1908,8 +1908,9 @@ export class ExtractionSession {
       this.externalSourceEntries = admitted.sourceEntries;
       this.externalSourceSideEffects = admitted.sourceEntrySideEffects;
       for (const entry of admitted.entries) {
-        const source =
-          hostSources.get(resolve(rootDir, entry.path)) ?? entry.source;
+        const hostSource = hostSources.get(resolve(rootDir, entry.path));
+        if (hostSource !== undefined) supplied.add(entry.path);
+        const source = hostSource ?? entry.source;
         rawEntries.push({
           path: entry.path,
           source,
@@ -1925,15 +1926,19 @@ export class ExtractionSession {
 
       this.beginStatusAttempt();
       let accepted: SourceIngestionResult;
+      const readEntries = this.withoutOutputSources(rawEntries);
       try {
-        accepted = await this.corpus.prepare(
-          this.withoutOutputSources(rawEntries)
-        );
+        accepted = await this.corpus.prepare(readEntries);
         this.throwOnAbortedParse(accepted);
         this.skippedSources = accepted.skippedOriginals ?? [];
         this.ingestionOpenings = accepted.openings ?? [];
         this.ingestionAdapted = adaptedOriginals(accepted.ownership);
       } catch (err) {
+        // A hold keeps what this read observed, as an incremental hold
+        // keeps its batch: the attempt that publishes reads these bytes.
+        if (err instanceof AbortedParseRejection) {
+          this.holdObservedEntries(readEntries, supplied);
+        }
         this.debouncePending.clear();
         this.writeAnalysisStatus('failed', pending, String(err));
         throw err;
@@ -1954,8 +1959,11 @@ export class ExtractionSession {
         pipelineStart,
         pending
       );
-      this.publishSourceIngestion(accepted, 'full', (path) =>
-        rawEntries.find((entry) => entry.path === path)
+      this.publishSourceIngestion(
+        accepted,
+        'full',
+        (path) => rawEntries.find((entry) => entry.path === path),
+        supplied
       );
 
       // External package state publishes in the same successful generation
