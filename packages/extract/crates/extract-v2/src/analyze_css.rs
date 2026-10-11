@@ -24,6 +24,7 @@ use crate::declarations::{bind_component_declarations, check_surface_overlap, De
 use crate::dynamic_meta::{share_slots, DynamicPropMeta};
 use crate::evaluator::{EvalError, TransformEvaluator};
 use crate::facts::FileFacts;
+use crate::identity::ImportBinding;
 use crate::jsx_scan::{
     ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult,
 };
@@ -864,6 +865,8 @@ fn classify_parent(
 /// Where a name visible in `file_path` is declared: the landing file, the
 /// declarator binding there, and whether that file declares it itself.
 /// None when the name's import source is outside the analyzed set.
+/// A namespace import, and a name the module does not bind, read as declared
+/// here.
 pub(crate) fn resolve_declaration(
     file_path: &str,
     ff: &FileFacts,
@@ -871,10 +874,12 @@ pub(crate) fn resolve_declaration(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
 ) -> Option<(String, String, bool)> {
-    let Some(imp) = ff.imports.iter().find(|i| i.local == name) else {
-        return Some((file_path.to_string(), name.to_string(), true));
+    let (specifier, imported) = match ff.bindings.module_import(name) {
+        Some(ImportBinding::Named { specifier, imported }) => (specifier, imported.as_str()),
+        Some(ImportBinding::Default { specifier }) => (specifier, "default"),
+        Some(ImportBinding::Namespace { .. }) | None => return Some((file_path.to_string(), name.to_string(), true)),
     };
-    resolve_export(file_path, &imp.source, &imp.imported, files, inputs)
+    resolve_export(file_path, specifier, imported, files, inputs)
 }
 
 /// The declaration `imported` from `specifier` lands on, through analyzed
@@ -5509,6 +5514,7 @@ fn run_with_system_floor(
         token_misses: Some(&token_misses),
         dropped_keys: Some(&dropped_keys),
         numeric_properties: Some(&inputs.numeric_properties),
+        numbers_take_px: false,
     };
 
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
