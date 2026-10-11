@@ -4459,4 +4459,62 @@ export const ds = tokens;
             "variableCss should not be empty"
         );
     }
+
+    /// A load records what must be watched for its retry: the paths it
+    /// looked for ahead of each file it chose (never the winner), every
+    /// candidate of an import that names nothing, the nearer
+    /// `node_modules/<pkg>` directories a package resolution skipped, and
+    /// each file it read, even when it then fails.
+    #[test]
+    fn a_load_records_the_paths_it_looked_for_and_the_files_it_read() {
+        let dir = scratch_dir("load-reads");
+        let entry = dir.join("system.ts");
+        fs::create_dir_all(dir.join("tokens")).unwrap();
+        write_fixture(&dir.join("tokens/index.ts"), "export const tokens = {};\n");
+        write_fixture(
+            &entry,
+            "import { tokens } from './tokens';\n\
+             import { palette } from './palette';\n\
+             export const system = { tokens, palette };\n",
+        );
+
+        let mut reads = LoadReads::default();
+        let result = resolve_all_deps_reading(
+            &entry.to_string_lossy(),
+            &dir.to_string_lossy(),
+            &ResolutionContext::default(),
+            &mut reads,
+        );
+
+        assert!(result.is_err(), "'./palette' names no file");
+        let canonical_dir = fs::canonicalize(&dir).unwrap();
+        let path = |rel: &str| canonical_dir.join(rel).to_string_lossy().to_string();
+        let lexical = |rel: &str| dir.join(rel).to_string_lossy().to_string();
+        assert!(reads.read.contains(&path("system.ts")), "{:?}", reads.read);
+        let missing = |rel: &str| reads.missing.iter().any(|p| *p == path(rel) || *p == lexical(rel));
+        assert!(missing("tokens.ts"), "{:?}", reads.missing);
+        assert!(missing("tokens.tsx"), "candidates ahead of the winner: {:?}", reads.missing);
+        assert!(!missing("tokens/index.ts"), "the winner is not absent: {:?}", reads.missing);
+        assert!(missing("palette.ts") && missing("palette/index.ts"), "{:?}", reads.missing);
+
+        let kit_entry = dir.join("kit-system.ts");
+        write_fixture(
+            &kit_entry,
+            "import { kit } from '@animus-test/absent-kit';\nexport const system = kit;\n",
+        );
+        let mut kit_reads = LoadReads::default();
+        let kit_result = resolve_all_deps_reading(
+            &kit_entry.to_string_lossy(),
+            &dir.to_string_lossy(),
+            &ResolutionContext::default(),
+            &mut kit_reads,
+        );
+        assert!(kit_result.is_err(), "the package is not installed");
+        assert!(
+            kit_reads.missing.iter().any(|p| p.ends_with("node_modules/@animus-test/absent-kit")
+                && p.starts_with(&*canonical_dir.to_string_lossy())),
+            "{:?}",
+            kit_reads.missing
+        );
+    }
 }

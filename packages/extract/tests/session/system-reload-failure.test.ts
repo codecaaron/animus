@@ -243,3 +243,56 @@ describe('reload debt', () => {
     session.close();
   });
 });
+
+// Rows 6 and 7: a path the load looked for and found absent counts, and so
+// do the files a failed load read.
+describe('the system load observations', () => {
+  async function developmentSession(root: string) {
+    const session = new ExtractionSession({ system: './src/system.ts' });
+    session.rootDir = root;
+    session.development = true;
+    await session.runFullPipeline();
+    return session;
+  }
+
+  test('creating a path the load found absent reloads the system', async () => {
+    const root = createFixtureProject('animus-negative-observation-');
+    const palette = join(root, 'src', 'palette.ts');
+    mocks.analyzeProject.mockImplementation(() => buildManifest({}));
+    mocks.loadSystemModule.mockReturnValue({
+      ...SYSTEM_CONFIG,
+      missing: [palette],
+    });
+    const session = await developmentSession(root);
+    const loads = mocks.loadSystemModule.mock.calls.length;
+
+    writeFileSync(palette, 'export const palette = {};\n');
+    await session.handleWatchUpdate({ modifiedFiles: new Set([palette]) });
+
+    expect(mocks.loadSystemModule.mock.calls.length).toBe(loads + 1);
+    session.close();
+  });
+
+  test("a failed load's read files and absent paths stay watched", async () => {
+    const root = createFixtureProject('animus-failed-load-reads-');
+    mocks.analyzeProject.mockImplementation(() => buildManifest({}));
+    const session = await developmentSession(root);
+    const systemPath = join(root, 'src', 'system.ts');
+    const palette = join(root, 'src', 'palette.ts');
+    const absent = join(root, 'src', 'theme.ts');
+    mocks.loadSystemModule.mockImplementation(() => {
+      throw Object.assign(new Error('SyntaxError in palette.ts'), {
+        dependencies: [systemPath, palette],
+        missing: [absent],
+      });
+    });
+
+    await expect(
+      session.handleWatchUpdate({ modifiedFiles: new Set([systemPath]) })
+    ).rejects.toThrow('palette.ts');
+
+    expect(session.systemDependencyPaths).toContain(palette);
+    expect(session.systemMissingPaths).toContain(absent);
+    session.close();
+  });
+});
