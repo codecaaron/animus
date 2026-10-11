@@ -472,7 +472,7 @@ fn unstable_style_statics(
     files: &BTreeMap<String, rustc_hash::FxHashMap<String, crate::static_value::StaticValue>>,
     inputs: &analyze_css::CssInputs,
     readings_of: &mut ReadingsOf<'_>,
-) -> BTreeMap<(String, String), String> {
+) -> BTreeMap<(String, String), (String, crate::flow::Uncertainty)> {
     let declaration = |(module, binding): (ModuleIndex, LocalId)| -> (String, String) {
         let path = &links.paths[module];
         (path.clone(), lowered[path].bindings.binding(binding).name.clone())
@@ -678,7 +678,14 @@ fn unstable_style_statics(
         for local in statics.keys() {
             let query = AbsenceQuery::Stable(ObjectId::new(file, local), Vec::new());
             if let Coverage::Exposed(exposures) = effects.covers(&query) {
-                unstable.insert((file.clone(), local.clone()), exposures[0].cause().to_string());
+                // Every exposure is what the binding is uncertain as; the
+                // first names it.
+                let uncertainty = exposures
+                    .iter()
+                    .map(crate::flow::Exposure::uncertainty)
+                    .reduce(crate::flow::Uncertainty::join)
+                    .expect("an exposed subject has an exposure");
+                unstable.insert((file.clone(), local.clone()), (exposures[0].cause().to_string(), uncertainty));
             }
         }
     }
@@ -866,11 +873,11 @@ impl ExtractEngine {
         for ast in store.iter() {
             let program = ast.program();
             let statics = if crate::analyze_css::is_external_file(&ast.path, &self.opts.css_inputs.external_dirs) {
-                crate::eval::collect_package_static_values(program)
+                crate::eval::collect_package_static_values(program, &ast.path)
             } else {
-                crate::eval::collect_static_values(program)
+                crate::eval::collect_static_values(program, &ast.path)
             };
-            let complete_statics = crate::eval::collect_complete_static_values(program);
+            let complete_statics = crate::eval::collect_complete_static_values(program, &ast.path);
             let exports = collect_export_facts(program);
             let imports = collect_import_facts(ast.module_record());
             statics_by_file.insert(ast.path.clone(), statics);
@@ -938,7 +945,7 @@ impl ExtractEngine {
         let readings_by_file: BTreeMap<String, crate::usage_facts::ParamReadings> =
             lowered_by_file.iter().map(|(path, lowered)| (path.clone(), std::sync::Arc::clone(&lowered.readings))).collect();
         let mut readings_of = |file: &str| readings_by_file.get(file).cloned().unwrap_or_default();
-        for ((file, local), reason) in unstable_style_statics(
+        for ((file, local), (reason, uncertainty)) in unstable_style_statics(
             &style_modules,
             &imports_by_file,
             &links,
@@ -953,8 +960,11 @@ impl ExtractEngine {
                 let in_package = crate::analyze_css::is_external_file(&file, &self.opts.css_inputs.external_dirs);
                 let held = programs
                     .get(file.as_str())
-                    .and_then(|program| crate::eval::pre_read_static(program, &local, in_package));
-                unsettled_by_file.entry(file).or_default().insert(local, crate::eval::Unsettled { reason, held });
+                    .and_then(|program| crate::eval::pre_read_static(program, &file, &local, in_package));
+                unsettled_by_file
+                    .entry(file)
+                    .or_default()
+                    .insert(local, crate::eval::Unsettled { reason, uncertainty, held });
             }
         }
 
