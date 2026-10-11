@@ -1,9 +1,11 @@
 import {
   assembleStylesheet,
+  bareSpecifierPackageName,
   clearEngineCache,
   collectExternalPackageSources,
   contentHash,
   createExcludeMatcher,
+  declaredWorkspacePackages,
   DEFAULT_EXTENSIONS,
   discoverFiles,
   engineModuleParser,
@@ -177,9 +179,37 @@ export async function runBuildStart(
  *  the analysis input it yields. */
 async function discoverSources(
   ctx: PluginContext,
-  resolveSpecifier: (specifier: string) => Promise<string | null>
+  hostResolve: (specifier: string) => Promise<string | null>
 ): Promise<DiscoveredSources> {
   const t0 = performance.now();
+  // A declared workspace nothing links into node_modules is no package to
+  // Vite, though the system loader resolves it: where the host finds
+  // nothing, discovery asks the loader, as the session does. Vite resolves
+  // such a package's imports only through a source-entry redirect, so the
+  // collector admits a loader answer only where one exists.
+  const workspaces = declaredWorkspacePackages(ctx.rootDir);
+  const loaderOnly = new Set<string>();
+  const resolveSpecifier = async (
+    specifier: string
+  ): Promise<string | null> => {
+    const hosted = await hostResolve(specifier);
+    if (
+      hosted !== null ||
+      !Object.hasOwn(workspaces, bareSpecifierPackageName(specifier))
+    ) {
+      return hosted;
+    }
+    const loaded = ctx
+      .engineApi()
+      .resolveSpecifier?.(
+        specifier,
+        ctx.rootDir,
+        ctx.resolveConditions,
+        workspaces
+      );
+    if (loaded?.path) loaderOnly.add(specifier);
+    return loaded?.path ?? null;
+  };
   // Refresh in case `options` was mutated between server lifecycles.
   ctx.excludeMatcher = createExcludeMatcher(ctx.options.exclude);
   const excludePatterns = ctx.excludeMatcher;
@@ -239,6 +269,7 @@ async function discoverSources(
   const collected = await collectExternalPackageSources({
     specifiers: packageSpecifiers,
     resolveSpecifier,
+    requireSourceEntry: (specifier) => loaderOnly.has(specifier),
     rootDir: ctx.rootDir,
     extensionsSet: ctx.extensionsSet,
     hasEntry: (relPath) => rawEntries.some((entry) => entry.path === relPath),

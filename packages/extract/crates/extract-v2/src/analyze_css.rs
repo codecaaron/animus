@@ -744,7 +744,15 @@ pub fn resolve_import_source<T>(
 
 /// The analyzed file `base` names, through the one extension policy.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
-    animus_system_loader::resolution::extension_policy().probe(base, |candidate| files.contains_key(candidate))
+    use animus_system_loader::resolution::{extension_policy, Seen};
+    // The analyzed set is keyed by each file's own spelling, so a lookup is
+    // exact: a specifier that differs only in case names no analyzed file.
+    extension_policy()
+        .probe(base, |candidate| match files.contains_key(candidate) {
+            true => Seen::File,
+            false => Seen::Missing,
+        })
+        .found()
 }
 
 /// The first module on the module table's route for `module`'s export
@@ -3063,7 +3071,7 @@ fn exported_component_ids(
         if !seen.insert(module.clone()) {
             continue;
         }
-        for name in crate::family_members::module_export_names(&module, files, inputs, links) {
+        for name in crate::family_members::module_export_names(&module, links) {
             let namespace =
                 crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs, links);
             match namespace {
@@ -4040,12 +4048,7 @@ fn bounded_prop_tags(
     // The declaration a module's name or default import resolves to, through
     // any barrel.
     let declared = |file: &str, ff: &FileFacts, name: &str| {
-        let (declaring, binding, _) = resolve_declaration(file, ff, name, files, inputs, links)?;
-        let binding = match binding.as_str() {
-            "default" => files.get(&declaring)?.default_export_binding.clone().unwrap_or(binding),
-            _ => binding,
-        };
-        Some((declaring, binding))
+        resolve_declaration(file, ff, name, files, inputs, links).map(|(declaring, binding, _)| (declaring, binding))
     };
     // Whether `module` is `declaring`, or re-exports from it at any depth,
     // as the module table links them: by name, as a namespace, through
@@ -4453,10 +4456,6 @@ fn uncertain_tag_reason(
                 false => resolve_declaration(file, ff, tag, files, inputs, links).and_then(
                     |(declaring_file, binding, local)| {
                         let dff = files.get(&declaring_file)?;
-                        let binding = match binding.as_str() {
-                            "default" => dff.default_export_binding.clone().unwrap_or(binding),
-                            _ => binding,
-                        };
                         // `export function` and `export class` record no export
                         // fact, so a declaration the file does not import is
                         // its own.
@@ -8619,7 +8618,9 @@ mod tests {
         assert_eq!(resolve("./icon.js").as_deref(), Some("src/icon.tsx"));
         assert_eq!(resolve("./real.js").as_deref(), Some("src/real.js"));
         assert_eq!(resolve("./m.mjs").as_deref(), Some("src/m.mts"));
-        assert_eq!(resolve("./signals.JS").as_deref(), Some("src/signals.ts"));
+        // Exact case, as Node, TypeScript and the hosts read it: `.JS` is no
+        // emitted `.js`.
+        assert_eq!(resolve("./signals.JS"), None);
         assert_eq!(resolve("./icon.jsx").as_deref(), Some("src/icon.tsx"));
         assert_eq!(resolve("./missing.js"), None);
     }

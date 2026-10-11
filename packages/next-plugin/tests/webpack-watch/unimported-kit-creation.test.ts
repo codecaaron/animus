@@ -19,15 +19,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 import { setEngineApiOverride } from '../../../extract/session/singleton';
-import {
-  manifestPackageEntry,
-  requireResolveSpecifier,
-} from '../../../extract/tests/session/session-fixtures';
+import { requireResolveSpecifier } from '../../../extract/tests/session/session-fixtures';
 
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
   resolveSpecifier: requireResolveSpecifier,
-  resolvePackageEntry: manifestPackageEntry,
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,
