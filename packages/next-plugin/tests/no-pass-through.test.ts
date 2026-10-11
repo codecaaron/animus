@@ -131,8 +131,59 @@ describe('a transform failure never serves builder source', () => {
         rootDir: '/app',
         manifestJson: '{}',
         transformFile: (source) => ({ code: source, hasComponents: false }),
-        listsComponents: (path) => path === 'src/Button.tsx',
+        served: { listed: new Set(['src/Button.tsx']), dropped: new Map() },
       })
     ).toThrow(/src\/Button\.tsx/);
   });
+});
+
+/** An extension the analysis dropped over a parent it could not resolve,
+ *  as the manifest records it (spec §12.2 row 11). */
+const DROP = {
+  file: 'src/Fancy.tsx',
+  component: 'Fancy',
+  parent: 'Parent',
+  specifier: './Parent',
+  base: 'src/Parent',
+  outcome: 'absent',
+} as const;
+const DROPPED_MESSAGE =
+  "cannot serve src/Fancy.tsx: 'Fancy' extends 'Parent' from './Parent'";
+
+describe('a dropped extension is never served raw', () => {
+  // Contract (SA1, spec §12.2 row 11): every host fails the transform of a
+  // file whose extension the analysis dropped over its parent, naming the
+  // component, parent and specifier, in development and in a build.
+  test('unplugin', () => {
+    expect(() =>
+      transformWithEngine(BUILDER_SOURCE, '/app/src/Fancy.tsx', {
+        rootDir: '/app',
+        manifestJson: '{}',
+        transformFile: (source) => ({ code: source, hasComponents: false }),
+        served: { listed: new Set(), dropped: new Map([[DROP.file, DROP]]) },
+      })
+    ).toThrow(DROPPED_MESSAGE);
+  });
+
+  for (const development of [true, false]) {
+    test(`webpack loader, ${development ? 'development' : 'build'}`, () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      expect(() =>
+        transformWithManifest({
+          source: BUILDER_SOURCE,
+          filename: DROP.file,
+          manifestJson: JSON.stringify(
+            makeManifest({ missing_inputs: [{ ...DROP }] })
+          ),
+          engineApi: () => ({
+            transformFile: (source: string) => ({
+              code: source,
+              hasComponents: false,
+            }),
+          }),
+          opts: { development },
+        })
+      ).toThrow(DROPPED_MESSAGE);
+    });
+  }
 });

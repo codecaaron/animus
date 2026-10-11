@@ -1,5 +1,6 @@
 import {
   contentHash,
+  droppedExtensionMessage,
   isEngineTransformExtension,
   isPathWithinRoot,
 } from '@animus-ui/extract/pipeline';
@@ -11,7 +12,6 @@ import { droppedExtensions, reconcileSourceCorpus } from './rediscovery';
 import { applyPublished, changesOf, mergePublished } from './session-outcomes';
 
 import type { ObservedOutcome, PluginContext } from './context';
-import type { ManifestMissingInput } from '@animus-ui/extract/pipeline';
 
 /**
  * The import goes after the directive prologue: above it, 'use client'
@@ -47,18 +47,6 @@ export function extendingFiles(
     }
   }
   return files;
-}
-
-/** Why a file dropped over its extension parent is not served. */
-function droppedExtensionMessage(drop: ManifestMissingInput): string {
-  const from = drop.specifier === null ? '' : ` from '${drop.specifier}'`;
-  return (
-    `[animus-extract] cannot serve ${drop.file}: '${drop.component}' ` +
-    `extends '${drop.parent}'${from}, which the analysis could not resolve ` +
-    `(${drop.outcome}); serving it untransformed would render it without ` +
-    `its styles. Make the parent an analysed Animus component, or remove ` +
-    `the extension.`
-  );
 }
 
 export async function transformSource(

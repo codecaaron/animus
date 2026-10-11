@@ -2,6 +2,7 @@ import {
   caseMismatchReason,
   isPathWithinRoot,
   probeAbsolutePathSpecifier,
+  servedFiles,
 } from '@animus-ui/extract/pipeline';
 import { extname, relative, resolve } from 'path';
 
@@ -28,11 +29,7 @@ export function droppedExtensions(
   if (!manifest) return NO_DROPS;
   let drops = dropsByManifest.get(manifest);
   if (!drops) {
-    const byFile = new Map<string, ManifestMissingInput>();
-    for (const input of manifest.missing_inputs ?? []) {
-      if (!byFile.has(input.file)) byFile.set(input.file, input);
-    }
-    drops = byFile;
+    drops = servedFiles(manifest).dropped;
     dropsByManifest.set(manifest, drops);
   }
   return drops;

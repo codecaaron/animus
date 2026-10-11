@@ -2,6 +2,7 @@ import {
   BUILT_IN_EXTENSION_POLICY,
   builtInAssetClassification,
   DiagnosticFailure,
+  droppedExtensionMessage,
   ENGINE_TRANSFORM_EXTENSIONS,
   esbuildAssetClassification,
   esbuildExtensionPolicy,
@@ -9,6 +10,7 @@ import {
   isPathWithinRoot,
   keepsKitSourceEffects,
   rollupExtensionPolicy,
+  servedFiles,
   viteAssetClassification,
   viteExtensionPolicy,
   webpackExtensionPolicy,
@@ -38,6 +40,8 @@ import type {
   HostAssetClassification,
   HostExtensionPolicy,
   HostResolve,
+  ProjectManifest,
+  ServedFiles,
 } from '@animus-ui/extract/pipeline';
 import type { SessionKey } from '@animus-ui/extract/session';
 import type {
@@ -90,8 +94,9 @@ export interface HostState {
   /** The build of the root this plugin instance analyses, once a pipeline
    *  run's session joined it. */
   key: SessionKey | null;
-  /** The files the run's analysis extracted components from. */
-  listedFiles: ReadonlySet<string>;
+  /** The files the run's analysis extracted components from, and the
+   *  extensions it dropped over their parent. */
+  served: ServedFiles;
 }
 
 export function createHostState(): HostState {
@@ -99,7 +104,7 @@ export function createHostState(): HostState {
     pipeline: null,
     mode: null,
     cssText: '',
-    listedFiles: new Set(),
+    served: { listed: new Set(), dropped: new Map() },
     systemPropsJs: '',
     kitRedirects: new Map(),
     kitSideEffects: new Map(),
@@ -182,37 +187,31 @@ export function transformWithEngine(
       path: string,
       manifestJson: string
     ) => { code: string; hasComponents: boolean };
-    /** Whether the analysis extracted components from a root-relative
-     *  file; one it did must transform. */
-    listsComponents?: (filename: string) => boolean;
+    /** The root-relative files the analysis extracted components from,
+     *  which must transform, and those it dropped over their parent. */
+    served?: ServedFiles;
   }
 ): string | null {
   const filename = relative(ctx.rootDir, resolve(id)).split('\\').join('/');
   const result = ctx.transformFile(code, filename, ctx.manifestJson);
   if (result.hasComponents) return result.code;
   // Serving it raw would ship builder code (SA1).
-  if (ctx.listsComponents?.(filename)) {
+  if (ctx.served?.listed.has(filename)) {
     throw new Error(
       `[animus] the analysis extracted components from ${filename}, but its ` +
         `transform found none`
     );
   }
+  const drop = ctx.served?.dropped.get(filename);
+  if (drop !== undefined) throw new Error(droppedExtensionMessage(drop));
   return null;
 }
 
-/** The files a manifest lists components for, parsed once per run. */
-function componentFiles(manifestJson: string | null): ReadonlySet<string> {
-  if (manifestJson === null) return new Set();
-  // SAFETY: the session's own published manifest, whose `files` maps each
-  // root-relative file to the component ids extracted from it.
-  const { files } = JSON.parse(manifestJson) as {
-    files?: Record<string, readonly string[]>;
-  };
-  return new Set(
-    Object.entries(files ?? {})
-      .filter(([, ids]) => ids.length > 0)
-      .map(([file]) => file)
-  );
+/** What a manifest's transform serves, parsed once per run. */
+function manifestServedFiles(manifestJson: string | null): ServedFiles {
+  if (manifestJson === null) return { listed: new Set(), dropped: new Map() };
+  // SAFETY: the session's own published manifest.
+  return servedFiles(JSON.parse(manifestJson) as ProjectManifest);
 }
 
 /** Whether esbuild's `external` option names `specifier`: exactly, as the
@@ -515,7 +514,7 @@ export const unpluginFactory: UnpluginFactory<
         );
       }
       state.cssText = getSharedCss(session.key);
-      state.listedFiles = componentFiles(getManifestJson(session.key));
+      state.served = manifestServedFiles(getManifestJson(session.key));
       state.systemPropsJs = getSharedSystemProps(session.key);
       state.kitRedirects = new Map(session.externalSourceEntries);
       state.kitSideEffects = new Map(session.externalSourceSideEffects);
@@ -728,7 +727,7 @@ export const unpluginFactory: UnpluginFactory<
           rootDir: root,
           manifestJson: getManifestJson(key) ?? '',
           transformFile,
-          listsComponents: (file) => state.listedFiles.has(file),
+          served: state.served,
         });
         if (transformed !== null) output = transformed;
       }

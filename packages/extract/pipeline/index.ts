@@ -255,3 +255,5 @@ export {
 } from './host-assets';
 export type { HostAssetClassification } from './host-assets';
 export { adaptedOriginals } from './probe-evidence';
+export type { ServedFiles } from './served-files';
+export { droppedExtensionMessage, servedFiles } from './served-files';
