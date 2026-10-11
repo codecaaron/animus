@@ -17,13 +17,17 @@ import {
   extname,
   isAbsolute,
   join,
+  posix,
   relative,
   resolve,
+  sep,
 } from 'path';
 
 import {
   AliasAgreementCache,
   compareAliases,
+  packageInstanceFinding,
+  packageReadRecord,
 } from '../pipeline/alias-agreement';
 import {
   adaptedOriginals,
@@ -53,6 +57,7 @@ import {
   DEFAULT_RUNTIME_IMPORT,
   hostFirstPackageResolver,
   hashReplacementPlans,
+  isEngineTransformExtension,
   isExcludedPackageRelativePath,
   isPathWithinRoot,
   declaredWorkspacePackages,
@@ -89,6 +94,7 @@ import {
   surfaceManifestDiagnostics,
   systemLoadReads,
 } from '../pipeline/index';
+import { parseInternalWire } from '../pipeline/internal-wire';
 import { systemInstanceMismatches } from '../pipeline/system-instances';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
 import {
@@ -141,6 +147,8 @@ import {
   setOwningWatchSession,
   setAnalysisStartedPromise,
   setAnalyzedHashes,
+  getSharedPackageReadRecord,
+  setSharedPackageReadRecord,
   setManifestJson,
   setReplacementEpoch,
   setSessionArtifactDir,
@@ -153,7 +161,7 @@ import {
 } from './singleton';
 import { logBuildTimings } from './timing';
 
-import type { AliasComparison } from '../pipeline/alias-agreement';
+import type { PackageReadRecord } from '../pipeline/alias-agreement';
 import type {
   AnimusCoreOptions,
   ExternalPackageOutcome,
@@ -161,6 +169,7 @@ import type {
   HostExtensionPolicy,
   KitDescriptorRecord,
 } from '../pipeline/index';
+import type { ExtractFactsResult } from '../pipeline/source-ingestion';
 import type {
   PackageResolution,
   SessionResolutionContext,
@@ -443,9 +452,6 @@ export class ExtractionSession {
    *  discovery asks it first, the loader only for a declared workspace it
    *  cannot resolve. Null resolves through the loader alone. */
   hostResolve: HostResolve | null = null;
-  /** How the last analysis compared the path aliases it reads with the
-   *  host's resolver (spec §2.2 A7); `unavailable` is never agreement. */
-  aliasComparison: AliasComparison = 'unavailable';
   /** Each file's alias comparison, kept by content hash across analyses. */
   private readonly aliasCache = new AliasAgreementCache();
   /** Serialized path aliases, harvested by the adapter from bundler config. */
@@ -811,6 +817,11 @@ export class ExtractionSession {
   lastExternalOutcomes: ExternalPackageOutcome[] = [];
   /** The analysed kits' descriptors, from the last discovery. */
   kitDescriptors: KitDescriptorRecord[] = [];
+  /** Package name → the real root of the instance discovery read. */
+  private packageInstances: Record<string, string> = {};
+  /** What this attempt's analysis read of the discovered packages; the
+   *  build's shared record once the analysis publishes. */
+  private packageReadRecord: PackageReadRecord | null = null;
 
   /** Component count of the last published analysis, null before the first —
    *  read by drivers instead of re-parsing the manifest JSON every cycle. */
@@ -1958,6 +1969,7 @@ export class ExtractionSession {
       rootDir
     );
     this.kitDescriptors = admitted.kitDescriptors;
+    this.packageInstances = admitted.packageInstances;
 
     try {
       const identity = createSourceIdentity(rootDir);
@@ -2650,6 +2662,9 @@ export class ExtractionSession {
       this.key,
       new Map(fileEntries.map((entry) => [entry.path, entry.hash]))
     );
+    if (this.packageReadRecord !== null) {
+      setSharedPackageReadRecord(this.key, this.packageReadRecord);
+    }
 
     // Payloads first, then the commit, then the epoch LAST and only when its
     // value moved — an epoch-woken reader never sees an uncommitted write.
@@ -2735,13 +2750,21 @@ export class ExtractionSession {
   private async compareAliasesWithHost(
     fileEntries: FileEntry[]
   ): Promise<ManifestDiagnostic[]> {
+    const record = packageReadRecord({
+      rootDir: this.rootDir!,
+      roots: this.packageInstances,
+      redirected: new Set(this.externalSourceEntries.keys()),
+      analysed: fileEntries.map((entry) => entry.path),
+      rendersBuilder: (file) => this.rendersBuilder(file),
+    });
+    this.packageReadRecord = record;
     const { moduleSpecifiers } = this.engine();
-    if (this.host.noBundler) {
-      this.aliasComparison = 'not-applicable';
-      return [];
-    }
+    // No finding is agreement only where a comparison ran (spec §2.2 A7);
+    // its state belongs to the acquisition certificate, so until that
+    // exists an unavailable comparison is logged, never recorded as one.
+    if (this.host.noBundler) return [];
     if (this.hostResolve === null || moduleSpecifiers === undefined) {
-      this.aliasComparison = 'unavailable';
+      this.log('path aliases: no host resolver, comparison unavailable');
       return [];
     }
     // A report: whatever goes wrong while comparing never blocks the
@@ -2759,8 +2782,11 @@ export class ExtractionSession {
         moduleSpecifiers,
         resolve: this.hostResolve,
         cache: this.aliasCache,
+        packages: record,
       });
-      this.aliasComparison = 'compared';
+      for (const finding of findings) {
+        record.reported.add(`${finding.file}\0${finding.component}`);
+      }
       if (unavailable > 0) {
         this.log(
           `path aliases: ${unavailable} aliased import(s) the host's resolver failed on are unavailable, not agreeing`
@@ -2768,10 +2794,70 @@ export class ExtractionSession {
       }
       return findings;
     } catch (error) {
-      this.aliasComparison = 'unavailable';
       this.log(`path aliases: comparison unavailable (${String(error)})`);
       return [];
     }
+  }
+
+  /** Whether the file at a real path declares builder chains, by the
+   *  engine's own parse: a module that does, served unread, renders with
+   *  empty classes. One the engine cannot read counts as one that does. */
+  private rendersBuilder(file: string): boolean {
+    if (!isEngineTransformExtension(file)) return false;
+    const { extractFacts } = this.engine();
+    if (extractFacts === undefined) return true;
+    const path = relative(this.rootDir!, file);
+    try {
+      const facts = parseInternalWire<ExtractFactsResult>(
+        extractFacts(
+          JSON.stringify([{ path, source: readFileSync(file, 'utf-8') }])
+        ),
+        'extractFacts'
+      ).files[path];
+      return (
+        facts === undefined || facts.parsePanicked || facts.chains.length > 0
+      );
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * An import the host resolved while bundling (spec §2.2 A4), reported as
+   * the comparison reports it: webpack resolves each module's requests with
+   * the resolve options of the rules that module matches, which its
+   * resolver, asked outside a compilation, does not apply. `importer` and
+   * `resolved` are absolute. A finding the comparison already reported is
+   * not repeated; an error-level one throws in a build.
+   */
+  reportHostResolution(
+    importer: string,
+    request: string,
+    resolved: string
+  ): void {
+    // The build's published record, whichever participant collected it: a
+    // compiler that joined another's analysis holds no evidence of its own.
+    const record = getSharedPackageReadRecord(this.key);
+    if (record === null) return;
+    const finding = packageInstanceFinding(
+      record,
+      relative(record.rootDir, importer).split(sep).join(posix.sep),
+      request,
+      resolved
+    );
+    if (finding === null) return;
+    const key = `${finding.file}\0${finding.component}`;
+    if (record.reported.has(key)) return;
+    record.reported.add(key);
+    surfaceManifestDiagnostics(
+      { diagnostics: [finding] },
+      (message) => this.warn(message),
+      {
+        levels: this.options.diagnostics,
+        strict: this.options.strict,
+        reportErrors: this.reportErrors(),
+      }
+    );
   }
 
   private writeAnalysisStatus(

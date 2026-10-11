@@ -4,6 +4,7 @@ import { resolve } from 'path';
 
 import { createV2EngineApi, stableStringify } from '../pipeline/index';
 
+import type { PackageReadRecord } from '../pipeline/alias-agreement';
 import type { AnimusCoreOptions } from '../pipeline/core-options';
 import type { EngineApi, V2ExtractEngine } from '../pipeline/index';
 
@@ -154,6 +155,21 @@ export function setAnalyzedHashes(
   hashes: Map<string, string>
 ): void {
   joined(key).analyzedHashes = hashes;
+}
+
+/** What the build's last published analysis read of the discovered
+ *  packages (spec §2.2 A4); null before one publishes. */
+export function getSharedPackageReadRecord(
+  key: SessionKey
+): PackageReadRecord | null {
+  return findSession(key)?.packageReadRecord ?? null;
+}
+
+export function setSharedPackageReadRecord(
+  key: SessionKey,
+  record: PackageReadRecord
+): void {
+  joined(key).packageReadRecord = record;
 }
 
 /**
@@ -568,6 +584,9 @@ export interface SessionState {
   /** Root-relative path → hash of the bytes the last published analysis
    *  read, including files that produced no entries. */
   analyzedHashes: Map<string, string> | null;
+  /** What the last published analysis read of the discovered packages,
+   *  which every participant checks its host's answers against. */
+  packageReadRecord: PackageReadRecord | null;
   /** Written after the manifest, so a reader of the epoch sees at least
    *  that generation's manifest. */
   replacementEpoch: string | null;
@@ -643,6 +662,7 @@ export function joinSession(
       externalEntries: new Map(),
       externalSideEffects: new Map(),
       analyzedHashes: null,
+      packageReadRecord: null,
       replacementEpoch: null,
       artifactDir: null,
       unmatchedExcludesReported: false,

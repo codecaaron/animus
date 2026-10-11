@@ -523,6 +523,9 @@ export interface CollectedExternalPackages {
   diagnostics: ManifestDiagnostic[];
   /** Each resolved package's kit descriptor, once per package root. */
   kitDescriptors: KitDescriptorRecord[];
+  /** Package name → the real root of the instance read for it (spec §2.2
+   *  A4): another instance an importer resolves is not this one. */
+  packageInstances: Record<string, string>;
 }
 
 export async function collectExternalPackageSources(opts: {
@@ -676,6 +679,7 @@ export async function collectExternalPackageSources(opts: {
   };
 
   const kitDescriptors: KitDescriptorRecord[] = [];
+  const packageInstances: Record<string, string> = {};
   const describedRoots = new Set<string>();
   for (const specifier of specifiers) {
     let absEntry: string | null;
@@ -855,6 +859,7 @@ export async function collectExternalPackageSources(opts: {
     }
 
     const realRoot = realPath(pkgRoot);
+    if (packageName) packageInstances[packageName] ??= realRoot;
     if (!describedRoots.has(realRoot)) {
       describedRoots.add(realRoot);
       const described = readKitDescriptor(pkgRoot, rootDir);
@@ -1039,6 +1044,7 @@ export async function collectExternalPackageSources(opts: {
     outcomes,
     diagnostics: [...diagnostics, ...noKitFilesDiagnostics(outcomes)],
     kitDescriptors,
+    packageInstances,
   };
 }
 
@@ -1113,7 +1119,7 @@ export function sourceKitDependencies(
 
 /** A specifier that names a package: not relative or absolute, and no URL,
  *  scheme (`node:`, `virtual:`), subpath import or virtual id. */
-function isPackageSpecifier(specifier: string): boolean {
+export function isPackageSpecifier(specifier: string): boolean {
   return /^(?:@[^/\\:]+\/)?[^./\\#\0:][^:]*$/.test(specifier);
 }
 
@@ -1325,6 +1331,11 @@ export function excludeCollectedPackages(
         !rejectedDirs.some((dir) =>
           isPathWithinRoot(resolve(rootDir, record.packageRoot), dir)
         )
+    ),
+    packageInstances: Object.fromEntries(
+      Object.entries(collected.packageInstances).filter(
+        ([, root]) => !rejectedDirs.some((dir) => isPathWithinRoot(root, dir))
+      )
     ),
   };
 }
