@@ -56,6 +56,7 @@ export type {
   SourceKitDependency,
 } from './discover-packages';
 export {
+  bareSpecifierPackageName,
   collectExternalPackageSources,
   engineModuleParser,
   excludeCollectedPackages,
@@ -163,6 +164,8 @@ export type { StaticCssComponentOverride, StaticCssConfig } from './static-css';
 export { serializeStaticCss } from './static-css';
 export type { SystemConfig } from './system-config';
 export { loadSystemConfig } from './system-config';
+export type { WorkspacePackages } from './workspace-packages';
+export { declaredWorkspacePackages } from './workspace-packages';
 export type { StructuralCheckInput } from './structural-self-check';
 export { runStructuralSelfCheck } from './structural-self-check';
 export { buildSystemPropsModule } from './system-props-module';
