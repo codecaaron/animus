@@ -176,7 +176,7 @@ fn select_package_entry(
     // its root, as Node's legacy resolution reads them; a subpath names a
     // file or directory in the package.
     let probe = |entry: &str| {
-        resolution::EXTENSION_POLICY
+        resolution::extension_policy()
             .probe(&pkg_dir.join(entry).to_string_lossy(), |candidate| Path::new(candidate).is_file())
     };
     let legacy = match subpath.trim_start_matches('.').trim_start_matches('/') {
@@ -401,7 +401,7 @@ pub fn resolve_specifier(
 fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, String> {
     // Appended, not replaced: `./tokens.theme` names `tokens.theme.ts`.
     let target = base_dir.join(specifier).to_string_lossy().to_string();
-    resolution::EXTENSION_POLICY
+    resolution::extension_policy()
         .probe(&target, |candidate| Path::new(candidate).is_file())
         .ok_or_else(|| format!("could not resolve '{}' from {:?}", specifier, base_dir))
 }
@@ -2566,7 +2566,7 @@ export const ds = tokens;
             let prefix = format!("{}/", dir.to_string_lossy());
             let system = resolve_relative(&dir, specifier).map(|path| path.trim_start_matches(&prefix).trim_start_matches("./").to_string());
             let base = specifier.trim_start_matches("./");
-            let analysis = resolution::EXTENSION_POLICY.probe(base, |candidate| present.contains(&candidate));
+            let analysis = resolution::extension_policy().probe(base, |candidate| present.contains(&candidate));
             assert_eq!(system.as_deref(), Ok(expected), "system: {present:?} {specifier}");
             assert_eq!(analysis.as_deref(), Some(expected), "analysis: {present:?} {specifier}");
             let _ = fs::remove_dir_all(&dir);
