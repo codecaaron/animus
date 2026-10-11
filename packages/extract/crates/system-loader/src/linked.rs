@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use oxc::allocator::Allocator;
-use oxc::ast::ast::{ExportDefaultDeclarationKind, ImportDeclarationSpecifier, Statement};
+use oxc::ast::ast::{ExportDefaultDeclarationKind, Expression, ImportDeclarationSpecifier, Statement};
 use oxc::ast::AstKind;
 use oxc::parser::{Parser, ParserReturn};
 use oxc::semantic::SemanticBuilder;
@@ -161,6 +161,22 @@ pub(crate) fn rewrite_module_for_linking(
     let semantic = SemanticBuilder::new().with_build_nodes(true).build(&program).semantic;
     let scoping = semantic.scoping();
     let key = |spec: &str| module_key(canonical_path, spec, specifier_map);
+    // The loader reads exports and imports through `__modules`: a module may
+    // declare it only in a scope where it reads no import.
+    let reserved = |what: &str| {
+        Err(format!(
+            "module '{canonical_path}' declares `__modules`{what}, which the system loader reserves for \
+             the modules it links; rename the binding"
+        ))
+    };
+    let cells: Vec<oxc::semantic::ScopeId> = scoping
+        .symbol_ids()
+        .filter(|&symbol| scoping.symbol_name(symbol) == "__modules")
+        .map(|symbol| scoping.symbol_scope_id(symbol))
+        .collect();
+    if cells.contains(&scoping.root_scope_id()) {
+        return reserved("");
+    }
 
     let mut edits: Vec<Edit> = Vec::new();
     let mut removed: Vec<(usize, usize)> = Vec::new();
@@ -259,7 +275,24 @@ pub(crate) fn rewrite_module_for_linking(
                         local_exports.push(("default".to_string(), id));
                     }
                     kind => {
-                        edits.push(Edit { text: format!("const {default_name} = "), ..prefix });
+                        // An anonymous function or class takes the name
+                        // `default`, as an export default names it: a
+                        // property key names it so too.
+                        let anonymous = match kind {
+                            ExportDefaultDeclarationKind::ClassDeclaration(_) => true,
+                            kind => kind.as_expression().is_some_and(|expr| match expr.get_inner_expression() {
+                                Expression::ArrowFunctionExpression(_) => true,
+                                Expression::FunctionExpression(function) => function.id.is_none(),
+                                Expression::ClassExpression(class) => class.id.is_none(),
+                                _ => false,
+                            }),
+                        };
+                        let opening = if anonymous { "{ default: " } else { "" };
+                        edits.push(Edit { text: format!("const {default_name} = {opening}"), ..prefix });
+                        if anonymous {
+                            let end = decl.declaration.span().end as usize;
+                            edits.push(Edit { start: end, end, text: " }.default".to_string() });
+                        }
                         if matches!(kind, ExportDefaultDeclarationKind::ClassDeclaration(_)) {
                             edits.push(Edit {
                                 start: decl.span.end as usize,
@@ -297,6 +330,10 @@ pub(crate) fn rewrite_module_for_linking(
     let mut refs: HashMap<(usize, usize), &str> = HashMap::new();
     for (&symbol, cell) in &imported {
         for reference in scoping.get_resolved_references(symbol) {
+            let at = reference.scope_id();
+            if cells.iter().any(|&scope| at == scope || scoping.scope_is_descendant_of(at, scope)) {
+                return reserved(" where it reads an import");
+            }
             let node = reference.node_id();
             let span = semantic.nodes().get_node(node).span();
             let (start, end) = (span.start as usize, span.end as usize);
