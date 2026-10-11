@@ -13,6 +13,7 @@ import {
   viteExtensionPolicy,
   viteHostExpander,
   webpackExtensionPolicy,
+  webpackHostExpander,
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_CSS_MODULE_ID,
@@ -39,6 +40,7 @@ import type {
   HostAssetClassification,
   HostExtensionPolicy,
   HostLoadExpander,
+  WebpackRuleEntry,
 } from '@animus-ui/extract/pipeline';
 import type { SessionKey } from '@animus-ui/extract/session';
 import type {
@@ -285,9 +287,77 @@ interface RspackLikeCompiler extends WebpackLikeCompiler {
   };
 }
 
+/** The experiments webpack's default rules are built from. */
+interface WebpackRuleExperiments {
+  css?: boolean;
+  asyncWebAssembly?: boolean;
+  syncWebAssembly?: boolean;
+}
+
+/** Normalized webpack options, as far as their default rules. */
+interface WebpackNormalizedOptions {
+  module?: { defaultRules?: ReadonlyArray<WebpackRuleEntry> };
+}
+
+/** Rules as comparable text: a RegExp by its source and flags, a function
+ *  by its text. */
+function ruleText(rules: ReadonlyArray<WebpackRuleEntry> | undefined): string {
+  return JSON.stringify(rules ?? null, (_key, value: WebpackRuleValue) =>
+    value instanceof RegExp
+      ? `/${value.source}/${value.flags}`
+      : value instanceof Function
+        ? String(value)
+        : value
+  );
+}
+
+/** A value inside a rule, as the comparison reads it. */
+type WebpackRuleValue =
+  | RegExp
+  | ((...args: never[]) => boolean)
+  | string
+  | number
+  | boolean
+  | null
+  | readonly WebpackRuleValue[]
+  | { [key: string]: WebpackRuleValue };
+
+/** Whether `module.defaultRules` is webpack's own default list: the list
+ *  webpack's defaults give the compiler's experiments, unchanged. Throws
+ *  where webpack's option API is not available. */
+function defaultRulesAreWebpacks(compiler: WebpackLikeCompiler): boolean {
+  const config = compiler.webpack?.config;
+  if (config === undefined) {
+    throw new Error("webpack's option defaults are not available");
+  }
+  const { css, asyncWebAssembly, syncWebAssembly } =
+    compiler.options.experiments ?? {};
+  const fresh = config.getNormalizedWebpackOptions({
+    experiments: { css, asyncWebAssembly, syncWebAssembly },
+  });
+  config.applyWebpackOptionsDefaults(fresh);
+  return (
+    ruleText(fresh.module?.defaultRules) ===
+    ruleText(compiler.options.module?.defaultRules)
+  );
+}
+
+/** A webpack parser's wrapped-context options, which build a template or
+ *  concatenated request's context. */
+interface WrappedContextOptions {
+  wrappedContextRegExp?: RegExp;
+  wrappedContextRecursive?: boolean;
+}
+
 interface WebpackLikeCompiler {
   options: {
     mode?: string;
+    module?: {
+      parser?: Record<string, WrappedContextOptions | undefined>;
+      rules?: ReadonlyArray<WebpackRuleEntry>;
+      defaultRules?: ReadonlyArray<WebpackRuleEntry>;
+    };
+    experiments?: WebpackRuleExperiments;
     resolve?: {
       conditionNames?: string[];
       extensions?: string[];
@@ -304,9 +374,34 @@ interface WebpackLikeCompiler {
   };
   /** Set once `watch()` starts, before the first compilation. */
   watchMode?: boolean;
+  /** webpack's resolvers, whose options decide a context's alternative
+   *  requests. */
+  resolverFactory?: {
+    get(
+      type: 'normal' | 'context',
+      options: { dependencyType: string }
+    ): {
+      options: {
+        extensions: Iterable<string>;
+        mainFiles: Iterable<string>;
+        modules: ReadonlyArray<string | readonly string[]>;
+        fullySpecified?: boolean;
+        enforceExtension?: boolean;
+        alias?: ReadonlyArray<{ name: string }>;
+        fallback?: ReadonlyArray<{ name: string }>;
+      };
+    };
+  };
   webpack?: {
     version?: string;
     DefinePlugin?: new (defs: Record<string, string>) => WebpackLikeApplied;
+    /** webpack's own option normalization and defaults. */
+    config?: {
+      getNormalizedWebpackOptions(config: {
+        experiments: WebpackRuleExperiments;
+      }): WebpackNormalizedOptions;
+      applyWebpackOptionsDefaults(options: WebpackNormalizedOptions): void;
+    };
   };
   rspack?: {
     rspackVersion?: string;
@@ -343,6 +438,22 @@ interface KitResolveData {
 }
 interface WebpackLikeApplied {
   apply: (compiler: WebpackLikeCompiler) => void;
+}
+
+/** Whether every webpack JavaScript parser keeps the default wrapped
+ *  context, `/.*\/` and recursive. */
+function wrappedContextDefaults(
+  parser: Record<string, WrappedContextOptions | undefined> | undefined
+): boolean {
+  return Object.entries(parser ?? {})
+    .filter(([type]) => type === 'javascript' || type.startsWith('javascript/'))
+    .every(
+      ([, options]) =>
+        (options?.wrappedContextRegExp === undefined ||
+          (options.wrappedContextRegExp.source === '.*' &&
+            options.wrappedContextRegExp.flags === '')) &&
+        options?.wrappedContextRecursive !== false
+    );
 }
 
 const PLUGIN_NAME = 'animus-host';
@@ -924,6 +1035,41 @@ export const unpluginFactory: UnpluginFactory<
       `${meta.framework === 'rspack' ? 'rspack' : 'webpack'} rules not modelled`
     );
     watching = () => compiler.watchMode === true;
+    // Rspack builds contexts in its own implementation, not reproduced.
+    const resolverFactory = compiler.resolverFactory;
+    hostLoadExpander =
+      meta.framework === 'webpack' && resolverFactory !== undefined
+        ? webpackHostExpander({
+            resolveReading: (category) => {
+              const read = resolverFactory.get('normal', {
+                dependencyType: category,
+              }).options;
+              const context = resolverFactory.get('context', {
+                dependencyType: category,
+              }).options;
+              return {
+                extensions: [...read.extensions],
+                mainFiles: [...read.mainFiles],
+                modules: read.modules,
+                fullySpecified: read.fullySpecified === true,
+                enforceExtension: read.enforceExtension === true,
+                aliasNames: [read, context].flatMap((resolver) =>
+                  [...(resolver.alias ?? []), ...(resolver.fallback ?? [])].map(
+                    (entry) => entry.name
+                  )
+                ),
+              };
+            },
+            // Read for every expansion: a plugin can add a rule later.
+            options: () => ({
+              rules: compiler.options.module?.rules ?? [],
+              defaultRulesAreWebpacks: defaultRulesAreWebpacks(compiler),
+              wrappedDefaults: wrappedContextDefaults(
+                compiler.options.module?.parser
+              ),
+            }),
+          })
+        : undefined;
     const DefinePlugin =
       compiler.webpack?.DefinePlugin ?? compiler.rspack?.DefinePlugin;
     if (!DefinePlugin) {
