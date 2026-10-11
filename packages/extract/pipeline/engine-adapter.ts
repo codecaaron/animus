@@ -35,7 +35,8 @@ export interface EngineApi {
    *  of the file it names, or why it names none. */
   resolveSpecifier?: (
     specifier: string,
-    fromDir: string
+    fromDir: string,
+    conditions?: readonly string[]
   ) => { path?: string | null; unresolved?: string | null };
   analyzeProject: (
     filesJson: string,
@@ -153,8 +154,12 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
       extractFacts: (filesJson) => native.extractFacts(filesJson),
       moduleSpecifiers: (filesJson) => native.moduleSpecifiers(filesJson),
       diagnosticCodes: () => native.diagnosticCodes(),
-      resolveSpecifier: (specifier, fromDir) =>
-        native.resolveSpecifier(specifier, fromDir),
+      // Absent where the native module lacks it, so callers can say so.
+      resolveSpecifier:
+        native.resolveSpecifier === undefined
+          ? undefined
+          : (specifier, fromDir, conditions) =>
+              native.resolveSpecifier(specifier, fromDir, conditions),
       analyzeProject: (
         filesJsonRaw,
         scalesJson,

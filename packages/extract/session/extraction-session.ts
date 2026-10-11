@@ -985,14 +985,18 @@ export class ExtractionSession {
     // local; anything else resolves as the system loader resolves it. The
     // traversal and ingest below are the shared collector.
     t = this.now();
-    const resolveSpecifier: ResolveSpecifier = (specifier, fromDir) => {
+    const resolveSpecifier: ResolveSpecifier = (
+      specifier,
+      fromDir,
+      conditions
+    ) => {
       const native = engineApi().resolveSpecifier;
       if (native === undefined) {
         throw new Error(
           'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
         );
       }
-      return native(specifier, fromDir);
+      return native(specifier, fromDir, [...conditions]);
     };
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = await extractSystemFilePackages(
@@ -1000,9 +1004,12 @@ export class ExtractionSession {
       engineModuleParser(engineApi()),
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
       (name) => {
-        const entry = resolvePackagesByName(rootDir, [name], resolveSpecifier)[
-          name
-        ];
+        const entry = resolvePackagesByName(
+          rootDir,
+          [name],
+          resolveSpecifier,
+          this.conditions
+        ).entries[name];
         return entry ? resolve(rootDir, entry) : null;
       }
     );
@@ -1012,7 +1019,8 @@ export class ExtractionSession {
     const preResolved = resolvePackagesByName(
       rootDir,
       packageNames,
-      resolveSpecifier
+      resolveSpecifier,
+      this.conditions
     );
 
     // Raw content hashes of every walked external file, keyed by absolute
@@ -1022,7 +1030,10 @@ export class ExtractionSession {
     const collected = await collectExternalPackageSources({
       specifiers: packageNames,
       resolveSpecifier: (name) =>
-        preResolved[name] ? resolve(rootDir, preResolved[name]) : null,
+        preResolved.entries[name]
+          ? resolve(rootDir, preResolved.entries[name])
+          : null,
+      unresolvedReason: (name) => preResolved.unresolved[name],
       rootDir,
       extensionsSet,
       hasEntry: (relPath) => rawEntries.some((e) => e.path === relPath),
@@ -1064,7 +1075,10 @@ export class ExtractionSession {
         reportErrors: this.reportErrors(),
       }
     );
-    const unresolvableMessage = unresolvableIncludesMessage(collected.outcomes);
+    const unresolvableMessage = unresolvableIncludesMessage(
+      collected.outcomes,
+      relative(rootDir, resolvedSystemPath)
+    );
     if (unresolvableMessage !== null) {
       if (this.options.strict) this.strictFailure(unresolvableMessage);
       else this.warn(unresolvableMessage);
