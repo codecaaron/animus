@@ -5,6 +5,7 @@
 import {
   mkdirSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   statSync,
@@ -14,11 +15,21 @@ import {
 import { join, relative } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({
-  loadSystemModule: vi.fn(),
-  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
-  clearAnalysisCache: vi.fn(),
-}));
+/** An engine's fingerprints, where a row gives the stub them. */
+interface Fingerprints {
+  fingerprintFile: (path: string) => string | null;
+  fingerprintBytes: (bytes: Buffer) => string;
+}
+
+const mocks = vi.hoisted(() => {
+  const none = (): Fingerprints | null => null;
+  return {
+    loadSystemModule: vi.fn(),
+    analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
+    clearAnalysisCache: vi.fn(),
+    fingerprints: none(),
+  };
+});
 
 import { getSharedCss, setEngineApiOverride } from '../../session/singleton';
 
@@ -29,8 +40,11 @@ setEngineApiOverride(() => ({
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,
+  fingerprintFile: mocks.fingerprints?.fingerprintFile,
+  fingerprintBytes: mocks.fingerprints?.fingerprintBytes,
 }));
 
+import { contentHash } from '../../pipeline/content-hash';
 import { ExtractionSession } from '../../session/extraction-session';
 import { SESSION_ASSETS_DIR } from '../../session/session-paths';
 import {
@@ -169,6 +183,40 @@ describe('handleWatchUpdate asset+component batches', () => {
     expect(copy(before)).toBeDefined();
     expect(copy(after)).toBeDefined();
     expect(copy(after)).not.toBe(copy(before));
+  });
+
+  /** Contract: an asset's copy is paired with the fingerprint of the bytes
+   *  it holds. An edit that lands after the copy is made, before the copy's
+   *  fingerprint is taken, still publishes a new copy on the next cycle. */
+  test('an edit between an asset copy and its fingerprint is detected', async () => {
+    const { root, assetPath } = createProject();
+    const edited = '<svg><title>edited</title></svg>';
+    let edits = 0;
+    mocks.fingerprints = {
+      // The first file fingerprint lands an edit just before it reads.
+      fingerprintFile: (path) => {
+        if (edits++ === 0) writeFileSync(assetPath, edited);
+        return contentHash(readFileSync(path));
+      },
+      fingerprintBytes: (bytes) => contentHash(bytes),
+    };
+    try {
+      const session = await startSession(root, assetPath);
+      // Any edit in the copy's window, as the first read would see it.
+      if (edits === 0) writeFileSync(assetPath, edited);
+      writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
+      await session.handleWatchUpdate({
+        modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
+        removedFiles: new Set(),
+      });
+
+      const copy = /assets\/logo\.([0-9a-f]{8})\.svg/.exec(
+        getSharedCss(session.key)
+      )?.[1];
+      expect(copy).toBe(contentHash(edited).slice(0, 8));
+    } finally {
+      mocks.fingerprints = null;
+    }
   });
 
   test('an asset-only batch still re-analyzes (asset substitution refresh)', async () => {

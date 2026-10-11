@@ -28,6 +28,7 @@ name = "animus-extract-v2"
 version = "0.0.1"
 dependencies = [
  "animus-system-loader",
+ "foldhash",
  "napi",
  "napi-build",
  "napi-derive",
