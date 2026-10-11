@@ -95,6 +95,11 @@ export declare function engineVersion(): string
  */
 export declare function extractFacts(fileEntriesJson: string): string
 
+/**
+ * A failed load throws an `Error` carrying `dependencies` (the files it
+ * read or attempted) and `missing` (the paths it looked for and found
+ * absent), so the host watches them for the retry.
+ */
 export declare function loadSystemModule(systemPath: string, rootDir: string, exportName?: string | undefined | null, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null): NapiSystemConfig
 
 /**
@@ -172,6 +177,11 @@ export interface NapiSystemConfig {
    * included, runtime stubs are not.
    */
   dependencies: Array<string>
+  /**
+   * Paths the resolution looked for and found absent, ahead of the file it
+   * chose, sorted: creating one changes what the system loads.
+   */
+  missing?: Array<string>
   /**
    * Per-module built-theme token manifests, shaped
    * `{ modulePath: { exportName: [token paths] } }`. Absent when none exist.

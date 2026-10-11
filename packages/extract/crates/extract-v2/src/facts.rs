@@ -1810,10 +1810,12 @@ mod tests {
     /// in, nested, as main did: a `$animus.lost` key is a skip, one with a
     /// `$animus.capture` key is taken without one. A `.props()` config's
     /// lost `transform` is removed as JSON's map removed it, the last entry
-    /// taking its place, which the config's class reads.
+    /// taking its place, which the config's class reads. An object that
+    /// spells the asset marker with more fields is read through those
+    /// fields, as its JSON was.
     #[test]
     fn a_stage_takes_copied_marker_keys_as_main_did() {
-        let rows: [(&str, &str); 3] = [
+        let rows: [(&str, &str); 5] = [
             (
                 "const nested = { ':hover': { '$animus.lost': 'authored', padding: 4 }, color: 'red' };\n\
                  export const A = ds.styles({ ...nested }).asElement('div');",
@@ -1828,6 +1830,16 @@ mod tests {
                 "const cfg = { tone: { transform: { '$animus.lost': 'authored' }, property: 'color', scale: 'colors' }, gap: { property: 'gap' } };\n\
                  export const A = ds.props(cfg).asElement('div');",
                 r#"{"value": {"tone": {"scale": "colors", "property": "color"}, "gap": {"property": "gap"}}, "skipped": [], "dropped_transforms": [["tone", "authored"]]}"#,
+            ),
+            (
+                "const preset = { '$animus.asset': 'package', extra: { '$animus.lost': 'nested' }, padding: 4 };\n\
+                 export const A = ds.styles(preset).asElement('div');",
+                r#"{"value": {"$animus.asset": "package", "padding": 4}, "skipped": [["extra", "nested"]], "dropped_transforms": []}"#,
+            ),
+            (
+                "const box = { a: { '$animus.asset': 'package', extra: { '$animus.lost': 'nested' }, padding: 4 } };\n\
+                 export const A = ds.styles({ p: box.a.padding }).asElement('div');",
+                r#"{"value": {"p": 4}, "skipped": [], "dropped_transforms": []}"#,
             ),
         ];
         for (source, expected) in rows {

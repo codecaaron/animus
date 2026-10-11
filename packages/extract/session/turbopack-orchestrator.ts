@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, statSync, watch } from 'fs';
-import { join, relative } from 'path';
+import { dirname, join, relative } from 'path';
 
+import { isPathWithinRoot } from '../pipeline/index';
 import { COALESCING_WINDOW_MS, CoalescingWindow } from './coalescing-window';
 import {
   ANIMUS_ARTIFACT_DIR,
@@ -84,6 +85,10 @@ export function startTurbopackWatcher(
   let holdingEvents = holdEvents;
 
   const externalWatchers = new Map<string, ReturnType<typeof watch>>();
+  const dependencyWatchers = new Map<
+    string,
+    { watcher: ReturnType<typeof watch>; files: Set<string> }
+  >();
   let pendingOpened = new Map<string, ReturnType<typeof watch>>();
   let capturedDuringSnapshot: string[] = [];
 
@@ -110,6 +115,9 @@ export function startTurbopackWatcher(
     console.warn(`[animus-extract] ${message}`);
   };
 
+  // This watcher's cycles that have not settled.
+  let cyclesInFlight = 0;
+
   const flush = (): void => {
     const modifiedFiles = new Set<string>();
     const removedFiles = new Set<string>();
@@ -117,22 +125,26 @@ export function startTurbopackWatcher(
       (existsSync(path) ? modifiedFiles : removedFiles).add(path);
     }
     pendingPaths.clear();
+    if (closed) return;
 
-    updateChain = updateChain.then(() => {
-      // Cancelling the window does not retract a thunk already chained
-      // behind an in-flight cycle; entering the session after teardown races.
-      if (closed) return;
-      return session
-        .handleWatchUpdate({ modifiedFiles, removedFiles })
-        .catch((err) => {
-          console.warn(`[animus-extract] watch update failed: ${String(err)}`);
-        })
-        .then(() => {
-          if (pendingOpened.size > 0 || capturedDuringSnapshot.length > 0) {
-            rollbackPendingExternal();
-          }
-        });
-    });
+    // Recorded now, before any promise is joined: the session's observation
+    // queue runs it behind any cycle in flight.
+    cyclesInFlight++;
+    const cycle = session
+      .handleWatchUpdate({ modifiedFiles, removedFiles })
+      .catch((err) => {
+        console.warn(`[animus-extract] watch update failed: ${String(err)}`);
+      })
+      .finally(() => {
+        cyclesInFlight--;
+        // A cycle still running may own the pending watchers.
+        if (cyclesInFlight > 0) return;
+        if (pendingOpened.size > 0 || capturedDuringSnapshot.length > 0) {
+          rollbackPendingExternal();
+        }
+        syncDependencyWatchers();
+      });
+    updateChain = updateChain.then(() => cycle);
   };
 
   const coalescing = new CoalescingWindow(flush, debounceMs);
@@ -153,6 +165,10 @@ export function startTurbopackWatcher(
       watcher.close();
     }
     watchers.clear();
+    for (const { watcher } of dependencyWatchers.values()) {
+      watcher.close();
+    }
+    dependencyWatchers.clear();
     for (const watcher of externalWatchers.values()) {
       watcher.close();
     }
@@ -252,6 +268,72 @@ export function startTurbopackWatcher(
     }
   };
 
+  /** Whether the root or an external root watcher already reports `path`. */
+  const watchedByRoot = (path: string): boolean => {
+    if (
+      isPathWithinRoot(rootDir, path) &&
+      !relative(rootDir, path)
+        .split(/[\\/]/)
+        .some((segment) => IGNORED_SEGMENTS.has(segment))
+    ) {
+      return true;
+    }
+    return [...externalWatchers.keys()].some((root) =>
+      isPathWithinRoot(root, path)
+    );
+  };
+
+  /** Watches the system, asset and configuration dependencies no root
+   *  watcher reports, by their directories, for those files only. */
+  const syncDependencyWatchers = (): void => {
+    if (closed) return;
+    const wanted = new Map<string, Set<string>>();
+    for (const path of [
+      ...session.systemDependencyPaths,
+      ...session.assetDependencyPaths,
+      ...session.configInputPaths,
+    ]) {
+      if (watchedByRoot(path)) continue;
+      const files = wanted.get(dirname(path)) ?? new Set<string>();
+      files.add(path);
+      wanted.set(dirname(path), files);
+    }
+    for (const [dir, { watcher }] of [...dependencyWatchers]) {
+      if (wanted.has(dir)) continue;
+      watcher.close();
+      dependencyWatchers.delete(dir);
+    }
+    for (const [dir, files] of wanted) {
+      const existing = dependencyWatchers.get(dir);
+      if (existing) {
+        existing.files = files;
+        continue;
+      }
+      try {
+        const watcher = watchFn(dir, { recursive: false }, (_event, name) => {
+          if (closed || !name) return;
+          const abs = join(dir, name.toString());
+          if (dependencyWatchers.get(dir)?.files.has(abs)) enqueuePath(abs);
+        });
+        watcher.on('error', (err) => {
+          watcher.close();
+          dependencyWatchers.delete(dir);
+          console.warn(
+            `[animus-extract] dependency watch on ${dir} failed (${String(err)}); its changes require a dev-server restart`
+          );
+        });
+        watcher.unref?.();
+        dependencyWatchers.set(dir, { watcher, files });
+      } catch (err) {
+        // A directory that does not exist yet holds only absent inputs.
+        if (errnoCode(err) === 'ENOENT') continue;
+        console.warn(
+          `[animus-extract] dependency watch on ${dir} unavailable (${String(err)}); its changes require a dev-server restart`
+        );
+      }
+    }
+  };
+
   const addWatcher = (dir: string, recursive: boolean): void => {
     const watcher = watchFn(dir, { recursive }, (_event, filename) =>
       onEvent(dir, filename)
@@ -280,6 +362,7 @@ export function startTurbopackWatcher(
   for (const root of session.externalWatchRoots ?? []) {
     openExternalWatcher(root, externalWatchers);
   }
+  syncDependencyWatchers();
 
   session.onExternalRootResolved = (root: string): void => {
     if (closed) return;
@@ -312,6 +395,9 @@ export function startTurbopackWatcher(
     onDied: null,
     deliverHeldEvents: () => {
       holdingEvents = false;
+      // A watcher started before discovery learns the dependencies only
+      // now, whether or not anything is pending.
+      syncDependencyWatchers();
       // Startup bypasses the window.
       if (pendingPaths.size > 0) coalescing.flush();
       return updateChain;

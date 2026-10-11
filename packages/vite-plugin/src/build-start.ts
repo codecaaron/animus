@@ -1,6 +1,5 @@
 import {
   assembleStylesheet,
-  bareSpecifierPackageName,
   clearEngineCache,
   collectExternalPackageSources,
   contentHash,
@@ -13,15 +12,21 @@ import {
   extractSystemFilePackages,
   importedKitDiagnostics,
   firstOwners,
+  hostFirstPackageResolver,
   isDeletedSource,
   nativeKitSourceRoot,
   nativePackageLocator,
+  outputSourceGuard,
+  outputSourceMessage,
   surfaceManifestDiagnostics,
+  unmatchedExcludeLines,
   unreadableSourceDiagnostic,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
-import { basename, relative } from 'path';
+import { basename, dirname, relative, resolve } from 'path';
+
+import { sweepAbandonedCopyDirs } from './asset-copy-dirs';
 
 import type { DiscoveredSources, PluginContext } from './context';
 import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
@@ -63,7 +68,17 @@ export async function runBuildStart(
     );
   }
 
+  // One matcher per buildStart, which a development rediscovery reuses.
+  // Refreshed in case `options` was mutated between server lifecycles.
+  ctx.excludeMatcher = createExcludeMatcher(
+    ctx.options.exclude,
+    ctx.outputExclude === null ? [] : [ctx.outputExclude]
+  );
+  ctx.extensionsSet = new Set(ctx.options.extensions ?? DEFAULT_EXTENSIONS);
   const discovered = await discoverSources(ctx, resolveSpecifier);
+  for (const line of unmatchedExcludeLines(ctx.excludeMatcher)) {
+    console.error(line);
+  }
   // The system's imports and its packages' manifests decide discovery, so a
   // development system reload repeats it. Discovery decides the files; a
   // cached file keeps the source the hot path last read.
@@ -86,6 +101,9 @@ export async function runBuildStart(
   // Vite's CSS pipeline resolves `__VITE_ASSET__` markers to hashed names
   // before the stylesheet is hashed, so the CSS hash reflects the final URL.
   const assetSpecifiers = ctx.sheetAssetSpecifiers();
+  ctx.assetSourceBySpecifier.clear();
+  if (ctx.assetCopyDir !== null)
+    sweepAbandonedCopyDirs(dirname(ctx.assetCopyDir));
   for (const specifier of assetSpecifiers) {
     const resolvedPath = await resolveSpecifier(specifier);
     if (!resolvedPath) {
@@ -113,10 +131,20 @@ export async function runBuildStart(
         );
       }
     } else {
-      ctx.assetUrlBySpecifier.set(specifier, ctx.devFsUrl(resolvedPath));
+      try {
+        ctx.assetUrlBySpecifier.set(
+          specifier,
+          ctx.devAssetUrl(specifier, resolvedPath)
+        );
+      } catch (err) {
+        ctx.assetFallback(
+          specifier,
+          `[animus-extract] failed to copy asset() specifier ${specifier}: ${String(err)}`,
+          err
+        );
+      }
     }
   }
-  ctx.substituteSheets();
   // From here on, runAnalysis owns late-appearing specifiers (dev resets).
   ctx.assetPassComplete = true;
 
@@ -185,43 +213,18 @@ async function discoverSources(
   hostResolve: (specifier: string) => Promise<string | null>
 ): Promise<DiscoveredSources> {
   const t0 = performance.now();
-  // A declared workspace nothing links into node_modules is no package to
-  // Vite, though the system loader resolves it: where the host finds
-  // nothing, discovery asks the loader, as the session does. Vite resolves
-  // such a package's imports only through a source-entry redirect, so the
-  // collector admits a loader answer only where one exists.
   const workspaces = declaredWorkspacePackages(ctx.rootDir);
-  const loaderOnly = new Set<string>();
-  const resolveSpecifier = async (
-    specifier: string
-  ): Promise<string | null> => {
-    const hosted = await hostResolve(specifier);
-    if (
-      hosted !== null ||
-      !Object.hasOwn(workspaces, bareSpecifierPackageName(specifier))
-    ) {
-      return hosted;
-    }
-    const loaded = ctx
-      .engineApi()
-      .resolveSpecifier?.(
-        specifier,
-        ctx.rootDir,
-        ctx.resolveConditions,
-        workspaces,
-        extensionPolicyJson(ctx.extensionPolicy)
-      );
-    if (loaded?.path) loaderOnly.add(specifier);
-    return loaded?.path ?? null;
-  };
-  // Refresh in case `options` was mutated between server lifecycles.
-  ctx.excludeMatcher = createExcludeMatcher(ctx.options.exclude);
-  const excludePatterns = ctx.excludeMatcher;
-  ctx.extensionsSet = new Set(ctx.options.extensions ?? DEFAULT_EXTENSIONS);
+  const packages = hostFirstPackageResolver(hostResolve, ctx.engineApi(), {
+    rootDir: ctx.rootDir,
+    conditions: ctx.resolveConditions,
+    workspaces,
+    extensions: ctx.extensionPolicy,
+  });
+  const resolveSpecifier = packages.resolveSpecifier;
   const filePaths = discoverFiles(
     ctx.rootDir,
     ctx.rootDir,
-    excludePatterns,
+    ctx.excludeMatcher,
     ctx.extensionsSet
   );
 
@@ -282,11 +285,15 @@ async function discoverSources(
       extensionPolicyJson(ctx.extensionPolicy)
     ),
     locatePackage: nativePackageLocator(ctx.engineApi(), workspaces),
-    requireSourceEntry: (specifier) => loaderOnly.has(specifier),
+    requireSourceEntry: packages.requireSourceEntry,
     extensions: ctx.extensionPolicy,
     rootDir: ctx.rootDir,
     extensionsSet: ctx.extensionsSet,
     hasEntry: (relPath) => rawEntries.some((entry) => entry.path === relPath),
+    hostOutputDirs:
+      ctx.outputExclude === null
+        ? []
+        : [resolve(ctx.rootDir, ctx.outputExclude)],
     onUnreadable: (relPath, err) => {
       if (!isDeletedSource(err)) {
         ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
@@ -334,8 +341,21 @@ async function discoverSources(
     `Discovered ${rawEntries.length} files (${packageFileCount} from packages) (${Math.round(performance.now() - t0)}ms)`
   );
 
+  // A file whose real path lies in the output directory is output, under
+  // whatever spelling discovery reached it.
+  const inOutput = outputSourceGuard(
+    ctx.rootDir,
+    ctx.outputExclude === null ? [] : [ctx.outputExclude]
+  );
+  const analysisInputs = rawEntries.filter((entry) => {
+    const outputDir = inOutput(resolve(ctx.rootDir, entry.path));
+    if (outputDir === null) return true;
+    ctx.warn(outputSourceMessage(entry.path, outputDir));
+    return false;
+  });
+
   return {
-    rawEntries,
+    rawEntries: analysisInputs,
     // Seed before the parse and analysis gates: a failed non-strict
     // buildStart must leave HMR the full corpus, not one assembled from the
     // first edit.

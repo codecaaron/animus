@@ -25,7 +25,15 @@ export {
   assertSupportedEngine,
   RETIRED_ENGINE_MESSAGE,
 } from './engine-retirement';
+export type { AssetCopy } from './asset-copies';
+export { pruneStaleAssets, writeAssetCopy } from './asset-copies';
 export { contentHash } from './content-hash';
+export {
+  assertRuntimeImportSuppliesTerminals,
+  DEFAULT_RUNTIME_IMPORT,
+} from './runtime-import';
+export type { HostFirstResolver, HostResolve } from './host-package-resolver';
+export { hostFirstPackageResolver } from './host-package-resolver';
 export type {
   AnimusCoreOptions,
   AnimusMode,
@@ -42,10 +50,14 @@ export {
   createExcludeMatcher,
   DEFAULT_EXCLUDE,
   DRIVER_NAMESPACES,
+  outputExclusion,
+  outputSourceGuard,
+  outputSourceMessage,
   REPLACEABLE_DEFAULT_EXCLUDE,
   STRUCTURAL_EXCLUDE,
   resolveMode,
   resolveVerbosity,
+  unmatchedExcludeLines,
 } from './core-options';
 export { compareDiscoveryOrder, discoverFiles } from './discover-files';
 export type {
@@ -164,8 +176,8 @@ export {
 } from './run-analysis';
 export type { StaticCssComponentOverride, StaticCssConfig } from './static-css';
 export { serializeStaticCss } from './static-css';
-export type { SystemConfig } from './system-config';
-export { loadSystemConfig } from './system-config';
+export type { SystemConfig, SystemLoadReads } from './system-config';
+export { loadSystemConfig, systemLoadReads } from './system-config';
 export type { HostExtensionPolicy } from './host-extensions';
 export {
   BUILT_IN_EXTENSION_POLICY,
@@ -181,7 +193,7 @@ export { declaredWorkspacePackages } from './workspace-packages';
 export type { StructuralCheckInput } from './structural-self-check';
 export { runStructuralSelfCheck } from './structural-self-check';
 export { buildSystemPropsModule } from './system-props-module';
-export { readTsconfigAliasPairs } from './tsconfig-paths';
+export { readTsconfigAliasPairs, tsconfigChainPaths } from './tsconfig-paths';
 export type {
   DynamicPropConfigEntry,
   DynamicPropMeta,
