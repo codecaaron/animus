@@ -6299,6 +6299,23 @@ mod tests {
         OwnedAst::parse("test.tsx".into(), source.to_string(), &counter)
     }
 
+    /// Contract (until serialized statics read typed values): a member
+    /// handed on is read through an object that spells a marker with more
+    /// fields, as main read its JSON, so a primitive one leaves the object
+    /// stable.
+    #[test]
+    fn a_member_handed_on_reads_a_marker_objects_fields() {
+        let ast = parse(
+            "const cfg = { inner: { '$animus.lost': 'authored', value: 1 }, padding: 4 };\n\
+             unknown(cfg.inner.value);\n",
+        );
+        let program = ast.program();
+        let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
+        let statics = crate::eval::collect_static_values(program);
+        let facts = style_object_uses(program, &scoping, &statics);
+        assert!(!facts.uses.contains_key("cfg"), "{:?}", facts.uses);
+    }
+
     fn props(entries: &[(&str, &[&str])]) -> FxHashMap<String, FxHashSet<String>> {
         entries
             .iter()
