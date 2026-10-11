@@ -85,6 +85,17 @@ export declare function loadSystemModule(systemPath: string, rootDir: string, ex
  */
 export declare function moduleSpecifiers(fileEntriesJson: string): string
 
+/**
+ * A specifier as the system loader resolves it: the real path of the file
+ * it names, with that of the `package.json` that selected it for a
+ * package, or why it names none.
+ */
+export interface NapiResolvedSpecifier {
+  path?: string
+  manifest?: string
+  unresolved?: string
+}
+
 export interface NapiSystemConfig {
   propConfig: string
   groupRegistry: string
@@ -140,3 +151,12 @@ export interface NapiSystemConfig {
    */
   sourceThemeManifests?: string
 }
+
+/**
+ * Resolves `specifier` from `from_dir` as the system loader resolves its
+ * imports, so a host lane can resolve a file or package the way a system's
+ * evaluation does: a relative or absolute path through the extension
+ * policy; a package through `exports` (its `animus` source condition, then
+ * `conditions`, `import` and `default`), then `module`, then `main`.
+ */
+export declare function resolveSpecifier(specifier: string, fromDir: string, conditions?: Array<string> | undefined | null): NapiResolvedSpecifier

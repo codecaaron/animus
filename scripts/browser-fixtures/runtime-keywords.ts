@@ -5,24 +5,15 @@
  * classes, or a rule order that let a slot outrank a keyword class at a
  * breakpoint, changes a computed colour here.
  */
-import { createRequire } from 'node:module';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import {
   applyUnitFallback,
-  buildAnalyzeProjectArgs,
   buildDynamicPropConfig,
-  createV2EngineApi,
 } from '../../packages/extract/pipeline/index';
 import { createSystem, createTheme } from '../../packages/system/src/index';
 import { resolveClasses } from '../../packages/system/src/runtime/resolveClasses';
+import { analyzeFixture } from './analyze';
 
-import type { V2ExtractEngine } from '../../packages/extract/pipeline/index';
 import type { FixtureCase, Probe } from './cases';
-
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const require = createRequire(import.meta.url);
 
 const RED = 'rgb(255, 0, 0)';
 const GREEN = 'rgb(0, 128, 0)';
@@ -60,7 +51,7 @@ const SOURCE = `import { ds } from './setup';
 export const Box = ds.styles({ color: 'leaf' }).system({ probe: true }).asElement('div');
 export const App = ({ n }) => <Box color={n} />;`;
 
-function analyzeFixture() {
+function analyzeKeywordFixture() {
   const theme = createTheme()
     .addBreakpoints({ sm: 640 })
     .addColors({ ink: INK, leaf: GREEN })
@@ -71,60 +62,19 @@ function analyzeFixture() {
     .build()
     .seal()
     .toConfig();
-  let engine: V2ExtractEngine | null = null;
-  let sentSources: Map<string, string> | null = null;
-  let driftWarned = false;
-  const engineApi = createV2EngineApi({
-    label: 'browser-fixtures',
-    isV2: () => true,
-    loadNativeEngine: () =>
-      require(resolve(ROOT, 'packages', 'extract', 'index-v2.js')),
-    store: {
-      getEngine: () => engine,
-      setEngine: (next) => {
-        engine = next;
-      },
-      getSentSources: () => sentSources,
-      setSentSources: (next) => {
-        sentSources = next;
-      },
-      getDriftWarned: () => driftWarned,
-      setDriftWarned: (value) => {
-        driftWarned = value;
-      },
-    },
-  });
-  const manifestJson: string = engineApi().analyzeProject(
-    ...buildAnalyzeProjectArgs({
-      filesJson: JSON.stringify([
-        { path: 'fixtures/keywords.tsx', source: SOURCE },
-      ]),
-      scalesJson: theme.scalesJson,
-      variableMapJson: theme.variableMapJson,
-      contextualVarsJson: theme.contextualVarsJson || null,
-      propConfigJson: config.propConfig,
-      groupRegistryJson: config.groupRegistry,
-      packageResolutionJson: '{}',
-      devMode: false,
-      emitterConfigJson: null,
-      selectorAliasesJson: null,
-      globalStyleBlocksJson: null,
-      pathAliasesJson: null,
-      keyframesJson: null,
-      staticCssJson: null,
-      conditionAliasesJson: null,
-      externalDirsJson: null,
-      transformSourcesJson: null,
-    })
-  );
   return {
-    manifest: JSON.parse(manifestJson),
+    manifest: analyzeFixture({
+      path: 'fixtures/keywords.tsx',
+      source: SOURCE,
+      theme,
+      config,
+    }),
     variableCss: theme.variableCss,
   };
 }
 
 export function runtimeKeywordCases(): FixtureCase[] {
-  const { manifest, variableCss } = analyzeFixture();
+  const { manifest, variableCss } = analyzeKeywordFixture();
   const box = manifest.components['fixtures/keywords.tsx::Box'];
   const dynamicPropConfig = buildDynamicPropConfig(manifest.dynamic_props);
   const { slotClass, varName } = dynamicPropConfig.color;

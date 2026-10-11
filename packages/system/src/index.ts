@@ -16,7 +16,9 @@ export { createComposedFamily } from './runtime/createComposedFamily';
 export type {
   CreateKeyframesFactory,
   FontFace,
+  FontFaceLocalSrc,
   FontFaceSrc,
+  FontFaceUrlSrc,
   GlobalStyleBlock,
   GlobalStyleMap,
   GlobalStylesFactory,
