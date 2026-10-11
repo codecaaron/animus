@@ -605,6 +605,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::theme::AT_RULE_SELECTOR_NESTING, "error"),
     (crate::theme::AT_RULE_PLACEMENT, "error"),
     (crate::theme::FONT_FACE_DROPPED, "error"),
+    (crate::theme::FONT_FACE_GENERIC_FIRST_WORD, "warn"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -741,9 +742,9 @@ pub fn resolve_import_source<T>(
     probe_files(&base, files)
 }
 
-/// The analyzed file `base` names, through the extractor's extension policy.
+/// The analyzed file `base` names, through the one extension policy.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
-    animus_system_loader::resolution::ANALYSIS_SOURCE.probe(base, |candidate| files.contains_key(candidate))
+    animus_system_loader::resolution::extension_policy().probe(base, |candidate| files.contains_key(candidate))
 }
 
 /// Follow `export { X as Y } from '...'` hops, and local exports of an
@@ -1340,6 +1341,14 @@ fn dropped_style_key(
                  under it is not emitted — write the block under a selector of its own"
             );
             return diagnostic(file, component, "warn", message, Some(crate::theme::AT_RULE_SELECTOR_NESTING));
+        }
+        DroppedStyleKey::FontFaceGenericFirstWord { face, family } => {
+            let message = format!(
+                "the font face {face} prints its family as {family}, which starts with a generic family: Lightning \
+                 CSS, when it finalizes the stylesheet, writes it unquoted, and browsers then read the generic and \
+                 drop the face — rename the family so its first word is not a generic family"
+            );
+            return diagnostic(file, component, "warn", message, Some(crate::theme::FONT_FACE_GENERIC_FIRST_WORD));
         }
         DroppedStyleKey::FontFace { face, part, reason } => {
             let dropped = match part {
@@ -2630,6 +2639,11 @@ fn resolve_identity(
             return import_identity(&module, last, files, links, evaluated_ids, &by_bare_name);
         }
         let root = path_head.split('.').next().unwrap_or(path_head);
+        // A namespace the module table rejects names no member: none is
+        // picked by its spelling.
+        if files.get(file).is_some_and(|ff| namespace_root_rejected(file, ff, root, files, inputs, links)) {
+            return Vec::new();
+        }
         // An imported root (named or namespace) names its module, and one the
         // analysis cannot resolve names nothing here.
         let root_file = match files.get(file).map(|ff| {
@@ -2660,6 +2674,37 @@ fn resolve_identity(
         return by_bare_name(&imp.imported);
     }
     by_bare_name(local)
+}
+
+/// Whether the root `root` of a dotted path in `file` names a namespace the
+/// module table rejects: a namespace import of an analysed module, or a
+/// named import whose export is absent, ambiguous, open, or a namespace.
+/// The path reaches here only when a segment did not resolve. An import of
+/// an object, or of a module outside the analysis, is no such rejection.
+fn namespace_root_rejected(
+    file: &str,
+    ff: &FileFacts,
+    root: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> bool {
+    let analysed = |source: &str| {
+        resolve_import_source(file, source, files, inputs).filter(|module| links.module(module).is_some())
+    };
+    if let Some(source) = ff.namespace_imports.get(root) {
+        return analysed(source).is_some();
+    }
+    let Some(import) = ff.imports.iter().find(|import| import.local == root) else { return false };
+    let Some(module) = analysed(&import.source) else { return false };
+    match links.resolve_export(&module, &import.imported) {
+        Some(ExportLookup::Resolved(Terminal::Namespace(_))) => true,
+        Some(ExportLookup::Resolved(Terminal::Local { .. })) => {
+            crate::family_members::namespace_export(module, import.imported.clone(), files, inputs, links).is_some()
+        }
+        Some(ExportLookup::Resolved(Terminal::External { .. })) | None => false,
+        Some(ExportLookup::Absent | ExportLookup::Ambiguous(_) | ExportLookup::Incomplete { .. }) => true,
+    }
 }
 
 /// The components `module`'s export `name` may be, as the module table
@@ -3039,7 +3084,7 @@ fn exported_component_ids(
         }
         for name in crate::family_members::module_export_names(&module, files, inputs, links) {
             let namespace =
-                crate::family_members::namespace_export(module.clone(), name.clone(), links);
+                crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs, links);
             match namespace {
                 Some(namespace) => modules.push(namespace),
                 None => ids.extend(export_ids(&module, name, true, files, inputs, links, evaluated_ids)),
@@ -3123,7 +3168,7 @@ fn declared_binding(
 
 /// A resolved binding's file and name; for `export default X`'s cell, X,
 /// as the facts name it.
-fn binding_name(
+pub(crate) fn binding_name(
     links: &crate::link::ProjectLinks,
     files: &BTreeMap<String, FileFacts>,
     module: usize,
@@ -3174,7 +3219,7 @@ pub(crate) fn namespace_path_module(
     let mut module = crate::family_members::local_namespace(file, ff, local, files, inputs, links)?;
     for segment in segments {
         let segment = segment.to_string();
-        module = crate::family_members::namespace_export(module, segment, links)?;
+        module = crate::family_members::namespace_export(module, segment, files, inputs, links)?;
     }
     Some(module)
 }
@@ -3517,7 +3562,7 @@ fn lost_through_export<'f>(
     links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, LostThrough<'f>)> {
     let (file, declaration) = declared_binding(links, files, module, name)?;
-    let lost = LostThrough::of(&file, &declaration, files)?;
+    let lost = LostThrough::of_binding(&file, &declaration, files)?;
     Some((file, declaration, lost))
 }
 
@@ -4517,10 +4562,17 @@ impl<'f> LostThrough<'f> {
             .find(|e| e.exported == name && e.source.is_none())
             .and_then(|e| e.local.as_deref())
             .unwrap_or(name);
-        if let Some(target) = ff.aliases.get(local).or_else(|| ff.assigned_aliases.get(local)) {
+        Self::of_binding(file, local, files)
+    }
+
+    /// How the declaration bound to `binding` in `file` loses props, read
+    /// from that binding itself.
+    fn of_binding(file: &str, binding: &str, files: &'f BTreeMap<String, FileFacts>) -> Option<Self> {
+        let ff = files.get(file)?;
+        if let Some(target) = ff.aliases.get(binding).or_else(|| ff.assigned_aliases.get(binding)) {
             return Some(Self::Alias(target));
         }
-        let forwarding = ff.props_forwarding.get(local)?;
+        let forwarding = ff.props_forwarding.get(binding)?;
         Some(Self::Spread(&forwarding.routes))
     }
 
@@ -9391,6 +9443,9 @@ mod tests {
     #[test]
     fn typed_font_faces_print_their_sources_and_descriptors_and_report_what_they_leave_out() {
         let mut inputs = test_inputs();
+        inputs.theme.insert("fonts.brand".into(), "Inter".into());
+        inputs.theme.insert("fonts.body".into(), "Inter, system-ui, sans-serif".into());
+        inputs.theme.insert("fonts.mode".into(), "var(--mode-font)".into());
         inputs.global_style_blocks = Some(serde_json::json!({
             "fonts": {
                 "styles": {},
@@ -9412,23 +9467,52 @@ mod tests {
                             { "url": "./it's.woff" },
                             { "url": "./line\rbreak.woff" },
                             { "local": "Arial", "url": "./both.woff" },
-                            { "url": "./tech.woff", "tech": "variations;}" }
+                            { "url": "./tech.woff", "tech": "variations;}" },
+                            { "local": "sans-serif" }
                         ],
                         "weight": 400
                     },
                     { "src": [{ "local": "Arial" }] },
-                    { "family": "Empty", "src": [{ "format": "woff2" }] }
+                    { "family": "Empty", "src": [{ "format": "woff2" }] },
+                    // A face's family is one name, printed by the `local()` rule.
+                    { "family": "My Font 2", "src": [{ "local": "X" }] },
+                    { "family": "Helvetica Neue", "src": [{ "local": "X" }] },
+                    { "family": "serif", "src": [{ "local": "X" }] },
+                    { "family": "\"Quoted Name\"", "src": [{ "local": "X" }] },
+                    { "family": "{fonts.brand}", "src": [{ "local": "X" }] },
+                    { "family": "{fonts.body}", "src": [{ "local": "X" }] },
+                    { "family": "{fonts.mode}", "src": [{ "local": "X" }] },
+                    // A name's whitespace collapses and its escapes decode; a
+                    // generic first word stays quoted, and warns.
+                    { "family": "Helvetica  Neue", "src": [{ "local": "Y" }] },
+                    { "family": "Mon\\61  Sans", "src": [{ "local": "Y" }] },
+                    { "family": "serif Pro", "src": [{ "local": "Y" }] }
                 ]
             }
         }));
         let out = analyze(&[("a.tsx", "export const x = 1;\n")], &inputs);
         for face in [
             "@font-face { font-family: MonaFallback; src: local(Arial); size-adjust: 104%; ascent-override: 90%; font-feature-settings: \"ss01\"; }",
-            "@font-face { font-family: Mona; src: local(Mona Sans), local('Font Awesome 6'), local('inherit'), url('animus-asset:./mona.woff2') format('woff2') tech(variations), url('./it\\'s.woff'), url('./line\\d break.woff'); }",
+            "@font-face { font-family: Mona; src: local(Mona Sans), local('Font Awesome 6'), local('inherit'), url('animus-asset:./mona.woff2') format('woff2') tech(variations), url('./it\\'s.woff'), url('./line\\d break.woff'), local('sans-serif'); }",
+            "@font-face { font-family: 'My Font 2'; src: local(X); }",
+            "@font-face { font-family: Helvetica Neue; src: local(X); }",
+            "@font-face { font-family: 'serif'; src: local(X); }",
+            "@font-face { font-family: \"Quoted Name\"; src: local(X); }",
+            "@font-face { font-family: Inter; src: local(X); }",
+            "@font-face { font-family: Helvetica Neue; src: local(Y); }",
+            "@font-face { font-family: Mona Sans; src: local(Y); }",
+            "@font-face { font-family: 'serif Pro'; src: local(Y); }",
         ] {
             assert!(out.sheets.global.contains(face), "{face}\nmissing from:\n{}", out.sheets.global);
         }
-        assert_eq!(out.sheets.global.matches("@font-face").count(), 2, "{}", out.sheets.global);
+        assert_eq!(out.sheets.global.matches("@font-face").count(), 10, "{}", out.sheets.global);
+        let unquoted: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some("animus.style.font-face-generic-first-word"))
+            .map(|d| (d.component.as_str(), d.severity.as_deref()))
+            .collect();
+        assert_eq!(unquoted, [("global 'fonts'", Some("warn"))], "{:#?}", out.diagnostics);
         let dropped: Vec<_> = out
             .diagnostics
             .iter()
@@ -9444,6 +9528,8 @@ mod tests {
                 ("global 'fonts'", "the font face #3", Some("error")),
                 ("global 'fonts'", "source 1 of the font face 'Empty'", Some("error")),
                 ("global 'fonts'", "the font face 'Empty'", Some("error")),
+                ("global 'fonts'", "the font face '{fonts.body}'", Some("error")),
+                ("global 'fonts'", "the font face '{fonts.mode}'", Some("error")),
             ],
             "{:#?}",
             out.diagnostics
@@ -11302,6 +11388,61 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     #[test]
+    fn a_default_exported_namespace_keeps_its_members() {
+        // `import * as ns …; export default ns`: the default import is the
+        // namespace, and its member's system props extract.
+        let recipe = "export const R = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let out = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("index.ts", "import * as ns from './recipe';\nexport default ns;\n"),
+            ("app.tsx", "import ui from './index';\nexport const App = () => <ui.R marginInlineStart={8} />;\n"),
+        ]);
+        assert!(out.css.contains("margin-inline-start: 0.5rem;"), "{}", out.css);
+        assert!(
+            !out.diagnostics.iter().any(|d| d.code.as_deref().is_some_and(|code| code.starts_with("animus.usage.identity-uncertain"))),
+            "{:?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn a_rejected_namespace_names_no_member_by_its_spelling() {
+        // A namespace import the module table finds ambiguous, open or absent
+        // names nothing, even beside a same-spelled component of that module.
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let root = "const Root = ds.styles({ display: 'flex' }).asElement('div');\nexport const Use = () => <Root />;\n";
+        let files: BTreeMap<String, FileFacts> = [
+            ("x.ts", "export const Root = ds.styles({ display: 'grid' }).asElement('div');".to_string()),
+            ("y.ts", "export const Root = ds.styles({ display: 'block' }).asElement('div');".to_string()),
+            ("a.ts", "export * as ns from './x';".to_string()),
+            ("b.ts", "export * as ns from './y';".to_string()),
+            ("both.ts", format!("export * from './a';\nexport * from './b';\n{root}")),
+            ("open.ts", format!("export * from './a';\nexport * from './missing';\n{root}")),
+            ("none.ts", format!("export const other = 1;\n{root}")),
+            (
+                "app.ts",
+                "import { ns as amb } from './both';\nimport { ns as opn } from './open';\nimport { ns as abs } from './none';".to_string(),
+            ),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let ast = crate::owned_ast::OwnedAst::parse(path.to_string(), source, &counter);
+            (path.to_string(), crate::facts::extract_file_facts(&ast))
+        })
+        .collect();
+        let inputs = test_inputs();
+        let links = crate::link::ProjectLinks::link(&files, &inputs);
+        let evaluated: FxHashSet<String> =
+            ["x.ts::Root", "y.ts::Root", "both.ts::Root", "open.ts::Root", "none.ts::Root"].into_iter().map(String::from).collect();
+        let by_binding: IdsByBinding =
+            [("Root".to_string(), evaluated.iter().cloned().collect::<Vec<_>>())].into_iter().collect();
+        for tag in ["amb.Root", "opn.Root", "abs.Root"] {
+            let ids = resolve_identity("app.ts", tag, &files, &inputs, &links, &evaluated, Some(&by_binding));
+            assert!(ids.is_empty(), "{tag}: {ids:?}");
+        }
+    }
+
+    #[test]
     fn an_exported_namespace_is_one_only_where_the_module_table_resolves_it() {
         // Two stars bringing in different namespaces, or one beside an
         // unresolved path, name no namespace.
@@ -11324,7 +11465,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         .collect();
         let inputs = test_inputs();
         let links = crate::link::ProjectLinks::link(&files, &inputs);
-        let namespace = |module: &str| crate::family_members::namespace_export(module.to_string(), "ns".to_string(), &links);
+        let namespace = |module: &str| {
+            crate::family_members::namespace_export(module.to_string(), "ns".to_string(), &files, &inputs, &links)
+        };
         assert_eq!(namespace("both.ts"), None);
         assert_eq!(namespace("open.ts"), None);
         assert_eq!(namespace("one.ts"), Some("x.ts".to_string()));
@@ -12870,8 +13013,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     /// A wrapper that loses a prop is the binding the module table resolves
-    /// the import to: one exported under another name is found, and an
-    /// import two stars make ambiguous names no wrapper.
+    /// the import to: one exported under another name is found, an import
+    /// two stars make ambiguous names no wrapper, and the resolved binding
+    /// is never swapped for another that an export spells like it.
     #[test]
     fn a_wrapper_that_loses_props_is_found_as_the_module_table_resolves_it() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
@@ -12900,6 +13044,20 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("app.tsx", app),
         ]);
         assert!(unattributed(&ambiguous).is_empty(), "{:?}", ambiguous.diagnostics);
+        // The resolved binding is the wrapper itself, never the binding an
+        // export of the same spelling names.
+        let crossed = "import { Box } from './recipe';\n\
+                       const Inner = (props) => { const { children, ...rest } = props; return <Box {...rest} />; };\n\
+                       const Other = () => null;\n\
+                       export { Inner as Top, Other as Inner };\n";
+        let crossed = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("one.tsx", crossed),
+            ("index.ts", "export * from './one';\n"),
+            ("app.tsx", app),
+        ]);
+        let warned: Vec<_> = unattributed(&crossed).iter().map(|d| d.dropped.as_deref()).collect();
+        assert_eq!(warned, [Some("marginInlineStart")], "{:?}", crossed.diagnostics);
     }
 
     /// Each wrapper shape the attribution does not follow warns once, at the
