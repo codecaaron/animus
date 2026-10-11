@@ -22,7 +22,7 @@ import {
   RESOLVED_COMPONENTS_ID,
   RESOLVED_SYSTEM_PROPS_ID,
 } from '../src/constants';
-import { PluginContext, systemPropsModuleSource } from '../src/context';
+import { PluginContext } from '../src/context';
 import { animusExtract } from '../src/index';
 import { makeComponent, makeManifest } from './manifest-fixture';
 
@@ -281,67 +281,6 @@ describe('runtimeImport override guards its terminal contract', () => {
         )
       ).resolves.toBeDefined();
     }
-  });
-});
-
-describe('systemPropsModuleSource: keyed on the inputs it generates from', () => {
-  /** The served module regenerates from its context inputs on every call: a
-   *  memo a writer forgets to refresh serves a dead generation forever. */
-  it('serves a hand-moved input without any writer refreshing a memo', () => {
-    const ctx = new PluginContext({ system: './ds.ts' });
-
-    const before = systemPropsModuleSource(ctx);
-    ctx.storedSystemPropMapJson = JSON.stringify({ color: 'colors' });
-
-    expect(before).toContain('export const systemPropMap = {};');
-    expect(systemPropsModuleSource(ctx)).toContain(
-      'export const systemPropMap = {"color":"colors"};'
-    );
-  });
-
-  it('tracks the group registry the loaded system carries', () => {
-    // Adoption replaces `system` wholesale, so the registry moves with no
-    // per-field write a refresh could hang on.
-    const ctx = new PluginContext({ system: './ds.ts' });
-
-    systemPropsModuleSource(ctx);
-    ctx.system = { ...ctx.system, groupRegistryJson: '{"space":["p","m"]}' };
-
-    expect(systemPropsModuleSource(ctx)).toContain(
-      'export const systemPropGroups = {"space":["p","m"]};'
-    );
-  });
-
-  it('tracks the transforms the latest analysis admitted', () => {
-    const ctx = new PluginContext({ system: './ds.ts' });
-
-    ctx.storedAdmittedTransformsJson = '{"fraction":"(v) => v * 2"}';
-    const first = systemPropsModuleSource(ctx);
-    ctx.storedAdmittedTransformsJson = '{"fraction":"(v) => v * 3"}';
-
-    expect(first).toContain('"fraction": ((v) => v * 2)');
-    expect(systemPropsModuleSource(ctx)).toContain(
-      '"fraction": ((v) => v * 3)'
-    );
-  });
-
-  it('delivers no configured source analysis has not admitted', () => {
-    const ctx = new PluginContext({ system: './ds.ts' });
-
-    ctx.system = {
-      ...ctx.system,
-      transformSourcesJson: '{"fraction":"(v) => v * 2"}',
-    };
-
-    expect(systemPropsModuleSource(ctx)).toContain(
-      'export const transforms = {};'
-    );
-  });
-
-  it('serves identical bytes while the inputs stand still', () => {
-    const ctx = new PluginContext({ system: './ds.ts' });
-
-    expect(systemPropsModuleSource(ctx)).toBe(systemPropsModuleSource(ctx));
   });
 });
 

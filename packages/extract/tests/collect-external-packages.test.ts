@@ -29,7 +29,10 @@ import {
   INVALID_KIT_SOURCE_CONDITION,
   KIT_SYSTEM_NOT_INCLUDED,
   KIT_WITHOUT_SOURCE_CONDITION,
+  PACKAGE_MISMATCH,
+  SYSTEM_INSTANCE_MISMATCH,
 } from '../pipeline/manifest-diagnostics';
+import { systemInstanceMismatches } from '../pipeline/system-instances';
 
 import type { JsonValue } from '../pipeline/tsconfig-paths';
 
@@ -1294,10 +1297,11 @@ test.each([
   expect({
     declared: sourceKitDependencies(root, engine).map((kit) => kit.name),
     imported: importedKitDiagnostics(
-      [{ path: 'src/App.tsx', source: '' }],
+      [{ path: 'src/App.tsx', source: '', hash: '' }],
       engine,
       root,
-      []
+      [],
+      () => JSON.parse(engine.extractFacts())
     ).map((d) => [d.component, d.code]),
   }).toEqual({
     declared: [name],
@@ -1555,3 +1559,112 @@ test.each([
     });
   }
 );
+
+describe('a host-resolved package', () => {
+  /** Contract: extraction reads the package the host resolves (spec §2.2
+   *  A4), where a host alias resolves one package to another. An answer
+   *  in no package of its own is read from the installed package, and is
+   *  reported unless it lies under node_modules (a dependency cache). */
+  test('extraction reads the package the host resolves', async () => {
+    // Real, as the locator answers: macOS links /var.
+    const root = realpathSync(makeRoot());
+    writeFileSync(join(root, 'package.json'), '{"name":"app"}');
+    const kit = (name: string, component: string): string => {
+      const base = join(root, 'node_modules', name);
+      makePackage(base, {
+        [`src/${component}.tsx`]: `export const ${component} = 1;`,
+        'src/index.ts': `export * from './${component}';`,
+        'dist/index.mjs': `export const ${component} = 2;`,
+      });
+      writeFileSync(
+        join(base, 'package.json'),
+        JSON.stringify({
+          name,
+          exports: {
+            '.': { animus: './src/index.ts', import: './dist/index.mjs' },
+          },
+        })
+      );
+      return base;
+    };
+    kit('kit', 'Installed');
+    const aliased = kit('alt-kit', 'Aliased');
+    const read = async (hostEntry: string) => {
+      const result = await collect(root, { kit: hostEntry });
+      return {
+        files: result.entries.map((entry) => entry.path).sort(),
+        redirects: Object.fromEntries(result.sourceEntries),
+        mismatches: result.diagnostics.filter(
+          (diagnostic) => diagnostic.code === PACKAGE_MISMATCH
+        ),
+      };
+    };
+
+    const alias = await read(join(aliased, 'dist', 'index.mjs'));
+    expect(alias.files).toEqual([
+      'node_modules/alt-kit/src/Aliased.tsx',
+      'node_modules/alt-kit/src/index.ts',
+    ]);
+    // The host hands its plugins the aliased name.
+    expect(alias.redirects).toEqual({
+      kit: join(aliased, 'src', 'index.ts'),
+      'alt-kit': join(aliased, 'src', 'index.ts'),
+    });
+    expect(alias.mismatches).toEqual([]);
+
+    const installedFiles = [
+      'node_modules/kit/src/Installed.tsx',
+      'node_modules/kit/src/index.ts',
+    ];
+    const cache = join(root, 'node_modules', '.vite', 'deps', 'kit.js');
+    mkdirSync(join(cache, '..'), { recursive: true });
+    writeFileSync(cache, 'export const Installed = 3;');
+    const cached = await read(cache);
+    expect(cached.files).toEqual(installedFiles);
+    expect(cached.mismatches).toEqual([]);
+
+    const local = join(root, 'src', 'local-kit.ts');
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(local, 'export const Local = 4;');
+    const elsewhere = await read(local);
+    expect(elsewhere.files).toEqual(installedFiles);
+    expect(elsewhere.mismatches.map((d) => d.message)).toEqual([
+      expect.stringContaining(`resolves 'kit' to src/local-kit.ts`),
+    ]);
+  });
+});
+
+describe('a kit the system evaluates', () => {
+  /** Contract: the system and the analysis read one instance of each kit
+   *  (spec §2.2 A4). A system-file kit whose analysed instance is not the
+   *  one the system load evaluated fails, naming both. */
+  test('is the instance extraction analyses', () => {
+    const root = realpathSync(makeRoot());
+    const installed = join(root, 'node_modules', 'kit');
+    const aliased = join(root, 'node_modules', 'alt-kit');
+    for (const dir of [installed, aliased]) {
+      makePackage(dir, { 'src/definition.ts': 'export const system = 1;' });
+    }
+    const evaluatedFile = join(installed, 'src', 'definition.ts');
+    const check = (analysedDir: string, evaluated = [evaluatedFile]) =>
+      systemInstanceMismatches({
+        rootDir: root,
+        specifiers: ['kit/definition'],
+        instances: { kit: analysedDir },
+        evaluated,
+        loaderResolve: () => evaluatedFile,
+      }).map(({ code, message }) => [code, message]);
+
+    expect(check(installed)).toEqual([]);
+    expect(check(aliased)).toEqual([
+      [
+        SYSTEM_INSTANCE_MISMATCH,
+        expect.stringContaining(
+          "evaluates 'kit/definition' from node_modules/kit, but the host bundler resolves it to node_modules/alt-kit"
+        ),
+      ],
+    ]);
+    // A file the load never read is no evaluated instance.
+    expect(check(aliased, [])).toEqual([]);
+  });
+});

@@ -2,6 +2,7 @@
  * SA1: a transform failure never serves builder source. Each host family
  * surfaces it as the host's own error, in development and in a build.
  */
+import { servedFiles } from '@animus-ui/extract/pipeline';
 import { join } from 'path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
@@ -131,8 +132,121 @@ describe('a transform failure never serves builder source', () => {
         rootDir: '/app',
         manifestJson: '{}',
         transformFile: (source) => ({ code: source, hasComponents: false }),
-        listsComponents: (path) => path === 'src/Button.tsx',
+        served: { listed: new Set(['src/Button.tsx']), dropped: new Map() },
       })
     ).toThrow(/src\/Button\.tsx/);
+  });
+});
+
+/** An extension the analysis dropped over a parent it could not resolve,
+ *  as the manifest records it (spec §12.2 row 11). */
+const DROP = {
+  file: 'src/Fancy.tsx',
+  component: 'Fancy',
+  parent: 'Parent',
+  specifier: './Parent',
+  base: 'src/Parent',
+  outcome: 'absent',
+} as const;
+const DROPPED_MESSAGE =
+  "cannot serve src/Fancy.tsx: 'Fancy' extends 'Parent' from './Parent'";
+
+describe('a dropped extension is never served raw', () => {
+  // Contract (SA1, spec §12.2 row 11): every host fails the transform of a
+  // file whose extension the analysis dropped over its parent, naming the
+  // component, parent and specifier, in development and in a build.
+  // Mixed: another component of the same file extracted.
+  for (const mixed of [false, true]) {
+    const label = mixed ? ', beside an extracted component' : '';
+    test(`unplugin${label}`, () => {
+      expect(() =>
+        transformWithEngine(BUILDER_SOURCE, '/app/src/Fancy.tsx', {
+          rootDir: '/app',
+          manifestJson: '{}',
+          transformFile: (source) => ({ code: source, hasComponents: mixed }),
+          served: {
+            listed: new Set(mixed ? [DROP.file] : []),
+            dropped: new Map([[DROP.file, DROP]]),
+          },
+        })
+      ).toThrow(DROPPED_MESSAGE);
+    });
+
+    for (const development of [true, false]) {
+      test(`webpack loader, ${development ? 'development' : 'build'}${label}`, () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        expect(() =>
+          transformWithManifest({
+            source: BUILDER_SOURCE,
+            filename: DROP.file,
+            manifestJson: JSON.stringify(
+              makeManifest({
+                files: mixed ? { [DROP.file]: [`${DROP.file}::Good`] } : {},
+                missing_inputs: [{ ...DROP }],
+              })
+            ),
+            engineApi: () => ({
+              transformFile: (source: string) => ({
+                code: source,
+                hasComponents: mixed,
+              }),
+            }),
+            opts: { development },
+          })
+        ).toThrow(DROPPED_MESSAGE);
+      });
+    }
+  }
+});
+
+describe('an extension refused with its parent is delivered', () => {
+  // Contract (SA1 by cause, PF1): a parent that resolves but is
+  // unextractable is a refusal the analysis completed, so its extension is
+  // delivered with the chain in place and its finding reported, never
+  // failed, in every host.
+  const REFUSED = { ...DROP, outcome: 'failed-parent' } as const;
+
+  test('unplugin', () => {
+    expect(
+      transformWithEngine(BUILDER_SOURCE, '/app/src/Fancy.tsx', {
+        rootDir: '/app',
+        manifestJson: '{}',
+        transformFile: (source) => ({ code: source, hasComponents: false }),
+        served: servedFiles(makeManifest({ missing_inputs: [REFUSED] })),
+      })
+    ).toBeNull();
+  });
+
+  for (const development of [true, false]) {
+    test(`webpack loader, ${development ? 'development' : 'build'}`, () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      expect(
+        transformWithManifest({
+          source: BUILDER_SOURCE,
+          filename: REFUSED.file,
+          manifestJson: JSON.stringify(
+            makeManifest({ missing_inputs: [REFUSED] })
+          ),
+          engineApi: () => ({
+            transformFile: (source: string) => ({
+              code: source,
+              hasComponents: false,
+            }),
+          }),
+          opts: { development },
+        })
+      ).toContain('Button');
+    });
+  }
+
+  test('Vite', async () => {
+    const probe = makeContextProbe('/proj', {
+      isProd: true,
+      storedManifest: makeManifest({ missing_inputs: [REFUSED] }),
+      storedManifestJson: '{}',
+    });
+    await expect(
+      transformSource(probe.ctx, BUILDER_SOURCE, join('/proj', REFUSED.file))
+    ).resolves.toBeNull();
   });
 });
