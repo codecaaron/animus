@@ -780,6 +780,18 @@ impl ExtractEngine {
     #[napi]
     pub fn analyze(&mut self, file_entries_json: String, probe_evidence_json: Option<String>) -> napi::Result<String> {
         let entries = canonical_entries(&file_entries_json)?;
+        if let Ok(mut incomplete) = self.opts.css_inputs.incomplete_probes.lock() {
+            incomplete.clear();
+            // Ingestion's openings are this analysis's own.
+            for opening in &self.opts.css_inputs.analysis_context.openings {
+                incomplete.insert((
+                    opening.importer.clone(),
+                    opening.specifier.clone(),
+                    opening.candidate.clone(),
+                    opening.opened.clone(),
+                ));
+            }
+        }
         // Evidence gathered for other files (a same-count edit since the
         // `prepare`) is not this input's, so the probes ask the file set.
         let identity = input_identity(&entries, &self.opts.css_inputs);
