@@ -282,6 +282,8 @@ export class PluginContext {
   systemDependencyKeys: Set<string> = new Set();
 
   systemDependencyPaths: string[] = [];
+  /** Paths the system load looked for and found absent. */
+  systemMissingPaths: string[] = [];
 
   // Per-plugin-instance engine state: two differently-configured plugins in
   // one process must not share an engine.
@@ -468,11 +470,13 @@ export class PluginContext {
     for (const path of [
       this.resolvedSystemPath,
       ...session.systemDependencyPaths,
+      ...session.systemMissingPaths,
     ]) {
       for (const key of toWatchKeys(path)) keys.add(key);
     }
     this.systemDependencyKeys = keys;
     this.systemDependencyPaths = session.systemDependencyPaths;
+    this.systemMissingPaths = session.systemMissingPaths;
     this.storedManifest = manifest;
     this.storedManifestJson = publication.manifestJson;
     this.storedSheets = manifest.sheets;
@@ -713,6 +717,10 @@ export class PluginContext {
     if (!watcher) return;
     if (this.systemDependencyPaths.length > 0) {
       watcher.add(this.systemDependencyPaths);
+    }
+    // Absent now: creating one reloads the system.
+    if (this.systemMissingPaths.length > 0) {
+      watcher.add(this.systemMissingPaths);
     }
     if (this.externalPackageDirs.length > 0) {
       watcher.add(this.externalPackageDirs);
