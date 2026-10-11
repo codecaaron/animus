@@ -22,8 +22,11 @@ export type ListedArgs =
       /** The specifier's static text between its substitutions: one more
        *  than the substitutions. */
       quasis: string[];
-      /** Whether the specifier is a template literal. */
+      /** Whether the specifier is a template literal; otherwise a string
+       *  concatenation. */
       template: boolean;
+      /** `import()`'s options object as written (its attributes). */
+      options: { [key: string]: StaticValue } | null;
       /** The comments inside the call, delimiters included. */
       comments: string[];
     }
@@ -65,11 +68,21 @@ export interface ExpandedPath {
   query: string;
 }
 
-/** How a host's bundler expands computed loads (spec §6.3). */
+/**
+ * How a host's bundler expands computed loads (spec §6.3).
+ *
+ * A load is named by its importer, rootDir-relative exactly as the
+ * analysis keys it, and `start`, the UTF-8 byte offset of the call in the
+ * source `prepare` read. A host that locates loads with a JavaScript
+ * parser's ranges, which count UTF-16 code units, converts them first (a
+ * BOM and `// π 😀` put a call at byte 36, UTF-16 index 31).
+ */
 export interface HostLoadExpander {
-  /** Every file the bundler expands `load` to, exactly as it would.
-   *  Undefined where the host's semantics are not reproduced exactly, so
-   *  the load keeps its widest reading: when in doubt, no expansion. */
+  /** Every file the bundler expands `load` to, exactly as it would, each
+   *  rootDir-relative exactly as the analysis keys it, with the query the
+   *  host loads it with. Undefined where the host's semantics are not
+   *  reproduced exactly, so the load keeps its widest reading: when in
+   *  doubt, no expansion. */
   expand(
     load: ListedLoad,
     rootDir: string
@@ -90,8 +103,11 @@ export interface HostExpansion {
 /**
  * The host's expansion of each listed load the expander reproduces, with
  * each file read as the analysis and the host read it: a module the
- * analysis holds, loaded as code; a file the host loads as an opaque value
- * (spec §2.2 A8); otherwise a file the analysis does not read.
+ * analysis holds, loaded as code without a query; a file the host loads as
+ * an opaque value (spec §2.2 A8); otherwise a file the analysis does not
+ * read. A query can select other code than the module (a plugin's
+ * transform), so a queried file that is not opaque is never the analysed
+ * module, and it keeps its query.
  */
 export function hostExpansions(
   loads: readonly ListedLoad[],
@@ -107,14 +123,14 @@ export function hostExpansions(
     const files = new Map<string, HostExpansion['files'][number]>();
     for (const { path, query } of expanded) {
       const opaque = isAsset?.(join(rootDir, path), query) ?? false;
-      // `?raw` or `?url` loads an analysed module as a string.
       const status =
-        analysed.has(path) && !(query !== '' && opaque)
+        query === '' && analysed.has(path)
           ? 'analysed'
           : opaque
             ? 'opaque'
             : 'unanalysed';
-      files.set(`${path}${query}`, { path, status });
+      const key = `${path}${query}`;
+      files.set(key, { path: status === 'analysed' ? path : key, status });
     }
     expansions.push({
       importer: load.importer,

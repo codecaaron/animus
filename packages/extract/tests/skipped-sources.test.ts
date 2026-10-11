@@ -205,7 +205,12 @@ describe('a host expansion of a computed load', () => {
       {
         importer: 'src/load.ts',
         kind: 'import',
-        args: { quasis: ['./pages/', '.ts'], template: true, comments: [] },
+        args: {
+          quasis: ['./pages/', '.ts'],
+          template: true,
+          options: null,
+          comments: [],
+        },
       },
     ]);
     const uncertain = (warned: string) =>
