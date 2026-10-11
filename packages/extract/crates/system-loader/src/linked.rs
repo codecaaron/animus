@@ -409,6 +409,9 @@ impl Linker<'_> {
                 getters.push((name, read));
             }
         }
+        // A module namespace lists its names in code-unit order, as Node
+        // lists them.
+        getters.sort_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));
         getters
     }
 

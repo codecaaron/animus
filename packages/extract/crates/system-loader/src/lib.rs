@@ -2570,7 +2570,7 @@ export const ds = tokens;
         /// A case's name, its modules, and the loaded propConfig or a part
         /// of the load's error.
         type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], Result<&'a str, &'a str>);
-        let cases: [Case; 10] = [
+        let cases: [Case; 11] = [
             (
                 "hoisted-live",
                 &[
@@ -2632,6 +2632,15 @@ export const ds = tokens;
                     ("entry", "import { value, bump } from './a.js';\nbump();\nconst data = { value };\n"),
                 ],
                 Ok(r#"{"value":8}"#),
+            ),
+            (
+                "namespace-key-order",
+                &[
+                    ("entry", "import * as ns from './a.js';\nconst data = { keys: Object.keys(ns) };\n"),
+                    ("a", "export const z = 1;\nexport { y } from './c.js';\nexport * as w from './c.js';\nexport const a = 2;\n"),
+                    ("c", "import './entry.js';\nexport const y = 3;\n"),
+                ],
+                Ok(r#"{"keys":["a","w","y","z"]}"#),
             ),
             (
                 "missing-import",
