@@ -48,6 +48,9 @@ export interface EngineApi {
     workspaces?: WorkspacePackages,
     extensionPolicyJson?: string
   ) => { path?: string | null; unresolved?: string | null };
+  /** A fast fingerprint of the bytes at `path`, for telling whether a file
+   *  changed between watch passes; null where it cannot be read. */
+  fingerprintFile?: (path: string) => string | null;
   /** Whether the package at `packageDir` declares the kit source condition:
    *  an `animus` key anywhere in its `exports`, read from the manifest. */
   declaresKitSource?: (packageDir: string) => boolean;
@@ -205,6 +208,10 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
                 workspaces,
                 extensionPolicyJson
               ),
+      fingerprintFile:
+        native.fingerprintFile === undefined
+          ? undefined
+          : (path) => native.fingerprintFile(path) ?? null,
       declaresKitSource:
         native.declaresKitSource === undefined
           ? undefined

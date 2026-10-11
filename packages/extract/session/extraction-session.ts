@@ -372,8 +372,8 @@ export class ExtractionSession {
     string,
     {
       sourcePath: string;
-      /** The content hash the copy was made from. */
-      digest: string;
+      /** The fingerprint of the bytes the copy was made from. */
+      fingerprint: string;
       fileName: string;
       url: string;
     }
@@ -2807,6 +2807,15 @@ export class ExtractionSession {
     this.onArtifactWrite?.(name, content);
   }
 
+  /** The fingerprint of an asset's bytes: the engine's fast one, where it
+   *  has one; their content hash otherwise. */
+  private fingerprintAsset(path: string): string {
+    return (
+      engineApi(this.key).fingerprintFile?.(path) ??
+      contentHash(readFileSync(path))
+    );
+  }
+
   /** Copy each asset() specifier's bytes, from every sheet, into `assets/`
    *  under a content-hashed name and substitute a url relative to
    *  styles.css. */
@@ -2837,13 +2846,14 @@ export class ExtractionSession {
       return substituteSheetAssets(sheets, urlBySpecifier);
     }
     for (const specifier of specifiers) {
-      // The memo saves resolution and the copy, never the hash: bytes can
-      // change with mtime and size unchanged (SE-5). A missing copy
-      // (concurrent prune) falls through and self-heals.
+      // The memo saves resolution and the copy, never the bytes' check:
+      // they can change with mtime and size unchanged (SE-5), so each pass
+      // fingerprints them. A missing copy (concurrent prune) falls through
+      // and self-heals.
       const cached = this.assetCopyCache.get(specifier);
       if (cached && existsSync(join(assetsDir, cached.fileName))) {
         try {
-          if (contentHash(readFileSync(cached.sourcePath)) === cached.digest) {
+          if (this.fingerprintAsset(cached.sourcePath) === cached.fingerprint) {
             this.trackAssetDependency(cached.sourcePath);
             expected.add(cached.fileName);
             urlBySpecifier.set(specifier, cached.url);
@@ -2859,14 +2869,14 @@ export class ExtractionSession {
         urlBySpecifier.set(specifier, specifier);
         continue;
       }
-      const { fileName, digest } = writeAssetCopy(resolvedPath, assetsDir);
+      const { fileName } = writeAssetCopy(resolvedPath, assetsDir);
       this.trackAssetDependency(resolvedPath);
       expected.add(fileName);
       const url = `./${SESSION_ASSETS_DIR}/${fileName}`;
       urlBySpecifier.set(specifier, url);
       this.assetCopyCache.set(specifier, {
         sourcePath: resolvedPath,
-        digest,
+        fingerprint: this.fingerprintAsset(resolvedPath),
         fileName,
         url,
       });

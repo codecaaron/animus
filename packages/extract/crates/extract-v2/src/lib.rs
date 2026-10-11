@@ -247,6 +247,19 @@ pub fn locate_package(
     Some(std::fs::canonicalize(&dir).unwrap_or(dir).to_string_lossy().to_string())
 }
 
+/// A fast fingerprint of the bytes at `path` (foldhash, 64 bits, hex), for
+/// telling whether a file changed between watch passes in one process: no
+/// security property, and no stability across versions. `None` where the
+/// file cannot be read.
+#[napi]
+pub fn fingerprint_file(path: String) -> Option<String> {
+    use std::hash::{BuildHasher, Hasher};
+    let bytes = std::fs::read(&path).ok()?;
+    let mut hasher = foldhash::quality::FixedState::with_seed(0).build_hasher();
+    hasher.write(&bytes);
+    Some(format!("{:016x}", hasher.finish()))
+}
+
 /// Whether the package at `package_dir` declares the kit source condition:
 /// an `animus` key anywhere in its `exports`, valid or not, read from the
 /// manifest alone.
