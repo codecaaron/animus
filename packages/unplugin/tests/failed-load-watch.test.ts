@@ -119,6 +119,8 @@ describe('a path the system load found absent is watched for its creation', () =
     const watcher = watch({
       input: entry,
       output: { dir: join(root, 'out'), format: 'es' },
+      // A written bundle inside the root would rebuild the watch again.
+      watch: { skipWrite: true },
       plugins: [animusRollup({ system: './src/system.ts', root })],
     });
     watcher.on('event', (event: RollupWatcherEvent) => {
