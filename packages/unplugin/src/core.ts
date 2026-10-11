@@ -11,7 +11,7 @@ import {
   rollupExtensionPolicy,
   viteAssetClassification,
   viteExtensionPolicy,
-  viteLoadExpander,
+  viteHostExpander,
   webpackExtensionPolicy,
   webpackLoadExpander,
 } from '@animus-ui/extract/pipeline';
@@ -386,22 +386,6 @@ function wrappedContextDefaults(
     );
 }
 
-/** Whether Vite's `build.dynamicImportVarsOptions` are its default, which
- *  transforms every importer outside `node_modules`. */
-function defaultImportVars(
-  options: { include?: unknown; exclude?: unknown } | undefined
-): boolean {
-  const exclude = options?.exclude;
-  return (
-    options?.include === undefined &&
-    Array.isArray(exclude) &&
-    exclude.length === 1 &&
-    exclude[0] instanceof RegExp &&
-    exclude[0].source === 'node_modules' &&
-    exclude[0].flags === ''
-  );
-}
-
 const PLUGIN_NAME = 'animus-host';
 
 const ESBUILD_WATCH_HINT =
@@ -772,29 +756,17 @@ export const unpluginFactory: UnpluginFactory<
       configResolved(config: {
         command: string;
         root: string;
-        build: {
-          watch?: unknown;
-          dynamicImportVarsOptions?: { include?: unknown; exclude?: unknown };
+        build: { watch?: unknown };
+        resolve: {
+          extensions: string[];
+          alias?: ReadonlyArray<{ find: string | RegExp }>;
         };
-        resolve: { extensions: string[] };
         assetsInclude: (file: string) => boolean;
-        environments?: Record<string, { isBundled?: boolean }>;
+        environments?: Parameters<typeof viteHostExpander>[0]['environments'];
       }) {
         hostExtensions = viteExtensionPolicy(config.resolve.extensions);
         hostAssets = viteAssetClassification(config.assetsInclude);
-        // Vite 8 bundles an environment with rolldown's native glob and
-        // dynamic-import-vars plugins, which the expander reproduces; it
-        // serves an unbundled one, and an earlier Vite marks none bundled.
-        const environments = Object.values(config.environments ?? {});
-        const bundled =
-          environments.length > 0 &&
-          environments.every((environment) => environment.isBundled === true);
-        hostLoadExpander = bundled
-          ? viteLoadExpander(
-              config.root,
-              defaultImportVars(config.build.dynamicImportVarsOptions)
-            )
-          : undefined;
+        hostLoadExpander = viteHostExpander(config);
         const serving =
           config.command === 'serve' || Boolean(config.build.watch);
         watching = () => serving;
