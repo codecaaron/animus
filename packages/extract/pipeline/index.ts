@@ -33,8 +33,12 @@ export {
   DEFAULT_RUNTIME_IMPORT,
 } from './runtime-import';
 export type { HostFirstResolver, HostResolve } from './host-package-resolver';
-export { aliasesAgreeByConstruction, compareAliases } from './alias-agreement';
-export type { AliasComparison } from './alias-agreement';
+export {
+  AliasAgreementCache,
+  aliasesAgreeByConstruction,
+  compareAliases,
+} from './alias-agreement';
+export type { AliasAgreement, AliasComparison } from './alias-agreement';
 export { hostFirstPackageResolver } from './host-package-resolver';
 export type {
   AnimusCoreOptions,

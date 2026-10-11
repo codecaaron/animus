@@ -13,7 +13,10 @@ import {
 } from 'fs';
 import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
 
-import { compareAliases } from '../pipeline/alias-agreement';
+import {
+  AliasAgreementCache,
+  compareAliases,
+} from '../pipeline/alias-agreement';
 import {
   adaptedOriginals,
   assembleStylesheet,
@@ -397,6 +400,8 @@ export class ExtractionSession {
   /** How the last analysis compared the path aliases it reads with the
    *  host's resolver (spec §2.2 A7); `unavailable` is never agreement. */
   aliasComparison: AliasComparison = 'unavailable';
+  /** Each file's alias comparison, kept by content hash across analyses. */
+  private readonly aliasCache = new AliasAgreementCache();
   /** Serialized path aliases, harvested by the adapter from bundler config. */
   pathAliasesJson: string | null = null;
   /** The host's aliases are the project's tsconfig `paths`: each full pass
@@ -2656,19 +2661,34 @@ export class ExtractionSession {
       this.aliasComparison = 'unavailable';
       return [];
     }
-    this.aliasComparison = 'compared';
-    return compareAliases({
-      rootDir: this.rootDir!,
-      fileEntries,
-      pathAliasesJson: this.pathAliasesJson,
-      order: this.extensionPolicy,
-      readings: {
-        isAsset: this.assetClassification.isAsset,
-        adapted: this.ingestionAdapted,
-      },
-      moduleSpecifiers,
-      resolve: this.hostResolve,
-    });
+    // A report: whatever goes wrong while comparing never blocks the
+    // analysis or its publication.
+    try {
+      const { findings, unavailable } = await compareAliases({
+        rootDir: this.rootDir!,
+        fileEntries,
+        pathAliasesJson: this.pathAliasesJson,
+        order: this.extensionPolicy,
+        readings: {
+          isAsset: this.assetClassification.isAsset,
+          adapted: this.ingestionAdapted,
+        },
+        moduleSpecifiers,
+        resolve: this.hostResolve,
+        cache: this.aliasCache,
+      });
+      this.aliasComparison = 'compared';
+      if (unavailable > 0) {
+        this.log(
+          `path aliases: ${unavailable} aliased import(s) the host's resolver failed on are unavailable, not agreeing`
+        );
+      }
+      return findings;
+    } catch (error) {
+      this.aliasComparison = 'unavailable';
+      this.log(`path aliases: comparison unavailable (${String(error)})`);
+      return [];
+    }
   }
 
   private writeAnalysisStatus(
