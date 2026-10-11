@@ -6,6 +6,7 @@ import {
   DEFAULT_EXTENSIONS,
   DEFAULT_RUNTIME_IMPORT,
   findSheetAssetSpecifiers,
+  isPathWithinRoot,
   parseFilesJson,
   resolveAssetFile,
   resolveVerbosity,
@@ -702,10 +703,11 @@ export class PluginContext {
     return this.session?.isSystemDependency(absFile) ?? false;
   }
 
-  /** Watch every loader-reported dependency path, the paths the load found
-   *  absent (creating one reloads the system), and the external package
-   *  roots. Vite hard-ignores node_modules, so dependencies installed there
-   *  produce no events. A list already registered is not added again. */
+  /** Watch every loader-reported dependency path, the external package
+   *  roots, and the paths the load found absent that no watched directory
+   *  covers (creating one reloads the system). Vite hard-ignores
+   *  node_modules, so dependencies installed there produce no events. A list
+   *  already registered is not added again. */
   registerSystemWatchPaths(): void {
     const watcher = this.devServer?.watcher;
     const session = this.session;
@@ -717,8 +719,28 @@ export class PluginContext {
     ]) {
       if (paths.length === 0 || this.watchedPathLists.has(paths)) continue;
       this.watchedPathLists.add(paths);
-      watcher.add(paths);
+      const added =
+        paths === session.systemMissingPaths
+          ? this.uncoveredMissingPaths(paths, session.externalPackageDirs)
+          : paths;
+      if (added.length > 0) watcher.add(added);
     }
+  }
+
+  /** The absent paths no watched directory reports a creation for. Vite's
+   *  root watch and a package root's watch already do, and a watch on an
+   *  absent file inside a watched directory stops that directory's events
+   *  under inotify (chokidar's non-fsevents handler). */
+  private uncoveredMissingPaths(
+    paths: readonly string[],
+    packageDirs: readonly string[]
+  ): string[] {
+    const watchedDirs = this.rootDir
+      ? [this.rootDir, ...packageDirs]
+      : packageDirs;
+    return paths.filter(
+      (path) => !watchedDirs.some((dir) => isPathWithinRoot(dir, path))
+    );
   }
 
   /** Invalidate the component CSS and system-props modules, then reload. The
