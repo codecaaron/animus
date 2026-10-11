@@ -1992,19 +1992,25 @@ export const App = () => <Box tone="red" />;
     fn a_possibly_mutated_static_never_yields_its_pre_mutation_value_as_static_css() {
         let rows = [
             // A concise arrow returns what it evaluates (PF2).
-            ("sync return", "const get = () => pad; get().padding = 9;"),
-            ("async return", "const get = async () => pad; (await get()).padding = 9;"),
-            ("then callback return", "Promise.resolve(0).then(() => pad).then((p) => { p.padding = 9; });"),
+            ("sync return", "const get = () => pad; get().padding = 9;", "{ ...pad }"),
+            ("async return", "const get = async () => pad; (await get()).padding = 9;", "{ ...pad }"),
+            ("then callback return", "Promise.resolve(0).then(() => pad).then((p) => { p.padding = 9; });", "{ ...pad }"),
+            // A read by name or by one member takes no held value (PF1).
+            ("held by name", "pad.padding = 9;", "pad"),
+            ("held one member", "pad.padding = 9;", "{ padding: pad.padding }"),
+            ("direct eval, by name", "eval('pad.padding = 9');", "pad"),
         ];
-        for (row, mutation) in rows {
+        for (row, mutation, read) in rows {
             let mut engine = ExtractEngine::new(None).unwrap();
             let files = serde_json::json!([
                 { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
                 { "path": "mutate.js", "source": format!("import {{ pad }} from './tokens.js';\n{mutation}\n") },
                 {
                     "path": "reader.tsx",
-                    "source": "import './mutate.js';\nimport { pad } from './tokens.js';\n\
-                               export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+                    "source": format!(
+                        "import './mutate.js';\nimport {{ pad }} from './tokens.js';\n\
+                         export const C = ds.styles({read}).asElement('div');\nexport const App = () => <C />;\n"
+                    ),
                 },
             ]);
             let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
