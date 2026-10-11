@@ -15601,10 +15601,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     /// The probe stops at the host's first candidate (spec §2.2 A8): a file
-    /// analysis never reads ends it Incomplete, reported only where a later
-    /// analysed candidate would otherwise have been read, and recorded
-    /// silently otherwise; either way nothing is pruned. An asset, or an
-    /// adapted original, names no module, as before, and stops nothing.
+    /// analysis never reads ends it Incomplete and nothing is pruned. It is
+    /// reported as a skipped source where a later analysed candidate would
+    /// otherwise have been read, and as an unanalysed import otherwise: no
+    /// opening stops pruning silently. An asset, or an adapted original,
+    /// names no module, as before, and stops nothing.
     #[test]
     fn a_skipped_source_ends_the_probe_and_an_asset_does_not() {
         let evidence = |reading: HostReading| {
@@ -15629,21 +15630,23 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             }
             analyze(&files, &inputs)
         };
-        let skipped = |out: &CssOutput| {
-            out.diagnostics.iter().filter(|d| d.code.as_deref() == Some(RESOLVE_SKIPPED_SOURCE)).count()
+        let count = |out: &CssOutput, code: &str| {
+            out.diagnostics.iter().filter(|d| d.code.as_deref() == Some(code)).count()
         };
-        // A later analysed candidate: reported, and the probe never reads it.
+        let skipped = |out: &CssOutput| count(out, RESOLVE_SKIPPED_SOURCE);
+        let unanalysed = |out: &CssOutput| count(out, "animus.resolve.unanalysed-import");
+        // A later analysed candidate: reported once, and the probe never reads it.
         let out = run(Some(HostReading::Unanalysed), true);
-        assert_eq!(skipped(&out), 1, "{:#?}", out.diagnostics);
+        assert_eq!((skipped(&out), unanalysed(&out)), (1, 0), "{:#?}", out.diagnostics);
         assert_eq!(kept_sizes(&out, "r.tsx::R"), vec!["sm", "md", "lg"]);
-        // None: recorded silently, and still nothing is pruned.
+        // None: reported as an unanalysed import, and still nothing is pruned.
         let out = run(Some(HostReading::Unanalysed), false);
-        assert_eq!(skipped(&out), 0, "{:#?}", out.diagnostics);
+        assert_eq!((skipped(&out), unanalysed(&out)), (0, 1), "{:#?}", out.diagnostics);
         assert_eq!(kept_sizes(&out, "r.tsx::R"), vec!["sm", "md", "lg"]);
         // An asset or an adapted original stops nothing.
         for reading in [HostReading::Asset, HostReading::Adapted] {
             let out = run(Some(reading), false);
-            assert_eq!(skipped(&out), 0);
+            assert_eq!((skipped(&out), unanalysed(&out)), (0, 0));
             assert_eq!(kept_sizes(&out, "r.tsx::R"), kept_sizes(&run(None, false), "r.tsx::R"), "{reading:?}");
         }
     }
