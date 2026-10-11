@@ -237,6 +237,33 @@ fn replacement_import_needs(
     needs
 }
 
+/// A file entry's analysis identity: its path with `\\` read as `/`, and
+/// empty and `.` segments dropped and `..` taken back lexically, so every
+/// spelling of one path sorts and coalesces as one. Case and Unicode stay
+/// as written, no symlink is followed, and a `?query` suffix stays part of
+/// the identity.
+fn canonical_analysis_id(path: &str) -> String {
+    let (path, query) = path.split_at(path.find('?').unwrap_or(path.len()));
+    let path = path.replace('\\', "/");
+    let rooted = path.starts_with('/');
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => match segments.last() {
+                Some(&last) if last != ".." => {
+                    segments.pop();
+                }
+                // Above the root there is nothing to take back.
+                _ if rooted => {}
+                _ => segments.push(".."),
+            },
+            segment => segments.push(segment),
+        }
+    }
+    format!("{}{}{query}", if rooted { "/" } else { "" }, segments.join("/"))
+}
+
 #[napi]
 pub struct ExtractEngine {
     opts: ResolvedOptions,
@@ -666,8 +693,8 @@ impl ExtractEngine {
         let mut entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
             .map_err(|e| napi::Error::from_reason(format!("invalid file entries JSON: {e}")))?;
         // Analysis sees the files in canonical order, so its output does not
-        // depend on the order a host lists them in.
-        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        // depend on the order a host lists them in, or on how it spells a path.
+        entries.sort_by_cached_key(|entry| (canonical_analysis_id(&entry.path), entry.path.clone()));
 
         self.facts.clear();
         self.sources.clear();
@@ -2384,6 +2411,27 @@ export const App = () => <Box tone="red" />;
         assert!(!code.contains(".extend("), "{code}");
         assert!(code.contains("const kept = ds.styles"), "{code}");
         assert!(code.contains("export const shared = ds.styles"), "{code}");
+    }
+
+    /// Every spelling of one path is one analysis identity; case, a query and
+    /// a parent above the start stay distinct.
+    #[test]
+    fn spellings_of_one_path_share_an_analysis_id() {
+        for (path, id) in [
+            ("a/b.tsx", "a/b.tsx"),
+            ("a\\b.tsx", "a/b.tsx"),
+            ("./a.tsx", "a.tsx"),
+            ("dir/../a.tsx", "a.tsx"),
+            ("a//b/./c.tsx", "a/b/c.tsx"),
+            ("../../packages/ui/x.tsx", "../../packages/ui/x.tsx"),
+            ("/root/../x.tsx", "/x.tsx"),
+            ("/../x.tsx", "/x.tsx"),
+            ("A.tsx", "A.tsx"),
+            ("a.svelte?type=script&lang=../x", "a.svelte?type=script&lang=../x"),
+            ("./a.svelte?raw", "a.svelte?raw"),
+        ] {
+            assert_eq!(canonical_analysis_id(path), id, "{path}");
+        }
     }
 
     /// Contract: analysis output is independent of the order the caller
