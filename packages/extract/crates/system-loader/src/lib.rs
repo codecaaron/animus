@@ -132,9 +132,20 @@ pub fn resolve_bare_specifier(
     from_dir: &str,
     context: &ResolutionContext,
 ) -> Result<(String, PathBuf), String> {
+    resolve_bare_specifier_observed(specifier, from_dir, context, &mut LoadReads::default())
+}
+
+/// [`resolve_bare_specifier`], recording in `reads` each path it read or
+/// looked for as it probed, whether or not the resolution succeeds.
+pub fn resolve_bare_specifier_observed(
+    specifier: &str,
+    from_dir: &str,
+    context: &ResolutionContext,
+    reads: &mut LoadReads,
+) -> Result<(String, PathBuf), String> {
     let (pkg_name, subpath) = split_specifier(specifier);
-    let pkg_json_path = locate_package(pkg_name, from_dir, context)?.join("package.json");
-    select_package_entry(pkg_json_path, subpath, context, specifier, true)
+    let pkg_json_path = locate_package_observed(pkg_name, from_dir, context, reads)?.join("package.json");
+    select_package_entry_observed(pkg_json_path, subpath, context, specifier, true, reads)
 }
 
 /// `path` with its links and `.` segments resolved, as `require.resolve`
@@ -157,7 +168,21 @@ fn select_package_entry(
     specifier: &str,
     source_first: bool,
 ) -> Result<(String, PathBuf), String> {
+    select_package_entry_observed(pkg_json_path, subpath, context, specifier, source_first, &mut LoadReads::default())
+}
+
+/// [`select_package_entry`], recording the manifest it reads (before it is
+/// parsed) and each entry candidate it found absent.
+fn select_package_entry_observed(
+    pkg_json_path: PathBuf,
+    subpath: &str,
+    context: &ResolutionContext,
+    specifier: &str,
+    source_first: bool,
+    reads: &mut LoadReads,
+) -> Result<(String, PathBuf), String> {
     let conditions = &context.conditions;
+    reads.read.insert(pkg_json_path.to_string_lossy().to_string());
     let pkg_dir = pkg_json_path
         .parent()
         .ok_or_else(|| format!("invalid package.json path: {:?}", pkg_json_path))?;
@@ -193,7 +218,11 @@ fn select_package_entry(
                 // `..` taken back lexically, as Node resolves a target: the
                 // path checked is the path opened.
                 let abs_path = resolution::lexical(&pkg_dir.join(&resolved)).to_string_lossy().to_string();
-                match resolution::see_within(pkg_dir, &abs_path) {
+                let seen = resolution::see_within(pkg_dir, &abs_path);
+                if seen == resolution::Seen::Missing {
+                    reads.missing.insert(abs_path.clone());
+                }
+                match seen {
                     resolution::Seen::File => return Ok((abs_path, pkg_json_path)),
                     resolution::Seen::CaseOnly(actual) if !source => {
                         return Err(resolution::case_mismatch_reason(
@@ -222,20 +251,35 @@ fn select_package_entry(
     // The first entry the filesystem answers, even under another case, ends
     // the selection. An entry's `..` is taken back lexically, as Node
     // resolves it, so the file checked is the file opened.
-    let probe = |entry: &str| {
-        context
-            .extensions
-            .probe(&resolution::lexical(&pkg_dir.join(entry)).to_string_lossy(), |candidate| {
-                resolution::see_within(pkg_dir, candidate)
-            })
+    // Each probe records the candidates it found absent ahead of the one it
+    // took, all of them when it took none.
+    let mut probe = |entry: &str| {
+        let base = resolution::lexical(&pkg_dir.join(entry)).to_string_lossy().to_string();
+        let probed = context.extensions.probe(&base, |candidate| resolution::see_within(pkg_dir, candidate));
+        let taken = match &probed {
+            resolution::Probe::Found(path) => Some(path.clone()),
+            resolution::Probe::CaseMismatch { candidate, .. } => Some(candidate.clone()),
+            resolution::Probe::Absent => None,
+        };
+        reads.missing.extend(
+            context.extensions.candidates(&base).into_iter().take_while(|candidate| Some(candidate) != taken.as_ref()),
+        );
+        probed
     };
     let legacy = match subpath.trim_start_matches('.').trim_start_matches('/') {
-        "" => ["module", "main"]
-            .iter()
-            .filter_map(|field| pkg_json.get(*field).and_then(|value| value.as_str()))
-            .map(probe)
-            .find(|probed| *probed != resolution::Probe::Absent)
-            .unwrap_or_else(|| probe("index")),
+        "" => {
+            let mut chosen = None;
+            for field in ["module", "main"] {
+                if let Some(entry) = pkg_json.get(field).and_then(|value| value.as_str()) {
+                    let probed = probe(entry);
+                    if probed != resolution::Probe::Absent {
+                        chosen = Some(probed);
+                        break;
+                    }
+                }
+            }
+            chosen.unwrap_or_else(|| probe("index"))
+        }
         subpath => probe(subpath),
     };
     match legacy {
@@ -276,12 +320,24 @@ fn split_specifier(specifier: &str) -> (&str, &str) {
 /// as Node's resolver finds it; else the declared workspace of that name, as
 /// for a workspace package nothing links there.
 pub fn locate_package(pkg_name: &str, start_dir: &str, context: &ResolutionContext) -> Result<PathBuf, String> {
+    locate_package_observed(pkg_name, start_dir, context, &mut LoadReads::default())
+}
+
+/// [`locate_package`], recording each `node_modules/<pkg>` it found absent
+/// before the one it took: a package installed there would win.
+fn locate_package_observed(
+    pkg_name: &str,
+    start_dir: &str,
+    context: &ResolutionContext,
+    reads: &mut LoadReads,
+) -> Result<PathBuf, String> {
     let mut dir = PathBuf::from(start_dir);
     loop {
         let package = dir.join("node_modules").join(pkg_name);
         if package.is_dir() {
             return Ok(package);
         }
+        reads.missing.insert(package.to_string_lossy().to_string());
         if !dir.pop() {
             break;
         }
@@ -742,26 +798,6 @@ fn absent_relative_candidates(
     policy.candidates(&target).into_iter().take_while(|candidate| Some(candidate.as_str()) != resolved).collect()
 }
 
-/// The `node_modules/<package>` directories nearer `from_dir` than the
-/// manifest that resolved the package, or every one up to the filesystem
-/// root when none did: a package installed in one would win.
-fn absent_package_dirs(specifier: &str, from_dir: &Path, manifest: Option<&Path>) -> Vec<String> {
-    let (package, _) = split_specifier(specifier);
-    let mut absent = Vec::new();
-    let mut dir = from_dir.to_path_buf();
-    loop {
-        let candidate = dir.join("node_modules").join(package);
-        if manifest == Some(candidate.join("package.json").as_path()) {
-            break;
-        }
-        absent.push(candidate.to_string_lossy().to_string());
-        if !dir.pop() {
-            break;
-        }
-    }
-    absent
-}
-
 pub fn resolve_all_deps_reading(
     system_path: &str,
     _root_dir: &str,
@@ -893,13 +929,7 @@ pub fn resolve_all_deps_reading(
             } else {
                 // No generic stub fallback: a silent stub turns a missing
                 // package into "X is not a function" in an unrelated module.
-                let resolution = resolve_bare_specifier(spec, &current_dir.to_string_lossy(), context);
-                reads.missing.extend(absent_package_dirs(
-                    spec,
-                    current_dir,
-                    resolution.as_ref().ok().map(|(_, manifest)| manifest.as_path()),
-                ));
-                match resolution {
+                match resolve_bare_specifier_observed(spec, &current_dir.to_string_lossy(), context, reads) {
                     Ok((resolved, manifest)) => {
                         let canonical = fs::canonicalize(&resolved)
                             .unwrap_or_else(|_| PathBuf::from(&resolved))
