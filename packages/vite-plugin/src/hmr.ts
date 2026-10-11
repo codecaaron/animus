@@ -2,6 +2,8 @@ import {
   contentHash,
   diffFilePlans,
   isPathWithinRoot,
+  outputSourceGuard,
+  outputSourceMessage,
   snapshotFilePlans,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
@@ -158,6 +160,14 @@ async function analyzeChangedFile(
   }
 
   const relPath = relative(ctx.rootDir, absFile);
+  const outputDir = outputSourceGuard(
+    ctx.rootDir,
+    ctx.outputExclude === null ? [] : [ctx.outputExclude]
+  )(absFile);
+  if (outputDir !== null) {
+    ctx.warn(outputSourceMessage(relPath, outputDir));
+    return { kind: 'ignored' };
+  }
 
   let source: string;
   try {

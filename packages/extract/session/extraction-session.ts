@@ -42,6 +42,8 @@ import {
   declaredWorkspacePackages,
   extensionPolicyJson,
   loadSystemConfig,
+  outputSourceGuard,
+  outputSourceMessage,
   postProcessCss,
   projectExternalFileOwners,
   resolveAssetFile,
@@ -59,6 +61,7 @@ import {
   toWatchKeys,
   isDeletedSource,
   unreadableSourceDiagnostic,
+  unmatchedExcludeLines,
   unresolvableIncludesMessage,
   walkPackageSources,
   engineModuleParser,
@@ -102,6 +105,7 @@ import {
   joinSession,
   sessionKey,
   getOwningWatchSession,
+  claimUnmatchedExcludeReport,
   getManifestJson,
   getSystemAuthority,
   holdBuildClaimRecord,
@@ -561,20 +565,15 @@ export class ExtractionSession {
    *  driver serving the dir in place, `'every-cycle'` one republishing it. */
   staleAssetPruning: 'full-pipeline' | 'every-cycle' = 'full-pipeline';
 
-  /** Driver-owned STRUCTURAL exclusions, joined to the never-replaceable set
-   *  — never the user list, whose presence flips the replace semantics. */
+  /** The host's output directories (`outputExclusion`): root-relative,
+   *  excluded as literal path prefixes from discovery and from package
+   *  collection, whatever the user's list. */
   structuralExclude: string[] = [];
 
   private scanConfigMemo: {
     excludeMatcher: ExcludeMatcher;
     extensionsSet: ReadonlySet<string>;
   } | null = null;
-
-  /** Per-pattern exclusion hit counts from this session's matcher —
-   *  driver-consumed reporting surface (dead-pattern visibility). */
-  getExcludeStats(): ReadonlyMap<string, number> {
-    return this.resolveScanConfig().excludeMatcher.stats();
-  }
 
   /** Resolve the scan configuration from options — the single source of the
    *  exclude/extension policy shared by the full and incremental pipelines. */
@@ -939,12 +938,18 @@ export class ExtractionSession {
     }
 
     const changedPaths: string[] = [];
+    const inOutput = outputSourceGuard(rootDir, this.structuralExclude);
     // A read that fails or recovers changes the report, even with no source
     // change.
     let readFailuresChanged = false;
 
     for (const target of targets) {
       const relPath = target.key;
+      const outputDir = inOutput(target.abs);
+      if (outputDir !== null) {
+        this.warn(outputSourceMessage(relPath, outputDir));
+        continue;
+      }
       let source: string;
       try {
         source = readFileSync(target.abs, 'utf-8');
@@ -1285,6 +1290,12 @@ export class ExtractionSession {
       excludeMatcher,
       extensionsSet
     );
+    // Once per build: its first full discovery, whether or not it publishes.
+    if (claimUnmatchedExcludeReport(this.key)) {
+      for (const line of unmatchedExcludeLines(excludeMatcher)) {
+        console.error(line);
+      }
+    }
 
     bt.fileDiscovery = this.elapsed(t);
 
@@ -1395,6 +1406,9 @@ export class ExtractionSession {
       rootDir,
       extensionsSet,
       hasEntry: (relPath) => rawEntries.some((e) => e.path === relPath),
+      hostOutputDirs: this.structuralExclude.map((dir) =>
+        resolve(rootDir, dir)
+      ),
       onSourceRead: (source, _relPath, absPath) => {
         rawExternalFiles.set(absPath, contentHash(source));
       },
@@ -1530,7 +1544,9 @@ export class ExtractionSession {
       this.beginStatusAttempt();
       let accepted: SourceIngestionResult;
       try {
-        accepted = await this.corpus.prepare(rawEntries);
+        accepted = await this.corpus.prepare(
+          this.withoutOutputSources(rawEntries)
+        );
         this.throwOnAbortedParse(accepted);
         this.skippedSources = accepted.skippedOriginals ?? [];
         this.ingestionOpenings = accepted.openings ?? [];
@@ -1577,6 +1593,18 @@ export class ExtractionSession {
 
   /** Per-generation source state captured as ONE object so the restore
    *  cannot omit a member; deep-copied fields are mutated in place. */
+  /** The full pass's analysis inputs, less any file whose real path lies in
+   *  an output directory, each reported. */
+  private withoutOutputSources(entries: FileEntry[]): FileEntry[] {
+    const inOutput = outputSourceGuard(this.rootDir!, this.structuralExclude);
+    return entries.filter((entry) => {
+      const outputDir = inOutput(resolve(this.rootDir!, entry.path));
+      if (outputDir === null) return true;
+      this.warn(outputSourceMessage(entry.path, outputDir));
+      return false;
+    });
+  }
+
   private snapshotSourceState() {
     return {
       sourceIdentity: this.sourceIdentity,
