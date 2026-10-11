@@ -8,6 +8,7 @@ import {
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
+  outputExclusion,
   rollupExtensionPolicy,
   viteAssetClassification,
   viteExtensionPolicy,
@@ -92,6 +93,8 @@ export interface HostState {
   key: SessionKey | null;
   /** The files the run's analysis extracted components from. */
   listedFiles: ReadonlySet<string>;
+  /** Every file the run's analysis read, absolute. */
+  analyzedFiles: string[];
 }
 
 export function createHostState(): HostState {
@@ -100,6 +103,7 @@ export function createHostState(): HostState {
     mode: null,
     cssText: '',
     listedFiles: new Set(),
+    analyzedFiles: [],
     systemPropsJs: '',
     kitRedirects: new Map(),
     kitSideEffects: new Map(),
@@ -262,6 +266,12 @@ interface RollupResolveContext {
   } | null>;
 }
 
+/** What a render hook reports through. */
+interface OwnOutputReporter {
+  warn(message: string): void;
+  error(message: string): never;
+}
+
 interface EsbuildOptionsLike {
   outdir?: string;
   outfile?: string;
@@ -287,6 +297,7 @@ interface RspackLikeCompiler extends WebpackLikeCompiler {
 interface WebpackLikeCompiler {
   options: {
     mode?: string;
+    output?: { path?: string };
     resolve?: {
       conditionNames?: string[];
       extensions?: string[];
@@ -406,6 +417,13 @@ export const unpluginFactory: UnpluginFactory<
   /** The bundler's own resolution, which package discovery asks first
    *  (spec §2.2 A4); none where the host exposes no resolver. */
   let hostResolver: HostResolve | null = null;
+  /** The output directories Rollup and Rolldown named at render, which they
+   *  name only after analysis: this process's later builds exclude them. */
+  const learnedOutputDirs = new Set<string>();
+  /** The bundler's output directories, absolute, which discovery excludes
+   *  whatever the user's `exclude` list: read when a run starts, after the
+   *  bundler applied its defaults. */
+  let hostOutputDirs = (): string[] => [...learnedOutputDirs];
   /** Hooks can fire before buildStart (webpack's make taps run
    *  concurrently), so joiners await this before awaiting the pipeline. */
   let signalPipelineStarted!: () => void;
@@ -490,6 +508,10 @@ export const unpluginFactory: UnpluginFactory<
       session.assetClassification = hostAssets;
       session.hostResolve = hostResolver;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
+      session.structuralExclude = hostOutputDirs().flatMap((dir) => {
+        const exclusion = outputExclusion(root, dir);
+        return exclusion === null ? [] : [exclusion];
+      });
       // Each full pass re-reads the tsconfig aliases.
       session.aliasesFromTsconfig = true;
       state.key = session.key;
@@ -521,10 +543,10 @@ export const unpluginFactory: UnpluginFactory<
       state.kitSideEffects = new Map(session.externalSourceSideEffects);
       state.redirectTargets = new Set(state.kitRedirects.values());
       state.externalPackageDirs = [...session.externalPackageDirs];
-      const watchPaths = new Set<string>();
-      for (const key of getAnalyzedHashes(session.key)?.keys() ?? []) {
-        watchPaths.add(resolve(root, key));
-      }
+      state.analyzedFiles = [...analyzed.keys()].map((key) =>
+        resolve(root, key)
+      );
+      const watchPaths = new Set<string>(state.analyzedFiles);
       for (const dep of session.systemDependencyPaths) watchPaths.add(dep);
       // Absent now; creating one rebuilds against a system that loads it.
       for (const path of session.systemMissingPaths) watchPaths.add(path);
@@ -589,6 +611,33 @@ export const unpluginFactory: UnpluginFactory<
         source: bytes,
       });
     }
+  }
+
+  /** Rollup and Rolldown name their output directory only at render, after
+   *  analysis: this process's later builds exclude it, and an analysis that
+   *  already read a file there is reported, failing a build under `strict`. */
+  function checkOwnOutput(
+    context: OwnOutputReporter,
+    output: { dir?: string; file?: string }
+  ): void {
+    const named =
+      output.dir ??
+      (output.file === undefined ? undefined : dirname(output.file));
+    if (named === undefined) return;
+    const outDir = resolve(named);
+    learnedOutputDirs.add(outDir);
+    const exclusion = outputExclusion(root, outDir);
+    if (exclusion === null) return;
+    const read = state.analyzedFiles.filter((file) =>
+      isPathWithinRoot(outDir, file)
+    );
+    if (read.length === 0) return;
+    const message =
+      `[animus] this build analysed its own earlier output: ` +
+      `${read.map((file) => relative(root, file)).join(', ')}. Add ` +
+      `'${exclusion}' to the plugin's \`exclude\` option.`;
+    if (options.strict && !watching()) context.error(message);
+    context.warn(message);
   }
 
   /** Analysis is a filesystem walk, so watch mode misses edits to
@@ -755,13 +804,15 @@ export const unpluginFactory: UnpluginFactory<
       // Vite runs the normalized buildStart, so its own signals decide:
       // serving or `build.watch` runs another turn.
       configResolved(config: {
+        root: string;
         command: string;
-        build: { watch?: unknown };
+        build: { watch?: unknown; outDir: string };
         resolve: { extensions: string[] };
         assetsInclude: (file: string) => boolean;
       }) {
         hostExtensions = viteExtensionPolicy(config.resolve.extensions);
         hostAssets = viteAssetClassification(config.assetsInclude);
+        hostOutputDirs = () => [resolve(config.root, config.build.outDir)];
         const serving =
           config.command === 'serve' || Boolean(config.build.watch);
         watching = () => serving;
@@ -787,6 +838,15 @@ export const unpluginFactory: UnpluginFactory<
         } finally {
           registerWatchTargets(this);
         }
+      },
+      renderStart(outputOptions) {
+        checkOwnOutput(this, outputOptions);
+      },
+    },
+
+    rolldown: {
+      renderStart(outputOptions) {
+        checkOwnOutput(this, outputOptions);
       },
     },
 
@@ -864,6 +924,15 @@ export const unpluginFactory: UnpluginFactory<
       },
       config(buildOptions) {
         esbuildOptions = buildOptions;
+        const outDir =
+          buildOptions.outdir ??
+          (buildOptions.outfile === undefined
+            ? undefined
+            : dirname(buildOptions.outfile));
+        hostOutputDirs = () =>
+          outDir === undefined
+            ? []
+            : [resolve(buildOptions.absWorkingDir ?? process.cwd(), outDir)];
         hostConditions = buildOptions.conditions ?? [];
         hostExtensions = esbuildExtensionPolicy(buildOptions.resolveExtensions);
         hostAssets = esbuildAssetClassification(buildOptions.loader);
@@ -961,6 +1030,11 @@ export const unpluginFactory: UnpluginFactory<
       `${meta.framework === 'rspack' ? 'rspack' : 'webpack'} rules not modelled`
     );
     watching = () => compiler.watchMode === true;
+    // Read per run: webpack applies its output default after plugins.
+    hostOutputDirs = () => {
+      const outputPath = compiler.options.output?.path;
+      return outputPath === undefined ? [] : [outputPath];
+    };
     const DefinePlugin =
       compiler.webpack?.DefinePlugin ?? compiler.rspack?.DefinePlugin;
     if (!DefinePlugin) {
