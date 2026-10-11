@@ -112,6 +112,9 @@ type Compiler = {
     thisCompilation: {
       tap: (name: string, fn: (compilation: OwnCompilation) => void) => void;
     };
+    /** `compiler.close()` (webpack 5), and the end of a watch. */
+    shutdown?: { tap: (name: string, fn: () => void) => void };
+    watchClose?: { tap: (name: string, fn: () => void) => void };
   };
   context: string;
   /** Present on watchRun compilers after the first compilation (webpack 5). */
@@ -284,6 +287,16 @@ export class AnimusWebpackPlugin {
     }
 
     this.appendEpochWatchIgnore(compiler);
+
+    // The compiler's end leaves the build, which retires with its last
+    // compiler. A watch started again analyzes in full: its build may have
+    // retired meanwhile.
+    const leave = () => {
+      this.session.close();
+      this.initialized = false;
+    };
+    compiler.hooks.shutdown?.tap(PLUGIN_NAME, leave);
+    compiler.hooks.watchClose?.tap(PLUGIN_NAME, leave);
 
     compiler.hooks.thisCompilation.tap(PLUGIN_NAME, (compilation) => {
       const epochMoved = this.epochMovedForNextCompilation;

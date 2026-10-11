@@ -97,7 +97,10 @@ import {
   joinSession,
   sessionKey,
   getOwningWatchSession,
+  getManifestJson,
   getSystemAuthority,
+  holdBuildClaimRecord,
+  leaveSession,
   getWatchTransaction,
   observationQueue,
   SessionConfigurationConflict,
@@ -372,6 +375,8 @@ export class ExtractionSession {
    *  does. */
   readonly sessionId: string;
   private joinedKey: SessionKey | null = null;
+  /** This instance as a participant of its build, once joined. */
+  private participant: string | null = null;
   /** Epoch of the last published analysis; null seeds from disk so a
    *  same-session restart with unchanged plans rewrites no bytes. */
   private lastEpochValue: string | null = null;
@@ -430,7 +435,9 @@ export class ExtractionSession {
     if (this.joinedKey === null) {
       const key = sessionKey(this.sessionId, this.rootDir!);
       // Unique across module copies (ESM and CJS), which share the registry.
-      joinSession(key, `${this.driverLabel}#${randomUUID()}`, this.options);
+      const participant = `${this.driverLabel}#${randomUUID()}`;
+      joinSession(key, participant, this.options);
+      this.participant = participant;
       this.joinedKey = key;
     }
     return this.joinedKey;
@@ -619,6 +626,12 @@ export class ExtractionSession {
         continue;
       }
       const owner = this.system ? this : getOwningWatchSession(this.key);
+      if (owner === null && getManifestJson(this.key) !== null) {
+        // The publisher left a build this participant still uses: it takes
+        // over, and its full read settles the queued observations.
+        await this.runFullPipeline();
+        continue;
+      }
       if (owner === null || !owner.startObservedAttempt()) {
         // No session of the build can analyze yet: the observation stays
         // queued for the owner's next attempt.
@@ -1017,15 +1030,12 @@ export class ExtractionSession {
         `${this.driverLabel}:${this.sessionDir}`
       );
       // The on-disk record is what stops a sibling from pruning this tree.
-      // Only the in-process winner writes it, and both release together.
+      // The build holds it, and releases it only when it retires.
       mkdirSync(this.sessionDir, { recursive: true });
-      const releaseClaimRecord = holdDirectoryClaim(this.sessionDir, {
-        build: this.sessionId,
-      });
-      this.releasePublicationClaim = () => {
-        releaseOwner();
-        releaseClaimRecord();
-      };
+      holdBuildClaimRecord(this.key, () =>
+        holdDirectoryClaim(this.sessionDir, { build: this.sessionId })
+      );
+      this.releasePublicationClaim = releaseOwner;
     }
 
     // Ownership is decided by whether `system` is set, so a failed pass must
@@ -1513,11 +1523,20 @@ export class ExtractionSession {
     );
   }
 
-  /** Release this session's publication claim so a successor may publish.
-   *  Idempotent, and scoped to this session's own claim. */
+  /** Release this session's publication claim so a successor may publish,
+   *  and leave the build, which retires with its last participant.
+   *  Idempotent; a later use joins the build again. */
   close(): void {
     this.releasePublicationClaim?.();
     this.releasePublicationClaim = null;
+    if (this.joinedKey === null || this.participant === null) return;
+    // Another participant takes over the build's analysis, never this one.
+    if (getOwningWatchSession(this.joinedKey) === this) {
+      setOwningWatchSession(this.joinedKey, null);
+    }
+    leaveSession(this.joinedKey, this.participant);
+    this.joinedKey = null;
+    this.participant = null;
   }
 
   /** Reset analysis state for a system reload: write guards go back to null
