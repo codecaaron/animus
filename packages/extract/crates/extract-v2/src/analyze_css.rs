@@ -13739,6 +13739,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "export const e = import.meta.glob(['./g/*.js', '!./g/skip.js'], { query: '?raw', import: 'default' });\n",
             "export const f = (s) => import(s);\n",
             "export const g = (o) => import.meta.glob('./h/*.js', o);\n",
+            "export const h = (n) => import(`./raw/${n}.js`, { with: { type: 'raw' } });\n",
+            "export const i = (n, o) => import(`./raw/${n}.js`, o);\n",
+            "export const j = (n) => import(`${n}`);\n",
+            "export const k = (n) => import('' + n);\n",
+            "export const l = import.meta.glob('./h/*.js', false);\n",
         );
         let allocator = oxc::allocator::Allocator::default();
         let program = oxc::parser::Parser::new(&allocator, loader, oxc::span::SourceType::ts()).parse().program;
@@ -13748,14 +13753,22 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(
             listed,
             serde_json::json!([
-                { "start": start("import(/*"), "kind": "import", "args": { "quasis": ["./pages/", ".js"], "template": true, "comments": ["/* webpackInclude: /\\.js$/ */"] } },
-                { "start": start("(require)"), "kind": "require", "args": { "quasis": ["./data/", ".json"], "template": false, "comments": [] } },
+                { "start": start("import(/*"), "kind": "import", "args": { "quasis": ["./pages/", ".js"], "template": true, "options": null, "comments": ["/* webpackInclude: /\\.js$/ */"] } },
+                { "start": start("(require)"), "kind": "require", "args": { "quasis": ["./data/", ".json"], "template": false, "options": null, "comments": [] } },
                 { "start": start("require['"), "kind": "context", "args": { "dir": "./ctx", "recursive": false, "regExp": { "source": "\\.js$", "flags": "i" }, "include": null, "exclude": null, "mode": null } },
                 { "start": start("import.meta.webpackContext"), "kind": "webpackContext", "args": { "dir": "./wc", "recursive": null, "regExp": { "source": "x", "flags": "" }, "include": null, "exclude": null, "mode": "lazy" } },
                 { "start": start("import.meta.glob(["), "kind": "glob", "args": { "patterns": ["./g/*.js", "!./g/skip.js"], "options": { "query": "?raw", "import": "default" } } },
-                { "start": start("import(s)"), "kind": "import", "args": { "quasis": ["", ""], "template": false, "comments": [] } },
-                // An argument that is not written statically lists no arguments.
-                { "start": start("import.meta.glob('./h"), "kind": "glob", "args": null },
+                // A bare variable is no template or concatenation, which
+                // hosts read another way, and an argument that is not
+                // written statically, or options that are no object literal,
+                // list no arguments.
+                { "start": start("import(s)"), "kind": "import", "args": null },
+                { "start": start("import.meta.glob('./h/*.js', o)"), "kind": "glob", "args": null },
+                { "start": start("import(`./raw/${n}.js`, {"), "kind": "import", "args": { "quasis": ["./raw/", ".js"], "template": true, "options": { "with": { "type": "raw" } }, "comments": [] } },
+                { "start": start("import(`./raw/${n}.js`, o"), "kind": "import", "args": null },
+                { "start": start("import(`${n}`)"), "kind": "import", "args": { "quasis": ["", ""], "template": true, "options": null, "comments": [] } },
+                { "start": start("import('' + n)"), "kind": "import", "args": { "quasis": ["", ""], "template": false, "options": null, "comments": [] } },
+                { "start": start("import.meta.glob('./h/*.js', false)"), "kind": "glob", "args": null },
             ])
         );
         let files = [("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("loader.ts", loader)];

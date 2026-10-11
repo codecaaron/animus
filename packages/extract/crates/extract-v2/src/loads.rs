@@ -194,11 +194,11 @@ impl<'a> Visit<'a> for Calls<'_, 'a> {
             span: import.span,
         });
         self.list(import.span, HostLoadKind::Import, |calls| {
-            Some(HostArgs::Specifier {
-                quasis: quasis_of(&import.source)?,
-                template: is_template(&import.source),
-                comments: calls.comments_in(import.span),
-            })
+            // A phase (`import.source(…)`, `import.defer(…)`) is not read.
+            if import.phase.is_some() {
+                return None;
+            }
+            specifier_args(&import.source, import.options.as_ref().map(Some), calls.comments_in(import.span))
         });
         oxc::ast_visit::walk::walk_import_expression(self, import);
     }
@@ -456,11 +456,12 @@ pub enum HostLoadKind {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(untagged)]
 pub enum HostArgs {
-    /// `import(…)` or `require(…)`: the specifier's static text between
-    /// its substitutions (a template's quasis, or a concatenation's strings;
-    /// one more than the substitutions), whether it is a template literal
-    /// (some hosts expand only those), and the comments inside the call.
-    Specifier { quasis: Vec<String>, template: bool, comments: Vec<String> },
+    /// `import(…)` or `require(…)` of a template literal or a string
+    /// concatenation: the specifier's static text between its substitutions
+    /// (one more than the substitutions), whether it is a template literal
+    /// (some hosts expand only those), `import()`'s options object as
+    /// written (its attributes), and the comments inside the call.
+    Specifier { quasis: Vec<String>, template: bool, options: Option<serde_json::Value>, comments: Vec<String> },
     /// `require.context(dir, recursive, regExp, mode)`, or
     /// `import.meta.webpackContext(dir, { recursive, regExp, include,
     /// exclude, mode })`; an argument left out is `None`, for the host's
@@ -503,10 +504,7 @@ fn host_load_kind(callee: &Expression<'_>) -> Option<HostLoadKind> {
 fn host_args(kind: HostLoadKind, call: &CallExpression<'_>, comments: Vec<String>) -> Option<HostArgs> {
     let argument = |index: usize| call.arguments.get(index).map(Argument::as_expression);
     match kind {
-        HostLoadKind::Import | HostLoadKind::Require => {
-            let specifier = argument(0)??;
-            Some(HostArgs::Specifier { quasis: quasis_of(specifier)?, template: is_template(specifier), comments })
-        }
+        HostLoadKind::Import | HostLoadKind::Require => specifier_args(argument(0)??, None, comments),
         HostLoadKind::Context => Some(HostArgs::Context {
             dir: literal_text(argument(0)??)?,
             recursive: optional(argument(1), bool_literal)?,
@@ -525,7 +523,7 @@ fn host_args(kind: HostLoadKind, call: &CallExpression<'_>, comments: Vec<String
                     .collect::<Option<Vec<_>>>()?,
                 expression => vec![literal_text(expression)?],
             };
-            let options = optional(argument(1), static_json)?;
+            let options = optional(argument(1), object_json)?;
             Some(HostArgs::Glob { patterns, options })
         }
     }
@@ -597,6 +595,26 @@ fn literal_text(expression: &Expression<'_>) -> Option<String> {
     }
 }
 
+/// A specifier's arguments, for a template literal or a string
+/// concatenation only: hosts read a bare variable or another expression
+/// another way (webpack, an expression context). `options`, `import()`'s
+/// second argument, must be an object literal written statically.
+fn specifier_args(
+    specifier: &Expression<'_>,
+    options: Option<Option<&Expression<'_>>>,
+    comments: Vec<String>,
+) -> Option<HostArgs> {
+    if !is_text(specifier) {
+        return None;
+    }
+    Some(HostArgs::Specifier {
+        quasis: quasis_of(specifier)?,
+        template: is_template(specifier),
+        options: optional(options, object_json)?,
+        comments,
+    })
+}
+
 /// A specifier's static text between its substitutions: a template's
 /// quasis, a concatenation's strings, any other expression one
 /// substitution. `None` where a template's text has no cooked value.
@@ -635,6 +653,15 @@ fn is_text(expression: &Expression<'_>) -> bool {
             is_text(&binary.left) || is_text(&binary.right)
         }
         _ => false,
+    }
+}
+
+/// An object literal as JSON, where every value in it is written
+/// statically.
+fn object_json(expression: &Expression<'_>) -> Option<serde_json::Value> {
+    match expression.get_inner_expression() {
+        Expression::ObjectExpression(_) => static_json(expression),
+        _ => None,
     }
 }
 
