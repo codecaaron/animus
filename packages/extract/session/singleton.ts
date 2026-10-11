@@ -229,6 +229,36 @@ export function observationQueue(key: SessionKey): ObservationQueue {
   return joined(key).observations;
 }
 
+/** A system as one resolution context loaded it: the evaluated modules and
+ *  a fingerprint of everything the load produced. */
+export interface SystemLoad {
+  readonly identity: string;
+  readonly dependencies: readonly string[];
+}
+
+/**
+ * The build's one agreed system (SA5): the load its analysis runs on, the
+ * resolution context that made it, and each other participant context's
+ * load of the same system, made once.
+ */
+export interface SystemAuthority extends SystemLoad {
+  /** The context as stable text, and as a conflict names it. */
+  readonly context: string;
+  readonly label: string;
+  readonly others: Map<string, SystemLoad>;
+}
+
+export function getSystemAuthority(key: SessionKey): SystemAuthority | null {
+  return findSession(key)?.systemAuthority ?? null;
+}
+
+export function setSystemAuthority(
+  key: SessionKey,
+  authority: SystemAuthority
+): void {
+  joined(key).systemAuthority = authority;
+}
+
 export function setWatchTransaction(
   key: SessionKey,
   transaction: Promise<void> | null
@@ -342,13 +372,13 @@ export class SessionConfigurationConflict extends Error {
     readonly key: SessionKey,
     readonly established: string,
     readonly joining: string,
-    readonly differing: readonly string[]
+    readonly differing: readonly string[],
+    requirement = 'Every participant of one build must use the same Animus options.'
   ) {
     super(
       `[animus] SessionConfigurationConflict: "${joining}" joined build ` +
         `${key.build} of ${key.root} with ${differing.join(', ')} differing ` +
-        `from "${established}". Every participant of one build must use the ` +
-        `same Animus options.`
+        `from "${established}". ${requirement}`
     );
     this.name = 'SessionConfigurationConflict';
   }
@@ -430,6 +460,7 @@ export interface SessionState {
   /** The one in-flight watch-analysis transaction. */
   watchTransaction: Promise<void> | null;
   observations: ObservationQueue;
+  systemAuthority: SystemAuthority | null;
   manifestJson: string | null;
   sharedCss: string;
   sharedSystemProps: string;
@@ -500,6 +531,7 @@ export function joinSession(
         revisions: new Map(),
         active: null,
       },
+      systemAuthority: null,
       manifestJson: null,
       sharedCss: '',
       sharedSystemProps: '',

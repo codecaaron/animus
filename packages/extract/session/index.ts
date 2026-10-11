@@ -1,3 +1,5 @@
+export { COALESCING_WINDOW_MS, CoalescingWindow } from './coalescing-window';
+export type { WindowClock, WindowTimer } from './coalescing-window';
 export { ExtractionSession, pruneStaleAssets } from './extraction-session';
 export type {
   SessionHost,

@@ -168,6 +168,21 @@ pub enum Known<T: Ord> {
     Uncertain(Uncertainty),
 }
 
+/// How a change touches an object at its path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeKind {
+    /// A write, delete or `defineProperty` of the member at the path.
+    Write,
+    /// A write under a key the analysis cannot read, to the container at
+    /// the path.
+    UnknownKeyWrite,
+    /// The value at the path reaches code the analysis does not follow,
+    /// which may change anything in or below it.
+    Escape,
+    /// The binding that holds the object is assigned again.
+    Rebind,
+}
+
 /// A change the analysis sees to an object at a member path (empty for the
 /// object itself), with the clause that says where: `preset is passed to
 /// decorate() in a.tsx on line 4`.
@@ -175,6 +190,7 @@ pub enum Known<T: Ord> {
 pub struct Change {
     pub object: ObjectId,
     pub path: Vec<String>,
+    pub kind: ChangeKind,
     pub cause: String,
     /// When it was recorded, among changes and openings alike.
     order: usize,
@@ -201,6 +217,11 @@ pub struct SemanticClosure {
 pub enum AbsenceQuery {
     /// Nothing changes the object at or below the member path.
     Stable(ObjectId, Vec<String>),
+    /// Nothing rebinds the member at the path: no write of it or of a
+    /// container on the way to it, no write under an unknown key and no
+    /// escape of a container on the way, and no reassignment of the
+    /// binding. A change strictly below the member leaves it.
+    SlotNotWritten(ObjectId, Vec<String>),
 }
 
 /// Why a subject is exposed: a change the analysis sees, or an opening.
@@ -267,8 +288,8 @@ impl FlowBuilder {
         self.exports.entry(object).or_default().insert((module.to_string(), name.to_string()));
     }
 
-    pub fn change(&mut self, object: ObjectId, path: Vec<String>, cause: String) {
-        self.changes.push(Change { object, path, cause, order: self.recorded });
+    pub fn change(&mut self, object: ObjectId, path: Vec<String>, kind: ChangeKind, cause: String) {
+        self.changes.push(Change { object, path, kind, cause, order: self.recorded });
         self.recorded += 1;
     }
 
@@ -309,7 +330,8 @@ impl FlowBuilder {
                         let order = effects.recorded;
                         effects.recorded += 1;
                         let cause = format!("{}{cause}", flow.prefix);
-                        effects.add(Change { object: object.clone(), path: Vec::new(), cause, order });
+                        let kind = ChangeKind::Escape;
+                        effects.add(Change { object: object.clone(), path: Vec::new(), kind, cause, order });
                         grew = true;
                     }
                 }
@@ -319,6 +341,11 @@ impl FlowBuilder {
             }
         }
     }
+}
+
+/// Whether `prefix` is `path` or a path above it.
+fn prefix_of(prefix: &[String], path: &[String]) -> bool {
+    prefix.len() <= path.len() && prefix.iter().zip(path).all(|(a, b)| a == b)
 }
 
 /// The closed facts of one analysis.
@@ -355,7 +382,7 @@ impl ValueEffects {
                 None => true,
                 Some(atoms) => atoms.iter().any(|atom| match atom {
                     RegionAtom::Path(target, at) => target == object && at.is_empty(),
-                    atom => self.reaches(&Region::of(atom.clone()), object, &[]),
+                    atom => self.reaches(&Region::of(atom.clone()), object, &[], false),
                 }),
             })
     }
@@ -369,34 +396,52 @@ impl ValueEffects {
 
     /// Whether a subject is provably untouched, or what may reach it.
     pub fn covers(&self, query: &AbsenceQuery) -> Coverage<'_> {
-        let AbsenceQuery::Stable(object, path) = query;
-        // A change at a path reaches every path it is a prefix of, and the
-        // paths that are prefixes of it.
-        let overlaps = |at: &[String]| at.iter().zip(path).all(|(a, b)| a == b);
+        let (object, path, slot) = match query {
+            AbsenceQuery::Stable(object, path) => (object, path, false),
+            AbsenceQuery::SlotNotWritten(object, path) => (object, path, true),
+        };
+        let counts = |change: &Change| {
+            if !slot {
+                // A change at a path reaches every path it is a prefix of,
+                // and the paths that are prefixes of it.
+                return change.path.iter().zip(path).all(|(a, b)| a == b);
+            }
+            match change.kind {
+                ChangeKind::Rebind => true,
+                ChangeKind::Write => prefix_of(&change.path, path),
+                ChangeKind::UnknownKeyWrite | ChangeKind::Escape => {
+                    change.path.len() < path.len() && prefix_of(&change.path, path)
+                }
+            }
+        };
         let changed = self
             .changed
             .get(object)
             .into_iter()
             .flatten()
             .map(|&index| &self.changes[index])
-            .filter(|change| overlaps(&change.path))
+            .filter(|change| counts(change))
             .map(Exposure::Changed);
         let opened = self
             .closure
             .openings
             .iter()
-            .filter(|opening| self.reaches(&opening.exposure, object, path))
+            .filter(|opening| self.reaches(&opening.exposure, object, path, slot))
             .map(Exposure::Opened);
         let mut exposed: Vec<Exposure<'_>> = changed.chain(opened).collect();
         exposed.sort_by_key(Exposure::order);
         if exposed.is_empty() { Coverage::Disjoint } else { Coverage::Exposed(exposed) }
     }
 
-    fn reaches(&self, region: &Region, object: &ObjectId, path: &[String]) -> bool {
+    /// Whether an opening's region reaches the object at the path: for a
+    /// slot, a region of part of the object reaches it only at or above
+    /// the slot.
+    fn reaches(&self, region: &Region, object: &ObjectId, path: &[String], slot: bool) -> bool {
         let Some(atoms) = region.as_atoms() else { return true };
         let exports = self.exports.get(object);
         atoms.iter().any(|atom| match atom {
             RegionAtom::Object(target) => target == object,
+            RegionAtom::Path(target, at) if slot => target == object && prefix_of(at, path),
             RegionAtom::Path(target, at) => target == object && at.iter().zip(path).all(|(a, b)| a == b),
             RegionAtom::ScopeRegion(module) => object.module == *module,
             RegionAtom::ExportsOf(module) => exports.is_some_and(|names| names.iter().any(|(m, _)| m == module)),
@@ -427,6 +472,53 @@ mod tests {
         inputs
     }
 
+    /// A slot is exposed only by what can rebind it: a write of it or of a
+    /// container above it, a write under an unknown key or an escape of a
+    /// container above it, a reassignment of the binding, or an opening
+    /// that reaches the object at or above it. Anything strictly below the
+    /// slot leaves it, while `Stable` counts that too.
+    #[test]
+    fn a_slot_counts_only_what_can_rebind_it() {
+        let o = ObjectId::new("m.ts", "o");
+        let path = |members: &[&str]| members.iter().map(|member| member.to_string()).collect::<Vec<_>>();
+        let slot = AbsenceQuery::SlotNotWritten(o.clone(), path(&["Root"]));
+        let stable = AbsenceQuery::Stable(o.clone(), path(&["Root"]));
+        let changes: [(ChangeKind, &[&str], bool, bool); 10] = [
+            // (kind, at, slot exposed, stable exposed)
+            (ChangeKind::Write, &["Root"], true, true),
+            (ChangeKind::Write, &[], true, true),
+            (ChangeKind::Write, &["Root", "x"], false, true),
+            (ChangeKind::Write, &["Other"], false, false),
+            (ChangeKind::UnknownKeyWrite, &[], true, true),
+            (ChangeKind::UnknownKeyWrite, &["Root"], false, true),
+            (ChangeKind::Escape, &[], true, true),
+            (ChangeKind::Escape, &["Root"], false, true),
+            (ChangeKind::Escape, &["Other"], false, false),
+            (ChangeKind::Rebind, &[], true, true),
+        ];
+        let exposed = |effects: &ValueEffects, query: &AbsenceQuery| matches!(effects.covers(query), Coverage::Exposed(_));
+        for (kind, at, slot_exposed, stable_exposed) in changes {
+            let mut builder = FlowBuilder::new();
+            builder.change(o.clone(), path(at), kind, "changed".to_string());
+            let effects = builder.close();
+            assert_eq!(exposed(&effects, &slot), slot_exposed, "{kind:?} at {at:?}");
+            assert_eq!(exposed(&effects, &stable), stable_exposed, "{kind:?} at {at:?}");
+        }
+        let openings: [(RegionAtom, bool); 5] = [
+            (RegionAtom::Object(o.clone()), true),
+            (RegionAtom::Path(o.clone(), path(&["Root"])), true),
+            (RegionAtom::Path(o.clone(), path(&["Root", "x"])), false),
+            (RegionAtom::ExportsOf("m.ts".to_string()), true),
+            (RegionAtom::ExportedAs("elsewhere".to_string()), false),
+        ];
+        for (atom, slot_exposed) in openings {
+            let mut builder = FlowBuilder::new();
+            builder.export(o.clone(), "m.ts", "o");
+            builder.open(ReasonId::OpaqueEffect, Region::of(atom.clone()), "opened".to_string());
+            assert_eq!(exposed(&builder.close(), &slot), slot_exposed, "{atom:?}");
+        }
+    }
+
     /// Adding an opening never takes coverage away: a narrow opening on an
     /// object a flow reaches leaves the flow's whole-object change in place.
     #[test]
@@ -434,7 +526,7 @@ mod tests {
         let (x, y) = (ObjectId::new("m.ts", "x"), ObjectId::new("m.ts", "y"));
         let build = |narrow: bool| {
             let mut builder = FlowBuilder::new();
-            builder.change(y.clone(), Vec::new(), "y changes".to_string());
+            builder.change(y.clone(), Vec::new(), ChangeKind::Escape, "y changes".to_string());
             if narrow {
                 let region = Region::of(RegionAtom::Path(x.clone(), vec!["a".to_string()]));
                 builder.open(ReasonId::OpaqueEffect, region, "x.a may change".to_string());
