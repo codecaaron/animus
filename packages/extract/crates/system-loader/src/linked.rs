@@ -104,7 +104,8 @@ pub(crate) enum ExportTarget {
     Namespace { from: String },
 }
 
-/// A module of a cyclic graph, rewritten for linking.
+/// A module rewritten for linking: its exports, stars and imports link every
+/// graph; its link code and body make a cyclic graph's bundle.
 pub(crate) struct LinkedModule {
     /// Its own export names, in source order.
     pub exports: Vec<(String, ExportTarget)>,
@@ -298,7 +299,7 @@ pub(crate) fn rewrite_module_for_linking(
     Ok(module)
 }
 
-/// The export relation of a cyclic graph's modules, answered by the shared
+/// The export relation of a system's modules, cyclic or not, answered by the shared
 /// module table. A stub is a module outside the graph: an import of it names
 /// its export without proving it, and `export *` of it is open. The loader
 /// builds each stub's object, so it closes that opening itself: a star of a
@@ -309,10 +310,17 @@ pub(crate) struct Linker<'a> {
     keys: Vec<String>,
     index: HashMap<String, crate::module_table::ModuleIndex>,
     stubs: &'a HashMap<String, HashSet<String>>,
+    /// Each TypeScript module's type-only export names, which its stripped
+    /// record no longer holds.
+    type_exports: &'a HashMap<String, HashSet<String>>,
 }
 
 impl<'a> Linker<'a> {
-    pub fn new(modules: &HashMap<String, LinkedModule>, stubs: &'a HashMap<String, HashSet<String>>) -> Self {
+    pub fn new(
+        modules: &HashMap<String, LinkedModule>,
+        stubs: &'a HashMap<String, HashSet<String>>,
+        type_exports: &'a HashMap<String, HashSet<String>>,
+    ) -> Self {
         use crate::module_table::{Import, ImportName, ModuleRecord, ModuleTable, Request};
         let mut keys: Vec<String> = modules.keys().cloned().collect();
         keys.sort();
@@ -359,7 +367,7 @@ impl<'a> Linker<'a> {
             record.requests = requests;
             records.push(record);
         }
-        Self { table: ModuleTable::new(records), keys, index, stubs }
+        Self { table: ModuleTable::new(records), keys, index, stubs, type_exports }
     }
 
     /// Export `name` of `module`, with each open star of a stub closed: the
@@ -455,11 +463,21 @@ impl<'a> Linker<'a> {
         getters
     }
 
+    /// The getters of `module`'s names that do not read one of its own
+    /// bindings: what it re-exports, and what `export *` brings in.
+    pub fn forwarded(&self, module: &str) -> Vec<(String, String)> {
+        let record = self.table.record(self.index[module]);
+        self.getters(module)
+            .into_iter()
+            .filter(|(name, _)| !record.local_exports.iter().any(|(exported, _)| exported == name))
+            .collect()
+    }
+
     /// Fails as Node fails to link: an import of a name its module does not
     /// export, or exports ambiguously through `export *`, a re-export that
     /// does not resolve, and either through a module the graph does not hold.
     pub fn check_links(&self, module: &str) -> Result<(), String> {
-        use crate::module_table::{ExportLookup, ImportName, Request};
+        use crate::module_table::{ExportLookup, ImportName, Request, LINK_ABSENT_IMPORT, LINK_AMBIGUOUS_IMPORT};
         let at = self.index[module];
         let record = self.table.record(at);
         // A re-export is named by the name it exports, as Node names it.
@@ -476,15 +494,21 @@ impl<'a> Linker<'a> {
                 Request::Outside(_) => continue,
                 Request::Unresolved(key) => (key.clone(), ExportLookup::Absent),
             };
-            let problem = match lookup {
+            // A type a TypeScript module exports, imported or re-exported
+            // without `type`: the strip erased it, and a bundler without
+            // isolated modules erases the import too, so it links to nothing
+            // and fails nothing.
+            let erased_type = || self.type_exports.get(&from).is_some_and(|types| types.contains(name));
+            let (code, problem) = match lookup {
                 ExportLookup::Resolved(_) => continue,
-                ExportLookup::Ambiguous(_) => "which resolves it ambiguously through `export *`",
-                _ if verb == "re-exports" => "which resolves to no binding",
-                _ => "which does not export it",
+                ExportLookup::Absent if erased_type() => continue,
+                ExportLookup::Ambiguous(_) => (LINK_AMBIGUOUS_IMPORT, "which resolves it ambiguously through `export *`"),
+                _ if verb == "re-exports" => (LINK_ABSENT_IMPORT, "which resolves to no binding"),
+                _ => (LINK_ABSENT_IMPORT, "which does not export it"),
             };
             let target = if verb == "re-exports" { String::new() } else { format!(" from '{from}'") };
             return Err(format!(
-                "module '{module}' {verb} '{shown}'{target}, {problem}; the system loader links this cyclic \
+                "module '{module}' {verb} '{shown}'{target}, {problem} ({code}); the system loader links this \
                  module graph as Node does, and Node rejects this too"
             ));
         }
