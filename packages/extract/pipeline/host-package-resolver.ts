@@ -4,6 +4,8 @@
  * cannot resolve.
  */
 
+import { join } from 'path';
+
 import { bareSpecifierPackageName } from './discover-packages';
 import { extensionPolicyJson } from './host-extensions';
 
@@ -42,9 +44,20 @@ export function hostFirstPackageResolver(
   }
 ): HostFirstResolver {
   const loaderOnly = new Set<string>();
+  // Discovery resolves from the root: a host asked without an importer
+  // resolves from its own working directory or context, which can reach
+  // another copy of the package.
+  const rootImporter = join(context.rootDir, '__animus_discovery__.js');
   return {
     async resolveSpecifier(specifier) {
-      const hosted = await hostResolve(specifier);
+      let hosted: string | null;
+      try {
+        hosted = await hostResolve(specifier, rootImporter);
+      } catch {
+        // A host that fails is one that finds nothing: a declared
+        // workspace still reaches the loader.
+        hosted = null;
+      }
       if (
         hosted !== null ||
         !Object.hasOwn(context.workspaces, bareSpecifierPackageName(specifier))
