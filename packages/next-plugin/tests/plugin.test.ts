@@ -1,12 +1,21 @@
 import { isJsonObject, parseJsonObject } from '@animus-ui/assertions';
 import { RETIRED_ENGINE_MESSAGE } from '@animus-ui/extract/pipeline';
-import { readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import {
+  existsSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { ExtractionSession } from '../../extract/session/extraction-session';
+import { readCliLockRecord } from '../../extract/session/published-set';
 import { sessionArtifactDir } from '../../extract/session/session-paths';
 import {
+  findSession,
   getManifestJson,
   getSharedCss,
   sessionKey,
@@ -153,8 +162,20 @@ function createCompiler(
   const watchRunHandlers: AsyncHandler[] = [];
   const compilationHandlers: CompilationHandler[] = [];
   const thisCompilationHandlers: ThisCompilationHandler[] = [];
+  const shutdownHandlers: Array<() => void> = [];
+  const watchCloseHandlers: Array<() => void> = [];
   const compiler: PluginCompiler = {
     hooks: {
+      shutdown: {
+        tap: (_name: string, fn: () => void) => {
+          shutdownHandlers.push(fn);
+        },
+      },
+      watchClose: {
+        tap: (_name: string, fn: () => void) => {
+          watchCloseHandlers.push(fn);
+        },
+      },
       run: {
         tapPromise: (_name: string, fn: AsyncHandler) => {
           runHandlers.push(fn);
@@ -197,6 +218,8 @@ function createCompiler(
     watchRunHandlers,
     compilationHandlers,
     thisCompilationHandlers,
+    shutdown: () => shutdownHandlers.forEach((fn) => fn()),
+    watchClose: () => watchCloseHandlers.forEach((fn) => fn()),
   };
 }
 
@@ -672,6 +695,210 @@ describe('production run (full pipeline)', () => {
       String(call[0]).includes('not surfaced')
     );
     expect(surfaced).toHaveLength(0);
+  });
+});
+
+describe('coordinated teardown', () => {
+  /** Older than the 24h sibling-directory retention window. */
+  const age = (dir: string) => {
+    const stale = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    utimesSync(dir, stale, stale);
+  };
+
+  /** A later build of the root, whose startup prunes stale siblings. */
+  const startLaterBuild = async (root: string) => {
+    const later = createCompiler(root);
+    applyPlugin(
+      new AnimusWebpackPlugin(OPTIONS, { build: 'later' }),
+      later.compiler
+    );
+    await later.runHandlers[0](later.compiler);
+  };
+
+  /** Contract: a completed build is pruned once stale. When its last
+   *  compiler shuts down the build retires, so a later build of the root
+   *  removes its tree past the retention window. */
+  test('a completed build is pruned once stale', async () => {
+    const root = createProject();
+    const client = createCompiler(root, { name: 'client' });
+    const server = createCompiler(root, { name: 'server' });
+    const plugins = [client, server].map((side) => {
+      const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
+      applyPlugin(plugin, side.compiler);
+      return plugin;
+    });
+    await client.runHandlers[0](client.compiler);
+    await server.runHandlers[0](server.compiler);
+    const tree = sessionArtifactDir(root, plugins[0].sessionId);
+    client.shutdown();
+    server.shutdown();
+    age(tree);
+
+    await startLaterBuild(root);
+
+    expect(existsSync(tree)).toBe(false);
+  });
+
+  // dx-codex's witnesses for teardown.
+  test('a publisher that shuts down first leaves its sibling the tree and its claim', async () => {
+    const root = createProject();
+    const client = createCompiler(root, { name: 'client' });
+    const server = createCompiler(root, { name: 'server' });
+    const [publisher] = [client, server].map((side) => {
+      const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
+      applyPlugin(plugin, side.compiler);
+      return plugin;
+    });
+    await client.runHandlers[0](client.compiler);
+    await server.runHandlers[0](server.compiler);
+    const tree = sessionArtifactDir(root, publisher.sessionId);
+    client.shutdown();
+    age(tree);
+
+    await startLaterBuild(root);
+
+    expect(existsSync(tree)).toBe(true);
+    // The claim another process reads stays held while the build is live.
+    expect(readCliLockRecord(tree).kind).toBe('held');
+  });
+
+  test('a watch closed and started again analyzes in full', async () => {
+    const root = createProject();
+    const { compiler, watchRunHandlers, watchClose } = createCompiler(root);
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
+    applyPlugin(plugin, compiler);
+    await watchRunHandlers[0](compiler);
+    watchClose();
+
+    // A watch started again, with no edit: webpack's first watchRun carries
+    // no change sets, so only a full startup republishes the retired build.
+    await watchRunHandlers[0](compiler);
+
+    expect(getManifestJson(keyOf(root))).not.toBeNull();
+    expect(getSharedCss(keyOf(root))).not.toBe('');
+  });
+
+  test('a compiler still watching takes over when the publisher leaves', async () => {
+    const root = createProject();
+    const client = createCompiler(root, { name: 'client' });
+    const server = createCompiler(root, { name: 'server' });
+    for (const side of [client, server]) {
+      applyPlugin(
+        new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+        side.compiler
+      );
+    }
+    await client.watchRunHandlers[0](client.compiler);
+    await server.watchRunHandlers[0](server.compiler);
+    client.watchClose();
+
+    const buttonPath = join(root, 'src', 'Button.tsx');
+    nextComponentCss = '.btn{margin:24;}';
+    writeFileSync(buttonPath, BUTTON_SOURCE_CHANGED);
+    server.compiler.modifiedFiles = new Set([buttonPath]);
+    await server.watchRunHandlers[0](server.compiler);
+
+    expect(getSharedCss(keyOf(root))).toMatch(/margin:\s*24/);
+  });
+
+  test('a rewatch beside a live sibling sees what changed while it was away', async () => {
+    const root = createProject();
+    const client = createCompiler(root, { name: 'client' });
+    const server = createCompiler(root, { name: 'server' });
+    for (const side of [client, server]) {
+      applyPlugin(
+        new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+        side.compiler
+      );
+    }
+    await client.watchRunHandlers[0](client.compiler);
+    await server.watchRunHandlers[0](server.compiler);
+    client.watchClose();
+
+    nextComponentCss = '.btn{margin:32;}';
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
+    // Started again with no change sets, as webpack's first watchRun is.
+    await client.watchRunHandlers[0](client.compiler);
+
+    expect(getSharedCss(keyOf(root))).toMatch(/margin:\s*32/);
+  });
+
+  test('a rewatch racing the takeover joins it, with no error', async () => {
+    const root = createProject();
+    const client = createCompiler(root, { name: 'client' });
+    const server = createCompiler(root, { name: 'server' });
+    for (const side of [client, server]) {
+      applyPlugin(
+        new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+        side.compiler
+      );
+    }
+    await client.watchRunHandlers[0](client.compiler);
+    await server.watchRunHandlers[0](server.compiler);
+    client.watchClose();
+
+    const buttonPath = join(root, 'src', 'Button.tsx');
+    nextComponentCss = '.btn{margin:40;}';
+    writeFileSync(buttonPath, BUTTON_SOURCE_CHANGED);
+    server.compiler.modifiedFiles = new Set([buttonPath]);
+    await Promise.all([
+      server.watchRunHandlers[0](server.compiler),
+      client.watchRunHandlers[0](client.compiler),
+    ]);
+
+    // The client's next compilation carries any failure of its turn.
+    const { compilation } = createCompilation([]);
+    const errors: Error[] = [];
+    client.thisCompilationHandlers[0]({ ...compilation, errors });
+    expect(errors).toEqual([]);
+    expect(getSharedCss(keyOf(root))).toMatch(/margin:\s*40/);
+  });
+
+  test('a rewatch reconciles a file deleted while it was away', async () => {
+    const root = createProject();
+    const extraPath = join(root, 'src', 'Extra.tsx');
+    writeFileSync(extraPath, 'export const Extra = 1;\n');
+    const client = createCompiler(root, { name: 'client' });
+    const server = createCompiler(root, { name: 'server' });
+    for (const side of [client, server]) {
+      applyPlugin(
+        new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+        side.compiler
+      );
+    }
+    await client.watchRunHandlers[0](client.compiler);
+    await server.watchRunHandlers[0](server.compiler);
+    client.watchClose();
+    // The server takes over with an edit of its own.
+    const buttonPath = join(root, 'src', 'Button.tsx');
+    writeFileSync(buttonPath, BUTTON_SOURCE_CHANGED);
+    server.compiler.modifiedFiles = new Set([buttonPath]);
+    await server.watchRunHandlers[0](server.compiler);
+
+    rmSync(extraPath);
+    await client.watchRunHandlers[0](client.compiler);
+
+    const last = analyzeCall(mocks.analyzeProject.mock.calls.length - 1);
+    expect(parseFiles(last).map((f) => f.path)).not.toContain('src/Extra.tsx');
+  });
+
+  test('participants from two module copies never retire each other', async () => {
+    const root = createProject();
+    const { compiler, runHandlers } = createCompiler(root);
+    // The plugin runs on the session's dist copy; this one is the source's,
+    // under the same driver label.
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
+    applyPlugin(plugin, compiler);
+    await runHandlers[0](compiler);
+    const other = new ExtractionSession(OPTIONS, { build: BUILD });
+    other.rootDir = root;
+    other.driverLabel = 'animus-next';
+    expect(other.key.build).toBe(BUILD);
+
+    other.close();
+
+    expect(findSession(keyOf(root))).toBeDefined();
+    expect(getSharedCss(keyOf(root))).not.toBe('');
   });
 });
 

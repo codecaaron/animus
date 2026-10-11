@@ -18,6 +18,7 @@ import { dirname, join, relative, sep } from 'path';
 import { systemPropsPath } from '../../../extract/session/session-paths';
 import {
   getReplacementEpoch,
+  joinSession,
   sessionKey,
 } from '../../../extract/session/singleton';
 import {
@@ -494,6 +495,16 @@ export function buildHarnessWebpackConfig(
   const animus = args.plugins.find(
     (plugin) => plugin instanceof AnimusWebpackPlugin
   );
+  // The harness observes the plugin's build as a participant of its own, so
+  // the build outlives the compiler's close while a test reads what it
+  // published.
+  if (animus instanceof AnimusWebpackPlugin) {
+    joinSession(
+      sessionKey(animus.sessionId, args.root),
+      'watch-harness',
+      animus.getOptions()
+    );
+  }
   const config: HarnessWebpackConfig = {
     mode: 'development',
     context: args.root,

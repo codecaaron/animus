@@ -113,10 +113,17 @@ export const ds = createSystem({ includes: [kit] }).addGroup('layout', layout).b
  *  gives Next's client (`browser`) and server (`node`) compilers. */
 function createCompiler(root: string, name: string, condition: string) {
   const run: RunHandler[] = [];
+  const watchRun: RunHandler[] = [];
+  const watchClose: Array<() => void> = [];
   const compiler: PluginCompiler = {
     hooks: {
       run: { tapPromise: (_name: string, fn: RunHandler) => void run.push(fn) },
-      watchRun: { tapPromise: () => {} },
+      watchRun: {
+        tapPromise: (_name: string, fn: RunHandler) => void watchRun.push(fn),
+      },
+      watchClose: {
+        tap: (_name: string, fn: () => void) => void watchClose.push(fn),
+      },
       compilation: { tap: () => {} },
       thisCompilation: { tap: () => {} },
     },
@@ -133,7 +140,16 @@ function createCompiler(root: string, name: string, condition: string) {
       },
     },
   };
-  return { compiler, run: () => run[0](compiler) };
+  return {
+    compiler,
+    run: () => run[0](compiler),
+    /** One watch turn reporting `modified`, or none as a first turn. */
+    watchRun: (modified?: string[]) => {
+      compiler.modifiedFiles = modified ? new Set(modified) : undefined;
+      return watchRun[0](compiler);
+    },
+    watchClose: () => watchClose.forEach((fn) => fn()),
+  };
 }
 
 type Side = 'client' | 'server';
@@ -305,5 +321,49 @@ describe('one agreed system authority', () => {
     expect(() => other.agreeWithSystemAuthority()).toThrow(
       'SessionConfigurationConflict'
     );
+  }, 60000);
+
+  /** Contract: a participant attaching again writes nothing of its own. A
+   *  build still live answers through its current publisher, so the
+   *  participant's retained system never republishes. */
+  test('a participant attaching again writes through the current publisher', async () => {
+    const root = createProject('@kits/ui/definition');
+    const client = createCompiler(root, 'client', 'browser');
+    const server = createCompiler(root, 'server', 'node');
+    for (const side of [client, server]) {
+      new AnimusWebpackPlugin(
+        { system: './src/system.ts' },
+        { build: 'b' }
+      ).apply(side.compiler);
+    }
+    await client.watchRun();
+    await server.watchRun();
+    client.watchClose();
+
+    // The server takes over with the kit's new brand.
+    const definition = join(
+      root,
+      'node_modules',
+      '@kits',
+      'ui',
+      'src',
+      'definition.ts'
+    );
+    writeFileSync(
+      definition,
+      readFileSync(definition, 'utf-8').replace('#333333', '#444444')
+    );
+    await server.watchRun([definition]);
+    expect(getSharedCss(sessionKey('b', root))).toContain('#444444');
+
+    // The client attaches again and reports an edit.
+    await client.watchRun();
+    const appPath = join(root, 'src', 'App.tsx');
+    writeFileSync(appPath, 'export const App = 2;\n');
+    await client.watchRun([appPath]);
+
+    const css = getSharedCss(sessionKey('b', root));
+    expect(css).toContain('#444444');
+    expect(css).not.toContain('#333333');
   }, 60000);
 });
