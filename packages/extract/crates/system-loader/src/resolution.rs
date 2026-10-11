@@ -1,32 +1,34 @@
 //! The order in which a relative or aliased specifier's candidate files are
 //! tried: one policy, through which both the system loader and the
 //! extractor resolve, so a specifier names the same file for a system's
-//! evaluation and for an analysis. `relativeSourceCandidates` in
-//! `packages/extract/pipeline/source-ingestion.ts` mirrors it.
+//! evaluation and for an analysis. `extension_policy.json` is generated from
+//! `EXTENSION_POLICY` in `packages/extract/pipeline/extension-policy.ts`,
+//! which source ingestion reads (`node packages/extract/scripts/extension-policy.ts --write`).
+
+use std::sync::OnceLock;
 
 /// The candidate files a specifier's base path names, in the order they are
 /// tried: the base itself, the base with each appended extension, its
 /// `index` with each, then the NodeNext sources an emitted extension stands
 /// for, whatever the emitted extension's case.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExtensionPolicy {
     /// Appended to the base, then to `{base}/index`.
-    pub appended: &'static [&'static str],
+    pub appended: Vec<String>,
     /// An emitted extension (`./x.js`), and the source extensions it names
     /// (`x.ts`), tried in order.
-    pub node_next: &'static [(&'static str, &'static [&'static str])],
+    pub node_next: Vec<(String, Vec<String>)>,
 }
 
 /// The one extension policy.
-pub const EXTENSION_POLICY: ExtensionPolicy = ExtensionPolicy {
-    appended: &[".ts", ".tsx", ".js", ".jsx", ".mjs"],
-    node_next: &[
-        (".js", &[".ts", ".tsx", ".jsx"]),
-        (".jsx", &[".tsx"]),
-        (".mjs", &[".mts"]),
-        (".cjs", &[".cts"]),
-    ],
-};
+pub fn extension_policy() -> &'static ExtensionPolicy {
+    static POLICY: OnceLock<ExtensionPolicy> = OnceLock::new();
+    POLICY.get_or_init(|| {
+        serde_json::from_str(include_str!("extension_policy.json"))
+            .expect("extension_policy.json is generated valid JSON")
+    })
+}
 
 impl ExtensionPolicy {
     /// The first candidate for `base` that `exists`, in policy order. The

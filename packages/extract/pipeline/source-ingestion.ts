@@ -1,6 +1,7 @@
 import { posix } from 'node:path';
 
 import { contentHash } from './content-hash';
+import { EXTENSION_POLICY } from './extension-policy';
 import { parseInternalWire } from './internal-wire';
 import { SKIPPED_SOURCE_COST } from './manifest-diagnostics';
 import { preprocessMdx, type PreprocessMdxResult } from './mdx-preprocessor';
@@ -217,19 +218,12 @@ export interface SourceIngestionOptions {
   adaptSvelte?: typeof adaptSvelteSource;
 }
 
+/** As written, with each appended extension, then as a directory's index. */
 const RELATIVE_PROBE_SUFFIXES = [
   '',
-  '.ts',
-  '.tsx',
-  '.js',
-  '.jsx',
-  '.mjs',
-  '/index.ts',
-  '/index.tsx',
-  '/index.js',
-  '/index.jsx',
-  '/index.mjs',
-] as const;
+  ...EXTENSION_POLICY.appended,
+  ...EXTENSION_POLICY.appended.map((appended) => `/index${appended}`),
+];
 
 function extension(path: string): string {
   const basename = posix.basename(path);
@@ -242,18 +236,14 @@ function canonicalResolverPath(path: string): string {
 }
 
 /** NodeNext relative specifiers carry the EMITTED extension (`./x.js` for
- *  `x.ts`); the literal spelling is probed first, so a `.js` neighbor wins.
- *  Mirrors `EXTENSION_POLICY` in `crates/system-loader/src/resolution.rs`. */
+ *  `x.ts`); the literal spelling is probed first, so a `.js` neighbor wins. */
 interface NodeNextExtensionMap {
   readonly [emitted: string]: readonly string[] | undefined;
 }
 
-const NODE_NEXT_EXTENSION_MAP: NodeNextExtensionMap = {
-  '.js': ['.ts', '.tsx', '.jsx'],
-  '.jsx': ['.tsx'],
-  '.mjs': ['.mts'],
-  '.cjs': ['.cts'],
-};
+const NODE_NEXT_EXTENSION_MAP: NodeNextExtensionMap = Object.fromEntries(
+  EXTENSION_POLICY.nodeNext
+);
 
 /** The paths a relative specifier can name from `importerPath`, in probe
  *  order: as written with each source suffix, then a NodeNext emitted

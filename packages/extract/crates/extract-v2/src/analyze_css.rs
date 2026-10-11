@@ -743,7 +743,7 @@ pub fn resolve_import_source<T>(
 
 /// The analyzed file `base` names, through the one extension policy.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
-    animus_system_loader::resolution::EXTENSION_POLICY.probe(base, |candidate| files.contains_key(candidate))
+    animus_system_loader::resolution::extension_policy().probe(base, |candidate| files.contains_key(candidate))
 }
 
 /// Follow `export { X as Y } from '...'` hops, and local exports of an
