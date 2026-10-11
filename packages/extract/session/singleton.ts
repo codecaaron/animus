@@ -54,6 +54,15 @@ export function resetAnalysisStartedPromise(key: SessionKey): void {
   if (state !== undefined) state.analysisStarted = null;
 }
 
+/** True for the build's first caller only: the one that reports its
+ *  unmatched user excludes. */
+export function claimUnmatchedExcludeReport(key: SessionKey): boolean {
+  const state = joined(key);
+  if (state.unmatchedExcludesReported) return false;
+  state.unmatchedExcludesReported = true;
+  return true;
+}
+
 export function getSharedCss(key: SessionKey): string {
   return findSession(key)?.sharedCss ?? '';
 }
@@ -561,6 +570,9 @@ export interface SessionState {
   replacementEpoch: string | null;
   /** The artifact directory of the session's last publication. */
   artifactDir: string | null;
+  /** Whether the build reported its unmatched user excludes: once, after
+   *  its first full discovery, whether or not that pass publishes. */
+  unmatchedExcludesReported: boolean;
 }
 
 const SESSION_REGISTRY = Symbol.for('animus.session-registry.v1');
@@ -629,6 +641,7 @@ export function joinSession(
       analyzedHashes: null,
       replacementEpoch: null,
       artifactDir: null,
+      unmatchedExcludesReported: false,
     };
     sessions.set(id, state);
     return state;

@@ -523,6 +523,9 @@ export async function collectExternalPackageSources(opts: {
   /** The host's extension order (spec §2.2 A2) for an absolute include or a
    *  source-entry guess; the built-in policy without one. */
   extensions?: ExtensionOrder;
+  /** The host's output directories, absolute: a package inside one is
+   *  output, never collected as source. */
+  hostOutputDirs?: readonly string[];
 }): Promise<CollectedExternalPackages> {
   const {
     specifiers,
@@ -537,6 +540,7 @@ export async function collectExternalPackageSources(opts: {
     onPackageResolved,
     requireSourceEntry,
     extensions,
+    hostOutputDirs = [],
   } = opts;
 
   const entries: Array<{ path: string; source: string }> = [];
@@ -760,6 +764,21 @@ export async function collectExternalPackageSources(opts: {
       const reason = caseMismatch ?? unresolvedReason?.(specifier);
       if (reason !== undefined) record.reason = reason;
       outcomes.push(record);
+      continue;
+    }
+
+    const hostOutput = hostOutputDirs.find(
+      (dir) =>
+        isPathWithinRoot(dir, pkgRoot) ||
+        isPathWithinRoot(realPath(dir), realPath(pkgRoot))
+    );
+    if (hostOutput !== undefined) {
+      outcomes.push({
+        specifier,
+        outcome: 'unresolvable',
+        fileCount: 0,
+        reason: `the package lies inside the host's output directory ${hostOutput}, which is never source`,
+      });
       continue;
     }
 

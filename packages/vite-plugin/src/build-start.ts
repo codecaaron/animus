@@ -21,7 +21,7 @@ import {
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
-import { basename, relative } from 'path';
+import { basename, relative, resolve } from 'path';
 
 import type { DiscoveredSources, PluginContext } from './context';
 import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
@@ -292,6 +292,10 @@ async function discoverSources(
     rootDir: ctx.rootDir,
     extensionsSet: ctx.extensionsSet,
     hasEntry: (relPath) => rawEntries.some((entry) => entry.path === relPath),
+    hostOutputDirs:
+      ctx.outputExclude === null
+        ? []
+        : [resolve(ctx.rootDir, ctx.outputExclude)],
     onUnreadable: (relPath, err) => {
       if (!isDeletedSource(err)) {
         ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));

@@ -86,14 +86,13 @@ export function createCliSession(config: ResolvedCliConfig): ExtractionSession {
         `--root at the source tree.`
     );
   }
-  const anchored = outputExclusion(root, outDir);
-  if (
-    anchored !== null &&
-    !config.excludePatterns.some((p) => relOut.includes(p) || p === relOut)
-  ) {
-    session.structuralExclude = [anchored];
+  // Installed whatever the user's list says: no user pattern stands in for
+  // the output boundary.
+  const outputDir = outputExclusion(root, outDir);
+  if (outputDir !== null) {
+    session.structuralExclude = [outputDir];
     err(
-      `outDir ${relOut} is inside the root — auto-excluded from discovery (pattern '${anchored}')`
+      `outDir ${relOut} is inside the root — auto-excluded from discovery (directory '${outputDir}')`
     );
   }
 

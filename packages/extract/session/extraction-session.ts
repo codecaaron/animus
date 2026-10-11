@@ -100,6 +100,7 @@ import {
   joinSession,
   sessionKey,
   getOwningWatchSession,
+  claimUnmatchedExcludeReport,
   getManifestJson,
   getSystemAuthority,
   holdBuildClaimRecord,
@@ -527,8 +528,9 @@ export class ExtractionSession {
    *  driver serving the dir in place, `'every-cycle'` one republishing it. */
   staleAssetPruning: 'full-pipeline' | 'every-cycle' = 'full-pipeline';
 
-  /** Driver-owned STRUCTURAL exclusions, joined to the never-replaceable set
-   *  — never the user list, whose presence flips the replace semantics. */
+  /** The host's output directories (`outputExclusion`): root-relative,
+   *  excluded as literal path prefixes from discovery and from package
+   *  collection, whatever the user's list. */
   structuralExclude: string[] = [];
 
   private scanConfigMemo: {
@@ -1167,8 +1169,8 @@ export class ExtractionSession {
       excludeMatcher,
       extensionsSet
     );
-    // Once per build: its first full discovery, before anything publishes.
-    if (getManifestJson(this.key) === null) {
+    // Once per build: its first full discovery, whether or not it publishes.
+    if (claimUnmatchedExcludeReport(this.key)) {
       for (const line of unmatchedExcludeLines(excludeMatcher)) {
         console.error(line);
       }
@@ -1279,6 +1281,9 @@ export class ExtractionSession {
       rootDir,
       extensionsSet,
       hasEntry: (relPath) => rawEntries.some((e) => e.path === relPath),
+      hostOutputDirs: this.structuralExclude.map((dir) =>
+        resolve(rootDir, dir)
+      ),
       onSourceRead: (source, _relPath, absPath) => {
         rawExternalFiles.set(absPath, contentHash(source));
       },
