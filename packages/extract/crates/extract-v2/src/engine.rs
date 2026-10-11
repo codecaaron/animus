@@ -655,23 +655,31 @@ fn unstable_style_statics(
         // namespace's member, every export of a namespace used whole, or
         // the binding's own.
         let targets_of = |name: &str| -> Vec<(String, String)> {
-            let exposed = |name: Option<&str>| exposed_bindings(links, name).into_iter().flat_map(declarations).collect();
             let targets: Vec<(String, String)> = match name.split_once('.') {
                 Some((namespace, member)) => match namespace_of(file, namespace) {
                     Some(Request::Module(target)) => {
                         exported(&links.paths[*target], member).into_iter().flat_map(declarations).collect()
                     }
-                    Some(Request::Unresolved(_)) => exposed(Some(member)),
-                    Some(Request::Outside(_)) | None => Vec::new(),
+                    Some(Request::Unresolved(_) | Request::Outside(_)) | None => Vec::new(),
                 },
                 None => match namespace_of(file, name) {
                     Some(Request::Module(target)) => every_export(&links.paths[*target]),
-                    Some(Request::Unresolved(_)) => exposed(None),
-                    Some(Request::Outside(_)) => Vec::new(),
+                    Some(Request::Unresolved(_) | Request::Outside(_)) => Vec::new(),
                     None => possible(file, name),
                 },
             };
             targets.into_iter().filter(|target| mutable(target)).collect()
+        };
+        // A module the analysis cannot find may re-export any object under
+        // any name, so a use through its namespace may reach every exported
+        // object, as the member tables read it.
+        let unread = |flow: &mut FlowBuilder, name: &str, reason: String| {
+            let namespace = name.split_once('.').map_or(name, |(namespace, _)| namespace);
+            let missing = matches!(namespace_of(file, namespace), Some(Request::Unresolved(_)));
+            if missing {
+                flow.open(ReasonId::UnresolvedSpecifier, Region::of(RegionAtom::AllExports), reason);
+            }
+            missing
         };
         // A function hands a nested object on to whatever it hands
         // members to, so only an object of primitives passes as a read.
@@ -700,6 +708,9 @@ fn unstable_style_statics(
                 hand_on(&mut flow, &links.paths[*target], &said(file, name, used));
                 continue;
             }
+            if unread(&mut flow, name, said(file, name, used)) {
+                continue;
+            }
             for target in targets_of(name) {
                 for (path, kind) in changes_of(&target, at) {
                     flow.change(object(target.clone()), path, kind, said(file, name, used));
@@ -707,6 +718,9 @@ fn unstable_style_statics(
             }
         }
         for (name, used) in &module.facts.flat_reads {
+            if unread(&mut flow, name, format!("{}, and it holds a nested object", said(file, name, used))) {
+                continue;
+            }
             for target in targets_of(name).into_iter().filter(|target| nested(target)) {
                 for path in nested_members(&target) {
                     let reason = format!("{}, and it holds a nested object", said(file, name, used));
@@ -2760,6 +2774,18 @@ export const App = () => <Box tone="red" />;
                 "namespace of a missing module",
                 "./tokens",
                 vec![file("mutate.ts", "import * as ns from './missing';\nns.pad.padding = 9;\n")],
+            ),
+            // A module the analysis cannot find may re-export `pad` under any
+            // name.
+            (
+                "renamed member of a missing module's namespace",
+                "./tokens",
+                vec![file("mutate.ts", "import * as ns from './missing';\nns.Tooltip.padding = 9;\n")],
+            ),
+            (
+                "member of a missing module's namespace held by an alias",
+                "./tokens",
+                vec![file("mutate.ts", "import * as ns from './missing';\nconst tooltip = ns.Tooltip;\ntooltip.padding = 9;\n")],
             ),
         ];
         let mut stale = Vec::new();
