@@ -820,16 +820,8 @@ pub(crate) struct EnrichedUsage {
     pub escapes: BTreeSet<String>,
     /// See `FileFacts::spread_wrappers`.
     pub spread_wrappers: BTreeMap<String, SpreadWrapper>,
-    /// See `FileFacts::unsafe_object_uses`.
-    pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
-    /// See `FileFacts::object_handoffs`.
-    pub object_handoffs: Vec<Handoff>,
-    /// See `FileFacts::written_namespaces`.
-    pub written_namespaces: WrittenNamespaces,
     /// See `FileFacts::ordinary_components`.
     pub ordinary_components: BTreeSet<String>,
-    /// See `FileFacts::context_consts`.
-    pub context_consts: BTreeSet<String>,
     /// See `FileFacts::prop_tags`.
     pub prop_tags: Vec<PropTag>,
     /// See `FileFacts::name_uses`.
@@ -916,8 +908,6 @@ pub(crate) fn collect_enriched_usage(
     module_path: &str,
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
-    object_consts: &BTreeMap<&str, bool>,
-    assigned_targets: &BTreeSet<&str>,
 ) -> EnrichedUsage {
     let static_values = crate::eval::Statics::of(static_values, module_path);
     let exported: FxHashSet<&str> = exports.iter().filter_map(|e| e.local.as_deref()).collect();
@@ -1032,19 +1022,6 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeMap::new(),
     };
-    let context_consts =
-        origins.map_or_else(BTreeSet::new, |scoping| context_consts(program, scoping, &ReactImports::of(program, scoping)));
-    // A context is watched as an object too: its `Provider` must stay React's.
-    let mut watched = object_consts.clone();
-    for context in &context_consts {
-        watched.entry(context.as_str()).or_insert(false);
-    }
-    // Read through the scopes every module builds, so a module with no
-    // import or chain still records what may change its objects.
-    let (unsafe_object_uses, object_handoffs, written_namespaces) = match origins {
-        Some(scoping) => unsafe_object_uses(program, scoping, &watched, assigned_targets),
-        None => (BTreeMap::new(), Vec::new(), BTreeMap::new()),
-    };
     let (opaque_calls, opaque_tags, element_consts) =
         origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
     let (prop_tags, name_uses, namespace_member_uses) =
@@ -1056,11 +1033,7 @@ pub(crate) fn collect_enriched_usage(
         confined,
         escapes,
         spread_wrappers,
-        unsafe_object_uses,
-        object_handoffs,
-        written_namespaces,
         ordinary_components,
-        context_consts,
         prop_tags,
         name_uses,
         namespace_member_uses,
@@ -1711,6 +1684,39 @@ struct ObjectBinding {
 pub type WrittenNamespaces = BTreeMap<String, (String, ObjectUse)>;
 
 /// See `FileFacts::unsafe_object_uses`.
+/// What a module's own source says may change the objects the member
+/// tables follow, and the contexts it builds among them: read from its parse
+/// and semantic build alone, before any static value is evaluated.
+pub(crate) struct ObjectUses {
+    /// See `FileFacts::context_consts`.
+    pub context_consts: BTreeSet<String>,
+    /// See `FileFacts::unsafe_object_uses`.
+    pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
+    /// See `FileFacts::object_handoffs`.
+    pub object_handoffs: Vec<Handoff>,
+    /// See `FileFacts::written_namespaces`.
+    pub written_namespaces: WrittenNamespaces,
+}
+
+/// The uses of `object_consts` and of the module's contexts that may change
+/// them, through the module's one semantic build.
+pub(crate) fn object_uses(
+    program: &Program<'_>,
+    scoping: &Scoping,
+    object_consts: &BTreeMap<&str, bool>,
+    assigned_targets: &BTreeSet<&str>,
+) -> ObjectUses {
+    let context_consts = context_consts(program, scoping, &ReactImports::of(program, scoping));
+    // A context is watched as an object too: its `Provider` must stay React's.
+    let mut watched = object_consts.clone();
+    for context in &context_consts {
+        watched.entry(context.as_str()).or_insert(false);
+    }
+    let (unsafe_object_uses, object_handoffs, written_namespaces) =
+        unsafe_object_uses(program, scoping, &watched, assigned_targets);
+    ObjectUses { context_consts, unsafe_object_uses, object_handoffs, written_namespaces }
+}
+
 fn unsafe_object_uses(
     program: &Program<'_>,
     scoping: &Scoping,
@@ -5459,7 +5465,7 @@ pub fn collect_usage_facts_with_statics(
     module_path: &str,
 ) -> Vec<UsageFact> {
     let built = SemanticBuilder::new().build(program).semantic.into_scoping();
-    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[], &BTreeMap::new(), &BTreeSet::new())
+    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[])
         .usage
 }
 
