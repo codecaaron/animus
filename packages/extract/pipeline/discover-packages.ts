@@ -722,7 +722,8 @@ export async function collectExternalPackageSources(opts: {
             sourceEntryForSpecifier(
               specifier,
               join(pkgRoot, 'src'),
-              extensionsSet
+              extensionsSet,
+              rootDir
             ) !== null;
       if (!redirected) {
         outcomes.push({
