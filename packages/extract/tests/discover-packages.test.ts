@@ -1,9 +1,13 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
-import { extractSystemFilePackages } from '../pipeline/discover-packages';
+import {
+  extractSystemFilePackages,
+  probeAbsolutePathSpecifier,
+} from '../pipeline/discover-packages';
+import { webpackExtensionPolicy } from '../pipeline/host-extensions';
 
 import type { ModuleRecord } from '../pipeline/discover-packages';
 import type { ManifestDiagnostic } from '../pipeline/manifest-diagnostics';
@@ -708,4 +712,48 @@ describe('extractSystemFilePackages root bindings', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+const SOURCES = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs']);
+
+// Contract: extraction opens the file the host resolver opens, as the
+// system loader's `one_extension_policy_answers_system_and_analysis_alike`
+// does for its lanes. Each row: a webpack-like host's resolve options, the
+// files present, the specifier, the file it names (spec §2.2 A2).
+test.each([
+  // An exhausted alias ends resolution: no appended or index try.
+  [
+    { extensions: ['.js', '.ts'], extensionAlias: { '.js': ['.ts'] } },
+    ['a.js.ts'],
+    'a.js',
+    null,
+  ],
+  [{ extensionAlias: { '.js': ['.ts'] } }, ['a.js/index.js'], 'a.js', null],
+  // An alias key is the configured suffix, however many dots.
+  [
+    { extensions: ['.js', '.tsx'], extensionAlias: { '.view.js': ['.tsx'] } },
+    ['x.tsx', 'x.view.js'],
+    'x.view.js',
+    'x.tsx',
+  ],
+  // A captured order is all the host tries: no analysis source past it.
+  [{ extensions: ['.js'] }, ['only.ts'], 'only', null],
+])('%j with %j: %s names %s', (options, present, specifier, named) => {
+  const root = mkdtempSync(join(tmpdir(), 'discover-packages-'));
+  for (const file of present) {
+    mkdirSync(dirname(join(root, file)), { recursive: true });
+    writeFileSync(join(root, file), 'export {};\n');
+  }
+  const probed = probeAbsolutePathSpecifier(
+    join(root, specifier),
+    SOURCES,
+    root,
+    webpackExtensionPolicy('webpack', options, '5.105.4')
+  );
+
+  rmSync(root, { recursive: true, force: true });
+
+  expect(probed.kind === 'found' ? relative(root, probed.path) : null).toBe(
+    named
+  );
 });

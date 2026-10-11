@@ -49,9 +49,10 @@ const BUILT_IN_ORDER: ExtensionOrder = {
 /** The files `base` can name, in policy order: itself, with each appended
  *  extension, as a directory's index with each, then the sources its
  *  emitted NodeNext extension stands for (`x.js` names `x.ts`), spelled
- *  exactly. Given `sources`, only extensions in it are tried, and those
- *  the policy lacks (`.mdx`) follow its own. `index` spells a directory's
- *  index path. */
+ *  exactly. Given `sources`, only extensions in it are tried, and under the
+ *  built-in order those it lacks (`.mdx`) follow its own. A configured
+ *  alias of the base's suffix replaces all of these. `index` spells a
+ *  directory's index path. */
 export function policyCandidates(
   base: string,
   options: {
@@ -67,10 +68,24 @@ export function policyCandidates(
     index = (directory, file) => `${directory}/${file}`,
     policy = BUILT_IN_ORDER,
   } = options;
+  // A configured alias of the emitted extension, the first whose suffix
+  // the base ends with, replaces the whole search, as enhanced-resolve and
+  // the system loader read it: each spelling is tried as written, and
+  // exhausting them ends resolution. Exact case.
+  const alias = policy.alias.find(([from]) => base.endsWith(from));
+  if (alias !== undefined) {
+    const [from, sequence] = alias;
+    const stem = base.slice(0, base.length - from.length);
+    return sequence.map((to) => `${stem}${to}`);
+  }
   const admitted = (extension: string) => !sources || sources.has(extension);
+  // Source extensions the order lacks (`.mdx`) follow it only under
+  // Animus's own order, which every built-in fallback shares: a captured
+  // host order is all the host tries, so a file it cannot find is no file
+  // to analyse in its place.
   const appended = [
     ...policy.appended.filter(admitted),
-    ...(sources
+    ...(sources && policy.appended === EXTENSION_POLICY.appended
       ? [...sources].filter((s) => !policy.appended.includes(s))
       : []),
   ];
@@ -84,11 +99,8 @@ export function policyCandidates(
   const nodeNext = (
     policy.nodeNext.find(([from]) => from === emitted)?.[1] ?? []
   ).filter(admitted);
-  // A configured alias of the emitted extension replaces the literal try,
-  // in its order, as the system loader reads it.
-  const alias = policy.alias.find(([from]) => from === emitted)?.[1];
   return [
-    ...(alias === undefined ? [base] : alias.map((to) => `${stem}${to}`)),
+    base,
     ...appended.map((extension) => `${base}${extension}`),
     ...appended.map((extension) => index(base, `index${extension}`)),
     ...nodeNext.map((source) => `${stem}${source}`),

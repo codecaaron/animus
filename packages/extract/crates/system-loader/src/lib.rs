@@ -2288,9 +2288,11 @@ export const ds = tokens;
         let turbopack = order(&[".tsx", ".ts", ".jsx", ".js", ".mjs", ".json"], &[], &[]);
         let alias_only = order(&[".js", ".json", ".wasm"], &[], &[(".js", &[".ts"])]);
         let alias_then_js = order(&[".js", ".json", ".wasm"], &[], &[(".js", &[".ts", ".js"])]);
+        let alias_appending_ts = order(&[".js", ".ts"], &[], &[(".js", &[".ts"])]);
+        let multi_dot_alias = order(&[".js", ".tsx"], &[], &[(".view.js", &[".tsx"])]);
         /// A host, its order, the files present, the specifier, the file named.
         type Row<'r> = (&'r str, &'r resolution::ExtensionPolicy, &'r [&'r str], &'r str, Option<&'r str>);
-        let rows: [Row; 10] = [
+        let rows: [Row; 13] = [
             ("vite", &vite, &["a.ts", "a.js"], "./a", Some("a.js")),
             ("vite", &vite, &["a.jsx", "a.mjs"], "./a", Some("a.mjs")),
             ("built-in", &built_in, &["a.js", "a.ts"], "./a.js", Some("a.js")),
@@ -2303,6 +2305,11 @@ export const ds = tokens;
             ("webpack alias ['.ts']", &alias_only, &["y.js"], "./y.js", None),
             ("webpack alias ['.ts']", &alias_only, &["y.ts", "y.js"], "./y.js", Some("y.ts")),
             ("webpack alias ['.ts', '.js']", &alias_then_js, &["x.ts", "x.js"], "./x.js", Some("x.ts")),
+            // An exhausted alias ends resolution: no appended or index try.
+            ("webpack alias ['.ts'], appending .ts", &alias_appending_ts, &["a.js.ts"], "./a.js", None),
+            ("webpack alias ['.ts']", &alias_only, &["a.js/index.js"], "./a.js", None),
+            // An alias key is the configured suffix, however many dots.
+            ("webpack alias '.view.js'", &multi_dot_alias, &["x.tsx", "x.view.js"], "./x.view.js", Some("x.tsx")),
         ];
         for (index, (host, policy, present, specifier, expected)) in rows.into_iter().enumerate() {
             let dir = scratch_dir(&format!("extension-policy-{index}"));
