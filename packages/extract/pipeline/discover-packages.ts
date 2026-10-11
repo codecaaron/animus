@@ -44,6 +44,7 @@ import type {
   ExtractImportFact,
 } from './source-ingestion';
 import type { JsonValue } from './tsconfig-paths';
+import type { WorkspacePackages } from './workspace-packages';
 
 export function findPackageRoot(absEntryPath: string): string {
   let pkgRoot = dirname(absEntryPath);
@@ -197,6 +198,66 @@ export interface KitSourceCondition {
   root: string | null;
 }
 
+/** A kit's source root as the system loader's table selects it (spec §2.2
+ *  A5): the rule that chose it, each exact entry's source file, and the
+ *  `animus` targets the loader does not read as source, with why. Each of
+ *  those falls back to its runtime target, except a percent-escaped one,
+ *  which fails the load. `unresolved` names why the specifier names no file
+ *  though its package was located. */
+export interface KitSourceSelection {
+  rule: 'animus' | 'source-exports' | 'src' | 'compiled';
+  root: string | null;
+  entries: Array<[subpath: string, file: string]>;
+  invalid: Array<[subpath: string, target: string, why: string]>;
+  unresolved: string | null;
+}
+
+/** A specifier's kit source root, given the package discovery located and
+ *  the file the host resolves; null where no host imports the specifier. */
+export type KitSourceRootResolver = (
+  specifier: string,
+  packageDir: string,
+  hostEntry: string | null
+) => KitSourceSelection | null;
+
+/** The native table's kit source roots under one resolution context. */
+export function nativeKitSourceRoot(
+  engine: Pick<EngineApi, 'resolveKitSourceRoot'>,
+  fromDir: string,
+  conditions: readonly string[],
+  workspaces: WorkspacePackages,
+  extensionPolicyJson: string
+): KitSourceRootResolver {
+  const native = engine.resolveKitSourceRoot;
+  return (specifier, packageDir, hostEntry) => {
+    if (native === undefined) {
+      throw new Error(
+        'the native engine does not expose resolveKitSourceRoot, which kit discovery needs — rebuild @animus-ui/extract'
+      );
+    }
+    const answer = parseInternalWire<Partial<KitSourceSelection>>(
+      native(
+        specifier,
+        fromDir,
+        [...conditions],
+        workspaces,
+        extensionPolicyJson,
+        hostEntry ?? undefined,
+        packageDir
+      ),
+      'resolveKitSourceRoot'
+    );
+    if (answer.rule === undefined) return null;
+    return {
+      rule: answer.rule,
+      root: answer.root ?? null,
+      entries: answer.entries ?? [],
+      invalid: answer.invalid ?? [],
+      unresolved: answer.unresolved ?? null,
+    };
+  };
+}
+
 /** A package target Node accepts, as the system loader reads it
  *  (`valid_package_target`): relative to the package root (`./`), with no
  *  `.`, `..` or `node_modules` segment after it. An empty segment loads. */
@@ -231,9 +292,10 @@ export function readKitSourceCondition(
     if (subpath.includes('*') || !isJsonBlock(value)) continue;
     const target = value[KIT_SOURCE_CONDITION];
     if (!isJsonString(target)) continue;
-    // Read as the system loader reads a target: a raw backslash is a `/`,
-    // and a percent-escape is refused. A target it refuses is no source: it
-    // evaluates the runtime entry, so analysis reads that entry too.
+    // Read as the system loader reads a target: a raw backslash is a `/`.
+    // A target it does not read as source is no source: for most it
+    // evaluates the runtime entry instead, while a percent-escaped one fails
+    // the load (percent-escape unsupported).
     const file = resolve(pkgRoot, target.replaceAll('\\', '/'));
     const escaped = target.includes('%');
     const seen =
@@ -267,50 +329,6 @@ function sourceRoot(entries: Array<[string, string]>): string | null {
       root === null ? dirname(file) : commonDirectory(root, dirname(file)),
     null
   );
-}
-
-/** A TypeScript source file; compiled output and declarations are not. */
-const TS_SOURCE = /(?<!\.d)\.[cm]?tsx?$/;
-
-/** A kit with no source condition whose every exact `exports` entry already
- *  targets TypeScript source in the package under `import` or `default`:
- *  those targets are its source, as the condition would name them. Null
- *  when any exact entry has no such target, such as one only `require` or
- *  `types` reaches, or there is no exact entry. A target that differs from
- *  its file only in case names no file, as the system loader reads it: why,
- *  never a guess past it. */
-function sourceExportsCondition(
-  pkgRoot: string
-): KitSourceCondition | { caseMismatch: string } | null {
-  const entries: Array<[string, string]> = [];
-  for (const [subpath, value] of exportsSubpaths(
-    readPackageManifest(pkgRoot)
-  )) {
-    if (subpath.includes('*')) continue;
-    const target = exportTarget(value);
-    const file = target === null ? null : resolve(pkgRoot, target);
-    if (
-      target === null ||
-      file === null ||
-      !TS_SOURCE.test(file) ||
-      !isPathWithinRoot(pkgRoot, file)
-    )
-      return null;
-    const seen = seeOnDisk(file, pkgRoot);
-    if (seen.kind === 'case-only') {
-      return {
-        caseMismatch: caseMismatchReason(
-          `exports["${subpath}"] of ${join(pkgRoot, 'package.json')}`,
-          { candidate: target, actual: seen.actual },
-          'spell the export target as the file is spelled'
-        ),
-      };
-    }
-    if (seen.kind !== 'file') return null;
-    entries.push([subpath, file]);
-  }
-  if (entries.length === 0) return null;
-  return { entries, invalid: [], root: sourceRoot(entries) };
 }
 
 function commonDirectory(a: string, b: string): string {
@@ -567,6 +585,8 @@ export async function collectExternalPackageSources(opts: {
   ) => string | null | Promise<string | null>;
   /** Why `resolveSpecifier` found no file for a specifier, when it knows. */
   unresolvedReason?: (specifier: string) => string | undefined;
+  /** Each kit's source root, as the system loader's table selects it. */
+  kitSourceRoot: KitSourceRootResolver;
   rootDir: string;
   extensionsSet: ReadonlySet<string>;
   hasEntry: (relPath: string) => boolean;
@@ -587,6 +607,7 @@ export async function collectExternalPackageSources(opts: {
     specifiers,
     resolveSpecifier,
     unresolvedReason,
+    kitSourceRoot,
     rootDir,
     extensionsSet,
     hasEntry,
@@ -762,18 +783,39 @@ export async function collectExternalPackageSources(opts: {
         realPath(resolvedRoot) === locatedRoot)
         ? resolvedRoot
         : locatedRoot || resolvedRoot;
-    const declared =
-      packageName && pkgRoot ? readKitSourceCondition(pkgRoot) : null;
-    const inferred =
-      packageName && pkgRoot && !declared
-        ? sourceExportsCondition(pkgRoot)
+    // The table selects the kit's source: its `animus` targets, else its
+    // source-targeting exports, else a `src/` guess, else the runtime
+    // entry's directory. The host's entry stays the runtime entry.
+    const selection =
+      packageName && pkgRoot
+        ? kitSourceRoot(specifier, pkgRoot, absEntry)
         : null;
-    if (inferred && 'caseMismatch' in inferred) {
+    if (selection?.unresolved) {
       absEntry = null;
-      caseMismatch = inferred.caseMismatch;
+      caseMismatch = selection.unresolved;
     }
-    const condition =
-      declared ?? (inferred && !('caseMismatch' in inferred) ? inferred : null);
+    const condition: KitSourceCondition | null =
+      selection &&
+      (selection.rule === 'animus' ||
+        selection.rule === 'source-exports' ||
+        selection.invalid.length > 0)
+        ? {
+            entries: selection.entries,
+            invalid: selection.invalid,
+            root: selection.rule === 'compiled' ? null : selection.root,
+          }
+        : null;
+    // A refused selection fails the load, so its finding is reported with
+    // the unresolvable outcome.
+    if (
+      selection?.unresolved &&
+      condition &&
+      packageName &&
+      !reportedPackages.has(packageName)
+    ) {
+      reportedPackages.add(packageName);
+      diagnostics.push(...sourceConditionDiagnostics(packageName, condition));
+    }
     const entryKey = packageName && `.${specifier.slice(packageName.length)}`;
     absEntry ??=
       condition?.entries.find(([entry]) => entry === entryKey)?.[1] ?? null;
@@ -793,7 +835,7 @@ export async function collectExternalPackageSources(opts: {
       const redirected =
         condition && packageName
           ? condition.entries.some(([entry]) => entry === entryKey)
-          : existsSync(join(pkgRoot, 'src')) &&
+          : selection?.rule === 'src' &&
             sourceEntryForSpecifier(
               specifier,
               join(pkgRoot, 'src'),
@@ -882,7 +924,9 @@ export async function collectExternalPackageSources(opts: {
           if (ingest(file, specifier)) fileCount++;
         }
       }
-    } else if (existsSync(srcDir)) {
+    } else if (
+      selection === null ? existsSync(srcDir) : selection.rule === 'src'
+    ) {
       packageDirs.push(srcDir);
       if (linked) linkedDirs.push(srcDir);
       claimDir(srcDir, specifier);
@@ -1094,7 +1138,9 @@ export function importedKitDiagnostics(
 }
 
 /** A kit without the source condition, warned once, or each condition entry
- *  whose target is missing or no package target Node accepts. */
+ *  the loader does not read as source: missing, spelled otherwise on disk,
+ *  no package target Node accepts (each read from its runtime target), or
+ *  percent-escaped (refused, failing the load). */
 function sourceConditionDiagnostics(
   packageName: string,
   condition: KitSourceCondition | null
@@ -1115,7 +1161,11 @@ function sourceConditionDiagnostics(
     file: packageName,
     component: 'kit',
     kind: 'warn',
-    message: `exports["${subpath}"].${KIT_SOURCE_CONDITION} names ${target}, which ${why}, so that entry is read from its runtime target instead of source`,
+    // The loader refuses a percent-escaped target loudly; any other invalid
+    // target falls back to the entry's runtime target.
+    message: why.includes('percent-escape unsupported')
+      ? `exports["${subpath}"].${KIT_SOURCE_CONDITION}: ${why}, so the system loader fails to load that entry`
+      : `exports["${subpath}"].${KIT_SOURCE_CONDITION} names ${target}, which ${why}, so that entry is read from its runtime target instead of source`,
     code: INVALID_KIT_SOURCE_CONDITION,
     severity: severityFor(INVALID_KIT_SOURCE_CONDITION),
   }));
