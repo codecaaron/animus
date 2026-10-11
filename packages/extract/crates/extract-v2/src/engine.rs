@@ -456,6 +456,8 @@ struct StyleModule {
     written_namespaces: crate::usage_facts::WrittenNamespaces,
     namespace_exports: BTreeMap<String, String>,
     loads: Vec<String>,
+    /// The modules its `import` and `export … from` declarations load.
+    imports: Vec<String>,
     /// How it runs code from a string, which can load any module.
     dynamic_code: Option<&'static str>,
 }
@@ -650,6 +652,14 @@ fn unstable_style_statics(
             .iter()
             .map(|(name, spec)| (spec, format!("as the namespace {name}")));
         let loads = module.loads.iter().map(|spec| (spec, "at runtime".to_string()));
+        // A module the analysis cannot find runs when this one imports it,
+        // bindings or not, and may re-export any static.
+        for spec in &module.imports {
+            if let Some(unread @ crate::link::Unread::Missing) = crate::link::unread_source(file, spec, files, inputs) {
+                let reason = format!("{file} imports {spec}, and {}", unread.clause());
+                flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+            }
+        }
         for (spec, how) in reexports.chain(loads) {
             if let Some(unread) = crate::link::unread_source(file, spec, files, inputs) {
                 let reason = format!("{file} hands on {spec} {how}, and {}", unread.clause());
@@ -938,6 +948,12 @@ impl ExtractEngine {
                                 LoadKind::DynamicImport | LoadKind::Call { require: true } | LoadKind::WrappedRequire
                             ) && matches!(load.spelling, Spelling::String | Spelling::Template)
                         })
+                        .filter_map(|load| load.specifier().map(str::to_string))
+                        .collect(),
+                    imports: lowered_by_file[&ast.path]
+                        .loads
+                        .iter()
+                        .filter(|load| matches!(load.kind, LoadKind::Import { runtime: true, .. } | LoadKind::Reexport { runtime: true }))
                         .filter_map(|load| load.specifier().map(str::to_string))
                         .collect(),
                     dynamic_code: lowered_by_file[&ast.path].dynamic_code,
@@ -2255,6 +2271,7 @@ export const App = () => <Box tone="red" />;
             ("package require(), template literal", "require(`@local/proxy`).pad.padding = 9;", "{ ...pad }"),
             // A path the analysis cannot find may be a module at run time.
             ("missing module import()", "await import('./generated.js').then((m) => { m.pad.padding = 9; });", "{ ...pad }"),
+            ("missing module side-effect import", "import './generated.js';", "{ ...pad }"),
             // Code from a string can load and change any module (PF3).
             (
                 "eval loads the module",

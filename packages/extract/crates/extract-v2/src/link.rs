@@ -249,8 +249,8 @@ pub(crate) enum Unread {
     /// Node.
     Package,
     /// A path that names no file the analysis holds: one it excluded, one
-    /// generated later, or one in a language it does not read. A data or
-    /// asset file imports nothing.
+    /// generated later, or one in a language it does not read. A file the
+    /// host reads as an opaque value imports nothing.
     Missing,
 }
 
@@ -281,19 +281,22 @@ pub(crate) fn unread_source<T>(
 ) -> Option<Unread> {
     match named(path, specifier, files, inputs) {
         Named::Package(identity) if !is_node_builtin(&identity) => Some(Unread::Package),
-        Named::Nothing if !names_data(specifier) => Some(Unread::Missing),
+        Named::Nothing if !host_reads_opaque(path, specifier, inputs) => Some(Unread::Missing),
         _ => None,
     }
 }
 
-/// The extensions of data and style files, which import no module of code.
-const DATA_EXTENSIONS: [&str; 8] = [".json", ".css", ".scss", ".sass", ".less", ".styl", ".pcss", ".postcss"];
-
-/// Whether `specifier` names a data, style or asset file rather than code.
-fn names_data(specifier: &str) -> bool {
-    let path = specifier.split('?').next().unwrap_or(specifier).to_ascii_lowercase();
-    animus_system_loader::asset_import_reason(specifier).is_some()
-        || DATA_EXTENSIONS.iter().any(|extension| path.ends_with(extension))
+/// Whether the host reads what `specifier`, written in `path`, names as an
+/// opaque value or through analysis children (spec §2.2 A8): an asset, a
+/// stylesheet, JSON, a file a query loads as a string, or an adapted
+/// original. Without the host's reading, a file is not opaque.
+fn host_reads_opaque(path: &str, specifier: &str, inputs: &CssInputs) -> bool {
+    let base = crate::analyze_css::probe_base(path, specifier, inputs);
+    let host = base.and_then(|base| inputs.probe_evidence.as_ref()?.bases.get(&base).cloned());
+    matches!(
+        host.and_then(|host| host.reading),
+        Some(crate::analyze_css::HostReading::Asset | crate::analyze_css::HostReading::Adapted)
+    )
 }
 
 /// Every analysed module's record, linked: modules in path order, each

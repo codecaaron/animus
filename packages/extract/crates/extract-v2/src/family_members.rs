@@ -780,6 +780,15 @@ impl<'f> ObjectMembers<'f> {
                 let reason = format!("{module} re-exports {target} as the namespace {name}");
                 self.namespace_reach(&target).record(&mut flow, Vec::new(), &reason);
             }
+            // A module the analysis cannot find runs when this one loads it
+            // by declaration, bindings or not, and may re-export any object.
+            for import in &ff.runtime_imports {
+                let LoadTarget::Specifier(spec) = &import.target else { continue };
+                if let Some(unread @ crate::link::Unread::Missing) = crate::link::unread_source(module, spec, files, inputs) {
+                    let reason = format!("{module} imports {spec} on line {}, and {}", import.line, unread.clause());
+                    flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+                }
+            }
             for load in &ff.module_loads {
                 if let LoadTarget::Specifier(spec) = &load.target {
                     if let Some(unread) = crate::link::unread_source(module, spec, files, inputs) {

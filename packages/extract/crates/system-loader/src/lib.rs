@@ -605,9 +605,7 @@ const ASSET_EXTENSIONS: &[&str] = &[
     ".svg", ".ico", ".mp4", ".webm", ".mp3", ".wasm", ".pdf",
 ];
 
-/// Why a specifier names an asset rather than a module of code: a bundler
-/// asset query, or a binary asset extension.
-pub fn asset_import_reason(specifier: &str) -> Option<&'static str> {
+fn asset_import_reason(specifier: &str) -> Option<&'static str> {
     if let Some((_, query)) = specifier.split_once('?') {
         if matches!(query, "url" | "raw" | "inline" | "no-inline") {
             return Some("bundler asset query suffix");

@@ -529,6 +529,10 @@ pub struct FileFacts {
     /// follow.
     #[serde(skip)]
     pub(crate) module_loads: Vec<crate::loads::ModuleLoad>,
+    /// Each `import` and `export … from` declaration the compiler keeps,
+    /// bindings or not: the module it names runs when this one loads.
+    #[serde(skip)]
+    pub(crate) runtime_imports: Vec<crate::loads::ModuleLoad>,
     /// The specifiers of this file's bindingless runtime imports
     /// (`import './x'`): the host loads each for its effects, so each is
     /// probed (spec §2.2 A8).
@@ -1641,6 +1645,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         value_escapes,
         spread_wrappers,
         module_loads: loads.iter().filter_map(|load| load.module_load(source)).collect(),
+        runtime_imports: loads.iter().filter_map(|load| load.runtime_import(source)).collect(),
         bindingless_imports: loads
             .iter()
             .filter(|load| load.kind == crate::loads::LoadKind::Import { runtime: true, bindingless: true })

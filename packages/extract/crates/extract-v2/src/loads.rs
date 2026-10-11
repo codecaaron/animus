@@ -57,6 +57,23 @@ impl Load {
         }
     }
 
+    /// The declaration as `FileFacts::runtime_imports` records it: an
+    /// `import` or `export … from` the compiler keeps, bindings or not.
+    pub fn runtime_import(&self, source: &str) -> Option<ModuleLoad> {
+        matches!(self.kind, LoadKind::Import { runtime: true, .. } | LoadKind::Reexport { runtime: true })
+            .then(|| self.recorded(source, false))
+    }
+
+    fn recorded(&self, source: &str, dynamic_import: bool) -> ModuleLoad {
+        let (start, end) = (self.span.start as usize, self.span.end as usize);
+        ModuleLoad {
+            target: self.target.clone(),
+            dynamic_import,
+            line: source[..start].matches('\n').count() + 1,
+            call: source[start..end].split_whitespace().collect::<Vec<_>>().join(" "),
+        }
+    }
+
     /// The load as `FileFacts::module_loads` records it, for a load that
     /// is no declaration.
     pub fn module_load(&self, source: &str) -> Option<ModuleLoad> {
@@ -65,13 +82,7 @@ impl Load {
             LoadKind::Call { .. } | LoadKind::WrappedRequire => false,
             LoadKind::Import { .. } | LoadKind::Reexport { .. } => return None,
         };
-        let (start, end) = (self.span.start as usize, self.span.end as usize);
-        Some(ModuleLoad {
-            target: self.target.clone(),
-            dynamic_import,
-            line: source[..start].matches('\n').count() + 1,
-            call: source[start..end].split_whitespace().collect::<Vec<_>>().join(" "),
-        })
+        Some(self.recorded(source, dynamic_import))
     }
 }
 

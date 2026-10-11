@@ -13357,6 +13357,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     fn analyze_with_logical_space(entries: &[(&str, &str)]) -> CssOutput {
+        analyze(entries, &logical_space_inputs())
+    }
+
+    fn logical_space_inputs() -> CssInputs {
         let mut inputs = CssInputs::from_json(
             None,
             None,
@@ -13378,7 +13382,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         )
         .unwrap();
         inputs.theme.insert("space.8".into(), "0.5rem".into());
-        analyze(entries, &inputs)
+        inputs
     }
 
     /// An object handed to a module-scope function nothing writes stays
@@ -13442,8 +13446,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
         let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
         let barrel = "export * from './fam';\nexport * from 'some-package';\n";
-        // `./bridge` is outside the analysis and may `export { Fam as X }`.
-        let bridged = "export * from './bridge';\n";
+        // `some-bridge` is a package outside the analysis and may
+        // `export { Fam as X }`.
+        let bridged = "export * from 'some-bridge';\n";
         let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
         for (mutate, warns) in [
             ("import { Fam } from './barrel';\nFam.Box = () => null;\n", true),
@@ -13520,26 +13525,48 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// A path that names no analysed file may still be a module at run time
     /// (excluded, generated, or in a language the analysis does not read),
     /// which may re-export any analysed object: re-exporting its namespace,
-    /// or loading it with `import()` or `require()`, leaves every member
-    /// table unproven. A data or asset file imports nothing.
+    /// loading it with `import()` or `require()`, or importing it, bindings
+    /// or not, leaves every member table unproven. A file the host reads as
+    /// an opaque value imports nothing; without the host's reading, a file
+    /// is not opaque, whatever its spelling.
     #[test]
     fn a_write_through_a_module_the_analysis_cannot_find_reaches_any_exported_object() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
         let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
         let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
-        let rows: [(&[(&str, &str)], bool); 6] = [
-            (&[("mutate.ts", "export * as ns from './generated';\n")], true),
-            (&[("mutate.ts", "import('./generated').then((m) => { m.Fam.Box = () => null; });\n")], true),
-            (&[("mutate.ts", "require('./generated.js').Fam.Box = () => null;\n")], true),
-            (&[("mutate.ts", "import('./data.json').then((data) => { data.Fam = null; });\n")], false),
-            (&[("mutate.ts", "import('./icon.svg?url').then((icon) => { icon.Fam = null; });\n")], false),
-            (&[("mutate.ts", "require('./styles.css');\n")], false),
-        ];
-        for (more, warns) in rows {
-            let mut files = vec![("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app)];
-            files.extend_from_slice(more);
-            let out = analyze_with_logical_space(&files);
-            assert_eq!(unattributed(&out).len(), usize::from(warns), "{more:?}: {:?}", out.diagnostics);
+        let mut inputs = logical_space_inputs();
+        let asset = |base: &str| {
+            let candidate = HostCandidate {
+                candidate: base.to_string(),
+                actual: None,
+                analysed_as: None,
+                reading: Some(HostReading::Asset),
+            };
+            (base.to_string(), candidate)
+        };
+        inputs.probe_evidence = Some(ProbeEvidence {
+            generation: 1,
+            identity: String::new(),
+            bases: ["data.json", "icon.svg?url", "styles.css"].into_iter().map(asset).collect(),
+        });
+        for (mutate, warns) in [
+            ("export * as ns from './generated';\n", true),
+            ("import('./generated').then((m) => { m.Fam.Box = () => null; });\n", true),
+            ("require('./generated.js').Fam.Box = () => null;\n", true),
+            ("import './generated.js';\n", true),
+            ("import {} from './generated.js';\n", true),
+            ("import('./generated.js?inline').then((m) => { m.Fam.Box = () => null; });\n", true),
+            ("import('./other.json').then((data) => { data.Fam = null; });\n", true),
+            ("import type { Shape } from './generated.js';\nexport type Local = Shape;\n", false),
+            ("import('./data.json').then((data) => { data.Fam = null; });\n", false),
+            ("import('./icon.svg?url').then((icon) => { icon.Fam = null; });\n", false),
+            ("require('./styles.css');\n", false),
+        ] {
+            let out = analyze(
+                &[("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("mutate.ts", mutate)],
+                &inputs,
+            );
+            assert_eq!(unattributed(&out).len(), usize::from(warns), "{mutate}: {:?}", out.diagnostics);
         }
     }
 
