@@ -476,7 +476,50 @@ fn unstable_style_statics(
         let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
         format!("{name} {} in {file}{line}", used.what)
     };
-    let mut unstable: BTreeMap<(String, String), String> = BTreeMap::new();
+    use crate::flow::{AbsenceQuery, Coverage, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom};
+    let object = |(file, local): (String, String)| ObjectId { module: file, binding: local };
+    let mut flow = FlowBuilder::new();
+    // Each object a module exports, under each name it exports it as.
+    for (module, path) in links.paths.iter().enumerate() {
+        for name in links.table.exported_names(module).names {
+            let terminals = match links.table.resolve_export(module, &name) {
+                ExportLookup::Resolved(terminal) => vec![terminal],
+                ExportLookup::Incomplete { known, .. } => known,
+                ExportLookup::Absent | ExportLookup::Ambiguous(_) => Vec::new(),
+            };
+            for exported in local_bindings(terminals) {
+                flow.export(object(declaration(exported)), path, &name);
+            }
+        }
+    }
+    // A namespace handed on exposes every object the module exports,
+    // through `export *` too, and past a star the analysis cannot open,
+    // whatever that star may bring.
+    let hand_on = |flow: &mut FlowBuilder, target: &str, reason: &str| {
+        let Some(module) = links.module(target) else { return };
+        flow.open(ReasonId::OpaqueEffect, Region::of(RegionAtom::ExportsOf(target.to_string())), reason.to_string());
+        let names = links.table.exported_names(module);
+        for name in &names.names {
+            if let ExportLookup::Incomplete { openings, .. } = links.table.resolve_export(module, name) {
+                for opening in openings {
+                    let reason_id = match opening.reason {
+                        animus_system_loader::module_table::OpeningReason::OutsideStar(_) => ReasonId::OpaqueStar,
+                        animus_system_loader::module_table::OpeningReason::UnresolvedRequest(_) => {
+                            ReasonId::UnresolvedSpecifier
+                        }
+                    };
+                    let region = match opening.name {
+                        Some(asked) => RegionAtom::ExportedAs(asked),
+                        None => RegionAtom::AllExports,
+                    };
+                    flow.open(reason_id, Region::of(region), reason.to_string());
+                }
+            }
+        }
+        if !names.complete() {
+            flow.open(ReasonId::OpaqueStar, Region::of(RegionAtom::AllExports), reason.to_string());
+        }
+    };
     for (file, module) in style {
         // The declarations a use's name stands for that hold an object: a
         // namespace's member, every export of a namespace used whole, or
@@ -509,19 +552,19 @@ fn unstable_style_statics(
                         reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
                     });
                 if !read {
-                    unstable.entry(target).or_insert_with(|| said(file, &handoff.binding, &handoff.used));
+                    flow.change(object(target), Vec::new(), said(file, &handoff.binding, &handoff.used));
                 }
             }
         }
         for (name, used) in &module.facts.uses {
             for target in targets_of(name) {
-                unstable.entry(target).or_insert_with(|| said(file, name, used));
+                flow.change(object(target), Vec::new(), said(file, name, used));
             }
         }
         for (name, used) in &module.facts.flat_reads {
             for target in targets_of(name).into_iter().filter(|target| nested(target)) {
                 let reason = format!("{}, and it holds a nested object", said(file, name, used));
-                unstable.entry(target).or_insert(reason);
+                flow.change(object(target), Vec::new(), reason);
             }
         }
         let reexports = module
@@ -533,45 +576,38 @@ fn unstable_style_statics(
             let Some(target) = analyze_css::resolve_import_source(file, spec, files, inputs) else {
                 continue;
             };
-            let reason = format!("{file} hands on {target} {how}");
-            for export in every_export(&target) {
-                unstable.entry(export).or_insert_with(|| reason.clone());
-            }
+            hand_on(&mut flow, &target, &format!("{file} hands on {target} {how}"));
         }
         // Code from a string can `import()` any module and change what it
         // exports.
         if let Some(how) = module.dynamic_code {
             let reason = format!("{file} {how}, so code from a string can load and change any module");
-            for target in style.keys() {
-                for export in every_export(target) {
-                    unstable.entry(export).or_insert_with(|| reason.clone());
-                }
-            }
+            flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), reason);
         }
     }
-    loop {
-        let mut changed = false;
-        for (file, module) in style {
-            let edges = module
-                .facts
-                .stored
-                .iter()
-                .map(|(stored, container)| (stored, container, "is stored in"))
-                .chain(module.facts.derives.iter().map(|(derived, read)| (derived, read, "reads")));
-            for (dependent, on, how) in edges {
-                let Some(reason) = possible(file, on).iter().find_map(|on_at| unstable.get(on_at)).cloned() else {
-                    continue;
-                };
-                for dependent_at in possible(file, dependent) {
-                    if let std::collections::btree_map::Entry::Vacant(entry) = unstable.entry(dependent_at) {
-                        entry.insert(format!("{dependent} {how} {on}, and {reason}"));
-                        changed = true;
-                    }
-                }
-            }
+    // A static stored in an object, or read from a binding, may change with
+    // it.
+    for (file, module) in style {
+        let edges = module
+            .facts
+            .stored
+            .iter()
+            .map(|(stored, container)| (stored, container, "is stored in"))
+            .chain(module.facts.derives.iter().map(|(derived, read)| (derived, read, "reads")));
+        for (dependent, on, how) in edges {
+            let to = possible(file, dependent).into_iter().map(object).collect();
+            let from = possible(file, on).into_iter().map(object).collect();
+            flow.flow(to, from, format!("{dependent} {how} {on}, and "));
         }
-        if !changed {
-            break;
+    }
+    let effects = flow.close();
+    let mut unstable = BTreeMap::new();
+    for (file, statics) in files {
+        for local in statics.keys() {
+            let query = AbsenceQuery::Stable(ObjectId::new(file, local), Vec::new());
+            if let Coverage::Exposed(exposures) = effects.covers(&query) {
+                unstable.insert((file.clone(), local.clone()), exposures[0].cause().to_string());
+            }
         }
     }
     unstable

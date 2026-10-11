@@ -10,6 +10,13 @@ export declare class ExtractEngine {
 }
 
 /**
+ * Whether the package at `package_dir` declares the kit source condition:
+ * an `animus` key anywhere in its `exports`, valid or not, read from the
+ * manifest alone.
+ */
+export declare function declaresKitSource(packageDir: string): boolean
+
+/**
  * Every diagnostic code the engine emits, with the severity it carries, as
  * JSON: `{ "animus.chain.unextractable": "warn", … }`. Hosts check codes
  * against it instead of keeping a table of their own.
@@ -151,6 +158,17 @@ export interface NapiSystemConfig {
    */
   sourceThemeManifests?: string
 }
+
+/**
+ * A kit's source root (spec §2.2 A5), as JSON: the package located from
+ * `from_dir` as the system loader locates it, the rule that chose the root
+ * (`animus`, `source-exports`, `src` or `compiled`), its entries, its
+ * invalid `animus` targets, and the runtime entry (`host_entry`, the file
+ * the host resolves, where given); or `{ "unresolved": why }` where no host
+ * imports the specifier. `package_dir` is the package discovery located,
+ * where it located one.
+ */
+export declare function resolveKitSourceRoot(specifier: string, fromDir: string, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null, hostEntry?: string | undefined | null, packageDir?: string | undefined | null): string
 
 /**
  * Resolves `specifier` from `from_dir` as the system loader resolves its

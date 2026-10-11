@@ -1,5 +1,11 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join } from 'node:path';
 import { createLogger } from 'vite';
 import { afterEach, expect, test } from 'vitest';
 
@@ -62,6 +68,36 @@ async function buildWithUnlinkedKit(
         readFileSync(join(dir, 'package.json'), 'utf-8')
       );
       return { path: join(dir, main ?? 'src/index.ts') };
+    },
+    // The stand-in table: `src/` where the kit has one, else its runtime
+    // entry's directory.
+    resolveKitSourceRoot: (
+      _specifier: string,
+      _fromDir: string,
+      _conditions?: readonly string[],
+      _workspaces?: Record<string, string>,
+      _extensionPolicyJson?: string,
+      hostEntry?: string,
+      packageDir?: string
+    ) => {
+      const src = join(packageDir ?? '', 'src');
+      return JSON.stringify(
+        existsSync(src)
+          ? {
+              rule: 'src',
+              root: src,
+              entries: [],
+              invalid: [],
+              unresolved: null,
+            }
+          : {
+              rule: 'compiled',
+              root: hostEntry ? dirname(hostEntry) : null,
+              entries: [],
+              invalid: [],
+              unresolved: null,
+            }
+      );
     },
     analyzeProject: (...args: unknown[]) => {
       analysed = String(args[0]);
