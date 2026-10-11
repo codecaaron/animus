@@ -1045,14 +1045,28 @@ impl ExtractEngine {
         // Each file's Lower output, before anything reads across files.
         let mut lowered_by_file: BTreeMap<String, crate::link::Lowered> =
             store.iter().map(|ast| (ast.path.clone(), crate::link::Lowered::of(ast))).collect();
-        let links = ProjectLinks::of_records(&lowered_by_file, |lowered| &lowered.record, &self.opts.css_inputs);
+        // What each module's parse and semantic build give alone, the object
+        // facts the member tables follow among them, read before any static
+        // value is evaluated; fact extraction completes them.
+        let mut structural_by_file: BTreeMap<String, facts::FileFacts> = store
+            .iter()
+            .map(|ast| {
+                let lowered = &lowered_by_file[&ast.path];
+                let objects = facts::object_facts(ast.program(), &lowered.scoping);
+                (ast.path.clone(), facts::structural_facts(ast, lowered, objects))
+            })
+            .collect();
+        let links = ProjectLinks::of_records(&lowered_by_file, |lowered| &*lowered.record, &self.opts.css_inputs);
+        // A hand-off to a function that does more than read is a use like
+        // any other, judged before any static value is evaluated.
+        analyze_css::judge_object_handoffs(&mut structural_by_file, &self.opts.css_inputs, &links);
         // Static reads follow explicit exports only, never `export *`, until
         // mutation tracking can bound every source a star exposes a binding
         // to; mutation tracking follows stars.
         let explicit: BTreeMap<String, crate::link::OwnedModuleRecord> = lowered_by_file
             .iter()
             .map(|(path, lowered)| {
-                (path.clone(), crate::link::OwnedModuleRecord { star_exports: Vec::new(), ..lowered.record.clone() })
+                (path.clone(), crate::link::OwnedModuleRecord { star_exports: Vec::new(), ..(*lowered.record).clone() })
             })
             .collect();
         let read_links = ProjectLinks::of_records(&explicit, |record| record, &self.opts.css_inputs);
@@ -1333,6 +1347,7 @@ impl ExtractEngine {
                 unsettled_imports_by_file.get(&ast.path).unwrap_or(&none_unsettled),
                 &references,
                 lowered_by_file.remove(&ast.path),
+                structural_by_file.remove(&ast.path),
             );
             if let Some(names) = global_declarations.get(ast.path.as_str()) {
                 file_facts.global_keys = facts::declaration_keys(ast.program(), ast.source(), names);
@@ -1344,7 +1359,6 @@ impl ExtractEngine {
 
         // Facts own every resolved reference; release the modules' scopings.
         drop(references);
-        analyze_css::judge_object_handoffs(&mut self.facts, &self.opts.css_inputs, &links);
         let mut css = analyze_css::run(
             &self.facts,
             &self.order,

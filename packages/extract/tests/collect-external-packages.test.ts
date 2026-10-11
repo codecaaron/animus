@@ -1297,10 +1297,11 @@ test.each([
   expect({
     declared: sourceKitDependencies(root, engine).map((kit) => kit.name),
     imported: importedKitDiagnostics(
-      [{ path: 'src/App.tsx', source: '' }],
+      [{ path: 'src/App.tsx', source: '', hash: '' }],
       engine,
       root,
-      []
+      [],
+      () => JSON.parse(engine.extractFacts())
     ).map((d) => [d.component, d.code]),
   }).toEqual({
     declared: [name],
@@ -1649,7 +1650,7 @@ describe('a kit the system evaluates', () => {
       systemInstanceMismatches({
         rootDir: root,
         specifiers: ['kit/definition'],
-        dirOwnerSets: { [join(analysedDir, 'src')]: ['kit/definition'] },
+        instances: { kit: analysedDir },
         evaluated,
         loaderResolve: () => evaluatedFile,
       }).map(({ code, message }) => [code, message]);

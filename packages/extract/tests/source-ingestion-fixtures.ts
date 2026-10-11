@@ -129,11 +129,13 @@ export function scriptedSourceIngestor(
   } = {}
 ): SourceIngestor & { ingested: RawSourceEntry[][] } {
   const ingested: RawSourceEntry[][] = [];
-  const { surfaceDiagnostics, markPublished } = createSourceIngestor(host);
+  const { surfaceDiagnostics, markPublished, facts } =
+    createSourceIngestor(host);
   return {
     ingested,
     surfaceDiagnostics,
     markPublished,
+    facts,
     async ingest(entries) {
       ingested.push([...entries]);
       const originalEntries = entries.map((entry) => ({

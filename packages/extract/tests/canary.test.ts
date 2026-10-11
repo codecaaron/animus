@@ -504,14 +504,16 @@ test('a Svelte resolver call stops at an unanalysed host-first file', async () =
 // the host loads it for its effects. Under the CLI's built-in
 // classification, a file it opens that analysis never reads (`.data`, a
 // `.js` with a query that keeps it code) leaves usage incomplete, so R's
-// `lg`, which only that file could render, keeps its CSS; a stylesheet,
-// JSON, or a file `?raw` loads as a string, is opaque, and `lg` is pruned.
+// `lg`, which only that file could render, keeps its CSS, and the import is
+// reported: no opening stops pruning silently. A stylesheet, JSON, an SVG,
+// or a file `?raw` loads as a string, is opaque, and `lg` is pruned.
 test.each([
   ['./selected.data', true],
   ['./selected.js?foo', true],
   ['./selected.js?raw', false],
   ['./globals.css', false],
   ['./data.json', false],
+  ['./logo.svg', false],
 ])("a bindingless import of '%s' keeps lg: %s", (specifier, kept) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-bindingless-')));
   const analysed = {
@@ -526,6 +528,10 @@ test.each([
   writeFileSync(join(root, 'selected.js'), "R.render({ size: 'lg' });\n");
   writeFileSync(join(root, 'globals.css'), 'body { margin: 0; }\n');
   writeFileSync(join(root, 'data.json'), '{ "size": "lg" }\n');
+  writeFileSync(
+    join(root, 'logo.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg"/>\n'
+  );
   const filesJson = JSON.stringify(
     Object.entries(analysed).map(([path, source]) => ({ path, source }))
   );
@@ -543,7 +549,10 @@ test.each([
   expect({
     sm: manifest.css.includes('padding: 1px'),
     lg: manifest.css.includes('padding: 99px'),
-  }).toEqual({ sm: true, lg: kept });
+    warned: manifest.diagnostics.filter(
+      (d: { code?: string }) => d.code === 'animus.resolve.unanalysed-import'
+    ).length,
+  }).toEqual({ sm: true, lg: kept, warned: kept ? 1 : 0 });
 });
 
 // Contract: a default-bound JSON import is opaque data (spec §2.2 A8): it

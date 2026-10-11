@@ -28,8 +28,8 @@ pub type OwnedModuleRecord = ModuleRecord<LocalId, String>;
 /// extraction reuses rather than building again.
 pub(crate) struct Lowered {
     pub(crate) scoping: Scoping,
-    pub(crate) bindings: BindingTable,
-    pub(crate) record: OwnedModuleRecord,
+    pub(crate) bindings: std::sync::Arc<BindingTable>,
+    pub(crate) record: std::sync::Arc<OwnedModuleRecord>,
     pub(crate) loads: Vec<crate::loads::Load>,
     /// How each of the module's functions treats an object passed to it.
     pub(crate) readings: crate::usage_facts::ParamReadings,
@@ -53,7 +53,15 @@ impl Lowered {
         let readings = std::sync::Arc::new(crate::usage_facts::function_param_readings(program, &scoping));
         let dynamic_code = crate::usage_facts::dynamic_code(program, &scoping);
         let loader_escape = crate::usage_facts::loader_escape(program, &scoping);
-        Self { scoping, bindings, record, loads: crate::loads::collect(program), readings, dynamic_code, loader_escape }
+        Self {
+            scoping,
+            bindings: std::sync::Arc::new(bindings),
+            record: std::sync::Arc::new(record),
+            loads: crate::loads::collect(program),
+            readings,
+            dynamic_code,
+            loader_escape,
+        }
     }
 }
 
