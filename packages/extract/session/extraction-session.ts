@@ -939,11 +939,31 @@ export class ExtractionSession {
     try {
       await transaction;
     } catch (error) {
+      // The authority stays the committed system's, with its proofs.
       this.system = priorSystem;
       throw error;
     } finally {
       if (!nested) setWatchTransaction(this.key, null);
     }
+    this.commitSystemAuthority();
+  }
+
+  /** The build's authority becomes the system this session committed, with
+   *  it and never before: a failed reload leaves the committed one, and the
+   *  context proofs made against it. An unchanged system keeps its proofs. */
+  private commitSystemAuthority(): void {
+    const load = systemLoad(this.system!);
+    const context = this.resolutionContextText();
+    const current = getSystemAuthority(this.key);
+    if (current?.identity === load.identity && current.context === context) {
+      return;
+    }
+    setSystemAuthority(this.key, {
+      ...load,
+      context,
+      label: this.resolutionContextLabel(),
+      others: new Map(),
+    });
   }
 
   private async runPipelineTransaction(
@@ -972,12 +992,6 @@ export class ExtractionSession {
     this.log(`extension order: ${context.extensions.resolverVersion}`);
     let t = this.now();
     this.system = this.loadSystemUnder(context);
-    setSystemAuthority(this.key, {
-      ...systemLoad(this.system),
-      context: this.resolutionContextText(),
-      label: this.resolutionContextLabel(),
-      others: new Map(),
-    });
     this.assetCopyCache.clear();
     this.assetDependencyPaths.clear();
     this.assetDependencyKeys.clear();
