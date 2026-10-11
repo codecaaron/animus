@@ -23,6 +23,7 @@ import {
   TURBOPACK_SYSTEM_PROPS_ID,
 } from '@animus-ui/extract/session';
 import { existsSync } from 'fs';
+import { dirname } from 'path';
 
 import { resolveAnimusLoaderPath } from './loader-path';
 import { sameDirectory } from './same-directory';
@@ -121,6 +122,21 @@ type Compiler = {
     watchClose?: { tap: (name: string, fn: () => void) => void };
   };
   context: string;
+  /** webpack's resolvers; package discovery asks the normal one first. */
+  resolverFactory?: {
+    get(
+      type: 'normal',
+      options: { dependencyType: string }
+    ): {
+      resolve(
+        context: Record<string, never>,
+        path: string,
+        request: string,
+        resolveContext: Record<string, never>,
+        callback: (error: Error | null, result?: string | false) => void
+      ): void;
+    };
+  };
   /** Present on watchRun compilers after the first compilation (webpack 5). */
   modifiedFiles?: ReadonlySet<string>;
   removedFiles?: ReadonlySet<string>;
@@ -252,6 +268,24 @@ export class AnimusWebpackPlugin {
     const resolve = compiler.options?.resolve;
     const names = resolve?.conditionNames ?? [];
     this.session.conditions = names.filter((name) => name !== '...');
+    // Package discovery asks webpack's own resolver first, as the bundle
+    // resolves (spec §2.2 A4); the loader answers only a declared workspace
+    // it cannot resolve.
+    const resolverFactory = compiler.resolverFactory;
+    if (resolverFactory !== undefined) {
+      this.session.hostResolve = (specifier: string, importer?: string) =>
+        new Promise<string | null>((done) => {
+          resolverFactory
+            .get('normal', { dependencyType: 'esm' })
+            .resolve(
+              {},
+              importer === undefined ? compiler.context : dirname(importer),
+              specifier,
+              {},
+              (error, result) => done(error !== null || !result ? null : result)
+            );
+        });
+    }
     // webpack's rules are not modelled: a conditional rule may never apply,
     // so the built-in list answers (spec §2.2 A8).
     this.session.assetClassification = builtInAssetClassification(
@@ -291,6 +325,18 @@ export class AnimusWebpackPlugin {
   }
 
   apply(compiler: Compiler): void {
+    // The compiler's end leaves the build, which retires with its last
+    // compiler. A watch started again analyzes in full: its build may have
+    // retired meanwhile. The edge compiler joins too, through the resolver
+    // lookups withAnimus wires, so it leaves the same way.
+    const leave = () => {
+      this.session.close();
+      this.initialized = false;
+      this.rejoining = true;
+    };
+    compiler.hooks.shutdown?.tap(PLUGIN_NAME, leave);
+    compiler.hooks.watchClose?.tap(PLUGIN_NAME, leave);
+
     // Edge compiler has no CSS dependencies.
     if (compiler.options?.name === 'edge-server') return;
 
@@ -300,17 +346,6 @@ export class AnimusWebpackPlugin {
     }
 
     this.appendEpochWatchIgnore(compiler);
-
-    // The compiler's end leaves the build, which retires with its last
-    // compiler. A watch started again analyzes in full: its build may have
-    // retired meanwhile.
-    const leave = () => {
-      this.session.close();
-      this.initialized = false;
-      this.rejoining = true;
-    };
-    compiler.hooks.shutdown?.tap(PLUGIN_NAME, leave);
-    compiler.hooks.watchClose?.tap(PLUGIN_NAME, leave);
 
     compiler.hooks.thisCompilation.tap(PLUGIN_NAME, (compilation) => {
       const epochMoved = this.epochMovedForNextCompilation;
@@ -532,6 +567,16 @@ export class AnimusWebpackPlugin {
     return this.session.externalPackageDirs.length > 0
       ? this.session.externalPackageDirs
       : getSharedExternalDirs(this.session.key);
+  }
+
+  /** An import webpack resolved while bundling, with the resolve options of
+   *  the rules its importer matches (spec §2.2 A4). */
+  reportHostResolution(
+    importer: string,
+    request: string,
+    resolved: string
+  ): void {
+    this.session.reportHostResolution(importer, request, resolved);
   }
 
   getExternalSourceEntries(): Map<string, string> {

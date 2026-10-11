@@ -31,6 +31,9 @@ pub(crate) struct FamilyIndex {
     members: Vec<Vec<(String, String)>>,
     /// Per family, whether it may hold members `members` does not list.
     open: Vec<bool>,
+    /// Per family, its declaration: the module and the binding that holds
+    /// it, or the module's default cell for `export default compose(…)`.
+    declarations: Vec<(String, String)>,
 }
 
 impl FamilyIndex {
@@ -46,6 +49,7 @@ impl FamilyIndex {
             by_binding: FxHashMap::default(),
             members: Vec::new(),
             open: Vec::new(),
+            declarations: Vec::new(),
         };
         for (file, ff) in files {
             for family in &ff.compose {
@@ -58,6 +62,14 @@ impl FamilyIndex {
                         .collect(),
                 );
                 index.open.push(family.open);
+                // A family no binding holds and no default export names is
+                // keyed by its position, apart from any binding.
+                let declared = match (&family.family_binding, family.default_export) {
+                    (Some(binding), _) => binding.clone(),
+                    (None, true) => "default".to_string(),
+                    (None, false) => format!("<family {id}>"),
+                };
+                index.declarations.push((file.clone(), declared));
                 if let Some(binding) = &family.family_binding {
                     index.locals.insert((file.clone(), binding.clone()), id);
                     index
@@ -182,9 +194,9 @@ impl Reach {
 
     /// Records the use as a change to each object it reaches and to the
     /// facades built on it, then each of its openings, said as `reason`.
-    fn record(self, flow: &mut FlowBuilder, facades: Vec<Object>, reason: &str) {
+    fn record(self, flow: &mut FlowBuilder, families: &FamilyIndex, facades: Vec<Object>, reason: &str) {
         for object in self.objects.into_iter().chain(facades) {
-            flow.change(object_id(&object), Vec::new(), ChangeKind::Escape, reason.to_string());
+            flow.change(object_id(&object, families), Vec::new(), ChangeKind::Escape, reason.to_string());
         }
         for (why, region) in self.openings {
             flow.open(why, region, reason.to_string());
@@ -192,12 +204,15 @@ impl Reach {
     }
 }
 
-/// An object as the changed relation names it: a facade by its module and
-/// binding, a family by its position, under a module no path names.
-fn object_id(object: &Object) -> ObjectId {
+/// An object as the changed relation names it: by its declaration, the
+/// module and binding that hold it.
+fn object_id(object: &Object, families: &FamilyIndex) -> ObjectId {
     match object {
-        Object::Facade(module, binding) => ObjectId::new(module, binding),
-        Object::Family(index) => ObjectId::new("<family>", &index.to_string()),
+        Object::Facade(module, binding) | Object::Context(module, binding) => ObjectId::new(module, binding),
+        Object::Family(index) => {
+            let (module, binding) = &families.declarations[*index];
+            ObjectId::new(module, binding)
+        }
     }
 }
 
@@ -213,6 +228,9 @@ enum Object {
     Family(usize),
     /// A facade: (module, binding) of its declaration.
     Facade(String, String),
+    /// A context React's `createContext` builds, whose `Provider` a tag
+    /// reads: (module, binding) of its declaration. Its member table is open.
+    Context(String, String),
 }
 
 /// What one member of an object holds once the object is built.
@@ -430,7 +448,7 @@ impl<'f> ObjectMembers<'f> {
     pub(crate) fn facade_at(&mut self, file: &str, name: &str) -> Option<(String, String)> {
         match self.object_at(file, name)? {
             Object::Facade(module, binding) => Some((module, binding)),
-            Object::Family(_) => None,
+            Object::Family(_) | Object::Context(..) => None,
         }
     }
 
@@ -501,8 +519,8 @@ impl<'f> ObjectMembers<'f> {
         }
     }
 
-    /// The object `name` holds in `module`: a family or facade it declares,
-    /// one a `const` alias names, or one it imports.
+    /// The object `name` holds in `module`: a family, facade or context it
+    /// declares, one a `const` alias names, or one it imports.
     fn local_object(&mut self, module: &str, name: &str) -> Option<Object> {
         let key = (module.to_string(), name.to_string());
         if let Some(found) = self.objects.get(&key) {
@@ -523,6 +541,9 @@ impl<'f> ObjectMembers<'f> {
         }
         if ff.facades.contains_key(name) {
             return Some(Object::Facade(module.to_string(), name.to_string()));
+        }
+        if ff.context_consts.contains(name) {
+            return Some(Object::Context(module.to_string(), name.to_string()));
         }
         if let Some(target) = ff.aliases.get(name) {
             return self.local_object(module, target);
@@ -561,6 +582,8 @@ impl<'f> ObjectMembers<'f> {
                 self.building.remove(object);
                 table
             }
+            // Nothing proves which members a context holds.
+            Object::Context(..) => MemberTable { open: true, ..MemberTable::default() },
         };
         // What changed the object may also have added members.
         if let Some(reason) = self.instability(object) {
@@ -648,15 +671,21 @@ impl<'f> ObjectMembers<'f> {
         table
     }
 
-    /// The first use in the analysed modules that may change `object`, said
-    /// as a clause, or `None` when there is none.
-    fn instability(&mut self, object: &Object) -> Option<String> {
+    /// What the uses in the analysed modules may change, closed once, on
+    /// the first question.
+    pub(crate) fn changes(&mut self) -> &ValueEffects {
         if self.changed.is_none() {
             let changed = self.changed();
             self.changed = Some(changed);
         }
-        let query = AbsenceQuery::SlotsNotWritten(object_id(object));
-        if let Some(Coverage::Exposed(exposures)) = self.changed.as_ref().map(|changed| changed.covers(&query)) {
+        self.changed.as_ref().expect("closed above")
+    }
+
+    /// The first use in the analysed modules that may change `object`, said
+    /// as a clause, or `None` when there is none.
+    fn instability(&mut self, object: &Object) -> Option<String> {
+        let query = AbsenceQuery::SlotsNotWritten(object_id(object, self.families));
+        if let Coverage::Exposed(exposures) = self.changes().covers(&query) {
             return Some(exposures[0].cause().to_string());
         }
         let Object::Facade(module, binding) = object else { return None };
@@ -684,7 +713,9 @@ impl<'f> ObjectMembers<'f> {
     /// module and source order: a use of a binding that holds it, a use that
     /// may write through a package's namespace, a namespace re-export of a
     /// module exporting it, a runtime load of one, or code run from a
-    /// string. Every such use may rebind any member.
+    /// string. Every such use may rebind any member. The objects are facades,
+    /// families and the contexts React's `createContext` builds, whose
+    /// `Provider` a tag reads.
     fn changed(&mut self) -> ValueEffects {
         let files = self.files;
         let inputs = self.inputs;
@@ -697,7 +728,7 @@ impl<'f> ObjectMembers<'f> {
             names.insert("default".to_string());
             for name in &names {
                 if let Some(object) = self.exported_object(module, name) {
-                    flow.export(object_id(&object), module, name);
+                    flow.export(object_id(&object, self.families), module, name);
                 }
             }
         }
@@ -754,7 +785,7 @@ impl<'f> ObjectMembers<'f> {
                 };
                 // A write to an assigned facade's target changes the facade.
                 let facades = self.facades_on(module, ff, name);
-                reach.record(&mut flow, facades, &reason);
+                reach.record(&mut flow, self.families, facades, &reason);
             }
             // A package may re-export our objects (a linked workspace
             // package) under any name: a use that may write through its
@@ -772,12 +803,12 @@ impl<'f> ObjectMembers<'f> {
                     continue;
                 };
                 let reason = format!("{module} re-exports {target} as the namespace {name}");
-                self.namespace_reach(&target).record(&mut flow, Vec::new(), &reason);
+                self.namespace_reach(&target).record(&mut flow, self.families, Vec::new(), &reason);
             }
             for load in &ff.module_loads {
                 for target in loaded_modules(module, load, files, inputs) {
                     let reason = format!("{module} loads {target} at runtime on line {}", load.line);
-                    self.namespace_reach(target).record(&mut flow, Vec::new(), &reason);
+                    self.namespace_reach(target).record(&mut flow, self.families, Vec::new(), &reason);
                 }
             }
             // Code from a string can `import()` any module and change what

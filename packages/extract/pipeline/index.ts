@@ -32,8 +32,10 @@ export {
   assertRuntimeImportSuppliesTerminals,
   DEFAULT_RUNTIME_IMPORT,
 } from './runtime-import';
-export type { HostFirstResolver, HostResolve } from './host-package-resolver';
-export { hostFirstPackageResolver } from './host-package-resolver';
+export type { DiscoveryResolver, HostResolve } from './host-package-resolver';
+export { AliasAgreementCache, compareAliases } from './alias-agreement';
+export type { AliasAgreement } from './alias-agreement';
+export { discoveryResolver } from './host-package-resolver';
 export type {
   AnimusCoreOptions,
   AnimusMode,
@@ -203,6 +205,7 @@ export type { CssDiagnosticLike } from './error-diagnostics';
 export { assertNoErrorDiagnostics } from './error-diagnostics';
 export type {
   ManifestComponentDescriptor,
+  ManifestMissingInput,
   ManifestComponentSheets,
   ManifestSheets,
   ProjectManifest,
@@ -216,12 +219,10 @@ export {
   DIAGNOSTIC_LEVELS,
   DiagnosticFailure,
   INVALID_PROPERTY_REGISTRATION,
-  isUnresolvedParentDrop,
   surfaceManifestDiagnostics,
   isDeletedSource,
   noKitFilesDiagnostics,
   unreadableSourceDiagnostic,
-  unresolvedParentName,
   VOCABULARY_COLLISION,
   VOCABULARY_LEGACY_VERB,
   systemLoadDiagnostics,
@@ -254,3 +255,5 @@ export {
 } from './host-assets';
 export type { HostAssetClassification } from './host-assets';
 export { adaptedOriginals } from './probe-evidence';
+export type { ServedFiles } from './served-files';
+export { droppedExtensionMessage, servedFiles } from './served-files';

@@ -762,6 +762,27 @@ describe('coordinated teardown', () => {
     expect(readCliLockRecord(tree).kind).toBe('held');
   });
 
+  test('an edge compiler that read the build leaves it at shutdown', async () => {
+    const root = createProject();
+    const sides = ['client', 'server', 'edge-server'].map((name) => {
+      const side = createCompiler(root, { name });
+      const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
+      // withAnimus sets the root at config time, edge compiler included.
+      plugin.setRootDir(root);
+      applyPlugin(plugin, side.compiler);
+      return { side, plugin };
+    });
+    const [client, server, edge] = sides;
+    await client.side.runHandlers[0](client.side.compiler);
+    await server.side.runHandlers[0](server.side.compiler);
+    // withAnimus's resolver hooks read the build on the edge compiler too.
+    edge.plugin.getExternalSourceEntries();
+
+    for (const { side } of sides) side.shutdown();
+
+    expect(findSession(keyOf(root))).toBeUndefined();
+  });
+
   test('a watch closed and started again analyzes in full', async () => {
     const root = createProject();
     const { compiler, watchRunHandlers, watchClose } = createCompiler(root);

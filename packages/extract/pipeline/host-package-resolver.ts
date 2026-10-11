@@ -1,8 +1,10 @@
 /**
- * Package resolution for a host that resolves imports itself: the host's
- * answer first, the system loader's only for a declared workspace the host
- * cannot resolve.
+ * Package resolution for discovery: one resolver, whose answers are the
+ * host's where it resolves imports itself (spec §2.2 A4), and the system
+ * loader's otherwise, and for a declared workspace the host cannot resolve.
  */
+
+import { join } from 'path';
 
 import { bareSpecifierPackageName } from './discover-packages';
 import { extensionPolicyJson } from './host-extensions';
@@ -11,16 +13,29 @@ import type { EngineApi } from './engine-adapter';
 import type { HostExtensionPolicy } from './host-extensions';
 import type { WorkspacePackages } from './workspace-packages';
 
-/** The host's own resolution of a package specifier; null where it finds
- *  nothing. */
-export type HostResolve = (specifier: string) => Promise<string | null>;
+/** The host's own resolution of a specifier, from `importer` (absolute)
+ *  where given, else from the root; null where it finds nothing. */
+export type HostResolve = (
+  specifier: string,
+  importer?: string
+) => Promise<string | null>;
 
-export interface HostFirstResolver {
+export interface DiscoveryResolver {
+  /** Whether a host answers first; without one the loader answers all. */
+  readonly hostFirst: boolean;
+  /** The entry file a package specifier names, absolute; null for none. */
   resolveSpecifier(specifier: string): Promise<string | null>;
-  /** Whether only the loader resolved `specifier`. The host resolves such a
-   *  package's imports only through a source-entry redirect, so the
-   *  collector admits it only where one exists. */
+  /** Why no file answers `specifier`, where the loader alone resolved it
+   *  and said. */
+  unresolvedReason(specifier: string): string | undefined;
+  /** Whether only the loader resolved `specifier` while a host answers
+   *  first. The host resolves such a package's imports only through a
+   *  source-entry redirect, so the collector admits it only where one
+   *  exists. */
   requireSourceEntry(specifier: string): boolean;
+  /** The system loader's own answer from `fromDir`, as system evaluation
+   *  resolves (spec §2.2 A3); null for none. */
+  loaderResolve(specifier: string, fromDir: string): string | null;
 }
 
 /**
@@ -28,8 +43,8 @@ export interface HostFirstResolver {
  * to the host, though the system loader resolves it: where the host finds
  * nothing, discovery asks the loader.
  */
-export function hostFirstPackageResolver(
-  hostResolve: HostResolve,
+export function discoveryResolver(
+  hostResolve: HostResolve | null,
   engine: Pick<EngineApi, 'resolveSpecifier'>,
   context: {
     rootDir: string;
@@ -37,27 +52,72 @@ export function hostFirstPackageResolver(
     workspaces: WorkspacePackages;
     extensions: HostExtensionPolicy;
   }
-): HostFirstResolver {
+): DiscoveryResolver {
+  const load = (
+    specifier: string,
+    fromDir: string
+  ): { path?: string | null; unresolved?: string | null } => {
+    const native = engine.resolveSpecifier;
+    if (native === undefined) {
+      throw new Error(
+        'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
+      );
+    }
+    return native(
+      specifier,
+      fromDir,
+      [...context.conditions],
+      context.workspaces,
+      extensionPolicyJson(context.extensions)
+    );
+  };
+  const loaderResolve = (specifier: string, fromDir: string): string | null =>
+    load(specifier, fromDir).path ?? null;
+
+  if (hostResolve === null) {
+    const unresolved = new Map<string, string>();
+    return {
+      hostFirst: false,
+      async resolveSpecifier(specifier) {
+        const entry = load(specifier, context.rootDir);
+        if (entry.path) return entry.path;
+        unresolved.set(specifier, entry.unresolved ?? 'it names no file');
+        return null;
+      },
+      unresolvedReason: (specifier) => unresolved.get(specifier),
+      requireSourceEntry: () => false,
+      loaderResolve,
+    };
+  }
+
   const loaderOnly = new Set<string>();
+  // Discovery resolves from the root: a host asked without an importer
+  // resolves from its own working directory or context, which can reach
+  // another copy of the package.
+  const rootImporter = join(context.rootDir, '__animus_discovery__.js');
   return {
+    hostFirst: true,
     async resolveSpecifier(specifier) {
-      const hosted = await hostResolve(specifier);
+      let hosted: string | null;
+      try {
+        hosted = await hostResolve(specifier, rootImporter);
+      } catch {
+        // A host that fails is one that finds nothing: a declared
+        // workspace still reaches the loader.
+        hosted = null;
+      }
       if (
         hosted !== null ||
         !Object.hasOwn(context.workspaces, bareSpecifierPackageName(specifier))
       ) {
         return hosted;
       }
-      const loaded = engine.resolveSpecifier?.(
-        specifier,
-        context.rootDir,
-        [...context.conditions],
-        context.workspaces,
-        extensionPolicyJson(context.extensions)
-      );
-      if (loaded?.path) loaderOnly.add(specifier);
-      return loaded?.path ?? null;
+      const loaded = loaderResolve(specifier, context.rootDir);
+      if (loaded) loaderOnly.add(specifier);
+      return loaded;
     },
+    unresolvedReason: () => undefined,
     requireSourceEntry: (specifier) => loaderOnly.has(specifier),
+    loaderResolve,
   };
 }

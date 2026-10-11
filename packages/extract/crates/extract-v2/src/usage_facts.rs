@@ -820,16 +820,8 @@ pub(crate) struct EnrichedUsage {
     pub escapes: BTreeSet<String>,
     /// See `FileFacts::spread_wrappers`.
     pub spread_wrappers: BTreeMap<String, SpreadWrapper>,
-    /// See `FileFacts::unsafe_object_uses`.
-    pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
-    /// See `FileFacts::object_handoffs`.
-    pub object_handoffs: Vec<Handoff>,
-    /// See `FileFacts::written_namespaces`.
-    pub written_namespaces: WrittenNamespaces,
     /// See `FileFacts::ordinary_components`.
     pub ordinary_components: BTreeSet<String>,
-    /// See `FileFacts::context_consts`.
-    pub context_consts: BTreeSet<String>,
     /// See `FileFacts::prop_tags`.
     pub prop_tags: Vec<PropTag>,
     /// See `FileFacts::name_uses`.
@@ -916,8 +908,6 @@ pub(crate) fn collect_enriched_usage(
     module_path: &str,
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
-    object_consts: &BTreeMap<&str, bool>,
-    assigned_targets: &BTreeSet<&str>,
 ) -> EnrichedUsage {
     let static_values = crate::eval::Statics::of(static_values, module_path);
     let exported: FxHashSet<&str> = exports.iter().filter_map(|e| e.local.as_deref()).collect();
@@ -1032,19 +1022,6 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeMap::new(),
     };
-    let context_consts =
-        origins.map_or_else(BTreeSet::new, |scoping| context_consts(program, scoping, &ReactImports::of(program, scoping)));
-    // A context is watched as an object too: its `Provider` must stay React's.
-    let mut watched = object_consts.clone();
-    for context in &context_consts {
-        watched.entry(context.as_str()).or_insert(false);
-    }
-    // Read through the scopes every module builds, so a module with no
-    // import or chain still records what may change its objects.
-    let (unsafe_object_uses, object_handoffs, written_namespaces) = match origins {
-        Some(scoping) => unsafe_object_uses(program, scoping, &watched, assigned_targets),
-        None => (BTreeMap::new(), Vec::new(), BTreeMap::new()),
-    };
     let (opaque_calls, opaque_tags, element_consts) =
         origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
     let (prop_tags, name_uses, namespace_member_uses) =
@@ -1056,11 +1033,7 @@ pub(crate) fn collect_enriched_usage(
         confined,
         escapes,
         spread_wrappers,
-        unsafe_object_uses,
-        object_handoffs,
-        written_namespaces,
         ordinary_components,
-        context_consts,
         prop_tags,
         name_uses,
         namespace_member_uses,
@@ -1711,6 +1684,39 @@ struct ObjectBinding {
 pub type WrittenNamespaces = BTreeMap<String, (String, ObjectUse)>;
 
 /// See `FileFacts::unsafe_object_uses`.
+/// What a module's own source says may change the objects the member
+/// tables follow, and the contexts it builds among them: read from its parse
+/// and semantic build alone, before any static value is evaluated.
+pub(crate) struct ObjectUses {
+    /// See `FileFacts::context_consts`.
+    pub context_consts: BTreeSet<String>,
+    /// See `FileFacts::unsafe_object_uses`.
+    pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
+    /// See `FileFacts::object_handoffs`.
+    pub object_handoffs: Vec<Handoff>,
+    /// See `FileFacts::written_namespaces`.
+    pub written_namespaces: WrittenNamespaces,
+}
+
+/// The uses of `object_consts` and of the module's contexts that may change
+/// them, through the module's one semantic build.
+pub(crate) fn object_uses(
+    program: &Program<'_>,
+    scoping: &Scoping,
+    object_consts: &BTreeMap<&str, bool>,
+    assigned_targets: &BTreeSet<&str>,
+) -> ObjectUses {
+    let context_consts = context_consts(program, scoping, &ReactImports::of(program, scoping));
+    // A context is watched as an object too: its `Provider` must stay React's.
+    let mut watched = object_consts.clone();
+    for context in &context_consts {
+        watched.entry(context.as_str()).or_insert(false);
+    }
+    let (unsafe_object_uses, object_handoffs, written_namespaces) =
+        unsafe_object_uses(program, scoping, &watched, assigned_targets);
+    ObjectUses { context_consts, unsafe_object_uses, object_handoffs, written_namespaces }
+}
+
 fn unsafe_object_uses(
     program: &Program<'_>,
     scoping: &Scoping,
@@ -1763,6 +1769,7 @@ fn unsafe_object_uses(
         derives: Vec::new(),
         handoffs: Vec::new(),
         flat_reads: Vec::new(),
+        style_uses: Vec::new(),
         member_consts: member_consts.consts,
         written_namespaces: BTreeMap::new(),
     };
@@ -1844,7 +1851,8 @@ pub(crate) fn style_object_uses(
     }
     if scoping.root_unresolved_references().contains_key("eval") {
         let what = ObjectUse { line: None, what: "can be changed by a direct eval".to_string() };
-        let uses = candidates.into_values().map(|binding| (binding.name, what.clone())).collect();
+        let names: BTreeSet<String> = candidates.into_values().map(|binding| binding.name).collect();
+        let uses = names.into_iter().map(|name| (name, what.clone(), UseAt::WHOLE)).collect();
         return StyleObjectFacts { uses, ..StyleObjectFacts::default() };
     }
     let mut scan = ObjectUseScan {
@@ -1861,12 +1869,19 @@ pub(crate) fn style_object_uses(
         derives: Vec::new(),
         handoffs: Vec::new(),
         flat_reads: Vec::new(),
+        style_uses: Vec::new(),
         member_consts: FxHashMap::default(),
         written_namespaces: BTreeMap::new(),
     };
     scan.visit_program(program);
+    // By binding, each in source order, so a binding's first use leads; a
+    // later use reaching the same place adds nothing.
+    let mut uses = scan.style_uses;
+    uses.sort_by(|(a, ..), (b, ..)| a.cmp(b));
+    let mut seen = FxHashSet::default();
+    uses.retain(|(binding, _, at)| seen.insert((binding.clone(), at.clone())));
     StyleObjectFacts {
-        uses: scan.uses,
+        uses,
         stored: scan.containers,
         derives: scan.derives,
         handoffs: scan.handoffs,
@@ -1894,11 +1909,13 @@ fn fixed_callee(scoping: &Scoping, reference: Option<oxc::semantic::ReferenceId>
 /// edges in the engine, once it knows each import's own.
 #[derive(Debug, Default)]
 pub(crate) struct StyleObjectFacts {
-    /// Each binding's first unsafe use.
-    pub uses: BTreeMap<String, ObjectUse>,
-    /// (object, the module-scope `const` object it is stored in): the
-    /// object is unstable when its container is.
-    pub stored: Vec<(String, String)>,
+    /// Each unsafe use of a binding and where it reaches the object, by
+    /// binding, each binding's in source order.
+    pub uses: Vec<(String, ObjectUse, UseAt)>,
+    /// (object, the module-scope `const` object it is stored in, whether
+    /// spread in as a copy of its members): the object is unstable when its
+    /// container is, below its own members for a copy.
+    pub stored: Vec<(String, String, bool)>,
     /// (module-scope `const`, a binding its initializer reads): the `const`
     /// holds a value read from that binding, unstable when it is.
     pub derives: Vec<(String, String)>,
@@ -1936,15 +1953,35 @@ fn initializing_const(ancestors: &[AstKind<'_>]) -> Option<String> {
     (top_level && declaration.kind == VariableDeclarationKind::Const).then(|| id.name.to_string())
 }
 
+/// Where a style-mode use reaches the object it names, as a member path
+/// from it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum UseAt {
+    /// The value at the path escapes; at `[]`, the object itself.
+    Member(Vec<String>),
+    /// The value of some member under the path, its key computed, escapes.
+    AnyMember(Vec<String>),
+    /// The member at the path is assigned or deleted.
+    Written(Vec<String>),
+    /// A member under the path, its key computed, is assigned or deleted.
+    UnknownKeyWritten(Vec<String>),
+}
+
+impl UseAt {
+    pub(crate) const WHOLE: UseAt = UseAt::Member(Vec::new());
+}
+
 /// How a style-mode use treats an object binding.
 enum StyleUse {
     Read,
     Unsafe(String),
-    /// Stored as a member of the named module-scope `const` object.
-    StoredIn(String),
-    /// Hands on the member at the path (`None` past a computed member):
-    /// unsafe unless that member is no object.
-    MemberHandoff(Option<Vec<String>>, String),
+    /// Stored as a member of the named module-scope `const` object, or its
+    /// members copied in by a spread.
+    StoredIn { container: String, copied: bool },
+    /// Writes a member, or calls one with the object at the path as `this`.
+    MemberEffect(UseAt, String),
+    /// Hands on the value at the path: unsafe unless it is no object.
+    MemberHandoff(UseAt, String),
     /// Passed whole as argument `index` of a call to the function named
     /// `callee`, by the reference `reference`: a read when the callee is a
     /// module-scope binding nothing writes and that parameter only reads it.
@@ -2090,7 +2127,7 @@ fn style_object_use(
         // A copy kept in a module-scope `const` object is as stable as it.
         Some(AstKind::SpreadElement(spread)) if spread.argument.span() == current => match rest.next() {
             Some(AstKind::ObjectExpression(_)) => match container_const(span, ancestors) {
-                Some(container) if containers.contains(&container) => StyleUse::StoredIn(container),
+                Some(container) if containers.contains(&container) => StyleUse::StoredIn { container, copied: true },
                 _ => StyleUse::FlatRead("is spread into a copy".to_string()),
             },
             _ => StyleUse::Unsafe("is spread into a call or an array".to_string()),
@@ -2098,52 +2135,74 @@ fn style_object_use(
         Some(AstKind::JSXSpreadAttribute(_)) => StyleUse::FlatRead("is spread into props".to_string()),
         Some(AstKind::ObjectProperty(prop)) if prop.value.span() == current => {
             match container_const(span, ancestors) {
-                Some(container) if containers.contains(&container) => StyleUse::StoredIn(container),
+                Some(container) if containers.contains(&container) => StyleUse::StoredIn { container, copied: false },
                 _ => StyleUse::Unsafe("is stored in an object".to_string()),
             }
         }
         Some(AstKind::StaticMemberExpression(_) | AstKind::ComputedMemberExpression(_)) => {
             // Out through the member chain: a write or hand-off at any depth.
+            // `path` holds the static keys up to the first computed one.
             let mut outer = current;
             let mut name = String::new();
-            let mut path: Option<Vec<String>> = Some(Vec::new());
+            let mut path: Vec<String> = Vec::new();
+            let mut computed: Option<usize> = None;
+            let mut depth = 0;
             let mut parent = parent;
             loop {
                 match parent {
                     Some(AstKind::StaticMemberExpression(member)) if member.object.span() == outer => {
                         name = member.property.name.to_string();
-                        if let Some(path) = path.as_mut() {
+                        if computed.is_none() {
                             path.push(name.clone());
                         }
                     }
                     Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == outer => {
                         name = "a computed member".to_string();
-                        path = None;
+                        computed.get_or_insert(depth);
                     }
                     _ => break,
                 }
+                depth += 1;
                 let member_span = parent.map(GetSpan::span).unwrap_or(outer);
-                if let Some(what) = member_use(&format!("its member {name}"), member_span, rest.clone()) {
-                    return StyleUse::Unsafe(what);
+                if let Some(effect) = member_effect(member_span, rest.clone()) {
+                    let what = member_use(&format!("its member {name}"), member_span, rest.clone())
+                        .expect("an effect is said");
+                    // The member written, or the holder a method gets as
+                    // `this`; past a computed key, some member's value.
+                    let last = computed == Some(depth - 1);
+                    let at = match (effect, computed) {
+                        (MemberEffect::Assigned | MemberEffect::Deleted, None) => UseAt::Written(path),
+                        (MemberEffect::Assigned | MemberEffect::Deleted, Some(_)) if last => {
+                            UseAt::UnknownKeyWritten(path)
+                        }
+                        (MemberEffect::Method, None) => UseAt::Member(path[..path.len() - 1].to_vec()),
+                        (MemberEffect::Method, Some(_)) if last => UseAt::Member(path),
+                        (_, Some(_)) => UseAt::AnyMember(path),
+                    };
+                    return StyleUse::MemberEffect(at, what);
                 }
                 let (next_outer, next_parent) = peel_wrappers(member_span, &mut rest);
                 outer = next_outer;
                 parent = next_parent;
             }
+            let handed = match computed {
+                None => UseAt::Member(path),
+                Some(_) => UseAt::AnyMember(path),
+            };
             match parent {
                 Some(AstKind::CallExpression(call)) if call.callee.span() != outer => {
-                    StyleUse::MemberHandoff(path, format!("has its member {name} passed to a call"))
+                    StyleUse::MemberHandoff(handed, format!("has its member {name} passed to a call"))
                 }
                 Some(AstKind::VariableDeclarator(declarator))
                     if declarator.init.as_ref().map(GetSpan::span) == Some(outer) =>
                 {
-                    StyleUse::MemberHandoff(path, format!("has its member {name} assigned to a variable"))
+                    StyleUse::MemberHandoff(handed, format!("has its member {name} assigned to a variable"))
                 }
                 Some(AstKind::AssignmentExpression(assignment)) if assignment.right.span() == outer => {
-                    StyleUse::MemberHandoff(path, format!("has its member {name} assigned to a variable"))
+                    StyleUse::MemberHandoff(handed, format!("has its member {name} assigned to a variable"))
                 }
                 Some(AstKind::ObjectProperty(_) | AstKind::ArrayExpression(_)) => {
-                    StyleUse::MemberHandoff(path, format!("has its member {name} stored in an object"))
+                    StyleUse::MemberHandoff(handed, format!("has its member {name} stored in an object"))
                 }
                 // A value only compared, combined, tested or discarded.
                 Some(
@@ -2155,7 +2214,7 @@ fn style_object_use(
                 Some(AstKind::ConditionalExpression(conditional)) if conditional.test.span() == outer => StyleUse::Read,
                 Some(AstKind::IfStatement(statement)) if statement.test.span() == outer => StyleUse::Read,
                 _ => StyleUse::MemberHandoff(
-                    path,
+                    handed,
                     format!("has its member {name} used where the extractor does not follow it"),
                 ),
             }
@@ -2512,8 +2571,8 @@ struct ObjectUseScan<'a, 's> {
     ancestors: Vec<AstKind<'a>>,
     /// Style-value rules (see `style_object_uses`) instead of a facade's.
     style: bool,
-    /// (stored object, the `const` object it is stored in).
-    containers: Vec<(String, String)>,
+    /// See `StyleObjectFacts::stored`.
+    containers: Vec<(String, String, bool)>,
     /// The module's static values, which say whether a member handed on is
     /// an object; `None` outside style mode.
     statics: Option<&'s FxHashMap<String, StaticValue>>,
@@ -2523,6 +2582,8 @@ struct ObjectUseScan<'a, 's> {
     handoffs: Vec<Handoff>,
     /// See `StyleObjectFacts::flat_reads`.
     flat_reads: Vec<(String, ObjectUse)>,
+    /// See `StyleObjectFacts::uses`; empty outside style mode.
+    style_uses: Vec<(String, ObjectUse, UseAt)>,
     /// See `MemberConsts`; empty in style mode.
     member_consts: FxHashMap<SymbolId, String>,
     /// See `FileFacts::written_namespaces`.
@@ -2606,7 +2667,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
             return;
         }
         if self.style {
-            let (key, what) = if binding.namespace {
+            let (key, what, at) = if binding.namespace {
                 // A member of a namespace import, as the object it names.
                 let mut rest = self.ancestors.iter().rev();
                 let (span, parent) = peel_wrappers(ident.span, &mut rest);
@@ -2621,13 +2682,12 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                                 self.flat_reads.push((key, ObjectUse { line: Some(self.line(ident.span)), what }));
                                 return;
                             }
-                            StyleUse::StoredIn(_) => (key, "is stored in an object".to_string()),
-                            StyleUse::Unsafe(what)
-                            | StyleUse::MemberHandoff(_, what)
-                            | StyleUse::Handoff { what, .. } => (key, what),
+                            StyleUse::StoredIn { .. } => (key, "is stored in an object".to_string(), UseAt::WHOLE),
+                            StyleUse::MemberEffect(at, what) | StyleUse::MemberHandoff(at, what) => (key, what, at),
+                            StyleUse::Unsafe(what) | StyleUse::Handoff { what, .. } => (key, what, UseAt::WHOLE),
                         }
                     }
-                    _ => (binding.name.clone(), "is used as a whole namespace".to_string()),
+                    _ => (binding.name.clone(), "is used as a whole namespace".to_string(), UseAt::WHOLE),
                 }
             } else {
                 let containers: FxHashSet<String> =
@@ -2638,17 +2698,18 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 }
                 match style_object_use(ident.span, &self.ancestors, &containers, self.global_object) {
                     StyleUse::Read => return,
-                    StyleUse::StoredIn(container) => {
-                        self.containers.push((binding.name.clone(), container));
+                    StyleUse::StoredIn { container, copied } => {
+                        self.containers.push((binding.name.clone(), container, copied));
                         return;
                     }
                     StyleUse::FlatRead(what) => {
                         self.flat_reads.push((binding.name.clone(), ObjectUse { line: Some(self.line(ident.span)), what }));
                         return;
                     }
-                    StyleUse::Unsafe(what) => (binding.name.clone(), what),
+                    StyleUse::Unsafe(what) => (binding.name.clone(), what, UseAt::WHOLE),
+                    StyleUse::MemberEffect(at, what) => (binding.name.clone(), what, at),
                     StyleUse::Handoff { what, reference, .. } if !fixed_callee(self.scoping, reference) => {
-                        (binding.name.clone(), what)
+                        (binding.name.clone(), what, UseAt::WHOLE)
                     }
                     StyleUse::Handoff { callee, index, what, .. } => {
                         self.handoffs.push(Handoff {
@@ -2659,11 +2720,15 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                         });
                         return;
                     }
-                    StyleUse::MemberHandoff(path, what) => {
+                    StyleUse::MemberHandoff(at, what) => {
                         // A primitive member handed on cannot change the object.
+                        let path = match &at {
+                            UseAt::Member(path) => Some(path),
+                            _ => None,
+                        };
                         let primitive = path.zip(self.statics).and_then(|(path, statics)| {
                             let mut value = statics.get(&binding.name)?;
-                            for segment in &path {
+                            for segment in path {
                                 value = value.get(segment)?;
                             }
                             Some(matches!(
@@ -2677,15 +2742,12 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                         if primitive == Some(true) {
                             return;
                         }
-                        (binding.name.clone(), what)
+                        (binding.name.clone(), what, at)
                     }
                 }
             };
-            if self.uses.contains_key(&key) {
-                return;
-            }
             let line = self.line(ident.span);
-            self.uses.insert(key, ObjectUse { line: Some(line), what });
+            self.style_uses.push((key, ObjectUse { line: Some(line), what }, at));
             return;
         }
         // React's `useContext` and `use` read the context they receive.
@@ -3052,30 +3114,45 @@ fn in_own_assign_source<'b, 'a: 'b>(ancestors: &mut impl Iterator<Item = &'b Ast
 fn member_use<'b, 'a: 'b>(
     noun: &str,
     span: oxc::span::Span,
-    mut ancestors: impl Iterator<Item = &'b AstKind<'a>>,
+    ancestors: impl Iterator<Item = &'b AstKind<'a>>,
 ) -> Option<String> {
+    member_effect(span, ancestors).map(|effect| match effect {
+        MemberEffect::Assigned => format!("has {noun} assigned"),
+        MemberEffect::Deleted => format!("has {noun} deleted"),
+        MemberEffect::Method => format!("has {noun} called as a method"),
+    })
+}
+
+/// What a member expression at `span` does to the object holding it.
+#[derive(Clone, Copy)]
+enum MemberEffect {
+    Assigned,
+    Deleted,
+    /// Called, so the call gets the holder as `this`.
+    Method,
+}
+
+fn member_effect<'b, 'a: 'b>(
+    span: oxc::span::Span,
+    mut ancestors: impl Iterator<Item = &'b AstKind<'a>>,
+) -> Option<MemberEffect> {
     let (current, parent) = peel_wrappers(span, &mut ancestors);
-    let assigned = || Some(format!("has {noun} assigned"));
     match parent? {
-        AstKind::AssignmentExpression(assignment) if assignment.left.span() == current => assigned(),
+        AstKind::AssignmentExpression(assignment) if assignment.left.span() == current => Some(MemberEffect::Assigned),
         AstKind::UpdateExpression(_)
         | AstKind::ArrayAssignmentTarget(_)
         | AstKind::AssignmentTargetRest(_)
         | AstKind::AssignmentTargetWithDefault(_)
-        | AstKind::AssignmentTargetPropertyProperty(_) => assigned(),
-        AstKind::ForInStatement(statement) if statement.left.span() == current => assigned(),
-        AstKind::ForOfStatement(statement) if statement.left.span() == current => assigned(),
+        | AstKind::AssignmentTargetPropertyProperty(_) => Some(MemberEffect::Assigned),
+        AstKind::ForInStatement(statement) if statement.left.span() == current => Some(MemberEffect::Assigned),
+        AstKind::ForOfStatement(statement) if statement.left.span() == current => Some(MemberEffect::Assigned),
         AstKind::UnaryExpression(unary)
             if unary.operator == oxc::syntax::operator::UnaryOperator::Delete =>
         {
-            Some(format!("has {noun} deleted"))
+            Some(MemberEffect::Deleted)
         }
-        AstKind::CallExpression(call) if call.callee.span() == current => {
-            Some(format!("has {noun} called as a method"))
-        }
-        AstKind::TaggedTemplateExpression(tagged) if tagged.tag.span() == current => {
-            Some(format!("has {noun} called as a method"))
-        }
+        AstKind::CallExpression(call) if call.callee.span() == current => Some(MemberEffect::Method),
+        AstKind::TaggedTemplateExpression(tagged) if tagged.tag.span() == current => Some(MemberEffect::Method),
         _ => None,
     }
 }
@@ -5388,7 +5465,7 @@ pub fn collect_usage_facts_with_statics(
     module_path: &str,
 ) -> Vec<UsageFact> {
     let built = SemanticBuilder::new().build(program).semantic.into_scoping();
-    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[], &BTreeMap::new(), &BTreeSet::new())
+    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[])
         .usage
 }
 

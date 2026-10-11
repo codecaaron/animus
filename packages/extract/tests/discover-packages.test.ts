@@ -847,6 +847,7 @@ function collectedKits(
     outcomes: [],
     diagnostics: [],
     kitDescriptors: [],
+    packageInstances: {},
   };
   for (const [specifier, pkg, files] of specifiers) {
     const dir = `/r/packages/${pkg}/src`;
@@ -962,10 +963,11 @@ test('an imported kit the system does not include is an error', () => {
   };
 
   const found = importedKitDiagnostics(
-    [{ path: 'src/App.tsx', source: '' }],
+    [{ path: 'src/App.tsx', source: '', hash: '' }],
     engine,
     root,
-    ['@acme/included', '@acme/legacy']
+    ['@acme/included', '@acme/legacy'],
+    () => JSON.parse(engine.extractFacts())
   );
   rmSync(root, { recursive: true, force: true });
 

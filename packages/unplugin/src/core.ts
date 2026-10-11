@@ -2,6 +2,7 @@ import {
   BUILT_IN_EXTENSION_POLICY,
   builtInAssetClassification,
   DiagnosticFailure,
+  droppedExtensionMessage,
   ENGINE_TRANSFORM_EXTENSIONS,
   esbuildAssetClassification,
   esbuildExtensionPolicy,
@@ -9,6 +10,7 @@ import {
   isPathWithinRoot,
   keepsKitSourceEffects,
   rollupExtensionPolicy,
+  servedFiles,
   viteAssetClassification,
   viteExtensionPolicy,
   webpackExtensionPolicy,
@@ -37,6 +39,9 @@ import type {
   AnimusMode,
   HostAssetClassification,
   HostExtensionPolicy,
+  HostResolve,
+  ProjectManifest,
+  ServedFiles,
 } from '@animus-ui/extract/pipeline';
 import type { SessionKey } from '@animus-ui/extract/session';
 import type {
@@ -89,8 +94,9 @@ export interface HostState {
   /** The build of the root this plugin instance analyses, once a pipeline
    *  run's session joined it. */
   key: SessionKey | null;
-  /** The files the run's analysis extracted components from. */
-  listedFiles: ReadonlySet<string>;
+  /** The files the run's analysis extracted components from, and the
+   *  extensions it dropped over their parent. */
+  served: ServedFiles;
 }
 
 export function createHostState(): HostState {
@@ -98,7 +104,7 @@ export function createHostState(): HostState {
     pipeline: null,
     mode: null,
     cssText: '',
-    listedFiles: new Set(),
+    served: { listed: new Set(), dropped: new Map() },
     systemPropsJs: '',
     kitRedirects: new Map(),
     kitSideEffects: new Map(),
@@ -181,16 +187,20 @@ export function transformWithEngine(
       path: string,
       manifestJson: string
     ) => { code: string; hasComponents: boolean };
-    /** Whether the analysis extracted components from a root-relative
-     *  file; one it did must transform. */
-    listsComponents?: (filename: string) => boolean;
+    /** The root-relative files the analysis extracted components from,
+     *  which must transform, and those it dropped over their parent. */
+    served?: ServedFiles;
   }
 ): string | null {
   const filename = relative(ctx.rootDir, resolve(id)).split('\\').join('/');
+  // A dropped extension is never served raw, even beside components that
+  // did extract (SA1).
+  const drop = ctx.served?.dropped.get(filename);
+  if (drop !== undefined) throw new Error(droppedExtensionMessage(drop));
   const result = ctx.transformFile(code, filename, ctx.manifestJson);
   if (result.hasComponents) return result.code;
   // Serving it raw would ship builder code (SA1).
-  if (ctx.listsComponents?.(filename)) {
+  if (ctx.served?.listed.has(filename)) {
     throw new Error(
       `[animus] the analysis extracted components from ${filename}, but its ` +
         `transform found none`
@@ -199,19 +209,11 @@ export function transformWithEngine(
   return null;
 }
 
-/** The files a manifest lists components for, parsed once per run. */
-function componentFiles(manifestJson: string | null): ReadonlySet<string> {
-  if (manifestJson === null) return new Set();
-  // SAFETY: the session's own published manifest, whose `files` maps each
-  // root-relative file to the component ids extracted from it.
-  const { files } = JSON.parse(manifestJson) as {
-    files?: Record<string, readonly string[]>;
-  };
-  return new Set(
-    Object.entries(files ?? {})
-      .filter(([, ids]) => ids.length > 0)
-      .map(([file]) => file)
-  );
+/** What a manifest's transform serves, parsed once per run. */
+function manifestServedFiles(manifestJson: string | null): ServedFiles {
+  if (manifestJson === null) return { listed: new Set(), dropped: new Map() };
+  // SAFETY: the session's own published manifest.
+  return servedFiles(JSON.parse(manifestJson) as ProjectManifest);
 }
 
 /** Whether esbuild's `external` option names `specifier`: exactly, as the
@@ -313,6 +315,9 @@ interface WebpackLikeCompiler {
   hooks: {
     done: { tap: (name: string, fn: () => void) => void };
     failed?: { tap: (name: string, fn: () => void) => void };
+    /** `close()` of a watch, which webpack fires in place of `done` when it
+     *  closes mid-compile. */
+    watchClose?: { tap: (name: string, fn: () => void) => void };
     normalModuleFactory: {
       tap: (
         name: string,
@@ -341,6 +346,33 @@ interface KitResolveData {
 }
 interface WebpackLikeApplied {
   apply: (compiler: WebpackLikeCompiler) => void;
+}
+
+/** A Rollup-family plugin context, which resolves through the bundler's
+ *  own plugin pipeline. */
+interface ResolvingContext {
+  resolve(
+    source: string,
+    importer?: string,
+    options?: { skipSelf?: boolean }
+  ): Promise<{ id: string } | null>;
+}
+
+function hasPluginResolve(
+  context: UnpluginBuildContext | ResolvingContext
+): context is ResolvingContext {
+  return 'resolve' in context;
+}
+
+/** The bundler's resolution through a Rollup-family plugin context (Rollup,
+ *  Rolldown, Vite); none where the context cannot resolve. */
+function pluginResolver(
+  context: UnpluginBuildContext | ResolvingContext
+): HostResolve | null {
+  if (!hasPluginResolve(context)) return null;
+  return async (specifier, importer) =>
+    (await context.resolve(specifier, importer, { skipSelf: true }))?.id ??
+    null;
 }
 
 const PLUGIN_NAME = 'animus-host';
@@ -372,6 +404,9 @@ export const unpluginFactory: UnpluginFactory<
   let hostExtensions: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
   let hostAssets: HostAssetClassification =
     builtInAssetClassification('noHost');
+  /** The bundler's own resolution, which package discovery asks first
+   *  (spec §2.2 A4); none where the host exposes no resolver. */
+  let hostResolver: HostResolve | null = null;
   /** Hooks can fire before buildStart (webpack's make taps run
    *  concurrently), so joiners await this before awaiting the pipeline. */
   let signalPipelineStarted!: () => void;
@@ -403,6 +438,18 @@ export const unpluginFactory: UnpluginFactory<
 
   async function startPipeline(): Promise<void> {
     signalPipelineStarted();
+    // A webpack compile that ended without done or failed (it restarts one
+    // an edit invalidated, and skips both) left its Session joined and its
+    // claim held: retire it before this run claims the build again. A
+    // webpack compiler runs one compile at a time; the Rollup family can
+    // start environments in parallel, so they keep theirs.
+    if (
+      activeSession !== null &&
+      (meta.framework === 'webpack' || meta.framework === 'rspack')
+    ) {
+      disposeSessionDir(state);
+      releaseClaim();
+    }
     try {
       await runClaimedPipeline();
     } catch (error) {
@@ -442,6 +489,7 @@ export const unpluginFactory: UnpluginFactory<
       session.conditions = hostConditions;
       session.extensionPolicy = hostExtensions;
       session.assetClassification = hostAssets;
+      session.hostResolve = hostResolver;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
       // Each full pass re-reads the tsconfig aliases.
       session.aliasesFromTsconfig = true;
@@ -468,7 +516,7 @@ export const unpluginFactory: UnpluginFactory<
         );
       }
       state.cssText = getSharedCss(session.key);
-      state.listedFiles = componentFiles(getManifestJson(session.key));
+      state.served = manifestServedFiles(getManifestJson(session.key));
       state.systemPropsJs = getSharedSystemProps(session.key);
       state.kitRedirects = new Map(session.externalSourceEntries);
       state.kitSideEffects = new Map(session.externalSourceSideEffects);
@@ -560,6 +608,7 @@ export const unpluginFactory: UnpluginFactory<
     enforce: 'pre',
 
     async buildStart() {
+      if (rollupLike) hostResolver = pluginResolver(this);
       try {
         await startPipeline();
       } finally {
@@ -680,7 +729,7 @@ export const unpluginFactory: UnpluginFactory<
           rootDir: root,
           manifestJson: getManifestJson(key) ?? '',
           transformFile,
-          listsComponents: (file) => state.listedFiles.has(file),
+          served: state.served,
         });
         if (transformed !== null) output = transformed;
       }
@@ -733,6 +782,7 @@ export const unpluginFactory: UnpluginFactory<
           'rollup'
         );
         modeOracle = this.meta?.watchMode ? 'development' : 'production';
+        hostResolver = pluginResolver(this);
         try {
           await startPipeline();
         } finally {
@@ -930,6 +980,11 @@ export const unpluginFactory: UnpluginFactory<
       releaseClaim();
     });
     compiler.hooks.failed?.tap(PLUGIN_NAME, () => {
+      disposeSessionDir(state);
+      releaseClaim();
+    });
+    // A watch closed mid-compile fires neither: the build retires here.
+    compiler.hooks.watchClose?.tap(PLUGIN_NAME, () => {
       disposeSessionDir(state);
       releaseClaim();
     });
