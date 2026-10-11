@@ -55,7 +55,7 @@ import {
   firstOwners,
   assertRuntimeImportSuppliesTerminals,
   DEFAULT_RUNTIME_IMPORT,
-  hostFirstPackageResolver,
+  discoveryResolver,
   hashReplacementPlans,
   isEngineTransformExtension,
   isExcludedPackageRelativePath,
@@ -103,7 +103,6 @@ import {
   readCliLockRecord,
   verifyCommitRecord,
 } from './published-set';
-import { resolvePackagesByName } from './resolve-packages';
 import {
   ANALYSIS_COMMIT_ARTIFACT,
   ANALYSIS_INPUTS_ARTIFACT,
@@ -170,10 +169,7 @@ import type {
   KitDescriptorRecord,
 } from '../pipeline/index';
 import type { ExtractFactsResult } from '../pipeline/source-ingestion';
-import type {
-  PackageResolution,
-  SessionResolutionContext,
-} from './resolve-packages';
+import type { SessionResolutionContext } from './resolve-packages';
 import type { SessionKey, SystemLoad } from './singleton';
 
 export type SessionOptions = AnimusCoreOptions;
@@ -1772,56 +1768,24 @@ export class ExtractionSession {
     }
 
     bt.fileRead = this.elapsed(t);
+    const rawPaths = new Set(rawEntries.map((entry) => entry.path));
 
-    // Package resolution, as system loading resolves: under the same
-    // context, every answer the loader's. The traversal and ingest below
-    // are the shared collector.
+    // Package resolution: the host's own where it resolves imports (spec
+    // §2.2 A4), else the system loader's under the same context. The
+    // traversal and ingest below are the shared collector.
     t = this.now();
-    const packageResolution: PackageResolution = {
-      resolveSpecifier: (
-        specifier,
-        fromDir,
-        { conditions, workspaces, extensions }
-      ) => {
-        const native = this.engine().resolveSpecifier;
-        if (native === undefined) {
-          throw new Error(
-            'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
-          );
-        }
-        return native(
-          specifier,
-          fromDir,
-          [...conditions],
-          workspaces,
-          extensionPolicyJson(extensions)
-        );
-      },
-    };
-    const hostFirst =
-      this.hostResolve === null
-        ? null
-        : hostFirstPackageResolver(this.hostResolve, this.engine(), {
-            rootDir,
-            conditions: context.conditions,
-            workspaces: context.workspaces,
-            extensions: context.extensions,
-          });
+    const resolver = discoveryResolver(this.hostResolve, this.engine(), {
+      rootDir,
+      conditions: context.conditions,
+      workspaces: context.workspaces,
+      extensions: context.extensions,
+    });
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
       engineModuleParser(this.engine()),
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
-      hostFirst?.resolveSpecifier ??
-        ((name) => {
-          const entry = resolvePackagesByName(
-            rootDir,
-            [name],
-            packageResolution,
-            context
-          ).entries[name];
-          return entry ? resolve(rootDir, entry) : null;
-        }),
+      resolver.resolveSpecifier,
       context.extensions
     );
     discoveryDiagnostics.push(
@@ -1829,18 +1793,10 @@ export class ExtractionSession {
         rawEntries,
         this.engine(),
         rootDir,
-        packageNames
+        packageNames,
+        (entries) => this.corpus.facts(entries)
       )
     );
-    const preResolved =
-      hostFirst === null
-        ? resolvePackagesByName(
-            rootDir,
-            packageNames,
-            packageResolution,
-            context
-          )
-        : null;
 
     // Raw content hashes of every walked external file, keyed by absolute
     // path — recorded before MDX preprocessing so the diff sees raw bytes.
@@ -1857,17 +1813,12 @@ export class ExtractionSession {
       ),
       locatePackage: nativePackageLocator(this.engine(), context.workspaces),
       specifiers: packageNames,
-      resolveSpecifier:
-        hostFirst?.resolveSpecifier ??
-        ((name) =>
-          preResolved?.entries[name]
-            ? resolve(rootDir, preResolved.entries[name])
-            : null),
-      unresolvedReason: (name) => preResolved?.unresolved[name],
-      requireSourceEntry: hostFirst?.requireSourceEntry,
+      resolveSpecifier: resolver.resolveSpecifier,
+      unresolvedReason: resolver.unresolvedReason,
+      requireSourceEntry: resolver.requireSourceEntry,
       rootDir,
       extensionsSet,
-      hasEntry: (relPath) => rawEntries.some((e) => e.path === relPath),
+      hasEntry: (relPath) => rawPaths.has(relPath),
       hostOutputDirs: this.structuralExclude.map((dir) =>
         resolve(rootDir, dir)
       ),
@@ -1898,19 +1849,15 @@ export class ExtractionSession {
     this.ingestionFailureDiagnostics = ingestionFailures;
     // The host chose the analysed instances; the system load resolved its
     // own. Until the loader takes the host's instance, they must agree.
-    if (hostFirst !== null) {
+    if (resolver.hostFirst) {
       discoveryDiagnostics.push(
         ...systemInstanceMismatches({
           rootDir,
           specifiers: packageNames,
-          dirOwnerSets: collected.dirOwnerSets,
+          instances: collected.packageInstances,
           evaluated: this.systemDependencyPaths,
           loaderResolve: (specifier) =>
-            packageResolution.resolveSpecifier(
-              specifier,
-              dirname(resolvedSystemPath),
-              context
-            ).path ?? null,
+            resolver.loaderResolve(specifier, dirname(resolvedSystemPath)),
         })
       );
     }

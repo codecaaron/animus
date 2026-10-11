@@ -8,9 +8,13 @@
  */
 
 import { realpathSync } from 'fs';
-import { join, relative, sep } from 'path';
+import { relative, sep } from 'path';
 
-import { findPackageRoot } from './discover-packages';
+import {
+  bareSpecifierPackageName,
+  findPackageRoot,
+  isPackageSpecifier,
+} from './discover-packages';
 import { severityFor, SYSTEM_INSTANCE_MISMATCH } from './manifest-diagnostics';
 
 import type { ManifestDiagnostic } from './manifest-diagnostics';
@@ -27,32 +31,27 @@ function realPath(path: string): string {
  * One error for each system-file kit specifier whose analysed package
  * instance is not the one the system load evaluated: the file the loader's
  * own resolution names must be among the files the load read, and lie in
- * another package root than the directories discovery collected for it.
+ * another package root than the instance discovery read for its package.
  */
 export function systemInstanceMismatches(input: {
   rootDir: string;
   /** The system file's kit specifiers, as discovery read them. */
   specifiers: readonly string[];
-  /** Each collected directory and the specifiers that claimed it. */
-  dirOwnerSets: Readonly<Record<string, readonly string[]>>;
+  /** Package name → the real root of the instance discovery read. */
+  instances: Readonly<Record<string, string>>;
   /** The files the system load read. */
   evaluated: readonly string[];
   /** The system loader's resolution of a specifier, from the system file. */
   loaderResolve: (specifier: string) => string | null;
 }): ManifestDiagnostic[] {
   const evaluated = new Set(input.evaluated.map(realPath));
-  const analysedRoot = new Map<string, string>();
-  for (const [dir, owners] of Object.entries(input.dirOwnerSets)) {
-    const root = realPath(findPackageRoot(join(dir, 'index')));
-    for (const owner of owners) {
-      if (!analysedRoot.has(owner)) analysedRoot.set(owner, root);
-    }
-  }
   const shown = (path: string): string =>
     relative(input.rootDir, path).split(sep).join('/');
   const diagnostics: ManifestDiagnostic[] = [];
   for (const specifier of input.specifiers) {
-    const analysed = analysedRoot.get(specifier);
+    // A local include is a path, which both sides read as written.
+    if (!isPackageSpecifier(specifier)) continue;
+    const analysed = input.instances[bareSpecifierPackageName(specifier)];
     if (analysed === undefined) continue;
     let file: string | null;
     try {

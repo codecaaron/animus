@@ -560,7 +560,6 @@ export async function collectExternalPackageSources(opts: {
 }): Promise<CollectedExternalPackages> {
   const {
     specifiers,
-    resolveSpecifier,
     unresolvedReason,
     kitSourceRoot,
     locatePackage,
@@ -575,13 +574,23 @@ export async function collectExternalPackageSources(opts: {
     hostOutputDirs = [],
   } = opts;
 
+  // One host request per specifier: a redirect's side-effect check asks
+  // again for the entry the include already resolved.
+  const answers = new Map<string, Promise<string | null>>();
+  const resolveSpecifier = (specifier: string): Promise<string | null> => {
+    let answer = answers.get(specifier);
+    if (answer === undefined) {
+      answer = Promise.resolve().then(() => opts.resolveSpecifier(specifier));
+      answers.set(specifier, answer);
+    }
+    return answer;
+  };
+
   const entries: Array<{ path: string; source: string }> = [];
   const pushed = new Set<string>();
   const packageMap: Record<string, string> = {};
   const sourceEntries = new Map<string, string>();
   const sourceEntrySideEffects = new Map<string, boolean>();
-  /** `replaced` names the entry the redirect stands in for; it is only
-   *  needed, and so only resolved, for a glob list. */
   /** The entry `subpath` of the package resolves to without the redirect.
    *  A resolver with no `import` condition, as Node's `require` has none,
    *  finds no ESM-only entry, so the manifest's own target answers then. */
@@ -601,6 +610,8 @@ export async function collectExternalPackageSources(opts: {
       null
     );
   };
+  /** `replaced` names the entry the redirect stands in for; it is only
+   *  needed, and so only resolved, for a glob list. */
   const redirect = async (
     specifier: string,
     srcEntry: string,
@@ -1134,29 +1145,25 @@ export function isPackageSpecifier(specifier: string): boolean {
  * reaches the engine only as its generated children.
  */
 export function importedKitDiagnostics(
-  files: ReadonlyArray<{ path: string; source: string }>,
-  engine: Pick<
-    EngineApi,
-    'extractFacts' | 'declaresKitSource' | 'locatePackage'
-  >,
+  files: ReadonlyArray<{ path: string; source: string; hash: string }>,
+  engine: Pick<EngineApi, 'declaresKitSource' | 'locatePackage'>,
   rootDir: string,
-  systemKits: readonly string[]
+  systemKits: readonly string[],
+  /** The engine's facts for parser-ready files: the ingestion's cached
+   *  parse, so the corpus pass that follows parses nothing again. */
+  factsOf: (
+    files: ReadonlyArray<{ path: string; source: string; hash: string }>
+  ) => ExtractFactsResult
 ): ManifestDiagnostic[] {
-  const { extractFacts } = engine;
   const parsed = files.filter(({ path }) => isEngineTransformExtension(path));
-  if (!extractFacts || parsed.length === 0) return [];
+  if (parsed.length === 0) return [];
   const locatePackage = nativePackageLocator(
     engine,
     declaredWorkspacePackages(rootDir)
   );
   let facts: ExtractFactsResult;
   try {
-    facts = parseInternalWire<ExtractFactsResult>(
-      extractFacts(
-        JSON.stringify(parsed.map(({ path, source }) => ({ path, source })))
-      ),
-      'extractFacts'
-    );
+    facts = factsOf(parsed);
   } catch {
     return [];
   }
