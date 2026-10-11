@@ -13189,17 +13189,21 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         // every name the call's result binds; a spread of the props says
         // it forwards them. Contract: a conditional props split is
         // attributed like a rest spread, alternative by alternative.
-        let routes: [(&str, &str); 7] = [
-            ("const [styling = {}] = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
-            ("const { styling = {} } = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
-            ("const { part: { styling } } = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
-            ("const styling = pick(props); return <Box {...styling} />;", "may forward"),
-            ("let styling = pick(props); styling = {}; return <Box {...styling} />;", "may forward"),
-            ("return <Box {...props} />;", "forwards them by spread"),
+        let routes: [(&str, Option<&str>); 9] = [
+            ("const [styling = {}] = splitProps(props, KEYS); return <Box {...styling} />;", Some("may forward")),
+            ("const { styling = {} } = splitProps(props, KEYS); return <Box {...styling} />;", Some("may forward")),
+            ("const { part: { styling } } = splitProps(props, KEYS); return <Box {...styling} />;", Some("may forward")),
+            ("const styling = pick(props); return <Box {...styling} />;", Some("may forward")),
+            ("let styling = pick(props); styling = {}; return <Box {...styling} />;", Some("may forward")),
+            ("return <Box {...props} />;", Some("forwards them by spread")),
             (
                 "const [legend, styling] = visible ? splitProps(props, KEYS) : [{}, props]; return <Box {...styling} />;",
-                "may forward",
+                Some("may forward"),
             ),
+            // The spread reads its own binding, which only shares the name.
+            ("const styling = visible ? props : {}; return ((styling) => <Box {...styling} />)({});", None),
+            // Only a falsy `false` reaches the spread.
+            ("const styling = false && props; return <Box {...styling} />;", None),
         ];
         for (body, how) in routes {
             let wrapper = format!(
@@ -13208,7 +13212,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             );
             let out = analyze_with_logical_space(&[("recipe.tsx", recipe), ("wrapper.tsx", &wrapper), ("app.tsx", rendered)]);
             let messages: Vec<_> = unattributed(&out).iter().map(|d| d.message.as_str()).collect();
-            assert!(matches!(messages.as_slice(), [one] if one.contains(how)), "{body}: {messages:?}");
+            match how {
+                Some(how) => assert!(matches!(messages.as_slice(), [one] if one.contains(how)), "{body}: {messages:?}"),
+                None => assert!(messages.is_empty(), "{body}: {messages:?}"),
+            }
         }
     }
 
