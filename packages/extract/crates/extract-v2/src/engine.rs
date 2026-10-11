@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use crate::identity::LocalId;
 use crate::link::ProjectLinks;
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
-use animus_system_loader::module_table::ModuleIndex;
+use animus_system_loader::module_table::{ExportLookup, ModuleIndex, Terminal};
 
 const SYSTEM_PROPS_MODULE_ID: &str = "virtual:animus/system-props";
 
@@ -828,36 +828,45 @@ impl ExtractEngine {
             let mut extra = rustc_hash::FxHashMap::default();
             let mut usage_extra = rustc_hash::FxHashMap::default();
             for imp in imports {
-                let Some((module, binding)) = import_binding(
-                    path,
-                    &imp.source,
-                    &imp.imported,
-                    &links,
-                    &statics_by_file,
-                    &self.opts.css_inputs,
-                ) else {
+                let Some(target) =
+                    analyze_css::resolve_import_source(path, &imp.source, &statics_by_file, &self.opts.css_inputs)
+                else {
                     continue;
                 };
-                let resolved_file = links.paths[module].clone();
-                let local = &lowered_by_file[&resolved_file].bindings.binding(binding).name;
-                // A relative `asset()` specifier means its own file's
-                // directory, which an importer cannot carry.
-                if let Some(val) = statics_by_file[&resolved_file]
-                    .get(local)
-                    .filter(|value| !crate::eval::carries_relative_asset(value))
-                {
-                    extra.insert(imp.local.clone(), val.clone());
+                let Some(module) = links.module(&target) else { continue };
+                let (lookup, spelled) = links.table.resolve_export_spelled(module, &imp.imported);
+                match lookup {
+                    ExportLookup::Resolved(Terminal::Local { module, binding }) => {
+                        let declaring = &links.paths[module];
+                        let local = &lowered_by_file[declaring].bindings.binding(binding).name;
+                        // A relative `asset()` specifier means its own file's
+                        // directory, which an importer cannot carry.
+                        if let Some(val) = statics_by_file[declaring]
+                            .get(local)
+                            .filter(|value| !crate::eval::carries_relative_asset(value))
+                        {
+                            extra.insert(imp.local.clone(), val.clone());
+                        }
+                        if let Some(val) = complete_statics_by_file[declaring].get(local) {
+                            usage_extra.insert(imp.local.clone(), val.clone());
+                        }
+                    }
+                    ExportLookup::Resolved(Terminal::Namespace(_)) => {}
+                    _ => continue,
                 }
-                if let Some(val) = complete_statics_by_file[&resolved_file].get(local) {
-                    usage_extra.insert(imp.local.clone(), val.clone());
-                }
-                // A registered collection, by a name its module exports it as.
-                let registered = links.exported_as(module, binding).find_map(|name| keyframes_registry.get(name));
-                if let Some(kf) = registered {
+                // A registered collection, by the name the import's route
+                // reaches it by; routes naming different registrations name
+                // none.
+                let mut registered = spelled.iter().filter_map(|(_, name)| keyframes_registry.get(name));
+                let first = registered.next();
+                if let Some(kf) = first.filter(|kf| registered.all(|other| other == *kf)) {
                     extra.insert(imp.local.clone(), kf.clone());
                     usage_extra.insert(imp.local.clone(), kf.clone());
-                } else if crate::analyze_css::is_external_file(&resolved_file, output_dirs) {
-                    compiled_declarations.insert((path.clone(), imp.local.clone()), resolved_file);
+                } else if let Some((at, _)) = spelled.first() {
+                    let declared_in = &links.paths[*at];
+                    if crate::analyze_css::is_external_file(declared_in, output_dirs) {
+                        compiled_declarations.insert((path.clone(), imp.local.clone()), declared_in.clone());
+                    }
                 }
             }
             for exp in exports {
@@ -1936,6 +1945,50 @@ export const App = () => <Box tone="red" />;
             .filter(|d| d["kind"] == "skip")
             .collect();
         assert!(skips.is_empty(), "{skips:?}");
+    }
+
+    /// An import of a registered keyframes collection takes the registration
+    /// of the name its route reaches the collection by: never another alias
+    /// of the same binding registered as a different collection, and a
+    /// namespace exported as the collection too.
+    #[test]
+    fn an_imported_collection_takes_the_registration_its_route_names() {
+        let frames = r#"{"from":{"opacity":0},"to":{"opacity":1}}"#;
+        let registry = format!(
+            r#"{{"motion":{{"pulse":{{"name":"animus-kf-motion","frames":{frames}}}}},"alternate":{{"pulse":{{"name":"animus-kf-alternate","frames":{frames}}}}}}}"#
+        );
+        let consumer = "import { motion } from './motion';\nexport const C = ds.styles({ animationName: motion.pulse }).asElement('span');\nexport const App = () => <C />;\n";
+        let rows = [
+            (
+                "aliased binding",
+                serde_json::json!([
+                    { "path": "motion.ts", "source": "const original = createKeyframes({ pulse: { from: { opacity: 0 }, to: { opacity: 1 } } });\nexport { original as alternate, original as motion };\n" },
+                    { "path": "other.ts", "source": "export const alternate = createKeyframes({ pulse: { from: { opacity: 1 }, to: { opacity: 0 } } });\n" },
+                    { "path": "app.tsx", "source": consumer }
+                ]),
+            ),
+            (
+                "exported namespace",
+                serde_json::json!([
+                    { "path": "frames.ts", "source": "export const __brand = 'Keyframes';\nexport const __frames = { pulse: { from: { opacity: 0 }, to: { opacity: 1 } } };\nexport const pulse = 'pulse';\n" },
+                    { "path": "motion.ts", "source": "import * as ns from './frames';\nexport { ns as motion };\n" },
+                    { "path": "app.tsx", "source": consumer }
+                ]),
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (row, files) in rows {
+            let mut engine =
+                ExtractEngine::new(Some(EngineOptions { keyframes_json: Some(registry.clone()), ..Default::default() }))
+                    .unwrap();
+            let manifest: serde_json::Value =
+                serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
+            let css = manifest["css"].as_str().unwrap();
+            if !css.contains("animation-name: animus-kf-motion") || !manifest["diagnostics"].as_array().unwrap().is_empty() {
+                wrong.push((row, css.to_string(), manifest["diagnostics"].to_string()));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     #[test]
