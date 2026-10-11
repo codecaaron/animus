@@ -48,51 +48,84 @@ export function disjointPackages(
   roots: readonly string[],
   analysed: ReadonlySet<string>
 ): string[] {
-  const verdicts = new Map<string, boolean>();
-  const visiting = new Set<string>();
-  const byName = new Map<string, boolean>();
-  const judge = (
-    name: string,
-    dir: string | null,
-    optional: boolean
-  ): boolean => {
-    if (analysed.has(name)) return false;
-    if (dir === null) return optional;
-    const known = verdicts.get(dir);
-    if (known !== undefined) return known;
-    // A cycle back to a package being judged adds nothing new.
-    if (visiting.has(dir)) return true;
-    visiting.add(dir);
-    const manifest = readPackageManifest(dir);
-    let disjoint = manifest !== null && dir.split(sep).includes('node_modules');
-    for (const [field, fieldOptional] of [
-      ['dependencies', false],
-      ['peerDependencies', false],
-      ['optionalDependencies', true],
-    ] as const) {
+  // Every package the roots reach, by real directory, with whether it fails
+  // on its own, and the packages that depend on each. A package is disjoint
+  // when no failing package is reachable from it, so a cycle is judged as a
+  // whole.
+  const names = new Map<string, string>();
+  const failing = new Set<string>();
+  const dependents = new Map<string, string[]>();
+  const pending: string[] = [];
+  const reach = (name: string, dir: string, from: string | null): void => {
+    if (from !== null)
+      dependents.set(dir, [...(dependents.get(dir) ?? []), from]);
+    if (names.has(dir)) return;
+    names.set(dir, name);
+    pending.push(dir);
+    const linked = !dir.split(sep).includes('node_modules');
+    if (analysed.has(name) || linked || readPackageManifest(dir) === null) {
+      failing.add(dir);
+    }
+  };
+  const follow = (
+    manifest: JsonValue | null,
+    fields: ReadonlyArray<readonly [string, boolean]>,
+    from: string,
+    dependent: string | null
+  ): void => {
+    for (const [field, fieldOptional] of fields) {
       for (const dep of dependencyNames(manifest, field)) {
-        if (!disjoint) break;
-        const depOptional = fieldOptional || optionalPeer(manifest, dep);
-        disjoint = judge(dep, locatePackageRoot(dep, dir), depOptional);
+        const dir = locatePackageRoot(dep, from);
+        if (dir !== null) reach(dep, dir, dependent);
+        // An analysed package outside node_modules, or a missing required
+        // dependency, fails the package that needs it; a missing optional
+        // one is not installed, so nothing loads it.
+        else if (
+          dependent !== null &&
+          (analysed.has(dep) || !(fieldOptional || optionalPeer(manifest, dep)))
+        ) {
+          failing.add(dependent);
+        }
       }
     }
-    visiting.delete(dir);
-    verdicts.set(dir, disjoint);
-    byName.set(name, (byName.get(name) ?? true) && disjoint);
-    return disjoint;
   };
   for (const root of roots) {
-    const manifest = readPackageManifest(root);
-    for (const field of [
-      'dependencies',
-      'devDependencies',
-      'peerDependencies',
-      'optionalDependencies',
-    ]) {
-      for (const dep of dependencyNames(manifest, field)) {
-        judge(dep, locatePackageRoot(dep, root), false);
+    follow(
+      readPackageManifest(root),
+      [
+        ['dependencies', false],
+        ['devDependencies', false],
+        ['peerDependencies', false],
+        ['optionalDependencies', true],
+      ],
+      root,
+      null
+    );
+  }
+  for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
+    follow(
+      readPackageManifest(dir),
+      [
+        ['dependencies', false],
+        ['peerDependencies', false],
+        ['optionalDependencies', true],
+      ],
+      dir,
+      dir
+    );
+  }
+  const reaching = [...failing];
+  for (let dir = reaching.pop(); dir !== undefined; dir = reaching.pop()) {
+    for (const dependent of dependents.get(dir) ?? []) {
+      if (!failing.has(dependent)) {
+        failing.add(dependent);
+        reaching.push(dependent);
       }
     }
+  }
+  const byName = new Map<string, boolean>();
+  for (const [dir, name] of names) {
+    byName.set(name, (byName.get(name) ?? true) && !failing.has(dir));
   }
   return [...byName]
     .filter(([, disjoint]) => disjoint)

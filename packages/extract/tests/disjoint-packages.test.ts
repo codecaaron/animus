@@ -96,3 +96,19 @@ test('an outside package is disjoint only when its whole installed closure is re
   }
   expect(disjoint.includes('linked')).toBe(false);
 });
+
+/** A cycle is judged as a whole: a package whose cycle reaches an
+ *  analysed package is not disjoint, whichever member is met first. */
+test('a dependency cycle that reaches an analysed package lists none of its members', () => {
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-disjoint-')));
+  const app = join(root, 'app');
+  installed(app, 'a', { dependencies: { b: '1', app: '1' } });
+  installed(app, 'b', { dependencies: { a: '1' } });
+  installed(app, 'app', {});
+  write(
+    join(app, 'package.json'),
+    JSON.stringify({ name: 'app', dependencies: { a: '1', b: '1' } })
+  );
+
+  expect(disjointPackages([app], new Set(['app']))).toEqual([]);
+});
