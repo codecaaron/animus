@@ -12,6 +12,8 @@ import {
   findSheetAssetSpecifiers,
   generatedModuleCode,
   isDeletedSource,
+  BUILT_IN_EXTENSION_POLICY,
+  declaredWorkspacePackages,
   loadSystemConfig,
   parseFilesJson,
   projectExternalFileOwners,
@@ -46,6 +48,7 @@ import type {
   AssetSheets,
   ExcludeMatcher,
   ExternalPackageOutcome,
+  HostExtensionPolicy,
   KitDescriptorRecord,
   ManifestDiagnostic,
   ManifestSheets,
@@ -185,6 +188,9 @@ export class PluginContext {
 
   /** Vite's export conditions, so the loader reads the files Vite serves. */
   resolveConditions: string[] = [];
+  /** Vite's resolved extension order; the built-in policy until
+   *  `configResolved`. */
+  extensionPolicy: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
 
   /** Development's repeat of buildStart's discovery, with its resolver. */
   rediscoverSources: (() => Promise<DiscoveredSources>) | null = null;
@@ -456,6 +462,8 @@ export class PluginContext {
         prefix: this.options.prefix,
         prefixContextualVars: this.options.prefixContextualVars,
         conditions: this.resolveConditions,
+        workspaces: declaredWorkspacePackages(this.rootDir),
+        extensions: this.extensionPolicy,
       });
       // Includes each manifest whose `exports` selected a module, so an edit
       // to one reloads the system too.

@@ -76,7 +76,7 @@ export declare function engineVersion(): string
  */
 export declare function extractFacts(fileEntriesJson: string): string
 
-export declare function loadSystemModule(systemPath: string, rootDir: string, exportName?: string | undefined | null, conditions?: Array<string> | undefined | null): NapiSystemConfig
+export declare function loadSystemModule(systemPath: string, rootDir: string, exportName?: string | undefined | null, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null): NapiSystemConfig
 
 /**
  * Each file's run-time module specifiers, for the kit publication check:
@@ -153,19 +153,10 @@ export interface NapiSystemConfig {
 }
 
 /**
- * Selects the entry `subpath` (omitted for the root, else `./x`) of the
- * package in `package_dir` as the system loader selects a package's entry
- * once it has found it: for a package located another way, such as a
- * workspace. `exports` (its `animus` source condition, then `conditions`,
- * `import` and `default`), then for the root `module`, then `main`.
- */
-export declare function resolvePackageEntry(packageDir: string, subpath?: string | undefined | null, conditions?: Array<string> | undefined | null): NapiResolvedSpecifier
-
-/**
  * Resolves `specifier` from `from_dir` as the system loader resolves its
  * imports, so a host lane can resolve a file or package the way a system's
  * evaluation does: a relative or absolute path through the extension
  * policy; a package through `exports` (its `animus` source condition, then
  * `conditions`, `import` and `default`), then `module`, then `main`.
  */
-export declare function resolveSpecifier(specifier: string, fromDir: string, conditions?: Array<string> | undefined | null): NapiResolvedSpecifier
+export declare function resolveSpecifier(specifier: string, fromDir: string, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null): NapiResolvedSpecifier

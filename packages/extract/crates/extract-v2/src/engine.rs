@@ -2080,6 +2080,10 @@ export const App = () => <Box tone="red" />;
             ("sync return", concat!(import_pad!(), "const get = () => pad; get().padding = 9;"), "{ ...pad }"),
             ("async return", concat!(import_pad!(), "const get = async () => pad; (await get()).padding = 9;"), "{ ...pad }"),
             ("then callback return", concat!(import_pad!(), "await Promise.resolve(0).then(() => pad).then((p) => { p.padding = 9; });"), "{ ...pad }"),
+            // A read by name or by one member takes no held value (PF1).
+            ("held by name", concat!(import_pad!(), "pad.padding = 9;"), "pad"),
+            ("held one member", concat!(import_pad!(), "pad.padding = 9;"), "{ padding: pad.padding }"),
+            ("direct eval, by name", concat!(import_pad!(), "eval('pad.padding = 9');"), "pad"),
             // Code from a string can load and change any module (PF3).
             (
                 "eval loads the module",

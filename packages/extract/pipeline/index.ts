@@ -56,6 +56,7 @@ export type {
   SourceKitDependency,
 } from './discover-packages';
 export {
+  bareSpecifierPackageName,
   collectExternalPackageSources,
   engineModuleParser,
   excludeCollectedPackages,
@@ -67,12 +68,13 @@ export {
   firstOwners,
   importedKitDiagnostics,
   isExcludedPackageRelativePath,
-  resolveAbsolutePathSpecifier,
+  probeAbsolutePathSpecifier,
   sourceKitDependencies,
   staleDistIncludesMessage,
   unresolvableIncludesMessage,
   walkPackageSources,
 } from './discover-packages';
+export { caseMismatchReason } from './extension-policy';
 export type { KitDescriptor, KitDescriptorRecord } from './kit-descriptor';
 export {
   buildKitDescriptor,
@@ -162,6 +164,18 @@ export type { StaticCssComponentOverride, StaticCssConfig } from './static-css';
 export { serializeStaticCss } from './static-css';
 export type { SystemConfig } from './system-config';
 export { loadSystemConfig } from './system-config';
+export type { HostExtensionPolicy } from './host-extensions';
+export {
+  BUILT_IN_EXTENSION_POLICY,
+  esbuildExtensionPolicy,
+  extensionPolicyJson,
+  rollupExtensionPolicy,
+  turbopackExtensionPolicy,
+  viteExtensionPolicy,
+  webpackExtensionPolicy,
+} from './host-extensions';
+export type { WorkspacePackages } from './workspace-packages';
+export { declaredWorkspacePackages } from './workspace-packages';
 export type { StructuralCheckInput } from './structural-self-check';
 export { runStructuralSelfCheck } from './structural-self-check';
 export { buildSystemPropsModule } from './system-props-module';

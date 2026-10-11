@@ -1324,11 +1324,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             }
                         }
                         None => match identifier_index.get(key) {
-                            // A stage argument by name reads its held value; a
-                            // member path does not.
-                            Some(name) => match eval::static_path(&statics_fx, name)
-                                .map(|v| if name.contains('.') { v } else { eval::held_value(v) })
-                            {
+                            // A stage argument something may change before the
+                            // read refuses, by name or by member path.
+                            Some(name) => match eval::static_path(&statics_fx, name) {
                                 Some(v) => match eval::lost_value_reason(v) {
                                     Some(reason) => Err(reason.to_string()),
                                     None => Ok((Some(v.clone()), Vec::new(), Vec::new())),
@@ -1526,6 +1524,11 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &assigned_targets,
     );
 
+    // `export default X` of a module binding X names X.
+    let default_export_binding = match bindings.default_export {
+        Some(crate::identity::DefaultExport::Snapshot { of: Some(of), .. }) => Some(bindings.binding(of).name.clone()),
+        _ => None,
+    };
 
     FileFacts {
         path: ast.path.clone(),
@@ -1547,7 +1550,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         compose,
         star_exports: crate::usage_facts::collect_star_exports(ast.module_record()),
         namespace_exports: crate::usage_facts::collect_namespace_exports(ast.module_record()),
-        default_export_binding: crate::usage_facts::collect_default_export_binding(program),
+        default_export_binding,
         builder_import_references,
         aliases: const_initializers.aliases,
         assigned_aliases: const_initializers.assigned,

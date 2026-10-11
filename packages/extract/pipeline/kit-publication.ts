@@ -1,13 +1,22 @@
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { isBuiltin } from 'node:module';
-import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 
 import {
   bareSpecifierPackageName,
   exportsSubpaths,
   KIT_SOURCE_CONDITION,
 } from './discover-packages';
+import { caseMismatchReason, probeOnDisk, seeOnDisk } from './extension-policy';
 import { parseInternalWire } from './internal-wire';
 import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
@@ -30,14 +39,6 @@ const CODE_EXTENSIONS = new Set([
   '.mjs',
   '.cjs',
 ]);
-
-const isFile = (path: string): boolean => {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-};
 
 const posixPath = (path: string) => path.split(sep).join('/');
 
@@ -240,12 +241,20 @@ export function kitPublicationFailures(
         );
       }
       for (const file of matched) admit(subpath, file);
-    } else if (!isFile(resolve(pkgRoot, target))) {
-      failures.push(
-        `package.json: the "animus" target of exports["${subpath}"], ${target}, does not exist in the package`
-      );
     } else {
-      admit(subpath, relPath);
+      const seen = seeOnDisk(resolve(pkgRoot, target), pkgRoot);
+      if (seen.kind === 'file') admit(subpath, relPath);
+      else {
+        failures.push(
+          seen.kind === 'case-only'
+            ? `package.json: ${caseMismatchReason(
+                `the "animus" target of exports["${subpath}"]`,
+                { candidate: target, actual: rel(seen.actual) },
+                'spell the target as the file is spelled'
+              )}`
+            : `package.json: the "animus" target of exports["${subpath}"], ${target}, does not exist in the package`
+        );
+      }
     }
   }
 
@@ -263,8 +272,20 @@ export function kitPublicationFailures(
       ).files[file] ?? [];
     for (const specifier of specifiers) {
       if (specifier.startsWith('.')) {
-        const target = relativeSourceCandidates(file, specifier).find(isFile);
-        if (target === undefined) {
+        const probed = probeOnDisk(
+          relativeSourceCandidates(file, specifier),
+          dirname(file)
+        );
+        const target = probed.kind === 'found' ? probed.path : undefined;
+        if (probed.kind === 'case-mismatch') {
+          failures.push(
+            `${rel(file)}: ${caseMismatchReason(
+              `import '${specifier}'`,
+              { candidate: rel(probed.candidate), actual: rel(probed.actual) },
+              'spell the import as the file is spelled'
+            )}`
+          );
+        } else if (target === undefined) {
           failures.push(
             `${rel(file)}: import '${specifier}' resolves to no file in the package`
           );

@@ -20,6 +20,11 @@ pub struct ExtensionPolicy {
     /// An emitted extension (`./x.js`), and the source extensions it names
     /// (`x.ts`), tried in order.
     pub node_next: Vec<(String, Vec<String>)>,
+    /// A host's configured alias of an emitted extension (webpack's
+    /// `extensionAlias`): its sequence replaces the literal try, in order
+    /// (spec §2.2 A2). Captured only; no probe reads it yet.
+    #[serde(default)]
+    pub alias: Vec<(String, Vec<String>)>,
 }
 
 /// The one extension policy.
@@ -95,6 +100,15 @@ impl ExtensionPolicy {
         }
         Probe::Absent
     }
+}
+
+/// Why `subject` names no file: `candidate`, the file it would load, is
+/// spelled otherwise on disk (`actual`). `remedy` says what to respell.
+pub fn case_mismatch_reason(subject: &str, candidate: &str, actual: &str, remedy: &str) -> String {
+    format!(
+        "{subject} names {candidate:?}, but the file on disk is {actual:?}, spelled differently: a case- \
+         or normalization-insensitive filesystem loads it and a sensitive one does not — {remedy}"
+    )
 }
 
 /// What the filesystem holds at `candidate`: a file it opens under exactly
