@@ -2,6 +2,7 @@
 //! over one stored AST, producing owned facts and adding no parse.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use oxc::ast::ast::{CommentKind, Expression, ObjectExpression, ObjectPropertyKind, Program, PropertyKey};
 use oxc::span::GetSpan;
@@ -398,6 +399,10 @@ pub struct FileFacts {
     /// above stays the raw syntax classification.
     #[serde(skip)]
     pub(crate) usage_enriched: Option<Vec<UsageFact>>,
+    /// The identity of every binding and reference, from the semantic build
+    /// the enriched usage reads.
+    #[serde(skip)]
+    pub bindings: Arc<crate::identity::BindingTable>,
     /// compose() families found in this file.
     pub compose: Vec<ComposeFamilyInfo>,
     /// Sources of `export * from '…'`.
@@ -1499,7 +1504,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
         opaque_calls,
         element_consts,
         opaque_tags,
+        bindings,
     } = crate::usage_facts::collect_enriched_usage(
+        crate::identity::ModuleId::new(&ast.path),
         program,
         ast.module_record(),
         &usage_statics_fx,
@@ -1526,6 +1533,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
             .collect(),
         usage,
         usage_enriched: Some(usage_enriched),
+        bindings: Arc::new(bindings),
         compose,
         star_exports: crate::usage_facts::collect_star_exports(ast.module_record()),
         namespace_exports: crate::usage_facts::collect_namespace_exports(ast.module_record()),

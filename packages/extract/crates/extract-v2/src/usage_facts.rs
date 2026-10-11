@@ -709,6 +709,8 @@ pub(crate) struct EnrichedUsage {
     pub element_consts: BTreeMap<String, ElementConst>,
     /// See `FileFacts::opaque_tags`.
     pub opaque_tags: Vec<OpaqueTag>,
+    /// See `FileFacts::bindings`.
+    pub bindings: crate::identity::BindingTable,
 }
 
 /// A component element that hands its children and props to its receiver,
@@ -941,7 +943,9 @@ fn call_loads(call: &CallExpression<'_>) -> Vec<LoadTarget> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_enriched_usage(
+    module_id: crate::identity::ModuleId,
     program: &Program<'_>,
     module: &ModuleRecord<'_>,
     static_values: &FxHashMap<String, Value>,
@@ -963,20 +967,24 @@ pub(crate) fn collect_enriched_usage(
     let may_escape = !chains.is_empty()
         || program.body.iter().any(|stmt| matches!(stmt, Statement::ImportDeclaration(_)));
     let wrapper_candidates = spread_wrapper_candidates(program);
-    let scoping = (!static_values.is_empty()
+    let needs_scoping = !static_values.is_empty()
         || !candidates.is_empty()
         || may_escape
-        || !wrapper_candidates.is_empty())
-    .then(|| SemanticBuilder::new().build(program).semantic.into_scoping());
+        || !wrapper_candidates.is_empty();
+    // Tag origins and ordinary components read the same scopes, so a module
+    // that needs none of the above still builds them, and so does the
+    // binding table.
+    let built = SemanticBuilder::new().build(program).semantic.into_scoping();
+    let bindings = crate::identity::BindingTable::prepare(crate::identity::IdentityInput {
+        module: module_id,
+        program,
+        module_record: module,
+        scoping: &built,
+    });
+    let (scoping, tag_scoping) = if needs_scoping { (Some(built), None) } else { (None, Some(built)) };
     let react = match &scoping {
         Some(scoping) => ReactNames::from_imports(program, scoping),
         None => ReactNames::by_name(),
-    };
-    // Tag origins and ordinary components read the same scopes, built here
-    // when nothing above needed them.
-    let tag_scoping = match &scoping {
-        Some(_) => None,
-        None => Some(SemanticBuilder::new().build(program).semantic.into_scoping()),
     };
     let origins = scoping.as_ref().or(tag_scoping.as_ref());
     // Only TypeScript annotates parameters.
@@ -1100,6 +1108,7 @@ pub(crate) fn collect_enriched_usage(
         opaque_calls,
         element_consts,
         opaque_tags,
+        bindings,
     }
 }
 
@@ -4965,7 +4974,9 @@ pub fn collect_usage_facts_with_statics(
     module: &ModuleRecord<'_>,
     static_values: &FxHashMap<String, Value>,
 ) -> Vec<UsageFact> {
-    collect_enriched_usage(program, module, static_values, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
+    // Only the usage facts are read, so no module path names the table.
+    let module_id = crate::identity::ModuleId::new("");
+    collect_enriched_usage(module_id, program, module, static_values, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
 }
 
 fn attribute_expression<'a, 'b>(
