@@ -717,11 +717,38 @@ impl ExtractEngine {
             path: String,
             source: String,
         }
-        let mut entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
+        let entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
             .map_err(|e| napi::Error::from_reason(format!("invalid file entries JSON: {e}")))?;
         // Analysis sees the files in canonical order, so its output does not
         // depend on the order a host lists them in, or on how it spells a path.
-        entries.sort_by_cached_key(|entry| (canonical_analysis_id(&entry.path), entry.path.clone()));
+        let mut keyed: Vec<(String, InputEntry)> =
+            entries.into_iter().map(|entry| (canonical_analysis_id(&entry.path), entry)).collect();
+        keyed.sort_by(|(a, x), (b, y)| a.cmp(b).then_with(|| x.path.cmp(&y.path)));
+        // One file listed twice, in any spelling, is analysed once, under its
+        // least spelling, when both entries carry the same source; with
+        // different sources it names no single input, so the analysis fails
+        // rather than pick one.
+        let mut entries: Vec<InputEntry> = Vec::with_capacity(keyed.len());
+        let mut kept_id: Option<String> = None;
+        for (id, entry) in keyed {
+            match entries.last() {
+                Some(kept) if kept_id.as_ref() == Some(&id) => {
+                    if kept.source != entry.source {
+                        let listed = match kept.path == entry.path {
+                            true => format!("'{}' twice", entry.path),
+                            false => format!("'{}' and '{}', one file,", kept.path, entry.path),
+                        };
+                        return Err(napi::Error::from_reason(format!(
+                            "file entries list {listed} with different sources; pass each file once"
+                        )));
+                    }
+                }
+                _ => {
+                    kept_id = Some(id);
+                    entries.push(entry);
+                }
+            }
+        }
 
         self.facts.clear();
         self.sources.clear();
@@ -2472,6 +2499,25 @@ export const App = () => <Box tone="red" />;
         ] {
             assert_eq!(canonical_analysis_id(path), id, "{path}");
         }
+    }
+
+    /// One file listed twice, in any spelling, is analysed once when both
+    /// entries carry the same source, and fails the analysis when they do
+    /// not; a query names another input.
+    #[test]
+    fn a_file_listed_twice_is_one_input_or_a_failure() {
+        let analyze = |entries: &[(&str, &str)]| {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let entries: Vec<_> =
+                entries.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect();
+            engine.analyze(serde_json::Value::from(entries).to_string()).map(|_| engine.parse_count).map_err(|e| e.reason)
+        };
+        for (one, other) in [("a.tsx", "a.tsx"), ("a.tsx", "./a.tsx"), ("a.tsx", "dir/../a.tsx"), ("a/b.tsx", "a\\b.tsx")] {
+            assert_eq!(analyze(&[(one, "export const x = 1;"), (other, "export const x = 1;")]), Ok(1), "{one} {other}");
+            let failure = analyze(&[(one, "export const x = 1;"), (other, "export const x = 2;")]).unwrap_err();
+            assert!(failure.contains("with different sources"), "{one} {other}: {failure}");
+        }
+        assert_eq!(analyze(&[("a.tsx", "export const x = 1;"), ("a.tsx?raw", "export const x = 2;")]), Ok(2));
     }
 
     /// Contract: analysis output is independent of the order the caller
