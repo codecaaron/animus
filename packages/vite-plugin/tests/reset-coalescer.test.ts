@@ -239,14 +239,19 @@ describe('ResetCoalescer window', () => {
     await time.advance(75);
     expect(starts).toEqual([75]);
 
-    // A request at 80 during the running reset is due at 155; the reset
-    // settles at 300, so the follow-up starts then, not 75 ms later.
+    // Requests at 80, 200 and 290 during the running reset: the first is
+    // due at 155, so the follow-up starts at settlement, 300, and covers
+    // the later two; no second follow-up runs at 365.
     await time.advance(80);
+    coalescer.request();
+    await time.advance(200);
+    coalescer.request();
+    await time.advance(290);
     coalescer.request();
     await time.advance(300);
     finish();
     await new Promise((resolve) => setImmediate(resolve));
-    await time.advance(300);
+    await time.advance(400);
     expect(starts).toEqual([75, 300]);
   });
 });
