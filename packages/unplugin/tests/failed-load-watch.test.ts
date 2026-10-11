@@ -1,4 +1,4 @@
-import { realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { watch } from 'rollup';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -91,7 +91,8 @@ describe('a path the system load found absent is watched for its creation', () =
     restoreGlobals = resetAnimusGlobals();
     // The watcher reports real paths; the temp root may sit behind a symlink.
     const root = realpathSync(createProject('animus-unplugin-absent-watch-'));
-    const absent = join(root, 'src', 'theme.ts');
+    // The load's resolution probes for an import it could not resolve.
+    const absent = [join(root, 'src', 'theme'), join(root, 'src', 'theme.js')];
     const entry = join(root, 'src', 'entry.js');
     writeFileSync(entry, 'export const entry = 1;\n');
     const trace: string[] = [];
@@ -104,7 +105,7 @@ describe('a path the system load found absent is watched for its creation', () =
         return {
           ...SYSTEM_CONFIG,
           dependencies: [join(root, 'src', 'system.ts')],
-          missing: loads === 1 ? [absent] : [],
+          missing: existsSync(absent[1]) ? [] : absent,
         };
       },
       analyzeProject: () => buildManifest(PLAN_A),
@@ -132,11 +133,16 @@ describe('a path the system load found absent is watched for its creation', () =
       trace.push(`change ${event} ${id}`);
     });
     try {
-      await until(() => trace.includes('rollup END'), 'the first build', trace);
-      expect(loads).toBe(1);
+      const ends = () => trace.filter((line) => line === 'rollup END').length;
+      await until(() => ends() === 1, 'the first build', trace);
 
-      writeFileSync(absent, 'export const theme = {};\n');
-      await until(() => loads === 2, 'the system reload', trace);
+      // An edit rebuilds first: each build registers the absent paths again.
+      writeFileSync(entry, 'export const entry = 2;\n');
+      await until(() => ends() === 2, 'the rebuild after an edit', trace);
+      const loadsBefore = loads;
+
+      writeFileSync(absent[1], 'export const theme = {};\n');
+      await until(() => loads > loadsBefore, 'the system reload', trace);
     } finally {
       await watcher.close();
     }
