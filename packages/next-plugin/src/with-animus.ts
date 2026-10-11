@@ -526,9 +526,11 @@ async function analyzeForTurbopack(
     development ? 'development' : 'production'
   );
   // Turbopack leaves an `import(expr)` it cannot read unbundled.
+  // Each phase Next loads the config in is a host operation of its own,
+  // with its own mode, so it is a build of its own.
   const session = new ExtractionSession(
     { ...options, mode },
-    { unbundledComputedImports: true, build }
+    { unbundledComputedImports: true, build: `${build}-${phase}` }
   );
   // A replaced session's watcher would keep the root claimed for it.
   liveTurbopackSession?.close();
