@@ -1202,7 +1202,7 @@ fn build_linked_bundle(
         let module = linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map)?;
         modules.insert((*path).clone(), module);
     }
-    let linker = linked::Linker { modules: &modules, stubs: stub_exports };
+    let linker = linked::Linker::new(&modules, stub_exports);
     for path in &paths {
         linker.check_links(path)?;
     }
