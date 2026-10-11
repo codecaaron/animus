@@ -1351,8 +1351,10 @@ struct AuthoredPosition {
 
 /// Why an authored callable's bindings cannot be admitted.
 enum BindingFailure {
-    /// A reference inside the callable resolves to a binding outside it.
-    Captured(String),
+    /// A reference inside the callable resolves to a binding outside it: the
+    /// first, and each read of an import through the bundle's module cell
+    /// when every read of the cell is one.
+    Captured { reason: String, import_reads: Vec<String> },
     /// The callable's function or a host read could not be established.
     Inconclusive(String),
 }
@@ -1391,7 +1393,12 @@ fn transform_provenance<'js>(
             id.clone(),
             match evidence {
                 Ok(globals) => serde_json::json!({ "hostGlobals": globals }),
-                Err(BindingFailure::Captured(reason)) => serde_json::json!({ "rejection": reason }),
+                Err(BindingFailure::Captured { reason, import_reads }) if import_reads.is_empty() => {
+                    serde_json::json!({ "rejection": reason })
+                }
+                Err(BindingFailure::Captured { reason, import_reads }) => {
+                    serde_json::json!({ "rejection": reason, "importReads": import_reads })
+                }
                 Err(BindingFailure::Inconclusive(reason)) if reads_shared_host_name(source) => {
                     serde_json::json!({ "rejection": reason })
                 }
@@ -1435,7 +1442,8 @@ fn authored_positions<'js>(
 /// its bindings cannot be admitted: the position must start exactly that
 /// function of a bundled module and its text must be the configured source;
 /// a reference resolving to a binding outside the function, or reading an
-/// imported binding, is captured; and
+/// imported binding, is captured, and each import read is named when the
+/// module cell is read for nothing else; and
 /// every `btoa` or `atob` it reads must be unbound in a module without
 /// direct eval.
 fn host_binding_evidence(
@@ -1483,6 +1491,11 @@ fn host_binding_evidence(
     let direct_eval = scoping.root_unresolved_references().contains_key("eval");
     let mut globals = Vec::new();
     let mut unproven = None;
+    let mut captured: Option<String> = None;
+    let mut import_reads: Vec<String> = Vec::new();
+    // Whether the callable reads the bundle's module cell other than to read
+    // an import: then the cell's reads are not all imports.
+    let mut cell_read_otherwise = false;
     // Nodes come in source order, so the first captured name is reported.
     for node in semantic.nodes().iter() {
         let AstKind::IdentifierReference(reference) = node.kind() else { continue };
@@ -1494,19 +1507,22 @@ fn host_binding_evidence(
         match symbol {
             Some(symbol) if span.contains_inclusive(scoping.symbol_span(symbol)) => {}
             Some(_) => {
-                return Err(BindingFailure::Captured(format!(
-                    "reads '{name}' declared in {module} outside the callback"
-                )));
+                cell_read_otherwise |= name == "__modules";
+                captured.get_or_insert_with(|| format!("reads '{name}' declared in {module} outside the callback"));
             }
             // The bundle refers to an imported binding through its module's
-            // cell.
+            // cell, within the range the rewrite recorded for that read.
             None if name == "__modules" => {
                 let at = start + reference.span.start as usize;
                 let imported = layout.import_refs.iter().find(|(from, to, _)| (*from..*to).contains(&at));
-                return Err(BindingFailure::Captured(format!(
-                    "reads '{}' declared in {module} outside the callback",
-                    imported.map_or(name, |(_, _, local)| local.as_str())
-                )));
+                let reason =
+                    format!("reads '{}' declared in {module} outside the callback", imported.map_or(name, |(_, _, local)| local.as_str()));
+                match imported {
+                    Some(_) if !import_reads.contains(&reason) => import_reads.push(reason.clone()),
+                    Some(_) => {}
+                    None => cell_read_otherwise = true,
+                }
+                captured.get_or_insert(reason);
             }
             None => {
                 let Some(host) = SHARED_HOST_NAMES.iter().find(|host| name == **host) else { continue };
@@ -1517,6 +1533,12 @@ fn host_binding_evidence(
                 }
             }
         }
+    }
+    if let Some(reason) = captured {
+        if cell_read_otherwise {
+            import_reads.clear();
+        }
+        return Err(BindingFailure::Captured { reason, import_reads });
     }
     if let Some(reason) = unproven {
         return Err(inconclusive(reason));
@@ -2188,16 +2210,21 @@ export const ds = tokens;
         write_fixture(&dir.join("factory.js"), "export const made = ((btoa) => (v) => btoa(String(v)))((s) => s);\n");
         write_fixture(&dir.join("direct.js"), "eval('');\nexport const viaEval = (v) => btoa(String(v));\n");
         write_fixture(
+            &dir.join("authored.js"),
+            "export const authored = (() => { const bias = (v) => v; const __modules = (v) => v; return (v) => bias(v) + __modules(v); })();\n",
+        );
+        write_fixture(
             &dir.join("ds.js"),
             &format!(
                 "import {{ local, mathLocal, setImported }} from './local.js';\n\
                  import {{ global, decl, own, mathOwn, mathGlobal }} from './global.js';\n\
                  import {{ made }} from './factory.js';\n\
                  import {{ viaEval }} from './direct.js';\n\
+                 import {{ authored }} from './authored.js';\n\
                  const link = Symbol.for('animus.transform.authored');\n\
                  const forward = (fn) => {{ const w = (v) => fn(v); Object.defineProperty(w, link, {{ value: fn }}); return w; }};\n\
                  const built = new Function('v', 'return btoa(String(v))');\n\
-                 const linked = {{ local, global, decl, own, made, viaEval, built, mathLocal, setImported, mathOwn, mathGlobal }};\n\
+                 const linked = {{ local, global, decl, own, made, viaEval, built, mathLocal, setImported, mathOwn, mathGlobal, authored }};\n\
                  const transforms = Object.fromEntries(Object.entries(linked).map(([id, fn]) => [id, forward(fn)]));\n\
                  transforms.unlinked = (v) => btoa(String(v));\n\
                  transforms.renamed = forward(global);\n\
@@ -2233,6 +2260,11 @@ export const ds = tokens;
         // source reading neither host name keeps its text admission.
         assert!(reason("mathLocal").contains("reads 'Math' declared in"), "{}", reason("mathLocal"));
         assert!(reason("setImported").contains("reads 'Set' declared in"), "{}", reason("setImported"));
+        // An import read through the bundle's module cell is named as one; a
+        // `__modules` the module declares itself is no import.
+        assert_eq!(provenance["setImported"]["importReads"], serde_json::json!([reason("setImported")]));
+        assert!(reason("authored").contains("reads 'bias' declared in"), "{}", reason("authored"));
+        assert!(provenance["authored"].get("importReads").is_none(), "{}", provenance["authored"]);
         assert_eq!(provenance["mathOwn"], serde_json::json!({ "hostGlobals": [] }));
         assert_eq!(provenance["mathGlobal"], serde_json::json!({ "hostGlobals": [] }));
         assert_eq!(provenance["mathUnlinked"], serde_json::json!({ "hostGlobals": [] }));
