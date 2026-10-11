@@ -1,6 +1,7 @@
 import { contentHash, createExcludeMatcher } from '@animus-ui/extract/pipeline';
 import { COALESCING_WINDOW_MS } from '@animus-ui/extract/session';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -113,6 +114,17 @@ function makeEnvironment(name: string, moduleIds: string[]) {
 }
 
 const VIRTUAL_IDS = [RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID];
+
+/** Whether the temp volume ignores case, so two spellings name one file. */
+function caseInsensitiveVolume(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), 'animus-case-'));
+  try {
+    writeFileSync(join(dir, 'Probe'), '');
+    return existsSync(join(dir, 'probe'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 /** The change set for an edit whose settled bytes Vite's `read()` handed
  *  over: the file as it now reads on disk. */
@@ -645,6 +657,38 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     expect(publishedCard()).toBe(card20);
     ctx.close();
   });
+
+  // Two spellings name one file only on a case-insensitive volume.
+  it.skipIf(!caseInsensitiveVolume())(
+    'a full read that reaches host bytes only under another spelling refuses',
+    async () => {
+      // A debt retry takes an edit Vite reports as src/button.tsx while the
+      // full read discovers src/Button.tsx: it must not publish the disk.
+      const { app, file, ctx, state, update } = await startedContext();
+      const publishedButton = () =>
+        ctx.session?.corpus.published.analysisEntries.get('src/Button.tsx')
+          ?.source;
+      const button12 = 'export const Button = 12;\n';
+      writeFileSync(file, '');
+      await update(file, async () => button12);
+
+      state.systemLoadFails = true;
+      await update(join(app, 'src', 'system.ts'));
+      await flushSystemReload(ctx);
+      state.systemLoadFails = false;
+
+      await expect(
+        update(
+          join(app, 'src', 'button.tsx'),
+          async () => 'export const Button = 30;\n'
+        )
+      ).rejects.toThrow(
+        /reload not published: .*src\/button\.tsx \(read as src\/Button\.tsx\)/
+      );
+      expect(publishedButton()).toBe(button12);
+      ctx.close();
+    }
+  );
 
   it('analyzes the retried content when a system reload debt takes the edit', async () => {
     // A failed system reload leaves debt, so the next edit is analyzed by a
