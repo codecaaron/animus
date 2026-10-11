@@ -801,6 +801,28 @@ describe('coordinated teardown', () => {
     expect(getSharedCss(keyOf(root))).toMatch(/margin:\s*24/);
   });
 
+  test('a rewatch beside a live sibling sees what changed while it was away', async () => {
+    const root = createProject();
+    const client = createCompiler(root, { name: 'client' });
+    const server = createCompiler(root, { name: 'server' });
+    for (const side of [client, server]) {
+      applyPlugin(
+        new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+        side.compiler
+      );
+    }
+    await client.watchRunHandlers[0](client.compiler);
+    await server.watchRunHandlers[0](server.compiler);
+    client.watchClose();
+
+    nextComponentCss = '.btn{margin:32;}';
+    writeFileSync(join(root, 'src', 'Button.tsx'), BUTTON_SOURCE_CHANGED);
+    // Started again with no change sets, as webpack's first watchRun is.
+    await client.watchRunHandlers[0](client.compiler);
+
+    expect(getSharedCss(keyOf(root))).toMatch(/margin:\s*32/);
+  });
+
   test('participants from two module copies never retire each other', async () => {
     const root = createProject();
     const { compiler, runHandlers } = createCompiler(root);
