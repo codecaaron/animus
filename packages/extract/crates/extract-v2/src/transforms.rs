@@ -26,7 +26,8 @@ use self_contained::{configured_reference_rejections, external_symbol_diagnostic
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallbackDefinition {
     /// The definition's identity: its declaring module and binding, or for
-    /// an inline callback the component and prop that declare it.
+    /// an inline callback the component and prop that declare it and where
+    /// it is written.
     pub key: String,
     /// The readable name diagnostics report.
     pub name: String,
@@ -702,11 +703,12 @@ mod tests {
 
         // Each proof is registered under the name of the global it uses, and
         // every proof runs after all registrations: no key reaches a global.
-        let eval = crate::evaluator::TransformEvaluator::new();
+        let mut admission = crate::evaluator::TransformAdmission::new();
         for (name, source) in STANDARD_GLOBAL_PROOFS {
             assert_eq!(admit_configured_source(name, source), Ok(()), "{name}");
-            eval.register(name, source).unwrap_or_else(|e| panic!("{name}: {e}"));
+            admission.admit_configured(name, source).unwrap_or_else(|e| panic!("{name}: {e}"));
         }
+        let eval = admission.seal();
         // A guarded global is admitted but declines static evaluation.
         for (name, _) in STANDARD_GLOBAL_PROOFS {
             let result = eval.evaluate(name, name, &serde_json::json!(7));
@@ -720,8 +722,9 @@ mod tests {
 
     #[test]
     fn admission_ignores_names_registered_into_an_evaluator_realm() {
-        let eval = crate::evaluator::TransformEvaluator::new();
-        eval.register("registeredHelper", "(v) => v").unwrap();
+        let mut admission = crate::evaluator::TransformAdmission::new();
+        admission.admit_configured("registeredHelper", "(v) => v").unwrap();
+        let _eval = admission.seal();
         assert!(
             rejection_text("usesRegistered", "(v) => registeredHelper(v)")
                 .contains("external symbol 'registeredHelper'")
@@ -761,7 +764,6 @@ mod tests {
     /// code unit.
     #[test]
     fn shared_host_globals_are_admitted_and_run() {
-        let eval = crate::evaluator::TransformEvaluator::new();
         for (key, source, value, expected) in [
             ("btoa", "(v) => btoa(String(v))", "caf\u{e9}", "Y2Fm6Q=="),
             ("atob", "(v) => atob(String(v))", "Y2Fm6Q==", "caf\u{e9}"),
@@ -769,8 +771,9 @@ mod tests {
             assert_eq!(admit_configured_source(key, source), Ok(()), "{key}");
             assert!(extract_one(&format!("const t = createTransform('{key}', {source});")).valid, "{key}");
             let value = serde_json::json!(value);
-            eval.register(key, source).unwrap();
-            assert_eq!(eval.evaluate(key, key, &value).unwrap(), expected, "{key}");
+            let mut admission = crate::evaluator::TransformAdmission::new();
+            admission.admit_configured(key, source).unwrap();
+            assert_eq!(admission.seal().evaluate(key, key, &value).unwrap(), expected, "{key}");
         }
     }
 
@@ -909,8 +912,9 @@ const transform = createTransform('external', (values) => {
             Ok(js) => {
                 assert!(!js.contains(": number"), "should not contain type annotations: {}", js);
                 assert!(!js.contains("as string"), "should not contain 'as string': {}", js);
-                let eval = crate::evaluator::TransformEvaluator::new();
-                eval.register("size", js).unwrap();
+                let mut admission = crate::evaluator::TransformAdmission::new();
+                admission.admit_configured("size", js).unwrap();
+                let eval = admission.seal();
                 assert_eq!(eval.evaluate("size", "size", &serde_json::Value::Number(28.into())).unwrap(), "28px");
             }
             Err(e) => panic!("strip_typescript failed: {}", e),

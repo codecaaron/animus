@@ -25,6 +25,11 @@ pub struct CapturedTransformFact {
     pub key: String,
     /// User-authored function source text, copied from the input file.
     pub source: String,
+    /// Where the authored function starts in its file: an inline callback's
+    /// definition is keyed by it, so a callback JS replaces (a repeated prop
+    /// or `transform` key, a later `.props()`) is its own definition.
+    #[serde(skip)]
+    pub start: u32,
     /// The callback the prop binds, with its declaring component; `None`
     /// until an inline callback is keyed to its component.
     #[serde(skip)]
@@ -1172,6 +1177,7 @@ fn eval_stage_object(
                 .map(|c| CapturedTransformFact {
                     key: c.key,
                     source: source[c.span.start as usize..c.span.end as usize].to_string(),
+                    start: c.span.start,
                     callback: None,
                 })
                 .collect(),
@@ -1416,7 +1422,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                     capture.callback = Some(CallbackBinding {
                                         declarer: declarer.clone(),
                                         definition: CallbackDefinition {
-                                            key: format!("{}#{}.{prop}", ast.path, descriptor.binding),
+                                            key: format!("{}#{}.{prop}@{}", ast.path, descriptor.binding, capture.start),
                                             name: "inline".to_string(),
                                             source: capture.source.clone(),
                                             module_host_bindings: module_host_bindings.clone(),
@@ -1447,6 +1453,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                                         facts.captured.push(CapturedTransformFact {
                                                             key: format!("{prop}.transform"),
                                                             source: reference.name.to_string(),
+                                                            start: reference.span.start,
                                                             callback: resolved.definition.map(|definition| {
                                                                 CallbackBinding { declarer: declarer.clone(), definition }
                                                             }),

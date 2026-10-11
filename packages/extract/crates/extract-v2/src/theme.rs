@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::css_tokens::{decoded_identifier, important_priority, tokenize, variable_reads, ImportantSpelling};
-use crate::evaluator::{EvalError, TransformEvaluator};
+use crate::evaluator::{Admission, EvalError, TransformEvaluator};
 
 // Not registered in propConfig, but typed against the `colors` scale in TS:
 // their string values resolve through that scale at every position.
@@ -1649,7 +1649,24 @@ fn resolve_value(
     // component callback binds its definition once admitted.
     let binding = config.bound_definition().or_else(|| {
         let definition = &config.callback.as_ref()?.definition;
-        evaluator?.is_registered(&definition.key).then_some((definition.key.as_str(), definition.name.as_str()))
+        match evaluator?.admission(&definition.key) {
+            Admission::Admitted => Some((definition.key.as_str(), definition.name.as_str())),
+            // A callback admission could not compile applies at runtime.
+            Admission::RuntimeOnly(_) => None,
+            // Never evaluated through a registry changed after definitions
+            // exist (spec §7.4 D10).
+            Admission::Unsealed => {
+                if let Some(failures) = failures {
+                    failures.borrow_mut().push(TransformFailure {
+                        transform_name: definition.name.clone(),
+                        prop: prop_name.to_string(),
+                        failure: EvalError::UnsealedBinding { key: definition.key.clone() },
+                        variant_origin: None,
+                    });
+                }
+                None
+            }
+        }
     });
     // As at runtime, the bound transform takes every value that reaches it:
     // a scale's token, or a value missing a non-strict scale.
@@ -1793,7 +1810,7 @@ pub(crate) fn writes_token_reference(value: &Value) -> bool {
 /// result; any other value extracts as before.
 pub(crate) fn extracts_configured_value(config: &PropConfig, value: &Value, ctx: &ResolveContext) -> bool {
     match (config.bound_definition(), ctx.transform_evaluator) {
-        (Some((key, name)), Some(evaluator)) if evaluator.is_registered(key) => {
+        (Some((key, name)), Some(evaluator)) if evaluator.is_admitted(key) => {
             extracts_callback_value(config, key, name, value, ctx)
         }
         _ => true,
@@ -3352,8 +3369,9 @@ mod tests {
 
     fn resolve_with_failing_transform(source: &str) -> (ResolvedStyles, Vec<TransformFailure>) {
         let owner = TestCtxOwner::new();
-        let evaluator = TransformEvaluator::new();
-        evaluator.register("size", source).unwrap();
+        let mut admission = crate::evaluator::TransformAdmission::new();
+        admission.admit_configured("size", source).unwrap();
+        let evaluator = admission.seal();
         let sink = TransformFailureSink::default();
         let mut ctx = owner.ctx();
         ctx.transform_evaluator = Some(&evaluator);
@@ -3362,6 +3380,54 @@ mod tests {
         let resolved = resolve_styles(&styles, &ctx, true);
         let failures = sink.borrow().clone();
         (resolved, failures)
+    }
+
+    /// Contract (spec §7.4 D10): a transform binding never evaluates through
+    /// a registry changed after definitions exist. A callback the sealed
+    /// registry lacks is an unsealed binding: it is reported, and nothing is
+    /// evaluated.
+    #[test]
+    fn a_callback_the_sealed_registry_lacks_is_an_unsealed_binding() {
+        let mut owner = TestCtxOwner::new();
+        let definition = crate::transforms::CallbackDefinition {
+            key: "a.tsx#A.tone".to_string(),
+            name: "inline".to_string(),
+            source: "(v) => v + 'px'".to_string(),
+            module_host_bindings: Vec::new(),
+        };
+        owner.config.insert(
+            "tone".to_string(),
+            PropConfig {
+                property: "width".to_string(),
+                properties: vec![],
+                negative: false,
+                scale: None,
+                transform: None,
+                transform_id: None,
+                current_var: None,
+                transform_fn_source: Some(definition.source.clone()),
+                callback: Some(crate::transforms::CallbackBinding { declarer: "a.tsx::A".to_string(), definition }),
+                strict: None,
+                declaration: Default::default(),
+            },
+        );
+        let evaluator = crate::evaluator::TransformAdmission::new().seal();
+        let sink = TransformFailureSink::default();
+        let mut ctx = owner.ctx();
+        ctx.transform_evaluator = Some(&evaluator);
+        ctx.transform_failures = Some(&sink);
+        let resolved = resolve_styles(&json!({ "tone": 5 }), &ctx, true);
+
+        assert_eq!(
+            *sink.borrow(),
+            vec![TransformFailure {
+                transform_name: "inline".to_string(),
+                prop: "tone".to_string(),
+                failure: EvalError::UnsealedBinding { key: "a.tsx#A.tone".to_string() },
+                variant_origin: None,
+            }]
+        );
+        assert!(resolved.declarations.iter().all(|declaration| !declaration.value.contains("px")), "{resolved:?}");
     }
 
     #[test]
