@@ -2764,7 +2764,7 @@ fn member_path_ids(
         let (namespace, family) = namespace.rsplit_once('.')?;
         let module = namespace_path_module(file, ff, namespace, files, inputs)?;
         let (declaring, exported, declared) =
-            declared_export(&module, family.to_string(), files, inputs, links)?;
+            declared_export(&module, family.to_string(), files, links)?;
         Some(
             exported_family_slots(&declaring, &exported, &declared, files)
                 .into_iter()
@@ -3059,7 +3059,7 @@ fn export_ids(
     links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
-    let Some((declaring, exported, declared)) = declared_export(module, name, files, inputs, links) else {
+    let Some((declaring, exported, declared)) = declared_export(module, name, files, links) else {
         return Vec::new();
     };
     let mut ids = resolve_identity(&declaring, &declared, files, inputs, evaluated_ids, None);
@@ -3071,49 +3071,42 @@ fn export_ids(
     ids
 }
 
-/// Where `module`'s export `name` is declared: the declaring file, the
-/// name it exports there, and the local binding it declares. A binding the
-/// module table resolves the export to is declared there, under the name
-/// asked for when the declaring module exports it so, else its first export
-/// name; any other answer keeps the family re-export walk.
+/// Where `module`'s export `name` is declared, as the module table resolves
+/// it: the declaring file, the name it exports there, and the local binding
+/// it declares. Only a binding the table resolves the export to is
+/// declared: the export name is the one asked for when the declaring
+/// module exports the binding so, else its first; for `export default X`
+/// the binding is X, as the facts name it. A namespace, an export of a
+/// module outside the analysis, and an absent, ambiguous or open answer
+/// declare nothing.
 pub(crate) fn declared_export(
     module: &str,
     name: String,
     files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, String)> {
-    if let Some(ExportLookup::Resolved(Terminal::Local { module: declaring, binding })) =
-        links.resolve_export(module, &name)
-    {
-        let path = &links.paths[declaring];
-        let declared = files[path].bindings.binding(binding);
-        if declared.kind != BindingKind::DefaultCell {
-            let exports: Vec<&String> = links
-                .table
-                .record(declaring)
-                .local_exports
-                .iter()
-                .filter(|(_, exported)| *exported == binding)
-                .map(|(exported_as, _)| exported_as)
-                .collect();
-            let exported = exports.iter().find(|exported_as| **exported_as == &name).or(exports.first());
-            if let Some(exported) = exported {
-                return Some((path.clone(), exported.to_string(), declared.name.clone()));
-            }
-        }
-    }
-    let (declaring, exported) =
-        crate::family_members::follow_exports(module.to_string(), name, files, inputs)?;
-    let ff = files.get(&declaring)?;
-    let declared = ff
-        .exports
+    let ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) = links.resolve_export(module, &name)?
+    else {
+        return None;
+    };
+    let path = &links.paths[declaring];
+    let declared = files[path].bindings.binding(binding);
+    let exports: Vec<&String> = links
+        .table
+        .record(declaring)
+        .local_exports
         .iter()
-        .find(|e| e.exported == exported && e.source.is_none())
-        .and_then(|e| e.local.clone())
-        .or_else(|| ff.default_export_binding.clone().filter(|_| exported == "default"))
-        .unwrap_or_else(|| exported.clone());
-    Some((declaring, exported, declared))
+        .filter(|(_, exported)| *exported == binding)
+        .map(|(exported_as, _)| exported_as)
+        .collect();
+    let exported = exports.iter().find(|exported_as| **exported_as == &name).or(exports.first())?;
+    let declared_name = match declared.kind {
+        BindingKind::DefaultCell => {
+            files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone())
+        }
+        _ => declared.name.clone(),
+    };
+    Some((path.clone(), exported.to_string(), declared_name))
 }
 
 /// The (slot, binding) pairs of the compose family `declaring` declares as
@@ -11282,6 +11275,31 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "{}",
             out.sheets.base
         );
+    }
+
+    #[test]
+    fn a_family_export_is_declared_only_where_the_module_table_resolves_it() {
+        // An ambiguous or open export declares nothing; only a resolved
+        // binding is declared, and never the first star's candidate.
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let files: BTreeMap<String, FileFacts> = [
+            ("a.ts", "export const X = 1;"),
+            ("b.ts", "export const X = 2;"),
+            ("both.ts", "export * from './a';\nexport * from './b';"),
+            ("open.ts", "export * from './a';\nexport * from './missing';"),
+            ("one.ts", "export * from './a';"),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let ast = crate::owned_ast::OwnedAst::parse(path.to_string(), source.to_string(), &counter);
+            (path.to_string(), crate::facts::extract_file_facts(&ast))
+        })
+        .collect();
+        let links = crate::link::ProjectLinks::link(&files, &test_inputs());
+        let declared = |module: &str| declared_export(module, "X".to_string(), &files, &links);
+        assert_eq!(declared("both.ts"), None);
+        assert_eq!(declared("open.ts"), None);
+        assert_eq!(declared("one.ts"), Some(("a.ts".to_string(), "X".to_string(), "X".to_string())));
     }
 
     #[test]
