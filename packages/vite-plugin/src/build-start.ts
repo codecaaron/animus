@@ -10,6 +10,7 @@ import { basename, dirname } from 'path';
 import { sweepAbandonedCopyDirs } from './asset-copy-dirs';
 
 import type { PluginContext } from './context';
+import type { HostResolve } from '@animus-ui/extract/pipeline';
 
 /**
  * `resolveSpecifier` maps a specifier to an absolute id. `emitAsset` is
@@ -17,7 +18,7 @@ import type { PluginContext } from './context';
  */
 export async function runBuildStart(
   ctx: PluginContext,
-  resolveSpecifier: (specifier: string) => Promise<string | null>,
+  resolveSpecifier: HostResolve,
   emitAsset?: (fileName: string, source: Uint8Array) => string
 ): Promise<void> {
   // Reset before the analysis below, which consults this state: Rollup
