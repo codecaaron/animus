@@ -174,6 +174,8 @@ function systemLoad(system: SystemConfig): SystemLoad {
 interface TakenObservations {
   taken: Map<string, string>;
   rescan: boolean;
+  /** The host-supplied bytes of taken paths. */
+  sources: Map<string, string>;
 }
 
 /** What the hosting bundler does, which the user does not configure. */
@@ -256,6 +258,10 @@ type FileEntry = { path: string; source: string; hash: string };
 export interface WatchChanges {
   modifiedFiles?: ReadonlySet<string>;
   removedFiles?: ReadonlySet<string>;
+  /** Bytes the host already read for some modified files, by path, read in
+   *  place of the disk: a host that settles an atomic save hands over the
+   *  settled text while the file on disk may still be empty. */
+  sources?: ReadonlyMap<string, string>;
 }
 
 /** `payloadHash` gates rewrites; `diskHash` covers the enveloped disk bytes
@@ -807,7 +813,9 @@ export class ExtractionSession {
     for (const path of changes.modifiedFiles ?? []) {
       let state: string;
       try {
-        state = contentHash(readFileSync(path, 'utf-8'));
+        state = contentHash(
+          changes.sources?.get(path) ?? readFileSync(path, 'utf-8')
+        );
       } catch {
         state = UNREADABLE_OBSERVATION;
       }
@@ -830,7 +838,13 @@ export class ExtractionSession {
       queue.revisions.set(revision, active.transaction);
       return revision;
     }
-    for (const [path, state] of observed) queue.untaken.set(path, state);
+    for (const [path, state] of observed) {
+      queue.untaken.set(path, state);
+      // This observation supersedes the queued one, bytes included.
+      const supplied = changes.sources?.get(path);
+      if (supplied === undefined) queue.suppliedSources.delete(path);
+      else queue.suppliedSources.set(path, supplied);
+    }
     queue.revisions.set(revision, null);
     return revision;
   }
@@ -875,7 +889,7 @@ export class ExtractionSession {
   /** Starts one attempt over every untaken observation of the build. */
   startObservedAttempt(): boolean {
     if (!this.system || this.detached) return false;
-    const { taken, rescan } = this.takeObservations();
+    const { taken, rescan, sources } = this.takeObservations();
     const modifiedFiles = new Set<string>();
     const removedFiles = new Set<string>();
     for (const [path, state] of taken) {
@@ -883,7 +897,7 @@ export class ExtractionSession {
     }
     this.settleTaken(
       taken,
-      this.runWatchAttempt({ modifiedFiles, removedFiles }, rescan)
+      this.runWatchAttempt({ modifiedFiles, removedFiles, sources }, rescan)
     );
     return true;
   }
@@ -894,9 +908,11 @@ export class ExtractionSession {
     const queue = observationQueue(this.key);
     const taken = new Map(queue.untaken);
     const rescan = queue.rescan;
+    const sources = new Map(queue.suppliedSources);
     queue.untaken.clear();
+    queue.suppliedSources.clear();
     queue.rescan = false;
-    return { taken, rescan };
+    return { taken, rescan, sources };
   }
 
   /** `transaction` settles every waiting revision, and is the active
@@ -1124,7 +1140,8 @@ export class ExtractionSession {
       }
       let source: string;
       try {
-        source = readFileSync(target.abs, 'utf-8');
+        source =
+          changes.sources?.get(target.abs) ?? readFileSync(target.abs, 'utf-8');
       } catch (err) {
         // Benign race: the file vanished between the watch event and this
         // read — it will surface in removedFiles on the next watch cycle.
@@ -2066,7 +2083,9 @@ export class ExtractionSession {
       try {
         pending.push([
           classified.key,
-          contentHash(readFileSync(path, 'utf-8')),
+          contentHash(
+            changes.sources?.get(path) ?? readFileSync(path, 'utf-8')
+          ),
         ]);
       } catch {
         // vanished between event and read — surfaces as removed next cycle
@@ -2160,7 +2179,11 @@ export class ExtractionSession {
       }
     }
 
-    return { modifiedFiles: modified, removedFiles: removed };
+    return {
+      modifiedFiles: modified,
+      removedFiles: removed,
+      sources: changes.sources,
+    };
   }
 
   /** Route one watcher path: a project-root member (consumer excludes apply)
