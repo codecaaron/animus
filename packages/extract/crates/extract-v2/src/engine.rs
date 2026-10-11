@@ -406,6 +406,43 @@ fn literal_module_loads(program: &oxc::ast::ast::Program<'_>) -> Vec<String> {
     loads.0
 }
 
+/// How a module runs code from a string, which can load any module: an
+/// unbound `eval`, direct or not, or a call of the unbound `Function`.
+fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::Scoping) -> Option<&'static str> {
+    use oxc::ast::ast::{CallExpression, Expression, NewExpression};
+    use oxc::ast_visit::Visit;
+    if scoping.root_unresolved_references().contains_key("eval") {
+        return Some("calls eval");
+    }
+    if !scoping.root_unresolved_references().contains_key("Function") {
+        return None;
+    }
+    struct Constructs<'s> {
+        scoping: &'s oxc::semantic::Scoping,
+        found: bool,
+    }
+    impl Constructs<'_> {
+        fn global_function(&self, callee: &Expression<'_>) -> bool {
+            matches!(callee.get_inner_expression(), Expression::Identifier(id)
+                if id.name == "Function"
+                    && id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).symbol_id().is_none()))
+        }
+    }
+    impl<'a> Visit<'a> for Constructs<'_> {
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            self.found |= self.global_function(&call.callee);
+            oxc::ast_visit::walk::walk_call_expression(self, call);
+        }
+        fn visit_new_expression(&mut self, new: &NewExpression<'a>) {
+            self.found |= self.global_function(&new.callee);
+            oxc::ast_visit::walk::walk_new_expression(self, new);
+        }
+    }
+    let mut constructs = Constructs { scoping, found: false };
+    constructs.visit_program(program);
+    constructs.found.then_some("builds a function from a string")
+}
+
 /// One module's functions, each with how its parameters treat an object.
 type FunctionReadings = std::rc::Rc<BTreeMap<String, Vec<crate::usage_facts::ParamReading>>>;
 /// A module's function readings, scanned on first request.
@@ -418,6 +455,8 @@ struct StyleModule {
     facts: crate::usage_facts::StyleObjectFacts,
     namespace_exports: BTreeMap<String, String>,
     loads: Vec<String>,
+    /// How it runs code from a string, which can load any module.
+    dynamic_code: Option<&'static str>,
 }
 
 /// Each module-scope static that a use anywhere in the analysis may change
@@ -592,6 +631,16 @@ fn unstable_style_statics(
             let reason = format!("{file} hands on {target} {how}");
             for export in every_export(&target) {
                 unstable.entry(export).or_insert_with(|| reason.clone());
+            }
+        }
+        // Code from a string can `import()` any module and change what it
+        // exports.
+        if let Some(how) = module.dynamic_code {
+            let reason = format!("{file} {how}, whose code can load and change any module");
+            for target in style.keys() {
+                for export in every_export(target) {
+                    unstable.entry(export).or_insert_with(|| reason.clone());
+                }
             }
         }
     }
@@ -822,6 +871,7 @@ impl ExtractEngine {
                     facts,
                     namespace_exports: crate::usage_facts::collect_namespace_exports(module),
                     loads: literal_module_loads(program),
+                    dynamic_code: dynamic_code(program, &lowered_by_file[&ast.path].scoping),
                 },
             );
         }
@@ -1990,21 +2040,46 @@ export const App = () => <Box tone="red" />;
     /// rather than emitting `padding: 4`.
     #[test]
     fn a_possibly_mutated_static_never_yields_its_pre_mutation_value_as_static_css() {
+        // The mutating module imports `pad` itself, except where code from a
+        // string loads it.
+        macro_rules! import_pad {
+            () => {
+                "import { pad } from './tokens.js';\n"
+            };
+        }
         let rows = [
             // A concise arrow returns what it evaluates (PF2).
-            ("sync return", "const get = () => pad; get().padding = 9;"),
-            ("async return", "const get = async () => pad; (await get()).padding = 9;"),
-            ("then callback return", "await Promise.resolve(0).then(() => pad).then((p) => { p.padding = 9; });"),
+            ("sync return", concat!(import_pad!(), "const get = () => pad; get().padding = 9;"), "{ ...pad }"),
+            ("async return", concat!(import_pad!(), "const get = async () => pad; (await get()).padding = 9;"), "{ ...pad }"),
+            ("then callback return", concat!(import_pad!(), "await Promise.resolve(0).then(() => pad).then((p) => { p.padding = 9; });"), "{ ...pad }"),
+            // Code from a string can load and change any module (PF3).
+            (
+                "eval loads the module",
+                "await eval(\"import('./tokens.js')\").then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
+            (
+                "indirect eval loads the module",
+                "await (0, eval)(\"import('./tokens.js')\").then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
+            (
+                "a function from a string loads the module",
+                "await new Function(\"return import('./tokens.js')\")().then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
         ];
-        for (row, mutation) in rows {
+        for (row, mutation, read) in rows {
             let mut engine = ExtractEngine::new(None).unwrap();
             let files = serde_json::json!([
                 { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
-                { "path": "mutate.js", "source": format!("import {{ pad }} from './tokens.js';\n{mutation}\n") },
+                { "path": "mutate.js", "source": format!("{mutation}\n") },
                 {
                     "path": "reader.tsx",
-                    "source": "import './mutate.js';\nimport { pad } from './tokens.js';\n\
-                               export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+                    "source": format!(
+                        "import './mutate.js';\nimport {{ pad }} from './tokens.js';\n\
+                         export const C = ds.styles({read}).asElement('div');\nexport const App = () => <C />;\n"
+                    ),
                 },
             ]);
             let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
