@@ -3414,6 +3414,7 @@ fn spread_wrapper_targets(
 /// warns.
 /// `takes_system_prop(file, name, prop)`: whether `name`, as `file` declares
 /// or imports it, is an extracted component taking `prop` as a system prop.
+#[allow(clippy::too_many_arguments)]
 fn unattributed_system_props(
     file: &str,
     ff: &FileFacts,
@@ -3421,6 +3422,7 @@ fn unattributed_system_props(
     attributed: &dyn Fn(&str) -> bool,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
 ) -> Vec<CssDiagnostic> {
     let mut reported: FxHashSet<(&str, Vec<&str>)> = FxHashSet::default();
@@ -3435,7 +3437,7 @@ fn unattributed_system_props(
         if !tag.starts_with(|c: char| c.is_ascii_uppercase()) || !(imported || local) {
             continue;
         }
-        let Some((declaration_file, declaration, lost)) = lost_through_binding(file, tag, files, inputs) else {
+        let Some((declaration_file, declaration, lost)) = lost_through_binding(file, tag, files, inputs, links) else {
             continue;
         };
         warnings.extend(lost_props_warning(
@@ -3445,6 +3447,7 @@ fn unattributed_system_props(
             props,
             (&declaration_file, &declaration, &lost),
             (files, inputs),
+            links,
             takes_system_prop,
             &mut reported,
         ));
@@ -3508,44 +3511,30 @@ fn lost_through_binding<'f>(
     binding: &str,
     files: &'f BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, LostThrough<'f>)> {
     let ff = files.get(file)?;
     match ff.imports.iter().find(|import| import.local == binding) {
         Some(import) => {
             let module = resolve_import_source(file, &import.source, files, inputs)?;
-            lost_through_export(module, import.imported.clone(), files, inputs, &mut FxHashSet::default())
+            lost_through_export(&module, &import.imported, files, links)
         }
         None => LostThrough::of(file, binding, files).map(|lost| (file.to_string(), binding.to_string(), lost)),
     }
 }
 
 /// The declaration `module` exports as `name` that loses the props it is
-/// passed, followed through re-exports and imported names exported again,
-/// then through `export *` when the module exports no `name` of its own.
+/// passed: the binding the module table resolves the export to. An
+/// ambiguous or open export names none.
 fn lost_through_export<'f>(
-    module: String,
-    name: String,
+    module: &str,
+    name: &str,
     files: &'f BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-    visited: &mut FxHashSet<(String, String)>,
+    links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, LostThrough<'f>)> {
-    if !visited.insert((module.clone(), name.clone())) {
-        return None;
-    }
-    let (file, declaration) = follow_reexports(module, name, files, inputs);
-    if let Some(lost) = LostThrough::of(&file, &declaration, files) {
-        return Some((file, declaration, lost));
-    }
-    let ff = files.get(&file)?;
-    // `export *` never carries a default export, nor a name the module
-    // exports itself.
-    if declaration == "default" || ff.exports.iter().any(|export| export.exported == declaration) {
-        return None;
-    }
-    ff.star_exports
-        .iter()
-        .filter_map(|spec| resolve_import_source(&file, spec, files, inputs))
-        .find_map(|next| lost_through_export(next, declaration.clone(), files, inputs, visited))
+    let (file, declaration) = declared_binding(links, files, module, name)?;
+    let lost = LostThrough::of_binding(&file, &declaration, files)?;
+    Some((file, declaration, lost))
 }
 
 /// The extracted component taking `prop` that `lost`, read in `file`, hands
@@ -3556,6 +3545,7 @@ fn component_reached(
     lost: &LostThrough<'_>,
     prop: &str,
     (files, inputs): (&BTreeMap<String, FileFacts>, &CssInputs),
+    links: &crate::link::ProjectLinks,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
     visited: &mut FxHashSet<(String, String)>,
 ) -> Option<(String, Option<String>)> {
@@ -3563,11 +3553,11 @@ fn component_reached(
         if takes_system_prop(file, target, prop) {
             return Some((target.clone(), None));
         }
-        let (next_file, next, next_lost) = lost_through_binding(file, target, files, inputs)?;
+        let (next_file, next, next_lost) = lost_through_binding(file, target, files, inputs, links)?;
         if !visited.insert((next_file.clone(), next)) {
             return None;
         }
-        let (component, _) = component_reached(&next_file, &next_lost, prop, (files, inputs), takes_system_prop, visited)?;
+        let (component, _) = component_reached(&next_file, &next_lost, prop, (files, inputs), links, takes_system_prop, visited)?;
         Some((component, Some(target.clone())))
     })
 }
@@ -3582,12 +3572,13 @@ fn lost_props_warning<'u>(
     props: Vec<&'u str>,
     (declaration_file, declaration, lost): (&str, &str, &LostThrough<'_>),
     analysis: (&BTreeMap<String, FileFacts>, &CssInputs),
+    links: &crate::link::ProjectLinks,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
     reported: &mut FxHashSet<(&'u str, Vec<&'u str>)>,
 ) -> Option<CssDiagnostic> {
     let takes = |prop: &str| {
         let mut visited = FxHashSet::from_iter([(declaration_file.to_string(), declaration.to_string())]);
-        component_reached(declaration_file, lost, prop, analysis, takes_system_prop, &mut visited)
+        component_reached(declaration_file, lost, prop, analysis, links, takes_system_prop, &mut visited)
     };
     let mut props: Vec<&str> = props.into_iter().filter(|prop| takes(prop).is_some()).collect();
     props.sort_unstable();
@@ -3663,12 +3654,14 @@ fn passed_system_props<'u>(
 /// one that named an extracted component when the object was built, but
 /// which something may have changed since, or one that names a function
 /// component forwarding its props (`LostThrough`).
+#[allow(clippy::too_many_arguments)]
 fn untraced_member_system_props(
     file: &str,
     ff: &FileFacts,
     member_expr_bindings: &FxHashMap<String, String>,
     objects: &mut crate::family_members::ObjectMembers<'_>,
     (files, inputs): (&BTreeMap<String, FileFacts>, &CssInputs),
+    links: &crate::link::ProjectLinks,
     component_takes: &dyn Fn(&str, &str) -> bool,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
 ) -> Vec<CssDiagnostic> {
@@ -3688,7 +3681,7 @@ fn untraced_member_system_props(
             Some(Member::Unstable(component, reason)) if !call => (component, reason),
             Some(Member::Bound { module, binding }) if member => {
                 if let Some((declaration_file, declaration, lost)) =
-                    lost_through_binding(&module, &binding, files, inputs)
+                    lost_through_binding(&module, &binding, files, inputs, links)
                 {
                     warnings.extend(lost_props_warning(
                         file,
@@ -3697,6 +3690,7 @@ fn untraced_member_system_props(
                         props,
                         (&declaration_file, &declaration, &lost),
                         (files, inputs),
+                        links,
                         takes_system_prop,
                         &mut reported,
                     ));
@@ -4540,10 +4534,17 @@ impl<'f> LostThrough<'f> {
             .find(|e| e.exported == name && e.source.is_none())
             .and_then(|e| e.local.as_deref())
             .unwrap_or(name);
-        if let Some(target) = ff.aliases.get(local).or_else(|| ff.assigned_aliases.get(local)) {
+        Self::of_binding(file, local, files)
+    }
+
+    /// How the declaration bound to `binding` in `file` loses props, read
+    /// from that binding itself.
+    fn of_binding(file: &str, binding: &str, files: &'f BTreeMap<String, FileFacts>) -> Option<Self> {
+        let ff = files.get(file)?;
+        if let Some(target) = ff.aliases.get(binding).or_else(|| ff.assigned_aliases.get(binding)) {
             return Some(Self::Alias(target));
         }
-        let forwarding = ff.props_forwarding.get(local)?;
+        let forwarding = ff.props_forwarding.get(binding)?;
         Some(Self::Spread(&forwarding.routes))
     }
 
@@ -6757,6 +6758,7 @@ fn run_with_system_floor(
             &attributed,
             files,
             inputs,
+            links,
             &takes_system_prop,
         ));
         diagnostics.extend(untraced_member_system_props(
@@ -6765,6 +6767,7 @@ fn run_with_system_floor(
             member_expr_bindings,
             &mut object_members,
             (files, inputs),
+            links,
             &component_takes,
             &takes_system_prop,
         ));
@@ -12914,6 +12917,54 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             .iter()
             .filter(|d| d.code.as_deref() == Some(UNATTRIBUTED_SYSTEM_PROPS))
             .collect()
+    }
+
+    /// A wrapper that loses a prop is the binding the module table resolves
+    /// the import to: one exported under another name is found, an import
+    /// two stars make ambiguous names no wrapper, and the resolved binding
+    /// is never swapped for another that an export spells like it.
+    #[test]
+    fn a_wrapper_that_loses_props_is_found_as_the_module_table_resolves_it() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let wrapper = |name: &str| {
+            format!(
+                "import {{ Box }} from './recipe';\n\
+                 const {name} = (props) => {{ const {{ children, ...rest }} = props; return <Box {{...rest}} />; }};\n\
+                 export {{ {name} as Top }};\n"
+            )
+        };
+        let app = "import { Top } from './index';\nexport const App = () => <Top marginInlineStart={8} />;\n";
+        let (one, two) = (wrapper("Inner"), wrapper("Other"));
+        let renamed = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("one.tsx", one.as_str()),
+            ("index.ts", "export * from './one';\n"),
+            ("app.tsx", app),
+        ]);
+        let warned: Vec<_> = unattributed(&renamed).iter().map(|d| d.dropped.as_deref()).collect();
+        assert_eq!(warned, [Some("marginInlineStart")], "{:?}", renamed.diagnostics);
+        let ambiguous = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("one.tsx", one.as_str()),
+            ("two.tsx", two.as_str()),
+            ("index.ts", "export * from './one';\nexport * from './two';\n"),
+            ("app.tsx", app),
+        ]);
+        assert!(unattributed(&ambiguous).is_empty(), "{:?}", ambiguous.diagnostics);
+        // The resolved binding is the wrapper itself, never the binding an
+        // export of the same spelling names.
+        let crossed = "import { Box } from './recipe';\n\
+                       const Inner = (props) => { const { children, ...rest } = props; return <Box {...rest} />; };\n\
+                       const Other = () => null;\n\
+                       export { Inner as Top, Other as Inner };\n";
+        let crossed = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("one.tsx", crossed),
+            ("index.ts", "export * from './one';\n"),
+            ("app.tsx", app),
+        ]);
+        let warned: Vec<_> = unattributed(&crossed).iter().map(|d| d.dropped.as_deref()).collect();
+        assert_eq!(warned, [Some("marginInlineStart")], "{:?}", crossed.diagnostics);
     }
 
     /// Each wrapper shape the attribution does not follow warns once, at the
