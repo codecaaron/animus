@@ -111,6 +111,6 @@ describe('failed full pipeline', () => {
 
     expect(mocks.analyzeProject.mock.calls.length).toBe(analysesAfterFailure);
     // The singleton spells "unset" as either absent or null.
-    expect(getManifestJson() ?? null).toBeNull();
+    expect(getManifestJson(session.key) ?? null).toBeNull();
   });
 });

@@ -77,7 +77,8 @@ describe('single-flight watch transaction', () => {
   test('a non-owning session entering the same batch awaits the published generation', async () => {
     const root = createProject();
     const owner = await startOwner(root);
-    const follower = new ExtractionSession({ system: './src/system.ts' });
+    // A participant of the owner's build.
+    const follower = new ExtractionSession({ system: './src/system.ts' }, { build: owner.sessionId });
     follower.rootDir = root;
 
     const batch = makeSuspendingBatch(root);
@@ -96,10 +97,10 @@ describe('single-flight watch transaction', () => {
     // The follower's entry must resolve AFTER the transaction published —
     // never against the pre-transaction generation.
     await followerEntry;
-    expect(getManifestJson()).toBe(published);
+    expect(getManifestJson(owner.key)).toBe(published);
 
     await ownerEntry;
-    expect(getWatchTransaction()).toBeNull();
+    expect(getWatchTransaction(owner.key)).toBeNull();
   });
 
   test('two concurrent entries for one batch run exactly ONE analysis', async () => {
@@ -123,7 +124,7 @@ describe('single-flight watch transaction', () => {
     await Promise.all([first, second]);
 
     expect(mocks.analyzeProject.mock.calls.length).toBe(callsAfterFull + 1);
-    expect(getWatchTransaction()).toBeNull();
+    expect(getWatchTransaction(owner.key)).toBeNull();
   });
 
   test('a watch batch entering during an in-flight FULL pipeline joins it', async () => {
@@ -137,7 +138,7 @@ describe('single-flight watch transaction', () => {
     session.rootDir = root;
 
     const pipeline = session.runFullPipeline();
-    expect(getWatchTransaction()).not.toBeNull();
+    expect(getWatchTransaction(session.key)).not.toBeNull();
 
     const joiner = session.handleWatchUpdate({
       modifiedFiles: new Set([join(root, 'src', 'Button.tsx')]),
@@ -146,13 +147,14 @@ describe('single-flight watch transaction', () => {
 
     await Promise.all([pipeline, joiner]);
     expect(mocks.analyzeProject.mock.calls.length).toBe(1);
-    expect(getWatchTransaction()).toBeNull();
+    expect(getWatchTransaction(session.key)).toBeNull();
   });
 
   test('a failed transaction rejects every joiner and clears the gate', async () => {
     const root = createProject();
     const owner = await startOwner(root);
-    const follower = new ExtractionSession({ system: './src/system.ts' });
+    // A participant of the owner's build.
+    const follower = new ExtractionSession({ system: './src/system.ts' }, { build: owner.sessionId });
     follower.rootDir = root;
 
     const batch = makeSuspendingBatch(root);
@@ -171,6 +173,6 @@ describe('single-flight watch transaction', () => {
 
     await expect(ownerEntry).rejects.toThrow('transaction boom');
     await expect(followerEntry).rejects.toThrow('transaction boom');
-    expect(getWatchTransaction()).toBeNull();
+    expect(getWatchTransaction(owner.key)).toBeNull();
   });
 });

@@ -136,7 +136,6 @@ export function loadFixtureWebpack(webpackPath: string): FixtureWebpack {
 }
 
 export {
-  ANIMUS_GLOBAL_KEYS,
   buildManifest,
   resetAnimusGlobals,
   SYSTEM_CONFIG,

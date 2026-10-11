@@ -120,7 +120,7 @@ async function build(extra: Record<string, string>, failing = false) {
   try {
     await session.runFullPipeline();
     return {
-      css: getSharedCss(),
+      css: getSharedCss(session.key),
       warned: warn.mock.calls.map((args) => args.join(' ')).join('\n'),
     };
   } finally {

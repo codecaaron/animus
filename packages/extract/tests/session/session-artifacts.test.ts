@@ -50,7 +50,7 @@ import {
   type AnalysisStatus,
   type SessionEnvelope,
 } from '../../session/session-paths';
-import { getManifestJson } from '../../session/singleton';
+import { findSession, getManifestJson, SessionConfigurationConflict } from '../../session/singleton';
 import {
   buildManifest,
   BUTTON_STYLE_EDIT,
@@ -289,10 +289,10 @@ async function startSession(
   root: string,
   components: Record<string, ManifestComponentDescriptor>,
   writes?: WriteRecord[],
-  opts?: { turbopack?: boolean }
+  opts?: { turbopack?: boolean; build?: string }
 ): Promise<ExtractionSession> {
   mocks.analyzeProject.mockImplementation(() => buildManifest(components));
-  const session = new ExtractionSession({ system: './src/system.ts' });
+  const session = new ExtractionSession({ system: './src/system.ts' }, { build: opts?.build });
   session.rootDir = root;
   if (opts?.turbopack) session.persistAnalysisInputs = true;
   if (writes) {
@@ -366,7 +366,7 @@ describe('session directory + transaction write order (design D1/D2)', () => {
     expect(existsSync(join(session.sessionDir, 'analysis-inputs.json'))).toBe(
       false
     );
-    expect(getManifestJson()).toBe(buildManifest(PLAN_A));
+    expect(getManifestJson(session.key)).toBe(buildManifest(PLAN_A));
     const commit = parseAnalysisCommit(
       readSessionArtifact(session, ANALYSIS_COMMIT_ARTIFACT)
     );
@@ -491,7 +491,8 @@ describe('analysis-commit content (design D1)', () => {
       { bigint: true }
     );
     session.close();
-    const again = await startSession(root, PLAN_A);
+    // The host restarts its session within the same build.
+    const again = await startSession(root, PLAN_A, undefined, { build: session.sessionId });
     expect(again.sessionId).toBe(session.sessionId);
     const commitStatAfter = statSync(
       join(again.sessionDir, ANALYSIS_COMMIT_ARTIFACT),
@@ -531,7 +532,7 @@ describe('payload envelopes (spec: Manifest disk artifact)', () => {
     expect(disk.components).toEqual(
       parseEngineManifest(manifestJson).components
     );
-    expect(getManifestJson()).toBe(manifestJson);
+    expect(getManifestJson(session.key)).toBe(manifestJson);
   });
 
   test('the inputs and styles artifacts carry the envelope side-band', async () => {
@@ -957,21 +958,19 @@ describe('CLI lock liveness policy', () => {
   });
 });
 
-describe('publication exclusivity (one publishing session per process)', () => {
-  test('a second session publishing into the process-shared session dir fails loud', async () => {
+describe('publication exclusivity (one publisher per build)', () => {
+  test('a second participant publishing the same build fails loud', async () => {
     const root = createProject();
     const first = await startSession(root, PLAN_A);
 
-    // Same process means the same session directory, and each instance keeps
+    // One build's participants share its directory, and each instance keeps
     // its own write guards, so two live publishers wedge manifest/commit.
-    const second = new ExtractionSession({ system: './src/system.ts' });
+    const second = new ExtractionSession({ system: './src/system.ts' }, { build: first.sessionId });
     second.rootDir = root;
     second.driverLabel = 'animus-second';
 
-    await expect(second.runFullPipeline()).rejects.toThrow(
-      /second Animus host/
-    );
-    await expect(second.runFullPipeline()).rejects.toThrow(first.sessionDir);
+    await expect(second.runFullPipeline()).rejects.toThrow(/which "animus-next:.*" publishes/);
+    await expect(second.runFullPipeline()).rejects.toThrow(first.sessionId);
   });
 
   test('closing the owner releases the claim: the successor publishes', async () => {
@@ -981,9 +980,36 @@ describe('publication exclusivity (one publishing session per process)', () => {
     // Idempotent: a second close must not free a successor's claim.
     first.close();
 
-    const second = await startSession(root, PLAN_A);
+    // The host restarts its session within the same build.
+    const second = await startSession(root, PLAN_A, undefined, { build: first.sessionId });
     expect(second.sessionId).toBe(first.sessionId);
-    expect(getManifestJson()).toBe(buildManifest(PLAN_A));
+    expect(getManifestJson(second.key)).toBe(buildManifest(PLAN_A));
+  });
+
+  /** Contract: two builds of one root never share state. Each build has its
+   *  own key, directory, engine and published results, and both publish at
+   *  once; a participant joining a build with other options fails. */
+  test('two builds of one root never share state', async () => {
+    const root = createProject();
+    mocks.analyzeProject.mockImplementation(() => buildManifest(PLAN_A));
+    const one = new ExtractionSession({ system: './src/system.ts' });
+    const other = new ExtractionSession({ system: './src/system.ts' });
+    one.rootDir = root;
+    other.rootDir = root;
+    await Promise.all([one.runFullPipeline(), other.runFullPipeline()]);
+
+    expect(one.sessionId).not.toBe(other.sessionId);
+    expect(one.sessionDir).not.toBe(other.sessionDir);
+    expect(getManifestJson(one.key)).toBe(buildManifest(PLAN_A));
+    expect(getManifestJson(other.key)).toBe(buildManifest(PLAN_A));
+    expect(findSession(one.key)).not.toBe(findSession(other.key));
+
+    const conflicting = new ExtractionSession(
+      { system: './src/system.ts', minify: true },
+      { build: one.sessionId }
+    );
+    conflicting.rootDir = root;
+    expect(() => conflicting.key).toThrow(SessionConfigurationConflict);
   });
 });
 

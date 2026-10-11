@@ -92,10 +92,10 @@ test('a lifted runtime asset resolves in the global sheet and reports nothing', 
   );
   await session.runFullPipeline();
 
-  expect(getSharedCss()).toMatch(
+  expect(getSharedCss(session.key)).toMatch(
     /--animus-asset-1a2b3c4d: ?url\("?\.\/assets\/rock\.[0-9a-f]{8}\.jpg"?\)/
   );
-  expect(getSharedSystemProps()).toContain('var(--animus-asset-1a2b3c4d)');
+  expect(getSharedSystemProps(session.key)).toContain('var(--animus-asset-1a2b3c4d)');
   expect(warn).not.toHaveBeenCalledWith(
     expect.stringContaining('unsubstituted')
   );

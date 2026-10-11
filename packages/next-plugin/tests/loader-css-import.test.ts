@@ -3,26 +3,13 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 import animusLoader from '../src/loader';
 
-import type { AnimusEngine } from '../../extract/session/singleton';
+import { joinSession, sessionKey } from '../../extract/session/singleton';
+import { resetAnimusGlobals } from '../../extract/tests/session/session-fixtures';
+
 import type { LoaderPolicyOptions } from '../src/loader-core';
 import type { V2ExtractEngine } from '@animus-ui/extract/pipeline';
 
-const MANIFEST_KEY = '__animus_manifest_json__';
-const ENGINE_KEY = '__animus_engine__';
-const V2_ENGINE_KEY = '__animus_v2_engine__';
-const V2_SENT_SOURCES_KEY = '__animus_v2_sent_sources__';
-
-interface LoaderSingletonSlots {
-  [MANIFEST_KEY]: string | null | undefined;
-  [ENGINE_KEY]: AnimusEngine | undefined;
-  [V2_ENGINE_KEY]: V2ExtractEngine | null | undefined;
-  [V2_SENT_SOURCES_KEY]: Map<string, string> | null | undefined;
-}
-
-// SAFETY: singleton.ts owns these globalThis keys and publishes exactly
-// these value types; the engine slots have no exported setter.
-const g = globalThis as typeof globalThis & LoaderSingletonSlots;
-let saved: LoaderSingletonSlots;
+let restoreGlobals: () => void;
 
 const ROOT = '/proj';
 const CSS_IMPORT = "import '.animus/styles.css';\n";
@@ -39,21 +26,18 @@ const unreachableEngine: V2ExtractEngine = {
   },
 };
 
+const BUILD = 'loader-css-import';
+
 beforeEach(() => {
-  saved = {
-    [MANIFEST_KEY]: g[MANIFEST_KEY],
-    [ENGINE_KEY]: g[ENGINE_KEY],
-    [V2_ENGINE_KEY]: g[V2_ENGINE_KEY],
-    [V2_SENT_SOURCES_KEY]: g[V2_SENT_SOURCES_KEY],
-  };
-  g[MANIFEST_KEY] = '{}';
-  g[ENGINE_KEY] = 'v2';
-  g[V2_ENGINE_KEY] = unreachableEngine;
-  g[V2_SENT_SOURCES_KEY] = new Map<string, string>();
+  restoreGlobals = resetAnimusGlobals();
+  const state = joinSession(sessionKey(BUILD, ROOT), 'animus-next', { system: './src/ds.ts' });
+  state.manifestJson = '{}';
+  state.engine = unreachableEngine;
+  state.sentSources = new Map<string, string>();
 });
 
 afterEach(() => {
-  Object.assign(g, saved);
+  restoreGlobals();
 });
 
 function runLoader(
@@ -64,7 +48,7 @@ function runLoader(
   const ctx = {
     resourcePath: join(ROOT, relPath),
     rootContext: ROOT,
-    getOptions: () => options,
+    getOptions: () => ({ build: BUILD, root: ROOT, ...options }),
   };
   return animusLoader.call(ctx, source);
 }
