@@ -118,8 +118,9 @@ pub struct Binding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DefaultExport {
     /// `export default <expression>`, `export default x` included: a
-    /// synthetic cell holding the value it had then.
-    Snapshot(LocalId),
+    /// synthetic cell holding the value it had then, and the module binding
+    /// the expression names when it is one (through type assertions).
+    Snapshot { cell: LocalId, of: Option<LocalId> },
     /// `export { x as default }`: the live binding `x`.
     Alias(LocalId),
     /// `export default function` or `class`: the declared binding, or a
@@ -344,7 +345,15 @@ fn default_export(
                     ExportDefaultDeclarationKind::ClassDeclaration(class) => class.id.as_ref(),
                     // An interface is a type: no runtime default.
                     ExportDefaultDeclarationKind::TSInterfaceDeclaration(_) => return None,
-                    _ => return Some(DefaultExport::Snapshot(synthetic(export.span))),
+                    _ => {
+                        let named = export.declaration.as_expression().and_then(|expression| {
+                            match crate::chain_walk::unwrap_type_assertions(expression) {
+                                oxc::ast::ast::Expression::Identifier(id) => module_names.get(id.name.as_str()).copied(),
+                                _ => None,
+                            }
+                        });
+                        return Some(DefaultExport::Snapshot { cell: synthetic(export.span), of: named });
+                    }
                 };
                 let named = id.and_then(|id| module_names.get(id.name.as_str()).copied());
                 return Some(DefaultExport::Declaration(named.unwrap_or_else(|| synthetic(export.span))));
@@ -431,10 +440,11 @@ export const uses = [x, b, Object, React];
         assert_ne!(module(&snapshot, "y"), module(&alias, "y"));
 
         // `export default y` holds y's value then; `export { y as default }` is y.
-        let Some(DefaultExport::Snapshot(cell)) = snapshot.default_export else {
+        let Some(DefaultExport::Snapshot { cell, of }) = snapshot.default_export else {
             panic!("a default expression is a snapshot: {:?}", snapshot.default_export);
         };
         assert_ne!(cell, LocalId(0));
+        assert_eq!(of, Some(LocalId(0)));
         assert_eq!(snapshot.binding(cell).kind, BindingKind::DefaultCell);
         assert_eq!(alias.default_export, Some(DefaultExport::Alias(LocalId(0))));
     }
