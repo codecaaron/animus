@@ -199,10 +199,7 @@ async function analyzeChangedFile(
   }
 
   const relPath = relative(ctx.rootDir, absFile);
-  const outputDir = outputSourceGuard(
-    ctx.rootDir,
-    ctx.outputExclude === null ? [] : [ctx.outputExclude]
-  )(absFile);
+  const outputDir = outputSourceGuard(ctx.rootDir, ctx.outputExcludes)(absFile);
   if (outputDir !== null) {
     ctx.warn(outputSourceMessage(relPath, outputDir));
     return { kind: 'ignored' };

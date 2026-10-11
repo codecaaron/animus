@@ -1,4 +1,5 @@
 import {
+  analysedOutputs,
   BUILT_IN_EXTENSION_POLICY,
   builtInAssetClassification,
   DiagnosticFailure,
@@ -6,15 +7,21 @@ import {
   ENGINE_TRANSFORM_EXTENSIONS,
   esbuildAssetClassification,
   esbuildExtensionPolicy,
+  esbuildOutputTargets,
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
-  outputExclusion,
+  mergeOutputTargets,
+  noOutputTargets,
+  outputExclusions,
   rollupExtensionPolicy,
+  rollupOutputTargets,
   servedFiles,
   viteAssetClassification,
   viteExtensionPolicy,
+  viteOutputTargets,
   webpackExtensionPolicy,
+  webpackOutputTargets,
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_CSS_MODULE_ID,
@@ -41,6 +48,7 @@ import type {
   HostAssetClassification,
   HostExtensionPolicy,
   HostResolve,
+  OutputTargets,
   ProjectManifest,
   ServedFiles,
 } from '@animus-ui/extract/pipeline';
@@ -418,13 +426,13 @@ export const unpluginFactory: UnpluginFactory<
   /** The bundler's own resolution, which package discovery asks first
    *  (spec §2.2 A4); none where the host exposes no resolver. */
   let hostResolver: HostResolve | null = null;
-  /** The output directories Rollup and Rolldown named at render, which they
-   *  name only after analysis: this process's later builds exclude them. */
-  const learnedOutputDirs = new Set<string>();
-  /** The bundler's output directories, absolute, which discovery excludes
-   *  whatever the user's `exclude` list: read when a run starts, after the
-   *  bundler applied its defaults. */
-  let hostOutputDirs = (): string[] => [...learnedOutputDirs];
+  /** What Rollup and Rolldown named at render, which they name only after
+   *  analysis: this process's later builds exclude it. */
+  let learnedOutputTargets = noOutputTargets();
+  /** Where the bundler writes, which discovery excludes whatever the
+   *  user's `exclude` list: read when a run starts, after the bundler
+   *  applied its defaults. */
+  let hostOutputTargets = (): OutputTargets => learnedOutputTargets;
   /** Hooks can fire before buildStart (webpack's make taps run
    *  concurrently), so joiners await this before awaiting the pipeline. */
   let signalPipelineStarted!: () => void;
@@ -509,10 +517,7 @@ export const unpluginFactory: UnpluginFactory<
       session.assetClassification = hostAssets;
       session.hostResolve = hostResolver;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
-      session.structuralExclude = hostOutputDirs().flatMap((dir) => {
-        const exclusion = outputExclusion(root, dir);
-        return exclusion === null ? [] : [exclusion];
-      });
+      session.structuralExclude = outputExclusions(root, hostOutputTargets());
       // Each full pass re-reads the tsconfig aliases.
       session.aliasesFromTsconfig = true;
       state.key = session.key;
@@ -614,29 +619,17 @@ export const unpluginFactory: UnpluginFactory<
     }
   }
 
-  /** Rollup and Rolldown name their output directory only at render, after
+  /** Rollup and Rolldown name their output only at render, after
    *  analysis: this process's later builds exclude it, and an analysis that
    *  already read a file there is reported, failing a build under `strict`. */
   function checkOwnOutput(
     context: OwnOutputReporter,
     output: { dir?: string; file?: string }
   ): void {
-    const named =
-      output.dir ??
-      (output.file === undefined ? undefined : dirname(output.file));
-    if (named === undefined) return;
-    const outDir = resolve(named);
-    learnedOutputDirs.add(outDir);
-    const exclusion = outputExclusion(root, outDir);
-    if (exclusion === null) return;
-    const read = state.analyzedFiles.filter((file) =>
-      isPathWithinRoot(outDir, file)
-    );
-    if (read.length === 0) return;
-    const message =
-      `[animus] this build analysed its own earlier output: ` +
-      `${read.map((file) => relative(root, file)).join(', ')}. Add ` +
-      `'${exclusion}' to the plugin's \`exclude\` option.`;
+    const targets = rollupOutputTargets(output);
+    learnedOutputTargets = mergeOutputTargets([learnedOutputTargets, targets]);
+    const message = analysedOutputs(root, targets, state.analyzedFiles);
+    if (message === null) return;
     if (options.strict && !watching()) context.error(message);
     context.warn(message);
   }
@@ -807,13 +800,16 @@ export const unpluginFactory: UnpluginFactory<
       configResolved(config: {
         root: string;
         command: string;
-        build: { watch?: unknown; outDir: string };
+        build: Parameters<typeof viteOutputTargets>[0]['build'] & {
+          watch?: unknown;
+        };
+        environments?: Parameters<typeof viteOutputTargets>[0]['environments'];
         resolve: { extensions: string[] };
         assetsInclude: (file: string) => boolean;
       }) {
         hostExtensions = viteExtensionPolicy(config.resolve.extensions);
         hostAssets = viteAssetClassification(config.assetsInclude);
-        hostOutputDirs = () => [resolve(config.root, config.build.outDir)];
+        hostOutputTargets = () => viteOutputTargets(config);
         const serving =
           config.command === 'serve' || Boolean(config.build.watch);
         watching = () => serving;
@@ -925,15 +921,7 @@ export const unpluginFactory: UnpluginFactory<
       },
       config(buildOptions) {
         esbuildOptions = buildOptions;
-        const outDir =
-          buildOptions.outdir ??
-          (buildOptions.outfile === undefined
-            ? undefined
-            : dirname(buildOptions.outfile));
-        hostOutputDirs = () =>
-          outDir === undefined
-            ? []
-            : [resolve(buildOptions.absWorkingDir ?? process.cwd(), outDir)];
+        hostOutputTargets = () => esbuildOutputTargets(buildOptions);
         hostConditions = buildOptions.conditions ?? [];
         hostExtensions = esbuildExtensionPolicy(buildOptions.resolveExtensions);
         hostAssets = esbuildAssetClassification(buildOptions.loader);
@@ -1032,10 +1020,8 @@ export const unpluginFactory: UnpluginFactory<
     );
     watching = () => compiler.watchMode === true;
     // Read per run: webpack applies its output default after plugins.
-    hostOutputDirs = () => {
-      const outputPath = compiler.options.output?.path;
-      return outputPath === undefined ? [] : [outputPath];
-    };
+    hostOutputTargets = () =>
+      webpackOutputTargets(compiler.options.output?.path);
     const DefinePlugin =
       compiler.webpack?.DefinePlugin ?? compiler.rspack?.DefinePlugin;
     if (!DefinePlugin) {
