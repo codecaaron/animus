@@ -1,4 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveConfig } from 'vite';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -149,5 +155,41 @@ describe('a Vite dev asset copy is served and kept', () => {
 
     expect(existsSync(firstCopy)).toBe(true);
     expect(existsSync(deadCopies)).toBe(false);
+  });
+});
+
+describe('a Vite dev asset copy is checked and bounded', () => {
+  test('a deny naming the copied file serves that asset live', async () => {
+    const { ctx, logo, specifier } = await serveWithAsset({
+      fs: { deny: ['**/animus-assets/**/*.svg'] },
+    });
+
+    expect(ctx.assetCopyDir).not.toBeNull();
+    expect(servedFile(ctx.assetUrlBySpecifier.get(specifier)!)).toBe(logo);
+  });
+
+  test('a third edit removes the oldest copy and keeps the last two', async () => {
+    const { ctx, logo, specifier } = await serveWithAsset();
+    const copies = [servedFile(ctx.assetUrlBySpecifier.get(specifier)!)];
+    for (const version of ['v2', 'v3']) {
+      writeFileSync(logo, `<svg id="${version}"/>`);
+      ctx.refreshAssetCopies(logo);
+      copies.push(servedFile(ctx.assetUrlBySpecifier.get(specifier)!));
+    }
+
+    expect(copies.map((copy) => existsSync(copy))).toEqual([false, true, true]);
+  });
+
+  test('an old directory whose owner cannot prove its start time is swept', async () => {
+    const cacheDir = makeTempRoot('animus-reused-pid-cache-');
+    // A live pid, recorded with a start time it never had.
+    const reused = join(cacheDir, 'animus-assets', `${process.ppid}-1`);
+    mkdirSync(reused, { recursive: true });
+    const dayAndAnHourAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    utimesSync(reused, dayAndAnHourAgo, dayAndAnHourAgo);
+
+    await serveWithAsset({ cacheDir, fs: { strict: false } });
+
+    expect(existsSync(reused)).toBe(false);
   });
 });
