@@ -821,6 +821,12 @@ impl<'f> ObjectMembers<'f> {
                 let reason = format!("{module} {how}, so code from a string can load and change any module");
                 flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), reason);
             }
+            // An escaped loader can load any module under a name the
+            // analysis never sees.
+            if let Some(how) = ff.loader_escape {
+                let reason = format!("{module} {how}, so it can load any module and change what it exports");
+                flow.open(ReasonId::OpaqueEffect, Region::of(RegionAtom::AllExports), reason);
+            }
         }
         flow.close()
     }

@@ -460,6 +460,8 @@ struct StyleModule {
     imports: Vec<String>,
     /// How it runs code from a string, which can load any module.
     dynamic_code: Option<&'static str>,
+    /// How it lets a loader escape, which can load any module.
+    loader_escape: Option<&'static str>,
 }
 
 /// Each module-scope static that a use anywhere in the analysis may change
@@ -703,6 +705,12 @@ fn unstable_style_statics(
         if let Some(how) = module.dynamic_code {
             let reason = format!("{file} {how}, so code from a string can load and change any module");
             flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), reason);
+        }
+        // An escaped loader can load any module under a name the analysis
+        // never sees.
+        if let Some(how) = module.loader_escape {
+            let reason = format!("{file} {how}, so it can load any module and change what it exports");
+            flow.open(ReasonId::OpaqueEffect, Region::of(RegionAtom::AllExports), reason);
         }
     }
     // A static stored in an object, or read from a binding, may change with
@@ -978,6 +986,7 @@ impl ExtractEngine {
                         .filter_map(|load| load.specifier().map(str::to_string))
                         .collect(),
                     dynamic_code: lowered_by_file[&ast.path].dynamic_code,
+                    loader_escape: lowered_by_file[&ast.path].loader_escape,
                 },
             );
         }
@@ -2315,6 +2324,25 @@ export const App = () => <Box tone="red" />;
                 "const modules = import.meta.glob('./*.js', { eager: true });\nmodules['./tokens.js'].pad.padding = 9;",
                 "{ ...pad }",
             ),
+            // A loader read anywhere but as a direct callee can load any
+            // module under a name the analysis never sees.
+            ("sequence-wrapped require", "const name = './tokens.js';\n(0, require)(name).pad.padding = 9;", "{ ...pad }"),
+            ("an alias of require", "const name = './tokens.js';\nconst r = require;\nr(name).pad.padding = 9;", "{ ...pad }"),
+            ("require.call", "const name = './tokens.js';\nrequire.call(null, name).pad.padding = 9;", "{ ...pad }"),
+            ("require.apply", "const name = './tokens.js';\nrequire.apply(null, [name]).pad.padding = 9;", "{ ...pad }"),
+            ("require.bind", "const name = './tokens.js';\nrequire.bind(null)(name).pad.padding = 9;", "{ ...pad }"),
+            ("the global object's require", "const name = './tokens.js';\nglobalThis.require(name).pad.padding = 9;", "{ ...pad }"),
+            ("module.require", "const name = './tokens.js';\nmodule.require(name).pad.padding = 9;", "{ ...pad }"),
+            (
+                "a createRequire result",
+                "import { createRequire } from 'node:module';\nconst name = './tokens.js';\ncreateRequire(import.meta.url)(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
+                "a held createRequire result",
+                "import { createRequire } from 'node:module';\nconst name = './tokens.js';\nconst load = createRequire(import.meta.url);\nload(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
             // Code from a string can load and change any module (PF3).
             (
                 "eval loads the module",
@@ -2375,11 +2403,14 @@ export const App = () => <Box tone="red" />;
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
         // A type query of eval, or a schema builder's own `Function` member
-        // (TypeBox's `Type.Function`), runs nothing, and a type query of a
-        // function's `arguments` reads none of them: the static still
-        // extracts.
+        // (TypeBox's `Type.Function`), runs nothing, a type query of a
+        // function's `arguments` reads none of them, and a direct `require`
+        // of a literal path, or `typeof require`, loads only that path or
+        // nothing: the static still extracts.
         for (row, module) in [
             ("type query", "export type Evaluate = typeof eval;\n"),
+            ("a direct require of another module", "require('./typebox');\n"),
+            ("typeof require", "export const loads = typeof require === 'function';\n"),
             (
                 "a type query of arguments in a read-only callee",
                 "import { pad } from './tokens';\nfunction read(o) { type Args = typeof arguments; return o.padding; }\nread(pad);\n",

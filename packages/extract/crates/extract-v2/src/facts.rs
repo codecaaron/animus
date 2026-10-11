@@ -486,6 +486,10 @@ pub struct FileFacts {
     /// load any module and change what it exports.
     #[serde(skip)]
     pub(crate) dynamic_code: Option<&'static str>,
+    /// How the module lets a loader escape (`reads module.require`), which
+    /// can load any module and change what it exports.
+    #[serde(skip)]
+    pub(crate) loader_escape: Option<&'static str>,
     /// Extensions of an `Object.member` parent, which are never chains.
     #[serde(skip)]
     pub member_parent_extensions: Vec<chain_walk::MemberParentExtension>,
@@ -1248,8 +1252,15 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let program = ast.program();
     // The engine lowers every file before static enrichment; any other
     // caller lowers this one here.
-    let crate::link::Lowered { scoping, bindings, record: module_record, loads, readings: param_readings, dynamic_code } =
-        lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
+    let crate::link::Lowered {
+        scoping,
+        bindings,
+        record: module_record,
+        loads,
+        readings: param_readings,
+        dynamic_code,
+        loader_escape,
+    } = lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
     let source = ast.source();
     let directive_prologue = program.directives.last().map(|last| {
         let end = extend_directive_trailing_trivia(source, last.span.end);
@@ -1652,6 +1663,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
             .filter_map(|load| load.specifier().map(str::to_string))
             .collect(),
         dynamic_code,
+        loader_escape,
         ordinary_components,
         context_consts,
         prop_tags,

@@ -2283,6 +2283,104 @@ pub(crate) fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::
     reads.found
 }
 
+/// How a module lets a loader escape, which can load any module: the unbound
+/// `require` read anywhere but as a direct callee (`require(…)`,
+/// `require.context(…)`, `require.resolve(…)`) or a `typeof` operand, so an
+/// alias, `(0, require)(…)` and `require.call(…)` all count; `require` read
+/// from the unbound `module` or global object; or any mention of
+/// `createRequire`. Not followed: `module.constructor._load` and other
+/// internals of the host's loader.
+pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::Scoping) -> Option<&'static str> {
+    use oxc::ast::ast::{
+        BindingProperty, CallExpression, ComputedMemberExpression, Expression, IdentifierReference, ModuleExportName,
+        StaticMemberExpression, UnaryExpression,
+    };
+    use oxc::ast_visit::Visit;
+    use oxc::syntax::operator::UnaryOperator;
+    const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "self", "global"];
+    struct Uses<'s> {
+        scoping: &'s oxc::semantic::Scoping,
+        found: Option<&'static str>,
+    }
+    impl Uses<'_> {
+        fn unbound(&self, id: &IdentifierReference<'_>) -> bool {
+            id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).symbol_id().is_none())
+        }
+        fn is_require(expr: &Expression<'_>) -> bool {
+            matches!(expr.get_inner_expression(), Expression::Identifier(id) if id.name == "require")
+        }
+        /// `require`, `require.context` or `require.resolve`, which a call
+        /// uses only to load or name a module.
+        fn direct_loader(callee: &Expression<'_>) -> bool {
+            Self::is_require(callee)
+                || callee.get_inner_expression().as_member_expression().is_some_and(|member| {
+                    matches!(member.static_property_name(), Some("context" | "resolve")) && Self::is_require(member.object())
+                })
+        }
+        fn member(&mut self, object: &Expression<'_>, name: &str) {
+            if name == "createRequire" {
+                self.found.get_or_insert("reads createRequire");
+            } else if name == "require" {
+                if let Expression::Identifier(id) = object.get_inner_expression() {
+                    if id.name == "module" && self.unbound(id) {
+                        self.found.get_or_insert("reads module.require");
+                    } else if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.unbound(id) {
+                        self.found.get_or_insert("reads require from the global object");
+                    }
+                }
+            }
+        }
+    }
+    impl<'a> Visit<'a> for Uses<'_> {
+        fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
+            let value = id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).is_value());
+            if value && id.name == "require" && self.unbound(id) {
+                self.found.get_or_insert("hands on require other than as a direct call");
+            }
+        }
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            if Self::direct_loader(&call.callee) {
+                for argument in &call.arguments {
+                    self.visit_argument(argument);
+                }
+                return;
+            }
+            oxc::ast_visit::walk::walk_call_expression(self, call);
+        }
+        fn visit_unary_expression(&mut self, unary: &UnaryExpression<'a>) {
+            if unary.operator == UnaryOperator::Typeof && Self::is_require(&unary.argument) {
+                return;
+            }
+            oxc::ast_visit::walk::walk_unary_expression(self, unary);
+        }
+        fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
+            self.member(&member.object, &member.property.name);
+            oxc::ast_visit::walk::walk_static_member_expression(self, member);
+        }
+        fn visit_computed_member_expression(&mut self, member: &ComputedMemberExpression<'a>) {
+            if let Some(name) = member.static_property_name() {
+                self.member(&member.object, &name);
+            }
+            oxc::ast_visit::walk::walk_computed_member_expression(self, member);
+        }
+        fn visit_binding_property(&mut self, property: &BindingProperty<'a>) {
+            if property.key.static_name().is_some_and(|name| name == "createRequire") {
+                self.found.get_or_insert("reads createRequire");
+            }
+            oxc::ast_visit::walk::walk_binding_property(self, property);
+        }
+        fn visit_module_export_name(&mut self, name: &ModuleExportName<'a>) {
+            if name.name() == "createRequire" {
+                self.found.get_or_insert("reads createRequire");
+            }
+            oxc::ast_visit::walk::walk_module_export_name(self, name);
+        }
+    }
+    let mut uses = Uses { scoping, found: None };
+    uses.visit_program(program);
+    uses.found
+}
+
 /// One module's functions, each with how its parameters treat an object.
 pub(crate) type ParamReadings = std::sync::Arc<BTreeMap<String, Vec<ParamReading>>>;
 /// A module's function readings.
