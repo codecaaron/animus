@@ -1269,7 +1269,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         unsettled_fx.insert(k.clone(), unsettled.clone());
         statics_fx.remove(k);
     }
-    let statics = eval::Statics::new(&statics_fx, &unsettled_fx);
+    let typed_fx = eval::typed_statics(&statics_fx);
+    let statics = eval::Statics::new(&typed_fx, &unsettled_fx);
     let mut usage_statics_fx = local_usage_statics.clone();
     for (k, v) in extra_usage_statics {
         usage_statics_fx.insert(k.clone(), v.clone());
@@ -1363,17 +1364,24 @@ pub(crate) fn extract_file_facts_from_static_maps(
                         None => match identifier_index.get(key) {
                             // A stage argument something may change before the
                             // read refuses, by name or by member path.
-                            Some(name) => match eval::static_path(statics, name) {
-                                Some(eval::StaticRead::Unsettled(reason)) => Err(reason.to_string()),
-                                Some(eval::StaticRead::Exact(v)) => match eval::lost_value_reason(v) {
-                                    Some(reason) => Err(reason.to_string()),
-                                    None => Ok((Some(v.clone()), Vec::new(), Vec::new())),
-                                },
-                                None => Err(format!(
-                                    "identifier '{}' not resolvable to static object",
-                                    name
-                                )),
-                            },
+                            Some(name) => {
+                                let mut segments = name.split('.');
+                                let binding = segments.next().unwrap_or_default();
+                                let path: Vec<&str> = segments.collect();
+                                match eval::static_value(statics, binding, &path) {
+                                    Some(eval::StaticAnswer::Unsettled(unsettled)) => Err(unsettled.reason.clone()),
+                                    Some(eval::StaticAnswer::Unevaluated(unevaluated)) => {
+                                        Err(unevaluated.clause.clone())
+                                    }
+                                    Some(eval::StaticAnswer::Exact(value)) => {
+                                        Ok((Some(eval::marked(value)), Vec::new(), Vec::new()))
+                                    }
+                                    None => Err(format!(
+                                        "identifier '{}' not resolvable to static object",
+                                        name
+                                    )),
+                                }
+                            }
                             None => Err("failed to parse object expression".to_string()),
                         },
                     };
