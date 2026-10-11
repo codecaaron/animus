@@ -20,6 +20,20 @@ describe('webpackExtensionPolicy', () => {
     expect(policy.alias).toEqual([['.js', ['.mts', '.ts', '.js']]]);
   });
 
+  it('reads a string extensionAlias value, at the root or for ESM, as unreadable', () => {
+    for (const resolve of [
+      { extensionAlias: { '.js': '...' } },
+      {
+        extensionAlias: { '.js': ['.ts', '.js'] },
+        byDependency: { esm: { extensionAlias: { '.js': '...' } } },
+      },
+    ]) {
+      expect(
+        webpackExtensionPolicy('webpack', resolve, '5.105.4').resolverVersion
+      ).toBe('built-in (hostOptionUnreadable: string extensionAlias)');
+    }
+  });
+
   it('reads an order that reaches unknown Rspack defaults as unreadable', () => {
     const extending = webpackExtensionPolicy(
       'rspack',

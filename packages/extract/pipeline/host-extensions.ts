@@ -120,6 +120,18 @@ export function webpackExtensionPolicy(
     : version?.startsWith('1.')
       ? HOST_DEFAULT_EXTENSIONS.rspack1
       : null;
+  // A string alias value is read by the bundler in ways no capture here
+  // models (a literal '...' suffix among them), so the order is unreadable.
+  const aliasValues = [
+    ...Object.values(resolve.extensionAlias ?? {}),
+    ...Object.values(esm?.extensionAlias ?? {}),
+  ];
+  if (aliasValues.some((value) => !Array.isArray(value))) {
+    return {
+      ...BUILT_IN_EXTENSION_POLICY,
+      resolverVersion: 'built-in (hostOptionUnreadable: string extensionAlias)',
+    };
+  }
   // The effective order reaches the bundler's defaults unless a list
   // without `...` replaces them; one that reaches unknown defaults is
   // unreadable, however much of it is configured.
