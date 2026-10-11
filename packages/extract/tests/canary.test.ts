@@ -1,9 +1,18 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, relative } from 'path';
 import { describe, expect, test } from 'vitest';
 
-import { probeAbsolutePathSpecifier } from '../pipeline/discover-packages';
+import {
+  probeAbsolutePathSpecifier,
+  readKitSourceCondition,
+} from '../pipeline/discover-packages';
 import {
   extensionPolicyJson,
   viteExtensionPolicy,
@@ -242,3 +251,62 @@ test("a configured Vite extension list is unreadable, and './only' still finds o
     native: expect.stringMatching(/only\.tsx$/),
   });
 });
+
+// Contract: system evaluation and analysis read the same facet of a kit
+// (spec §2.2 A3). Discovery's source entry is the file the system loader
+// evaluates; a source target the loader refuses is read from the runtime
+// entry by both, and reported. Each row: the `animus` target, the file both
+// read, and whether discovery reports the target. A raw backslash is a `/`,
+// beside a file literally named `src\\index.ts`; a percent-escape fails the
+// load loudly.
+test.each([
+  ['./src/index.ts', 'src/index.ts', false],
+  ['./src//index.ts', 'src/index.ts', false],
+  ['./src\\index.ts', 'src/index.ts', false],
+  ['src/index.ts', 'dist/index.js', true],
+  ['./src/../src/index.ts', 'dist/index.js', true],
+  ['./src/./index.ts', 'dist/index.js', true],
+  ['./src/a%20b.ts', 'percent-escape unsupported', true],
+])(
+  "a kit whose animus target is '%s' is read as %s by both",
+  (target, read, reported) => {
+    const pkg = realpathSync(mkdtempSync(join(tmpdir(), 'animus-kit-facet-')));
+    writeFileSync(
+      join(pkg, 'package.json'),
+      JSON.stringify({
+        name: 'kit',
+        exports: { '.': { animus: target, import: './dist/index.js' } },
+      })
+    );
+    const files = [
+      'src/index.ts',
+      'dist/index.js',
+      'src/a b.ts',
+      'src/a%20b.ts',
+    ];
+    if (process.platform !== 'win32') files.push('src\\index.ts');
+    for (const file of files) {
+      mkdirSync(join(pkg, file, '..'), { recursive: true });
+      writeFileSync(join(pkg, file), 'export {};\n');
+    }
+    const condition = readKitSourceCondition(pkg);
+    const loaded = v2.resolveSpecifier('kit', '/', [], { kit: pkg });
+    rmSync(pkg, { recursive: true, force: true });
+    const source = condition?.entries.find(([entry]) => entry === '.')?.[1];
+    const runtime = read === 'dist/index.js';
+
+    expect({
+      discovery: source === undefined ? 'runtime' : relative(pkg, source),
+      loader:
+        loaded.path === undefined
+          ? loaded.unresolved
+          : relative(pkg, loaded.path),
+      reported: (condition?.invalid.length ?? 0) > 0,
+    }).toEqual({
+      discovery: read.endsWith('.ts') ? read : 'runtime',
+      loader:
+        runtime || read.endsWith('.ts') ? read : expect.stringContaining(read),
+      reported,
+    });
+  }
+);
