@@ -237,6 +237,60 @@ fn replacement_import_needs(
     needs
 }
 
+/// A file entry's analysis identity: its path with `\\` read as `/`, and
+/// empty and `.` segments dropped and `..` taken back lexically, so every
+/// spelling of one path sorts as one. A root (`/`, a drive `C:` or `C:/`,
+/// a share `//host/share/`) is kept whole and never climbed past; a `..`
+/// that would climb past an absolute root is dropped, as Node's
+/// `path.win32.normalize` does. Case and Unicode stay as written, no
+/// symlink is followed, and a `?query` suffix stays part of the identity.
+fn canonical_analysis_id(path: &str) -> String {
+    let (path, query) = path.split_at(path.find('?').unwrap_or(path.len()));
+    let path = path.replace('\\', "/");
+    let (root, rest, absolute) = path_root(&path);
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in rest.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => match segments.last() {
+                Some(&last) if last != ".." => {
+                    segments.pop();
+                }
+                _ if absolute => {}
+                _ => segments.push(".."),
+            },
+            segment => segments.push(segment),
+        }
+    }
+    format!("{root}{}{query}", segments.join("/"))
+}
+
+/// A `/`-separated path's root, the rest after it, and whether the root is
+/// absolute: a drive with its top (`C:/`) or without (`C:`, relative to
+/// that drive's current directory), a share (`//host/share/`), or `/`.
+fn path_root(path: &str) -> (String, &str, bool) {
+    let bytes = path.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        let (drive, rest) = path.split_at(2);
+        return match rest.strip_prefix('/') {
+            Some(rest) => (format!("{drive}/"), rest, true),
+            None => (drive.to_string(), rest, false),
+        };
+    }
+    if let Some(share) = path.strip_prefix("//") {
+        let mut parts = share.splitn(3, '/');
+        if let (Some(host), Some(name)) = (parts.next(), parts.next()) {
+            if !host.is_empty() && !name.is_empty() {
+                return (format!("//{host}/{name}/"), parts.next().unwrap_or(""), true);
+            }
+        }
+    }
+    match path.strip_prefix('/') {
+        Some(rest) => ("/".to_string(), rest, true),
+        None => (String::new(), path, false),
+    }
+}
+
 #[napi]
 pub struct ExtractEngine {
     opts: ResolvedOptions,
@@ -244,8 +298,10 @@ pub struct ExtractEngine {
     /// Computed once per analyze(); recomputing per transform is O(files²).
     cross: Option<cross_file::CrossFileFacts>,
     sources: BTreeMap<String, String>,
-    /// Caller order of the last analyze(): registration collisions and
-    /// utility-class first-wins dedup are order-sensitive.
+    /// The files of the last analyze(), by path: the canonical order every
+    /// order-sensitive choice reads (registration collisions, first-wins
+    /// utility dedup, composed-family rules, report examples), never the
+    /// caller's.
     order: Vec<String>,
     css: Option<analyze_css::CssOutput>,
     parse_count: usize,
@@ -661,8 +717,11 @@ impl ExtractEngine {
             path: String,
             source: String,
         }
-        let entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
+        let mut entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
             .map_err(|e| napi::Error::from_reason(format!("invalid file entries JSON: {e}")))?;
+        // Analysis sees the files in canonical order, so its output does not
+        // depend on the order a host lists them in, or on how it spells a path.
+        entries.sort_by_cached_key(|entry| (canonical_analysis_id(&entry.path), entry.path.clone()));
 
         self.facts.clear();
         self.sources.clear();
@@ -2412,5 +2471,82 @@ export const App = () => <Box tone="red" />;
         assert!(!code.contains(".extend("), "{code}");
         assert!(code.contains("const kept = ds.styles"), "{code}");
         assert!(code.contains("export const shared = ds.styles"), "{code}");
+    }
+
+    /// Every spelling of one path is one analysis identity; case, a query, a
+    /// parent above a relative start and each kind of root stay distinct,
+    /// and no `..` climbs past a root (Node's `path.win32.normalize` cases).
+    #[test]
+    fn spellings_of_one_path_share_an_analysis_id() {
+        for (path, id) in [
+            ("a/b.tsx", "a/b.tsx"),
+            ("a\\b.tsx", "a/b.tsx"),
+            ("./a.tsx", "a.tsx"),
+            ("dir/../a.tsx", "a.tsx"),
+            ("a//b/./c.tsx", "a/b/c.tsx"),
+            ("../../packages/ui/x.tsx", "../../packages/ui/x.tsx"),
+            ("/root/../x.tsx", "/x.tsx"),
+            ("/../x.tsx", "/x.tsx"),
+            ("\\..\\x.tsx", "/x.tsx"),
+            ("A.tsx", "A.tsx"),
+            ("a.svelte?type=script&lang=../x", "a.svelte?type=script&lang=../x"),
+            ("./a.svelte?raw", "a.svelte?raw"),
+            ("C:/../a.tsx", "C:/a.tsx"),
+            ("C:\\..\\a.tsx", "C:/a.tsx"),
+            ("C:\\x\\..\\..\\y.tsx", "C:/y.tsx"),
+            ("C:..\\a.tsx", "C:../a.tsx"),
+            ("C:x\\..\\..\\y.tsx", "C:../y.tsx"),
+            ("C:", "C:"),
+            ("C:/", "C:/"),
+            ("//host/share/../../a.tsx", "//host/share/a.tsx"),
+            ("\\\\host\\share\\..\\..\\a.tsx", "//host/share/a.tsx"),
+            ("//host/share/a.tsx", "//host/share/a.tsx"),
+            ("/host/share/a.tsx", "/host/share/a.tsx"),
+        ] {
+            assert_eq!(canonical_analysis_id(path), id, "{path}");
+        }
+    }
+
+    /// Contract: analysis output is independent of the order the caller
+    /// lists files in. Composed-family rules and the whole-component
+    /// removal report's examples both once followed it.
+    #[test]
+    fn analysis_output_is_independent_of_caller_file_order() {
+        let family = |name: &str, display: &str| {
+            format!(
+                "import {{ compose }} from '@animus-ui/system/compose';\nimport {{ ds }} from './ds';\n\
+                 export const Root = ds.styles({{ display: '{display}' }})\
+                 .variant({{ prop: 'density', variants: {{ compact: {{ gap: 4 }}, loose: {{ gap: 12 }} }} }}).asElement('div');\n\
+                 export const Header = ds.styles({{}})\
+                 .variant({{ prop: 'density', variants: {{ compact: {{ margin: 2 }}, loose: {{ margin: 8 }} }} }}).asElement('header');\n\
+                 export const {name} = compose({{ Root, Header }}, {{ name: '{name}', shared: {{ density: true }} }});\n"
+            )
+        };
+        let files = [
+            ("ds.ts", "import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem().build();\n".to_string()),
+            ("one.tsx", family("FamOne", "flex")),
+            ("two.tsx", family("FamTwo", "grid")),
+            (
+                "app.tsx",
+                "import { FamOne } from './one';\nimport { FamTwo } from './two';\nimport { Outside } from 'elsewhere';\n\
+                 export const App = () => <><FamOne.Root density=\"compact\"><FamOne.Header /></FamOne.Root>\
+                 <FamTwo.Root density=\"loose\"><FamTwo.Header /></FamTwo.Root><Outside /></>;\n"
+                    .to_string(),
+            ),
+            ("page.tsx", "import { Widget } from 'unknown-lib';\nexport const Page = () => <Widget />;\n".to_string()),
+        ];
+        let run = |order: [usize; 5]| {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let entries: Vec<_> =
+                order.iter().map(|&i| serde_json::json!({ "path": files[i].0, "source": files[i].1 })).collect();
+            let analysis = engine.analyze(serde_json::Value::from(entries).to_string()).unwrap();
+            let transforms: Vec<String> =
+                files.iter().map(|(path, _)| engine.transform_file(path.to_string()).unwrap()).collect();
+            (analysis, transforms)
+        };
+        let given = run([0, 1, 2, 3, 4]);
+        for order in [[4, 3, 2, 1, 0], [2, 4, 0, 3, 1]] {
+            assert_eq!(run(order), given, "files in the order {order:?}");
+        }
     }
 }
