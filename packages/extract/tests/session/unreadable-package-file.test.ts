@@ -1,4 +1,4 @@
-import { chmodSync, readFileSync } from 'fs';
+import { chmodSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -48,6 +48,7 @@ function skippedSources(): string[] {
 
 let restoreGlobals: () => void;
 let warned: string[];
+let reported: string[];
 const lockedFiles: string[] = [];
 
 function createWorkspace() {
@@ -71,6 +72,10 @@ beforeEach(() => {
   warned = [];
   vi.spyOn(console, 'warn').mockImplementation((...parts: unknown[]) => {
     warned.push(parts.map(String).join(' '));
+  });
+  reported = [];
+  vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => {
+    reported.push(parts.map(String).join(' '));
   });
 });
 
@@ -165,6 +170,57 @@ describe('a project file that cannot be read', () => {
     expect(line).toContain('its renders are not seen, so nothing is pruned');
     expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(false);
     expect(skippedSources()).toEqual(['src/App.tsx']);
+    session.close();
+  });
+});
+
+// Decision #56: in development, a changed file that cannot be read is
+// reported with its path and cause, and enforced under strict.
+describe('a watched change that cannot be read', () => {
+  async function lockAfterStartup(strict: boolean) {
+    const { app } = createKitWorkspace();
+    const session = makeSession(app, { strict });
+    session.development = true;
+    await session.runFullPipeline();
+    const unreadable = join(app, 'src', 'App.tsx');
+    chmodSync(unreadable, 0o000);
+    lockedFiles.push(unreadable);
+    expect(() => readFileSync(unreadable, 'utf-8')).toThrow();
+    return { session, unreadable };
+  }
+
+  const unreadableLine = (lines: string[]) =>
+    lines.find((line) => line.includes(UNREADABLE_SOURCE_FILE));
+
+  test('is reported with its path and cause', async () => {
+    const { session, unreadable } = await lockAfterStartup(false);
+
+    await session.handleWatchUpdate({ modifiedFiles: new Set([unreadable]) });
+
+    expect(unreadableLine(warned)).toMatch(/src\/App\.tsx.*EACCES/);
+    session.close();
+  });
+
+  test('is reported at error level under strict, and the session keeps running', async () => {
+    const { session, unreadable } = await lockAfterStartup(true);
+
+    await session.handleWatchUpdate({ modifiedFiles: new Set([unreadable]) });
+
+    expect(unreadableLine(reported)).toMatch(/src\/App\.tsx.*EACCES/);
+    session.close();
+  });
+
+  test('a deleted file is a removal, not an unreadable change', async () => {
+    const { app } = createKitWorkspace();
+    const session = makeSession(app, { strict: true });
+    session.development = true;
+    await session.runFullPipeline();
+    const deleted = join(app, 'src', 'App.tsx');
+    rmSync(deleted);
+
+    await session.handleWatchUpdate({ modifiedFiles: new Set([deleted]) });
+
+    expect(unreadableLine([...warned, ...reported])).toBeUndefined();
     session.close();
   });
 });
