@@ -1829,15 +1829,11 @@ impl<'a> Visit<'a> for MemberConsts<'_> {
 pub(crate) fn style_object_uses(
     program: &Program<'_>,
     scoping: &Scoping,
-    statics: &FxHashMap<String, Value>,
+    statics: &FxHashMap<String, StaticValue>,
 ) -> StyleObjectFacts {
-    let statics = &crate::eval::typed_statics(statics);
     let consts: BTreeMap<&str, bool> = statics
         .iter()
-        // An object's marker counts, as its JSON object did.
-        .filter(|(_, value)| {
-            matches!(value, StaticValue::Object(_) | StaticValue::AssetFunction { .. } | StaticValue::Unevaluated(_))
-        })
+        .filter(|(_, value)| matches!(value, StaticValue::Object(_)))
         .map(|(name, _)| (name.as_str(), false))
         .collect();
     let candidates = object_bindings(program, scoping, &consts, &BTreeSet::new());
@@ -5386,11 +5382,10 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
 pub fn collect_usage_facts_with_statics(
     program: &Program<'_>,
     module: &ModuleRecord<'_>,
-    static_values: &FxHashMap<String, Value>,
+    static_values: &FxHashMap<String, StaticValue>,
 ) -> Vec<UsageFact> {
     let built = SemanticBuilder::new().build(program).semantic.into_scoping();
-    let typed = crate::eval::typed_statics(static_values);
-    collect_enriched_usage(built, program, module, &typed, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
+    collect_enriched_usage(built, program, module, static_values, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
 }
 
 fn attribute_expression<'a, 'b>(
@@ -5422,13 +5417,13 @@ fn evaluate_with_statics(
     if let Expression::ObjectExpression(object) = expression {
         let (value, skipped, captured) =
             crate::eval::eval_object_expr_with_statics(object, Some(static_values.into())).ok()?;
-        return (skipped.is_empty() && captured.is_empty()).then_some(value);
+        return (skipped.is_empty() && captured.is_empty()).then(|| crate::eval::plain(&value));
     }
     let mut skipped = Vec::new();
     let value =
         crate::eval::eval_expression_with_statics(expression, &mut skipped, Some(static_values.into()))
             .ok()?;
-    skipped.is_empty().then_some(value)
+    skipped.is_empty().then(|| crate::eval::plain(&value))
 }
 
 /// Whether `expression` is an explicit `undefined`: `void 0`, or the global
@@ -6297,23 +6292,6 @@ mod tests {
     fn parse(source: &str) -> OwnedAst {
         let counter = ParseCounter::new(0);
         OwnedAst::parse("test.tsx".into(), source.to_string(), &counter)
-    }
-
-    /// Contract (until serialized statics read typed values): a member
-    /// handed on is read through an object that spells a marker with more
-    /// fields, as main read its JSON, so a primitive one leaves the object
-    /// stable.
-    #[test]
-    fn a_member_handed_on_reads_a_marker_objects_fields() {
-        let ast = parse(
-            "const cfg = { inner: { '$animus.lost': 'authored', value: 1 }, padding: 4 };\n\
-             unknown(cfg.inner.value);\n",
-        );
-        let program = ast.program();
-        let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
-        let statics = crate::eval::collect_static_values(program);
-        let facts = style_object_uses(program, &scoping, &statics);
-        assert!(!facts.uses.contains_key("cfg"), "{:?}", facts.uses);
     }
 
     fn props(entries: &[(&str, &[&str])]) -> FxHashMap<String, FxHashSet<String>> {

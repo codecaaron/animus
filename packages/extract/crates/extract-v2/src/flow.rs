@@ -56,6 +56,9 @@ pub enum ReasonId {
     FlowBound,
     /// A function the analysis does not admit.
     UnadmittedFunction,
+    /// What Lower's evaluation could not settle in a static value: a
+    /// computed key, a call or spread in a const, a captured `transform`.
+    Unevaluated(crate::static_value::UnevaluatedKind),
 }
 
 /// One part of what an opening may reach.
