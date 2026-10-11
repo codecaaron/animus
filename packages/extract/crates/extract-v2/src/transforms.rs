@@ -322,14 +322,6 @@ impl TransformProvenance {
         Some(format!("[bail] Transform '{name}': its callable {rejection}"))
     }
 
-    /// Why definition `key`, whose configured source is rejected for reading
-    /// the system loader's module cell, was rejected: the cell is how the
-    /// loader's bundle reads an import, and the loader's evidence names that
-    /// import.
-    pub(crate) fn import_rejection(&self, key: &str, name: &str, source: &str) -> Option<String> {
-        self.captured_rejection(key, name).filter(|_| reads_unbound(source, LOADER_MODULE_CELL))
-    }
-
     /// Why definition `key`, whose admitted configured source reads the
     /// unbound shared host functions `hosts`, may not read them as the
     /// host's, if it may not.
@@ -359,23 +351,6 @@ impl TransformProvenance {
 /// runtime registry emits it verbatim, where a free identifier throws.
 pub fn admit_configured_source(name: &str, source: &str) -> Result<(), Vec<String>> {
     admit_configured_host_reads(name, source).map(drop)
-}
-
-/// What a module of a system bundled by the loader reads its imports from
-/// (`system-loader`'s `linked`).
-const LOADER_MODULE_CELL: &str = "__modules";
-
-/// Whether a configured source reads `name` unbound; text that does not
-/// parse reads nothing.
-fn reads_unbound(source: &str, name: &str) -> bool {
-    let wrapper = format!("const __configured = ({source});");
-    let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, &wrapper, SourceType::mjs()).parse();
-    if parsed.panicked || !parsed.diagnostics.is_empty() {
-        return false;
-    }
-    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
-    semantic.scoping().root_unresolved_references().contains_key(name)
 }
 
 /// [`admit_configured_source`], returning the shared host functions the
