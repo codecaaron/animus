@@ -23,6 +23,7 @@ import {
 import { existsSync } from 'fs';
 
 import { resolveAnimusLoaderPath } from './loader-path';
+import { sameDirectory } from './same-directory';
 
 import type { AnimusNextOptions } from './types';
 
@@ -490,7 +491,7 @@ export class AnimusWebpackPlugin {
     }
     // A root override the plugin cannot honor fails (SA2): the analysis
     // would read one tree while webpack builds another.
-    if (context && this.session.rootDir !== context) {
+    if (context && !sameDirectory(context, this.session.rootDir)) {
       throw new AnimusConfigError(
         `[animus-extract] compiler.context (${context}) differs from the ` +
           `configured project root (${this.session.rootDir}). Run next ` +
