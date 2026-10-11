@@ -164,6 +164,54 @@ describe('reload debt', () => {
     session.close();
   });
 
+  test('a failed rescan owes the reload, so the next edit does not publish against the stale system', async () => {
+    const root = createFixtureProject('animus-rescan-debt-');
+    mocks.analyzeProject.mockImplementation(() => buildManifest({}));
+    const session = await developmentSession(root);
+    const buttonPath = join(root, 'src', 'Button.tsx');
+    mocks.loadSystemModule.mockImplementation(() => {
+      throw new Error('SyntaxError: unexpected token in system.ts');
+    });
+    await expect(session.catchUp()).rejects.toThrow(/unexpected token/);
+    const analysesWhileOwed = mocks.analyzeProject.mock.calls.length;
+
+    writeFileSync(buttonPath, '// a component edit after the failed rescan\n');
+    await expect(
+      session.handleWatchUpdate({ modifiedFiles: new Set([buttonPath]) })
+    ).rejects.toThrow(/unexpected token/);
+
+    expect(mocks.analyzeProject.mock.calls.length).toBe(analysesWhileOwed);
+    session.close();
+  });
+
+  test('repeated failed reloads watch the last-good dependencies and only the current attempt', async () => {
+    const root = createFixtureProject('animus-reload-growth-');
+    mocks.analyzeProject.mockImplementation(() => buildManifest({}));
+    const session = await developmentSession(root);
+    const lastGood = [...session.systemDependencyPaths];
+    const systemPath = join(root, 'src', 'system.ts');
+    mocks.analyzeProject.mockImplementation(() => {
+      throw new Error('analysis boom');
+    });
+
+    const attempts = [0, 1, 2].map((n) => join(root, 'src', `palette${n}.ts`));
+    for (const palette of attempts) {
+      writeFileSync(palette, 'export const palette = {};\n');
+      mocks.loadSystemModule.mockReturnValue({
+        ...SYSTEM_CONFIG,
+        dependencies: [systemPath, palette],
+      });
+      await expect(
+        session.handleWatchUpdate({ modifiedFiles: new Set([systemPath]) })
+      ).rejects.toThrow('analysis boom');
+    }
+
+    expect([...session.systemDependencyPaths].sort()).toEqual(
+      [...new Set([...lastGood, systemPath, attempts[2]])].sort()
+    );
+    session.close();
+  });
+
   test('a failed reload keeps last-good watch registration', async () => {
     const root = createFixtureProject('animus-reload-registration-');
     const logo = join(root, 'logo.svg');
