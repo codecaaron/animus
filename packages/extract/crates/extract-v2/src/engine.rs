@@ -826,19 +826,28 @@ fn unstable_style_statics(
     // it.
     for (file, module) in style {
         // A container's change hands out the object stored in it whole, or
-        // the members a spread copied in; a `const` that reads a binding
-        // holds what it read in its members.
+        // the members a spread copied in. A `const` built fresh (a literal,
+        // React's `createContext`) holds what it read in its members, its
+        // own slots fixed; any other may hold the very object it read.
         let edges = module
             .facts
             .stored
             .iter()
             .map(|(stored, container, copied)| (stored, container, "is stored in", *copied))
-            .chain(module.facts.derives.iter().map(|(derived, read)| (derived, read, "reads", true)));
+            .chain(module.facts.derives.iter().map(|(derived, read, fresh)| (derived, read, "reads", *fresh)));
         for (dependent, on, how, below) in edges {
             let to = possible(file, dependent)
                 .into_iter()
                 .flat_map(|target| {
-                    let paths = if below { members_at(&target, &[], &|_| true) } else { vec![Vec::new()] };
+                    // Below the members by key where its value says them,
+                    // else at any member (`[*]`).
+                    let paths = match below {
+                        true => match members_at(&target, &[], &|_| true) {
+                            whole if whole == [Vec::<String>::new()] => vec![vec!["*".to_string()]],
+                            members => members,
+                        },
+                        false => vec![Vec::new()],
+                    };
                     paths.into_iter().map(move |path| (object(target.clone()), path))
                 })
                 .collect();
@@ -2541,6 +2550,15 @@ export const App = () => <Box tone="red" />;
             (
                 "a held createRequire result",
                 "import { createRequire } from 'node:module';\nconst name = './tokens.js';\nconst load = createRequire(import.meta.url);\nload(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            // A container, a module-scope alias or React's context holds the
+            // object itself: a write through it changes the object.
+            ("a write through an array holding it", concat!(import_pad!(), "const list = [pad];\nlist[0].padding = 9;"), "{ ...pad }"),
+            ("a write through a module-scope alias", concat!(import_pad!(), "const alias = pad;\nalias.padding = 9;"), "{ ...pad }"),
+            (
+                "a write through a context built on it",
+                concat!(import_pad!(), "import { createContext } from 'react';\nconst Ctx = createContext(pad);\nCtx._currentValue.padding = 9;"),
                 "{ ...pad }",
             ),
             // Code from a string can load and change any module (PF3).

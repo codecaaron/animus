@@ -1933,9 +1933,10 @@ pub(crate) struct StyleObjectFacts {
     /// spread in as a copy of its members): the object is unstable when its
     /// container is, below its own members for a copy.
     pub stored: Vec<(String, String, bool)>,
-    /// (module-scope `const`, a binding its initializer reads): the `const`
-    /// holds a value read from that binding, unstable when it is.
-    pub derives: Vec<(String, String)>,
+    /// (module-scope `const`, a binding its initializer reads, whether the
+    /// `const` is built fresh): the `const` holds a value read from that
+    /// binding, unstable when it is, below its own members when fresh.
+    pub derives: Vec<(String, String, bool)>,
     /// A binding passed whole to a named function: a read when that
     /// function's parameter only reads it and the binding holds no nested
     /// object, and otherwise this use.
@@ -1956,6 +1957,23 @@ pub(crate) struct Handoff {
 
 /// The module-scope `const` whose initializer holds the expression the
 /// ancestors lead out of.
+/// Whether the module-scope `const` whose initializer holds the current
+/// node is built fresh: an object or array literal, or React's
+/// `createContext(…)`. Its own slots are then fixed when it is built, and a
+/// value it read changes only below them.
+fn fresh_initializer(ancestors: &[AstKind<'_>], scoping: &Scoping, react: &ReactImports) -> bool {
+    let Some(AstKind::VariableDeclarator(declarator)) =
+        ancestors.iter().rev().find(|kind| matches!(kind, AstKind::VariableDeclarator(_)))
+    else {
+        return false;
+    };
+    match declarator.init.as_ref().map(Expression::get_inner_expression) {
+        Some(Expression::ObjectExpression(_) | Expression::ArrayExpression(_)) => true,
+        Some(Expression::CallExpression(call)) => react.calls(scoping, &call.callee, &["createContext"]),
+        _ => false,
+    }
+}
+
 fn initializing_const(ancestors: &[AstKind<'_>]) -> Option<String> {
     use oxc::ast::ast::{BindingPattern, VariableDeclarationKind};
     let at = ancestors.iter().rposition(|kind| matches!(kind, AstKind::VariableDeclarator(_)))?;
@@ -2840,7 +2858,7 @@ struct ObjectUseScan<'a, 's> {
     /// an object; `None` outside style mode.
     statics: Option<&'s FxHashMap<String, StaticValue>>,
     /// See `StyleObjectFacts::derives`.
-    derives: Vec<(String, String)>,
+    derives: Vec<(String, String, bool)>,
     /// See `StyleObjectFacts::handoffs`.
     handoffs: Vec<Handoff>,
     /// See `StyleObjectFacts::flat_reads`.
@@ -2957,7 +2975,8 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                     self.candidates.values().filter(|b| !b.namespace).map(|b| b.name.clone()).collect();
                 let derived = initializing_const(&self.ancestors).filter(|name| name != &binding.name);
                 if let Some(derived) = &derived {
-                    self.derives.push((derived.clone(), binding.name.clone()));
+                    let fresh = fresh_initializer(&self.ancestors, self.scoping, &self.react);
+                    self.derives.push((derived.clone(), binding.name.clone(), fresh));
                 }
                 match style_object_use(ident.span, &self.ancestors, &containers, self.global_object) {
                     StyleUse::Read => return,

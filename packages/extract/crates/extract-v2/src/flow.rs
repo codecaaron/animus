@@ -444,8 +444,8 @@ impl ValueEffects {
         let counts = |change: &Change| {
             if !slot {
                 // A change at a path reaches every path it is a prefix of,
-                // and the paths that are prefixes of it.
-                return change.path.iter().zip(path).all(|(a, b)| a == b);
+                // and the paths that are prefixes of it; `*` is any member.
+                return change.path.iter().zip(path).all(|(a, b)| a == b || a == "*");
             }
             let path = slot_of(&change.path);
             match change.kind {
