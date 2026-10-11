@@ -149,7 +149,6 @@ describe('withAnimus', () => {
       join(sessionDir, 'styles.css')
     );
 
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const adopt = plugin['adoptCompilerContext'].bind(plugin);
     const compilerAt = (context: string): Parameters<typeof adopt>[0] => ({
       context,
@@ -160,14 +159,16 @@ describe('withAnimus', () => {
         thisCompilation: { tap: () => {} },
       },
     });
-    adopt(compilerAt(monorepoRoot));
-    adopt(compilerAt(monorepoRoot));
+    // A compiler context other than the configured root fails (SA2).
+    expect(() => adopt(compilerAt(monorepoRoot))).toThrow(
+      expect.objectContaining({
+        name: 'AnimusConfigError',
+        message: expect.stringContaining(
+          `compiler.context (${monorepoRoot}) differs from the configured project root (${appDir})`
+        ),
+      })
+    );
     expect(plugin.sessionDir).toBe(sessionDir);
-    expect(
-      warn.mock.calls.filter(([msg]) =>
-        String(msg).includes('differs from the configured project root')
-      )
-    ).toHaveLength(1);
   });
 
   test('forwards every configured option to the injected plugin', () => {
