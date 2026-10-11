@@ -285,7 +285,7 @@ export const KIT_WITHOUT_SOURCE_CONDITION =
   'animus.discovery.kit-without-source-condition';
 
 /** A kit's `animus` export condition names a file that is missing or outside
- *  its package, so that entry is not read from source. */
+ *  its package, so that entry is read from its runtime target instead. */
 export const INVALID_KIT_SOURCE_CONDITION =
   'animus.discovery.invalid-source-condition';
 

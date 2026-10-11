@@ -1,10 +1,5 @@
-import { existsSync, readFileSync, realpathSync } from 'fs';
-import { dirname, join, relative, resolve } from 'path';
-
-import { parseInternalWire } from '../pipeline/internal-wire';
-import { isJsonBlock, isJsonString } from '../pipeline/tsconfig-paths';
-
-import type { JsonValue } from '../pipeline/tsconfig-paths';
+import { existsSync, readFileSync } from 'fs';
+import { join, relative, resolve } from 'path';
 
 /** Package specifier → rootDir-relative entry path. An unresolved specifier
  *  has no key at all, never a key with an empty target. */
@@ -12,101 +7,38 @@ export interface ResolvedPackageMap {
   [specifier: string]: string;
 }
 
-/** An exports target under the `import` condition, then `default`, as the
- *  system loader reads it; an array offers its targets in order. */
-function importTarget(value: JsonValue | undefined): string | null {
-  if (isJsonString(value)) return value;
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const target = importTarget(entry);
-      if (target !== null) return target;
-    }
-    return null;
-  }
-  if (!isJsonBlock(value)) return null;
-  return importTarget(value.import) ?? importTarget(value.default);
+/** A file a resolution names, by its real path, or why it names none. */
+export interface ResolvedFile {
+  path?: string | null;
+  unresolved?: string | null;
 }
 
-/** The exports entry for `subpath`: an exact key answers alone; otherwise
- *  the pattern with the longest prefix, then the longest suffix, wins. */
-function exportsTarget(exports: JsonValue, subpath: string): string | null {
-  const isMap =
-    isJsonBlock(exports) && Object.keys(exports).some((k) => k.startsWith('.'));
-  const map = isMap ? exports : { '.': exports };
-  if (subpath in map) return importTarget(map[subpath]);
-  let best: { prefix: string; suffix: string; value: JsonValue } | null = null;
-  for (const [pattern, value] of Object.entries(map)) {
-    const star = pattern.indexOf('*');
-    if (star === -1 || pattern.indexOf('*', star + 1) !== -1) continue;
-    const prefix = pattern.slice(0, star);
-    const suffix = pattern.slice(star + 1);
-    if (
-      !subpath.startsWith(prefix) ||
-      !subpath.endsWith(suffix) ||
-      subpath.length < prefix.length + suffix.length
-    ) {
-      continue;
-    }
-    if (
-      !best ||
-      prefix.length > best.prefix.length ||
-      (prefix.length === best.prefix.length &&
-        suffix.length > best.suffix.length)
-    ) {
-      best = { prefix, suffix, value };
-    }
-  }
-  if (!best) return null;
-  const matched = subpath.slice(
-    best.prefix.length,
-    subpath.length - best.suffix.length
-  );
-  return importTarget(best.value)?.replaceAll('*', matched) ?? null;
+/** Package resolution as the system loader resolves (the native module),
+ *  under the host's export conditions. */
+export interface PackageResolution {
+  /** A specifier, resolved from a directory. */
+  resolveSpecifier(
+    specifier: string,
+    fromDir: string,
+    conditions: readonly string[]
+  ): ResolvedFile;
+  /** The root entry of the package in a directory, located some other way. */
+  resolvePackageEntry(
+    packageDir: string,
+    conditions: readonly string[]
+  ): ResolvedFile;
 }
 
-/** The entry an ES import of `name` resolves to through the package's
- *  `exports`, under the `import` condition, then `default`: what the Vite
- *  host and the system loader resolve. Null without an `exports` field, or
- *  when no target exists. */
-function resolveImportEntry(rootDir: string, name: string): string | null {
-  const segments = name.split('/');
-  const packageName = segments.slice(0, name.startsWith('@') ? 2 : 1).join('/');
-  const subpath = `.${name.slice(packageName.length)}`;
-  for (let dir = rootDir; ; dir = dirname(dir)) {
-    const manifest = join(dir, 'node_modules', packageName, 'package.json');
-    if (existsSync(manifest)) {
-      let exports: JsonValue | undefined;
-      try {
-        const parsed = parseInternalWire<JsonValue>(
-          readFileSync(manifest, 'utf-8'),
-          `${manifest} (a package manifest)`
-        );
-        exports = isJsonBlock(parsed) ? parsed.exports : undefined;
-      } catch {
-        return null;
-      }
-      if (exports === undefined || exports === null) return null;
-      const target = exportsTarget(exports, subpath);
-      if (target === null) return null;
-      // Real path, as `require.resolve` and Vite return it: a workspace
-      // kit is reached through a node_modules link.
-      const entryPath = resolve(dirname(manifest), target);
-      return existsSync(entryPath) ? realpathSync(entryPath) : null;
-    }
-    if (dir === dirname(dir)) return null;
-  }
+/** The packages a session includes: each entry, and for each package that
+ *  names no file, why. */
+export interface ResolvedPackages {
+  entries: ResolvedPackageMap;
+  unresolved: { [specifier: string]: string };
 }
 
-export function resolvePackagesByName(
-  rootDir: string,
-  names: string[]
-): ResolvedPackageMap {
-  if (names.length === 0) return {};
-
-  const nameSet = new Set(names);
-  const resolved = new Set<string>();
-  const packageMap: ResolvedPackageMap = {};
-
+/** The session root's declared workspace directories; none when its
+ *  manifest is absent or declares none. */
+function workspaceDirs(rootDir: string): string[] {
   try {
     const rootPkg = JSON.parse(
       readFileSync(join(rootDir, 'package.json'), 'utf-8')
@@ -114,44 +46,69 @@ export function resolvePackagesByName(
     const workspaces: string[] = Array.isArray(rootPkg.workspaces)
       ? rootPkg.workspaces
       : (rootPkg.workspaces?.packages ?? []);
+    return workspaces.map((ws) => resolve(rootDir, ws));
+  } catch {
+    return [];
+  }
+}
 
-    for (const ws of workspaces) {
-      const wsDir = resolve(rootDir, ws);
-      if (!existsSync(wsDir)) continue;
+/** A workspace directory's package name; null for a directory that holds
+ *  no readable manifest, which is no package. */
+function workspaceName(wsDir: string): string | null {
+  try {
+    const pkg = JSON.parse(readFileSync(join(wsDir, 'package.json'), 'utf-8'));
+    return pkg.name || null;
+  } catch {
+    return null;
+  }
+}
 
-      try {
-        const pkg = JSON.parse(
-          readFileSync(join(wsDir, 'package.json'), 'utf-8')
-        );
-        const name: string = pkg.name || '';
+export function resolvePackagesByName(
+  rootDir: string,
+  names: string[],
+  resolution: PackageResolution,
+  conditions: readonly string[]
+): ResolvedPackages {
+  const packageMap: ResolvedPackageMap = {};
+  const unresolved: ResolvedPackages['unresolved'] = {};
+  if (names.length === 0) return { entries: packageMap, unresolved };
 
-        if (nameSet.has(name)) {
-          const main = pkg.main || pkg.module || 'index.ts';
-          const entryPath = resolve(wsDir, main);
-          if (existsSync(entryPath)) {
-            packageMap[name] = relative(rootDir, entryPath);
-            resolved.add(name);
-          }
-        }
-      } catch {}
+  const nameSet = new Set(names);
+  const resolved = new Set<string>();
+  // Why a located workspace package named no entry: its own evidence wins
+  // over the installed lookup's when neither finds a file.
+  const workspaceFailures = new Map<string, string>();
+
+  // The walk locates a workspace package; the loader selects its entry.
+  for (const wsDir of workspaceDirs(rootDir)) {
+    if (!existsSync(wsDir)) continue;
+    const name = workspaceName(wsDir);
+    if (name === null || !nameSet.has(name)) continue;
+    const entry = resolution.resolvePackageEntry(wsDir, conditions);
+    if (entry.path) {
+      packageMap[name] = relative(rootDir, entry.path);
+      resolved.add(name);
+    } else {
+      workspaceFailures.set(
+        name,
+        entry.unresolved ??
+          `${join(wsDir, 'package.json')} selects no entry file`
+      );
     }
-  } catch {}
-
-  // An ES import first, as the Vite host resolves it; `require.resolve`
-  // still answers for a package without `exports` or without an import or
-  // default target.
-  for (const name of nameSet) {
-    if (resolved.has(name)) continue;
-    const importEntry = resolveImportEntry(rootDir, name);
-    if (importEntry !== null) {
-      packageMap[name] = relative(rootDir, importEntry);
-      continue;
-    }
-    try {
-      const entryPath = require.resolve(name, { paths: [rootDir] });
-      packageMap[name] = relative(rootDir, entryPath);
-    } catch {}
   }
 
-  return packageMap;
+  // Every other package resolves as the system loader resolves it: its
+  // `animus` source condition first, then the host's conditions, `import`
+  // and `default`, then `module` before `main`.
+  for (const name of nameSet) {
+    if (resolved.has(name)) continue;
+    const entry = resolution.resolveSpecifier(name, rootDir, conditions);
+    if (entry.path) packageMap[name] = relative(rootDir, entry.path);
+    else {
+      unresolved[name] =
+        workspaceFailures.get(name) ?? entry.unresolved ?? 'it names no file';
+    }
+  }
+
+  return { entries: packageMap, unresolved };
 }

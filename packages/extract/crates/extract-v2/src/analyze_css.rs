@@ -605,6 +605,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::theme::AT_RULE_SELECTOR_NESTING, "error"),
     (crate::theme::AT_RULE_PLACEMENT, "error"),
     (crate::theme::FONT_FACE_DROPPED, "error"),
+    (crate::theme::FONT_FACE_GENERIC_FIRST_WORD, "warn"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -741,9 +742,9 @@ pub fn resolve_import_source<T>(
     probe_files(&base, files)
 }
 
-/// The analyzed file `base` names, through the extractor's extension policy.
+/// The analyzed file `base` names, through the one extension policy.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
-    animus_system_loader::resolution::ANALYSIS_SOURCE.probe(base, |candidate| files.contains_key(candidate))
+    animus_system_loader::resolution::extension_policy().probe(base, |candidate| files.contains_key(candidate))
 }
 
 /// Follow `export { X as Y } from '...'` hops, and local exports of an
@@ -1340,6 +1341,14 @@ fn dropped_style_key(
                  under it is not emitted — write the block under a selector of its own"
             );
             return diagnostic(file, component, "warn", message, Some(crate::theme::AT_RULE_SELECTOR_NESTING));
+        }
+        DroppedStyleKey::FontFaceGenericFirstWord { face, family } => {
+            let message = format!(
+                "the font face {face} prints its family as {family}, which starts with a generic family: Lightning \
+                 CSS, when it finalizes the stylesheet, writes it unquoted, and browsers then read the generic and \
+                 drop the face — rename the family so its first word is not a generic family"
+            );
+            return diagnostic(file, component, "warn", message, Some(crate::theme::FONT_FACE_GENERIC_FIRST_WORD));
         }
         DroppedStyleKey::FontFace { face, part, reason } => {
             let dropped = match part {
@@ -9406,6 +9415,9 @@ mod tests {
     #[test]
     fn typed_font_faces_print_their_sources_and_descriptors_and_report_what_they_leave_out() {
         let mut inputs = test_inputs();
+        inputs.theme.insert("fonts.brand".into(), "Inter".into());
+        inputs.theme.insert("fonts.body".into(), "Inter, system-ui, sans-serif".into());
+        inputs.theme.insert("fonts.mode".into(), "var(--mode-font)".into());
         inputs.global_style_blocks = Some(serde_json::json!({
             "fonts": {
                 "styles": {},
@@ -9427,23 +9439,52 @@ mod tests {
                             { "url": "./it's.woff" },
                             { "url": "./line\rbreak.woff" },
                             { "local": "Arial", "url": "./both.woff" },
-                            { "url": "./tech.woff", "tech": "variations;}" }
+                            { "url": "./tech.woff", "tech": "variations;}" },
+                            { "local": "sans-serif" }
                         ],
                         "weight": 400
                     },
                     { "src": [{ "local": "Arial" }] },
-                    { "family": "Empty", "src": [{ "format": "woff2" }] }
+                    { "family": "Empty", "src": [{ "format": "woff2" }] },
+                    // A face's family is one name, printed by the `local()` rule.
+                    { "family": "My Font 2", "src": [{ "local": "X" }] },
+                    { "family": "Helvetica Neue", "src": [{ "local": "X" }] },
+                    { "family": "serif", "src": [{ "local": "X" }] },
+                    { "family": "\"Quoted Name\"", "src": [{ "local": "X" }] },
+                    { "family": "{fonts.brand}", "src": [{ "local": "X" }] },
+                    { "family": "{fonts.body}", "src": [{ "local": "X" }] },
+                    { "family": "{fonts.mode}", "src": [{ "local": "X" }] },
+                    // A name's whitespace collapses and its escapes decode; a
+                    // generic first word stays quoted, and warns.
+                    { "family": "Helvetica  Neue", "src": [{ "local": "Y" }] },
+                    { "family": "Mon\\61  Sans", "src": [{ "local": "Y" }] },
+                    { "family": "serif Pro", "src": [{ "local": "Y" }] }
                 ]
             }
         }));
         let out = analyze(&[("a.tsx", "export const x = 1;\n")], &inputs);
         for face in [
             "@font-face { font-family: MonaFallback; src: local(Arial); size-adjust: 104%; ascent-override: 90%; font-feature-settings: \"ss01\"; }",
-            "@font-face { font-family: Mona; src: local(Mona Sans), local('Font Awesome 6'), local('inherit'), url('animus-asset:./mona.woff2') format('woff2') tech(variations), url('./it\\'s.woff'), url('./line\\d break.woff'); }",
+            "@font-face { font-family: Mona; src: local(Mona Sans), local('Font Awesome 6'), local('inherit'), url('animus-asset:./mona.woff2') format('woff2') tech(variations), url('./it\\'s.woff'), url('./line\\d break.woff'), local('sans-serif'); }",
+            "@font-face { font-family: 'My Font 2'; src: local(X); }",
+            "@font-face { font-family: Helvetica Neue; src: local(X); }",
+            "@font-face { font-family: 'serif'; src: local(X); }",
+            "@font-face { font-family: \"Quoted Name\"; src: local(X); }",
+            "@font-face { font-family: Inter; src: local(X); }",
+            "@font-face { font-family: Helvetica Neue; src: local(Y); }",
+            "@font-face { font-family: Mona Sans; src: local(Y); }",
+            "@font-face { font-family: 'serif Pro'; src: local(Y); }",
         ] {
             assert!(out.sheets.global.contains(face), "{face}\nmissing from:\n{}", out.sheets.global);
         }
-        assert_eq!(out.sheets.global.matches("@font-face").count(), 2, "{}", out.sheets.global);
+        assert_eq!(out.sheets.global.matches("@font-face").count(), 10, "{}", out.sheets.global);
+        let unquoted: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some("animus.style.font-face-generic-first-word"))
+            .map(|d| (d.component.as_str(), d.severity.as_deref()))
+            .collect();
+        assert_eq!(unquoted, [("global 'fonts'", Some("warn"))], "{:#?}", out.diagnostics);
         let dropped: Vec<_> = out
             .diagnostics
             .iter()
@@ -9459,6 +9500,8 @@ mod tests {
                 ("global 'fonts'", "the font face #3", Some("error")),
                 ("global 'fonts'", "source 1 of the font face 'Empty'", Some("error")),
                 ("global 'fonts'", "the font face 'Empty'", Some("error")),
+                ("global 'fonts'", "the font face '{fonts.body}'", Some("error")),
+                ("global 'fonts'", "the font face '{fonts.mode}'", Some("error")),
             ],
             "{:#?}",
             out.diagnostics

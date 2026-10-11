@@ -112,6 +112,7 @@ import type {
   ExternalPackageOutcome,
   KitDescriptorRecord,
 } from '../pipeline/index';
+import type { PackageResolution } from './resolve-packages';
 
 export type SessionOptions = AnimusCoreOptions;
 
@@ -980,23 +981,50 @@ export class ExtractionSession {
 
     bt.fileRead = this.elapsed(t);
 
-    // Workspace walk + require.resolve stays local (the Node-resolution
-    // seam); the traversal and ingest below are the shared collector.
+    // Package resolution, under the host's conditions as system loading has
+    // them: the workspace walk only locates a package, and every entry is
+    // selected as the system loader selects it. The traversal and ingest
+    // below are the shared collector.
     t = this.now();
+    const native = (name: 'resolveSpecifier' | 'resolvePackageEntry') => {
+      const found = engineApi()[name];
+      if (found === undefined) {
+        throw new Error(
+          `the native engine does not expose ${name}, which package resolution needs — rebuild @animus-ui/extract`
+        );
+      }
+      return found;
+    };
+    const packageResolution: PackageResolution = {
+      resolveSpecifier: (specifier, fromDir, conditions) =>
+        native('resolveSpecifier')(specifier, fromDir, [...conditions]),
+      resolvePackageEntry: (packageDir, conditions) =>
+        native('resolvePackageEntry')(packageDir, undefined, [...conditions]),
+    };
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
       engineModuleParser(engineApi()),
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
       (name) => {
-        const entry = resolvePackagesByName(rootDir, [name])[name];
+        const entry = resolvePackagesByName(
+          rootDir,
+          [name],
+          packageResolution,
+          this.conditions
+        ).entries[name];
         return entry ? resolve(rootDir, entry) : null;
       }
     );
     discoveryDiagnostics.push(
       ...importedKitDiagnostics(rawEntries, engineApi(), rootDir, packageNames)
     );
-    const preResolved = resolvePackagesByName(rootDir, packageNames);
+    const preResolved = resolvePackagesByName(
+      rootDir,
+      packageNames,
+      packageResolution,
+      this.conditions
+    );
 
     // Raw content hashes of every walked external file, keyed by absolute
     // path — recorded before MDX preprocessing so the diff sees raw bytes.
@@ -1005,7 +1033,10 @@ export class ExtractionSession {
     const collected = await collectExternalPackageSources({
       specifiers: packageNames,
       resolveSpecifier: (name) =>
-        preResolved[name] ? resolve(rootDir, preResolved[name]) : null,
+        preResolved.entries[name]
+          ? resolve(rootDir, preResolved.entries[name])
+          : null,
+      unresolvedReason: (name) => preResolved.unresolved[name],
       rootDir,
       extensionsSet,
       hasEntry: (relPath) => rawEntries.some((e) => e.path === relPath),
@@ -1047,7 +1078,10 @@ export class ExtractionSession {
         reportErrors: this.reportErrors(),
       }
     );
-    const unresolvableMessage = unresolvableIncludesMessage(collected.outcomes);
+    const unresolvableMessage = unresolvableIncludesMessage(
+      collected.outcomes,
+      relative(rootDir, resolvedSystemPath)
+    );
     if (unresolvableMessage !== null) {
       if (this.options.strict) this.strictFailure(unresolvableMessage);
       else this.warn(unresolvableMessage);
