@@ -11,6 +11,7 @@ import {
   rollupExtensionPolicy,
   viteAssetClassification,
   viteExtensionPolicy,
+  viteHostExpander,
   webpackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -37,6 +38,7 @@ import type {
   AnimusMode,
   HostAssetClassification,
   HostExtensionPolicy,
+  HostLoadExpander,
 } from '@animus-ui/extract/pipeline';
 import type { SessionKey } from '@animus-ui/extract/session';
 import type {
@@ -372,6 +374,9 @@ export const unpluginFactory: UnpluginFactory<
   let hostExtensions: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
   let hostAssets: HostAssetClassification =
     builtInAssetClassification('noHost');
+  /** How the bundler expands computed loads (spec §6.3); none where its
+   *  expansion is not reproduced. */
+  let hostLoadExpander: HostLoadExpander | undefined;
   /** Hooks can fire before buildStart (webpack's make taps run
    *  concurrently), so joiners await this before awaiting the pipeline. */
   let signalPipelineStarted!: () => void;
@@ -442,6 +447,7 @@ export const unpluginFactory: UnpluginFactory<
       session.conditions = hostConditions;
       session.extensionPolicy = hostExtensions;
       session.assetClassification = hostAssets;
+      session.loadExpander = hostLoadExpander;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
       // Each full pass re-reads the tsconfig aliases.
       session.aliasesFromTsconfig = true;
@@ -708,12 +714,18 @@ export const unpluginFactory: UnpluginFactory<
       // serving or `build.watch` runs another turn.
       configResolved(config: {
         command: string;
+        root: string;
         build: { watch?: unknown };
-        resolve: { extensions: string[] };
+        resolve: {
+          extensions: string[];
+          alias?: ReadonlyArray<{ find: string | RegExp }>;
+        };
         assetsInclude: (file: string) => boolean;
+        environments?: Parameters<typeof viteHostExpander>[0]['environments'];
       }) {
         hostExtensions = viteExtensionPolicy(config.resolve.extensions);
         hostAssets = viteAssetClassification(config.assetsInclude);
+        hostLoadExpander = viteHostExpander(config);
         const serving =
           config.command === 'serve' || Boolean(config.build.watch);
         watching = () => serving;
