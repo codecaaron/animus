@@ -253,7 +253,7 @@ export {
   viteAssetClassification,
 } from './host-assets';
 export type { HostAssetClassification } from './host-assets';
-export { viteLoadExpander } from './vite-expansions';
+export { viteHostExpander, viteLoadExpander } from './vite-expansions';
 export type {
   ExpandedPath,
   HostLoadExpander,

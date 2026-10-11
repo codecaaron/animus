@@ -1,5 +1,5 @@
-import { readdirSync } from 'node:fs';
-import { dirname, posix, relative, resolve, sep } from 'node:path';
+import { readdirSync, realpathSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, posix, relative, resolve, sep } from 'node:path';
 
 import type {
   ExpandedPath,
@@ -71,6 +71,10 @@ function resolveGlob(
   const parts = body.split('/').filter((part) => part !== '' && part !== '.');
   let base = start;
   let index = 0;
+  // Every segment is read, the fixed directories included.
+  if (parts.some((part) => part !== '..' && UNREAD_SYNTAX.test(part))) {
+    return undefined;
+  }
   // The fixed directories before the first glob segment.
   while (index < parts.length - 1 && !/[*{}]/.test(parts[index]!)) {
     base = parts[index] === '..' ? dirname(base) : resolve(base, parts[index]!);
@@ -107,20 +111,33 @@ function matches(
   return segment.test.test(name) && matches(rest, more, dot);
 }
 
-/** Every file below `dir`, as the names from `dir` down. */
-function walk(dir: string, prefix: readonly string[] = []): string[][] {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const files: string[][] = [];
-  for (const entry of entries) {
-    const names = [...prefix, entry.name];
-    if (entry.isDirectory())
-      files.push(...walk(`${dir}${sep}${entry.name}`, names));
-    else if (entry.isFile()) files.push(names);
+/** A file below a glob's base: the names from the base down, its path
+ *  through them, and the real path the bundler loads it by. */
+interface WalkedFile {
+  names: string[];
+  path: string;
+  real: string;
+}
+
+/** Every file below `dir`, following symbolic links as Vite does, each
+ *  directory once by its real path. A read the walk cannot finish throws:
+ *  the expansion would not be every file. */
+function walk(
+  dir: string,
+  prefix: readonly string[] = [],
+  visited: ReadonlySet<string> = new Set()
+): WalkedFile[] {
+  const real = realpathSync(dir);
+  if (visited.has(real)) return [];
+  const inside = new Set(visited).add(real);
+  const files: WalkedFile[] = [];
+  for (const name of readdirSync(dir)) {
+    const path = `${dir}${sep}${name}`;
+    const names = [...prefix, name];
+    const stat = statSync(path);
+    if (stat.isDirectory()) files.push(...walk(path, names, inside));
+    else if (stat.isFile())
+      files.push({ names, path, real: realpathSync(path) });
   }
   return files;
 }
@@ -137,17 +154,16 @@ function expandGlobs(
   const negated = globs.filter((glob) => glob.negated);
   const inside = (glob: ResolvedGlob, file: string) => {
     const rel = relative(glob.base, file);
-    if (rel.startsWith('..')) return false;
+    if (isAbsolute(rel) || rel.split(sep)[0] === '..') return false;
     return matches(glob.segments, rel.split(sep), exhaustive);
   };
   const selected = new Set<string>();
   for (const glob of affirmed) {
-    for (const names of walk(glob.base)) {
+    for (const { names, path, real } of walk(glob.base)) {
       if (!exhaustive && names.includes('node_modules')) continue;
-      const file = resolve(glob.base, ...names);
-      if (file === importer || !inside(glob, file)) continue;
-      if (negated.some((other) => inside(other, file))) continue;
-      selected.add(file);
+      if (path === importer || !inside(glob, path)) continue;
+      if (negated.some((other) => inside(other, path))) continue;
+      selected.add(real);
     }
   }
   return [...selected].sort();
@@ -256,10 +272,86 @@ export function viteLoadExpander(
         globs.push(glob);
       }
       if (!globs.some((glob) => !glob.negated)) return undefined;
-      return expandGlobs(globs, importer, exhaustive).map((file) => ({
-        path: relative(rootDir, file).split(sep).join(posix.sep),
+      let files: string[];
+      let realRoot: string;
+      try {
+        files = expandGlobs(globs, importer, exhaustive);
+        realRoot = realpathSync(rootDir);
+      } catch {
+        // An unreadable directory, or a link that cannot be followed.
+        return undefined;
+      }
+      // Each file by the real path the bundler loads it by.
+      return files.map((file) => ({
+        path: relative(realRoot, file).split(sep).join(posix.sep),
         query,
       }));
     },
   };
+}
+
+/** A Vite alias as its resolved configuration holds it. */
+interface ViteAlias {
+  find: string | RegExp;
+}
+
+/** One resolved Vite environment, as the expander reads it. */
+interface ViteEnvironmentReading {
+  isBundled?: boolean;
+  build?: {
+    dynamicImportVarsOptions?: { include?: unknown; exclude?: unknown };
+  };
+}
+
+/** Whether `build.dynamicImportVarsOptions` are Vite's default, which
+ *  transforms every importer outside `node_modules`. */
+function defaultImportVars(
+  options: { include?: unknown; exclude?: unknown } | undefined
+): boolean {
+  const exclude = options?.exclude;
+  return (
+    options?.include === undefined &&
+    Array.isArray(exclude) &&
+    exclude.length === 1 &&
+    exclude[0] instanceof RegExp &&
+    exclude[0].source === 'node_modules' &&
+    exclude[0].flags === ''
+  );
+}
+
+/** Whether an alias could rewrite a relative or root specifier, which the
+ *  expander reads without the resolver. */
+function aliasesRelative(aliases: readonly ViteAlias[] | undefined): boolean {
+  return (aliases ?? []).some(
+    ({ find }) =>
+      find instanceof RegExp || find.startsWith('.') || find.startsWith('/')
+  );
+}
+
+/**
+ * The expander for a resolved Vite configuration: only where every
+ * environment is bundled (Vite 8, rolldown's native plugins; an earlier
+ * Vite marks none), and no alias could rewrite a relative or root
+ * specifier. A variable `import()` is expanded only where every environment
+ * keeps Vite's default dynamic-import-vars options.
+ */
+export function viteHostExpander(config: {
+  root: string;
+  resolve?: { alias?: readonly ViteAlias[] };
+  environments?: Record<string, ViteEnvironmentReading>;
+}): HostLoadExpander | undefined {
+  const environments = Object.values(config.environments ?? {});
+  if (
+    environments.length === 0 ||
+    !environments.every((environment) => environment.isBundled === true) ||
+    aliasesRelative(config.resolve?.alias)
+  ) {
+    return undefined;
+  }
+  return viteLoadExpander(
+    config.root,
+    environments.every((environment) =>
+      defaultImportVars(environment.build?.dynamicImportVarsOptions)
+    )
+  );
 }
