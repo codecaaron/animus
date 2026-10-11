@@ -1,5 +1,5 @@
 import { ENGINE_TRANSFORM_EXTENSIONS } from '@animus-ui/extract/pipeline';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -170,6 +170,38 @@ describe('withAnimus', () => {
       })
     );
     expect(plugin.sessionDir).toBe(sessionDir);
+  });
+
+  /** Contract: an equivalent compiler context is the same root (SA2). */
+  test('an equivalent compiler context is accepted as the configured root', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'animus-next-equivalent-'));
+    temporaryRoots.push(parent);
+    const appDir = join(parent, 'app');
+    mkdirSync(appDir);
+    const linked = join(parent, 'linked');
+    symlinkSync(appDir, linked);
+    vi.spyOn(process, 'cwd').mockReturnValue(appDir);
+    const wrapped = withAnimus({ system: './src/ds.ts' })({});
+    if (!('webpack' in wrapped)) {
+      throw new Error('withAnimus returned the Turbopack branch');
+    }
+    const plugin = injectedAnimusPlugin(
+      wrapped.webpack?.({}, { dir: appDir })?.plugins
+    );
+    const adopt = plugin['adoptCompilerContext'].bind(plugin);
+    for (const context of [`${appDir}/`, linked]) {
+      expect(() =>
+        adopt({
+          context,
+          hooks: {
+            run: { tapPromise: () => {} },
+            watchRun: { tapPromise: () => {} },
+            compilation: { tap: () => {} },
+            thisCompilation: { tap: () => {} },
+          },
+        })
+      ).not.toThrow();
+    }
   });
 
   /** An app under a parent directory that declares one source kit; the

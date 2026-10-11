@@ -29,6 +29,7 @@ import { bindTurbopackWatchDeathReport, withAnimus } from '../src/with-animus';
 import type { AnalyzeProjectInputs } from '../../extract/pipeline';
 import type { TurbopackWatcherHandle } from '../../extract/session/turbopack-orchestrator';
 import type { TurbopackLoaderOptions } from '../src/turbopack-loader';
+import type { AnimusNextOptions } from '../src/types';
 import type { TurbopackNextConfigObject } from '../src/with-animus';
 import type { JsonValue } from '@animus-ui/assertions';
 import type {
@@ -212,6 +213,22 @@ describe('withAnimus Turbopack wiring', () => {
     expect(warned.some((line) => line.includes('holds no next.config'))).toBe(
       true
     );
+  });
+
+  /** Contract: v2 is the only engine, rejected before the native module
+   *  loads (SA2): a Turbopack config naming another fails at withAnimus(). */
+  test('a Turbopack config naming an engine other than v2 fails before native loads', () => {
+    process.chdir(createProject());
+    const options = {
+      system: './src/system.ts',
+      engine: 'v3',
+      turbopack: { mode: 'on' },
+    };
+    // SAFETY: Crosses the typed option boundary as a JavaScript config may.
+    expect(() => withAnimus(options as AnimusNextOptions)).toThrow(
+      expect.objectContaining({ name: 'AnimusConfigError' })
+    );
+    expect(mocks.loadSystemModule).not.toHaveBeenCalled();
   });
 
   /** Contract: two builds of one root never share state. Two config
