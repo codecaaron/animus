@@ -188,7 +188,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       const kits = sourceKitConfig(
         resolve(userConfig.root ?? process.cwd()),
         env.command === 'serve',
-        ctx.engineApi()
+        ctx.kitEngine()
       );
       return kits ? { define, ...kits } : { define };
     },
@@ -202,6 +202,12 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
     configResolved(config) {
       applyResolvedConfig(ctx, config);
+    },
+
+    // The end of a build, and of a dev server, which Vite closes the same
+    // way: the context's engine is released with it.
+    closeBundle() {
+      ctx.releaseEngine();
     },
 
     async buildStart() {

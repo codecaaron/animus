@@ -209,6 +209,18 @@ describe('turbopack loader hydration', () => {
     expect(mocks.analyzeProject.mock.calls.length).toBe(before + 1);
   });
 
+  /** Contract: engine state is per build (SA18). A worker serving two
+   *  builds keeps each build's hydration, so alternating needs none again. */
+  test('a worker alternating two builds hydrates each once', async () => {
+    const source = 'export const a = 1;\n';
+    const roots = [0, 1].map(() => makeRoot([{ path: 'app/a.tsx', source }]));
+    const before = mocks.analyzeProject.mock.calls.length;
+    for (const root of [roots[0], roots[1], roots[0]]) {
+      await runLoader(root, 'app/a.tsx', source);
+    }
+    expect(mocks.analyzeProject.mock.calls.length).toBe(before + 2);
+  });
+
   test('fails loudly when the loader runner cannot run it async', () => {
     const root = makeRoot([]);
     const ctx: ThisParameterType<typeof animusTurbopackLoader> = {
