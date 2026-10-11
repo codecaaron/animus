@@ -98,8 +98,8 @@ pub fn strip_typescript_module(source: &str, file_path: &str) -> Result<String, 
 /// What a resolution resolves under (pipeline spec §2.2): the host's export
 /// conditions, in its order, the session root's declared workspace
 /// packages, by name, at their canonical directories, and the host's
-/// extension order (A2), which no probe reads yet: the built-in policy
-/// answers until each host's order is measured against it.
+/// extension order (A2), through which every relative and package-entry
+/// probe reads candidates; the built-in policy where no host resolves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolutionContext {
     pub conditions: Vec<String>,
@@ -133,7 +133,7 @@ pub fn resolve_bare_specifier(
         // for a workspace package nothing links there.
         Err(missing) => context.workspaces.get(pkg_name).map(|dir| dir.join("package.json")).ok_or(missing)?,
     };
-    select_package_entry(pkg_json_path, subpath, &context.conditions, specifier)
+    select_package_entry(pkg_json_path, subpath, context, specifier)
 }
 
 /// `path` with its links and `.` segments resolved, as `require.resolve`
@@ -152,9 +152,10 @@ fn real_path(path: PathBuf) -> PathBuf {
 fn select_package_entry(
     pkg_json_path: PathBuf,
     subpath: &str,
-    conditions: &[String],
+    context: &ResolutionContext,
     specifier: &str,
 ) -> Result<(String, PathBuf), String> {
+    let conditions = &context.conditions;
     let pkg_dir = pkg_json_path
         .parent()
         .ok_or_else(|| format!("invalid package.json path: {:?}", pkg_json_path))?;
@@ -176,6 +177,16 @@ fn select_package_entry(
         // runtime target differing only in case names no file.
         for source in [true, false] {
             if let Some(resolved) = resolve_exports_entry(exports, export_key, source, conditions) {
+                // Node reads a target as a URL and decodes its escapes; each
+                // decoding rule is another way to name a file Node refuses,
+                // so an escape is refused, loudly, where Node may load it.
+                if resolved.contains('%') {
+                    return Err(format!(
+                        "could not resolve '{specifier}': {pkg_json_path:?} exports {resolved:?} for \
+                         '{export_key}' — percent-escape unsupported: spell the target and the \
+                         specifier without '%'"
+                    ));
+                }
                 // `..` taken back lexically, as Node resolves a target: the
                 // path checked is the path opened.
                 let abs_path = resolution::lexical(&pkg_dir.join(&resolved)).to_string_lossy().to_string();
@@ -209,7 +220,8 @@ fn select_package_entry(
     // the selection. An entry's `..` is taken back lexically, as Node
     // resolves it, so the file checked is the file opened.
     let probe = |entry: &str| {
-        resolution::extension_policy()
+        context
+            .extensions
             .probe(&resolution::lexical(&pkg_dir.join(entry)).to_string_lossy(), |candidate| {
                 resolution::see_within(pkg_dir, candidate)
             })
@@ -300,13 +312,14 @@ fn resolve_exports_entry(
     if !has_subpaths {
         return (lookup_key == ".")
             .then(|| resolve_condition_value(exports, source, conditions))
-            .flatten();
+            .flatten()
+            .map(|target| target_path(&target));
     }
 
     // An exact key answers alone: a declared key whose target resolves to
     // nothing is a blocked subpath, not an invitation to try the patterns.
     if let Some(entry) = exports.get(&lookup_key) {
-        return resolve_condition_value(entry, source, conditions);
+        return resolve_condition_value(entry, source, conditions).map(|target| target_path(&target));
     }
 
     resolve_exports_pattern(exports.as_object()?, &lookup_key, source, conditions)
@@ -352,32 +365,24 @@ fn resolve_exports_pattern(
     if refused_pattern_match(matched) {
         return None;
     }
-    Some(resolve_condition_value(value, source, conditions)?.replace('*', matched))
+    Some(target_path(&resolve_condition_value(value, source, conditions)?.replace('*', matched)))
+}
+
+/// The path an `exports` target names, read as Node reads a URL: a raw
+/// backslash is a `/`. A target holding a percent-escape is refused where
+/// the entry is selected (`select_package_entry`).
+fn target_path(target: &str) -> String {
+    target.replace('\\', "/")
 }
 
 /// Whether Node refuses a pattern's match (`ERR_INVALID_MODULE_SPECIFIER`):
-/// a segment that is `.`, `..` or `node_modules`, in any case and
-/// percent-encoded. An empty segment loads (only deprecated, DEP0166).
+/// a segment that is `.`, `..` or `node_modules`, in any case. A
+/// percent-encoded one is refused with every escape. An empty segment
+/// loads (only deprecated, DEP0166).
 fn refused_pattern_match(matched: &str) -> bool {
-    matched.split(['/', '\\']).any(|segment| {
-        let bytes = segment.as_bytes();
-        let mut decoded = String::new();
-        let mut index = 0;
-        while index < bytes.len() {
-            let hex = segment.get(index + 1..index + 3).and_then(|hex| u8::from_str_radix(hex, 16).ok());
-            match (bytes[index], hex) {
-                (b'%', Some(byte)) => {
-                    decoded.push(char::from(byte));
-                    index += 3;
-                }
-                (byte, _) => {
-                    decoded.push(char::from(byte));
-                    index += 1;
-                }
-            }
-        }
-        matches!(decoded.to_ascii_lowercase().as_str(), "." | ".." | "node_modules")
-    })
+    matched
+        .split(['/', '\\'])
+        .any(|segment| matches!(segment.to_ascii_lowercase().as_str(), "." | ".." | "node_modules"))
 }
 
 /// With `source`, a kit's `animus` condition, its original source, which
@@ -465,7 +470,7 @@ pub fn resolve_specifier(
     context: &ResolutionContext,
 ) -> Result<(PathBuf, Option<PathBuf>), String> {
     if specifier.starts_with('.') || specifier.starts_with('/') {
-        resolve_relative(Path::new(from_dir), specifier)
+        resolve_relative(Path::new(from_dir), specifier, &context.extensions)
             .map(|path| (real_path(PathBuf::from(path)), None))
             .map_err(|miss| match miss {
                 RelativeMiss::Absent => format!("could not resolve '{specifier}' from {from_dir:?}"),
@@ -484,12 +489,16 @@ enum RelativeMiss {
     CaseMismatch(String),
 }
 
-fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, RelativeMiss> {
+fn resolve_relative(
+    base_dir: &Path,
+    specifier: &str,
+    policy: &resolution::ExtensionPolicy,
+) -> Result<String, RelativeMiss> {
     // Appended, not replaced: `./tokens.theme` names `tokens.theme.ts`. `..`
     // is taken back lexically, as Node resolves it, so the file checked is
     // the file opened.
     let target = resolution::lexical(&base_dir.join(specifier)).to_string_lossy().to_string();
-    match resolution::extension_policy().probe(&target, |candidate| resolution::see_within(base_dir, candidate)) {
+    match policy.probe(&target, |candidate| resolution::see_within(base_dir, candidate)) {
         resolution::Probe::Found(path) => Ok(path),
         resolution::Probe::CaseMismatch { candidate, actual } => {
             Err(RelativeMiss::CaseMismatch(resolution::case_mismatch_reason(
@@ -765,7 +774,7 @@ pub fn resolve_all_deps(
                 ));
             }
             if spec.starts_with('.') || spec.starts_with('/') {
-                match resolve_relative(current_dir, spec) {
+                match resolve_relative(current_dir, spec, &context.extensions) {
                     Ok(resolved) => {
                         let canonical = fs::canonicalize(&resolved)
                             .unwrap_or_else(|_| PathBuf::from(&resolved))
@@ -2217,7 +2226,17 @@ export const ds = tokens;
         // link's parent holds.
         package("linked-main", serde_json::json!({ "main": "./link/../token.ts" }), &["token.ts", "other/Token.ts", "other/sub/x.ts"]);
         // A pattern's match may not hold `..`, as Node refuses it.
-        package("wild", serde_json::json!({ "exports": { "./*": "./src/*.ts" } }), &["src/token.ts", "src/a/b.ts"]);
+        package(
+            "wild",
+            serde_json::json!({ "exports": { "./*": "./src/*.ts" } }),
+            &["src/token.ts", "src/a/b.ts", "src/a%2fb.ts", "src/a b.ts", "src/a%20b.ts", "src/a\u{f}b.ts"],
+        );
+        // An exact target holding an escape, beside the file each reading
+        // names.
+        package("exact-escape", serde_json::json!({ "exports": { ".": "./src/a%20b.ts" } }), &["src/a b.ts", "src/a%20b.ts"]);
+        package("exact-dots", serde_json::json!({ "exports": { ".": "./src/%2e%2e/token.ts" } }), &["token.ts", "src/token.ts"]);
+        #[cfg(unix)]
+        fs::write(dir.join("node_modules/wild/src/a\\b.ts"), "export {};\n").expect("write backslash name");
         #[cfg(unix)]
         std::os::unix::fs::symlink(
             dir.join("node_modules/linked-main/other/sub"),
@@ -2248,6 +2267,19 @@ export const ds = tokens;
         assert!(resolved("wild/link/../token", &[]).is_err(), "a `..` in a pattern's match is refused");
         // An empty segment is not refused, as Node 24 loads it.
         assert_eq!(resolved("wild/a//b", &[]).as_deref(), Ok("wild/src/a/b.ts"));
+        // The substituted target is read as Node reads a URL: an encoded
+        // separator is refused, though a file is spelled so, and a raw
+        // backslash is a `/`, though a file holds one in its name.
+        assert!(resolved("wild/a%2fb", &[]).is_err(), "an encoded `/` is refused");
+        assert!(resolved("wild/a%5Cb", &[]).is_err(), "an encoded `\\` is refused");
+        // Any other escape is refused loudly, in a target or a match: Node
+        // decodes it, and each decoding rule names a file another way.
+        for specifier in ["wild/a%20b", "wild/a%+fb", "exact-escape", "exact-dots"] {
+            let error = resolved(specifier, &[]).expect_err("a percent-escape names no file");
+            assert!(error.contains("percent-escape unsupported"), "{specifier}: {error}");
+        }
+        #[cfg(unix)]
+        assert_eq!(resolved("wild/a\\b", &[]).as_deref(), Ok("wild/src/a/b.ts"));
         // Where the filesystem opens the misspelled entry, the selection
         // fails naming the file it opens; elsewhere it names no file.
         for (specifier, spelled, actual) in [("case-runtime", "dist/Index.js", "dist/index.js"), ("case-main", "Main.js", "main.js")] {
@@ -2263,29 +2295,49 @@ export const ds = tokens;
     /// evaluation, on disk, and for an analysis, in its file set.
     #[test]
     fn one_extension_policy_answers_system_and_analysis_alike() {
-        // Each row: the files present, the specifier, the file it names. The
-        // competing rows pin the order: appended extensions, index files and
-        // NodeNext sources each in policy order, an appended file before an
-        // index, and the literal spelling before any source it stands for.
-        let witnesses: [(&[&str], &str, Option<&str>); 15] = [
-            (&["x.ts"], "./x.js", Some("x.ts")),
-            (&["x.js", "x.ts"], "./x.js", Some("x.js")),
-            (&["x.tsx"], "./x.jsx", Some("x.tsx")),
-            (&["x.mts"], "./x.mjs", Some("x.mts")),
-            (&["x.cts"], "./x.cjs", Some("x.cts")),
-            // Exact case: `.JS` is no emitted `.js`, so nothing stands for it.
-            (&["x.ts"], "./x.JS", None),
-            (&["x.jsx"], "./x", Some("x.jsx")),
-            (&["x.mjs"], "./x", Some("x.mjs")),
-            (&["x.ts", "x.tsx", "x.js", "x.jsx", "x.mjs"], "./x", Some("x.ts")),
-            (&["x.tsx", "x.js"], "./x", Some("x.tsx")),
-            (&["x.jsx", "x.mjs"], "./x", Some("x.jsx")),
-            (&["x/index.ts", "x/index.tsx", "x/index.js"], "./x", Some("x/index.ts")),
-            (&["x.ts", "x/index.ts"], "./x", Some("x.ts")),
-            (&["x.ts", "x.tsx", "x.jsx"], "./x.js", Some("x.ts")),
-            (&["x.tsx", "x.jsx"], "./x.js", Some("x.tsx")),
+        // Contract: extraction opens the file the host resolver opens. Each
+        // row: a host's order, the files present, the specifier, the file it
+        // names, for a system's evaluation and for an analysis alike.
+        let owned = |list: &[&str]| list.iter().map(|item| item.to_string()).collect::<Vec<_>>();
+        let order = |appended: &[&str], node_next: &[(&str, &[&str])], alias: &[(&str, &[&str])]| {
+            resolution::ExtensionPolicy {
+                appended: owned(appended),
+                node_next: node_next.iter().map(|(from, to)| (from.to_string(), owned(to))).collect(),
+                alias: alias.iter().map(|(from, to)| (from.to_string(), owned(to))).collect(),
+            }
+        };
+        let typescript_outputs: &[(&str, &[&str])] =
+            &[(".js", &[".ts", ".tsx"]), (".jsx", &[".tsx"]), (".mjs", &[".mts"]), (".cjs", &[".cts"])];
+        let built_in = resolution::extension_policy().clone();
+        let vite = order(&[".mjs", ".js", ".mts", ".ts", ".jsx", ".tsx", ".json"], typescript_outputs, &[]);
+        let next_webpack = order(&[".js", ".mjs", ".tsx", ".ts", ".jsx", ".json", ".wasm"], &[], &[]);
+        let turbopack = order(&[".tsx", ".ts", ".jsx", ".js", ".mjs", ".json"], &[], &[]);
+        let alias_only = order(&[".js", ".json", ".wasm"], &[], &[(".js", &[".ts"])]);
+        let alias_then_js = order(&[".js", ".json", ".wasm"], &[], &[(".js", &[".ts", ".js"])]);
+        let alias_appending_ts = order(&[".js", ".ts"], &[], &[(".js", &[".ts"])]);
+        let multi_dot_alias = order(&[".js", ".tsx"], &[], &[(".view.js", &[".tsx"])]);
+        /// A host, its order, the files present, the specifier, the file named.
+        type Row<'r> = (&'r str, &'r resolution::ExtensionPolicy, &'r [&'r str], &'r str, Option<&'r str>);
+        let rows: [Row; 13] = [
+            ("vite", &vite, &["a.ts", "a.js"], "./a", Some("a.js")),
+            ("vite", &vite, &["a.jsx", "a.mjs"], "./a", Some("a.mjs")),
+            ("built-in", &built_in, &["a.js", "a.ts"], "./a.js", Some("a.js")),
+            ("vite", &vite, &["a.js", "a.ts"], "./a.js", Some("a.js")),
+            ("next-webpack", &next_webpack, &["a.js", "a.ts"], "./a.js", Some("a.js")),
+            ("turbopack", &turbopack, &["a.js", "a.ts"], "./a.js", Some("a.js")),
+            // `.JS` is no emitted `.js`, and no candidate is a case variant.
+            ("built-in", &built_in, &["a.ts"], "./a.JS", None),
+            // A configured alias replaces the literal try, in its order.
+            ("webpack alias ['.ts']", &alias_only, &["y.js"], "./y.js", None),
+            ("webpack alias ['.ts']", &alias_only, &["y.ts", "y.js"], "./y.js", Some("y.ts")),
+            ("webpack alias ['.ts', '.js']", &alias_then_js, &["x.ts", "x.js"], "./x.js", Some("x.ts")),
+            // An exhausted alias ends resolution: no appended or index try.
+            ("webpack alias ['.ts'], appending .ts", &alias_appending_ts, &["a.js.ts"], "./a.js", None),
+            ("webpack alias ['.ts']", &alias_only, &["a.js/index.js"], "./a.js", None),
+            // An alias key is the configured suffix, however many dots.
+            ("webpack alias '.view.js'", &multi_dot_alias, &["x.tsx", "x.view.js"], "./x.view.js", Some("x.tsx")),
         ];
-        for (index, (present, specifier, expected)) in witnesses.into_iter().enumerate() {
+        for (index, (host, policy, present, specifier, expected)) in rows.into_iter().enumerate() {
             let dir = scratch_dir(&format!("extension-policy-{index}"));
             for file in present {
                 let path = dir.join(file);
@@ -2293,18 +2345,18 @@ export const ds = tokens;
                 fs::write(path, "export {};\n").expect("write witness");
             }
             let prefix = format!("{}/", dir.to_string_lossy());
-            let system = resolve_relative(&dir, specifier)
+            let system = resolve_relative(&dir, specifier, policy)
                 .map(|path| path.trim_start_matches(&prefix).trim_start_matches("./").to_string())
                 .ok();
             let base = specifier.trim_start_matches("./");
-            let analysis = resolution::extension_policy()
+            let analysis = policy
                 .probe(base, |candidate| match present.contains(&candidate) {
                     true => resolution::Seen::File,
                     false => resolution::Seen::Missing,
                 })
                 .found();
-            assert_eq!(system.as_deref(), expected, "system: {present:?} {specifier}");
-            assert_eq!(analysis.as_deref(), expected, "analysis: {present:?} {specifier}");
+            assert_eq!(system.as_deref(), expected, "system, {host}: {present:?} {specifier}");
+            assert_eq!(analysis.as_deref(), expected, "analysis, {host}: {present:?} {specifier}");
             let _ = fs::remove_dir_all(&dir);
         }
         // A candidate the filesystem opens under a spelling no directory
@@ -2326,7 +2378,7 @@ export const ds = tokens;
                 fs::write(dir.join(file), "export {};\n").expect("write witness");
             }
             let opens = dir.join(asked).is_file();
-            let resolved = resolve_relative(&dir, specifier);
+            let resolved = resolve_relative(&dir, specifier, resolution::extension_policy());
             let _ = fs::remove_dir_all(&dir);
             match (opens, resolved, exact) {
                 (true, Err(RelativeMiss::CaseMismatch(reason)), _) => {
@@ -2359,7 +2411,7 @@ export const ds = tokens;
         fs::write(dir.join("sub/x.ts"), "export {};\n").expect("write witness");
         let name = dir.file_name().expect("a scratch dir has a name").to_string_lossy().to_ascii_uppercase();
         let host_root = dir.with_file_name(name);
-        match (host_root.exists(), resolve_relative(&host_root, "./sub/x")) {
+        match (host_root.exists(), resolve_relative(&host_root, "./sub/x", resolution::extension_policy())) {
             (true, Ok(path)) => assert!(path.ends_with("sub/x.ts"), "{path}"),
             (false, Err(RelativeMiss::Absent)) => {}
             (opens, Ok(path)) => panic!("opens root {opens}: resolved to {path}"),

@@ -324,6 +324,7 @@ export class ExtractionSession {
     strict: () => !!this.options.strict,
     warn: (message: string) => this.warn(message),
     reportErrors: () => this.reportErrors(),
+    extensions: () => this.extensionPolicy,
   });
 
   // Membership keys (lexical + canonical) for the system's evaluated module
@@ -1068,7 +1069,8 @@ export class ExtractionSession {
           context
         ).entries[name];
         return entry ? resolve(rootDir, entry) : null;
-      }
+      },
+      context.extensions
     );
     discoveryDiagnostics.push(
       ...importedKitDiagnostics(
@@ -1090,6 +1092,7 @@ export class ExtractionSession {
     const rawExternalFiles = new Map<string, string>();
 
     const collected = await collectExternalPackageSources({
+      extensions: context.extensions,
       specifiers: packageNames,
       resolveSpecifier: (name) =>
         preResolved.entries[name]
@@ -1575,6 +1578,7 @@ export class ExtractionSession {
         outputDirs: this.externalOutputDirs.map((dir) =>
           relative(this.rootDir!, dir)
         ),
+        extensions: this.extensionPolicy,
       },
     };
 
