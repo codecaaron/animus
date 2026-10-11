@@ -132,7 +132,7 @@ fn fold_system_input(hash: u64, json: Option<&str>) -> u64 {
 }
 
 /// Each keyframes collection's export and key, and the name its CSS takes.
-fn keyframe_names(blocks: Option<&Value>) -> Vec<(&str, &str, Option<&str>)> {
+pub(crate) fn keyframe_names(blocks: Option<&Value>) -> Vec<(&str, &str, Option<&str>)> {
     let collections = blocks.and_then(Value::as_object).into_iter().flatten();
     collections
         .flat_map(|(export, collection)| {
@@ -559,6 +559,7 @@ const INVALID_OPACITY_MODIFIER: &str = "animus.style.invalid-opacity-modifier";
 pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::eval::SELECTOR_UNSUPPORTED_SUBJECT, "error"),
     (crate::eval::KEYFRAMES_UNREGISTERED_REFERENCE, "warn"),
+    (crate::keyframe_aliases::RAW_ALIAS_STRING, "warn"),
     (COMPOSE_UNRESOLVABLE_SLOT, "error"),
     (UNSUPPORTED_MEMBER_PARENT, "error"),
     (EXTENSION_CYCLE, "error"),
@@ -1641,6 +1642,33 @@ fn unresolved_alias_findings(
         );
     }
     findings
+}
+
+/// A raw animation name that is a registered keyframes key, not the
+/// generated name its `@keyframes` rule carries.
+fn raw_keyframe_alias(
+    file: &str,
+    component: &str,
+    declaration: &CssDeclaration,
+    alias: &crate::keyframe_aliases::RawAlias,
+) -> CssDiagnostic {
+    let registered: Vec<String> =
+        alias.candidates.iter().map(|(path, name)| format!("{path} (`@keyframes {name}`)")).collect();
+    diagnostic(
+        file,
+        component,
+        "warn",
+        format!(
+            "'{}: {}' names '{}' as written, and no @keyframes rule has that name: the keyframes registered under it are {}. \
+             Reference the registered object, such as `{}`, so the generated name is emitted; the value is left unchanged",
+            declaration.property,
+            declaration.value,
+            alias.key,
+            registered.join(", "),
+            alias.candidates[0].0,
+        ),
+        Some(crate::keyframe_aliases::RAW_ALIAS_STRING),
+    )
 }
 
 /// Properties whose values legitimately carry dotted bare identifiers, so a
@@ -5568,6 +5596,16 @@ fn run_with_system_floor(
         numeric_properties: Some(&inputs.numeric_properties),
         numbers_take_px: false,
     };
+    // Raw animation names that are registered keyframes keys, read without
+    // reporting or evaluating anything a second time.
+    let keyframe_keys = crate::keyframe_aliases::KeyframeKeys::from_blocks(inputs.keyframes_blocks.as_ref());
+    let quiet_ctx = ResolveContext {
+        transform_evaluator: None,
+        transform_failures: None,
+        token_misses: None,
+        dropped_keys: None,
+        ..resolve_ctx
+    };
 
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
     let mut unresolvable_extensions: FxHashSet<String> = FxHashSet::default();
@@ -5795,6 +5833,9 @@ fn run_with_system_floor(
             &chain.descriptor.binding,
             &mut diagnostics,
         );
+        for (declaration, alias) in keyframe_keys.in_chain(chain, &quiet_ctx) {
+            diagnostics.push(raw_keyframe_alias(file_path, &chain.descriptor.binding, &declaration, &alias));
+        }
         if merged_chain.is_some() {
             // A parent option's dropped key was reported at the parent's
             // declaration, naming this chain among its inheritors.
@@ -6384,6 +6425,16 @@ fn run_with_system_floor(
         }
         if prop_config.is_some_and(|prop_config| !extracts_configured_value(prop_config, value, &resolve_ctx)) {
             return None;
+        }
+        // A raw keyframes key is reported at each use that writes it.
+        let usage_quiet = ResolveContext { config, ..quiet_ctx };
+        for (declaration, alias) in keyframe_keys.in_styles(&serde_json::json!({ prop_name: value }), &usage_quiet) {
+            match uses {
+                [] => diagnostics.push(raw_keyframe_alias(file, component, &declaration, &alias)),
+                uses => diagnostics.extend(
+                    uses.iter().map(|&(at, renders)| raw_keyframe_alias(file, renders, &declaration, &alias).at(at)),
+                ),
+            }
         }
         if let Some(prop_config) = prop_config {
             let usage_ctx = ResolveContext { config, ..resolve_ctx };
@@ -7936,6 +7987,16 @@ fn run_with_system_floor(
         }
     }
 
+    if let Some(blocks) = inputs.global_style_blocks.as_ref().and_then(Value::as_object) {
+        for (name, block) in blocks {
+            let block = crate::theme::GlobalBlock::of(block);
+            let file = block.source.unwrap_or("system");
+            let component = format!("global '{name}'");
+            for (declaration, alias) in keyframe_keys.in_styles(block.styles, &quiet_ctx) {
+                diagnostics.push(raw_keyframe_alias(file, &component, &declaration, &alias));
+            }
+        }
+    }
     let (global_css_raw, unlayered_global_css) = if let Some(blocks) = &inputs.global_style_blocks {
         // Each block's reports name its registration key and the module that
         // declares it; without one, the loaded system stands in.
@@ -9119,6 +9180,76 @@ mod tests {
             "{}",
             out.sheets.system
         );
+    }
+
+    #[test]
+    fn a_raw_keyframes_key_warns_once_where_written_and_leaves_the_css() {
+        let mut inputs = test_inputs();
+        inputs.config.insert("animation".into(), serde_json::from_str(r#"{"property":"animation"}"#).unwrap());
+        inputs.group_registry.insert("motion".into(), vec!["animation".into()]);
+        inputs.condition_aliases.insert(
+            "_motion".into(),
+            crate::theme::ConditionAliasEntry { value: "@media (prefers-reduced-motion: no-preference)".into(), order: 500, kind: "media".into() },
+        );
+        // `ease` is registered as a key, and `fadeOut` is one key's name and
+        // another's generated name.
+        let frames = serde_json::json!({ "to": { "opacity": 1 } });
+        inputs.keyframes_blocks = Some(serde_json::json!({
+            "motion": {
+                "fadeIn": { "name": "animus-kf-honfj9", "frames": frames },
+                "ease": { "name": "animus-kf-ease", "frames": frames },
+                "fadeOut": { "name": "animus-kf-out", "frames": frames },
+                "glow": { "name": "fadeOut", "frames": frames },
+                "infinite": { "name": "animus-kf-infinite", "frames": frames }
+            }
+        }));
+        let source = "export const Card = ds.styles({ animation: 'fadeIn 1s ease' }).asElement('div');\n\
+                      export const Pill = ds.styles({ animationName: 'animus-kf-honfj9' }).asElement('span');\n\
+                      export const Spin = ds.styles({ animationName: 'spin' }).asElement('i');\n\
+                      export const Note = ds.styles({ animation: 'external 1s /* fadeIn */' }).asElement('i');\n\
+                      export const Joined = ds.styles({ animation: 'fadeIn/**/1s' }).asElement('i');\n\
+                      export const Escaped = ds.styles({ animationName: 'fade\\\\49 n' }).asElement('i');\n\
+                      export const Loud = ds.styles({ animation: 'fadeIn 1s!important' }).asElement('i');\n\
+                      export const Named = ds.styles({ animationName: 'fadeOut' }).asElement('i');\n\
+                      export const Calm = ds.styles({ _motion: { animation: 'fadeIn 2s' } }).asElement('i');\n\
+                      export const Bogus = ds.styles({ '@bogus x': { animation: 'fadeIn 2s' } }).asElement('i');\n\
+                      export const Stepped = ds.styles({ animation: '1s steps(2) ease' }).asElement('i');\n\
+                      export const Shouty = ds.styles({ animation: '1s EASE ease' }).asElement('i');\n\
+                      export const Counted = ds.styles({ animation: '1s 3 infinite' }).asElement('i');\n\
+                      export const Varied = ds.styles({ animation: 'var(--motion) fadeIn 1s' }).asElement('i');\n\
+                      export const Box = ds.system({ motion: true }).asElement('div');\n\
+                      export const App = () => <><Card /><Pill /><Spin /><Note /><Joined /><Escaped /><Loud /><Named /><Calm /><Bogus />\
+                      <Stepped /><Shouty /><Counted /><Varied />\
+                      <Box animation=\"fadeIn 2s\" /><Box animation={{ _: 'fadeIn 3s' }} /></>;\n";
+        let out = analyze(&[("a.tsx", source)], &inputs);
+        let mut warned: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some("animus.keyframes.raw-alias-string"))
+            .map(|d| (d.component.as_str(), d.offset, d.message.split('\'').nth(3).unwrap_or_default()))
+            .collect();
+        warned.sort();
+        // A definition is located at its chain, a use at the attribute. Only
+        // an animation's name is read: a comment, a function, a keyword, a
+        // timing function or a number that fills another longhand, and a
+        // generated name are not, and a shorthand holding `var()` names none.
+        let at = |written: &str| source.find(written).map(|at| at as u32);
+        let mut expected = vec![
+            ("Box", at("animation=\"fadeIn 2s\""), "fadeIn"),
+            ("Box", at("animation={{"), "fadeIn"),
+            ("Calm", at("ds.styles({ _motion"), "fadeIn"),
+            ("Card", at("ds.styles({ animation: 'fadeIn 1s ease'"), "fadeIn"),
+            ("Counted", at("ds.styles({ animation: '1s 3"), "infinite"),
+            ("Escaped", at("ds.styles({ animationName: 'fade"), "fadeIn"),
+            ("Joined", at("ds.styles({ animation: 'fadeIn/**/"), "fadeIn"),
+            ("Loud", at("ds.styles({ animation: 'fadeIn 1s!"), "fadeIn"),
+            ("Shouty", at("ds.styles({ animation: '1s EASE"), "ease"),
+            ("Stepped", at("ds.styles({ animation: '1s steps"), "ease"),
+        ];
+        expected.sort();
+        assert_eq!(warned, expected, "{:#?}", out.diagnostics);
+        assert!(out.css.contains("animation: fadeIn 1s ease;"), "{}", out.css);
+        assert!(out.css.contains("animation: fadeIn 2s;"), "{}", out.css);
     }
 
     #[test]

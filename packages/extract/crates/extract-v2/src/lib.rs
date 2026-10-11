@@ -44,6 +44,7 @@ pub(crate) mod family_members;
 pub mod identity;
 pub mod ids;
 pub mod jsx_scan;
+pub(crate) mod keyframe_aliases;
 pub mod link;
 pub mod module_specifiers;
 pub mod usage_facts;

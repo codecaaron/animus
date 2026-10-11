@@ -54,7 +54,7 @@ fn prop_cascade_tier(prop_name: &str, config: &PropConfigMap) -> (usize, usize) 
 
 /// The CSS properties a style-object entry sets: a registered prop's, or the
 /// property a raw key names; none for a selector or condition key.
-fn entry_properties(key: &str, config: &PropConfigMap) -> Vec<String> {
+pub(crate) fn entry_properties(key: &str, config: &PropConfigMap) -> Vec<String> {
     match config.get(key) {
         Some(pc) => match pc.declaration_binding() {
             Some(binding) => binding.members.iter().map(|member| member.css_property.clone()).collect(),
@@ -1445,8 +1445,8 @@ fn without_priority(value: &Value, custom_only: bool) -> Cow<'_, Value> {
     bare.map_or(value, Cow::Owned)
 }
 
-/// A prop's declarations under `ctx`.
-fn resolve_prop(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDeclaration> {
+/// A prop's declarations under `ctx`; it reports only through `ctx`'s sinks.
+pub(crate) fn resolve_prop(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDeclaration> {
     let mut declarations = resolve_single_prop(
         key,
         value,
@@ -2617,6 +2617,39 @@ pub fn resolve_unlayered_global_blocks(blocks: &Value, ctx: &ResolveContext) -> 
 /// declaring binding once the block has resolved.
 pub type AfterGlobalBlock<'a> = dyn FnMut(&str, Option<&str>, Option<&str>) + 'a;
 
+/// A registered global block: its styles, font faces, layering, and the
+/// module and declaration that declare it. A block written as bare styles
+/// has none of the rest.
+pub(crate) struct GlobalBlock<'a> {
+    pub styles: &'a Value,
+    pub faces: Option<&'a Value>,
+    pub unlayered: bool,
+    pub source: Option<&'a str>,
+    pub declared_by: Option<&'a str>,
+}
+
+impl<'a> GlobalBlock<'a> {
+    pub fn of(block: &'a Value) -> Self {
+        match block.as_object() {
+            Some(obj)
+                if obj.get("styles").map(|s| s.is_object()).unwrap_or(false)
+                    && obj.keys().all(|k| {
+                        k == "styles" || k == "fontFaces" || k == "unlayered" || k == "source" || k == "sourceExport"
+                    }) =>
+            {
+                GlobalBlock {
+                    styles: obj.get("styles").unwrap(),
+                    faces: obj.get("fontFaces"),
+                    unlayered: obj.get("unlayered") == Some(&Value::Bool(true)),
+                    source: obj.get("source").and_then(Value::as_str),
+                    declared_by: obj.get("sourceExport").and_then(Value::as_str),
+                }
+            }
+            _ => GlobalBlock { styles: block, faces: None, unlayered: false, source: None, declared_by: None },
+        }
+    }
+}
+
 /// Resolves the layered (`unlayered: false`) or unlayered blocks, calling
 /// `after_block` after each, so what its resolution reported can be
 /// attributed to it.
@@ -2636,23 +2669,7 @@ pub fn resolve_global_blocks(
         // `sourceExport` names the declaration in `source` that declares the
         // block; the registration name is no binding, so without it the block
         // has no declaration.
-        let (styles, faces, block_unlayered, source, declared_by) = match block.as_object() {
-            Some(obj)
-                if obj.get("styles").map(|s| s.is_object()).unwrap_or(false)
-                    && obj.keys().all(|k| {
-                        k == "styles" || k == "fontFaces" || k == "unlayered" || k == "source" || k == "sourceExport"
-                    }) =>
-            {
-                (
-                    obj.get("styles").unwrap(),
-                    obj.get("fontFaces"),
-                    obj.get("unlayered") == Some(&Value::Bool(true)),
-                    obj.get("source").and_then(Value::as_str),
-                    obj.get("sourceExport").and_then(Value::as_str),
-                )
-            }
-            _ => (block, None, false, None, None),
-        };
+        let GlobalBlock { styles, faces, unlayered: block_unlayered, source, declared_by } = GlobalBlock::of(block);
         if block_unlayered != unlayered {
             continue;
         }
