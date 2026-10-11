@@ -112,7 +112,7 @@ import type {
   ExternalPackageOutcome,
   KitDescriptorRecord,
 } from '../pipeline/index';
-import type { ResolveSpecifier } from './resolve-packages';
+import type { PackageResolution } from './resolve-packages';
 
 export type SessionOptions = AnimusCoreOptions;
 
@@ -981,22 +981,25 @@ export class ExtractionSession {
 
     bt.fileRead = this.elapsed(t);
 
-    // Package resolution: the workspace walk and the exports reader stay
-    // local; anything else resolves as the system loader resolves it. The
-    // traversal and ingest below are the shared collector.
+    // Package resolution, under the host's conditions as system loading has
+    // them: the workspace walk only locates a package, and every entry is
+    // selected as the system loader selects it. The traversal and ingest
+    // below are the shared collector.
     t = this.now();
-    const resolveSpecifier: ResolveSpecifier = (
-      specifier,
-      fromDir,
-      conditions
-    ) => {
-      const native = engineApi().resolveSpecifier;
-      if (native === undefined) {
+    const native = (name: 'resolveSpecifier' | 'resolvePackageEntry') => {
+      const found = engineApi()[name];
+      if (found === undefined) {
         throw new Error(
-          'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
+          `the native engine does not expose ${name}, which package resolution needs — rebuild @animus-ui/extract`
         );
       }
-      return native(specifier, fromDir, [...conditions]);
+      return found;
+    };
+    const packageResolution: PackageResolution = {
+      resolveSpecifier: (specifier, fromDir, conditions) =>
+        native('resolveSpecifier')(specifier, fromDir, [...conditions]),
+      resolvePackageEntry: (packageDir, conditions) =>
+        native('resolvePackageEntry')(packageDir, undefined, [...conditions]),
     };
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = await extractSystemFilePackages(
@@ -1007,7 +1010,7 @@ export class ExtractionSession {
         const entry = resolvePackagesByName(
           rootDir,
           [name],
-          resolveSpecifier,
+          packageResolution,
           this.conditions
         ).entries[name];
         return entry ? resolve(rootDir, entry) : null;
@@ -1019,7 +1022,7 @@ export class ExtractionSession {
     const preResolved = resolvePackagesByName(
       rootDir,
       packageNames,
-      resolveSpecifier,
+      packageResolution,
       this.conditions
     );
 
