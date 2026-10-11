@@ -312,6 +312,12 @@ export const ALIAS_MISMATCH = 'animus.discovery.alias-mismatch';
  *  report only. */
 export const PACKAGE_MISMATCH = 'animus.discovery.package-mismatch';
 
+/** A system-file kit whose analysed instance is not the one the system
+ *  load evaluated (spec §2.2 A4): its components would be extracted
+ *  against another instance's vocabulary. */
+export const SYSTEM_INSTANCE_MISMATCH =
+  'animus.discovery.system-instance-mismatch';
+
 /** What a skipped source file costs: the analysis never sees what it
  *  renders. */
 export const SKIPPED_SOURCE_COST =
@@ -441,6 +447,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [UNIMPORTED_CREATE_SYSTEM, 'warn'],
   [ALIAS_MISMATCH, 'warn'],
   [PACKAGE_MISMATCH, 'warn'],
+  [SYSTEM_INSTANCE_MISMATCH, 'error'],
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],
   [INVALID_PROPERTY_REGISTRATION, 'error'],

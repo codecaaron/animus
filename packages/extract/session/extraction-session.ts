@@ -11,7 +11,15 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'fs';
-import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from 'path';
 
 import {
   AliasAgreementCache,
@@ -81,6 +89,7 @@ import {
   surfaceManifestDiagnostics,
   systemLoadReads,
 } from '../pipeline/index';
+import { systemInstanceMismatches } from '../pipeline/system-instances';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
 import {
   checkLockLiveness,
@@ -1866,6 +1875,24 @@ export class ExtractionSession {
 
     this.lastExternalOutcomes = collected.outcomes;
     this.ingestionFailureDiagnostics = ingestionFailures;
+    // The host chose the analysed instances; the system load resolved its
+    // own. Until the loader takes the host's instance, they must agree.
+    if (hostFirst !== null) {
+      discoveryDiagnostics.push(
+        ...systemInstanceMismatches({
+          rootDir,
+          specifiers: packageNames,
+          dirOwnerSets: collected.dirOwnerSets,
+          evaluated: this.systemDependencyPaths,
+          loaderResolve: (specifier) =>
+            packageResolution.resolveSpecifier(
+              specifier,
+              dirname(resolvedSystemPath),
+              context
+            ).path ?? null,
+        })
+      );
+    }
 
     surfaceManifestDiagnostics(
       {

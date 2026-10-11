@@ -30,7 +30,9 @@ import {
   KIT_SYSTEM_NOT_INCLUDED,
   KIT_WITHOUT_SOURCE_CONDITION,
   PACKAGE_MISMATCH,
+  SYSTEM_INSTANCE_MISMATCH,
 } from '../pipeline/manifest-diagnostics';
+import { systemInstanceMismatches } from '../pipeline/system-instances';
 
 import type { JsonValue } from '../pipeline/tsconfig-paths';
 
@@ -1628,5 +1630,40 @@ describe('a host-resolved package', () => {
     expect(elsewhere.mismatches.map((d) => d.message)).toEqual([
       expect.stringContaining(`resolves 'kit' to src/local-kit.ts`),
     ]);
+  });
+});
+
+describe('a kit the system evaluates', () => {
+  /** Contract: the system and the analysis read one instance of each kit
+   *  (spec §2.2 A4). A system-file kit whose analysed instance is not the
+   *  one the system load evaluated fails, naming both. */
+  test('is the instance extraction analyses', () => {
+    const root = realpathSync(makeRoot());
+    const installed = join(root, 'node_modules', 'kit');
+    const aliased = join(root, 'node_modules', 'alt-kit');
+    for (const dir of [installed, aliased]) {
+      makePackage(dir, { 'src/definition.ts': 'export const system = 1;' });
+    }
+    const evaluatedFile = join(installed, 'src', 'definition.ts');
+    const check = (analysedDir: string, evaluated = [evaluatedFile]) =>
+      systemInstanceMismatches({
+        rootDir: root,
+        specifiers: ['kit/definition'],
+        dirOwnerSets: { [join(analysedDir, 'src')]: ['kit/definition'] },
+        evaluated,
+        loaderResolve: () => evaluatedFile,
+      }).map(({ code, message }) => [code, message]);
+
+    expect(check(installed)).toEqual([]);
+    expect(check(aliased)).toEqual([
+      [
+        SYSTEM_INSTANCE_MISMATCH,
+        expect.stringContaining(
+          "evaluates 'kit/definition' from node_modules/kit, but the host bundler resolves it to node_modules/alt-kit"
+        ),
+      ],
+    ]);
+    // A file the load never read is no evaluated instance.
+    expect(check(aliased, [])).toEqual([]);
   });
 });
