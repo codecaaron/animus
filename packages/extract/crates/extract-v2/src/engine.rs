@@ -2473,16 +2473,19 @@ export const App = () => <Box tone="red" />;
     }
 
     /// What an analysis emits, by the channel that carries it (spec §6.4
-    /// F6): static components, their declarations, system-prop utilities
-    /// and dynamic slots; what it reports losing; what it prunes; and the
-    /// imports each transform removes from its file.
+    /// F6): static components, their declarations by section, system-prop
+    /// utilities and dynamic slots, each only where the stylesheet carries
+    /// it; what it reports losing, whole chains apart from single
+    /// properties; what it prunes; and the imports each transform removes
+    /// from its file.
     #[derive(Debug, Default)]
     struct Emission {
         components: std::collections::BTreeSet<String>,
-        declarations: BTreeMap<(String, String, String), String>,
+        declarations: BTreeMap<(String, String, String, String), String>,
         utilities: std::collections::BTreeSet<(String, String)>,
         dynamic_slots: std::collections::BTreeSet<String>,
-        losses: std::collections::BTreeSet<(String, String)>,
+        lost_chains: std::collections::BTreeSet<(String, String)>,
+        lost_properties: std::collections::BTreeSet<(String, String, String)>,
         pruned: std::collections::BTreeSet<(String, String, String)>,
         removed_imports: std::collections::BTreeSet<(String, String)>,
     }
@@ -2500,29 +2503,52 @@ export const App = () => <Box tone="red" />;
         let manifest: serde_json::Value =
             serde_json::from_str(&engine.analyze(serde_json::Value::Array(entries).to_string(), None).unwrap()).unwrap();
         let mut out = Emission::default();
+        // What the stylesheets deliver: the CSS and every sheet.
+        let mut stylesheet = manifest["css"].as_str().unwrap_or_default().to_string();
+        for sheet in manifest["sheets"].as_object().into_iter().flatten().filter_map(|(_, sheet)| sheet.as_str()) {
+            stylesheet.push_str(sheet);
+        }
         let keys = |value: &serde_json::Value| value.as_object().map(|map| map.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
         out.components.extend(keys(&manifest["components"]));
         for (id, fragments) in manifest["component_fragments"].as_object().into_iter().flatten() {
-            for css in fragments.as_object().into_iter().flatten().filter_map(|(_, css)| css.as_str()) {
+            for (section, css) in fragments.as_object().into_iter().flatten() {
                 let mut selector = String::new();
-                for line in css.lines().map(str::trim) {
+                for line in css.as_str().unwrap_or_default().lines().map(str::trim) {
                     if let Some(open) = line.strip_suffix('{') {
                         selector = open.trim().to_string();
                     } else if let Some((property, value)) = line.strip_suffix(';').and_then(|line| line.split_once(": ")) {
-                        out.declarations.insert((id.clone(), selector.clone(), property.to_string()), value.to_string());
+                        if stylesheet.contains(&selector) {
+                            let key = (id.clone(), section.clone(), selector.clone(), property.to_string());
+                            out.declarations.insert(key, value.to_string());
+                        }
                     }
                 }
             }
         }
         for (prop, values) in manifest["system_prop_map"].as_object().into_iter().flatten() {
-            out.utilities.extend(keys(values).into_iter().map(|value| (prop.clone(), value)));
+            for (value, class) in values.as_object().into_iter().flatten() {
+                if class.as_str().is_some_and(|class| stylesheet.contains(&format!(".{class}"))) {
+                    out.utilities.insert((prop.clone(), value.clone()));
+                }
+            }
         }
-        out.dynamic_slots.extend(keys(&manifest["dynamic_props"]));
-        let lost = ["animus.chain.unextractable", "animus.chain.stage-evaluation-failed", "animus.chain.skipped-value"];
+        for (prop, slot) in manifest["dynamic_props"].as_object().into_iter().flatten() {
+            if slot["slotClass"].as_str().is_some_and(|class| stylesheet.contains(&format!(".{class}"))) {
+                out.dynamic_slots.insert(prop.clone());
+            }
+        }
+        let whole = ["animus.chain.unextractable", "animus.chain.stage-evaluation-failed", "animus.extension.unresolved-parent"];
         for diagnostic in manifest["diagnostics"].as_array().into_iter().flatten() {
-            if diagnostic["code"].as_str().is_some_and(|code| lost.contains(&code)) {
-                let (file, component) = (diagnostic["file"].as_str(), diagnostic["component"].as_str());
-                out.losses.insert((file.unwrap_or_default().to_string(), component.unwrap_or_default().to_string()));
+            let field = |key: &str| diagnostic[key].as_str().unwrap_or_default().to_string();
+            let code = diagnostic["code"].as_str().unwrap_or_default();
+            if whole.contains(&code) {
+                out.lost_chains.insert((field("file"), field("component")));
+            } else if code == "animus.chain.skipped-value" {
+                // A skip names the key it dropped: `property 'padding'`.
+                let message = field("message");
+                if let Some(key) = message.split("property '").nth(1).and_then(|rest| rest.split('\'').next()) {
+                    out.lost_properties.insert((field("file"), field("component"), key.to_string()));
+                }
             }
         }
         for pruned in manifest["report"]["eliminated_details"].as_array().into_iter().flatten() {
@@ -2548,21 +2574,39 @@ export const App = () => <Box tone="red" />;
     /// Each way `head` emits less than `base` without reporting it.
     fn shrinkage(base: &Emission, head: &Emission) -> Vec<String> {
         let mut found = Vec::new();
-        // A component id is `file::binding`; a loss names its file and binding.
-        let reported = |id: &str| {
-            id.rsplit_once("::").is_some_and(|(file, binding)| head.losses.contains(&(file.to_string(), binding.to_string())))
+        // A component id is `file::binding`; a whole-chain loss names its
+        // file and binding.
+        let split = |id: &str| id.rsplit_once("::").map(|(file, binding)| (file.to_string(), binding.to_string()));
+        let chain_lost = |id: &str| split(id).is_some_and(|key| head.lost_chains.contains(&key));
+        // A skip of a key covers its declaration (`fontSize` as
+        // `font-size`), or its whole section (`variants`).
+        let property_lost = |id: &str, section: &str, property: &str| {
+            split(id).is_some_and(|(file, binding)| {
+                head.lost_properties.iter().any(|(lost_file, lost_binding, key)| {
+                    let kebab: String = key
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or(key)
+                        .chars()
+                        .flat_map(|c| if c.is_ascii_uppercase() { vec!['-', c.to_ascii_lowercase()] } else { vec![c] })
+                        .collect();
+                    *lost_file == file && *lost_binding == binding && (kebab == property || key == section)
+                })
+            })
         };
         found.extend(head.pruned.difference(&base.pruned).map(|pruned| format!("newly pruned {pruned:?}")));
         found.extend(
             base.components
                 .iter()
-                .filter(|id| !head.components.contains(*id) && !reported(id))
+                .filter(|id| !head.components.contains(*id) && !chain_lost(id))
                 .map(|id| format!("component {id} lost unreported")),
         );
-        for ((id, selector, property), value) in &base.declarations {
-            match head.declarations.get(&(id.clone(), selector.clone(), property.clone())) {
+        for (key @ (id, section, selector, property), value) in &base.declarations {
+            match head.declarations.get(key) {
                 Some(now) if now != value => found.push(format!("{id} {selector} {property} changed from {value} to {now}")),
-                None if !reported(id) => found.push(format!("{id} {selector} {property} lost unreported")),
+                None if !chain_lost(id) && !property_lost(id, section, property) => {
+                    found.push(format!("{id} {selector} {property} lost unreported"))
+                }
                 _ => {}
             }
         }
@@ -2572,6 +2616,7 @@ export const App = () => <Box tone="red" />;
                 .filter(|(prop, value)| !head.utilities.contains(&(prop.clone(), value.clone())) && !head.dynamic_slots.contains(prop))
                 .map(|utility| format!("utility {utility:?} lost with no dynamic slot")),
         );
+        found.extend(base.dynamic_slots.difference(&head.dynamic_slots).map(|prop| format!("dynamic slot {prop} lost")));
         found.extend(head.components.difference(&base.components).map(|id| format!("component {id} newly static")));
         found.extend(
             head.removed_imports.difference(&base.removed_imports).map(|import| format!("import {import:?} newly removed")),
@@ -2623,7 +2668,14 @@ export const App = () => <Box tone="red" />;
         ];
         injections.extend(modules.iter().map(|module| format!("import * as ns from './{module}';\nglobalThis.keep?.(ns);\n")));
         let base = emission(&project);
-        let channels = [base.components.len(), base.declarations.len(), base.utilities.len(), base.pruned.len(), base.losses.len()];
+        let channels = [
+            base.components.len(),
+            base.declarations.len(),
+            base.utilities.len(),
+            base.dynamic_slots.len(),
+            base.pruned.len(),
+            base.lost_properties.len(),
+        ];
         assert!(channels.iter().all(|count| *count > 0) && !base.removed_imports.is_empty(), "{base:?}");
         for injected in injections {
             let mut files = project.clone();
