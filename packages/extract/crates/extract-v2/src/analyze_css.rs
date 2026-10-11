@@ -22,7 +22,7 @@ use crate::css::{
 };
 use crate::declarations::{bind_component_declarations, check_surface_overlap, DeclarationBinding, DeclarationScales};
 use crate::dynamic_meta::{share_slots, DynamicPropMeta};
-use crate::evaluator::{EvalError, TransformAdmission, TransformEvaluator};
+use crate::evaluator::{Admission, EvalError, TransformAdmission, TransformEvaluator};
 use crate::facts::FileFacts;
 use crate::identity::{BindingKind, ImportBinding};
 use animus_system_loader::module_table::{ExportLookup, Request, Terminal};
@@ -5755,22 +5755,52 @@ fn bound_props_clause(props: &[&str]) -> String {
 }
 
 /// Whether extraction resolves `value` of a custom prop: a callback that
-/// cannot evaluate it applies it at runtime, and no callback sees a CSS-wide
-/// keyword.
+/// `admits` refuses or that cannot evaluate it applies it at runtime, and no
+/// callback sees a CSS-wide keyword.
 fn extracts_custom_value(
     prop_config: &PropConfig,
     value: &Value,
-    evaluator: &TransformEvaluator,
     ctx: &ResolveContext,
+    admits: impl FnOnce(&crate::transforms::CallbackBinding) -> bool,
 ) -> bool {
     match &prop_config.callback {
         _ if prop_config.transform_fn_source.is_none() || skips_transforms(prop_config, value, ctx) => true,
         Some(callback) => {
             let definition = &callback.definition;
-            evaluator.is_admitted(&definition.key)
-                && extracts_callback_value(prop_config, &definition.key, &definition.name, value, ctx)
+            admits(callback) && extracts_callback_value(prop_config, &definition.key, &definition.name, value, ctx)
         }
         None => false,
+    }
+}
+
+/// The bindings, by rendering owner, whose keys the sealed registry lacks.
+type UnsealedBindings = std::cell::RefCell<Vec<(String, TransformFailure)>>;
+
+/// Whether the sealed registry admits `callback` for `owner`'s `prop`: one it
+/// holds as runtime-only applies at runtime, and a key it lacks is recorded
+/// in `unsealed` and never evaluated.
+fn sealed_admits(
+    evaluator: &TransformEvaluator,
+    callback: &crate::transforms::CallbackBinding,
+    (owner, prop): (&str, &str),
+    unsealed: &UnsealedBindings,
+) -> bool {
+    let definition = &callback.definition;
+    match evaluator.admission(&definition.key) {
+        Admission::Admitted => true,
+        Admission::RuntimeOnly(_) => false,
+        Admission::Unsealed => {
+            unsealed.borrow_mut().push((
+                owner.to_string(),
+                TransformFailure {
+                    transform_name: definition.name.clone(),
+                    prop: prop.to_string(),
+                    failure: EvalError::UnsealedBinding { key: definition.key.clone() },
+                    variant_origin: None,
+                },
+            ));
+            false
+        }
     }
 }
 
@@ -6890,6 +6920,7 @@ fn run_with_system_floor(
 
     let mut all_utility_inputs: Vec<UtilityInput> = Vec::new();
     let mut all_custom_inputs: Vec<(String, UtilityInput)> = Vec::new();
+    let unsealed = UnsealedBindings::default();
     let mut all_custom_dynamic_usages: Vec<DynamicPropUsage> = Vec::new();
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
     let mut forwards: Vec<Forward> = Vec::new();
@@ -7164,7 +7195,9 @@ fn run_with_system_floor(
                         (&usage.prop_name, &usage.value, &uses),
                         &mut diagnostics,
                     );
-                    if extracts_custom_value(prop_config, &usage.value, &evaluator, &resolve_ctx) {
+                    let admits =
+                        |callback: &_| sealed_admits(&evaluator, callback, (&owner, &usage.prop_name), &unsealed);
+                    if extracts_custom_value(prop_config, &usage.value, &resolve_ctx, admits) {
                         all_custom_inputs.extend(input.map(|input| (owner.clone(), input)));
                     }
                 }
@@ -7742,7 +7775,7 @@ fn run_with_system_floor(
     // surface it, and kept while the rendering owner survives. A
     // configured transform's failure stays the system's.
     let mut reported: FxHashSet<ReportKey> = FxHashSet::default();
-    let attribute_callback_failures = |owner: &str, failures: Vec<TransformFailure>| {
+    let mut attribute_callback_failures = |owner: &str, failures: Vec<TransformFailure>| {
         for failure in failures {
             let declarer = custom_configs_by_id
                 .get(owner)
@@ -7770,7 +7803,7 @@ fn run_with_system_floor(
         &custom_configs_by_id,
         &resolve_ctx,
         class_prefix,
-        attribute_callback_failures,
+        &mut attribute_callback_failures,
     );
 
     let mut custom_dynamic_by_id: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
@@ -7819,7 +7852,8 @@ fn run_with_system_floor(
             let callback_admitted = || {
                 config.callback.as_ref().is_none_or(|callback| {
                     delivery != Some(callback.definition.source.as_str())
-                        || (evaluator.is_admitted(&callback.definition.key) && !reads_import(callback))
+                        || (sealed_admits(&evaluator, callback, (component_id, prop_name), &unsealed)
+                            && !reads_import(callback))
                 })
             };
             if !(covers(confined) && callback_admitted()) {
@@ -7834,6 +7868,11 @@ fn run_with_system_floor(
                 }
             }
         }
+    }
+    // A binding the sealed registry lacks fails, once, against the component
+    // that declares it.
+    for (owner, failure) in unsealed.take() {
+        attribute_callback_failures(&owner, vec![failure]);
     }
     // An extension reads an inherited callback from its parent's runtime
     // component, so a parent delivers each callback a delivering extension
