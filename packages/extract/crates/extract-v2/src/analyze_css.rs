@@ -910,16 +910,9 @@ fn module_declaration(
     };
     match lookup {
         ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) => {
-            let path = &links.paths[declaring];
-            let declared = files[path].bindings.binding(binding);
-            let name = match declared.kind {
-                BindingKind::DefaultCell => {
-                    files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone())
-                }
-                _ => declared.name.clone(),
-            };
-            let locally_defined = declares_locally(&files[path], &name);
-            Some((path.clone(), name, locally_defined, barrel))
+            let (path, name) = binding_name(links, files, declaring, binding);
+            let locally_defined = declares_locally(&files[&path], &name);
+            Some((path, name, locally_defined, barrel))
         }
         ExportLookup::Resolved(Terminal::Namespace(_) | Terminal::External { .. }) => {
             Some((module, imported.to_string(), false, barrel))
@@ -2403,6 +2396,7 @@ fn resolve_compose_slot_class<'a>(
     binding: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     id_to_class: &FxHashMap<&str, &'a str>,
 ) -> Option<&'a str> {
     let binding = resolve_alias_terminal(family_file, binding, files);
@@ -2416,8 +2410,7 @@ fn resolve_compose_slot_class<'a>(
         .iter()
         .find(|import| import.local == binding)?;
     let source_file = resolve_import_source(family_file, &imported.source, files, inputs)?;
-    let (defining_file, defining_name) =
-        follow_reexports(source_file, imported.imported.clone(), files, inputs);
+    let (defining_file, defining_name) = declared_binding(links, files, &source_file, &imported.imported)?;
     let defining_id = format!("{}::{}", defining_file, defining_name);
     id_to_class.get(defining_id.as_str()).copied()
 }
@@ -2689,14 +2682,7 @@ fn import_identity(
 ) -> Vec<String> {
     let component = |terminal: &Terminal<crate::identity::LocalId>| match terminal {
         Terminal::Local { module, binding } => {
-            let path = &links.paths[*module];
-            let declared = files[path].bindings.binding(*binding);
-            let name = match declared.kind {
-                BindingKind::DefaultCell => {
-                    files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone())
-                }
-                _ => declared.name.clone(),
-            };
+            let (path, name) = binding_name(links, files, *module, *binding);
             Some(format!("{path}::{name}")).filter(|id| evaluated_ids.contains(id))
         }
         Terminal::Namespace(_) | Terminal::External { .. } => None,
@@ -3104,8 +3090,6 @@ pub(crate) fn declared_export(
     else {
         return None;
     };
-    let path = &links.paths[declaring];
-    let declared = files[path].bindings.binding(binding);
     let exports: Vec<&String> = links
         .table
         .record(declaring)
@@ -3114,14 +3098,44 @@ pub(crate) fn declared_export(
         .filter(|(_, exported)| *exported == binding)
         .map(|(exported_as, _)| exported_as)
         .collect();
-    let exported = exports.iter().find(|exported_as| **exported_as == &name).or(exports.first())?;
-    let declared_name = match declared.kind {
-        BindingKind::DefaultCell => {
-            files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone())
+    let exported = exports.iter().find(|exported_as| **exported_as == &name).or(exports.first())?.to_string();
+    let (path, declared) = binding_name(links, files, declaring, binding);
+    Some((path, exported, declared))
+}
+
+/// The binding the module table resolves `module`'s export `name` to, as
+/// the facts name it: its declaring file and binding. `None` for any other
+/// answer: absent, ambiguous, open, a namespace, an export of a module
+/// outside the analysis, or a module the analysis does not hold.
+fn declared_binding(
+    links: &crate::link::ProjectLinks,
+    files: &BTreeMap<String, FileFacts>,
+    module: &str,
+    name: &str,
+) -> Option<(String, String)> {
+    match links.resolve_export(module, name)? {
+        ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) => {
+            Some(binding_name(links, files, declaring, binding))
         }
+        _ => None,
+    }
+}
+
+/// A resolved binding's file and name; for `export default X`'s cell, X,
+/// as the facts name it.
+fn binding_name(
+    links: &crate::link::ProjectLinks,
+    files: &BTreeMap<String, FileFacts>,
+    module: usize,
+    binding: crate::identity::LocalId,
+) -> (String, String) {
+    let path = &links.paths[module];
+    let declared = files[path].bindings.binding(binding);
+    let name = match declared.kind {
+        BindingKind::DefaultCell => files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone()),
         _ => declared.name.clone(),
     };
-    Some((path.clone(), exported.to_string(), declared_name))
+    (path.clone(), name)
 }
 
 /// The (slot, binding) pairs of the compose family `declaring` declares as
@@ -7956,6 +7970,7 @@ fn run_with_system_floor(
                 &family.root_binding,
                 files,
                 inputs,
+                links,
                 &id_to_class,
             ) else {
                 emit_compose_slot_bail(
@@ -7977,6 +7992,7 @@ fn run_with_system_floor(
                     binding,
                     files,
                     inputs,
+                    links,
                     &id_to_class,
                 ) {
                     Some(class) => child_slots.push((binding.as_str(), class)),
@@ -11663,6 +11679,35 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 out.diagnostics
             );
         }
+    }
+
+    #[test]
+    fn compose_slots_resolve_through_local_export_renames() {
+        // `const Foo = …; export { Foo as Bar }`: the slot imported as `Bar`
+        // is the component bound to `Foo`.
+        let out = analyze(
+            &[
+                (
+                    "slots.tsx",
+                    "const RootImpl = ds.styles({ display: 'flex' }).asElement('div');\n\
+                     const BodyImpl = ds\n\
+                       .variant({ prop: 'size', variants: { sm: { p: 8 } } })\n\
+                       .asElement('div');\n\
+                     export { RootImpl as Root, BodyImpl as Body };\n",
+                ),
+                (
+                    "card.tsx",
+                    "import { Root, Body } from './slots';\n\
+                     export const Card = compose({ Root, Body }, { name: 'Card', shared: { size: true } });\n\
+                     export const App = () => <Card.Root><Card.Body size=\"sm\" /></Card.Root>;\n",
+                ),
+            ],
+            &test_inputs(),
+        );
+        let root = class_of(&out, "slots.tsx::RootImpl");
+        let body = class_of(&out, "slots.tsx::BodyImpl");
+        assert!(out.sheets.variants.contains(&format!(".{root}--size-sm .{body}")), "{}", out.sheets.variants);
+        assert!(!out.diagnostics.iter().any(|d| d.kind == "bail"), "{:?}", out.diagnostics);
     }
 
     const RECIPE: &str = "export const R = ds.styles({})\n\
