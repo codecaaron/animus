@@ -3,11 +3,9 @@ import {
   assembleStylesheet,
   assertSupportedEngine,
   assertKnownOptionKeys,
-  buildPathAliasesJson,
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
-  readTsconfigAliasPairs,
   resolveMode,
   sourceKitDependencies,
   turbopackExtensionPolicy,
@@ -597,11 +595,8 @@ async function analyzeForTurbopack(
   session.development = development;
   session.rootDir = rootDir;
   session.extensionPolicy = turbopackExtensionPolicy(resolveExtensions);
-  const aliasPairs = readTsconfigAliasPairs(rootDir);
-  const builtAliases = buildPathAliasesJson(aliasPairs, rootDir);
-  if (builtAliases) {
-    session.pathAliasesJson = builtAliases.json;
-  }
+  // Each full pass re-reads the tsconfig aliases.
+  session.aliasesFromTsconfig = true;
   await runSessionPipeline(session);
 
   // A load that started while this one analyzed has replaced its session.

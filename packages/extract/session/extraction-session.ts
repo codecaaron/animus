@@ -15,6 +15,7 @@ import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
 
 import {
   assembleStylesheet,
+  buildPathAliasesJson,
   buildSystemPropsModule,
   BUILT_IN_EXTENSION_POLICY,
   clearEngineCache,
@@ -40,6 +41,7 @@ import {
   extensionPolicyJson,
   loadSystemConfig,
   postProcessCss,
+  readTsconfigAliasPairs,
   projectExternalFileOwners,
   resolveAssetFile,
   resolveLightningTargets,
@@ -54,6 +56,7 @@ import {
   reportSurvivingAssetPlaceholders,
   substituteSheetAssets,
   toWatchKeys,
+  tsconfigChainPaths,
   isDeletedSource,
   unreadableSourceDiagnostic,
   unresolvableIncludesMessage,
@@ -256,6 +259,13 @@ export class ExtractionSession {
   rootDir: string | null = null;
   /** Serialized path aliases, harvested by the adapter from bundler config. */
   pathAliasesJson: string | null = null;
+  /** The host's aliases are the project's tsconfig `paths`: each full pass
+   *  re-reads them, so a tsconfig edit takes effect. */
+  aliasesFromTsconfig = false;
+  /** The root package.json and the tsconfig chain, absent files included:
+   *  a change to any is a configuration change, which runs the full pass. */
+  configInputPaths: string[] = [];
+  private configInputKeys = new Set<string>();
   /** The host's export conditions, in its order, for the system loader. */
   conditions: readonly string[] = [];
   /** The host's extension order, as its adapter captured it; the built-in
@@ -778,9 +788,9 @@ export class ExtractionSession {
     let assetChanged = false;
     let systemHit: string | undefined;
     try {
-      if (!changes.modifiedFiles && !changes.removedFiles) {
-        // No change sets (webpack's first watchRun): probe the dependency
-        // files by content hash.
+      if (changed.length === 0) {
+        // No changes from the host (webpack's first watchRun, or empty
+        // sets): probe the dependency files by content hash.
         for (const [dep, hash] of this.systemDependencyHashes) {
           let current = '';
           try {
@@ -803,12 +813,17 @@ export class ExtractionSession {
       this.warn(`HMR system-reload check failed: ${String(err)}`);
     }
 
+    const configHit = changed.find((path) =>
+      toWatchKeys(path).some((key) => this.configInputKeys.has(key))
+    );
     const debtRetry = this.systemReloadOwed && this.heldRejection === null;
-    if (systemHit || debtRetry) {
+    if (systemHit || configHit || debtRetry) {
       this.log(
         systemHit
           ? `system reload: system dependency changed (${relative(rootDir, systemHit)})`
-          : 'system reload: retrying the reload a failure left owed'
+          : configHit
+            ? `system reload: configuration changed (${relative(rootDir, configHit)})`
+            : 'system reload: retrying the reload a failure left owed'
       );
       this.resetForHmr();
       try {
@@ -1157,6 +1172,23 @@ export class ExtractionSession {
     this.commitSystemAuthority();
   }
 
+  /** Records the configuration inputs and, for a tsconfig-aliased host,
+   *  re-reads its aliases. */
+  private readConfigInputs(rootDir: string): void {
+    this.configInputPaths = [
+      join(rootDir, 'package.json'),
+      ...tsconfigChainPaths(rootDir),
+    ];
+    this.configInputKeys = new Set(
+      this.configInputPaths.flatMap((path) => toWatchKeys(path))
+    );
+    if (this.aliasesFromTsconfig) {
+      this.pathAliasesJson =
+        buildPathAliasesJson(readTsconfigAliasPairs(rootDir), rootDir)?.json ??
+        null;
+    }
+  }
+
   /** What hosts watch for assets, and what the last-good generation
    *  reported about its kits and packages, which a failed full pass must
    *  leave in place. */
@@ -1225,6 +1257,7 @@ export class ExtractionSession {
     const rootDir = this.rootDir!;
     const priorSourceState = this.snapshotSourceState();
     const resolvedSystemPath = resolve(rootDir, this.options.system);
+    this.readConfigInputs(rootDir);
 
     // One resolution context, which system loading and package resolution
     // both read: the host's conditions and extension order, and the session

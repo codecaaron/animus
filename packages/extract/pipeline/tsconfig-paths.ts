@@ -190,9 +190,11 @@ function resolveExtendsTarget(
 }
 
 /** Child-first flattened extends chain starting at `entryPath`. */
-function loadChain(entryPath: string): TsconfigNode[] {
+function loadChain(
+  entryPath: string,
+  visited = new Set<string>()
+): TsconfigNode[] {
   const chain: TsconfigNode[] = [];
-  const visited = new Set<string>();
   const queue: string[] = [entryPath];
 
   while (queue.length > 0) {
@@ -211,6 +213,14 @@ function loadChain(entryPath: string): TsconfigNode[] {
     }
   }
   return chain;
+}
+
+/** Every tsconfig file the project's alias chain reads or looks for, absent
+ *  ones included: an edit, creation or deletion of any changes the aliases. */
+export function tsconfigChainPaths(rootDir: string): string[] {
+  const visited = new Set<string>();
+  loadChain(join(rootDir, 'tsconfig.json'), visited);
+  return [...visited];
 }
 
 /**
