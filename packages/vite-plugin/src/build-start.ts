@@ -59,7 +59,6 @@ export async function runBuildStart(
     if (ctx.isProd || ctx.sessionOutcome?.kind !== 'held') throw error;
     ctx.warn(error instanceof Error ? error.message : String(error));
   }
-  ctx.adoptPublication(session);
   // Until the hot path moves onto the Session, it reads the sources the
   // Session holds.
   if (!ctx.isProd) {

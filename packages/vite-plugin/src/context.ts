@@ -49,6 +49,7 @@ import {
   RESOLVED_CSS_ID,
   RESOLVED_SYSTEM_PROPS_ID,
   VIRTUAL_CSS_ID,
+  VIRTUAL_SYSTEM_PROPS_ID,
 } from './constants';
 import { HotUpdateEvents } from './hot-update-events';
 import { invalidateFileModules } from './module-invalidation';
@@ -73,7 +74,11 @@ import type {
   SourceIngestionResult,
   SystemConfig,
 } from '@animus-ui/extract/pipeline';
-import type { SessionKey, SessionOutcome } from '@animus-ui/extract/session';
+import type {
+  SessionKey,
+  SessionOutcome,
+  WatchChanges,
+} from '@animus-ui/extract/session';
 import type { Logger } from 'vite';
 
 function emptySystemConfig(): SystemConfig {
@@ -88,6 +93,13 @@ function emptySystemConfig(): SystemConfig {
     globalStyleBlocksJson: null,
     keyframesJson: null,
   };
+}
+
+/** A Session outcome, and whether its publication changed the served
+ *  system-props module. */
+export interface ObservedOutcome {
+  outcome: SessionOutcome;
+  systemPropsChanged: boolean;
 }
 
 // Serializes analysis transactions per context: two interleaved
@@ -421,6 +433,8 @@ export class PluginContext {
   /** The Session's last outcome: a publication, or a hold on an aborted
    *  parse. */
   sessionOutcome: SessionOutcome | null = null;
+  /** The outcomes each in-flight `submitChanges` collects. */
+  private readonly outcomeCollectors = new Set<ObservedOutcome[]>();
 
   constructor(
     options: AnimusExtractOptions,
@@ -508,9 +522,7 @@ export class PluginContext {
     session.persistArtifacts = false;
     session.driverLabel = 'animus-extract';
     this.sessionOutcome = null;
-    session.onOutcome = (outcome) => {
-      this.sessionOutcome = outcome;
-    };
+    session.onOutcome = (outcome) => this.observeOutcome(session, outcome);
     session.development = this.development;
     session.rootDir = this.rootDir;
     session.conditions = this.resolveConditions;
@@ -518,10 +530,61 @@ export class PluginContext {
     session.assetClassification = this.assetClassification;
     session.pathAliasesJson = this.pathAliasesJson;
     session.runtimeImport = options.runtimeImport ?? DEFAULT_RUNTIME_IMPORT;
+    session.cssModuleId = VIRTUAL_CSS_ID;
+    session.systemPropsModuleId = VIRTUAL_SYSTEM_PROPS_ID;
     session.structuralExclude =
       this.outputExclude === null ? [] : [this.outputExclude];
     this.session = session;
     return session;
+  }
+
+  /** Serves each publication as the Session makes it, so every reader in
+   *  between sees one generation. */
+  private observeOutcome(
+    session: ExtractionSession,
+    outcome: SessionOutcome
+  ): void {
+    this.sessionOutcome = outcome;
+    let systemPropsChanged = false;
+    // Aborted bytes go to Vite's own parser until a publication ends the
+    // hold (see the transform hook).
+    if (outcome.kind === 'held') {
+      for (const [path, hash] of outcome.abortedOriginals) {
+        this.abortedParseHashes.set(path, hash);
+      }
+    } else {
+      this.abortedParseHashes.clear();
+      const before = systemPropsModuleSource(this);
+      this.adoptPublication(session);
+      systemPropsChanged = systemPropsModuleSource(this) !== before;
+    }
+    for (const collected of this.outcomeCollectors) {
+      collected.push({ outcome, systemPropsChanged });
+    }
+  }
+
+  /** Submits a dev change set to the Session and returns the outcomes of
+   *  the attempts that settle it. A hold warns and resolves with its
+   *  outcome (Vite reports the syntax error itself); any other failure
+   *  rejects. */
+  async submitChanges(changes: WatchChanges): Promise<ObservedOutcome[]> {
+    const session = this.session ?? this.createSession();
+    const collected: ObservedOutcome[] = [];
+    this.outcomeCollectors.add(collected);
+    try {
+      // Until a first publication there is no generation to update: the
+      // full read covers the change.
+      if (session.publication === null) await session.runFullPipeline();
+      else await session.handleWatchUpdate(changes);
+    } catch (error) {
+      if (!collected.some(({ outcome }) => outcome.kind === 'held')) {
+        throw error;
+      }
+      this.warn(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.outcomeCollectors.delete(collected);
+    }
+    return collected;
   }
 
   /** Serves the Session's last publication: the manifest, the analysis
@@ -571,6 +634,7 @@ export class PluginContext {
     this.kitDescriptors = session.kitDescriptors;
     this.externalPackageOutcomes = session.lastExternalOutcomes;
     this.registerSystemWatchPaths();
+    this.applyAssetSubstitutions();
   }
 
   /** Releases this context's engine handle: a standalone one, which no
