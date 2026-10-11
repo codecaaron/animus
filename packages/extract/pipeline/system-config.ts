@@ -12,6 +12,7 @@ import { splitInvalidPropertyRegistrations } from './property-registrations';
 import type { EngineApi } from './engine-adapter';
 import type { PrefixNameConflict } from './prefix';
 import type { InvalidPropertyRegistration } from './property-registrations';
+import type { WorkspacePackages } from './workspace-packages';
 
 /**
  * The deserialized `loadSystemModule()` result, prefix transformation
@@ -70,10 +71,17 @@ function evaluateSystemModule(
   engine: Pick<EngineApi, 'loadSystemModule' | 'extractFacts'>,
   systemPath: string,
   rootDir: string,
-  conditions: readonly string[] | undefined
+  conditions: readonly string[] | undefined,
+  workspaces: WorkspacePackages | undefined
 ) {
   try {
-    return engine.loadSystemModule(systemPath, rootDir, undefined, conditions);
+    return engine.loadSystemModule(
+      systemPath,
+      rootDir,
+      undefined,
+      conditions,
+      workspaces
+    );
   } catch (error) {
     let source: string;
     try {
@@ -103,13 +111,17 @@ export function loadSystemConfig(
     /** The host's export conditions, in its order; the loader tries them
      *  with `import` and `default`. */
     conditions?: readonly string[];
+    /** The session root's declared workspaces, which the loader consults
+     *  after a `node_modules` lookup misses. */
+    workspaces?: WorkspacePackages;
   }
 ): SystemConfig {
   const config = evaluateSystemModule(
     engineApi(),
     opts.systemPath,
     opts.rootDir,
-    opts.conditions
+    opts.conditions,
+    opts.workspaces
   );
 
   let scalesJson: string = config.scalesJson;

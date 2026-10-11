@@ -535,6 +535,10 @@ export async function collectExternalPackageSources(opts: {
   /** Called once per specifier after its package dir is derived and BEFORE
    *  its sources are walked, so a host can watch with no blind gap. */
   onPackageResolved?: (specifier: string, packageDir: string) => void;
+  /** Specifiers the host itself cannot resolve: each is admitted only where
+   *  a source entry redirects the host's import of it, since compiled output
+   *  the host never opens is nothing it bundles. */
+  requireSourceEntry?: (specifier: string) => boolean;
 }): Promise<CollectedExternalPackages> {
   const {
     specifiers,
@@ -546,6 +550,7 @@ export async function collectExternalPackageSources(opts: {
     onSourceRead,
     onUnreadable,
     onPackageResolved,
+    requireSourceEntry,
   } = opts;
 
   const entries: Array<{ path: string; source: string }> = [];
@@ -707,6 +712,29 @@ export async function collectExternalPackageSources(opts: {
       if (reason !== undefined) record.reason = reason;
       outcomes.push(record);
       continue;
+    }
+
+    if (requireSourceEntry?.(specifier)) {
+      const redirected =
+        condition && packageName
+          ? condition.entries.some(([entry]) => entry === entryKey)
+          : existsSync(join(pkgRoot, 'src')) &&
+            sourceEntryForSpecifier(
+              specifier,
+              join(pkgRoot, 'src'),
+              extensionsSet,
+              rootDir
+            ) !== null;
+      if (!redirected) {
+        outcomes.push({
+          specifier,
+          outcome: 'unresolvable',
+          fileCount: 0,
+          reason:
+            'the host does not resolve it, and the system loader finds only compiled output that no source entry redirects to — link the package into node_modules, or give it an "animus" source condition',
+        });
+        continue;
+      }
     }
 
     const realRoot = realPath(pkgRoot);
