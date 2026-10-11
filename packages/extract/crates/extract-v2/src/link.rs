@@ -8,20 +8,24 @@ use animus_system_loader::module_table::{
     ExportLookup, Import, ImportName, ModuleIndex, ModuleRecord, ModuleTable, Request, RequestId,
 };
 use oxc::syntax::module_record::{
-    ExportExportName, ExportImportName, ExportLocalName, ImportImportName, ModuleRecord as ParsedRecord,
+    ExportEntry, ExportExportName, ExportImportName, ExportLocalName, ImportImportName, ModuleRecord as ParsedRecord,
 };
 
-use crate::analyze_css::{resolve_import_source, CssInputs};
+use crate::analyze_css::{expand_alias, resolve_import_source, CssInputs};
 use crate::facts::FileFacts;
-use crate::identity::{BindingTable, DefaultExport, LocalId};
+use crate::identity::{BindingKind, BindingTable, LocalId};
 
 /// A module's record with its requests as written.
 pub type OwnedModuleRecord = ModuleRecord<LocalId, String>;
 
-/// Copies the parser's record of `module`, leaving out type-only entries.
-/// Bindings are the table's; an entry whose binding a failed parse never
-/// declared is left out.
-pub(crate) fn copy_module_record(parsed: &ParsedRecord<'_>, bindings: &BindingTable) -> OwnedModuleRecord {
+/// Copies the parser's record of `module`, whose text is `source`, leaving
+/// out type-only entries. Bindings are the table's; an entry whose binding a
+/// failed parse never declared is left out.
+pub(crate) fn copy_module_record(
+    parsed: &ParsedRecord<'_>,
+    bindings: &BindingTable,
+    source: &str,
+) -> OwnedModuleRecord {
     let mut record = OwnedModuleRecord {
         requests: Vec::new(),
         imports: Vec::new(),
@@ -29,6 +33,13 @@ pub(crate) fn copy_module_record(parsed: &ParsedRecord<'_>, bindings: &BindingTa
         indirect_exports: Vec::new(),
         namespace_exports: Vec::new(),
         star_exports: Vec::new(),
+        default_cells: bindings
+            .bindings
+            .iter()
+            .enumerate()
+            .filter(|(_, binding)| binding.kind == BindingKind::DefaultCell)
+            .map(|(index, _)| LocalId(u32::try_from(index).expect("fewer than 2^32 bindings in one module")))
+            .collect(),
     };
     for entry in parsed.import_entries.iter().filter(|entry| !entry.is_type) {
         let Some(local) = bindings.module_binding(entry.local_name.name.as_str()) else { continue };
@@ -53,15 +64,21 @@ pub(crate) fn copy_module_record(parsed: &ParsedRecord<'_>, bindings: &BindingTa
                 if let Some(import) = namespace_import(local.name.as_str()) {
                     record.namespace_exports.push((exported, import.request));
                 } else if let Some(binding) = bindings.module_binding(local.name.as_str()) {
-                    record.local_exports.push((exported, binding));
+                    // A declared type exports nothing at runtime.
+                    let declared = bindings.binding(binding);
+                    if declared.value || declared.kind != BindingKind::Declared {
+                        record.local_exports.push((exported, binding));
+                    }
                 }
             }
-            ExportLocalName::Default(_) => {
-                if let Some(DefaultExport::Snapshot(cell) | DefaultExport::Declaration(cell)) = bindings.default_export {
+            // `export default` of an expression, or of an anonymous function
+            // or class, exports the module's default cell.
+            ExportLocalName::Default(_) | ExportLocalName::Null if exported == "default" => {
+                if let Some(&cell) = record.default_cells.first() {
                     record.local_exports.push((exported, cell));
                 }
             }
-            ExportLocalName::Null => {}
+            ExportLocalName::Default(_) | ExportLocalName::Null => {}
         }
     }
 
@@ -72,14 +89,7 @@ pub(crate) fn copy_module_record(parsed: &ParsedRecord<'_>, bindings: &BindingTa
         let request = intern(&mut record.requests, specifier.name.as_str());
         match &entry.import_name {
             ExportImportName::Name(name) => {
-                // The parser names an exported default import by its local
-                // name; ECMA reads `default` there.
-                let from_default_import = parsed.import_entries.iter().any(|import| {
-                    import.statement_span == entry.statement_span
-                        && import.local_name.name == name.name
-                        && matches!(import.import_name, ImportImportName::Default(_))
-                });
-                let imported = if from_default_import { "default".to_string() } else { name.name.to_string() };
+                let imported = reexported_import(parsed, entry, source).unwrap_or_else(|| name.name.to_string());
                 record.indirect_exports.push((exported, request, imported));
             }
             ExportImportName::All => record.namespace_exports.push((exported, request)),
@@ -94,6 +104,28 @@ pub(crate) fn copy_module_record(parsed: &ParsedRecord<'_>, bindings: &BindingTa
         }
     }
     record
+}
+
+/// The name an `export { x }` of an imported binding `x` re-exports, as
+/// ECMA's ParseModule reads it: the import's own name, `default` for a
+/// default import. The parser turns such an export into an indirect one
+/// carrying the import's statement span and, for a default import, its
+/// local name, so the export's own local name is read from the export
+/// specifier's span and matched to the import that declares it. `None` for
+/// an indirect export written with `from`.
+fn reexported_import(parsed: &ParsedRecord<'_>, entry: &ExportEntry<'_>, source: &str) -> Option<String> {
+    if !parsed.import_entries.iter().any(|import| import.statement_span == entry.statement_span) {
+        return None;
+    }
+    let text = source.get(entry.span.start as usize..entry.span.end as usize)?.trim_start();
+    let end = text.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).unwrap_or(text.len());
+    let local = &text[..end];
+    let import = parsed.import_entries.iter().find(|import| import.local_name.name == local)?;
+    match &import.import_name {
+        ImportImportName::Name(name) => Some(name.name.to_string()),
+        ImportImportName::Default(_) => Some("default".to_string()),
+        ImportImportName::NamespaceObject => None,
+    }
 }
 
 /// The position of `specifier` in `requests`, added when new.
@@ -135,7 +167,12 @@ impl ProjectLinks {
                             // A package entry the analysis does not hold.
                             None => Request::Outside(target),
                         },
-                        None if specifier.starts_with('.') => Request::Outside(format!("{path}::{specifier}")),
+                        // A path, written or through an alias, that names no
+                        // file the analysis holds resolved to nothing.
+                        None if specifier.starts_with('.') || expand_alias(specifier, &inputs.path_aliases).is_some() => {
+                            Request::Unresolved(format!("{path}::{specifier}"))
+                        }
+                        // A package the analysis does not hold.
                         None => Request::Outside(specifier.clone()),
                     }
                 })
@@ -193,6 +230,14 @@ mod tests {
             ("default-import.js", "import d from './snapshot.js'; export { d };"),
             ("types.ts", "export type T = 1; export interface I {} export const v = 1; export type { v as w };"),
             ("open.js", "export * from 'react'; export * from './leaf.js';"),
+            ("expression.js", "export default { a: 1 };"),
+            ("anonymous.js", "export default function () {}"),
+            ("reexport-default.js", "export { default } from './expression.js';"),
+            ("named.js", "export default 'default'; export const d = 'named';"),
+            ("collision.js", "import d, { d as x } from './named.js'; export { x };"),
+            ("dangling.js", "export { y } from './missing.js'; export * from './gone.js';"),
+            ("thenable.js", "export const then = () => {};"),
+            ("namespaces.ts", "export namespace Types { export type X = 1; } export namespace Values { export const v = 1; } type T = 1; export { T };"),
         ]);
         let module = |path: &str| links.module(path).unwrap();
         let local = |path: &str, name: &str| Terminal::Local {
@@ -232,6 +277,7 @@ mod tests {
         assert_eq!(resolve("types.ts", "I"), ExportLookup::Absent);
         assert_eq!(resolve("types.ts", "w"), ExportLookup::Absent);
         assert_eq!(links.table.exported_names(module("types.ts")).names, ["v"]);
+        assert_eq!(links.table.exported_names(module("namespaces.ts")).names, ["Values"]);
         // A star of an unanalysed module is open, never absent.
         let ExportLookup::Incomplete { known, openings } = resolve("open.js", "x") else {
             panic!("an open star leaves the answer open");
@@ -240,5 +286,25 @@ mod tests {
         assert_eq!(openings[0].reason, OpeningReason::OutsideStar("react".into()));
         assert!(matches!(links.table.namespace_has_then(module("open.js")), NamespaceThen::Incomplete(_)));
         assert_eq!(links.table.namespace_has_then(module("leaf.js")), NamespaceThen::Absent);
+        assert_eq!(links.table.namespace_has_then(module("thenable.js")), NamespaceThen::Present(local("thenable.js", "then")));
+        // A default expression and an anonymous default declaration export
+        // the module's default cell, and `export { default } from` reaches it.
+        for path in ["expression.js", "anonymous.js"] {
+            let ExportLookup::Resolved(Terminal::Local { binding, .. }) = resolve(path, "default") else {
+                panic!("{path} exports a default");
+            };
+            assert_eq!(files[path].bindings.binding(binding).kind, BindingKind::DefaultCell);
+        }
+        assert_eq!(resolve("reexport-default.js", "default"), resolve("expression.js", "default"));
+        // `export { x }` of `{ d as x }` re-exports `d`, beside a default import named d.
+        assert_eq!(resolve("collision.js", "x"), ExportLookup::Resolved(local("named.js", "d")));
+        // A request that resolves to nothing leaves the answer open, never absent.
+        for name in ["y", "z"] {
+            let ExportLookup::Incomplete { known, openings } = resolve("dangling.js", name) else {
+                panic!("an unresolved request leaves {name} open");
+            };
+            assert!(known.is_empty());
+            assert!(matches!(&openings[0].reason, OpeningReason::UnresolvedRequest(_)));
+        }
     }
 }

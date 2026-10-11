@@ -21,6 +21,9 @@ pub enum Request {
     Module(ModuleIndex),
     /// Outside the analysed set, by its resolved identity.
     Outside(String),
+    /// Resolved to nothing, by the specifier as written: any export may be
+    /// there.
+    Unresolved(String),
 }
 
 /// The name an import or indirect export reads; `default` is a name.
@@ -52,6 +55,9 @@ pub struct ModuleRecord<B, R = Request> {
     /// from`, and `export { ns }` of `import * as ns`.
     pub namespace_exports: Vec<(String, RequestId)>,
     pub star_exports: Vec<RequestId>,
+    /// The cells `export default` of an expression or an anonymous function
+    /// or class writes, which hold the value it had then.
+    pub default_cells: Vec<B>,
 }
 
 impl<B, R> ModuleRecord<B, R> {
@@ -67,6 +73,7 @@ impl<B, R> ModuleRecord<B, R> {
             indirect_exports: self.indirect_exports.clone(),
             namespace_exports: self.namespace_exports.clone(),
             star_exports: self.star_exports.clone(),
+            default_cells: self.default_cells.clone(),
         }
     }
 }
@@ -87,6 +94,8 @@ pub enum OpeningReason {
     /// `export *` of a module outside the analysed set: any name may come
     /// through it.
     OutsideStar(String),
+    /// A request that resolved to nothing.
+    UnresolvedRequest(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -207,6 +216,7 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
             (Request::Outside(identity), ImportName::Namespace) => {
                 ExportLookup::Resolved(Terminal::External { module: identity.clone(), export: None })
             }
+            (Request::Unresolved(specifier), _) => unresolved(module, specifier),
         }
     }
 
@@ -228,13 +238,17 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
                 Request::Outside(identity) => {
                     ExportLookup::Resolved(Terminal::External { module: identity.clone(), export: Some(imported.clone()) })
                 }
+                Request::Unresolved(specifier) => unresolved(module, specifier),
             };
         }
         if let Some((_, request)) = record.namespace_exports.iter().find(|(exported, _)| exported == name) {
-            return ExportLookup::Resolved(match through(*request) {
-                Request::Module(target) => Terminal::Namespace(*target),
-                Request::Outside(identity) => Terminal::External { module: identity.clone(), export: None },
-            });
+            return match through(*request) {
+                Request::Module(target) => ExportLookup::Resolved(Terminal::Namespace(*target)),
+                Request::Outside(identity) => {
+                    ExportLookup::Resolved(Terminal::External { module: identity.clone(), export: None })
+                }
+                Request::Unresolved(specifier) => unresolved(module, specifier),
+            };
         }
         if name == "default" {
             return ExportLookup::Absent;
@@ -245,6 +259,9 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
             match through(star) {
                 Request::Outside(identity) => {
                     openings.push(Opening { module, reason: OpeningReason::OutsideStar(identity.clone()) });
+                }
+                Request::Unresolved(specifier) => {
+                    openings.push(Opening { module, reason: OpeningReason::UnresolvedRequest(specifier.clone()) });
                 }
                 Request::Module(target) => match self.resolve(*target, name, set) {
                     ExportLookup::Absent => {}
@@ -307,6 +324,9 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
                 Request::Outside(identity) => out
                     .openings
                     .push(Opening { module, reason: OpeningReason::OutsideStar(identity.clone()) }),
+                Request::Unresolved(specifier) => out
+                    .openings
+                    .push(Opening { module, reason: OpeningReason::UnresolvedRequest(specifier.clone()) }),
                 Request::Module(target) => self.collect_names(*target, stars, seen, out, false),
             }
         }
@@ -362,10 +382,10 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
             .collect()
     }
 
-    /// Every open star, with its exposure: with no captured restriction,
-    /// unanalysed code may reach every importable module and the outside
-    /// world. Its dependents are the modules that reach it through `export
-    /// *`, as a fixpoint over star cycles.
+    /// Every open star and unresolved request, with its exposure: with no
+    /// captured restriction, unanalysed code may reach every importable
+    /// module and the outside world. Its dependents are the modules that
+    /// reach it through `export *`, as a fixpoint over star cycles.
     pub fn module_openings(&self) -> Vec<ModuleOpening> {
         let mut star_dependents = vec![BTreeSet::new(); self.modules.len()];
         for (index, record) in self.modules.iter().enumerate() {
@@ -378,8 +398,15 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
         let mut out = Vec::new();
         for (module, record) in self.modules.iter().enumerate() {
             let mut closure: Option<BTreeSet<ModuleIndex>> = None;
-            for &star in &record.star_exports {
-                let Request::Outside(identity) = &record.requests[star] else { continue };
+            let open_stars = record.star_exports.iter().filter_map(|&star| match &record.requests[star] {
+                Request::Outside(identity) => Some(OpeningReason::OutsideStar(identity.clone())),
+                _ => None,
+            });
+            let unresolved = record.requests.iter().filter_map(|request| match request {
+                Request::Unresolved(specifier) => Some(OpeningReason::UnresolvedRequest(specifier.clone())),
+                _ => None,
+            });
+            for reason in open_stars.chain(unresolved) {
                 let dependents = closure
                     .get_or_insert_with(|| {
                         let mut dependents = BTreeSet::from([module]);
@@ -395,7 +422,7 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
                     })
                     .clone();
                 out.push(ModuleOpening {
-                    opening: Opening { module, reason: OpeningReason::OutsideStar(identity.clone()) },
+                    opening: Opening { module, reason },
                     exposure: Exposure::AllImportableCapturedModules,
                     unknown_outside_world: true,
                     dependents,
@@ -404,6 +431,12 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
         }
         out
     }
+}
+
+/// The answer through a request that resolved to nothing: open.
+fn unresolved<B>(module: ModuleIndex, specifier: &str) -> ExportLookup<B> {
+    let reason = OpeningReason::UnresolvedRequest(specifier.to_string());
+    ExportLookup::Incomplete { known: Vec::new(), openings: vec![Opening { module, reason }] }
 }
 
 fn add_terminal<B: PartialEq>(known: &mut Vec<Terminal<B>>, terminal: Terminal<B>) {
