@@ -1,6 +1,5 @@
 import {
   assembleStylesheet,
-  clearEngineCache,
   createExcludeMatcher,
   DEFAULT_EXTENSIONS,
   validateLayerOrder,
@@ -21,10 +20,6 @@ export async function runBuildStart(
   resolveSpecifier: (specifier: string) => Promise<string | null>,
   emitAsset?: (fileName: string, source: Uint8Array) => string
 ): Promise<void> {
-  // Clear Rust-side per-file cache so stale results from a prior
-  // server lifecycle never bleed into a fresh build/dev start.
-  clearEngineCache(ctx.engineApi);
-
   // Reset before the analysis below, which consults this state: Rollup
   // reference ids are scoped to one build and must not cross into the next.
   ctx.assetPassComplete = false;
@@ -50,15 +45,10 @@ export async function runBuildStart(
   // Session's; Vite serves its publication and substitutes asset URLs.
   const session = ctx.session ?? ctx.createSession();
   session.hostResolve = resolveSpecifier;
-  session.hostSubstitutesAssets = true;
-  try {
-    await session.runFullPipeline();
-  } catch (error) {
-    // A dev server starts through an aborted parse: it serves no component
-    // CSS until an edit repairs the source. A build fails on it.
-    if (ctx.isProd || ctx.sessionOutcome?.kind !== 'held') throw error;
-    ctx.warn(error instanceof Error ? error.message : String(error));
-  }
+  // A build fails on an aborted parse. A dev server starts through it with
+  // a warning and serves no component CSS until an edit repairs the source.
+  if (ctx.isProd) await session.runFullPipeline();
+  else await ctx.runAttempt((started) => started.runFullPipeline());
   if (ctx.verbose) {
     const propCount = Object.keys(JSON.parse(ctx.system.propConfigJson)).length;
     const groupCount = Object.keys(
@@ -117,7 +107,7 @@ export async function runBuildStart(
     }
   }
   // From here on, each adopted publication resolves late-appearing
-  // specifiers (dev resets).
+  // specifiers (dev system reloads).
   ctx.assetPassComplete = true;
 
   if (ctx.storedManifest) {
@@ -149,7 +139,7 @@ export async function runBuildStart(
       `CSS: ${ctx.resolvedComponentCss.length} bytes (${Object.keys(ctx.storedManifest.components).length} components)`
     );
 
-    if (!ctx.isProd && ctx.storedSheets) {
+    if (!ctx.isProd) {
       const staticCss = assembleStylesheet({
         layers: ctx.options.layers,
         variableCss: ctx.variableCss,

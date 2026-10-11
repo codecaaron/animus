@@ -9,11 +9,11 @@ import { extname, relative, resolve } from 'path';
 import { RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID } from './constants';
 import { invalidateFileModules } from './module-invalidation';
 import { reconcileSourceCorpus } from './rediscovery';
+import { applyPublished, changesOf, mergePublished } from './session-outcomes';
 import { applyDevBridgeImport, extendingFiles } from './transform';
 
 import type { ObservedOutcome, PluginContext } from './context';
 import type { HotUpdateResult } from './hot-update-events';
-import type { WatchChanges } from '@animus-ui/extract/session';
 import type {
   DevEnvironment,
   EnvironmentModuleNode,
@@ -82,56 +82,6 @@ export async function handleHotUpdate(
   return invalidateStaleModules(ctx, environment, modules, result);
 }
 
-/** The file event as a Session change set. */
-function changesOf(
-  type: HotUpdateOptions['type'],
-  absFile: string
-): WatchChanges {
-  const files = new Set([absFile]);
-  return type === 'delete' ? { removedFiles: files } : { modifiedFiles: files };
-}
-
-/** What the published outcomes of one submission change, merged. */
-function mergePublished(outcomes: readonly ObservedOutcome[]) {
-  const merged = {
-    published: false,
-    full: false,
-    endedHold: false,
-    systemPropsChanged: false,
-    planChanged: new Set<string>(),
-    redeliver: new Set<string>(),
-  };
-  for (const { outcome, systemPropsChanged } of outcomes) {
-    if (outcome.kind !== 'published') continue;
-    merged.published = true;
-    merged.full ||= outcome.pass === 'full';
-    merged.endedHold ||= outcome.endedHold;
-    merged.systemPropsChanged ||= systemPropsChanged;
-    for (const path of outcome.planChanged) merged.planChanged.add(path);
-    for (const path of outcome.redeliver) merged.redeliver.add(path);
-  }
-  return merged;
-}
-
-/** Acts on what every submission's publications owe the module graph: a
- *  publication that ends a hold re-delivers the originals whose bytes
- *  changed meanwhile, and a full pass (a system reload) reloads the
- *  client. */
-function applyPublished(
-  ctx: PluginContext,
-  merged: ReturnType<typeof mergePublished>
-): void {
-  if (merged.redeliver.size > 0) {
-    invalidateFileModules(ctx, [...merged.redeliver]);
-  }
-  if (merged.full) {
-    // A type-only definition module has no import edge, so importer
-    // propagation cannot deliver its new bytes — evict changed plans.
-    invalidateFileModules(ctx, [...merged.planChanged]);
-    ctx.invalidateSystemReloadModules(true);
-  }
-}
-
 /** A system dependency's event reloads the system through the Session. A
  *  failed reload keeps the last good system served and warns; under
  *  `strict` the client overlay reports it too. */
@@ -140,7 +90,7 @@ async function reloadSystem(
   absFile: string,
   type: HotUpdateOptions['type']
 ): Promise<void> {
-  const resetStart = performance.now();
+  const reloadStart = performance.now();
   ctx.log(`HMR system reload: ${relative(ctx.rootDir, absFile)}`);
   let outcomes: ObservedOutcome[];
   try {
@@ -155,7 +105,7 @@ async function reloadSystem(
         err: { message, stack, plugin: 'animus-extract' },
       });
     }
-    // The reset re-serves the last good system.
+    // The failed reload re-serves the last good system.
     ctx.invalidateSystemReloadModules(true);
     return;
   }
@@ -165,7 +115,7 @@ async function reloadSystem(
   if (!merged.published) ctx.invalidateSystemReloadModules(false);
   else {
     ctx.log(
-      `HMR system reload complete: ${Math.round(performance.now() - resetStart)}ms`
+      `HMR system reload complete: ${Math.round(performance.now() - reloadStart)}ms`
     );
   }
 }
@@ -211,9 +161,7 @@ async function analyzeChangedFile(
   }
 
   const hmrStart = performance.now();
-  const outcomes = await ctx.submitChanges({
-    modifiedFiles: new Set([absFile]),
-  });
+  const outcomes = await ctx.submitChanges(changesOf('update', absFile));
   const last = outcomes.at(-1)?.outcome;
   // Nothing published: the Session read no change.
   if (last === undefined) {
@@ -302,15 +250,16 @@ async function pruneDeletedFile(
   absFile: string
 ): Promise<void> {
   const merged = mergePublished(
-    await ctx.submitChanges({ removedFiles: new Set([absFile]) })
+    await ctx.submitChanges(changesOf('delete', absFile))
   );
   if (!merged.published) return;
   applyPublished(ctx, merged);
   ctx.trace(`Deleted file pruned: ${relative(ctx.rootDir, absFile)}`);
 
   // No exclusion: evicting the deleted file's own residual nodes is harmless
-  // and closes the delete-then-recreate-same-path window.
-  invalidateFileModules(ctx, [...merged.planChanged]);
+  // and closes the delete-then-recreate-same-path window. A full pass has
+  // already evicted them (applyPublished).
+  if (!merged.full) invalidateFileModules(ctx, [...merged.planChanged]);
 
   ctx.invalidateExtractedModules();
 }

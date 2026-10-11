@@ -8,6 +8,8 @@ import {
 } from '@animus-ui/extract/pipeline';
 import { dirname, extname, relative, resolve } from 'path';
 
+import { mergePublished } from './session-outcomes';
+
 import type { ObservedOutcome, PluginContext } from './context';
 import type { ProjectManifest } from '@animus-ui/extract/pipeline';
 
@@ -95,9 +97,7 @@ export async function reconcileSourceCorpus(
     });
     outcomes.push(...submitted);
     // Nothing published: the previous manifest is still current.
-    if (!submitted.some(({ outcome }) => outcome.kind === 'published')) {
-      return outcomes;
-    }
+    if (!mergePublished(submitted).published) return outcomes;
   }
 
   if (unresolvedDropFiles(ctx).size > 0) {
@@ -110,7 +110,7 @@ export async function reconcileSourceCorpus(
 
 /** The on-disk sources the Session does not hold, as absolute paths. */
 function undiscoveredFiles(ctx: PluginContext): string[] {
-  const held = ctx.session!.publishedSources;
+  const held = ctx.session!.heldSources;
   return discoverFiles(
     ctx.rootDir,
     ctx.rootDir,
@@ -153,7 +153,7 @@ function warnInadmissibleParents(
   }
 
   for (const drop of drops) {
-    const consumer = ctx.session?.publishedSources.get(drop.file);
+    const consumer = ctx.session?.heldSources.get(drop.file);
     if (!consumer) continue;
     const specifier = importSpecifierFor(consumer.source, drop.parent);
     if (!specifier || !specifier.startsWith('.')) continue;

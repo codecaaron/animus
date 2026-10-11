@@ -78,7 +78,7 @@ export function loadVirtualModule(
   };
 
   if (id === RESOLVED_CSS_ID) {
-    if (!ctx.isProd && ctx.storedSheets) {
+    if (!ctx.isProd && ctx.storedManifest) {
       const { variables, body } = assembleStylesheet({
         layers: ctx.options.layers,
         variableCss: ctx.variableCss,

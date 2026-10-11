@@ -8,6 +8,7 @@ import { relative } from 'path';
 import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
 import { invalidateFileModules } from './module-invalidation';
 import { reconcileSourceCorpus, unresolvedDropFiles } from './rediscovery';
+import { applyPublished, changesOf, mergePublished } from './session-outcomes';
 
 import type { ObservedOutcome, PluginContext } from './context';
 
@@ -105,34 +106,35 @@ export async function transformSource(
     if (
       !ctx.isProd &&
       session !== null &&
-      !session.publishedSources.has(relativePath)
+      !session.heldSources.has(relativePath)
     ) {
       let outcomes: ObservedOutcome[] = [];
       try {
-        outcomes = await ctx.submitChanges({ modifiedFiles: new Set([id]) });
+        outcomes = await ctx.submitChanges(changesOf('create', id));
       } catch (error) {
         // A failed analysis leaves the file undetected, so the next
         // transform retries.
         ctx.warn(error instanceof Error ? error.message : String(error));
         detectionFailed = true;
       }
-      if (outcomes.some(({ outcome }) => outcome.kind === 'published')) {
+      if (mergePublished(outcomes).published) {
         // The detected file can itself extend a file the walk has not
         // seen, so reconcile before this result is served.
-        outcomes.push(...(await reconcileSourceCorpus(ctx)));
+        const merged = mergePublished([
+          ...outcomes,
+          ...(await reconcileSourceCorpus(ctx)),
+        ]);
+        applyPublished(ctx, merged);
 
         // A detection re-analysis can change other served files' plans;
         // the detected file's own in-flight transform is the current serve.
-        invalidateFileModules(
-          ctx,
-          [
-            ...new Set(
-              outcomes.flatMap(({ outcome }) =>
-                outcome.kind === 'published' ? outcome.planChanged : []
-              )
-            ),
-          ].filter((path) => path !== relativePath)
-        );
+        // A full pass has evicted them already (applyPublished).
+        if (!merged.full) {
+          invalidateFileModules(
+            ctx,
+            [...merged.planChanged].filter((path) => path !== relativePath)
+          );
+        }
 
         const compCount = ctx.storedManifest?.files[relativePath]?.length ?? 0;
         ctx.info(

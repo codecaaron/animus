@@ -26,7 +26,7 @@ server starts through an aborted parse with a warning; a build fails on it.
 
 - Replaces builder chains with `createComponent()` calls
 - Adds `import 'virtual:animus/styles.css'`
-- Uses manifest from `analyzeProject()` for class names and configs
+- Uses the Session's published manifest for class names and configs
 
 ### `hotUpdate` (dev HMR)
 

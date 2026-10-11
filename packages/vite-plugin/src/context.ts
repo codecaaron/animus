@@ -24,7 +24,7 @@ import {
   sessionKey,
 } from '@animus-ui/extract/session';
 import { rmSync } from 'fs';
-import { join, resolve } from 'path';
+import { join } from 'path';
 
 import {
   RESOLVED_COMPONENTS_ID,
@@ -43,7 +43,6 @@ import type {
   ExternalPackageOutcome,
   HostAssetClassification,
   HostExtensionPolicy,
-  ManifestSheets,
   ProjectManifest,
   SystemConfig,
 } from '@animus-ui/extract/pipeline';
@@ -199,8 +198,6 @@ export class PluginContext {
     );
   }
 
-  storedSheets: ManifestSheets | null = null;
-
   layerDeclaration = '';
 
   transformOutputHashes = new Map<string, string>();
@@ -271,19 +268,15 @@ export class PluginContext {
    *  the owning package's `sideEffects`; absent leaves Vite's default. */
   externalSourceSideEffects = new Map<string, boolean>();
 
-  externalSourceEntries = new Map<string, string>();
+  externalSourceEntries: ReadonlyMap<string, string> = new Map();
 
   externalPackageOutcomes: ExternalPackageOutcome[] = [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   devServer: any;
 
-  resolvedSystemPath: string | null = null;
-
-  systemDependencyKeys: Set<string> = new Set();
-
-  systemDependencyPaths: string[] = [];
-  /** Paths the system load looked for and found absent. */
-  systemMissingPaths: string[] = [];
+  /** The Session's path lists already registered with Vite's watcher; the
+   *  Session replaces a list when it changes. */
+  private readonly watchedPathLists = new WeakSet<readonly string[]>();
 
   // Per-plugin-instance engine state: two differently-configured plugins in
   // one process must not share an engine.
@@ -300,9 +293,6 @@ export class PluginContext {
   readonly build = createBuildId();
   /** The build's Session, created once the Vite root resolves. */
   session: ExtractionSession | null = null;
-  /** The Session's last outcome: a publication, or a hold on an aborted
-   *  parse. */
-  sessionOutcome: SessionOutcome | null = null;
   /** The outcomes each in-flight `submitChanges` collects. */
   private readonly outcomeCollectors = new Set<ObservedOutcome[]>();
 
@@ -390,8 +380,9 @@ export class PluginContext {
       }
     );
     session.persistArtifacts = false;
+    // Vite resolves asset() specifiers through its own asset pipeline.
+    session.hostSubstitutesAssets = true;
     session.driverLabel = 'animus-extract';
-    this.sessionOutcome = null;
     session.onOutcome = (outcome) => this.observeOutcome(session, outcome);
     session.development = this.development;
     session.rootDir = this.rootDir;
@@ -414,7 +405,6 @@ export class PluginContext {
     session: ExtractionSession,
     outcome: SessionOutcome
   ): void {
-    this.sessionOutcome = outcome;
     let systemPropsChanged = false;
     // Aborted bytes go to Vite's own parser until a publication ends the
     // hold (see the transform hook).
@@ -433,19 +423,28 @@ export class PluginContext {
     }
   }
 
-  /** Submits a dev change set to the Session and returns the outcomes of
-   *  the attempts that settle it. A hold warns and resolves with its
-   *  outcome (Vite reports the syntax error itself); any other failure
-   *  rejects. */
-  async submitChanges(changes: WatchChanges): Promise<ObservedOutcome[]> {
+  /** Submits a dev change set to the Session. Until a first publication
+   *  there is no generation to update: the full read covers the change. */
+  submitChanges(changes: WatchChanges): Promise<ObservedOutcome[]> {
+    return this.runAttempt((session) =>
+      session.publication === null
+        ? session.runFullPipeline()
+        : session.handleWatchUpdate(changes)
+    );
+  }
+
+  /** Runs one Session attempt and returns the outcomes that settle it. A
+   *  hold warns and resolves with its outcome (Vite reports the syntax
+   *  error itself); any other failure rejects. Either way the watcher
+   *  learns the paths the attempt's system load named. */
+  async runAttempt(
+    attempt: (session: ExtractionSession) => Promise<void>
+  ): Promise<ObservedOutcome[]> {
     const session = this.session ?? this.createSession();
     const collected: ObservedOutcome[] = [];
     this.outcomeCollectors.add(collected);
     try {
-      // Until a first publication there is no generation to update: the
-      // full read covers the change.
-      if (session.publication === null) await session.runFullPipeline();
-      else await session.handleWatchUpdate(changes);
+      await attempt(session);
     } catch (error) {
       if (!collected.some(({ outcome }) => outcome.kind === 'held')) {
         throw error;
@@ -453,6 +452,7 @@ export class PluginContext {
       this.warn(error instanceof Error ? error.message : String(error));
     } finally {
       this.outcomeCollectors.delete(collected);
+      this.registerSystemWatchPaths();
     }
     return collected;
   }
@@ -465,21 +465,8 @@ export class PluginContext {
     if (publication === null) return;
     const manifest = publication.manifest;
     this.system = publication.system;
-    this.resolvedSystemPath = resolve(this.rootDir, this.options.system);
-    const keys = new Set<string>();
-    for (const path of [
-      this.resolvedSystemPath,
-      ...session.systemDependencyPaths,
-      ...session.systemMissingPaths,
-    ]) {
-      for (const key of toWatchKeys(path)) keys.add(key);
-    }
-    this.systemDependencyKeys = keys;
-    this.systemDependencyPaths = session.systemDependencyPaths;
-    this.systemMissingPaths = session.systemMissingPaths;
     this.storedManifest = manifest;
     this.storedManifestJson = publication.manifestJson;
-    this.storedSheets = manifest.sheets;
     this.globalCss = publication.analysisGlobalCss;
     this.resolvedComponentCss = publication.analysisComponentCss;
     this.reverseProvenance = manifest.reverse_provenance;
@@ -492,13 +479,9 @@ export class PluginContext {
       manifest.typed_system_props
     );
     this.externalPackageDirs = session.externalPackageDirs;
-    this.externalSourceEntries.clear();
-    for (const [specifier, entry] of session.externalSourceEntries) {
-      this.externalSourceEntries.set(specifier, entry);
-    }
+    this.externalSourceEntries = session.externalSourceEntries;
     this.externalSourceSideEffects = session.externalSourceSideEffects;
     this.externalPackageOutcomes = session.lastExternalOutcomes;
-    this.registerSystemWatchPaths();
     this.applyAssetSubstitutions();
   }
 
@@ -705,25 +688,25 @@ export class PluginContext {
   }
 
   isSystemDependency(absFile: string): boolean {
-    return toWatchKeys(absFile).some((key) =>
-      this.systemDependencyKeys.has(key)
-    );
+    return this.session?.isSystemDependency(absFile) ?? false;
   }
 
-  /** Watch every loader-reported dependency path. Vite hard-ignores
-   *  node_modules, so dependencies installed there produce no events. */
+  /** Watch every loader-reported dependency path, the paths the load found
+   *  absent (creating one reloads the system), and the external package
+   *  roots. Vite hard-ignores node_modules, so dependencies installed there
+   *  produce no events. A list already registered is not added again. */
   registerSystemWatchPaths(): void {
     const watcher = this.devServer?.watcher;
-    if (!watcher) return;
-    if (this.systemDependencyPaths.length > 0) {
-      watcher.add(this.systemDependencyPaths);
-    }
-    // Absent now: creating one reloads the system.
-    if (this.systemMissingPaths.length > 0) {
-      watcher.add(this.systemMissingPaths);
-    }
-    if (this.externalPackageDirs.length > 0) {
-      watcher.add(this.externalPackageDirs);
+    const session = this.session;
+    if (!watcher || !session) return;
+    for (const paths of [
+      session.systemDependencyPaths,
+      session.systemMissingPaths,
+      session.externalPackageDirs,
+    ]) {
+      if (paths.length === 0 || this.watchedPathLists.has(paths)) continue;
+      this.watchedPathLists.add(paths);
+      watcher.add(paths);
     }
   }
 
