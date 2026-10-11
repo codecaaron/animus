@@ -199,12 +199,13 @@ export function checkLockLiveness(record: CliLockRecord): CliLockLiveness {
 }
 
 export function lockRecordBytes(startedAt: string, build?: string): string {
-  return JSON.stringify({
+  const record: CliLockRecord = {
     pid: process.pid,
     startedAt,
     heartbeatAt: new Date().toISOString(),
-    ...(build === undefined ? {} : { build }),
-  } satisfies CliLockRecord);
+  };
+  if (build !== undefined) record.build = build;
+  return JSON.stringify(record);
 }
 
 const HEARTBEAT_TEMP_PREFIX = '.lock-heartbeat-';

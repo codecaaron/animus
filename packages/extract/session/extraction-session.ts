@@ -111,7 +111,6 @@ import {
   setSharedSystemProps,
   setWatchTransaction,
 } from './singleton';
-import type { SessionKey } from './singleton';
 import { logBuildTimings } from './timing';
 
 import type {
@@ -124,6 +123,7 @@ import type {
   PackageResolution,
   SessionResolutionContext,
 } from './resolve-packages';
+import type { SessionKey } from './singleton';
 
 export type SessionOptions = AnimusCoreOptions;
 
@@ -898,13 +898,16 @@ export class ExtractionSession {
     // Publication exclusivity is the pipeline's claim, so the per-instance
     // write guards hold by construction. Re-entrant for this instance.
     if (this.releasePublicationClaim === null) {
-      const releaseOwner = claimExclusiveSessionOwner(this.key, 
+      const releaseOwner = claimExclusiveSessionOwner(
+        this.key,
         `${this.driverLabel}:${this.sessionDir}`
       );
       // The on-disk record is what stops a sibling from pruning this tree.
       // Only the in-process winner writes it, and both release together.
       mkdirSync(this.sessionDir, { recursive: true });
-      const releaseClaimRecord = holdDirectoryClaim(this.sessionDir, { build: this.sessionId });
+      const releaseClaimRecord = holdDirectoryClaim(this.sessionDir, {
+        build: this.sessionId,
+      });
       this.releasePublicationClaim = () => {
         releaseOwner();
         releaseClaimRecord();
@@ -1066,7 +1069,12 @@ export class ExtractionSession {
       }
     );
     discoveryDiagnostics.push(
-      ...importedKitDiagnostics(rawEntries, engineApi(this.key), rootDir, packageNames)
+      ...importedKitDiagnostics(
+        rawEntries,
+        engineApi(this.key),
+        rootDir,
+        packageNames
+      )
     );
     const preResolved = resolvePackagesByName(
       rootDir,
@@ -1678,7 +1686,8 @@ export class ExtractionSession {
 
     // The analyzed-hash map publishes with the manifest — one generation,
     // one publication; it is the loader's stale-input witness.
-    setAnalyzedHashes(this.key, 
+    setAnalyzedHashes(
+      this.key,
       new Map(fileEntries.map((entry) => [entry.path, entry.hash]))
     );
 
@@ -2019,7 +2028,9 @@ export class ExtractionSession {
     // live while its build is still joined.
     if (claim.record.pid === process.pid) {
       const build = claim.record.build;
-      const joined = build !== undefined && findSession(sessionKey(build, this.rootDir!)) !== undefined;
+      const joined =
+        build !== undefined &&
+        findSession(sessionKey(build, this.rootDir!)) !== undefined;
       return joined ? process.pid : null;
     }
     return checkLockLiveness(claim.record).live ? claim.record.pid : null;

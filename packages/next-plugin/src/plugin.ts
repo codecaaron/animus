@@ -178,7 +178,10 @@ export class AnimusWebpackPlugin {
    *  compilation keeps publishing, whatever the emission mode. */
   constructor(
     options: AnimusNextOptions,
-    { development = false, build }: { development?: boolean; build?: string } = {}
+    {
+      development = false,
+      build,
+    }: { development?: boolean; build?: string } = {}
   ) {
     this.options = options;
     assertNoRetiredEngineSelection(options.engine);

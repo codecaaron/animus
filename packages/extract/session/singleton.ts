@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { realpathSync } from 'fs';
 import { resolve } from 'path';
 
-import { createV2EngineApi } from '../pipeline/index';
+import { createV2EngineApi, stableStringify } from '../pipeline/index';
 
 import type { AnimusCoreOptions } from '../pipeline/core-options';
 import type { V2ExtractEngine } from '../pipeline/index';
@@ -17,7 +17,9 @@ import type { V2ExtractEngine } from '../pipeline/index';
 function joined(key: SessionKey): SessionState {
   const state = findSession(key);
   if (state === undefined) {
-    throw new Error(`[animus] no participant has joined build ${key.build} of ${key.root}`);
+    throw new Error(
+      `[animus] no participant has joined build ${key.build} of ${key.root}`
+    );
   }
   return state;
 }
@@ -34,11 +36,16 @@ export function setManifestJson(key: SessionKey, json: string): void {
  * A latch over the most recently STARTED analysis, never cleared on settle:
  * non-null means one was scheduled. In-flight lives in getWatchTransaction.
  */
-export function getAnalysisStartedPromise(key: SessionKey): Promise<void> | null {
+export function getAnalysisStartedPromise(
+  key: SessionKey
+): Promise<void> | null {
   return findSession(key)?.analysisStarted ?? null;
 }
 
-export function setAnalysisStartedPromise(key: SessionKey, promise: Promise<void>): void {
+export function setAnalysisStartedPromise(
+  key: SessionKey,
+  promise: Promise<void>
+): void {
   joined(key).analysisStarted = promise;
 }
 
@@ -75,17 +82,25 @@ export function getSharedExternalEntries(key: SessionKey): Map<string, string> {
   return findSession(key)?.externalEntries ?? new Map();
 }
 
-export function setSharedExternalEntries(key: SessionKey, entries: Map<string, string>): void {
+export function setSharedExternalEntries(
+  key: SessionKey,
+  entries: Map<string, string>
+): void {
   joined(key).externalEntries = entries;
 }
 
 /** Specifier → its source entry's side effects, published with the shared
  *  entries; absent leaves the bundler's own classification. */
-export function getSharedExternalSideEffects(key: SessionKey): Map<string, boolean> {
+export function getSharedExternalSideEffects(
+  key: SessionKey
+): Map<string, boolean> {
   return findSession(key)?.externalSideEffects ?? new Map();
 }
 
-export function setSharedExternalSideEffects(key: SessionKey, sideEffects: Map<string, boolean>): void {
+export function setSharedExternalSideEffects(
+  key: SessionKey,
+  sideEffects: Map<string, boolean>
+): void {
   joined(key).externalSideEffects = sideEffects;
 }
 
@@ -103,11 +118,16 @@ export interface WatchBatchTarget {
  * session forwards its batch here; dropping it loses files only that
  * watcher sees.
  */
-export function getOwningWatchSession(key: SessionKey): WatchBatchTarget | null {
+export function getOwningWatchSession(
+  key: SessionKey
+): WatchBatchTarget | null {
   return findSession(key)?.authority ?? null;
 }
 
-export function setOwningWatchSession(key: SessionKey, session: WatchBatchTarget | null): void {
+export function setOwningWatchSession(
+  key: SessionKey,
+  session: WatchBatchTarget | null
+): void {
   joined(key).authority = session;
 }
 
@@ -115,11 +135,16 @@ export function setOwningWatchSession(key: SessionKey, session: WatchBatchTarget
  * Per-file content hashes of the last published analysis (relPath → hash of
  * the exact bytes analyzed), including files that produced zero entries.
  */
-export function getAnalyzedHashes(key: SessionKey): ReadonlyMap<string, string> | null {
+export function getAnalyzedHashes(
+  key: SessionKey
+): ReadonlyMap<string, string> | null {
   return findSession(key)?.analyzedHashes ?? null;
 }
 
-export function setAnalyzedHashes(key: SessionKey, hashes: Map<string, string>): void {
+export function setAnalyzedHashes(
+  key: SessionKey,
+  hashes: Map<string, string>
+): void {
   joined(key).analyzedHashes = hashes;
 }
 
@@ -128,7 +153,10 @@ export function setAnalyzedHashes(key: SessionKey, hashes: Map<string, string>):
  * closes: a second publisher would clobber its artifacts. Two builds never
  * exclude each other; sequential claim and release cycles are legal.
  */
-export function claimExclusiveSessionOwner(key: SessionKey, label: string): () => void {
+export function claimExclusiveSessionOwner(
+  key: SessionKey,
+  label: string
+): () => void {
   const state = joined(key);
   const active = state.activeAttempt;
   if (active !== null) {
@@ -177,7 +205,10 @@ export function getWatchTransaction(key: SessionKey): Promise<void> | null {
   return findSession(key)?.watchTransaction ?? null;
 }
 
-export function setWatchTransaction(key: SessionKey, transaction: Promise<void> | null): void {
+export function setWatchTransaction(
+  key: SessionKey,
+  transaction: Promise<void> | null
+): void {
   joined(key).watchTransaction = transaction;
 }
 
@@ -299,47 +330,46 @@ export class SessionConfigurationConflict extends Error {
   }
 }
 
-/** Options that change no output: a participant may differ in them. */
-const OPERATIONAL_OPTIONS: ReadonlySet<string> = new Set(['verbose', 'root']);
-
+/**
+ * The options a build's analysis depends on, each as stable text, which every
+ * participant of the build must agree on. `verbose` changes no output, and
+ * the root is the key's. Each field is data by its type, so equal text is an
+ * equal value; a host's own options are not the build's.
+ */
 function semanticOptions(options: AnimusCoreOptions): Map<string, string> {
-  const entries = Object.entries(options)
-    .filter(([name, value]) => !OPERATIONAL_OPTIONS.has(name) && value !== undefined)
-    .map(([name, value]): [string, string] => [name, stableJson(value)]);
-  return new Map(entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
-}
-
-/** Each function or symbol an option holds, by reference: JSON would drop
- *  it, so two options differing only in one would compare equal. */
-const functionReferences = new WeakMap<object, number>();
-const symbolReferences = new Map<symbol, number>();
-let nextOptionReference = 0;
-
-function referenceId(value: object | symbol): number {
-  const known = typeof value === 'symbol' ? symbolReferences.get(value) : functionReferences.get(value);
-  if (known !== undefined) return known;
-  const id = nextOptionReference++;
-  if (typeof value === 'symbol') symbolReferences.set(value, id);
-  else functionReferences.set(value, id);
-  return id;
-}
-
-/** An option value as text that is equal exactly when the values are: plain
- *  data by content with keys sorted, a function by reference (the same
- *  function object, never equal text), a symbol by its description and
- *  reference. */
-function stableJson(value: unknown): string {
-  return JSON.stringify(value, (_key, inner: unknown) => {
-    if (typeof inner === 'function') return { function: referenceId(inner) };
-    if (typeof inner === 'symbol') return { symbol: String(inner.description), at: referenceId(inner) };
-    if (typeof inner === 'bigint') return { bigint: inner.toString() };
-    if (inner !== null && typeof inner === 'object' && !Array.isArray(inner)) {
-      return Object.fromEntries(
-        Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      );
-    }
-    return inner;
-  });
+  const fields: Array<[string, string | undefined]> = [
+    ['system', options.system],
+    ['exclude', options.exclude && stableStringify(options.exclude)],
+    ['extensions', options.extensions && stableStringify(options.extensions)],
+    [
+      'strict',
+      options.strict === undefined ? undefined : String(options.strict),
+    ],
+    [
+      'diagnostics',
+      options.diagnostics && stableStringify(options.diagnostics),
+    ],
+    ['prefix', options.prefix],
+    [
+      'prefixContextualVars',
+      options.prefixContextualVars === undefined
+        ? undefined
+        : String(options.prefixContextualVars),
+    ],
+    ['targets', options.targets && stableStringify(options.targets)],
+    [
+      'minify',
+      options.minify === undefined ? undefined : String(options.minify),
+    ],
+    ['staticCss', options.staticCss && stableStringify(options.staticCss)],
+    ['layers', options.layers && stableStringify(options.layers)],
+    ['engine', options.engine],
+    ['mode', options.mode],
+  ];
+  const present = fields.flatMap(([name, text]): Array<[string, string]> =>
+    text === undefined ? [] : [[name, text]]
+  );
+  return new Map(present);
 }
 
 /** The mutable state of one session, which every participant shares. */

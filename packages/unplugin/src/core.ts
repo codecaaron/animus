@@ -26,7 +26,6 @@ import {
   SESSION_ASSETS_DIR,
   TURBOPACK_SYSTEM_PROPS_ID,
 } from '@animus-ui/extract/session';
-import type { SessionKey } from '@animus-ui/extract/session';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 
@@ -37,6 +36,7 @@ import type {
   AnimusMode,
   HostExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
+import type { SessionKey } from '@animus-ui/extract/session';
 import type {
   ExternalIdResult,
   UnpluginBuildContext,
@@ -323,7 +323,7 @@ export const unpluginFactory: UnpluginFactory<
   const { root, options, watch } = resolveHostOptions(rawOptions);
   const state = createHostState();
   // One build per plugin instance: each pipeline run's session joins it.
-  const build = createBuildId();
+  const buildId = createBuildId();
   let activeSession: ExtractionSession | null = null;
   let modeOracle: AnimusMode | null = null;
   /** Whether the host is watching, where an error-level diagnostic reports
@@ -400,7 +400,7 @@ export const unpluginFactory: UnpluginFactory<
       state.mode = mode;
       const session = new ExtractionSession(
         { ...options, mode },
-        { unbundledComputedImports, build }
+        { unbundledComputedImports, build: buildId }
       );
       activeSession = session;
       session.development = watching();
@@ -625,7 +625,8 @@ export const unpluginFactory: UnpluginFactory<
       if (key !== null && isEngineTransformExtension(filePath)) {
         // Captured once per pipeline run: a per-module engineApi() call
         // pays a require for every module in the graph.
-        const transformFile = state.transformFile ?? engineApi(key).transformFile;
+        const transformFile =
+          state.transformFile ?? engineApi(key).transformFile;
         const transformed = transformWithEngine(output, filePath, {
           rootDir: root,
           manifestJson: getManifestJson(key) ?? '',

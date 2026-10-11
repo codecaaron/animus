@@ -447,8 +447,8 @@ function turbopackConfig<Config extends NextOwnedConfig>(
     nextConfig.turbopack?.resolveExtensions ??
     nextConfig.experimental?.turbo?.resolveExtensions;
   const load = (phase: string): Promise<TurbopackNextConfigObject<Config>> =>
-    loadTurbopackFragment(options, phase, resolveExtensions, build).then((fragment) =>
-      mergeTurbopackFragment(nextConfig, fragment)
+    loadTurbopackFragment(options, phase, resolveExtensions, build).then(
+      (fragment) => mergeTurbopackFragment(nextConfig, fragment)
     );
   function then<Resolved = TurbopackNextConfigObject<Config>, Rejected = never>(
     onResolved?:
