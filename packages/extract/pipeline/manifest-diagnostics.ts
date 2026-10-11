@@ -307,6 +307,11 @@ export const UNIMPORTED_CREATE_SYSTEM =
  *  analysis does (spec §2.2 A7): report only. */
 export const ALIAS_MISMATCH = 'animus.discovery.alias-mismatch';
 
+/** A package the host bundler resolves to a file in no package of its own,
+ *  where discovery reads the installed package instead (spec §2.2 A4):
+ *  report only. */
+export const PACKAGE_MISMATCH = 'animus.discovery.package-mismatch';
+
 /** What a skipped source file costs: the analysis never sees what it
  *  renders. */
 export const SKIPPED_SOURCE_COST =
@@ -435,6 +440,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [UNPROVEN_ROOT_BINDING, 'warn'],
   [UNIMPORTED_CREATE_SYSTEM, 'warn'],
   [ALIAS_MISMATCH, 'warn'],
+  [PACKAGE_MISMATCH, 'warn'],
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],
   [INVALID_PROPERTY_REGISTRATION, 'error'],

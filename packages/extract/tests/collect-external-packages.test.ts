@@ -29,6 +29,7 @@ import {
   INVALID_KIT_SOURCE_CONDITION,
   KIT_SYSTEM_NOT_INCLUDED,
   KIT_WITHOUT_SOURCE_CONDITION,
+  PACKAGE_MISMATCH,
 } from '../pipeline/manifest-diagnostics';
 
 import type { JsonValue } from '../pipeline/tsconfig-paths';
@@ -1555,3 +1556,77 @@ test.each([
     });
   }
 );
+
+describe('a host-resolved package', () => {
+  /** Contract: extraction reads the package the host resolves (spec §2.2
+   *  A4), where a host alias resolves one package to another. An answer
+   *  in no package of its own is read from the installed package, and is
+   *  reported unless it lies under node_modules (a dependency cache). */
+  test('extraction reads the package the host resolves', async () => {
+    // Real, as the locator answers: macOS links /var.
+    const root = realpathSync(makeRoot());
+    writeFileSync(join(root, 'package.json'), '{"name":"app"}');
+    const kit = (name: string, component: string): string => {
+      const base = join(root, 'node_modules', name);
+      makePackage(base, {
+        [`src/${component}.tsx`]: `export const ${component} = 1;`,
+        'src/index.ts': `export * from './${component}';`,
+        'dist/index.mjs': `export const ${component} = 2;`,
+      });
+      writeFileSync(
+        join(base, 'package.json'),
+        JSON.stringify({
+          name,
+          exports: {
+            '.': { animus: './src/index.ts', import: './dist/index.mjs' },
+          },
+        })
+      );
+      return base;
+    };
+    kit('kit', 'Installed');
+    const aliased = kit('alt-kit', 'Aliased');
+    const read = async (hostEntry: string) => {
+      const result = await collect(root, { kit: hostEntry });
+      return {
+        files: result.entries.map((entry) => entry.path).sort(),
+        redirects: Object.fromEntries(result.sourceEntries),
+        mismatches: result.diagnostics.filter(
+          (diagnostic) => diagnostic.code === PACKAGE_MISMATCH
+        ),
+      };
+    };
+
+    const alias = await read(join(aliased, 'dist', 'index.mjs'));
+    expect(alias.files).toEqual([
+      'node_modules/alt-kit/src/Aliased.tsx',
+      'node_modules/alt-kit/src/index.ts',
+    ]);
+    // The host hands its plugins the aliased name.
+    expect(alias.redirects).toEqual({
+      kit: join(aliased, 'src', 'index.ts'),
+      'alt-kit': join(aliased, 'src', 'index.ts'),
+    });
+    expect(alias.mismatches).toEqual([]);
+
+    const installedFiles = [
+      'node_modules/kit/src/Installed.tsx',
+      'node_modules/kit/src/index.ts',
+    ];
+    const cache = join(root, 'node_modules', '.vite', 'deps', 'kit.js');
+    mkdirSync(join(cache, '..'), { recursive: true });
+    writeFileSync(cache, 'export const Installed = 3;');
+    const cached = await read(cache);
+    expect(cached.files).toEqual(installedFiles);
+    expect(cached.mismatches).toEqual([]);
+
+    const local = join(root, 'src', 'local-kit.ts');
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(local, 'export const Local = 4;');
+    const elsewhere = await read(local);
+    expect(elsewhere.files).toEqual(installedFiles);
+    expect(elsewhere.mismatches.map((d) => d.message)).toEqual([
+      expect.stringContaining(`resolves 'kit' to src/local-kit.ts`),
+    ]);
+  });
+});
