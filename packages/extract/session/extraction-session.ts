@@ -259,9 +259,13 @@ function isDiskNumber<Value>(value: Value): value is Value & number {
 export interface SessionPublication {
   manifest: ProjectManifest;
   manifestJson: string;
-  /** The analysis sheets with asset() URLs substituted. */
-  globalCss: string;
-  componentCss: string;
+  /** The analysis sheets with asset() URLs substituted, before Lightning
+   *  CSS: what a host assembling its own stylesheet reads. */
+  analysisGlobalCss: string;
+  analysisComponentCss: string;
+  /** The final stylesheet, post-processed: byte for byte the body a
+   *  persisting host writes as `styles.css`. */
+  styles: string;
   system: SystemConfig;
   packageMap: Record<string, string>;
   ownership: Readonly<Record<string, SourceEntryOwnership>>;
@@ -2260,8 +2264,9 @@ export class ExtractionSession {
       this.stagedPublication = {
         manifest,
         manifestJson: result.manifestJson,
-        globalCss: sheets.globalCss,
-        componentCss: sheets.componentCss,
+        analysisGlobalCss: sheets.globalCss,
+        analysisComponentCss: sheets.componentCss,
+        styles: fullCss,
         system,
         packageMap,
       };
