@@ -253,11 +253,21 @@ pub fn locate_package(
 /// file cannot be read.
 #[napi]
 pub fn fingerprint_file(path: String) -> Option<String> {
+    std::fs::read(&path).ok().map(|bytes| fingerprint(&bytes))
+}
+
+/// `fingerprint_file` of bytes already read, so a reader that keeps them
+/// fingerprints exactly what it kept.
+#[napi]
+pub fn fingerprint_bytes(bytes: napi::bindgen_prelude::Buffer) -> String {
+    fingerprint(&bytes)
+}
+
+fn fingerprint(bytes: &[u8]) -> String {
     use std::hash::{BuildHasher, Hasher};
-    let bytes = std::fs::read(&path).ok()?;
     let mut hasher = foldhash::quality::FixedState::with_seed(0).build_hasher();
-    hasher.write(&bytes);
-    Some(format!("{:016x}", hasher.finish()))
+    hasher.write(bytes);
+    format!("{:016x}", hasher.finish())
 }
 
 /// Whether the package at `package_dir` declares the kit source condition:

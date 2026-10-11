@@ -332,6 +332,13 @@ function firstChangedFile(
   return undefined;
 }
 
+/** How a session fingerprints an asset's bytes, of a file or of bytes
+ *  already read; both always agree. */
+interface AssetFingerprints {
+  ofFile: (path: string) => string;
+  ofBytes: (bytes: Buffer) => string;
+}
+
 /** Bundler-agnostic extraction pipeline: system load, source ingestion,
  *  analysis, emission, and watch-cycle diffing. Carries no bundler types. */
 export class ExtractionSession {
@@ -2807,13 +2814,22 @@ export class ExtractionSession {
     this.onArtifactWrite?.(name, content);
   }
 
-  /** The fingerprint of an asset's bytes: the engine's fast one, where it
-   *  has one; their content hash otherwise. */
-  private fingerprintAsset(path: string): string {
-    return (
-      engineApi(this.key).fingerprintFile?.(path) ??
-      contentHash(readFileSync(path))
-    );
+  /** How an asset's bytes are fingerprinted, of a file or of bytes read:
+   *  the engine's fast fingerprint where it has both, the content hash
+   *  otherwise, so the two always agree. */
+  private assetFingerprints(): AssetFingerprints {
+    const { fingerprintFile, fingerprintBytes } = engineApi(this.key);
+    if (fingerprintFile && fingerprintBytes) {
+      return {
+        ofFile: (path) =>
+          fingerprintFile(path) ?? contentHash(readFileSync(path)),
+        ofBytes: fingerprintBytes,
+      };
+    }
+    return {
+      ofFile: (path) => contentHash(readFileSync(path)),
+      ofBytes: contentHash,
+    };
   }
 
   /** Copy each asset() specifier's bytes, from every sheet, into `assets/`
@@ -2853,7 +2869,10 @@ export class ExtractionSession {
       const cached = this.assetCopyCache.get(specifier);
       if (cached && existsSync(join(assetsDir, cached.fileName))) {
         try {
-          if (this.fingerprintAsset(cached.sourcePath) === cached.fingerprint) {
+          if (
+            this.assetFingerprints().ofFile(cached.sourcePath) ===
+            cached.fingerprint
+          ) {
             this.trackAssetDependency(cached.sourcePath);
             expected.add(cached.fileName);
             urlBySpecifier.set(specifier, cached.url);
@@ -2869,14 +2888,16 @@ export class ExtractionSession {
         urlBySpecifier.set(specifier, specifier);
         continue;
       }
-      const { fileName } = writeAssetCopy(resolvedPath, assetsDir);
+      const { fileName, bytes } = writeAssetCopy(resolvedPath, assetsDir);
       this.trackAssetDependency(resolvedPath);
       expected.add(fileName);
       const url = `./${SESSION_ASSETS_DIR}/${fileName}`;
       urlBySpecifier.set(specifier, url);
       this.assetCopyCache.set(specifier, {
         sourcePath: resolvedPath,
-        fingerprint: this.fingerprintAsset(resolvedPath),
+        // The bytes the copy holds, never a second read: an edit in
+        // between would pair the copy with another file's fingerprint.
+        fingerprint: this.assetFingerprints().ofBytes(bytes),
         fileName,
         url,
       });

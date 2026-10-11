@@ -96,6 +96,12 @@ export declare function engineVersion(): string
 export declare function extractFacts(fileEntriesJson: string): string
 
 /**
+ * `fingerprint_file` of bytes already read, so a reader that keeps them
+ * fingerprints exactly what it kept.
+ */
+export declare function fingerprintBytes(bytes: Buffer): string
+
+/**
  * A fast fingerprint of the bytes at `path` (foldhash, 64 bits, hex), for
  * telling whether a file changed between watch passes in one process: no
  * security property, and no stability across versions. `None` where the

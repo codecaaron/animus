@@ -20,6 +20,8 @@ export interface AssetCopy {
   fileName: string;
   /** The source bytes' content hash when copied. */
   digest: string;
+  /** The bytes copied, as read once. */
+  bytes: Buffer;
 }
 
 /** Copies `sourcePath` into `assetsDir` under its content-digested name,
@@ -36,7 +38,7 @@ export function writeAssetCopy(
   if (!existsSync(assetsDir)) mkdirSync(assetsDir, { recursive: true });
   const copyPath = join(assetsDir, fileName);
   if (!existsSync(copyPath)) writeFileSync(copyPath, bytes);
-  return { fileName, digest };
+  return { fileName, digest, bytes };
 }
 
 /** Sync `assets/` to the current build's file set; per-entry failures are
