@@ -64,7 +64,9 @@ export interface AnimusExtractOptions {
   system: string;
   /**
    * Module specifier for extracted runtime factories, default
-   * `@animus-ui/system`. An override must supply every terminal used.
+   * `@animus-ui/system/runtime`, as every adapter emits. `@animus-ui/system`
+   * also supplies every terminal; another override must supply every
+   * terminal used.
    */
   runtimeImport?: string;
   /**

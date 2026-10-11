@@ -1,4 +1,4 @@
-import { chmodSync, readFileSync } from 'fs';
+import { chmodSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -19,9 +19,11 @@ setEngineApiOverride(() => ({
 }));
 
 import { UNREADABLE_SOURCE_FILE } from '../../pipeline/manifest-diagnostics';
+import { getSharedCss } from '../../session/singleton';
 import {
   buildManifest,
   createKitWorkspace,
+  createProject,
   disposeTempRoots,
   makeSession,
   PLAN_A,
@@ -33,13 +35,12 @@ import {
 const DEV_MODE_SLOT = 7;
 const ANALYSIS_CONTEXT_SLOT = 20;
 
-/** The sources the first analysis was told it cannot see. */
-function skippedSources(): string[] {
+/** The sources an analysis, the first by default, was told it cannot see. */
+function skippedSources(call = 0): string[] {
+  const calls = mocks.analyzeProject.mock.calls;
   // SAFETY: the context slot holds the session's own JSON.stringify output,
   // or nothing when the session knows of no unseen source.
-  const json = mocks.analyzeProject.mock.calls[0]?.[ANALYSIS_CONTEXT_SLOT] as
-    | string
-    | undefined;
+  const json = calls.at(call)?.[ANALYSIS_CONTEXT_SLOT] as string | undefined;
   if (json === undefined) return [];
   // SAFETY: as above, the context's wire shape.
   const context = JSON.parse(json) as { skippedSources?: string[] };
@@ -48,6 +49,7 @@ function skippedSources(): string[] {
 
 let restoreGlobals: () => void;
 let warned: string[];
+let reported: string[];
 const lockedFiles: string[] = [];
 
 function createWorkspace() {
@@ -71,6 +73,10 @@ beforeEach(() => {
   warned = [];
   vi.spyOn(console, 'warn').mockImplementation((...parts: unknown[]) => {
     warned.push(parts.map(String).join(' '));
+  });
+  reported = [];
+  vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => {
+    reported.push(parts.map(String).join(' '));
   });
 });
 
@@ -165,6 +171,102 @@ describe('a project file that cannot be read', () => {
     expect(line).toContain('its renders are not seen, so nothing is pruned');
     expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(false);
     expect(skippedSources()).toEqual(['src/App.tsx']);
+    session.close();
+  });
+});
+
+// Decision #56: in development, a changed file that cannot be read is
+// reported with its path and cause, and enforced under strict.
+describe('a watched change that cannot be read', () => {
+  async function lockAfterStartup(strict: boolean) {
+    const { app } = createKitWorkspace();
+    const session = makeSession(app, { strict });
+    session.development = true;
+    await session.runFullPipeline();
+    const unreadable = join(app, 'src', 'App.tsx');
+    chmodSync(unreadable, 0o000);
+    lockedFiles.push(unreadable);
+    expect(() => readFileSync(unreadable, 'utf-8')).toThrow();
+    return { session, unreadable };
+  }
+
+  const unreadableLine = (lines: string[]) =>
+    lines.find((line) => line.includes(UNREADABLE_SOURCE_FILE));
+
+  test('is reported with its path and cause', async () => {
+    const { session, unreadable } = await lockAfterStartup(false);
+
+    await session.handleWatchUpdate({ modifiedFiles: new Set([unreadable]) });
+
+    expect(unreadableLine(warned)).toMatch(/src\/App\.tsx.*EACCES/);
+    session.close();
+  });
+
+  test('is reported at error level under strict, and the session keeps running', async () => {
+    const { session, unreadable } = await lockAfterStartup(true);
+
+    await session.handleWatchUpdate({ modifiedFiles: new Set([unreadable]) });
+
+    expect(unreadableLine(reported)).toMatch(/src\/App\.tsx.*EACCES/);
+    session.close();
+  });
+
+  test('a deleted file is a removal, not an unreadable change', async () => {
+    const { app } = createKitWorkspace();
+    const session = makeSession(app, { strict: true });
+    session.development = true;
+    await session.runFullPipeline();
+    const deleted = join(app, 'src', 'App.tsx');
+    rmSync(deleted);
+
+    await session.handleWatchUpdate({ modifiedFiles: new Set([deleted]) });
+
+    expect(unreadableLine([...warned, ...reported])).toBeUndefined();
+    session.close();
+  });
+
+  // The analysis continues on the last good read: no live CSS is lost.
+  test('a definition file keeps its CSS while it cannot be read', async () => {
+    const app = createProject('animus-unreadable-definition-');
+    mocks.analyzeProject.mockImplementation((filesJson: string) =>
+      buildManifest(
+        PLAN_A,
+        filesJson.includes('src/Button.tsx') ? '.btn{margin:8px}' : ''
+      )
+    );
+    const session = makeSession(app);
+    session.development = true;
+    await session.runFullPipeline();
+    const button = join(app, 'src', 'Button.tsx');
+    chmodSync(button, 0o000);
+    lockedFiles.push(button);
+    expect(() => readFileSync(button, 'utf-8')).toThrow();
+
+    await session.handleWatchUpdate({ modifiedFiles: new Set([button]) });
+
+    expect(unreadableLine(warned)).toMatch(/src\/Button\.tsx.*EACCES/);
+    expect(getSharedCss(session.key)).toMatch(/\.btn\s*\{\s*margin:\s*8px/);
+    session.close();
+  });
+
+  test('a kit file readable again clears its report on a directory event', async () => {
+    const { app, kit } = createKitWorkspace();
+    const session = makeSession(app);
+    session.development = true;
+    await session.runFullPipeline();
+    const button = join(kit, 'src', 'Button.tsx');
+    chmodSync(button, 0o000);
+    lockedFiles.push(button);
+    expect(() => readFileSync(button, 'utf-8')).toThrow();
+    await session.handleWatchUpdate({ modifiedFiles: new Set([button]) });
+    expect(skippedSources(-1)).toEqual([expect.stringContaining('Button.tsx')]);
+
+    chmodSync(button, 0o644);
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([join(kit, 'src')]),
+    });
+
+    expect(skippedSources(-1)).toEqual([]);
     session.close();
   });
 });

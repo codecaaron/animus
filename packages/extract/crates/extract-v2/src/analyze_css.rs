@@ -4421,7 +4421,7 @@ fn uncertainty_leaves_usage_proven(
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
     package_members: &FxHashSet<(String, String)>,
     bounded_tags: &FxHashSet<(String, u32)>) -> bool {
-    let unstable_contexts = &unstable_contexts(files, inputs, links);
+    let contexts = &context_changes(files, inputs, links);
     // Each element of an ordinary component is a site; classify each tag once.
     let mut classified: FxHashSet<(&str, &str, Option<TagOrigin>)> = FxHashSet::default();
     sites.iter().all(|(file, site)| {
@@ -4445,7 +4445,7 @@ fn uncertainty_leaves_usage_proven(
         !classified.insert((file.as_str(), tag, site.origin))
             || names_react_pass_through(ff, tag, site.origin)
             || imported_from_outside(file, ff, tag, site.origin, files, inputs)
-            || names_context_provider(file, ff, tag, site.origin, files, inputs, links, unstable_contexts)
+            || names_context_provider(file, ff, tag, site.origin, files, inputs, links, contexts)
             // The module's binding, never a parameter or local of the name.
             || (matches!(site.origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
                 && package_members.contains(&(file.to_string(), tag.to_string())))
@@ -4469,12 +4469,16 @@ fn names_context_provider(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
-    unstable: &FxHashSet<(String, String)>) -> bool {
+    contexts: &crate::flow::ValueEffects) -> bool {
     let Some((root, "Provider")) = tag.split_once('.') else { return false };
     matches!(origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
         && resolve_declaration(file, ff, root, files, inputs, links).is_some_and(|(declaring, binding, _)| {
+            let provider = crate::flow::AbsenceQuery::SlotNotWritten(
+                crate::flow::ObjectId::new(&declaring, &binding),
+                vec!["Provider".to_string()],
+            );
             files.get(&declaring).is_some_and(|declared| declared.context_consts.contains(&binding))
-                && !unstable.contains(&(declaring, binding))
+                && matches!(contexts.covers(&provider), crate::flow::Coverage::Disjoint)
         })
 }
 
@@ -4527,21 +4531,25 @@ pub(crate) fn judge_object_handoffs(
     }
 }
 
-/// The contexts some use in any analysed module may change: a member write
-/// or delete, a hand-off to code other than React's context readers. Their
-/// `Provider` is not proven to be React's.
-fn unstable_contexts(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs, links: &crate::link::ProjectLinks) -> FxHashSet<(String, String)> {
-    let mut unstable = FxHashSet::default();
+/// What a use in any analysed module may change of the contexts React's
+/// `createContext` builds: a member write or delete, a hand-off to code
+/// other than React's context readers. A changed context's `Provider` is
+/// not proven to be React's.
+fn context_changes(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs, links: &crate::link::ProjectLinks) -> crate::flow::ValueEffects {
+    let mut flow = crate::flow::FlowBuilder::new();
     for (path, ff) in files {
-        for name in ff.unsafe_object_uses.keys() {
+        for (name, used) in &ff.unsafe_object_uses {
             let root = name.split('.').next().unwrap_or(name);
             let Some((declaring, binding, _)) = resolve_declaration(path, ff, root, files, inputs, links) else { continue };
             if files.get(&declaring).is_some_and(|declared| declared.context_consts.contains(&binding)) {
-                unstable.insert((declaring, binding));
+                let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
+                let cause = format!("{name} {} in {path}{line}", used.what);
+                let context = crate::flow::ObjectId::new(&declaring, &binding);
+                flow.change(context, Vec::new(), crate::flow::ChangeKind::Escape, cause);
             }
         }
     }
-    unstable
+    flow.close()
 }
 
 /// Whether `tag`, or the binding it is a member of, is imported from a
@@ -4913,7 +4921,7 @@ fn opaque_delivery(
     receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
     renders_in_place: impl Fn(&str) -> bool,
 ) -> (std::collections::BTreeSet<String>, Vec<(String, String)>) {
-    let unstable_contexts = unstable_contexts(files, inputs, links);
+    let contexts = context_changes(files, inputs, links);
     // The declaration `name` (`lib.enhance` for a namespace import's
     // member) names from `file`, or `None` outside the analysis.
     let declaration = |file: &str, ff: &FileFacts, name: &str| {
@@ -4940,7 +4948,7 @@ fn opaque_delivery(
         if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
             return true;
         }
-        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, links, &unstable_contexts) {
+        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, links, &contexts) {
             return false;
         }
         let ids = receiver_ids(file, ff, &tag.tag);
