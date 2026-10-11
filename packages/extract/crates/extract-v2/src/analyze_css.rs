@@ -602,6 +602,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::theme::NON_BLOCK_VALUE, "error"),
     (crate::theme::AT_RULE_SELECTOR_NESTING, "error"),
     (crate::theme::AT_RULE_PLACEMENT, "error"),
+    (crate::theme::FONT_FACE_DROPPED, "error"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -1320,6 +1321,17 @@ fn dropped_style_key(
                  under it is not emitted — write the block under a selector of its own"
             );
             return diagnostic(file, component, "warn", message, Some(crate::theme::AT_RULE_SELECTOR_NESTING));
+        }
+        DroppedStyleKey::FontFace { face, part, reason } => {
+            let dropped = match part {
+                Some(part) => format!("{part} of the font face {face}"),
+                None => format!("the font face {face}"),
+            };
+            let message = format!(
+                "{dropped} is not emitted: {reason} — give each face a `family` and at least one `src` \
+                 entry of `{{ local }}` or `{{ url }}`, and each descriptor a string"
+            );
+            return diagnostic(file, component, "warn", message, Some(crate::theme::FONT_FACE_DROPPED));
         }
         DroppedStyleKey::SharedProperty { overridden, winner, property, rule } => {
             return keys_share_property(file, component, (overridden, winner, property, *rule), inheritors);
@@ -9160,6 +9172,68 @@ mod tests {
                 ("animus.style.at-rule-placement", "Bad"),
                 ("animus.style.at-rule-placement", "global 'lists'"),
                 ("animus.style.at-rule-placement", "keyframes 'animus-kf-rise'"),
+            ],
+            "{:#?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn typed_font_faces_print_their_sources_and_descriptors_and_report_what_they_leave_out() {
+        let mut inputs = test_inputs();
+        inputs.global_style_blocks = Some(serde_json::json!({
+            "fonts": {
+                "styles": {},
+                "fontFaces": [
+                    {
+                        "family": "MonaFallback",
+                        "src": [{ "local": "Arial" }],
+                        "sizeAdjust": "104%",
+                        "ascentOverride": "90%",
+                        "fontFeatureSettings": "\"ss01\""
+                    },
+                    {
+                        "family": "Mona",
+                        "src": [
+                            { "local": "Mona Sans" },
+                            { "local": "Font Awesome 6" },
+                            { "local": "inherit" },
+                            { "url": "animus-asset:./mona.woff2", "format": "woff2", "tech": "variations" },
+                            { "url": "./it's.woff" },
+                            { "url": "./line\rbreak.woff" },
+                            { "local": "Arial", "url": "./both.woff" },
+                            { "url": "./tech.woff", "tech": "variations;}" }
+                        ],
+                        "weight": 400
+                    },
+                    { "src": [{ "local": "Arial" }] },
+                    { "family": "Empty", "src": [{ "format": "woff2" }] }
+                ]
+            }
+        }));
+        let out = analyze(&[("a.tsx", "export const x = 1;\n")], &inputs);
+        for face in [
+            "@font-face { font-family: MonaFallback; src: local(Arial); size-adjust: 104%; ascent-override: 90%; font-feature-settings: \"ss01\"; }",
+            "@font-face { font-family: Mona; src: local(Mona Sans), local('Font Awesome 6'), local('inherit'), url('animus-asset:./mona.woff2') format('woff2') tech(variations), url('./it\\'s.woff'), url('./line\\d break.woff'); }",
+        ] {
+            assert!(out.sheets.global.contains(face), "{face}\nmissing from:\n{}", out.sheets.global);
+        }
+        assert_eq!(out.sheets.global.matches("@font-face").count(), 2, "{}", out.sheets.global);
+        let dropped: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some("animus.style.font-face-dropped"))
+            .map(|d| (d.component.as_str(), d.message.split(" is not emitted").next().unwrap_or_default(), d.severity.as_deref()))
+            .collect();
+        assert_eq!(
+            dropped,
+            [
+                ("global 'fonts'", "source 7 of the font face 'Mona'", Some("error")),
+                ("global 'fonts'", "source 8 of the font face 'Mona'", Some("error")),
+                ("global 'fonts'", "`weight` of the font face 'Mona'", Some("error")),
+                ("global 'fonts'", "the font face #3", Some("error")),
+                ("global 'fonts'", "source 1 of the font face 'Empty'", Some("error")),
+                ("global 'fonts'", "the font face 'Empty'", Some("error")),
             ],
             "{:#?}",
             out.diagnostics

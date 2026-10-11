@@ -364,6 +364,11 @@ pub const AT_RULE_SELECTOR_NESTING: &str = "animus.style.at-rule-selector-nestin
 /// keyframe frame, or among a prop's values.
 pub const AT_RULE_PLACEMENT: &str = "animus.style.at-rule-placement";
 
+/// A typed font face, or a source or descriptor of one, that is left out:
+/// one with no family or no source, a source that names neither a `local`
+/// font nor a `url`, or a descriptor whose value is not a string.
+pub const FONT_FACE_DROPPED: &str = "animus.style.font-face-dropped";
+
 /// A style-object key given an object that resolves to nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DroppedStyleKey {
@@ -379,6 +384,9 @@ pub enum DroppedStyleKey {
     /// (`within`: a keyframe frame, or a prop's value), with its block and
     /// what is not emitted for it (`lost`).
     AtRulePlacement { key: String, within: String, lost: String, block: Value },
+    /// The typed font face named `face`, or a part of it (`part`: a source
+    /// or a descriptor), that is left out, and why.
+    FontFace { face: String, part: Option<String>, reason: String },
     /// A prop that writes only the custom `properties` was given the number
     /// `value`, which no unit or transform establishes: it is written
     /// unitless.
@@ -422,6 +430,7 @@ impl DroppedStyleKey {
             | Self::NonBlockValue { key, .. }
             | Self::AtRuleSelectorNesting { key, .. } => key,
             Self::SharedProperty { winner, .. } => winner,
+            Self::FontFace { face, .. } => face,
         }
     }
 }
@@ -2663,69 +2672,128 @@ pub fn resolve_global_blocks(
     parts.join("\n\n")
 }
 
+/// The typed font-face descriptors, in the order they print, as (key, CSS
+/// descriptor).
+const FONT_FACE_DESCRIPTORS: [(&str, &str); 11] = [
+    ("style", "font-style"),
+    ("weight", "font-weight"),
+    ("stretch", "font-stretch"),
+    ("display", "font-display"),
+    ("unicodeRange", "unicode-range"),
+    ("sizeAdjust", "size-adjust"),
+    ("ascentOverride", "ascent-override"),
+    ("descentOverride", "descent-override"),
+    ("lineGapOverride", "line-gap-override"),
+    ("fontFeatureSettings", "font-feature-settings"),
+    ("fontVariationSettings", "font-variation-settings"),
+];
+
+/// A global block's typed font faces, each a `@font-face` rule: the family,
+/// the sources in order, then the descriptors. A face with no family or no
+/// source, a source that is neither a `local` name nor a `url`, and a
+/// descriptor that is not a string are reported and left out.
 fn render_font_faces(faces: &Value, ctx: &ResolveContext) -> String {
     let list = match faces.as_array() {
         Some(l) => l,
         None => return String::new(),
     };
     let mut blocks: Vec<String> = Vec::new();
-    for face in list {
-        let obj = match face.as_object() {
-            Some(o) => o,
-            None => continue,
+    for (index, face) in list.iter().enumerate() {
+        let obj = face.as_object();
+        let family = obj.and_then(|obj| obj.get("family")).and_then(Value::as_str);
+        let name = family.map_or_else(|| format!("#{}", index + 1), |family| format!("'{family}'"));
+        let drop = |part: Option<String>, reason: String| {
+            record_dropped_key_at(ctx, &[], DroppedStyleKey::FontFace { face: name.clone(), part, reason });
         };
-        let family = match obj.get("family").and_then(|v| v.as_str()) {
-            Some(f) => f,
-            None => continue,
+        let Some(obj) = obj else {
+            drop(None, format!("it is {face}, not an object"));
+            continue;
         };
-        let srcs = match obj.get("src").and_then(|v| v.as_array()) {
-            Some(s) if !s.is_empty() => s,
-            _ => continue,
+        let sources: Vec<String> = obj
+            .get("src")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter_map(|(at, entry)| {
+                font_face_source(entry).map_err(|reason| drop(Some(format!("source {}", at + 1)), reason)).ok()
+            })
+            .collect();
+        let Some(family) = family else {
+            drop(None, "it has no `family`".into());
+            continue;
         };
-        let family = resolve_token_aliases(
-            family,
-            ctx.theme,
-            ctx.variable_map,
-            ctx.contextual_vars,
-        );
-        let mut src_parts: Vec<String> = Vec::new();
-        for entry in srcs {
-            let entry = match entry.as_object() {
-                Some(e) => e,
-                None => continue,
-            };
-            let url = match entry.get("url").and_then(|v| v.as_str()) {
-                Some(u) => u,
-                None => continue,
-            };
-            match entry.get("format").and_then(|v| v.as_str()) {
-                Some(fmt) => {
-                    src_parts.push(format!("url('{url}') format('{fmt}')"))
-                }
-                None => src_parts.push(format!("url('{url}')")),
-            }
-        }
-        if src_parts.is_empty() {
+        if sources.is_empty() {
+            drop(None, "it has no source in `src`".into());
             continue;
         }
-        let mut decls = vec![
-            format!("font-family: {family};"),
-            format!("src: {};", src_parts.join(", ")),
-        ];
-        for (key, css_name) in [
-            ("style", "font-style"),
-            ("weight", "font-weight"),
-            ("stretch", "font-stretch"),
-            ("display", "font-display"),
-            ("unicodeRange", "unicode-range"),
-        ] {
-            if let Some(v) = obj.get(key).and_then(|v| v.as_str()) {
-                decls.push(format!("{css_name}: {v};"));
+        let family = resolve_token_aliases(family, ctx.theme, ctx.variable_map, ctx.contextual_vars);
+        let mut decls = vec![format!("font-family: {family};"), format!("src: {};", sources.join(", "))];
+        for (key, descriptor) in FONT_FACE_DESCRIPTORS {
+            match obj.get(key) {
+                Some(Value::String(value)) => decls.push(format!("{descriptor}: {value};")),
+                Some(other) => drop(Some(format!("`{key}`")), format!("its value {other} is not a string")),
+                None => {}
             }
         }
         blocks.push(format!("@font-face {{ {} }}", decls.join(" ")));
     }
     blocks.join("\n")
+}
+
+/// One `src` entry: `local(…)` for an installed font, else `url('…')` with
+/// its `format('…')` and `tech(…)` hints; why not, for an entry naming
+/// neither or both, or a `tech` that is not a list of identifiers.
+fn font_face_source(entry: &Value) -> Result<String, String> {
+    let url = match (entry.get("local").and_then(Value::as_str), entry.get("url").and_then(Value::as_str)) {
+        (Some(name), None) => return Ok(format!("local({})", font_name(name))),
+        (None, Some(url)) => url,
+        (Some(_), Some(_)) => return Err(format!("{entry} names both a `local` font and a `url`")),
+        (None, None) => return Err(format!("{entry} names neither a `local` font nor a `url`")),
+    };
+    let mut source = vec![format!("url({})", css_string(url))];
+    if let Some(format) = entry.get("format").and_then(Value::as_str) {
+        source.push(format!("format({})", css_string(format)));
+    }
+    if let Some(tech) = entry.get("tech").and_then(Value::as_str) {
+        let keywords: Vec<&str> = tech.split(',').map(str::trim).collect();
+        if !keywords.iter().all(|keyword| crate::css_tokens::is_plain_identifier(keyword)) {
+            return Err(format!("its `tech` {tech:?} is not a list of identifiers"));
+        }
+        source.push(format!("tech({})", keywords.join(", ")));
+    }
+    Ok(source.join(" "))
+}
+
+/// A font's full name as `local()` takes it: bare when every word is a
+/// plain identifier other than a CSS-wide keyword (`Arial`, `Helvetica
+/// Neue`), else quoted.
+fn font_name(name: &str) -> String {
+    let bare = |word: &str| {
+        crate::css_tokens::is_plain_identifier(word)
+            && !matches!(word.to_ascii_lowercase().as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer" | "default")
+    };
+    if !name.is_empty() && name.split(' ').all(bare) { name.to_string() } else { css_string(name) }
+}
+
+/// `text` as a single-quoted CSS string: a quote and a backslash are
+/// escaped, and every control character as its code point.
+fn css_string(text: &str) -> String {
+    use std::fmt::Write;
+    let mut quoted = String::with_capacity(text.len() + 2);
+    quoted.push('\'');
+    for c in text.chars() {
+        match c {
+            '\\' | '\'' => {
+                quoted.push('\\');
+                quoted.push(c);
+            }
+            c if c.is_ascii_control() => write!(quoted, "\\{:x} ", c as u32).unwrap(),
+            _ => quoted.push(c),
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 /// A registered keyframes block's rule. Each frame holds declarations only,

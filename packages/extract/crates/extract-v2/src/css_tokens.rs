@@ -71,6 +71,19 @@ fn starts_identifier(css: &str, at: usize) -> bool {
     }
 }
 
+/// Whether `word` is an identifier written plainly, with no escape: one a
+/// printer can write bare without changing what it reads as.
+pub fn is_plain_identifier(word: &str) -> bool {
+    let bytes = word.as_bytes();
+    let rest = match bytes {
+        [b'-', b'-', rest @ ..] => rest,
+        [b'-', rest @ ..] if is_ident_start(rest.first().copied()) => rest,
+        [first, ..] if is_ident_start(Some(*first)) => bytes,
+        _ => return false,
+    };
+    rest.iter().all(|&b| is_ident_char(Some(b)))
+}
+
 fn starts_number(css: &str, at: usize) -> bool {
     let signed = usize::from(matches!(byte(css, at), Some(b'+' | b'-')));
     is_digit(byte(css, at + signed)) || (byte(css, at + signed) == Some(b'.') && is_digit(byte(css, at + signed + 1)))
