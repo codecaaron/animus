@@ -125,11 +125,14 @@ export declare function loadSystemModule(systemPath: string, rootDir: string, ex
 export declare function locatePackage(name: string, fromDir: string, workspaces?: Record<string, string> | undefined | null): string | null
 
 /**
- * Each file's run-time module specifiers, for the kit publication check:
- * imports, re-exports and literal `import()` calls that survive type
- * stripping. `{ "files": { path: [specifier, …] } }`.
+ * Each file's run-time module specifiers: imports, re-exports and literal
+ * `import()` calls that survive type stripping. With `path_aliases_json`,
+ * each non-relative specifier a path alias names also maps to the path
+ * analysis probes for it (`probe_base`'s `expand_alias`), so a host
+ * comparison reads the analysis's own expansion. `{ "files": { path: [specifier, …] }, "bases": { path:
+ * { specifier: base } } }`.
  */
-export declare function moduleSpecifiers(fileEntriesJson: string): string
+export declare function moduleSpecifiers(fileEntriesJson: string, pathAliasesJson?: string | undefined | null): string
 
 /**
  * A specifier as the system loader resolves it: the real path of the file
