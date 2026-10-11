@@ -5582,11 +5582,14 @@ fn sorted_resolvable_component_ids(
             // A binding declared by more than one chain is one id, listed once.
             let unique: BTreeSet<&String> = cycle_ids.iter().collect();
             diagnostics.extend(unique.into_iter().map(|id| extension_cycle_bail(id, files, parent_map)));
+            // The rest keep the order parents first, which no cycle breaks.
             let cycle_set: FxHashSet<&String> = cycle_ids.iter().collect();
-            all_component_ids
-                .into_iter()
-                .filter(|id| !cycle_set.contains(id))
-                .collect()
+            let rest: Vec<ProvenanceNode> =
+                nodes.into_iter().filter(|node| !cycle_set.contains(&node.component_id)).collect();
+            match topological_sort(&rest) {
+                TopoResult::Sorted(order) => order,
+                TopoResult::Cycle(_) => unreachable!("every node a cycle reaches is set aside"),
+            }
         }
     }
 }
@@ -6111,6 +6114,9 @@ fn run_with_system_floor(
         Vec<(BTreeMap<String, Value>, String)>, // POST-MERGE compound configs
     );
     let mut evaluated: FxHashMap<String, EvalEntry> = FxHashMap::default();
+    // Each component's skipped (stage, key) pairs, its own and those it
+    // inherits without setting itself.
+    let mut skipped_keys: FxHashMap<String, Vec<(String, String)>> = FxHashMap::default();
     let scale_family_props = scale_family_css_properties(&inputs.config, &inputs.theme);
     let theme_tokens = tokens_by_name(&inputs.theme, &inputs.contextual_vars);
     let scale_names = if inputs.external_dirs.is_empty() {
@@ -6215,6 +6221,32 @@ fn run_with_system_floor(
             );
             continue;
         }
+        // What the parent skipped, the extension inherits skipped, unless it
+        // sets that key in the same stage itself.
+        let sets = |method: &str, key: &str| {
+            chain.stages.iter().any(|stage| {
+                stage.method == method && stage.value.as_ref().and_then(Value::as_object).is_some_and(|value| value.contains_key(key))
+            })
+        };
+        let inherited: Vec<(String, String)> = parent_map
+            .get(component_id)
+            .and_then(|parent_id| skipped_keys.get(parent_id))
+            .into_iter()
+            .flatten()
+            .filter(|(method, key)| !sets(method, key))
+            .cloned()
+            .collect();
+        if let Some(parent) = &chain.descriptor.extends_from {
+            for (_, key) in &inherited {
+                let message =
+                    format!("[skip] {}: property '{key}' — inherited from {parent}, which could not evaluate it", chain.descriptor.binding);
+                diagnostics.push(
+                    diagnostic(file_path, &chain.descriptor.binding, "skip", message, Some(SKIPPED_VALUE)).dropping(key),
+                );
+            }
+        }
+        let own = chain.stages.iter().flat_map(|stage| stage.skipped.iter().map(|(key, _)| (stage.method.clone(), key.clone())));
+        skipped_keys.insert(component_id.clone(), own.chain(inherited).collect());
         let parent_variant_configs = parent_map
             .get(component_id)
             .and_then(|parent_id| inherited_variant_configs.get(parent_id))
