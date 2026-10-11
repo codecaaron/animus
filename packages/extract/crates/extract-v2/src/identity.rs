@@ -108,8 +108,9 @@ pub struct Binding {
     /// `None` for the module scope.
     pub scope: Option<ScopeId>,
     pub kind: BindingKind,
-    /// Whether it holds a value at runtime: false for a type, an interface
-    /// and a namespace with no runtime member.
+    /// Whether it holds a value at runtime: false for a type, an interface,
+    /// a namespace with no runtime member and an ambient (`declare`)
+    /// declaration.
     pub value: bool,
 }
 
@@ -213,7 +214,11 @@ impl BindingTable {
             let import = scope.is_none().then(|| imports.get(name)).flatten();
             let kind = import.map_or(BindingKind::Declared, |import| BindingKind::Import(import.clone()));
             let span = scoping.symbol_span(symbol);
-            let value = scoping.symbol_flags(symbol).is_value();
+            // A symbol's flags union its merged declarations; it is a value
+            // when any one of them is a runtime value declaration.
+            let runtime = |flags: oxc::semantic::SymbolFlags| flags.is_value() && !flags.is_ambient();
+            let value = runtime(scoping.symbol_flags(symbol))
+                || scoping.symbol_redeclarations(symbol).iter().any(|declaration| runtime(declaration.flags));
             bindings.push(Binding { name: name.to_string(), span: (span.start, span.end), scope, kind, value });
         }
         let module_names: FxHashMap<String, LocalId> = scope_names

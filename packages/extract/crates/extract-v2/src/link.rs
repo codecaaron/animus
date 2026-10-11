@@ -5,18 +5,45 @@
 use std::collections::BTreeMap;
 
 use animus_system_loader::module_table::{
-    ExportLookup, Import, ImportName, ModuleIndex, ModuleRecord, ModuleTable, Request, RequestId,
+    ExportLookup, Import, ImportName, ModuleIndex, ModuleRecord, ModuleTable, Request, RequestId, Terminal,
 };
+use oxc::ast::ast::{Program, Statement};
 use oxc::syntax::module_record::{
     ExportEntry, ExportExportName, ExportImportName, ExportLocalName, ImportImportName, ModuleRecord as ParsedRecord,
 };
 
 use crate::analyze_css::{expand_alias, resolve_import_source, CssInputs};
 use crate::facts::FileFacts;
-use crate::identity::{BindingKind, BindingTable, LocalId};
+use crate::identity::{BindingKind, BindingTable, IdentityInput, LocalId, ModuleId};
+use oxc::semantic::{Scoping, SemanticBuilder};
+use rustc_hash::FxHashSet;
 
 /// A module's record with its requests as written.
 pub type OwnedModuleRecord = ModuleRecord<LocalId, String>;
+
+/// One file's Lower output: its identity table and owned module record,
+/// and the semantic build both were read from, which fact extraction
+/// reuses rather than building again.
+pub(crate) struct Lowered {
+    pub(crate) scoping: Scoping,
+    pub(crate) bindings: BindingTable,
+    pub(crate) record: OwnedModuleRecord,
+}
+
+impl Lowered {
+    pub(crate) fn of(ast: &crate::owned_ast::OwnedAst) -> Self {
+        Self::from_parts(ModuleId::new(&ast.path), ast.program(), ast.module_record())
+    }
+
+    /// Lowers `program` with one semantic build. The table is read straight
+    /// after it, while the program's reference cells hold its numbering.
+    pub(crate) fn from_parts(module: ModuleId, program: &Program<'_>, module_record: &ParsedRecord<'_>) -> Self {
+        let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
+        let bindings = BindingTable::prepare(IdentityInput { module, program, module_record, scoping: &scoping });
+        let record = copy_module_record(module_record, &bindings, program.source_text, program);
+        Self { scoping, bindings, record }
+    }
+}
 
 /// Copies the parser's record of `module`, whose text is `source`, leaving
 /// out type-only entries. Bindings are the table's; an entry whose binding a
@@ -25,6 +52,7 @@ pub(crate) fn copy_module_record(
     parsed: &ParsedRecord<'_>,
     bindings: &BindingTable,
     source: &str,
+    program: &Program<'_>,
 ) -> OwnedModuleRecord {
     let mut record = OwnedModuleRecord {
         requests: Vec::new(),
@@ -82,7 +110,12 @@ pub(crate) fn copy_module_record(
         }
     }
 
-    for entry in parsed.indirect_export_entries.iter().filter(|entry| !entry.is_type) {
+    // The parser marks an exported import with the import's type-only flag,
+    // not the export's: `import { d } …; export { type d }` and
+    // `export type { d }` are type-only exports all the same.
+    let type_only = type_only_export_specifiers(program);
+    let exported_as_type = |entry: &ExportEntry<'_>| type_only.contains(&(entry.span.start, entry.span.end));
+    for entry in parsed.indirect_export_entries.iter().filter(|entry| !entry.is_type && !exported_as_type(entry)) {
         let (Some(exported), Some(specifier)) = (export_name(&entry.export_name), &entry.module_request) else {
             continue;
         };
@@ -128,6 +161,24 @@ fn reexported_import(parsed: &ParsedRecord<'_>, entry: &ExportEntry<'_>, source:
     }
 }
 
+/// The spans of the export specifiers a local `export { … }` declares
+/// type-only: every specifier of `export type { … }`, and each `type x`.
+fn type_only_export_specifiers(program: &Program<'_>) -> FxHashSet<(u32, u32)> {
+    let mut spans = FxHashSet::default();
+    for statement in &program.body {
+        let Statement::ExportNamedDeclaration(export) = statement else { continue };
+        if export.source.is_some() {
+            continue;
+        }
+        for specifier in &export.specifiers {
+            if export.export_kind.is_type() || specifier.export_kind.is_type() {
+                spans.insert((specifier.span.start, specifier.span.end));
+            }
+        }
+    }
+    spans
+}
+
 /// The position of `specifier` in `requests`, added when new.
 fn intern(requests: &mut Vec<String>, specifier: &str) -> RequestId {
     requests.iter().position(|known| known == specifier).unwrap_or_else(|| {
@@ -154,13 +205,23 @@ pub struct ProjectLinks {
 
 impl ProjectLinks {
     pub fn link(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> Self {
+        Self::of_records(files, |ff| &ff.module_record, inputs)
+    }
+
+    /// The links of each file's record, `record` reading it from the file's
+    /// entry.
+    pub(crate) fn of_records<T>(
+        files: &BTreeMap<String, T>,
+        record: impl Fn(&T) -> &OwnedModuleRecord,
+        inputs: &CssInputs,
+    ) -> Self {
         let paths: Vec<String> = files.keys().cloned().collect();
         let index: BTreeMap<String, ModuleIndex> =
             paths.iter().enumerate().map(|(position, path)| (path.clone(), position)).collect();
         let records = files
             .iter()
-            .map(|(path, ff)| {
-                ff.module_record.resolved(|specifier| {
+            .map(|(path, file)| {
+                record(file).resolved(|specifier| {
                     match resolve_import_source(path, specifier, files, inputs) {
                         Some(target) => match index.get(&target) {
                             Some(&module) => Request::Module(module),
@@ -188,6 +249,23 @@ impl ProjectLinks {
     /// ResolveExport for export `name` of the module at `path`.
     pub fn resolve_export(&self, path: &str, name: &str) -> Option<ExportLookup<LocalId>> {
         Some(self.table.resolve_export(self.module(path)?, name))
+    }
+
+    /// The declaring module and binding export `name` of the module at
+    /// `path` resolves to. `None` for any other answer: absent, ambiguous,
+    /// open, a namespace, an export of a module outside the analysis, or a
+    /// module the analysis does not hold.
+    pub fn declared(&self, path: &str, name: &str) -> Option<(ModuleIndex, LocalId)> {
+        match self.resolve_export(path, name)? {
+            ExportLookup::Resolved(Terminal::Local { module, binding }) => Some((module, binding)),
+            _ => None,
+        }
+    }
+
+    /// The names `module` exports its binding `binding` as.
+    pub fn exported_as(&self, module: ModuleIndex, binding: LocalId) -> impl Iterator<Item = &str> + '_ {
+        let exports = &self.table.record(module).local_exports;
+        exports.iter().filter(move |(_, exported)| *exported == binding).map(|(name, _)| name.as_str())
     }
 }
 
@@ -238,6 +316,15 @@ mod tests {
             ("dangling.js", "export { y } from './missing.js'; export * from './gone.js';"),
             ("thenable.js", "export const then = () => {};"),
             ("namespaces.ts", "export namespace Types { export type X = 1; } export namespace Values { export const v = 1; } type T = 1; export { T };"),
+            ("typed-reexports.ts", "import { v } from './types';\nexport { type v as tv };\nexport type { v as tv2 };\nexport { v as rv };"),
+            (
+                "ambient.ts",
+                "declare const q: number;\ndeclare function g(): void;\ndeclare class C {}\ndeclare enum E { A }\ndeclare namespace D { export const d: number; }\nexport { q, g, C, E, D };\nexport const real = 1;",
+            ),
+            (
+                "merged.ts",
+                "function f() {}\ndeclare namespace f { export type T = 1; }\ndeclare namespace N { export function fn(): void; }\nnamespace N { export const v = 1; }\nexport { f, N };",
+            ),
         ]);
         let module = |path: &str| links.module(path).unwrap();
         let local = |path: &str, name: &str| Terminal::Local {
@@ -278,6 +365,13 @@ mod tests {
         assert_eq!(resolve("types.ts", "w"), ExportLookup::Absent);
         assert_eq!(links.table.exported_names(module("types.ts")).names, ["v"]);
         assert_eq!(links.table.exported_names(module("namespaces.ts")).names, ["Values"]);
+        // An imported binding exported as a type, either way, exports
+        // nothing at runtime; nor does an ambient declaration.
+        assert_eq!(links.table.exported_names(module("typed-reexports.ts")).names, ["rv"]);
+        assert_eq!(resolve("typed-reexports.ts", "rv"), ExportLookup::Resolved(local("types.ts", "v")));
+        assert_eq!(links.table.exported_names(module("ambient.ts")).names, ["real"]);
+        // A runtime declaration merged with an ambient one is a value.
+        assert_eq!(links.table.exported_names(module("merged.ts")).names, ["f", "N"]);
         // A star of an unanalysed module is open, never absent.
         let ExportLookup::Incomplete { known, openings } = resolve("open.js", "x") else {
             panic!("an open star leaves the answer open");

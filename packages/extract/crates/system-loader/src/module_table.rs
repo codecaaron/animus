@@ -103,6 +103,9 @@ pub struct Opening {
     /// The module whose star is open.
     pub module: ModuleIndex,
     pub reason: OpeningReason,
+    /// The export name asked of the open route; `None` when any name may
+    /// come through it.
+    pub name: Option<String>,
 }
 
 /// The answer to "which binding does export `name` of a module name?".
@@ -199,9 +202,34 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
         &self.dependents[module]
     }
 
+    /// The analysed modules `module` re-exports from: by name, as a
+    /// namespace, or through `export *`.
+    pub fn reexported_modules(&self, module: ModuleIndex) -> impl Iterator<Item = ModuleIndex> + '_ {
+        let record = &self.modules[module];
+        record
+            .indirect_exports
+            .iter()
+            .map(|(_, request, _)| *request)
+            .chain(record.namespace_exports.iter().map(|(_, request)| *request))
+            .chain(record.star_exports.iter().copied())
+            .filter_map(|request| match &record.requests[request] {
+                Request::Module(target) => Some(*target),
+                Request::Outside(_) | Request::Unresolved(_) => None,
+            })
+    }
+
     /// ResolveExport for export `name` of `module`.
     pub fn resolve_export(&self, module: ModuleIndex, name: &str) -> ExportLookup<B> {
-        self.resolve(module, name, &mut HashSet::new())
+        self.resolve(module, name, &mut HashSet::new(), &mut Vec::new())
+    }
+
+    /// ResolveExport for export `name` of `module`, with the name each route
+    /// reaches its terminal by: the export name asked of the module that
+    /// declares the binding or exports the namespace.
+    pub fn resolve_export_spelled(&self, module: ModuleIndex, name: &str) -> (ExportLookup<B>, Vec<(ModuleIndex, String)>) {
+        let mut spelled = Vec::new();
+        let lookup = self.resolve(module, name, &mut HashSet::new(), &mut spelled);
+        (lookup, spelled)
     }
 
     /// ResolveExport through `module`'s request `request`, as an import or
@@ -216,38 +244,49 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
             (Request::Outside(identity), ImportName::Namespace) => {
                 ExportLookup::Resolved(Terminal::External { module: identity.clone(), export: None })
             }
-            (Request::Unresolved(specifier), _) => unresolved(module, specifier),
+            (Request::Unresolved(specifier), ImportName::Name(name)) => unresolved(module, specifier, Some(name)),
+            (Request::Unresolved(specifier), ImportName::Namespace) => unresolved(module, specifier, None),
         }
     }
 
     /// One `set` of (module, name) pairs serves the whole query, forwarded
     /// through every branch: a pair met again resolves to null there, and
     /// null is `Absent`.
-    fn resolve(&self, module: ModuleIndex, name: &str, set: &mut HashSet<(ModuleIndex, String)>) -> ExportLookup<B> {
+    fn resolve(
+        &self,
+        module: ModuleIndex,
+        name: &str,
+        set: &mut HashSet<(ModuleIndex, String)>,
+        spelled: &mut Vec<(ModuleIndex, String)>,
+    ) -> ExportLookup<B> {
         if !set.insert((module, name.to_string())) {
             return ExportLookup::Absent;
         }
         let record = &self.modules[module];
         let through = |request: RequestId| &record.requests[request];
         if let Some((_, binding)) = record.local_exports.iter().find(|(exported, _)| exported == name) {
+            spelled.push((module, name.to_string()));
             return ExportLookup::Resolved(Terminal::Local { module, binding: binding.clone() });
         }
         if let Some((_, request, imported)) = record.indirect_exports.iter().find(|(exported, ..)| exported == name) {
             return match through(*request) {
-                Request::Module(target) => self.resolve(*target, imported, set),
+                Request::Module(target) => self.resolve(*target, imported, set, spelled),
                 Request::Outside(identity) => {
                     ExportLookup::Resolved(Terminal::External { module: identity.clone(), export: Some(imported.clone()) })
                 }
-                Request::Unresolved(specifier) => unresolved(module, specifier),
+                Request::Unresolved(specifier) => unresolved(module, specifier, Some(imported)),
             };
         }
         if let Some((_, request)) = record.namespace_exports.iter().find(|(exported, _)| exported == name) {
             return match through(*request) {
-                Request::Module(target) => ExportLookup::Resolved(Terminal::Namespace(*target)),
+                Request::Module(target) => {
+                    spelled.push((module, name.to_string()));
+                    ExportLookup::Resolved(Terminal::Namespace(*target))
+                }
                 Request::Outside(identity) => {
                     ExportLookup::Resolved(Terminal::External { module: identity.clone(), export: None })
                 }
-                Request::Unresolved(specifier) => unresolved(module, specifier),
+                Request::Unresolved(specifier) => unresolved(module, specifier, None),
             };
         }
         if name == "default" {
@@ -258,12 +297,14 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
         for &star in &record.star_exports {
             match through(star) {
                 Request::Outside(identity) => {
-                    openings.push(Opening { module, reason: OpeningReason::OutsideStar(identity.clone()) });
+                    let reason = OpeningReason::OutsideStar(identity.clone());
+                    openings.push(Opening { module, reason, name: Some(name.to_string()) });
                 }
                 Request::Unresolved(specifier) => {
-                    openings.push(Opening { module, reason: OpeningReason::UnresolvedRequest(specifier.clone()) });
+                    let reason = OpeningReason::UnresolvedRequest(specifier.clone());
+                    openings.push(Opening { module, reason, name: Some(name.to_string()) });
                 }
-                Request::Module(target) => match self.resolve(*target, name, set) {
+                Request::Module(target) => match self.resolve(*target, name, set, spelled) {
                     ExportLookup::Absent => {}
                     ExportLookup::Ambiguous(terminals) => return ExportLookup::Ambiguous(terminals),
                     ExportLookup::Resolved(terminal) => add_terminal(&mut known, terminal),
@@ -323,10 +364,10 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
             match &record.requests[star] {
                 Request::Outside(identity) => out
                     .openings
-                    .push(Opening { module, reason: OpeningReason::OutsideStar(identity.clone()) }),
+                    .push(Opening { module, reason: OpeningReason::OutsideStar(identity.clone()), name: None }),
                 Request::Unresolved(specifier) => out
                     .openings
-                    .push(Opening { module, reason: OpeningReason::UnresolvedRequest(specifier.clone()) }),
+                    .push(Opening { module, reason: OpeningReason::UnresolvedRequest(specifier.clone()), name: None }),
                 Request::Module(target) => self.collect_names(*target, stars, seen, out, false),
             }
         }
@@ -422,7 +463,7 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
                     })
                     .clone();
                 out.push(ModuleOpening {
-                    opening: Opening { module, reason },
+                    opening: Opening { module, reason, name: None },
                     exposure: Exposure::AllImportableCapturedModules,
                     unknown_outside_world: true,
                     dependents,
@@ -434,9 +475,10 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
 }
 
 /// The answer through a request that resolved to nothing: open.
-fn unresolved<B>(module: ModuleIndex, specifier: &str) -> ExportLookup<B> {
+fn unresolved<B>(module: ModuleIndex, specifier: &str, name: Option<&str>) -> ExportLookup<B> {
     let reason = OpeningReason::UnresolvedRequest(specifier.to_string());
-    ExportLookup::Incomplete { known: Vec::new(), openings: vec![Opening { module, reason }] }
+    let name = name.map(str::to_string);
+    ExportLookup::Incomplete { known: Vec::new(), openings: vec![Opening { module, reason, name }] }
 }
 
 fn add_terminal<B: PartialEq>(known: &mut Vec<Terminal<B>>, terminal: Terminal<B>) {
