@@ -303,7 +303,9 @@ impl FlowBuilder {
             for flow in &self.flows {
                 let Some(cause) = flow.from.iter().find_map(|object| effects.first_cause(object)) else { continue };
                 for object in &flow.to {
-                    if effects.first_cause(object).is_none() {
+                    // An exposure of only part of the object leaves room for
+                    // the whole-object change the flow carries.
+                    if !effects.wholly_exposed(object) {
                         let order = effects.recorded;
                         effects.recorded += 1;
                         let cause = format!("{}{cause}", flow.prefix);
@@ -337,6 +339,25 @@ impl ValueEffects {
     fn add(&mut self, change: Change) {
         self.changed.entry(change.object.clone()).or_default().push(self.changes.len());
         self.changes.push(change);
+    }
+
+    /// Whether a change of the object itself, or an opening that reaches
+    /// all of it, is already recorded.
+    fn wholly_exposed(&self, object: &ObjectId) -> bool {
+        let changed = self
+            .changed
+            .get(object)
+            .into_iter()
+            .flatten()
+            .any(|&index| self.changes[index].path.is_empty());
+        changed
+            || self.closure.openings.iter().any(|opening| match opening.exposure.as_atoms() {
+                None => true,
+                Some(atoms) => atoms.iter().any(|atom| match atom {
+                    RegionAtom::Path(target, at) => target == object && at.is_empty(),
+                    atom => self.reaches(&Region::of(atom.clone()), object, &[]),
+                }),
+            })
     }
 
     fn first_cause(&self, object: &ObjectId) -> Option<String> {
@@ -404,6 +425,27 @@ mod tests {
             inputs.push(Uncertainty::new(reason, Region::top()));
         }
         inputs
+    }
+
+    /// Adding an opening never takes coverage away: a narrow opening on an
+    /// object a flow reaches leaves the flow's whole-object change in place.
+    #[test]
+    fn a_narrow_opening_keeps_what_a_flow_carries() {
+        let (x, y) = (ObjectId::new("m.ts", "x"), ObjectId::new("m.ts", "y"));
+        let build = |narrow: bool| {
+            let mut builder = FlowBuilder::new();
+            builder.change(y.clone(), Vec::new(), "y changes".to_string());
+            if narrow {
+                let region = Region::of(RegionAtom::Path(x.clone(), vec!["a".to_string()]));
+                builder.open(ReasonId::OpaqueEffect, region, "x.a may change".to_string());
+            }
+            builder.flow(vec![x.clone()], vec![y.clone()], "x reads y, and ".to_string());
+            builder.close()
+        };
+        let member_b = AbsenceQuery::Stable(x.clone(), vec!["b".to_string()]);
+        for narrow in [false, true] {
+            assert!(matches!(build(narrow).covers(&member_b), Coverage::Exposed(_)), "narrow opening: {narrow}");
+        }
     }
 
     #[test]
