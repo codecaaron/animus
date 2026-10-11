@@ -64,6 +64,7 @@ pub mod reconcile;
 pub mod runtime_assets;
 pub mod chain_merge;
 pub(crate) mod selector_subject;
+pub mod static_value;
 pub mod transforms;
 pub mod analyze_css;
 pub mod theme;

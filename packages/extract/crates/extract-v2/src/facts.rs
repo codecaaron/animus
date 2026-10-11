@@ -1269,7 +1269,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         unsettled_fx.insert(k.clone(), unsettled.clone());
         statics_fx.remove(k);
     }
-    let statics = eval::Statics::new(&statics_fx, &unsettled_fx);
+    let typed_fx = eval::typed_statics(&statics_fx);
+    let statics = eval::Statics::new(&typed_fx, &unsettled_fx);
     let mut usage_statics_fx = local_usage_statics.clone();
     for (k, v) in extra_usage_statics {
         usage_statics_fx.insert(k.clone(), v.clone());
@@ -1363,17 +1364,24 @@ pub(crate) fn extract_file_facts_from_static_maps(
                         None => match identifier_index.get(key) {
                             // A stage argument something may change before the
                             // read refuses, by name or by member path.
-                            Some(name) => match eval::static_path(statics, name) {
-                                Some(eval::StaticRead::Unsettled(reason)) => Err(reason.to_string()),
-                                Some(eval::StaticRead::Exact(v)) => match eval::lost_value_reason(v) {
-                                    Some(reason) => Err(reason.to_string()),
-                                    None => Ok((Some(v.clone()), Vec::new(), Vec::new())),
-                                },
-                                None => Err(format!(
-                                    "identifier '{}' not resolvable to static object",
-                                    name
-                                )),
-                            },
+                            Some(name) => {
+                                let mut segments = name.split('.');
+                                let binding = segments.next().unwrap_or_default();
+                                let path: Vec<&str> = segments.collect();
+                                match eval::static_value(statics, binding, &path) {
+                                    Some(eval::StaticAnswer::Unsettled(unsettled)) => Err(unsettled.reason.clone()),
+                                    Some(eval::StaticAnswer::Unevaluated(unevaluated)) => {
+                                        Err(unevaluated.clause.clone())
+                                    }
+                                    Some(eval::StaticAnswer::Exact(value)) => {
+                                        Ok((Some(eval::marked(value)), Vec::new(), Vec::new()))
+                                    }
+                                    None => Err(format!(
+                                        "identifier '{}' not resolvable to static object",
+                                        name
+                                    )),
+                                }
+                            }
                             None => Err("failed to parse object expression".to_string()),
                         },
                     };
@@ -1748,6 +1756,50 @@ mod tests {
         );
         let serialized = serde_json::to_value(&facts).unwrap();
         assert_eq!(serialized["statics"], serde_json::json!({ "GAP": 16 }));
+    }
+
+    /// Contract (until serialized statics read typed values): an authored
+    /// object whose key spells a marker reads as that marker, as main's JSON
+    /// readers took it. A `$animus.lost` key refuses the object through a
+    /// stage, a spread and a member read; an unknown `$animus.asset` scope
+    /// is kept as written.
+    #[test]
+    fn an_authored_marker_key_reads_as_the_marker() {
+        let consts = "const preset = { '$animus.lost': 'authored', padding: 4 };\n\
+            const odd = { '$animus.asset': 'other' };\n\
+            const box = { f: { '$animus.asset': 'other', x: 1 } };\n";
+        let rows: [(&str, &str); 6] = [
+            (
+                "export const A = ds.styles(preset).asElement('div');",
+                r#"{"value": null, "skipped": [], "eval_error": "styles eval failed: authored"}"#,
+            ),
+            (
+                "export const A = ds.styles({ ...preset, color: 'red' }).asElement('div');",
+                r#"{"value": null, "skipped": [], "eval_error": "styles eval failed: spread of authored"}"#,
+            ),
+            (
+                "export const A = ds.styles({ p: preset.padding }).asElement('div');",
+                r#"{"value": {}, "skipped": [["p", "member expression (non-static) — authored"]], "eval_error": null}"#,
+            ),
+            (
+                "export const A = ds.styles({ p: preset['padding'] }).asElement('div');",
+                r#"{"value": {}, "skipped": [["p", "member expression (non-static) — authored"]], "eval_error": null}"#,
+            ),
+            (
+                "export const A = ds.styles({ ...odd, color: 'red' }).asElement('div');",
+                r#"{"value": null, "skipped": [], "eval_error": "styles eval failed: spread element in style object"}"#,
+            ),
+            (
+                "export const A = ds.styles({ ...box }).asElement('div');",
+                r#"{"value": {"f": {"$animus.asset": "other", "x": 1}}, "skipped": [], "eval_error": null}"#,
+            ),
+        ];
+        for (chain, expected) in rows {
+            let facts = facts_for(&format!("{consts}{chain}"));
+            let stage = &facts.chains[0].stages[0];
+            let seen = serde_json::json!({ "value": stage.value, "skipped": stage.skipped, "eval_error": stage.eval_error });
+            assert_eq!(seen, serde_json::from_str::<Value>(expected).unwrap(), "{chain}");
+        }
     }
 
     #[test]
