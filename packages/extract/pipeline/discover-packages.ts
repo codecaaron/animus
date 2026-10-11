@@ -116,18 +116,24 @@ export function bareSpecifierPackageName(specifier: string): string {
 function sourceEntryForSpecifier(
   specifier: string,
   srcDir: string,
-  extensionsSet: ReadonlySet<string>
+  extensionsSet: ReadonlySet<string>,
+  rootDir: string
 ): string | null {
   // A guess, not a resolution: a file differing only in case is no guess.
+  // Only the names below the root, or below `src/`, are checked.
   if (isAbsolute(specifier)) {
-    const probed = probeAbsolutePathSpecifier(specifier, extensionsSet);
+    const probed = probeAbsolutePathSpecifier(
+      specifier,
+      extensionsSet,
+      rootDir
+    );
     if (probed.kind !== 'found') return null;
     return isPathWithinRoot(srcDir, probed.path) ? probed.path : null;
   }
   const packageName = bareSpecifierPackageName(specifier);
   const subpath = specifier.slice(packageName.length + 1);
   const sourceStem = join(srcDir, subpath || 'index');
-  const probed = probeAbsolutePathSpecifier(sourceStem, extensionsSet);
+  const probed = probeAbsolutePathSpecifier(sourceStem, extensionsSet, srcDir);
   return probed.kind === 'found' ? probed.path : null;
 }
 
@@ -203,7 +209,7 @@ export function readKitSourceCondition(
         subpath,
         target,
         seen?.kind === 'case-only'
-          ? `differs from ${seen.actual} only in case (a case-sensitive filesystem does not load it)`
+          ? `is spelled otherwise on disk (${seen.actual}), which a case- or normalization-sensitive filesystem does not load`
           : 'is missing or outside the package',
       ]);
     }
@@ -230,8 +236,12 @@ const TS_SOURCE = /(?<!\.d)\.[cm]?tsx?$/;
  *  targets TypeScript source in the package under `import` or `default`:
  *  those targets are its source, as the condition would name them. Null
  *  when any exact entry has no such target, such as one only `require` or
- *  `types` reaches, or there is no exact entry. */
-function sourceExportsCondition(pkgRoot: string): KitSourceCondition | null {
+ *  `types` reaches, or there is no exact entry. A target that differs from
+ *  its file only in case names no file, as the system loader reads it: why,
+ *  never a guess past it. */
+function sourceExportsCondition(
+  pkgRoot: string
+): KitSourceCondition | { caseMismatch: string } | null {
   const entries: Array<[string, string]> = [];
   for (const [subpath, value] of exportsSubpaths(
     readPackageManifest(pkgRoot)
@@ -240,12 +250,23 @@ function sourceExportsCondition(pkgRoot: string): KitSourceCondition | null {
     const target = exportTarget(value);
     const file = target === null ? null : resolve(pkgRoot, target);
     if (
+      target === null ||
       file === null ||
       !TS_SOURCE.test(file) ||
-      !isPathWithinRoot(pkgRoot, file) ||
-      seeOnDisk(file, pkgRoot).kind !== 'file'
+      !isPathWithinRoot(pkgRoot, file)
     )
       return null;
+    const seen = seeOnDisk(file, pkgRoot);
+    if (seen.kind === 'case-only') {
+      return {
+        caseMismatch: caseMismatchReason(
+          `exports["${subpath}"] of ${join(pkgRoot, 'package.json')}`,
+          { candidate: target, actual: seen.actual },
+          'spell the export target as the file is spelled'
+        ),
+      };
+    }
+    if (seen.kind !== 'file') return null;
     entries.push([subpath, file]);
   }
   if (entries.length === 0) return null;
@@ -622,13 +643,21 @@ export async function collectExternalPackageSources(opts: {
     } catch {
       absEntry = null;
     }
-    // Node's resolver refuses extensionless TS paths, so an absolute specifier
-    // it declines is probed on the filesystem before giving up.
+    // An absolute specifier is checked on the filesystem, the names below the
+    // root spelled exactly, even where the host resolved it: a host on a
+    // case-insensitive filesystem opens a file that differs only in case.
+    // Node's resolver refuses extensionless TS paths, so one it declines is
+    // found here too.
     let caseMismatch: string | undefined;
-    if (!absEntry && isAbsolute(specifier)) {
-      const probed = probeAbsolutePathSpecifier(specifier, extensionsSet);
-      if (probed.kind === 'found') absEntry = probed.path;
+    if (isAbsolute(specifier)) {
+      const probed = probeAbsolutePathSpecifier(
+        specifier,
+        extensionsSet,
+        rootDir
+      );
+      if (probed.kind === 'found') absEntry ??= probed.path;
       if (probed.kind === 'case-mismatch') {
+        absEntry = null;
         caseMismatch = caseMismatchReason(
           `'${specifier}'`,
           probed,
@@ -653,10 +682,18 @@ export async function collectExternalPackageSources(opts: {
         realPath(resolvedRoot) === locatedRoot)
         ? resolvedRoot
         : locatedRoot || resolvedRoot;
-    const condition =
-      packageName && pkgRoot
-        ? (readKitSourceCondition(pkgRoot) ?? sourceExportsCondition(pkgRoot))
+    const declared =
+      packageName && pkgRoot ? readKitSourceCondition(pkgRoot) : null;
+    const inferred =
+      packageName && pkgRoot && !declared
+        ? sourceExportsCondition(pkgRoot)
         : null;
+    if (inferred && 'caseMismatch' in inferred) {
+      absEntry = null;
+      caseMismatch = inferred.caseMismatch;
+    }
+    const condition =
+      declared ?? (inferred && !('caseMismatch' in inferred) ? inferred : null);
     const entryKey = packageName && `.${specifier.slice(packageName.length)}`;
     absEntry ??=
       condition?.entries.find(([entry]) => entry === entryKey)?.[1] ?? null;
@@ -688,6 +725,35 @@ export async function collectExternalPackageSources(opts: {
       diagnostics.push(...sourceConditionDiagnostics(packageName, condition));
     }
 
+    // The compiled output a runtime entry lives in: its directory, with the
+    // entry's own extension, less the paths no package ships as source.
+    const ingestOutput = (entryFile: string): void => {
+      const outputDir = dirname(entryFile);
+      packageDirs.push(outputDir);
+      if (linked) linkedDirs.push(outputDir);
+      outputDirs.push(outputDir);
+      claimDir(outputDir, specifier);
+      onPackageResolved?.(specifier, outputDir);
+      const outputExtensions = new Set(extensionsSet);
+      outputExtensions.add(extname(entryFile));
+      dirExtensions[outputDir] = [...outputExtensions];
+      const outputFiles = discoverFiles(
+        outputDir,
+        outputDir,
+        undefined,
+        outputExtensions
+      ).filter((file) => {
+        const relToOutput = relative(outputDir, file);
+        return !PACKAGE_OUTPUT_EXCLUDES.some((pattern) =>
+          relToOutput.includes(pattern)
+        );
+      });
+      if (!outputFiles.includes(entryFile)) outputFiles.unshift(entryFile);
+      for (const outputFile of outputFiles) {
+        if (ingest(outputFile, specifier)) fileCount++;
+      }
+    };
+
     if (condition && packageName) {
       for (const [entry, target] of condition.entries) {
         const entrySpecifier = packageName + entry.slice(1);
@@ -697,6 +763,11 @@ export async function collectExternalPackageSources(opts: {
         );
       }
       packageMap[specifier] ??= relative(rootDir, absEntry);
+      // An entry whose source target is invalid is read from its runtime
+      // target, which the condition's source root does not hold.
+      if (!condition.entries.some(([entry]) => entry === entryKey)) {
+        ingestOutput(absEntry);
+      }
       if (condition.root) {
         packageDirs.push(condition.root);
         if (linked) linkedDirs.push(condition.root);
@@ -717,7 +788,8 @@ export async function collectExternalPackageSources(opts: {
       const srcEntry = sourceEntryForSpecifier(
         specifier,
         srcDir,
-        extensionsSet
+        extensionsSet,
+        rootDir
       );
       if (srcEntry) {
         packageMap[specifier] = relative(rootDir, srcEntry);
@@ -734,7 +806,8 @@ export async function collectExternalPackageSources(opts: {
           const rootEntry = sourceEntryForSpecifier(
             packageName,
             srcDir,
-            extensionsSet
+            extensionsSet,
+            rootDir
           );
           if (rootEntry) {
             packageMap[packageName] = relative(rootDir, rootEntry);
@@ -753,34 +826,8 @@ export async function collectExternalPackageSources(opts: {
         if (ingest(pkgFile, specifier)) fileCount++;
       }
     } else {
-      const outputDir = dirname(absEntry);
-      packageDirs.push(outputDir);
-      if (linked) linkedDirs.push(outputDir);
-      outputDirs.push(outputDir);
-      claimDir(outputDir, specifier);
-      onPackageResolved?.(specifier, outputDir);
-      const relPath = relative(rootDir, absEntry);
-      packageMap[specifier] = relPath;
-
-      const outputExtensions = new Set(extensionsSet);
-      outputExtensions.add(extname(absEntry));
-      dirExtensions[outputDir] = [...outputExtensions];
-      const outputFiles = discoverFiles(
-        outputDir,
-        outputDir,
-        undefined,
-        outputExtensions
-      ).filter((file) => {
-        const relToOutput = relative(outputDir, file);
-        return !PACKAGE_OUTPUT_EXCLUDES.some((pattern) =>
-          relToOutput.includes(pattern)
-        );
-      });
-      if (!outputFiles.includes(absEntry)) outputFiles.unshift(absEntry);
-
-      for (const outputFile of outputFiles) {
-        if (ingest(outputFile, specifier)) fileCount++;
-      }
+      packageMap[specifier] = relative(rootDir, absEntry);
+      ingestOutput(absEntry);
     }
 
     // App code imports a package by any of its export entries, often its
@@ -1154,7 +1201,7 @@ async function resolveModuleFile(
   importer: string,
   specifier: string,
   resolvePackage: PackageResolver | undefined
-): Promise<{ file: string } | { why: string }> {
+): Promise<{ file: string } | { why: string; caseMismatch?: true }> {
   const unresolved = { why: `'${specifier}' could not be resolved` };
   if (specifier.startsWith('.')) {
     const probed = probeOnDisk(
@@ -1169,6 +1216,7 @@ async function resolveModuleFile(
             probed,
             'spell the import as the file is spelled'
           ),
+          caseMismatch: true,
         }
       : unresolved;
   }
@@ -1184,7 +1232,9 @@ async function resolveModuleFile(
 type BindingIdentity =
   | { kind: 'animus' }
   | { kind: 'other'; what: string }
-  | { kind: 'unknown'; why: string };
+  /** `caseMismatch`: a module on the way differs from its specifier only
+   *  in case, so a case-insensitive host follows it and this cannot. */
+  | { kind: 'unknown'; why: string; caseMismatch?: true };
 
 const escapeRegExp = (text: string): string =>
   text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1213,7 +1263,7 @@ async function exportIdentity(
     specifier,
     following.resolvePackage
   );
-  if ('why' in resolved) return { kind: 'unknown', why: resolved.why };
+  if ('why' in resolved) return { kind: 'unknown', ...resolved };
   const { file } = resolved;
   const key = `${file}#${name}`;
   if (seen.has(key)) {
@@ -1327,6 +1377,9 @@ async function systemRoots(
   ): Promise<BindingIdentity> =>
     exportIdentity(systemFilePath, specifier, name, following, new Set());
   const called = (callee: string): boolean => callOf(callee).test(source);
+  /** Where `callee` is first called; the start of the file without a call. */
+  const callOffset = (callee: string): number =>
+    Math.max(0, source.search(callOf(callee)));
   /** Admits a binding named `createSystem` by its identity: an unknown one
    *  keeps `spellingAdmits`, and every unproven one is reported. */
   const admit = (
@@ -1385,12 +1438,14 @@ async function systemRoots(
     }
     // Another name is followed only when it is called and imported from a
     // local module, where a renamed re-export of the factory can surface.
-    if (
-      binding.source.startsWith('.') &&
-      called(binding.local) &&
-      (await identityOf(binding.source, binding.imported)).kind === 'animus'
-    ) {
-      roots.add(binding.local);
+    // One a case mismatch stops is reported: a case-insensitive host
+    // follows it.
+    if (binding.source.startsWith('.') && called(binding.local)) {
+      const identity = await identityOf(binding.source, binding.imported);
+      if (identity.kind === 'animus') roots.add(binding.local);
+      else if (identity.kind === 'unknown' && identity.caseMismatch) {
+        admit(binding.local, callOffset(binding.local), identity, false);
+      }
     }
   }
 
@@ -1399,13 +1454,14 @@ async function systemRoots(
   for (const [, namespace, specifier] of source.matchAll(NAMESPACE_IMPORT)) {
     namespaces.set(namespace, specifier);
     const member = `${namespace}.createSystem`;
-    if (
-      ANIMUS_SYSTEM_SPECIFIER.test(specifier) ||
-      (specifier.startsWith('.') &&
-        called(member) &&
-        (await identityOf(specifier, 'createSystem')).kind === 'animus')
-    ) {
+    if (ANIMUS_SYSTEM_SPECIFIER.test(specifier)) {
       roots.add(member);
+    } else if (specifier.startsWith('.') && called(member)) {
+      const identity = await identityOf(specifier, 'createSystem');
+      if (identity.kind === 'animus') roots.add(member);
+      else if (identity.kind === 'unknown' && identity.caseMismatch) {
+        admit(member, callOffset(member), identity, false);
+      }
     }
   }
 

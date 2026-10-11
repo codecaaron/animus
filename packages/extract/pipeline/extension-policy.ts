@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, statSync } from 'node:fs';
-import { basename, dirname, join, normalize, parse, sep } from 'node:path';
+import { readdirSync, realpathSync, statSync } from 'node:fs';
+import { join, normalize, parse, sep } from 'node:path';
 
 /**
  * The one extension policy: the order in which a relative or aliased
@@ -71,14 +71,16 @@ export function policyCandidates(
 /** What the filesystem holds at a candidate path, spelled exactly. */
 export type SeenFile =
   | { kind: 'file' }
-  /** A file whose name differs from the candidate's only in case, as a
-   *  case-insensitive filesystem matches it: its own spelling. */
+  /** A file the filesystem opens under the candidate's spelling though no
+   *  directory lists that spelling: its real path, as the filesystem
+   *  reports it. */
   | { kind: 'case-only'; actual: string }
   | { kind: 'missing' };
 
-/** How a probe ends. A case mismatch is the first candidate a host could
- *  load differing from a file only in case: a case-insensitive host loads
- *  it and a case-sensitive one does not, so it is neither found nor absent. */
+/** How a probe ends. A case mismatch is the first candidate a host opens
+ *  under a spelling no directory lists: a case- or normalization-insensitive
+ *  host loads it and a sensitive one does not, so it is neither found nor
+ *  absent. */
 export type ProbedFile =
   | { kind: 'found'; path: string }
   | { kind: 'case-mismatch'; candidate: string; actual: string }
@@ -108,40 +110,39 @@ const isFile = (path: string): boolean => {
   }
 };
 
-/** How `directory` lists `name`: exactly, under another case, or not at all. */
-function listed(
-  directory: string,
-  name: string
-): { exact: boolean; name: string } | null {
-  let entries: string[];
+/** Whether `directory` lists an entry spelled exactly `name`. */
+function lists(directory: string, name: string): boolean {
   try {
-    entries = readdirSync(directory || '.');
+    return readdirSync(directory || '.').includes(name);
   } catch {
-    return null;
+    return false;
   }
-  if (entries.includes(name)) return { exact: true, name };
-  const lower = name.toLowerCase();
-  const variant = entries.find((entry) => entry.toLowerCase() === lower);
-  return variant === undefined ? null : { exact: false, name: variant };
 }
 
-/** What the filesystem holds at `candidate`: a file whose every name matches
- *  its directory's entry, or one that matches only ignoring case (a
- *  case-insensitive filesystem opens it; on a case-sensitive one, a final
- *  name that differs only in case). Given `within`, the directory the two
- *  share is spelled as given and only the names below it are checked, as a
- *  specifier spells only the path from its importer's directory and a
- *  manifest only the paths in its package. The system loader reads it
- *  alike. */
+/** `path`'s real path as the filesystem reports it; as given when it cannot
+ *  be read. */
+const reported = (path: string): string => {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
+};
+
+/** What the filesystem holds at `candidate`: a file it opens under exactly
+ *  that spelling, or one it opens although a directory below the one the
+ *  candidate shares with `within` lists no entry spelled as the candidate
+ *  spells it (a case- or normalization-insensitive filesystem opening
+ *  another spelling). Nothing is folded: the filesystem decides what opens,
+ *  and its listings decide the spelling, so a file a case-sensitive
+ *  filesystem cannot open is simply missing. The shared directory is
+ *  spelled as given, as a specifier spells only the path from its
+ *  importer's directory and a manifest only the paths in its package. `..`
+ *  is taken back lexically, as Node and the bundlers resolve a specifier
+ *  before opening it. The system loader reads it alike. */
 export function seeOnDisk(candidate: string, within?: string): SeenFile {
   const path = normalize(candidate);
-  if (!existsSync(path)) {
-    const parent = dirname(path);
-    const entry = listed(parent, basename(path));
-    return entry && !entry.exact && isFile(join(parent, entry.name))
-      ? { kind: 'case-only', actual: join(parent, entry.name) }
-      : { kind: 'missing' };
-  }
+  if (!isFile(path)) return { kind: 'missing' };
   const { root } = parse(path);
   const names = path.slice(root.length).split(sep).filter(Boolean);
   const baseNames =
@@ -156,16 +157,14 @@ export function seeOnDisk(candidate: string, within?: string): SeenFile {
   ) {
     shared++;
   }
-  let actual = join(root, ...names.slice(0, shared));
-  let differs = false;
+  let directory = join(root, ...names.slice(0, shared));
   for (const name of names.slice(shared)) {
-    const entry = listed(actual, name);
-    if (entry === null) return { kind: 'missing' };
-    actual = join(actual, entry.name);
-    if (!entry.exact) differs = true;
+    if (!lists(directory, name)) {
+      return { kind: 'case-only', actual: reported(path) };
+    }
+    directory = join(directory, name);
   }
-  if (!isFile(actual)) return { kind: 'missing' };
-  return differs ? { kind: 'case-only', actual } : { kind: 'file' };
+  return { kind: 'file' };
 }
 
 /** The first of `candidates` the filesystem holds, spelled exactly below
@@ -179,9 +178,9 @@ export function probeOnDisk(
   );
 }
 
-/** Why `subject` names no file: the file it would load differs from its
- *  spelling only in case. `remedy` says what to respell. The system loader
- *  words it alike. */
+/** Why `subject` names no file: the file it would load is spelled otherwise
+ *  on disk. `remedy` says what to respell. The system loader words it
+ *  alike. */
 export function caseMismatchReason(
   subject: string,
   mismatch: { candidate: string; actual: string },
@@ -189,7 +188,8 @@ export function caseMismatchReason(
 ): string {
   return (
     `${subject} names ${mismatch.candidate}, but the file on disk is ` +
-    `${mismatch.actual}, which differs only in case: a case-insensitive ` +
-    `filesystem loads it and a case-sensitive one does not — ${remedy}`
+    `${mismatch.actual}, spelled differently: a case- or ` +
+    `normalization-insensitive filesystem loads it and a sensitive one ` +
+    `does not — ${remedy}`
   );
 }
