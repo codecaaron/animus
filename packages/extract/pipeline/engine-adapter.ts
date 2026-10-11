@@ -31,6 +31,12 @@ export interface EngineApi {
   moduleSpecifiers?: (filesJson: string) => string;
   /** The engine's code-to-severity table, as JSON. */
   diagnosticCodes?: () => string;
+  /** A specifier resolved as the system loader resolves it: the real path
+   *  of the file it names, or why it names none. */
+  resolveSpecifier?: (
+    specifier: string,
+    fromDir: string
+  ) => { path?: string | null; unresolved?: string | null };
   analyzeProject: (
     filesJson: string,
     scalesJson: string,
@@ -147,6 +153,8 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
       extractFacts: (filesJson) => native.extractFacts(filesJson),
       moduleSpecifiers: (filesJson) => native.moduleSpecifiers(filesJson),
       diagnosticCodes: () => native.diagnosticCodes(),
+      resolveSpecifier: (specifier, fromDir) =>
+        native.resolveSpecifier(specifier, fromDir),
       analyzeProject: (
         filesJsonRaw,
         scalesJson,
