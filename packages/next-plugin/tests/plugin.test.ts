@@ -823,6 +823,65 @@ describe('coordinated teardown', () => {
     expect(getSharedCss(keyOf(root))).toMatch(/margin:\s*32/);
   });
 
+  test('a rewatch racing the takeover joins it, with no error', async () => {
+    const root = createProject();
+    const client = createCompiler(root, { name: 'client' });
+    const server = createCompiler(root, { name: 'server' });
+    for (const side of [client, server]) {
+      applyPlugin(
+        new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+        side.compiler
+      );
+    }
+    await client.watchRunHandlers[0](client.compiler);
+    await server.watchRunHandlers[0](server.compiler);
+    client.watchClose();
+
+    const buttonPath = join(root, 'src', 'Button.tsx');
+    nextComponentCss = '.btn{margin:40;}';
+    writeFileSync(buttonPath, BUTTON_SOURCE_CHANGED);
+    server.compiler.modifiedFiles = new Set([buttonPath]);
+    await Promise.all([
+      server.watchRunHandlers[0](server.compiler),
+      client.watchRunHandlers[0](client.compiler),
+    ]);
+
+    // The client's next compilation carries any failure of its turn.
+    const { compilation } = createCompilation([]);
+    const errors: Error[] = [];
+    client.thisCompilationHandlers[0]({ ...compilation, errors });
+    expect(errors).toEqual([]);
+    expect(getSharedCss(keyOf(root))).toMatch(/margin:\s*40/);
+  });
+
+  test('a rewatch reconciles a file deleted while it was away', async () => {
+    const root = createProject();
+    const extraPath = join(root, 'src', 'Extra.tsx');
+    writeFileSync(extraPath, 'export const Extra = 1;\n');
+    const client = createCompiler(root, { name: 'client' });
+    const server = createCompiler(root, { name: 'server' });
+    for (const side of [client, server]) {
+      applyPlugin(
+        new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+        side.compiler
+      );
+    }
+    await client.watchRunHandlers[0](client.compiler);
+    await server.watchRunHandlers[0](server.compiler);
+    client.watchClose();
+    // The server takes over with an edit of its own.
+    const buttonPath = join(root, 'src', 'Button.tsx');
+    writeFileSync(buttonPath, BUTTON_SOURCE_CHANGED);
+    server.compiler.modifiedFiles = new Set([buttonPath]);
+    await server.watchRunHandlers[0](server.compiler);
+
+    rmSync(extraPath);
+    await client.watchRunHandlers[0](client.compiler);
+
+    const last = analyzeCall(mocks.analyzeProject.mock.calls.length - 1);
+    expect(parseFiles(last).map((f) => f.path)).not.toContain('src/Extra.tsx');
+  });
+
   test('participants from two module copies never retire each other', async () => {
     const root = createProject();
     const { compiler, runHandlers } = createCompiler(root);
