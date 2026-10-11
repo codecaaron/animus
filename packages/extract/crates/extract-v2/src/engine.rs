@@ -46,6 +46,9 @@ struct AnalyzeResult<'a> {
     reverse_provenance: &'a std::collections::BTreeMap<String, Vec<String>>,
     components: &'a std::collections::BTreeMap<String, analyze_css::ComponentDescriptor>,
     files: &'a std::collections::BTreeMap<String, Vec<String>>,
+    /// Present only where an extension was dropped over its parent.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    missing_inputs: &'a [analyze_css::MissingInput],
     timing: serde_json::Value,
 }
 
@@ -691,6 +694,12 @@ fn unstable_style_statics(
             }
         }
         for (name, used, at) in &module.facts.uses {
+            // A namespace used whole may change anything its module exports,
+            // as the member tables read it.
+            if let Some(Request::Module(target)) = namespace_of(file, name).filter(|_| !name.contains('.')) {
+                hand_on(&mut flow, &links.paths[*target], &said(file, name, used));
+                continue;
+            }
             for target in targets_of(name) {
                 for (path, kind) in changes_of(&target, at) {
                     flow.change(object(target.clone()), path, kind, said(file, name, used));
@@ -1253,6 +1262,7 @@ impl ExtractEngine {
             reverse_provenance: &css.reverse_provenance,
             components: &css.components,
             files: &css.files_map,
+            missing_inputs: &css.missing_inputs,
             timing: serde_json::json!({ "parseCount": self.parse_count }),
         });
         self.cross = Some(cross);
