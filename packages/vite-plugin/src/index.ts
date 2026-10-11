@@ -216,8 +216,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     async buildStart() {
       await runBuildStart(
         ctx,
-        async (specifier) => {
-          const resolved = await this.resolve(specifier);
+        async (specifier, importer) => {
+          const resolved = await this.resolve(specifier, importer);
           return resolved?.id ?? null;
         },
         // Rollup asset emission exists in build only; dev serves resolved

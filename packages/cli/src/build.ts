@@ -73,7 +73,7 @@ export async function runPreflight(config: ResolvedCliConfig): Promise<void> {
 export function createCliSession(config: ResolvedCliConfig): ExtractionSession {
   const { root, outDir, options } = config;
 
-  const session = new ExtractionSession(options);
+  const session = new ExtractionSession(options, { noBundler: true });
   const relOut = relative(root, outDir);
   if (relOut === '') {
     throw new UsageFailure(

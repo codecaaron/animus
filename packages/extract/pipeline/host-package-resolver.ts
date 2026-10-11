@@ -11,9 +11,12 @@ import type { EngineApi } from './engine-adapter';
 import type { HostExtensionPolicy } from './host-extensions';
 import type { WorkspacePackages } from './workspace-packages';
 
-/** The host's own resolution of a package specifier; null where it finds
- *  nothing. */
-export type HostResolve = (specifier: string) => Promise<string | null>;
+/** The host's own resolution of a specifier, from `importer` (absolute)
+ *  where given, else from the root; null where it finds nothing. */
+export type HostResolve = (
+  specifier: string,
+  importer?: string
+) => Promise<string | null>;
 
 export interface HostFirstResolver {
   resolveSpecifier(specifier: string): Promise<string | null>;

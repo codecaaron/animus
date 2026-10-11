@@ -303,6 +303,10 @@ export const UNPROVEN_ROOT_BINDING = 'animus.discovery.unproven-root-binding';
 export const UNIMPORTED_CREATE_SYSTEM =
   'animus.discovery.unimported-create-system';
 
+/** A tsconfig path alias the host bundler resolves to another file than
+ *  analysis does (spec §2.2 A7): report only. */
+export const ALIAS_MISMATCH = 'animus.discovery.alias-mismatch';
+
 /** What a skipped source file costs: the analysis never sees what it
  *  renders. */
 export const SKIPPED_SOURCE_COST =
@@ -430,6 +434,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [KIT_STALE_DESCRIPTOR, 'warn'],
   [UNPROVEN_ROOT_BINDING, 'warn'],
   [UNIMPORTED_CREATE_SYSTEM, 'warn'],
+  [ALIAS_MISMATCH, 'warn'],
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],
   [INVALID_PROPERTY_REGISTRATION, 'error'],
