@@ -212,7 +212,8 @@ describe('withAnimus Turbopack wiring', () => {
     const options = animusLoaderOptions(turbopack);
     // process.cwd() resolves the macOS /var → /private/var symlink
     expect(options).toMatchObject({ rootDir: realpathSync(root) });
-    expect(options.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    // The wrapper's build, qualified by the phase it loaded in.
+    expect(options.sessionId).toMatch(/^[0-9a-f-]{36}-phase-production-build$/);
     const sessionDir = options.sessionDir;
     expect(sessionDir).toBe(
       join(realpathSync(root), '.animus', 'sessions', options.sessionId)

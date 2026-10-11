@@ -16,7 +16,10 @@ import { tmpdir } from 'os';
 import { dirname, join, relative, sep } from 'path';
 
 import { systemPropsPath } from '../../../extract/session/session-paths';
-import { getReplacementEpoch } from '../../../extract/session/singleton';
+import {
+  getReplacementEpoch,
+  sessionKey,
+} from '../../../extract/session/singleton';
 import {
   buildManifest,
   makeComponent,
@@ -378,6 +381,7 @@ export interface WatchState {
 
 interface LoaderExecutionContext {
   resourcePath: string;
+  getOptions?: () => { build?: string; root?: string };
 }
 
 type HarnessLoader = (this: LoaderExecutionContext, source: string) => string;
@@ -402,7 +406,13 @@ export function installLoaderRecorder(
     source: string
   ): string {
     const file = relative(root, this.resourcePath).split(sep).join('/');
-    state.log.push({ file, turn: state.turn, epoch: getReplacementEpoch() });
+    // The build the rule's options name, as the loader reads it.
+    const options = this.getOptions?.() ?? {};
+    const epoch =
+      options.build === undefined
+        ? null
+        : getReplacementEpoch(sessionKey(options.build, options.root ?? root));
+    state.log.push({ file, turn: state.turn, epoch });
     const code = loaderFn.call(this, source);
     onCode?.(file, state.turn, code);
     return code;
@@ -431,7 +441,10 @@ interface HarnessWebpackConfig {
   cache: { type: 'memory' } | { type: 'filesystem'; cacheDirectory: string };
   resolve?: { extensions: string[] };
   module: {
-    rules: Array<{ test: RegExp; use: string[] }>;
+    rules: Array<{
+      test: RegExp;
+      use: Array<{ loader: string; options?: { build: string; root: string } }>;
+    }>;
   };
   plugins: object[];
 }
@@ -490,7 +503,19 @@ export function buildHarnessWebpackConfig(
     cache: args.cache ?? { type: 'memory' },
     module: {
       rules: [
-        { test: args.rulesTest ?? /src[\\/].*\.js$/, use: [args.shimPath] },
+        {
+          test: args.rulesTest ?? /src[\\/].*\.js$/,
+          // The build and root `withAnimus` gives its loader rule.
+          use: [
+            {
+              loader: args.shimPath,
+              options:
+                animus instanceof AnimusWebpackPlugin
+                  ? { build: animus.sessionId, root: args.root }
+                  : undefined,
+            },
+          ],
+        },
       ],
     },
     plugins:

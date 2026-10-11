@@ -7,6 +7,7 @@ import {
   getAnalyzedHashes,
   getReplacementEpoch,
 } from '../../../extract/session/singleton';
+import { latestSessionKey } from '../../../extract/tests/session/session-fixtures';
 import animusLoader from '../../src/loader';
 import { AnimusWebpackPlugin } from '../../src/plugin';
 import {
@@ -216,17 +217,17 @@ describe.skipIf(!prereq.ok)(
         steps: [
           // The turn after cold absorbs a one-time cold-artifact recheck.
           () => {
-            epochs.push(getReplacementEpoch());
+            epochs.push(getReplacementEpoch(latestSessionKey()));
             project.write('src/Plain.ts', PLAIN_SOURCE + '// touch\n');
           },
           () => {
-            epochs.push(getReplacementEpoch());
+            epochs.push(getReplacementEpoch(latestSessionKey()));
             project.write('src/Parent.ts', parentSource(4));
           },
         ],
         settleMs: 1500,
       });
-      epochs.push(getReplacementEpoch());
+      epochs.push(getReplacementEpoch(latestSessionKey()));
 
       const evidence = JSON.stringify({
         turns: turnEvidence(records),
@@ -263,14 +264,18 @@ describe.skipIf(!prereq.ok)(
         steps: [
           () => project.write('src/Plain.ts', PLAIN_SOURCE + '// touch\n'),
           () => {
-            heldHashes.push(getAnalyzedHashes()?.get('src/Parent.ts'));
+            heldHashes.push(
+              getAnalyzedHashes(latestSessionKey())?.get('src/Parent.ts')
+            );
             project.write(
               'src/Parent.ts',
               parentSource(4).replace('const STEP = 4;', 'const STEP = 4 +;')
             );
           },
           () => {
-            heldHashes.push(getAnalyzedHashes()?.get('src/Parent.ts'));
+            heldHashes.push(
+              getAnalyzedHashes(latestSessionKey())?.get('src/Parent.ts')
+            );
             project.write('src/Parent.ts', parentSource(5));
           },
         ],
@@ -300,9 +305,10 @@ describe.skipIf(!prereq.ok)(
       const repaired = turnEditing(records, 'Parent.ts', broken + 1);
       expect(repaired, evidence).toBeGreaterThan(broken);
       expect(records[repaired].errors, evidence).toEqual([]);
-      expect(getAnalyzedHashes()?.get('src/Parent.ts'), evidence).not.toBe(
-        heldHashes[0]
-      );
+      expect(
+        getAnalyzedHashes(latestSessionKey())?.get('src/Parent.ts'),
+        evidence
+      ).not.toBe(heldHashes[0]);
       expect(updates[repaired].modules, evidence).toEqual([
         'src/Child.ts',
         'src/Grand.ts',

@@ -320,9 +320,9 @@ describe('publication claim (one live publisher per build)', () => {
     const key = build('concurrent');
     const release = claimExclusiveSessionOwner(key, 'animus-host:/app-client');
     try {
-      expect(() => claimExclusiveSessionOwner(key, 'animus-host:/app-server')).toThrow(
-        /which "animus-host:\/app-client" publishes/
-      );
+      expect(() =>
+        claimExclusiveSessionOwner(key, 'animus-host:/app-server')
+      ).toThrow(/which "animus-host:\/app-client" publishes/);
     } finally {
       release();
     }
@@ -344,7 +344,9 @@ describe('publication claim (one live publisher per build)', () => {
     releaseA();
     const releaseB = claimExclusiveSessionOwner(key, 'animus-host:/b');
     releaseA();
-    expect(() => claimExclusiveSessionOwner(key, 'animus-host:/c')).toThrow(/publishes/);
+    expect(() => claimExclusiveSessionOwner(key, 'animus-host:/c')).toThrow(
+      /publishes/
+    );
     releaseB();
   });
 });

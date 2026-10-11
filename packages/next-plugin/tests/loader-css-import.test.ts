@@ -1,10 +1,9 @@
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import animusLoader from '../src/loader';
-
 import { joinSession, sessionKey } from '../../extract/session/singleton';
 import { resetAnimusGlobals } from '../../extract/tests/session/session-fixtures';
+import animusLoader from '../src/loader';
 
 import type { LoaderPolicyOptions } from '../src/loader-core';
 import type { V2ExtractEngine } from '@animus-ui/extract/pipeline';
@@ -30,7 +29,9 @@ const BUILD = 'loader-css-import';
 
 beforeEach(() => {
   restoreGlobals = resetAnimusGlobals();
-  const state = joinSession(sessionKey(BUILD, ROOT), 'animus-next', { system: './src/ds.ts' });
+  const state = joinSession(sessionKey(BUILD, ROOT), 'animus-next', {
+    system: './src/ds.ts',
+  });
   state.manifestJson = '{}';
   state.engine = unreachableEngine;
   state.sentSources = new Map<string, string>();

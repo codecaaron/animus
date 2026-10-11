@@ -78,7 +78,10 @@ describe('single-flight watch transaction', () => {
     const root = createProject();
     const owner = await startOwner(root);
     // A participant of the owner's build.
-    const follower = new ExtractionSession({ system: './src/system.ts' }, { build: owner.sessionId });
+    const follower = new ExtractionSession(
+      { system: './src/system.ts' },
+      { build: owner.sessionId }
+    );
     follower.rootDir = root;
 
     const batch = makeSuspendingBatch(root);
@@ -154,7 +157,10 @@ describe('single-flight watch transaction', () => {
     const root = createProject();
     const owner = await startOwner(root);
     // A participant of the owner's build.
-    const follower = new ExtractionSession({ system: './src/system.ts' }, { build: owner.sessionId });
+    const follower = new ExtractionSession(
+      { system: './src/system.ts' },
+      { build: owner.sessionId }
+    );
     follower.rootDir = root;
 
     const batch = makeSuspendingBatch(root);

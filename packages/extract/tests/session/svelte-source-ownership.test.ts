@@ -354,7 +354,11 @@ describe('opted-in Svelte source ownership', () => {
       'utf8'
     );
     expect(
-      engineApi(session.key).transformFile(definitionSource, definitionPath, MANIFEST)
+      engineApi(session.key).transformFile(
+        definitionSource,
+        definitionPath,
+        MANIFEST
+      )
     ).toEqual({ code: definitionSource, hasComponents: true });
     const clearsBeforeReset = mocks.clearAnalysisCache.mock.calls.length;
 
@@ -377,7 +381,11 @@ describe('opted-in Svelte source ownership', () => {
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
     expect(mocks.clearAnalysisCache.mock.calls.length).toBe(clearsBeforeReset);
     expect(
-      engineApi(session.key).transformFile(definitionSource, definitionPath, MANIFEST)
+      engineApi(session.key).transformFile(
+        definitionSource,
+        definitionPath,
+        MANIFEST
+      )
     ).toEqual({ code: definitionSource, hasComponents: true });
   });
 });

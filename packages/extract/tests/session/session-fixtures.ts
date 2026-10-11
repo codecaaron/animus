@@ -24,8 +24,12 @@ import type {
   ManifestComponentDescriptor,
   ProjectManifest,
 } from '../../pipeline';
-import type { SessionHost, SessionOptions } from '../../session/extraction-session';
+import type {
+  SessionHost,
+  SessionOptions,
+} from '../../session/extraction-session';
 import type { CliLockRecord } from '../../session/published-set';
+import type { SessionKey } from '../../session/singleton';
 
 /** The engine-free tests' stand-in for the native `resolveSpecifier`: a
  *  package as Node's `require.resolve` finds it, else a declared workspace's
@@ -56,17 +60,36 @@ export const requireResolveSpecifier: NonNullable<
   }
 };
 
+/** The key of the build a participant joined most recently: a harness that
+ *  drives one host build reads that build's state through it. */
+export function latestSessionKey(): SessionKey {
+  // SAFETY: singleton.ts is the only writer of this symbol, and it stores
+  // exactly this shape, entries in join order.
+  const holder = globalThis as typeof globalThis & {
+    [SESSION_REGISTRY_KEY]?: { sessions: Map<string, { key: SessionKey }> };
+  };
+  const states = [...(holder[SESSION_REGISTRY_KEY]?.sessions.values() ?? [])];
+  const latest = states[states.length - 1];
+  if (latest === undefined)
+    throw new Error('no participant has joined a build');
+  return latest.key;
+}
+
 /**
  * Clears the session registry, every build's state, for one test, and
  * restores it through its saved property descriptor. The engine-API test
  * seam lives outside the registry and survives.
  */
 export function resetAnimusGlobals(): () => void {
-  const saved = Object.getOwnPropertyDescriptor(globalThis, SESSION_REGISTRY_KEY);
+  const saved = Object.getOwnPropertyDescriptor(
+    globalThis,
+    SESSION_REGISTRY_KEY
+  );
   Reflect.deleteProperty(globalThis, SESSION_REGISTRY_KEY);
   return () => {
     Reflect.deleteProperty(globalThis, SESSION_REGISTRY_KEY);
-    if (saved !== undefined) Object.defineProperty(globalThis, SESSION_REGISTRY_KEY, saved);
+    if (saved !== undefined)
+      Object.defineProperty(globalThis, SESSION_REGISTRY_KEY, saved);
   };
 }
 

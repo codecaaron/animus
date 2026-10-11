@@ -65,7 +65,11 @@ describe('engineApi transformFile adapter', () => {
     const source = 'const a = 1;';
     state.sentSources = new Map([['src/analyzed.tsx', source]]);
 
-    const result = engineApi(key).transformFile(source, 'src/analyzed.tsx', '{}');
+    const result = engineApi(key).transformFile(
+      source,
+      'src/analyzed.tsx',
+      '{}'
+    );
 
     expect(result).toEqual({ code: 'transformed', hasComponents: true });
     expect(calls).toEqual(['src/analyzed.tsx']);

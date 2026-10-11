@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 import { setEngineApiOverride } from '../../../extract/session/singleton';
+import { latestSessionKey } from '../../../extract/tests/session/session-fixtures';
 
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
@@ -115,7 +116,9 @@ for (const fixture of WEBPACK_FIXTURES) {
         expect(evidence, JSON.stringify(evidence, null, 2)).toHaveLength(1);
         expect(records[0].errors).toEqual([]);
         expect(records[0].hasErrors).toBe(false);
-        const sessionEpochPath = replacementEpochPath(getSessionArtifactDir()!);
+        const sessionEpochPath = replacementEpochPath(
+          getSessionArtifactDir(latestSessionKey())!
+        );
         const childDeps = records[0].moduleFileDependencies.get(CHILD_REL);
         expect(childDeps).toBeDefined();
         expect(childDeps).toContain(sessionEpochPath);
@@ -161,7 +164,7 @@ for (const fixture of WEBPACK_FIXTURES) {
         expect(
           epochHygieneViolations(
             records,
-            replacementEpochPath(getSessionArtifactDir()!)
+            replacementEpochPath(getSessionArtifactDir(latestSessionKey())!)
           )
         ).toEqual([]);
       });
@@ -205,7 +208,7 @@ for (const fixture of WEBPACK_FIXTURES) {
         expect(
           epochHygieneViolations(
             records,
-            replacementEpochPath(getSessionArtifactDir()!)
+            replacementEpochPath(getSessionArtifactDir(latestSessionKey())!)
           )
         ).toEqual([]);
       });

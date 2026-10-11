@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { replacementEpochPath } from '../../../extract/session/session-paths';
 import { getSessionArtifactDir } from '../../../extract/session/singleton';
+import { latestSessionKey } from '../../../extract/tests/session/session-fixtures';
 import animusLoader from '../../src/loader';
 import { AnimusWebpackPlugin } from '../../src/plugin';
 import {
@@ -198,7 +199,7 @@ describe.skipIf(!prereq.ok)(
       expect(
         epochHygieneViolations(
           records,
-          replacementEpochPath(getSessionArtifactDir()!)
+          replacementEpochPath(getSessionArtifactDir(latestSessionKey())!)
         )
       ).toEqual([]);
     });

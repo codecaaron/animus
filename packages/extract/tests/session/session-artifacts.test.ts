@@ -50,7 +50,11 @@ import {
   type AnalysisStatus,
   type SessionEnvelope,
 } from '../../session/session-paths';
-import { findSession, getManifestJson, SessionConfigurationConflict } from '../../session/singleton';
+import {
+  findSession,
+  getManifestJson,
+  SessionConfigurationConflict,
+} from '../../session/singleton';
 import {
   buildManifest,
   BUTTON_STYLE_EDIT,
@@ -292,7 +296,10 @@ async function startSession(
   opts?: { turbopack?: boolean; build?: string }
 ): Promise<ExtractionSession> {
   mocks.analyzeProject.mockImplementation(() => buildManifest(components));
-  const session = new ExtractionSession({ system: './src/system.ts' }, { build: opts?.build });
+  const session = new ExtractionSession(
+    { system: './src/system.ts' },
+    { build: opts?.build }
+  );
   session.rootDir = root;
   if (opts?.turbopack) session.persistAnalysisInputs = true;
   if (writes) {
@@ -492,7 +499,9 @@ describe('analysis-commit content (design D1)', () => {
     );
     session.close();
     // The host restarts its session within the same build.
-    const again = await startSession(root, PLAN_A, undefined, { build: session.sessionId });
+    const again = await startSession(root, PLAN_A, undefined, {
+      build: session.sessionId,
+    });
     expect(again.sessionId).toBe(session.sessionId);
     const commitStatAfter = statSync(
       join(again.sessionDir, ANALYSIS_COMMIT_ARTIFACT),
@@ -965,11 +974,16 @@ describe('publication exclusivity (one publisher per build)', () => {
 
     // One build's participants share its directory, and each instance keeps
     // its own write guards, so two live publishers wedge manifest/commit.
-    const second = new ExtractionSession({ system: './src/system.ts' }, { build: first.sessionId });
+    const second = new ExtractionSession(
+      { system: './src/system.ts' },
+      { build: first.sessionId }
+    );
     second.rootDir = root;
     second.driverLabel = 'animus-second';
 
-    await expect(second.runFullPipeline()).rejects.toThrow(/which "animus-next:.*" publishes/);
+    await expect(second.runFullPipeline()).rejects.toThrow(
+      /which "animus-next:.*" publishes/
+    );
     await expect(second.runFullPipeline()).rejects.toThrow(first.sessionId);
   });
 
@@ -981,7 +995,9 @@ describe('publication exclusivity (one publisher per build)', () => {
     first.close();
 
     // The host restarts its session within the same build.
-    const second = await startSession(root, PLAN_A, undefined, { build: first.sessionId });
+    const second = await startSession(root, PLAN_A, undefined, {
+      build: first.sessionId,
+    });
     expect(second.sessionId).toBe(first.sessionId);
     expect(getManifestJson(second.key)).toBe(buildManifest(PLAN_A));
   });

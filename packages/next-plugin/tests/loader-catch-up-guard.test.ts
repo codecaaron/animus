@@ -52,7 +52,9 @@ afterEach(() => {
 function createRoot(withArtifact: boolean) {
   const root = makeTempRoot('animus-loader-epoch-');
   const sessionDir = sessionArtifactDir(root, SESSION_ID);
-  state = joinSession(sessionKey(SESSION_ID, root), 'animus-next', { system: './src/ds.ts' });
+  state = joinSession(sessionKey(SESSION_ID, root), 'animus-next', {
+    system: './src/ds.ts',
+  });
   state.manifestJson = JSON.stringify({ components: {} });
   state.engine = unreachableEngine;
   state.sentSources = new Map<string, string>();
