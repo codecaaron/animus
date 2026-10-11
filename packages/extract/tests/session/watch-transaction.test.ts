@@ -1,4 +1,4 @@
-import { writeFileSync } from 'fs';
+import { readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -196,6 +196,73 @@ describe('single-flight watch transaction', () => {
     ).toBe(laterSource);
     expect(getManifestJson(owner.key)).toBe(published);
     expect(getWatchTransaction(owner.key)).toBeNull();
+  });
+
+  /** Contract: an observation that arrives during a failing attempt is
+   *  never lost; nor does a stale one outlive a newer observation of its
+   *  path. A recreation equal to the active attempt's content supersedes the
+   *  deletion queued behind that attempt. */
+  test('an equivalent recreation supersedes a queued deletion', async () => {
+    const root = createProject();
+    const owner = await startOwner(root);
+    const batch = makeSuspendingBatch(root);
+    const buttonPath = join(root, 'src', 'Button.tsx');
+    mocks.analyzeProject.mockImplementation(() =>
+      buildManifest('.btn{margin:16px;}')
+    );
+
+    // The active attempt takes the button's edit.
+    const edit = owner.handleWatchUpdate({
+      modifiedFiles: batch,
+      removedFiles: new Set(),
+    });
+    rmSync(buttonPath);
+    const deletion = owner.handleWatchUpdate({
+      modifiedFiles: new Set(),
+      removedFiles: new Set([buttonPath]),
+    });
+    writeFileSync(buttonPath, BUTTON_SOURCE_CHANGED);
+    const recreation = owner.handleWatchUpdate({
+      modifiedFiles: new Set([buttonPath]),
+      removedFiles: new Set(),
+    });
+    await Promise.all([edit, deletion, recreation]);
+
+    const analyzed = lastAnalyzedFiles(mocks.analyzeProject);
+    expect(analyzed.map((entry) => entry.path)).toContain('src/Button.tsx');
+  });
+
+  /** Contract: startup settles the observations queued before it. Its full
+   *  read covers them, so none replays over the published corpus later. */
+  test('startup settles observations queued before the first analysis', async () => {
+    const root = createProject();
+    mocks.analyzeProject.mockImplementation(() =>
+      buildManifest('.btn{margin:8px;}')
+    );
+    const session = new ExtractionSession({ system: './src/system.ts' });
+    session.rootDir = root;
+    const buttonPath = join(root, 'src', 'Button.tsx');
+    const source = readFileSync(buttonPath, 'utf-8');
+
+    // No session of the build can analyze yet: the removal stays queued.
+    rmSync(buttonPath);
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set(),
+      removedFiles: new Set([buttonPath]),
+    });
+    writeFileSync(buttonPath, source);
+    await session.runFullPipeline();
+
+    // An unrelated edit runs after startup.
+    const notePath = join(root, 'src', 'Note.tsx');
+    writeFileSync(notePath, 'export const note = 1;\n');
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([notePath]),
+      removedFiles: new Set(),
+    });
+
+    const analyzed = lastAnalyzedFiles(mocks.analyzeProject);
+    expect(analyzed.map((entry) => entry.path)).toContain('src/Button.tsx');
   });
 
   test('a failed transaction rejects every joiner and clears the gate', async () => {
