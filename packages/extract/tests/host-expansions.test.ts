@@ -1,9 +1,13 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import { builtInAssetClassification } from '../pipeline/host-assets';
 import { hostExpansions } from '../pipeline/host-expansions';
+import { viteLoadExpander } from '../pipeline/vite-expansions';
 
-import type { ListedLoad } from '../pipeline/host-expansions';
+import type { ListedArgs, ListedLoad } from '../pipeline/host-expansions';
 
 describe('hostExpansions', () => {
   // Contract: a query selects how the host loads a file, which can be other
@@ -35,5 +39,84 @@ describe('hostExpansions', () => {
       { path: 'src/p.ts?mutate', status: 'unanalysed' },
       { path: 'src/p.ts?raw', status: 'opaque' },
     ]);
+  });
+});
+
+describe('viteLoadExpander', () => {
+  // Contract: a Vite record lists exactly the modules a Vite 8 build bundles
+  // for that load, and a load it cannot reproduce exactly lists none. Each
+  // expected set is what a real \`vite build\` (8.2.2) bundled.
+  test('lists what a Vite build bundles, or nothing', () => {
+    const root = mkdtempSync(join(tmpdir(), 'animus-vite-expansions-'));
+    for (const file of [
+      'src/pages/a.js',
+      'src/pages/b.ts',
+      'src/pages/.hidden.js',
+      'src/pages/sub/d.js',
+      'src/pages/node_modules/pkg/index.js',
+      'src/pages/x.test.js',
+      'src/other/o.js',
+    ]) {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      writeFileSync(join(root, file), 'export default 1;\n');
+    }
+    const expander = viteLoadExpander(root, true);
+    const expand = (kind: ListedLoad['kind'], args: ListedArgs) =>
+      expander
+        .expand({ importer: 'src/pages/entry.js', start: 0, kind, args }, root)
+        ?.map(({ path, query }) => `${path}${query}`);
+    const glob = (patterns: string[]) =>
+      expand('glob', { patterns, options: null });
+    const vars = (quasis: string[], template = true) =>
+      expand('import', { quasis, template, options: null, comments: [] });
+    try {
+      expect({
+        negated: glob(['./*.js', '!./a.js']),
+        deep: glob(['../pages/**/*.js']),
+        exhaustive: expand('glob', {
+          patterns: ['./**/*.js'],
+          options: { exhaustive: true },
+        }),
+        raw: expand('glob', {
+          patterns: ['/src/pages/{a,b}.*'],
+          options: { query: '?raw', import: 'default' },
+        }),
+        twoPatterns: glob(['./*.ts', '../other/*.js']),
+        template: vars(['./sub/', '.js']),
+        ownDirectory: vars(['./', '.js']),
+        deprecatedAs: expand('glob', {
+          patterns: ['./*.js'],
+          options: { as: 'raw' },
+        }),
+        concatenation: vars(['./sub/', '.js'], false),
+        noExtension: vars(['./sub/', '']),
+        ignored: expand('import', {
+          quasis: ['./sub/', '.js'],
+          template: true,
+          options: null,
+          comments: ['/* @vite-ignore */'],
+        }),
+      }).toEqual({
+        negated: ['src/pages/x.test.js'],
+        deep: ['src/pages/a.js', 'src/pages/sub/d.js', 'src/pages/x.test.js'],
+        exhaustive: [
+          'src/pages/.hidden.js',
+          'src/pages/a.js',
+          'src/pages/node_modules/pkg/index.js',
+          'src/pages/sub/d.js',
+          'src/pages/x.test.js',
+        ],
+        raw: ['src/pages/a.js?raw', 'src/pages/b.ts?raw'],
+        twoPatterns: ['src/other/o.js', 'src/pages/b.ts'],
+        template: ['src/pages/sub/d.js'],
+        ownDirectory: ['src/pages/a.js', 'src/pages/x.test.js'],
+        deprecatedAs: undefined,
+        concatenation: undefined,
+        noExtension: undefined,
+        ignored: undefined,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

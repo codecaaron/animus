@@ -11,6 +11,7 @@ import {
   rollupExtensionPolicy,
   viteAssetClassification,
   viteExtensionPolicy,
+  viteLoadExpander,
   webpackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -37,6 +38,7 @@ import type {
   AnimusMode,
   HostAssetClassification,
   HostExtensionPolicy,
+  HostLoadExpander,
 } from '@animus-ui/extract/pipeline';
 import type { SessionKey } from '@animus-ui/extract/session';
 import type {
@@ -343,6 +345,22 @@ interface WebpackLikeApplied {
   apply: (compiler: WebpackLikeCompiler) => void;
 }
 
+/** Whether Vite's `build.dynamicImportVarsOptions` are its default, which
+ *  transforms every importer outside `node_modules`. */
+function defaultImportVars(
+  options: { include?: unknown; exclude?: unknown } | undefined
+): boolean {
+  const exclude = options?.exclude;
+  return (
+    options?.include === undefined &&
+    Array.isArray(exclude) &&
+    exclude.length === 1 &&
+    exclude[0] instanceof RegExp &&
+    exclude[0].source === 'node_modules' &&
+    exclude[0].flags === ''
+  );
+}
+
 const PLUGIN_NAME = 'animus-host';
 
 const ESBUILD_WATCH_HINT =
@@ -372,6 +390,9 @@ export const unpluginFactory: UnpluginFactory<
   let hostExtensions: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
   let hostAssets: HostAssetClassification =
     builtInAssetClassification('noHost');
+  /** How the bundler expands computed loads (spec §6.3); none where its
+   *  expansion is not reproduced. */
+  let hostLoadExpander: HostLoadExpander | undefined;
   /** Hooks can fire before buildStart (webpack's make taps run
    *  concurrently), so joiners await this before awaiting the pipeline. */
   let signalPipelineStarted!: () => void;
@@ -442,6 +463,7 @@ export const unpluginFactory: UnpluginFactory<
       session.conditions = hostConditions;
       session.extensionPolicy = hostExtensions;
       session.assetClassification = hostAssets;
+      session.loadExpander = hostLoadExpander;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
       // Each full pass re-reads the tsconfig aliases.
       session.aliasesFromTsconfig = true;
@@ -708,12 +730,30 @@ export const unpluginFactory: UnpluginFactory<
       // serving or `build.watch` runs another turn.
       configResolved(config: {
         command: string;
-        build: { watch?: unknown };
+        root: string;
+        build: {
+          watch?: unknown;
+          dynamicImportVarsOptions?: { include?: unknown; exclude?: unknown };
+        };
         resolve: { extensions: string[] };
         assetsInclude: (file: string) => boolean;
+        environments?: Record<string, { isBundled?: boolean }>;
       }) {
         hostExtensions = viteExtensionPolicy(config.resolve.extensions);
         hostAssets = viteAssetClassification(config.assetsInclude);
+        // Vite 8 bundles an environment with rolldown's native glob and
+        // dynamic-import-vars plugins, which the expander reproduces; it
+        // serves an unbundled one, and an earlier Vite marks none bundled.
+        const environments = Object.values(config.environments ?? {});
+        const bundled =
+          environments.length > 0 &&
+          environments.every((environment) => environment.isBundled === true);
+        hostLoadExpander = bundled
+          ? viteLoadExpander(
+              config.root,
+              defaultImportVars(config.build.dynamicImportVarsOptions)
+            )
+          : undefined;
         const serving =
           config.command === 'serve' || Boolean(config.build.watch);
         watching = () => serving;
