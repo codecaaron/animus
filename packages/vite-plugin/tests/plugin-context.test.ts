@@ -1,3 +1,4 @@
+import { findSession } from '@animus-ui/extract/session';
 import { join, resolve } from 'path';
 import { createLogger, resolveConfig } from 'vite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -53,6 +54,35 @@ afterEach(() => {
 
 /** A Vite build of a kit workspace whose analysis returns `manifest`: the
  *  emitter config its analysis received. */
+/** An injected engine over a kit workspace's system, whose analysis
+ *  returns `manifest` and reports the arguments it received. */
+function kitWorkspaceEngine(
+  app: string,
+  manifest: ReturnType<typeof makeManifest>,
+  onAnalyze: (received: AnalyzeProjectArgs) => void = () => {}
+) {
+  return () => ({
+    loadSystemModule: () => ({
+      propConfig: '{}',
+      groupRegistry: '{}',
+      scalesJson: '{}',
+      variableMapJson: '{}',
+      variableCss: '',
+      dependencies: [],
+    }),
+    extractFacts: factsExtractor({
+      [join(app, 'src', 'system.ts')]: {
+        ...emptyFacts(join(app, 'src', 'system.ts')),
+        imports: systemImportFacts(KIT_SYSTEM_SOURCE),
+      },
+    }),
+    analyzeProject: (...received: AnalyzeProjectArgs) => {
+      onAnalyze(received);
+      return JSON.stringify(manifest);
+    },
+  });
+}
+
 async function buildWith(
   options: Pick<AnimusExtractOptions, 'runtimeImport'>,
   manifest = makeManifest()
@@ -61,25 +91,8 @@ async function buildWith(
   let emitterConfigJson: AnalyzeProjectArgs[8] | undefined;
   const ctx = new PluginContext(
     { system: './src/system.ts', ...options },
-    () => ({
-      loadSystemModule: () => ({
-        propConfig: '{}',
-        groupRegistry: '{}',
-        scalesJson: '{}',
-        variableMapJson: '{}',
-        variableCss: '',
-        dependencies: [],
-      }),
-      extractFacts: factsExtractor({
-        [join(app, 'src', 'system.ts')]: {
-          ...emptyFacts(join(app, 'src', 'system.ts')),
-          imports: systemImportFacts(KIT_SYSTEM_SOURCE),
-        },
-      }),
-      analyzeProject: (...received: AnalyzeProjectArgs) => {
-        emitterConfigJson = received[8];
-        return JSON.stringify(manifest);
-      },
+    kitWorkspaceEngine(app, manifest, (received) => {
+      emitterConfigJson = received[8];
     })
   );
   applyResolvedConfig(
@@ -369,5 +382,40 @@ describe('engine handle lifetime', () => {
     expect(engineHandleCount()).toBe(3);
     for (const ctx of contexts) ctx.releaseEngine();
     expect(engineHandleCount()).toBe(0);
+  });
+
+  /** Contract: Vite closing a context retires its build: the Session leaves
+   *  the registry, injected engine included (no engine handle to release).
+   *  A Session a re-resolved config superseded (once per environment) leaves
+   *  at once, and a closed context's next build start joins again. */
+  it('a closed context leaves no Session registry entry, and its next build rejoins', async () => {
+    restoreGlobals = resetAnimusGlobals();
+    const { app } = createKitWorkspace();
+    const ctx = new PluginContext(
+      { system: './src/system.ts' },
+      kitWorkspaceEngine(app, makeManifest())
+    );
+    const config = await resolveConfig(
+      { configFile: false, root: app, logLevel: 'silent' },
+      'build'
+    );
+    const start = () =>
+      runBuildStart(ctx, async (specifier) => resolve(app, 'src', specifier));
+
+    // A client and an SSR environment, each resolving the config.
+    applyResolvedConfig(ctx, config);
+    await start();
+    const key = ctx.session!.key;
+    applyResolvedConfig(ctx, config);
+    await start();
+    ctx.close();
+    expect(findSession(key)).toBeUndefined();
+
+    // One plugin shared by both environments: the second build start rejoins.
+    await start();
+    expect(findSession(key)).toBeDefined();
+    expect(ctx.storedManifest).not.toBeNull();
+    ctx.close();
+    expect(findSession(key)).toBeUndefined();
   });
 });
