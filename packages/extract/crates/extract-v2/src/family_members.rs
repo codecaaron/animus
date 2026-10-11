@@ -273,7 +273,7 @@ impl<'f> ObjectMembers<'f> {
         let (root, rest) = name.split_once('.').map_or((name, None), |(root, rest)| (root, Some(rest)));
         let declared = match ff.imports.iter().find(|import| import.local == root) {
             Some(import) => resolve_import_source(module, &import.source, self.files, self.inputs)
-                .and_then(|source| declared_export(&source, import.imported.clone(), self.files, self.inputs))
+                .and_then(|source| declared_export(&source, import.imported.clone(), self.files, self.links))
                 .map(|(declaring, _, binding)| (declaring, binding)),
             None => Some((module.to_string(), root.to_string())),
         };
@@ -483,7 +483,7 @@ impl<'f> ObjectMembers<'f> {
     /// and barrels.
     fn exported_object(&mut self, module: &str, name: &str) -> Option<Object> {
         let (declaring, exported, declared) =
-            declared_export(module, name.to_string(), self.files, self.inputs)?;
+            declared_export(module, name.to_string(), self.files, self.links)?;
         if let Some(&id) = self.families.exports.get(&(declaring.clone(), exported)) {
             return Some(Object::Family(id));
         }

@@ -2735,12 +2735,13 @@ fn namespace_member_ids(
     ff: &FileFacts,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<(String, Vec<String>)> {
     written_member_tags(ff)
         .into_iter()
         .filter_map(|tag| {
-            let ids = member_path_ids(file, ff, tag, false, files, inputs, evaluated_ids);
+            let ids = member_path_ids(file, ff, tag, false, files, inputs, links, evaluated_ids);
             (!ids.is_empty()).then(|| (tag.to_string(), ids))
         })
         .collect()
@@ -2750,6 +2751,7 @@ fn namespace_member_ids(
 /// bindings: `ui.R`, `ui.sub.R`, `sub.R` through a named import of a
 /// namespace, and a family's slot (`ui.sub.Card.Body`). With `slots`, an
 /// exported compose family hands over its slots, as a value use does.
+#[allow(clippy::too_many_arguments)]
 fn member_path_ids(
     file: &str,
     ff: &FileFacts,
@@ -2757,20 +2759,21 @@ fn member_path_ids(
     slots: bool,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
     let Some((namespace, name)) = path.rsplit_once('.') else {
         return Vec::new();
     };
     if let Some(module) = namespace_path_module(file, ff, namespace, files, inputs) {
-        return export_ids(&module, name.to_string(), slots, files, inputs, evaluated_ids);
+        return export_ids(&module, name.to_string(), slots, files, inputs, links, evaluated_ids);
     }
     // `ui.sub.Card.Body`: a slot of a family the namespace exports.
     let slot_ids = || {
         let (namespace, family) = namespace.rsplit_once('.')?;
         let module = namespace_path_module(file, ff, namespace, files, inputs)?;
         let (declaring, exported, declared) =
-            declared_export(&module, family.to_string(), files, inputs)?;
+            declared_export(&module, family.to_string(), files, links)?;
         Some(
             exported_family_slots(&declaring, &exported, &declared, files)
                 .into_iter()
@@ -3032,6 +3035,7 @@ fn exported_component_ids(
     module: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
     let mut ids = Vec::new();
@@ -3046,7 +3050,7 @@ fn exported_component_ids(
                 crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs);
             match namespace {
                 Some(namespace) => modules.push(namespace),
-                None => ids.extend(export_ids(&module, name, true, files, inputs, evaluated_ids)),
+                None => ids.extend(export_ids(&module, name, true, files, inputs, links, evaluated_ids)),
             }
         }
     }
@@ -3061,9 +3065,10 @@ fn export_ids(
     slots: bool,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
 ) -> Vec<String> {
-    let Some((declaring, exported, declared)) = declared_export(module, name, files, inputs) else {
+    let Some((declaring, exported, declared)) = declared_export(module, name, files, links) else {
         return Vec::new();
     };
     let mut ids = resolve_identity(&declaring, &declared, files, inputs, evaluated_ids, None);
@@ -3075,25 +3080,42 @@ fn export_ids(
     ids
 }
 
-/// Where `module`'s export `name` is declared: the declaring file, the
-/// name it exports there, and the local binding it declares.
+/// Where `module`'s export `name` is declared, as the module table resolves
+/// it: the declaring file, the name it exports there, and the local binding
+/// it declares. Only a binding the table resolves the export to is
+/// declared: the export name is the one asked for when the declaring
+/// module exports the binding so, else its first; for `export default X`
+/// the binding is X, as the facts name it. A namespace, an export of a
+/// module outside the analysis, and an absent, ambiguous or open answer
+/// declare nothing.
 pub(crate) fn declared_export(
     module: &str,
     name: String,
     files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, String)> {
-    let (declaring, exported) =
-        crate::family_members::follow_exports(module.to_string(), name, files, inputs)?;
-    let ff = files.get(&declaring)?;
-    let declared = ff
-        .exports
+    let ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) = links.resolve_export(module, &name)?
+    else {
+        return None;
+    };
+    let path = &links.paths[declaring];
+    let declared = files[path].bindings.binding(binding);
+    let exports: Vec<&String> = links
+        .table
+        .record(declaring)
+        .local_exports
         .iter()
-        .find(|e| e.exported == exported && e.source.is_none())
-        .and_then(|e| e.local.clone())
-        .or_else(|| ff.default_export_binding.clone().filter(|_| exported == "default"))
-        .unwrap_or_else(|| exported.clone());
-    Some((declaring, exported, declared))
+        .filter(|(_, exported)| *exported == binding)
+        .map(|(exported_as, _)| exported_as)
+        .collect();
+    let exported = exports.iter().find(|exported_as| **exported_as == &name).or(exports.first())?;
+    let declared_name = match declared.kind {
+        BindingKind::DefaultCell => {
+            files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone())
+        }
+        _ => declared.name.clone(),
+    };
+    Some((path.clone(), exported.to_string(), declared_name))
 }
 
 /// The (slot, binding) pairs of the compose family `declaring` declares as
@@ -6654,7 +6676,7 @@ fn run_with_system_floor(
         // `<ui.R>` through `import * as ui` renders what the namespace's
         // module exports as `R`, followed through barrels.
         let mut members_with_namespaces: Option<FxHashMap<String, String>> = None;
-        for (tag, ids) in namespace_member_ids(path, ff, files, inputs, &evaluated_ids) {
+        for (tag, ids) in namespace_member_ids(path, ff, files, inputs, links, &evaluated_ids) {
             file_lookup
                 .get_or_insert_with(|| global_lookup.clone())
                 .publish(&tag, &ids, &usage_sources);
@@ -6829,7 +6851,7 @@ fn run_with_system_floor(
             let opened = sites.entry((load.line, load.call.as_str())).or_default();
             for module in loaded_modules(path, load, files, inputs) {
                 let ids = exports_by_module.entry(module).or_insert_with(|| {
-                    exported_component_ids(module, files, inputs, &evaluated_ids)
+                    exported_component_ids(module, files, inputs, links, &evaluated_ids)
                 });
                 opened.extend(ids.iter().cloned());
             }
@@ -6873,7 +6895,7 @@ fn run_with_system_floor(
                 escaped_ids.extend(
                     resolve_declared_identity(path, prefix, files, inputs, &evaluated_ids)
                         .into_iter()
-                        .chain(member_path_ids(path, ff, prefix, false, files, inputs, &evaluated_ids))
+                        .chain(member_path_ids(path, ff, prefix, false, files, inputs, links, &evaluated_ids))
                         .filter(|id| {
                             evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsClass)
                         }),
@@ -6883,7 +6905,7 @@ fn run_with_system_floor(
             // a member of one at any depth (`ui.sub.X`) that component.
             match namespace_path_module(path, ff, name, files, inputs) {
                 Some(module) => {
-                    escaped_ids.extend(exported_component_ids(&module, files, inputs, &evaluated_ids));
+                    escaped_ids.extend(exported_component_ids(&module, files, inputs, links, &evaluated_ids));
                 }
                 None => escaped_ids.extend(member_path_ids(
                     path,
@@ -6892,8 +6914,8 @@ fn run_with_system_floor(
                     true,
                     files,
                     inputs,
-                    &evaluated_ids,
-                )),
+                    links,
+                    &evaluated_ids,)),
             }
             // An escaping facade or alias hands over its members, and one
             // member of it that component.
@@ -6980,7 +7002,7 @@ fn run_with_system_floor(
             false => resolve_declared_identity(path, tag, files, inputs, &evaluated_ids),
         };
         ids.extend(member_bindings.get(path).and_then(|members| members.get(tag)).cloned());
-        ids.extend(member_path_ids(path, ff, tag, false, files, inputs, &evaluated_ids));
+        ids.extend(member_path_ids(path, ff, tag, false, files, inputs, links, &evaluated_ids));
         ids
     };
     // A component object some module writes a member of (`R.render = Slot`)
@@ -6992,7 +7014,7 @@ fn run_with_system_floor(
             let prefixes = used.match_indices('.').map(|(dot, _)| &used[..dot]).chain(std::iter::once(used.as_str()));
             for prefix in prefixes {
                 changed_ids.extend(resolve_declared_identity(path, prefix, files, inputs, &evaluated_ids));
-                changed_ids.extend(member_path_ids(path, ff, prefix, false, files, inputs, &evaluated_ids));
+                changed_ids.extend(member_path_ids(path, ff, prefix, false, files, inputs, links, &evaluated_ids));
             }
         }
     }
@@ -11296,6 +11318,31 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "{}",
             out.sheets.base
         );
+    }
+
+    #[test]
+    fn a_family_export_is_declared_only_where_the_module_table_resolves_it() {
+        // An ambiguous or open export declares nothing; only a resolved
+        // binding is declared, and never the first star's candidate.
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let files: BTreeMap<String, FileFacts> = [
+            ("a.ts", "export const X = 1;"),
+            ("b.ts", "export const X = 2;"),
+            ("both.ts", "export * from './a';\nexport * from './b';"),
+            ("open.ts", "export * from './a';\nexport * from './missing';"),
+            ("one.ts", "export * from './a';"),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let ast = crate::owned_ast::OwnedAst::parse(path.to_string(), source.to_string(), &counter);
+            (path.to_string(), crate::facts::extract_file_facts(&ast))
+        })
+        .collect();
+        let links = crate::link::ProjectLinks::link(&files, &test_inputs());
+        let declared = |module: &str| declared_export(module, "X".to_string(), &files, &links);
+        assert_eq!(declared("both.ts"), None);
+        assert_eq!(declared("open.ts"), None);
+        assert_eq!(declared("one.ts"), Some(("a.ts".to_string(), "X".to_string(), "X".to_string())));
     }
 
     #[test]
