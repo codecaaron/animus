@@ -75,21 +75,56 @@ pub enum RegionAtom {
     AllExports,
 }
 
-/// What an opening may reach: a set of atoms, or everything.
+/// What an opening may reach: a non-empty set of at most `REGION_ATOMS`
+/// atoms, or everything. Only the constructors make one, so neither an
+/// empty set nor an over-bound one exists.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Region {
-    Atoms(BTreeSet<RegionAtom>),
-    Top,
-}
+pub struct Region(Option<BTreeSet<RegionAtom>>);
 
 impl Region {
     pub fn of(atom: RegionAtom) -> Self {
-        Region::Atoms(BTreeSet::from([atom]))
+        Region(Some(BTreeSet::from([atom])))
+    }
+
+    /// The region of `atoms`, or everything past `REGION_ATOMS` of them;
+    /// `None` when there is none.
+    pub fn atoms(atoms: impl IntoIterator<Item = RegionAtom>) -> Option<Self> {
+        let atoms: BTreeSet<RegionAtom> = atoms.into_iter().collect();
+        match atoms.len() {
+            0 => None,
+            len if len > REGION_ATOMS => Some(Region(None)),
+            _ => Some(Region(Some(atoms))),
+        }
+    }
+
+    /// Everything: the region a bound of the analysis widens to.
+    pub fn top() -> Self {
+        Region(None)
+    }
+
+    pub fn is_top(&self) -> bool {
+        self.0.is_none()
+    }
+
+    /// The atoms, or `None` for everything.
+    pub fn as_atoms(&self) -> Option<&BTreeSet<RegionAtom>> {
+        self.0.as_ref()
+    }
+
+    fn union(self, other: Region) -> Region {
+        match (self.0, other.0) {
+            (Some(mut atoms), Some(more)) => {
+                atoms.extend(more);
+                Region::atoms(atoms).expect("a union of non-empty regions is non-empty")
+            }
+            _ => Region::top(),
+        }
     }
 }
 
 /// The reasons an answer is uncertain and the region they may reach. A
-/// reason always travels with its region.
+/// reason always travels with its region, and a region that is everything
+/// always carries `FlowBound`, however it came to be everything.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Uncertainty {
     reasons: BTreeSet<ReasonId>,
@@ -98,7 +133,14 @@ pub struct Uncertainty {
 
 impl Uncertainty {
     pub fn new(reason: ReasonId, region: Region) -> Self {
-        Self { reasons: BTreeSet::from([reason]), region }
+        Self::canonical(BTreeSet::from([reason]), region)
+    }
+
+    fn canonical(mut reasons: BTreeSet<ReasonId>, region: Region) -> Self {
+        if region.is_top() {
+            reasons.insert(ReasonId::FlowBound);
+        }
+        Self { reasons, region }
     }
 
     pub fn reasons(&self) -> &BTreeSet<ReasonId> {
@@ -110,23 +152,10 @@ impl Uncertainty {
     }
 
     /// The union of two uncertainties: associative, commutative and
-    /// idempotent. Past `REGION_ATOMS` atoms the region widens to `Top`,
-    /// and the bound joins the reasons.
+    /// idempotent.
     pub fn join(mut self, other: Uncertainty) -> Self {
         self.reasons.extend(other.reasons);
-        self.region = match (self.region, other.region) {
-            (Region::Atoms(mut atoms), Region::Atoms(more)) => {
-                atoms.extend(more);
-                if atoms.len() > REGION_ATOMS {
-                    self.reasons.insert(ReasonId::FlowBound);
-                    Region::Top
-                } else {
-                    Region::Atoms(atoms)
-                }
-            }
-            _ => Region::Top,
-        };
-        self
+        Self::canonical(self.reasons, self.region.union(other.region))
     }
 }
 
@@ -267,7 +296,7 @@ impl ValueEffects {
     }
 
     fn reaches(&self, region: &Region, object: &ObjectId, path: &[String]) -> bool {
-        let Region::Atoms(atoms) = region else { return true };
+        let Some(atoms) = region.as_atoms() else { return true };
         let exports = self.exports.get(object);
         atoms.iter().any(|atom| match atom {
             RegionAtom::Object(target) => target == object,
@@ -277,5 +306,48 @@ impl ValueEffects {
             RegionAtom::ExportedAs(name) => exports.is_some_and(|names| names.iter().any(|(_, n)| n == name)),
             RegionAtom::AllExports => exports.is_some(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Uncertainties around the region bound: regions of 1, 2, 63, 64 and
+    /// 65 atoms, over shared and distinct atoms, with two reasons, and
+    /// everything.
+    fn bounded_inputs() -> Vec<Uncertainty> {
+        let mut inputs = Vec::new();
+        for reason in [ReasonId::OpaqueStar, ReasonId::DirectEval] {
+            for size in [1, 2, 63, 64, 65] {
+                for family in ["shared", "own"] {
+                    let atoms = (0..size).map(|i| RegionAtom::ExportedAs(format!("{family}{i}")));
+                    inputs.push(Uncertainty::new(reason, Region::atoms(atoms).expect("non-empty")));
+                }
+            }
+            inputs.push(Uncertainty::new(reason, Region::top()));
+        }
+        inputs
+    }
+
+    #[test]
+    fn uncertainty_join_is_associative() {
+        let inputs = bounded_inputs();
+        for a in &inputs {
+            for b in &inputs {
+                for c in &inputs {
+                    let left = a.clone().join(b.clone()).join(c.clone());
+                    let right = a.clone().join(b.clone().join(c.clone()));
+                    assert_eq!(left, right, "({a:?} ⊔ {b:?}) ⊔ {c:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn uncertainty_join_is_idempotent() {
+        for u in bounded_inputs() {
+            assert_eq!(u.clone().join(u.clone()), u);
+        }
     }
 }
