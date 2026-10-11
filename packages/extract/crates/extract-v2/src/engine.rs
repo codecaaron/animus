@@ -1992,7 +1992,7 @@ export const App = () => <Box tone="red" />;
             // A concise arrow returns what it evaluates (PF2).
             ("sync return", "const get = () => pad; get().padding = 9;"),
             ("async return", "const get = async () => pad; (await get()).padding = 9;"),
-            ("then callback return", "Promise.resolve(0).then(() => pad).then((p) => { p.padding = 9; });"),
+            ("then callback return", "await Promise.resolve(0).then(() => pad).then((p) => { p.padding = 9; });"),
         ];
         for (row, mutation) in rows {
             let mut engine = ExtractEngine::new(None).unwrap();
