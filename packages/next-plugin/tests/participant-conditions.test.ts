@@ -3,10 +3,17 @@
  * client compiler resolves with `browser`, the server's with `node`.
  * Against the real engine.
  */
-import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'fs';
+import {
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'fs';
 import { join, resolve } from 'path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
+import { ExtractionSession } from '../../extract/session/extraction-session';
 import { getSharedCss, sessionKey } from '../../extract/session/singleton';
 import {
   disposeTempRoots,
@@ -199,5 +206,47 @@ describe('one agreed system authority', () => {
       expect(String(outcome.rejected)).toContain('browser]');
       expect(String(outcome.rejected)).toContain('node]');
     }
+  }, 60000);
+
+  /** Contract: the authority is the committed system's. A reload whose
+   *  analysis fails commits nothing, so the authority, and the proofs other
+   *  contexts made against it, stay the committed system's. */
+  test('a failed reload leaves the committed authority', async () => {
+    const root = createProject('@kits/ui/definition');
+    const participant = (condition: string) => {
+      const session = new ExtractionSession(
+        { system: './src/system.ts' },
+        { build: 'b' }
+      );
+      session.rootDir = root;
+      session.conditions = ['webpack', 'development', condition];
+      return session;
+    };
+    const owner = participant('browser');
+    const other = participant('node');
+    await owner.runFullPipeline();
+    other.agreeWithSystemAuthority();
+
+    // The edit selects the kit root, which differs by condition, and a
+    // file that cannot parse fails the reload's analysis.
+    const systemPath = join(root, 'src', 'system.ts');
+    writeFileSync(
+      systemPath,
+      readFileSync(systemPath, 'utf-8').replace(
+        '@kits/ui/definition',
+        '@kits/ui'
+      )
+    );
+    const brokenPath = join(root, 'src', 'Broken.tsx');
+    writeFileSync(brokenPath, 'export const Broken = (;\n');
+    await expect(
+      owner.handleWatchUpdate({
+        modifiedFiles: new Set([systemPath, brokenPath]),
+        removedFiles: new Set(),
+      })
+    ).rejects.toThrow();
+
+    expect(getSharedCss(owner.key)).toContain('#333333');
+    expect(() => other.agreeWithSystemAuthority()).not.toThrow();
   }, 60000);
 });
