@@ -48,7 +48,15 @@ export default function animusLoader(
   }
 
   let manifestJson = getManifestJson(key);
-  if (!manifestJson) return source;
+  // No analysis means the build's analysis failed: a failure, never a raw
+  // serve (SA1). The failed analysis reports itself on the compilation.
+  if (!manifestJson) {
+    throw new Error(
+      `[animus-extract] no analysis is available to transform ` +
+        `${relative(this.rootContext, this.resourcePath)}: the project ` +
+        `analysis failed; see the error above.`
+    );
+  }
 
   const filename = relative(this.rootContext, this.resourcePath);
 

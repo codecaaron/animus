@@ -149,21 +149,11 @@ export function transformWithManifest(args: {
 
     return code;
   } catch (e: unknown) {
+    // In every mode the failure is the host's error, never a raw serve (SA1).
     const msg = e instanceof Error ? e.message : String(e);
-
-    if (opts.strict && !opts.development) {
-      throw new Error(
-        `[animus-extract] Transform failed for ${filename}: ${msg}`,
-        { cause: e }
-      );
-    }
-    if (opts.strict) {
-      console.error(
-        `[animus-extract] Transform failed for ${filename}: ${msg}`
-      );
-    } else {
-      console.warn(`[animus-extract] Transform failed for ${filename}:`, msg);
-    }
-    return source;
+    throw new Error(
+      `[animus-extract] Transform failed for ${filename}: ${msg}`,
+      { cause: e }
+    );
   }
 }

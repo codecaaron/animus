@@ -1,4 +1,5 @@
 import {
+  AnimusConfigError,
   buildAnalyzeProjectArgs,
   contentHash,
   parseFilesJson,
@@ -280,8 +281,14 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
     (sessionId !== undefined
       ? sessionArtifactDir(rootDir, sessionId)
       : undefined);
+  // withAnimus always names the session: a loader without one is set up by
+  // hand, and serving raw would ship builder code (SA1).
   if (sessionId === undefined || sessionDir === undefined) {
-    return source;
+    throw new AnimusConfigError(
+      `[animus-extract] the Turbopack loader for ` +
+        `${relative(rootDir, ctx.resourcePath)} names no Animus session; it ` +
+        `runs only as withAnimus() configures it.`
+    );
   }
   const key = sessionKey(sessionId, rootDir);
 
@@ -371,7 +378,6 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
   }
 
   return awaitCoverage({
-    source,
     sourceHash: sourceHash ?? contentHash(source),
     filename,
     key,
@@ -383,7 +389,6 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
 }
 
 async function awaitCoverage(args: {
-  source: string;
   sourceHash: string;
   filename: string;
   key: SessionKey;
@@ -393,7 +398,6 @@ async function awaitCoverage(args: {
   deliver: (covering: Hydration) => Promise<string>;
 }): Promise<string> {
   const {
-    source,
     sourceHash,
     filename,
     key,
@@ -424,7 +428,13 @@ async function awaitCoverage(args: {
     const status = readStatus(sessionDir);
     if (status === null) {
       if (!commitPresent) {
-        return source;
+        // Neither a commit nor a status: no analysis ran for this session,
+        // so the module fails rather than ship builder code (SA1).
+        throw coverageFailure(
+          `ANIMUS_ANALYSIS_MISSING: no analysis exists for ${filename} in ` +
+            `session ${sessionId}: neither a committed analysis nor an ` +
+            `analysis status is present. Is the animus orchestrator running?`
+        );
       }
       throw coverageFailure(
         `ANIMUS_ANALYSIS_CATCHING_UP: ${filename} is not covered by the committed analysis and no analysis-status exists for session ${sessionId} — is the animus orchestrator running?`
