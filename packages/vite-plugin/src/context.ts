@@ -75,44 +75,14 @@ export interface ObservedOutcome {
   systemPropsChanged: boolean;
 }
 
-function generateSystemPropsModule(ctx: PluginContext): string {
-  return buildSystemPropsModule({
-    systemPropMapJson: ctx.storedSystemPropMapJson,
-    groupRegistryJson: ctx.system.groupRegistryJson,
-    dynamicProps: JSON.parse(ctx.storedDynamicPropsJson),
-    admittedTransforms: JSON.parse(ctx.storedAdmittedTransformsJson),
-    typedSystemProps: JSON.parse(ctx.storedTypedSystemPropsJson),
-  });
-}
-
-/** Memoized on the inputs themselves, so no writer owes the memo a refresh
- *  and a stale memo cannot serve a module from a generation that is gone. */
-const systemPropsModules = new WeakMap<
-  PluginContext,
-  { key: string; source: string }
->();
-
-/** NUL cannot appear in JSON text, so concatenation is injective. */
-function systemPropsModuleKey(ctx: PluginContext): string {
-  return [
-    ctx.storedSystemPropMapJson,
-    ctx.system.groupRegistryJson,
-    ctx.storedDynamicPropsJson,
-    ctx.storedAdmittedTransformsJson,
-    ctx.storedTypedSystemPropsJson,
-  ].join('\u0000');
-}
-
-/** The exact source `virtual:animus/system-props` serves now — one definition,
- *  so the served bytes and the HMR change decision cannot diverge. */
-export function systemPropsModuleSource(ctx: PluginContext): string {
-  const key = systemPropsModuleKey(ctx);
-  const memo = systemPropsModules.get(ctx);
-  if (memo && memo.key === key) return memo.source;
-  const source = generateSystemPropsModule(ctx);
-  systemPropsModules.set(ctx, { key, source });
-  return source;
-}
+/** The system-props module before a first publication: no props. */
+const EMPTY_SYSTEM_PROPS_MODULE = buildSystemPropsModule({
+  systemPropMapJson: '{}',
+  groupRegistryJson: emptySystemConfig().groupRegistryJson,
+  dynamicProps: {},
+  admittedTransforms: {},
+  typedSystemProps: [],
+});
 
 const NO_SHEETS: AssetSheets = {
   variableCss: '',
@@ -209,10 +179,10 @@ export class PluginContext {
 
   reverseProvenance: Record<string, string[]> = {};
 
-  storedSystemPropMapJson = '{}';
-  storedDynamicPropsJson = '{}';
-  storedAdmittedTransformsJson = '{}';
-  storedTypedSystemPropsJson = '[]';
+  /** The exact source `virtual:animus/system-props` serves: the last
+   *  publication's, so the served bytes and the HMR change decision cannot
+   *  diverge. */
+  systemPropsModule = EMPTY_SYSTEM_PROPS_MODULE;
 
   rawExtensionFallbacks = new Set<string>();
 
@@ -418,9 +388,9 @@ export class PluginContext {
       }
     } else {
       this.abortedParseHashes.clear();
-      const before = systemPropsModuleSource(this);
+      const before = this.systemPropsModule;
       this.adoptPublication(session);
-      systemPropsChanged = systemPropsModuleSource(this) !== before;
+      systemPropsChanged = this.systemPropsModule !== before;
     }
     for (const collected of this.outcomeCollectors) {
       collected.push({ outcome, systemPropsChanged });
@@ -474,14 +444,7 @@ export class PluginContext {
     this.globalCss = publication.analysisGlobalCss;
     this.resolvedComponentCss = publication.analysisComponentCss;
     this.reverseProvenance = manifest.reverse_provenance;
-    this.storedSystemPropMapJson = JSON.stringify(manifest.system_prop_map);
-    this.storedDynamicPropsJson = JSON.stringify(manifest.dynamic_props);
-    this.storedAdmittedTransformsJson = JSON.stringify(
-      manifest.admitted_transforms
-    );
-    this.storedTypedSystemPropsJson = JSON.stringify(
-      manifest.typed_system_props
-    );
+    this.systemPropsModule = publication.systemPropsModule;
     this.externalPackageDirs = session.externalPackageDirs;
     this.externalSourceEntries = session.externalSourceEntries;
     this.externalSourceSideEffects = session.externalSourceSideEffects;
