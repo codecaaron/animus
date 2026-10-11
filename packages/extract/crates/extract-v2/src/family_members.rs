@@ -742,64 +742,6 @@ impl<'f> ObjectMembers<'f> {
     }
 }
 
-/// The module that declares the name `module` exports as `name`, and the
-/// name it declares there: `export { X as Y } from '…'`, `export * from '…'`
-/// (every source is tried, in order), and an imported name exported again
-/// (`import { X } from '…'; export { X }` or `export default X`). `None` when
-/// no route reaches a declaration.
-pub(crate) fn follow_exports(
-    module: String,
-    name: String,
-    files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-) -> Option<(String, String)> {
-    resolve_export(module, name, files, inputs, &mut FxHashSet::default())
-}
-
-fn resolve_export(
-    file: String,
-    name: String,
-    files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-    visited: &mut FxHashSet<(String, String)>,
-) -> Option<(String, String)> {
-    if !visited.insert((file.clone(), name.clone())) {
-        return None;
-    }
-    let ff = files.get(&file)?;
-    // An imported name exported again leads on to its module.
-    let reexported_import = |local: &str, visited: &mut FxHashSet<(String, String)>| {
-        let import = ff.imports.iter().find(|import| import.local == local)?;
-        let next = resolve_import_source(&file, &import.source, files, inputs)?;
-        resolve_export(next, import.imported.clone(), files, inputs, visited)
-    };
-    if let Some(export) = ff.exports.iter().find(|e| e.exported == name) {
-        return match (&export.source, &export.original, &export.local) {
-            (Some(spec), Some(original), _) => {
-                let next = resolve_import_source(&file, spec, files, inputs)?;
-                resolve_export(next, original.clone(), files, inputs, visited)
-            }
-            (None, _, Some(local)) if ff.imports.iter().any(|import| import.local == *local) => {
-                reexported_import(local, visited)
-            }
-            _ => Some((file.clone(), name.clone())),
-        };
-    }
-    if name == "default" {
-        return match &ff.default_export_binding {
-            Some(local) if ff.imports.iter().any(|import| import.local == *local) => {
-                reexported_import(local, visited)
-            }
-            _ => Some((file.clone(), name.clone())),
-        };
-    }
-    // `export *` never carries a default export.
-    ff.star_exports
-        .iter()
-        .filter_map(|spec| resolve_import_source(&file, spec, files, inputs))
-        .find_map(|module| resolve_export(module, name.clone(), files, inputs, visited))
-}
-
 /// The module `module` exports as the namespace `name`:
 /// `export * as name from '…'`, or a namespace import exported again
 /// (`import * as name from '…'; export { name }`), followed through

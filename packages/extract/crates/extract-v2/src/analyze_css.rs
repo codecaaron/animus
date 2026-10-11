@@ -2603,17 +2603,13 @@ fn resolve_declared_identity(
             .map(|source| (source, member.to_string())),
         Some(_) => None,
     };
-    let Some((declaring_file, exported)) = imported.and_then(|(source, name)| {
+    // The binding the module table resolves the export to.
+    let Some((declaring_file, _, declared)) = imported.and_then(|(source, name)| {
         let module = resolve_import_source(file, source, files, inputs)?;
-        crate::family_members::follow_exports(module, name, files, inputs)
+        declared_export(&module, name, files, links)
     }) else {
         return ids;
     };
-    let declared = files
-        .get(&declaring_file)
-        .and_then(|ff| ff.exports.iter().find(|e| e.exported == exported && e.source.is_none()))
-        .and_then(|e| e.local.clone())
-        .unwrap_or(exported);
     resolve_identity(&declaring_file, &declared, files, inputs, links, evaluated_ids, None)
 }
 
@@ -2633,6 +2629,13 @@ fn resolve_identity(
     // Dotted member path: the root resolves through the import table and the
     // last segment names the component there (`const Compound = { Item }`).
     if let Some((path_head, last)) = local.rsplit_once('.') {
+        // A member of an imported namespace is the export the module table
+        // resolves it to.
+        if let Some(module) =
+            files.get(file).and_then(|ff| namespace_path_module(file, ff, path_head, files, inputs, links))
+        {
+            return import_identity(&module, last, files, links, evaluated_ids, &by_bare_name);
+        }
         let root = path_head.split('.').next().unwrap_or(path_head);
         // An imported root (named or namespace) names its module, and one the
         // analysis cannot resolve names nothing here.
@@ -2659,29 +2662,62 @@ fn resolve_identity(
         .and_then(|ff| ff.imports.iter().find(|i| i.local == local))
     {
         if let Some(source_file) = resolve_import_source(file, &imp.source, files, inputs) {
-            // The module table's answer is final: the component the binding
-            // it resolves the import to builds, `export *` routes included;
-            // otherwise every component bound to the imported name.
-            if let Some(ExportLookup::Resolved(Terminal::Local { module, binding })) =
-                links.resolve_export(&source_file, &imp.imported)
-            {
-                let path = &links.paths[module];
-                let declared = files[path].bindings.binding(binding);
-                let name = match declared.kind {
-                    BindingKind::DefaultCell => {
-                        files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone())
-                    }
-                    _ => declared.name.clone(),
-                };
-                let terminal_id = format!("{path}::{name}");
-                if evaluated_ids.contains(&terminal_id) {
-                    return vec![terminal_id];
-                }
-            }
+            return import_identity(&source_file, &imp.imported, files, links, evaluated_ids, &by_bare_name);
         }
         return by_bare_name(&imp.imported);
     }
     by_bare_name(local)
+}
+
+/// The components `module`'s export `name` may be, as the module table
+/// resolves it. The answer is final:
+/// - **A binding's component** when the table resolves the export to a
+///   binding an evaluated component is bound to. For `export default X`'s
+///   cell, that is X's component.
+/// - **Ambiguous or open:** every known terminal's component, plus every
+///   component bound to the imported name, since an open answer may name
+///   another.
+/// - **Absent:** nothing; the module exports no such name.
+/// - **Otherwise:** every component bound to the imported name.
+fn import_identity(
+    module: &str,
+    name: &str,
+    files: &BTreeMap<String, FileFacts>,
+    links: &crate::link::ProjectLinks,
+    evaluated_ids: &FxHashSet<String>,
+    by_bare_name: &dyn Fn(&str) -> Vec<String>,
+) -> Vec<String> {
+    let component = |terminal: &Terminal<crate::identity::LocalId>| match terminal {
+        Terminal::Local { module, binding } => {
+            let path = &links.paths[*module];
+            let declared = files[path].bindings.binding(*binding);
+            let name = match declared.kind {
+                BindingKind::DefaultCell => {
+                    files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone())
+                }
+                _ => declared.name.clone(),
+            };
+            Some(format!("{path}::{name}")).filter(|id| evaluated_ids.contains(id))
+        }
+        Terminal::Namespace(_) | Terminal::External { .. } => None,
+    };
+    let known = match links.resolve_export(module, name) {
+        Some(ExportLookup::Resolved(terminal)) => match component(&terminal) {
+            Some(id) => return vec![id],
+            None => Vec::new(),
+        },
+        Some(ExportLookup::Ambiguous(terminals) | ExportLookup::Incomplete { known: terminals, .. }) => terminals,
+        // The module exports no such name: the import names nothing.
+        Some(ExportLookup::Absent) => return Vec::new(),
+        None => Vec::new(),
+    };
+    let mut ids: Vec<String> = known.iter().filter_map(component).collect();
+    for id in by_bare_name(name) {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
 }
 
 /// Every member tag a file writes, as a JSX tag or a `createElement` type.
@@ -11677,6 +11713,63 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ]);
             assert_eq!(kept, expected, "{barrel}");
         }
+    }
+
+    #[test]
+    fn an_ambiguous_import_reaches_every_candidate_component() {
+        // `X` comes through two stars as `A` and as `B`: the use reaches both
+        // candidates, not only an unrelated component also named X.
+        let options = |out: &CssOutput, id: &str| {
+            let class = class_of(out, id);
+            let sizes: Vec<&str> =
+                ["sm", "md", "lg"].into_iter().filter(|size| out.css.contains(&format!(".{class}--size-{size}"))).collect();
+            let states: Vec<&str> =
+                ["active", "busy"].into_iter().filter(|state| out.css.contains(&format!(".{class}--{state}"))).collect();
+            (sizes, states)
+        };
+        let a = RECIPE.replace("export const R", "const A") + "export { A as X };\n";
+        let b = RECIPE.replace("export const R", "const B") + "export { B as X };\n";
+        let out = analyze(
+            &[
+                ("a.tsx", a.as_str()),
+                ("b.tsx", b.as_str()),
+                ("c.tsx", "export const X = ds.styles({ display: 'grid' }).asElement('div');\n"),
+                ("barrel.tsx", "export * from './a';\nexport * from './b';\n"),
+                ("app.tsx", "import { X } from './barrel';\nexport const App = () => <X size=\"sm\" active />;\n"),
+            ],
+            &test_inputs(),
+        );
+        assert_eq!(options(&out, "a.tsx::A"), (vec!["sm"], vec!["active"]));
+        assert_eq!(options(&out, "b.tsx::B"), (vec!["sm"], vec!["active"]));
+    }
+
+    #[test]
+    fn an_import_names_a_component_only_as_the_module_table_resolves_it() {
+        // A namespace member the module does not export names nothing, and a
+        // declared identity through an ambiguous star is every candidate,
+        // never the first star's.
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let component = "ds.styles({ display: 'flex' }).asElement('div')";
+        let files: BTreeMap<String, FileFacts> = [
+            ("r.tsx", format!("const R = {component};\nexport const Other = 1;\n")),
+            ("a.tsx", format!("export const X = {component};\n")),
+            ("b.tsx", format!("export const X = {component};\n")),
+            ("barrel.tsx", "export * from './a';\nexport * from './b';\n".to_string()),
+            ("app.tsx", "import * as ns from './r';\nimport { X } from './barrel';\n".to_string()),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let ast = crate::owned_ast::OwnedAst::parse(path.to_string(), source, &counter);
+            (path.to_string(), crate::facts::extract_file_facts(&ast))
+        })
+        .collect();
+        let inputs = test_inputs();
+        let links = crate::link::ProjectLinks::link(&files, &inputs);
+        let evaluated: FxHashSet<String> = ["r.tsx::R", "a.tsx::X", "b.tsx::X"].into_iter().map(String::from).collect();
+        assert!(resolve_identity("app.tsx", "ns.R", &files, &inputs, &links, &evaluated, None).is_empty());
+        let mut declared = resolve_declared_identity("app.tsx", "X", &files, &inputs, &links, &evaluated);
+        declared.sort();
+        assert_eq!(declared, ["a.tsx::X", "b.tsx::X"]);
     }
 
     #[test]
