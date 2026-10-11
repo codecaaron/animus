@@ -436,19 +436,22 @@ fn exposed_bindings(links: &ProjectLinks, name: Option<&str>) -> Vec<(ModuleInde
 
 /// Every binding a module table answer may name: the one it resolves to
 /// or, when an open route leaves it incomplete, each binding it already
-/// knows and every binding the open route may reach.
-fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>) -> Vec<(ModuleIndex, LocalId)> {
+/// knows and every binding the open route may reach. `through_namespace`
+/// says the answer is a namespace member's.
+fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>, through_namespace: bool) -> Vec<(ModuleIndex, LocalId)> {
     let (terminals, openings) = match lookup {
         ExportLookup::Resolved(terminal) => (vec![terminal], Vec::new()),
         ExportLookup::Incomplete { known, openings } => (known, openings),
         ExportLookup::Absent | ExportLookup::Ambiguous(_) => return Vec::new(),
     };
+    // Through a namespace, a module the analysis cannot find may export any
+    // binding under the member's name; where another route already answers
+    // it, that name would be ambiguous and export nothing.
+    let unanswered = through_namespace && terminals.is_empty();
     let mut found: Vec<(ModuleIndex, LocalId)> = local_bindings(terminals).collect();
     for opening in openings {
-        // A module the analysis cannot find may export any binding under
-        // any name, the one asked for included.
         let name = match opening.reason {
-            OpeningReason::UnresolvedRequest(_) => None,
+            OpeningReason::UnresolvedRequest(_) if unanswered => None,
             _ => opening.name.as_deref(),
         };
         found.extend(exposed_bindings(links, name));
@@ -497,7 +500,7 @@ fn unstable_style_statics(
             let imports = &links.table.record(module).imports;
             match imports.iter().find(|import| held != binding && import.local == held) {
                 Some(import) => {
-                    work.extend(possible_bindings(links, links.table.resolve_request(module, import.request, &import.name)))
+                    work.extend(possible_bindings(links, links.table.resolve_request(module, import.request, &import.name), false))
                 }
                 None => found.push((path.clone(), bindings.binding(held).name.clone())),
             }
@@ -513,7 +516,7 @@ fn unstable_style_statics(
             Some(links.table.resolve_request(module, import.request, &import.name))
         });
         match imported {
-            Some(lookup) => possible_bindings(links, lookup).into_iter().flat_map(declarations).collect(),
+            Some(lookup) => possible_bindings(links, lookup, false).into_iter().flat_map(declarations).collect(),
             None => vec![(file.to_string(), name.to_string())],
         }
     };
@@ -545,7 +548,7 @@ fn unstable_style_statics(
         }
     };
     let exported = |target: &str, name: &str| -> Vec<(ModuleIndex, LocalId)> {
-        links.module(target).map(|module| possible_bindings(links, links.table.resolve_export(module, name))).unwrap_or_default()
+        links.module(target).map(|module| possible_bindings(links, links.table.resolve_export(module, name), true)).unwrap_or_default()
     };
     // The declaration a module's binding names: itself, or what it imports.
     let declared = |file: &str, name: &str| -> Option<(String, String)> {
