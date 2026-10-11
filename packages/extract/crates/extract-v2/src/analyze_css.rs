@@ -8266,6 +8266,11 @@ mod tests {
         let out = run(&[link(0, "{colors.missing}")]);
         assert!(!out.css.contains("color:"), "{}", out.css);
         assert_eq!(codes(&out), [UNRESOLVED_TOKEN_ALIAS], "{:?}", out.diagnostics);
+        // Text after the last alias counts toward the size bound.
+        let past_bound = format!("\"{{colors.leaf}}{}\"", "x".repeat(1 << 20));
+        let out = run(&[link(0, &past_bound), ("colors.leaf".to_string(), "a".to_string())]);
+        assert!(!out.css.contains("color:"), "the declaration is dropped");
+        assert_eq!(codes(&out), [TOKEN_ALIAS_TOO_LARGE], "{:?}", out.diagnostics);
     }
 
     fn assert_uncertain_identity_widens_and_retains(out: &CssOutput) {

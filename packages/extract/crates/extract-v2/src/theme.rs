@@ -2014,7 +2014,7 @@ impl ResolvedLiterals {
 /// once the result grows past `limit` bytes.
 fn substitute_aliases(value: &str, limit: usize, alias: &mut dyn FnMut(&str) -> String) -> Option<String> {
     if !value.contains('{') {
-        return Some(value.to_string());
+        return (value.len() <= limit).then(|| value.to_string());
     }
 
     let mut result = String::with_capacity(value.len());
@@ -2047,7 +2047,8 @@ fn substitute_aliases(value: &str, limit: usize, alias: &mut dyn FnMut(&str) -> 
         }
     }
 
-    Some(result)
+    // Text after the last alias counts toward the bound too.
+    (result.len() <= limit).then_some(result)
 }
 
 /// A colour token's opacity modifier: a percentage from 0 to 100, decimals
