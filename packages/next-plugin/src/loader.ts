@@ -1,4 +1,4 @@
-import { contentHash } from '@animus-ui/extract/pipeline';
+import { AnimusConfigError, contentHash } from '@animus-ui/extract/pipeline';
 import {
   engineApi,
   getAnalyzedHashes,
@@ -29,9 +29,16 @@ export default function animusLoader(
   source: string
 ): string {
   const opts = this.getOptions?.() ?? {};
-  // The build the config wrapper created, of the root its plugin analyses;
-  // a loader outside one reads no analysis.
-  if (opts.build === undefined) return source;
+  // The build the config wrapper created, of the root its plugin analyses.
+  // withAnimus always names it: a loader without one is set up by hand, and
+  // serving raw would ship builder code (SA1).
+  if (opts.build === undefined) {
+    throw new AnimusConfigError(
+      `[animus-extract] the Animus loader for ` +
+        `${relative(this.rootContext, this.resourcePath)} names no Animus ` +
+        `build; it runs only as withAnimus() configures it.`
+    );
+  }
   const key = sessionKey(opts.build, opts.root ?? this.rootContext);
 
   // In every mode: a persistent cache restores a module only while the

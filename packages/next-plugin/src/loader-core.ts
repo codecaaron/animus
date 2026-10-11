@@ -4,9 +4,12 @@ import { ANIMUS_CSS_MODULE_ID } from '@animus-ui/extract/session';
 import type { ProjectManifest } from '@animus-ui/extract/pipeline';
 
 export interface LoaderPolicyOptions {
+  /** Carried in the loaders' options; since SA1 no loader reads it, as a
+   *  transform failure fails the module in every mode. */
   strict?: boolean;
-  /** `next dev`: a strict transform failure reports and delivers the
-   *  source, as a non-strict one does, instead of failing the module. */
+  /** `next dev`: the Turbopack loader waits for and re-delivers the dev
+   *  watcher's generations. A transform failure fails the module in every
+   *  mode (SA1). */
   development?: boolean;
   cssImportTarget?: string;
   /** The build the config wrapper created, which the loader reads the
@@ -113,6 +116,29 @@ export function extensionLineage(
   return `\nvoid "animus-lineage:${contentHash(lineage)}";\n`;
 }
 
+let parsedManifest: { json: string; files: ReadonlySet<string> } | null = null;
+
+/** The files a manifest lists components for, parsed once per manifest:
+ *  every module of a compilation reads the same one. */
+function componentFiles(manifestJson: string): ReadonlySet<string> {
+  if (parsedManifest?.json !== manifestJson) {
+    // SAFETY: the session's own published manifest, whose `files` maps each
+    // root-relative file to the component ids extracted from it.
+    const { files } = JSON.parse(manifestJson) as {
+      files?: Record<string, readonly string[]>;
+    };
+    parsedManifest = {
+      json: manifestJson,
+      files: new Set(
+        Object.entries(files ?? {})
+          .filter(([, ids]) => ids.length > 0)
+          .map(([file]) => file)
+      ),
+    };
+  }
+  return parsedManifest.files;
+}
+
 export function transformWithManifest(args: {
   source: string;
   /** Project-root-relative path of the file being transformed. */
@@ -129,6 +155,14 @@ export function transformWithManifest(args: {
     const { transformFile } = engineApi();
 
     const result = transformFile(source, filename, manifestJson);
+    // A file the analysis extracted must transform: serving it raw would
+    // ship builder code (SA1). Usage-only and outside-analysis files pass.
+    if (!result.hasComponents && componentFiles(manifestJson).has(filename)) {
+      throw new Error(
+        `the analysis extracted components from ${filename}, but its ` +
+          `transform found none`
+      );
+    }
 
     let code = result.hasComponents ? result.code : source;
 
