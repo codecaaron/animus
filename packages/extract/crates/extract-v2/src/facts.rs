@@ -1568,7 +1568,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         scoping,
         program,
         ast.module_record(),
-        &usage_statics_fx,
+        &eval::typed_statics(&usage_statics_fx),
         &descriptors,
         &exports,
         &object_consts,
