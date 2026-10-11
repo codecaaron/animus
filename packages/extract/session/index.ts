@@ -4,6 +4,8 @@ export { ExtractionSession, pruneStaleAssets } from './extraction-session';
 export type {
   SessionHost,
   SessionOptions,
+  SessionOutcome,
+  SessionPublication,
   WatchChanges,
 } from './extraction-session';
 export {
