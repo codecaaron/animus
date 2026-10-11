@@ -120,7 +120,16 @@ export function webpackExtensionPolicy(
     : version?.startsWith('1.')
       ? HOST_DEFAULT_EXTENSIONS.rspack1
       : null;
-  if (unset && defaults === null) {
+  // The effective order reaches the bundler's defaults unless a list
+  // without `...` replaces them; one that reaches unknown defaults is
+  // unreadable, however much of it is configured.
+  const extendsBase = (list: readonly string[] | undefined): boolean =>
+    list === undefined || list.includes('...');
+  if (
+    defaults === null &&
+    extendsBase(esm?.extensions) &&
+    extendsBase(resolve.extensions)
+  ) {
     return {
       ...BUILT_IN_EXTENSION_POLICY,
       resolverVersion: `built-in (hostOptionUnreadable: ${host}${version ? `@${version}` : ''} defaults)`,
@@ -134,13 +143,31 @@ export function webpackExtensionPolicy(
       ? base
       : list.flatMap((extension) => (extension === '...' ? base : [extension]));
   const root = extend(resolve.extensions, defaults ?? []);
-  const alias = { ...resolve.extensionAlias, ...esm?.extensionAlias };
+  // A nested alias's `...` stands for its extension's root sequence, as the
+  // bundler merges `byDependency` over the root; the root's own `...` is the
+  // bundler's default, which aliases nothing.
+  const sequence = (value: string | string[]): readonly string[] =>
+    Array.isArray(value) ? value : [value];
+  const alias = new Map<string, readonly string[]>(
+    Object.entries(resolve.extensionAlias ?? {}).map(([emitted, value]) => [
+      emitted,
+      sequence(value).filter((extension) => extension !== '...'),
+    ])
+  );
+  for (const [emitted, value] of Object.entries(esm?.extensionAlias ?? {})) {
+    const base = alias.get(emitted) ?? [];
+    alias.set(
+      emitted,
+      sequence(value).flatMap((extension) =>
+        extension === '...' ? base : [extension]
+      )
+    );
+  }
   return {
     appended: [...extend(esm?.extensions, root)],
     nodeNext: [],
-    alias: Object.entries(alias).map(
-      ([emitted, sequence]) =>
-        [emitted, Array.isArray(sequence) ? [...sequence] : [sequence]] as const
+    alias: [...alias].map(
+      ([emitted, extensions]) => [emitted, [...extensions]] as const
     ),
     resolverVersion: label(host, version, unset ? 'default' : 'captured'),
   };
