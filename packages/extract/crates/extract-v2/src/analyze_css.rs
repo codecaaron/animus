@@ -13744,6 +13744,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "export const j = (n) => import(`${n}`);\n",
             "export const k = (n) => import('' + n);\n",
             "export const l = import.meta.glob('./h/*.js', false);\n",
+            "export const m = (n) => import(`./pages/${`group/${n}`}.js`);\n",
+            "export const o = (n) => import(`./pages/${'group/' + n}.js`);\n",
+            "export const p = (n) => import(`./q/${n}.js`, { 'with': { type: 'raw' } });\n",
+            "export const q = (n) => import(`./q/${n}.js`, { with: { type: 'raw' }, with: { type: 'code' } });\n",
         );
         let allocator = oxc::allocator::Allocator::default();
         let program = oxc::parser::Parser::new(&allocator, loader, oxc::span::SourceType::ts()).parse().program;
@@ -13769,6 +13773,12 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 { "start": start("import(`${n}`)"), "kind": "import", "args": { "quasis": ["", ""], "template": true, "options": null, "comments": [] } },
                 { "start": start("import('' + n)"), "kind": "import", "args": { "quasis": ["", ""], "template": false, "options": null, "comments": [] } },
                 { "start": start("import.meta.glob('./h/*.js', false)"), "kind": "glob", "args": null },
+                // A substitution that is text itself, and options with a
+                // quoted or repeated key, list no arguments.
+                { "start": start("import(`./pages/${`"), "kind": "import", "args": null },
+                { "start": start("import(`./pages/${'"), "kind": "import", "args": null },
+                { "start": start("import(`./q/${n}.js`, { '"), "kind": "import", "args": null },
+                { "start": start("import(`./q/${n}.js`, { with: { type: 'raw' }, with"), "kind": "import", "args": null },
             ])
         );
         let files = [("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("loader.ts", loader)];

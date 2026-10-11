@@ -617,15 +617,20 @@ fn specifier_args(
 
 /// A specifier's static text between its substitutions: a template's
 /// quasis, a concatenation's strings, any other expression one
-/// substitution. `None` where a template's text has no cooked value.
+/// substitution. `None` where a template's text has no cooked value or a
+/// substitution is text itself.
 fn quasis_of(expression: &Expression<'_>) -> Option<Vec<String>> {
     match expression.get_inner_expression() {
         Expression::StringLiteral(literal) => Some(vec![literal.value.to_string()]),
-        Expression::TemplateLiteral(template) => template
+        // A substitution with string structure of its own (a nested
+        // template, a concatenation with a string) adds path text a host
+        // reads, which the quasis would not show.
+        Expression::TemplateLiteral(template) if !template.expressions.iter().any(is_text) => template
             .quasis
             .iter()
             .map(|quasi| quasi.value.cooked.as_ref().map(|cooked| cooked.to_string()))
             .collect(),
+        Expression::TemplateLiteral(_) => None,
         // `+` concatenates when either side is text; numbers it adds.
         Expression::BinaryExpression(binary)
             if binary.operator == oxc::syntax::operator::BinaryOperator::Addition
@@ -666,7 +671,9 @@ fn object_json(expression: &Expression<'_>) -> Option<serde_json::Value> {
 }
 
 /// An options object as JSON, where every value in it is written
-/// statically.
+/// statically, each key once and as an identifier: hosts read a quoted key
+/// differently (webpack's import attributes read identifiers only), and
+/// disagree on which of a repeated key wins.
 fn static_json(expression: &Expression<'_>) -> Option<serde_json::Value> {
     use serde_json::Value;
     Some(match expression.get_inner_expression() {
@@ -676,10 +683,12 @@ fn static_json(expression: &Expression<'_>) -> Option<serde_json::Value> {
                 let oxc::ast::ast::ObjectPropertyKind::ObjectProperty(property) = property else {
                     return None;
                 };
-                if property.computed {
+                let oxc::ast::ast::PropertyKey::StaticIdentifier(key) = &property.key else {
+                    return None;
+                };
+                if map.insert(key.name.to_string(), static_json(&property.value)?).is_some() {
                     return None;
                 }
-                map.insert(property.key.static_name()?.to_string(), static_json(&property.value)?);
             }
             Value::Object(map)
         }
