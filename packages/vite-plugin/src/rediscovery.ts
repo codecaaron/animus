@@ -236,7 +236,8 @@ function warnInadmissibleParents(
     const probed = probeAbsolutePathSpecifier(
       resolve(importerDir, specifier),
       undefined,
-      importerDir
+      importerDir,
+      ctx.extensionPolicy
     );
     if (probed.kind === 'absent') continue;
     if (probed.kind === 'case-mismatch') {

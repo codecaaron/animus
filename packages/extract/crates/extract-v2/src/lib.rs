@@ -41,6 +41,7 @@ pub mod eval;
 pub mod evaluator;
 pub mod facts;
 pub(crate) mod family_members;
+pub mod flow;
 pub mod identity;
 pub mod ids;
 pub mod jsx_scan;

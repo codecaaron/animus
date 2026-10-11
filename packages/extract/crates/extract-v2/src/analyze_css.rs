@@ -166,6 +166,9 @@ pub struct AnalysisContext {
     /// Those of them read from their package's compiled output: the package
     /// declares no source condition and ships no `src/`.
     pub output_dirs: Vec<String>,
+    /// The host's extension order (spec §2.2 A2), as the session captured
+    /// it; the built-in policy where no host resolves.
+    pub extensions: Option<animus_system_loader::resolution::ExtensionPolicy>,
 }
 
 impl CssInputs {
@@ -720,7 +723,7 @@ pub fn resolve_import_source<T>(
 ) -> Option<String> {
     if !spec.starts_with('.') {
         if let Some(expanded) = expand_alias(spec, &inputs.path_aliases) {
-            return probe_files(&expanded, files);
+            return probe_files(&expanded, files, inputs);
         }
         return inputs.package_map.get(spec).cloned();
     }
@@ -739,15 +742,19 @@ pub fn resolve_import_source<T>(
         }
     }
     let base = parts.join("/");
-    probe_files(&base, files)
+    probe_files(&base, files, inputs)
 }
 
-/// The analyzed file `base` names, through the one extension policy.
-fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
+/// The analyzed file `base` names, through the host's extension order.
+fn probe_files<T>(base: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> Option<String> {
     use animus_system_loader::resolution::{extension_policy, Seen};
     // The analyzed set is keyed by each file's own spelling, so a lookup is
     // exact: a specifier that differs only in case names no analyzed file.
-    extension_policy()
+    let policy = match &inputs.analysis_context.extensions {
+        Some(policy) => policy,
+        None => extension_policy(),
+    };
+    policy
         .probe(base, |candidate| match files.contains_key(candidate) {
             true => Seen::File,
             false => Seen::Missing,

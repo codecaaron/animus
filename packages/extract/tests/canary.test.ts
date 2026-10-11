@@ -1,5 +1,13 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, test } from 'vitest';
+
+import { probeAbsolutePathSpecifier } from '../pipeline/discover-packages';
+import {
+  extensionPolicyJson,
+  viteExtensionPolicy,
+} from '../pipeline/host-extensions';
 
 const v2 = require('../index-v2.js');
 
@@ -198,5 +206,39 @@ describe('assembleStylesheet: @property registration split', () => {
     expect(propIdx).toBeGreaterThanOrEqual(0);
     expect(propIdx).toBeGreaterThan(declIdx);
     expect(layerBaseIdx).toBeGreaterThan(propIdx);
+  });
+});
+
+// Contract: extraction opens the file the host resolver opens. A configured
+// Vite `resolve.extensions` does not describe Vite's resolution: a real Vite
+// 8.2.2 build with `['.js']` loads `./only` as `only.tsx`. So the order is
+// unreadable, and discovery and the native resolver keep the built-in one.
+test("a configured Vite extension list is unreadable, and './only' still finds only.tsx", () => {
+  const policy = viteExtensionPolicy(['.js']);
+  const root = mkdtempSync(join(tmpdir(), 'animus-vite-configured-'));
+  writeFileSync(join(root, 'only.tsx'), 'export {};\n');
+  const probed = probeAbsolutePathSpecifier(
+    join(root, 'only'),
+    new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs']),
+    root,
+    policy
+  );
+  const native = v2.resolveSpecifier(
+    './only',
+    root,
+    [],
+    {},
+    extensionPolicyJson(policy)
+  );
+  rmSync(root, { recursive: true, force: true });
+
+  expect({
+    order: policy.resolverVersion,
+    discovery: probed.kind === 'found' ? probed.path : null,
+    native: native.path ?? null,
+  }).toEqual({
+    order: 'built-in (hostOptionUnreadable: vite configured extensions)',
+    discovery: join(root, 'only.tsx'),
+    native: expect.stringMatching(/only\.tsx$/),
   });
 });
