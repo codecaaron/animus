@@ -1,0 +1,125 @@
+import { join } from 'node:path';
+
+/** A regular expression literal as written. */
+export interface RegexLiteral {
+  source: string;
+  flags: string;
+}
+
+/** A value written statically in an options object, as JSON. */
+export type StaticValue =
+  | string
+  | number
+  | boolean
+  | null
+  | StaticValue[]
+  | { [key: string]: StaticValue };
+
+/** A computed load's arguments as written, as the engine's `prepare` lists
+ *  them: by `kind`, a specifier's static text, a context, or a glob. */
+export type ListedArgs =
+  | {
+      /** The specifier's static text between its substitutions: one more
+       *  than the substitutions. */
+      quasis: string[];
+      /** The comments inside the call, delimiters included. */
+      comments: string[];
+    }
+  | {
+      dir: string;
+      recursive: boolean | null;
+      regExp: RegexLiteral | null;
+      include: RegexLiteral | null;
+      exclude: RegexLiteral | null;
+      mode: string | null;
+    }
+  | {
+      patterns: string[];
+      options: { [key: string]: StaticValue } | null;
+    };
+
+/** A computed load the engine's `prepare` lists (spec §6.3): a load call or
+ *  `import()` that names no single specifier. */
+export interface ListedLoad {
+  /** The importing module, rootDir-relative, as the analysis keys it. */
+  importer: string;
+  /** The call's byte offset in the importer. */
+  start: number;
+  kind:
+    | 'import'
+    | 'require'
+    | 'context'
+    | 'webpackContext'
+    | 'glob'
+    | 'globEager';
+  /** Null where an argument is not written statically. */
+  args: ListedArgs | null;
+}
+
+/** A file a computed load expands to, rootDir-relative, with the query the
+ *  host loads it with (`''`, or `?…`). */
+export interface ExpandedPath {
+  path: string;
+  query: string;
+}
+
+/** How a host's bundler expands computed loads (spec §6.3). */
+export interface HostLoadExpander {
+  /** Every file the bundler expands `load` to, exactly as it would.
+   *  Undefined where the host's semantics are not reproduced exactly, so
+   *  the load keeps its widest reading: when in doubt, no expansion. */
+  expand(
+    load: ListedLoad,
+    rootDir: string
+  ): readonly ExpandedPath[] | undefined;
+}
+
+/** One load's expansion, as the engine's `HostExpansion` reads it. */
+export interface HostExpansion {
+  importer: string;
+  start: number;
+  closed: boolean;
+  files: Array<{
+    path: string;
+    status: 'analysed' | 'opaque' | 'unanalysed';
+  }>;
+}
+
+/**
+ * The host's expansion of each listed load the expander reproduces, with
+ * each file read as the analysis and the host read it: a module the
+ * analysis holds, loaded as code; a file the host loads as an opaque value
+ * (spec §2.2 A8); otherwise a file the analysis does not read.
+ */
+export function hostExpansions(
+  loads: readonly ListedLoad[],
+  rootDir: string,
+  analysed: ReadonlySet<string>,
+  expander: HostLoadExpander,
+  isAsset: ((file: string, query: string) => boolean) | undefined
+): HostExpansion[] {
+  const expansions: HostExpansion[] = [];
+  for (const load of loads) {
+    const expanded = expander.expand(load, rootDir);
+    if (expanded === undefined) continue;
+    const files = new Map<string, HostExpansion['files'][number]>();
+    for (const { path, query } of expanded) {
+      const opaque = isAsset?.(join(rootDir, path), query) ?? false;
+      // `?raw` or `?url` loads an analysed module as a string.
+      const status =
+        analysed.has(path) && !(query !== '' && opaque)
+          ? 'analysed'
+          : opaque
+            ? 'opaque'
+            : 'unanalysed';
+      files.set(`${path}${query}`, { path, status });
+    }
+    expansions.push({
+      importer: load.importer,
+      start: load.start,
+      closed: true,
+      files: [...files.values()],
+    });
+  }
+  return expansions;
+}
