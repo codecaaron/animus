@@ -268,9 +268,6 @@ fn split_specifier(specifier: &str) -> (&str, &str) {
     }
 }
 
-/// The `package.json` path of the nearest `node_modules/<pkg_name>`
-/// directory, as Node's resolver finds a package: the directory is the
-/// package whether or not it holds a manifest.
 /// The directory of the package `pkg_name` as the loader locates it from
 /// `start_dir`: the first `node_modules/<pkg_name>` directory up the tree,
 /// as Node's resolver finds it; else the declared workspace of that name, as
