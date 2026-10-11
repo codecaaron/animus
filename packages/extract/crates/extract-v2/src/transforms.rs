@@ -18,7 +18,7 @@ mod reference;
 mod self_contained;
 
 pub(crate) use reference::TransformReferences;
-use self_contained::{configured_reference_rejections, validate_self_contained};
+use self_contained::{configured_reference_rejections, external_symbol_diagnostic, validate_self_contained};
 
 /// The function a component callback binds, as its declaring module wrote
 /// it: what extraction may evaluate for known values, apart from the code
@@ -302,6 +302,10 @@ pub struct ProvenanceEntry {
     #[serde(default)]
     host_globals: Vec<String>,
     rejection: Option<String>,
+    /// Why, for each import its callable reads through the loader's module
+    /// cell, when the cell is read for nothing else.
+    #[serde(default)]
+    import_reads: Vec<String>,
 }
 
 impl TransformProvenance {
@@ -320,6 +324,15 @@ impl TransformProvenance {
         let Self::Supplied(entries) = self else { return None };
         let rejection = entries.get(key)?.rejection.as_deref()?;
         Some(format!("[bail] Transform '{name}': its callable {rejection}"))
+    }
+
+    /// Why definition `key` reads each import its callable reads through the
+    /// loader's module cell, which its configured source shows only as the
+    /// cell; empty when the loader showed the cell read for anything else.
+    pub(crate) fn import_rejections(&self, key: &str, name: &str) -> Vec<String> {
+        let Self::Supplied(entries) = self else { return Vec::new() };
+        let Some(entry) = entries.get(key) else { return Vec::new() };
+        entry.import_reads.iter().map(|reason| format!("[bail] Transform '{name}': its callable {reason}")).collect()
     }
 
     /// Why definition `key`, whose admitted configured source reads the
@@ -351,6 +364,17 @@ impl TransformProvenance {
 /// runtime registry emits it verbatim, where a free identifier throws.
 pub fn admit_configured_source(name: &str, source: &str) -> Result<(), Vec<String>> {
     admit_configured_host_reads(name, source).map(drop)
+}
+
+/// What a module of a system bundled by the loader reads its imports from
+/// (`system-loader`'s `linked`): a configured source captured from a
+/// callable that reads an import reads this cell.
+const LOADER_MODULE_CELL: &str = "__modules";
+
+/// The reason a configured source named `name` is rejected for reading the
+/// loader's module cell, among its other reasons.
+pub(crate) fn module_cell_rejection(name: &str) -> String {
+    external_symbol_diagnostic(name, LOADER_MODULE_CELL)
 }
 
 /// [`admit_configured_source`], returning the shared host functions the

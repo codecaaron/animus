@@ -3131,39 +3131,23 @@ pub(crate) fn declared_export(
     files: &BTreeMap<String, FileFacts>,
     links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, String)> {
-    let ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) = links.resolve_export(module, &name)?
-    else {
-        return None;
-    };
-    let exports: Vec<&String> = links
-        .table
-        .record(declaring)
-        .local_exports
-        .iter()
-        .filter(|(_, exported)| *exported == binding)
-        .map(|(exported_as, _)| exported_as)
-        .collect();
-    let exported = exports.iter().find(|exported_as| **exported_as == &name).or(exports.first())?.to_string();
+    let (declaring, binding) = links.declared(module, &name)?;
+    let exports: Vec<&str> = links.exported_as(declaring, binding).collect();
+    let exported = exports.iter().find(|exported_as| **exported_as == name).or(exports.first())?.to_string();
     let (path, declared) = binding_name(links, files, declaring, binding);
     Some((path, exported, declared))
 }
 
-/// The binding the module table resolves `module`'s export `name` to, as
-/// the facts name it: its declaring file and binding. `None` for any other
-/// answer: absent, ambiguous, open, a namespace, an export of a module
-/// outside the analysis, or a module the analysis does not hold.
+/// The binding `ProjectLinks::declared` finds for `module`'s export
+/// `name`, as the facts name it: its declaring file and binding.
 fn declared_binding(
     links: &crate::link::ProjectLinks,
     files: &BTreeMap<String, FileFacts>,
     module: &str,
     name: &str,
 ) -> Option<(String, String)> {
-    match links.resolve_export(module, name)? {
-        ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) => {
-            Some(binding_name(links, files, declaring, binding))
-        }
-        _ => None,
-    }
+    let (declaring, binding) = links.declared(module, name)?;
+    Some(binding_name(links, files, declaring, binding))
 }
 
 /// A resolved binding's file and name; for `export default X`'s cell, X,
@@ -5645,22 +5629,33 @@ fn run_with_system_floor(
                  standard globals, btoa and atob",
             )
         };
+        const CAPTURED_ADVICE: &str = "declare what it reads inside the callback or read the standard global \
+             itself; a configured source is evaluated and delivered as its own text, so it cannot carry its \
+             module's bindings";
         let hosts = match crate::transforms::admit_configured_host_reads(name, source) {
             Ok(hosts) => hosts,
             Err(rejections) => {
-                diagnostics.extend(rejections.into_iter().map(rejected));
+                // A callable reading an import is captured from the loader's
+                // bundle, where the import reads the loader's module cell.
+                // Where the loader shows every read of the cell is an
+                // import's, each import replaces the cell's reason. Every
+                // other reason stands.
+                let cell = crate::transforms::module_cell_rejection(name);
+                let imports = inputs.transform_provenance.import_rejections(key, name);
+                for reason in rejections {
+                    if reason == cell && !imports.is_empty() {
+                        diagnostics.extend(imports.iter().map(|import| rejected_with(import.clone(), CAPTURED_ADVICE)));
+                    } else {
+                        diagnostics.push(rejected(reason));
+                    }
+                }
                 continue;
             }
         };
         // Equal text cannot show which binding of a standard-global name a
         // callable closes over; the loader's evidence for its own function can.
         if let Some(reason) = inputs.transform_provenance.captured_rejection(key, name).filter(|_| hosts.is_empty()) {
-            diagnostics.push(rejected_with(
-                reason,
-                "declare what it reads inside the callback or read the standard global itself; \
-                 a configured source is evaluated and delivered as its own text, so it cannot \
-                 carry its module's bindings",
-            ));
+            diagnostics.push(rejected_with(reason, CAPTURED_ADVICE));
             continue;
         }
         // Its text alone cannot show which `btoa` or `atob` it captured.
@@ -14296,6 +14291,41 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(out.admitted_transforms.keys().collect::<Vec<_>>(), ["enc@a", "enc@b"]);
         assert!(out.diagnostics.iter().any(|d| d.code.as_deref() == Some(CONFIGURED_TRANSFORM_REJECTED)
             && d.message.contains("'plain'") && d.message.contains("its callable reads 'String' declared in /m.ts outside the callback")));
+        // A callable reading an import is captured from the loader's bundle,
+        // where the import reads the loader's module cell. Where the loader
+        // shows each read of the cell is an import's, the rejection names the
+        // imports, not the cell, and keeps every other reason. Without that
+        // evidence, a `__modules` the source declares outside the callback
+        // keeps its own reason, whatever else the loader captured first.
+        let import = "reads 'btoa' declared in /m.ts outside the callback";
+        let imports = format!(r#"{{"enc@a": {{"rejection": "{import}", "importReads": ["{import}"]}}}}"#);
+        let authored = r#"{"enc@a": {"rejection": "reads 'bias' declared in /m.ts outside the callback"}}"#.to_string();
+        let cell = "(0, __modules['/enc.ts']['btoa'])(String(v))";
+        for (source, provenance, expected, absent) in [
+            (format!("(v) => {cell}"), &imports, vec![import], vec!["__modules"]),
+            (format!("(v) => this.bias + {cell}"), &imports, vec![import, "reads 'this' of the callback"], vec!["__modules"]),
+            (format!("(v) => unknown(v) + {cell}"), &imports, vec![import, "external symbol 'unknown'"], vec!["__modules"]),
+            (
+                "(v) => bias(v) + __modules(v)".to_string(),
+                &authored,
+                vec!["external symbol '__modules'", "external symbol 'bias'"],
+                vec!["its callable reads"],
+            ),
+        ] {
+            let config = r#"{"a": {"property": "width", "transform": "enc", "transformId": "enc@a"}}"#;
+            let sources = serde_json::json!({ "enc@a": source }).to_string();
+            let mut inputs = configured_inputs(config, r#"["a"]"#, Some(&sources), false);
+            inputs.transform_provenance = crate::transforms::TransformProvenance::from_json(Some(provenance));
+            let out = analyze(&[("use.tsx", "export const Box = ds.styles({ a: 'x' }).asElement('div');\nexport const App = () => <Box />;\n")], &inputs);
+            let rejected: Vec<&String> = out.diagnostics.iter()
+                .filter(|d| d.code.as_deref() == Some(CONFIGURED_TRANSFORM_REJECTED)).map(|d| &d.message).collect();
+            for reason in expected {
+                assert!(rejected.iter().any(|m| m.contains(reason)), "{source}: {reason}: {rejected:#?}");
+            }
+            for reason in absent {
+                assert!(rejected.iter().all(|m| !m.contains(reason)), "{source}: {reason}: {rejected:#?}");
+            }
+        }
     }
 
     fn failing_transform_variant_inputs(dev_mode: bool) -> CssInputs {
