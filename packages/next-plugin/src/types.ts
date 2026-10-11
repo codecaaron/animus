@@ -6,6 +6,11 @@ import type {
 export interface AnimusNextOptions {
   /** Path to a module exporting a SystemInstance from `@animus-ui/system`. */
   system: string;
+  /** The app's directory, for a `next` run from another directory. Next
+   *  passes no dir to a config module, so the app's root is the current
+   *  directory without it. Its source kits and analysis read this root; under
+   *  webpack, a root that is not Next's dir fails. */
+  root?: string;
   /** Substrings, or globs when `*`/`?` present. Replaces `dist`/`.test.`/
    *  `.spec.`; `node_modules`, `.next` and `.animus` are always excluded. */
   exclude?: string[];
