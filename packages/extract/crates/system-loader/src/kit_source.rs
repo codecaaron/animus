@@ -186,19 +186,20 @@ pub fn resolve_kit_source_root(
         return Ok(found);
     }
 
-    // Source-targeting exports: every exact entry's runtime target, as the
-    // loader selects it, is TypeScript source in the package.
+    // Source-targeting exports: the entry the specifier selects has a
+    // runtime target, as the loader selects it, that is TypeScript source in
+    // the package. Each other entry whose target is source maps too; one
+    // whose target is compiled output is no source, and vetoes nothing.
     let mut sources = Vec::new();
-    for (entry, _) in &exact {
+    for (entry, _, _) in &walked {
         let target = resolve_exports_entry(exports.as_ref().unwrap_or(&serde_json::Value::Null), entry, false, &context.conditions);
         let Some(target) = target.filter(|target| is_typescript_source(target) && !target.contains('%')) else {
-            sources.clear();
-            break;
+            continue;
         };
         let file = resolution::lexical(&package_dir.join(&target));
         match resolution::see_within(&package_dir, &file.to_string_lossy()) {
             resolution::Seen::File => sources.push((entry.clone(), display(&file))),
-            resolution::Seen::CaseOnly(actual) => {
+            resolution::Seen::CaseOnly(actual) if *entry == entry_key => {
                 found.unresolved = Some(resolution::case_mismatch_reason(
                     &format!("exports[{entry:?}] of {manifest:?}"),
                     &target,
@@ -207,19 +208,13 @@ pub fn resolve_kit_source_root(
                 ));
                 return Ok(found);
             }
-            resolution::Seen::Missing => {
-                sources.clear();
-                break;
-            }
+            resolution::Seen::CaseOnly(_) | resolution::Seen::Missing => {}
         }
     }
-    if !sources.is_empty() {
+    if sources.iter().any(|(entry, _)| *entry == entry_key) {
         found.rule = KitSourceRule::SourceExports;
         found.root = common_directory(&sources);
         found.entries = sources;
-        if unimportable(&found) {
-            return Err(why_not_importable());
-        }
         return Ok(found);
     }
 
