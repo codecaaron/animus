@@ -16,7 +16,6 @@ import {
   VIRTUAL_CSS_ID,
   VIRTUAL_SYSTEM_PROPS_ID,
 } from './constants';
-import { systemPropsModuleSource } from './context';
 import { postProcessCss } from './css';
 
 import type { PluginContext } from './context';
@@ -165,9 +164,9 @@ if (import.meta.hot) {
   }
 
   if (id === RESOLVED_SYSTEM_PROPS_ID) {
-    // Routed through the shared generator so the HMR change decision reads
-    // the exact bytes this hook serves, and the Next plugin cannot drift.
-    return systemPropsModuleSource(ctx);
+    // The Session's module: the HMR change decision compares the exact bytes
+    // this hook serves, built where every host's are.
+    return ctx.systemPropsModule;
   }
 
   return null;
