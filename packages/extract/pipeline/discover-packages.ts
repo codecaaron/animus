@@ -190,11 +190,29 @@ export interface KitSourceCondition {
    *  absolute source file. */
   entries: Array<[subpath: string, target: string]>;
   /** Entries whose target is missing, differs from its file only in case,
-   *  or is outside the package, and which of those. */
+   *  or is no package target Node accepts, and which of those. */
   invalid: Array<[subpath: string, target: string, why: string]>;
   /** The deepest directory holding every source entry: what discovery walks.
    *  Null when no entry is valid. */
   root: string | null;
+}
+
+/** A package target Node accepts, as the system loader reads it
+ *  (`valid_package_target`): relative to the package root (`./`), with no
+ *  `.`, `..` or `node_modules` segment after it. An empty segment loads. */
+function isPackageTarget(target: string): boolean {
+  return (
+    target.startsWith('./') &&
+    !target
+      .split(/[/\\]/)
+      .slice(1)
+      .some(
+        (segment) =>
+          segment === '.' ||
+          segment === '..' ||
+          segment.toLowerCase() === 'node_modules'
+      )
+  );
 }
 
 /** The package's kit source condition, or null when no exact `exports`
@@ -213,10 +231,10 @@ export function readKitSourceCondition(
     if (subpath.includes('*') || !isJsonBlock(value)) continue;
     const target = value[KIT_SOURCE_CONDITION];
     if (!isJsonString(target)) continue;
+    // A target the system loader refuses is no source: it evaluates the
+    // runtime entry, so analysis reads that entry too.
     const file = resolve(pkgRoot, target);
-    const seen = isPathWithinRoot(pkgRoot, file)
-      ? seeOnDisk(file, pkgRoot)
-      : null;
+    const seen = isPackageTarget(target) ? seeOnDisk(file, pkgRoot) : null;
     if (seen?.kind === 'file') {
       condition.entries.push([subpath, file]);
     } else {
@@ -225,7 +243,9 @@ export function readKitSourceCondition(
         target,
         seen?.kind === 'case-only'
           ? `is spelled otherwise on disk (${seen.actual}), which a case- or normalization-sensitive filesystem does not load`
-          : 'is missing or outside the package',
+          : seen === null
+            ? "is no package target Node accepts (one starts with './' and has no '.', '..' or 'node_modules' segment)"
+            : 'is missing',
       ]);
     }
   }
@@ -1049,7 +1069,7 @@ export function importedKitDiagnostics(
 }
 
 /** A kit without the source condition, warned once, or each condition entry
- *  whose target is missing or outside the package. */
+ *  whose target is missing or no package target Node accepts. */
 function sourceConditionDiagnostics(
   packageName: string,
   condition: KitSourceCondition | null

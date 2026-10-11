@@ -1,9 +1,12 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, test } from 'vitest';
 
-import { probeAbsolutePathSpecifier } from '../pipeline/discover-packages';
+import {
+  probeAbsolutePathSpecifier,
+  readKitSourceCondition,
+} from '../pipeline/discover-packages';
 import {
   extensionPolicyJson,
   viteExtensionPolicy,
@@ -242,3 +245,52 @@ test("a configured Vite extension list is unreadable, and './only' still finds o
     native: expect.stringMatching(/only\.tsx$/),
   });
 });
+
+// Contract: system evaluation and analysis read the same facet of a kit
+// (spec §2.2 A3). Discovery's source entry is the file the system loader
+// evaluates; a source target the loader refuses as no package target is
+// read from the runtime entry by both, and reported.
+test.each([
+  ['./src/index.ts', 'source'],
+  ['src/index.ts', 'runtime'],
+  ['./src/../src/index.ts', 'runtime'],
+  ['./src/./index.ts', 'runtime'],
+  ['./src//index.ts', 'source'],
+])(
+  "a kit whose animus target is '%s' is read from its %s entry by both",
+  (target, facet) => {
+    const pkg = mkdtempSync(join(tmpdir(), 'animus-kit-facet-'));
+    writeFileSync(
+      join(pkg, 'package.json'),
+      JSON.stringify({
+        name: 'kit',
+        exports: { '.': { animus: target, import: './dist/index.js' } },
+      })
+    );
+    for (const file of ['src/index.ts', 'dist/index.js']) {
+      mkdirSync(join(pkg, file, '..'), { recursive: true });
+      writeFileSync(join(pkg, file), 'export {};\n');
+    }
+    const condition = readKitSourceCondition(pkg);
+    const loaded = v2.resolveSpecifier('kit', '/', [], { kit: pkg }).path ?? '';
+    rmSync(pkg, { recursive: true, force: true });
+    const facetOf = (path: string | undefined) =>
+      path === undefined
+        ? 'runtime'
+        : /src[\\/]+index\.ts$/.test(path)
+          ? 'source'
+          : 'runtime';
+
+    expect({
+      discovery: facetOf(
+        condition?.entries.find(([entry]) => entry === '.')?.[1]
+      ),
+      loader: facetOf(loaded),
+      reported: (condition?.invalid.length ?? 0) > 0,
+    }).toEqual({
+      discovery: facet,
+      loader: facet,
+      reported: facet === 'runtime',
+    });
+  }
+);
