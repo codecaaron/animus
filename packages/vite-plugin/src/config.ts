@@ -1,12 +1,12 @@
 import {
   buildPathAliasesJson,
-  isPathWithinRoot,
   outputExclusion,
   resolveMode,
   viteAssetClassification,
   viteExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
-import { resolve } from 'path';
+import { join, resolve } from 'path';
+import { isFileLoadingAllowed } from 'vite';
 
 import { resolveLightningTargets } from './css';
 
@@ -31,16 +31,19 @@ export function applyResolvedConfig(
     ).mode === 'production';
   ctx.rootDir = config.root;
   // Dev asset() URLs name immutable copies where the dev server serves
-  // them; a cacheDir outside `server.fs.allow` would 403 under strict mode.
+  // them, by Vite's own rule: strict mode, `server.fs.allow` and
+  // `server.fs.deny` together. Each process copies into its own directory.
   if (!ctx.isProd) {
-    const copyDir = resolve(config.cacheDir, 'animus-assets');
-    const served =
-      !config.server.fs.strict ||
-      config.server.fs.allow.some((dir) => isPathWithinRoot(dir, copyDir));
+    const copyDir = resolve(
+      config.cacheDir,
+      'animus-assets',
+      String(process.pid)
+    );
+    const served = isFileLoadingAllowed(config, join(copyDir, 'asset'));
     ctx.assetCopyDir = served ? copyDir : null;
     if (!served) {
       ctx.warn(
-        `[animus-extract] asset() copies need ${copyDir} in server.fs.allow; serving the live files instead, so an edited asset keeps its URL`
+        `[animus-extract] asset() copies in ${copyDir} are not served under server.fs; serving the live files instead, so an edited asset keeps its URL`
       );
     }
   }

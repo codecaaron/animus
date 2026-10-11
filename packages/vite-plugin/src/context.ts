@@ -365,9 +365,6 @@ export class PluginContext {
   assetCopyDir: string | null = null;
   /** specifier → the source file its dev copy was made from. */
   assetSourceBySpecifier = new Map<string, string>();
-  /** The copies the current asset pass made, which buildStart's prune
-   *  keeps. */
-  currentAssetCopies = new Set<string>();
 
   assetResolutionFailures = new Set<string>();
 
@@ -859,8 +856,12 @@ export class PluginContext {
   devAssetUrl(specifier: string, absPath: string): string {
     if (this.assetCopyDir === null) return this.devFsUrl(absPath);
     const { fileName } = writeAssetCopy(absPath, this.assetCopyDir);
+    // Watched once its copy exists, wherever it lives: an edit makes the
+    // next copy.
+    if (this.assetSourceBySpecifier.get(specifier) !== absPath) {
+      this.devServer?.watcher?.add(absPath);
+    }
     this.assetSourceBySpecifier.set(specifier, absPath);
-    this.currentAssetCopies.add(fileName);
     return this.devFsUrl(join(this.assetCopyDir, fileName));
   }
 
@@ -1016,10 +1017,6 @@ export class PluginContext {
     }
     if (this.externalPackageDirs.length > 0) {
       watcher.add(this.externalPackageDirs);
-    }
-    // An edited asset gets a new copy, so its source is watched too.
-    if (this.assetSourceBySpecifier.size > 0) {
-      watcher.add([...this.assetSourceBySpecifier.values()]);
     }
   }
 
