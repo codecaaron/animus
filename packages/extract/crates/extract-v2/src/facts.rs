@@ -480,6 +480,10 @@ pub struct FileFacts {
     /// How each of the module's functions treats an object passed to it.
     #[serde(skip)]
     pub(crate) param_readings: crate::usage_facts::ParamReadings,
+    /// How the module runs code from a string (`reads eval`), which can
+    /// load any module and change what it exports.
+    #[serde(skip)]
+    pub(crate) dynamic_code: Option<&'static str>,
     /// Extensions of an `Object.member` parent, which are never chains.
     #[serde(skip)]
     pub member_parent_extensions: Vec<chain_walk::MemberParentExtension>,
@@ -1228,7 +1232,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let program = ast.program();
     // The engine lowers every file before static enrichment; any other
     // caller lowers this one here.
-    let crate::link::Lowered { scoping, bindings, record: module_record, loads, readings: param_readings } =
+    let crate::link::Lowered { scoping, bindings, record: module_record, loads, readings: param_readings, dynamic_code } =
         lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
     let source = ast.source();
     let directive_prologue = program.directives.last().map(|last| {
@@ -1603,6 +1607,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         value_escapes,
         spread_wrappers,
         module_loads: loads.iter().filter_map(|load| load.module_load(source)).collect(),
+        dynamic_code,
         ordinary_components,
         context_consts,
         prop_tags,

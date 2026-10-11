@@ -28,6 +28,7 @@ import {
   enforceExternalTokenContracts,
   excludeCollectedPackages,
   extractSystemFilePackages,
+  nativeKitSourceRoot,
   importedKitDiagnostics,
   findPackageRoot,
   findSheetAssetSpecifiers,
@@ -60,6 +61,7 @@ import {
   engineModuleParser,
   surfaceManifestDiagnostics,
 } from '../pipeline/index';
+import { COALESCING_WINDOW_MS } from './coalescing-window';
 import {
   checkLockLiveness,
   holdDirectoryClaim,
@@ -97,7 +99,11 @@ import {
   joinSession,
   sessionKey,
   getOwningWatchSession,
+  getSystemAuthority,
   getWatchTransaction,
+  observationQueue,
+  SessionConfigurationConflict,
+  setSystemAuthority,
   resetAnalysisStartedPromise,
   setOwningWatchSession,
   setAnalysisStartedPromise,
@@ -124,9 +130,23 @@ import type {
   PackageResolution,
   SessionResolutionContext,
 } from './resolve-packages';
-import type { SessionKey } from './singleton';
+import type { SessionKey, SystemLoad } from './singleton';
 
 export type SessionOptions = AnimusCoreOptions;
+
+/** An observation's state when its file is gone, or cannot be read; any
+ *  other state is the content hash it was observed with. */
+const REMOVED_OBSERVATION = 'removed';
+const UNREADABLE_OBSERVATION = 'unreadable';
+
+/** A loaded system's identity: its evaluated modules and a fingerprint of
+ *  the whole load. */
+function systemLoad(system: SystemConfig): SystemLoad {
+  return {
+    identity: contentHash(JSON.stringify(system)),
+    dependencies: system.dependencies ?? [],
+  };
+}
 
 /** What the hosting bundler does, which the user does not configure. */
 export interface SessionHost {
@@ -160,10 +180,6 @@ import type {
 const SESSION_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 const STATUS_WATCHDOG_MS = 2000;
-
-/** Default watcher debounce and the session's status-deadline ceiling.
- *  The watcher entry point defaults its debounce from this — one definition. */
-export const DEFAULT_WATCH_DEBOUNCE_MS = 75;
 
 const LEGACY_FLAT_ARTIFACTS = [
   MANIFEST_ARTIFACT,
@@ -358,7 +374,7 @@ export class ExtractionSession {
    *  same-session restart with unchanged plans rewrites no bytes. */
   private lastEpochValue: string | null = null;
   /** Watcher debounce ceiling feeding status deadlines. */
-  debounceCeilingMs = DEFAULT_WATCH_DEBOUNCE_MS;
+  debounceCeilingMs = COALESCING_WINDOW_MS;
   /** Test seam: observes every session-artifact write (name, content)
    *  post-rename — write ORDER is part of the transaction contract. */
   onArtifactWrite: ((name: string, content: string) => void) | null = null;
@@ -515,8 +531,8 @@ export class ExtractionSession {
     return this.scanConfigMemo;
   }
 
-  /** Concurrent entries wait for publication, then ingest their own batch;
-   *  content hashes coalesce observations the prior analysis covered. */
+  /** Records the batch before any await, so an attempt that rejects never
+   *  erases it, and settles with the attempt that takes it (SA20). */
   async handleWatchUpdate(changes: WatchChanges): Promise<void> {
     try {
       await this.routeWatchUpdate(changes);
@@ -533,47 +549,140 @@ export class ExtractionSession {
     const hasBatch =
       (changes.modifiedFiles?.size ?? 0) > 0 ||
       (changes.removedFiles?.size ?? 0) > 0;
+    if (hasBatch) {
+      await this.awaitObservation(this.recordObservation(changes));
+      return;
+    }
+    // No observation: an in-flight attempt answers the call, and otherwise
+    // the owner runs it (absent change sets probe every file).
     const inflight = getWatchTransaction(this.key);
     if (inflight) {
       await inflight;
-      if (!hasBatch) return;
-    }
-
-    // Non-owning instance: each compiler child watches its own files, so a
-    // batch only this one observes is forwarded, never dropped. Keep this
-    // check AFTER the join above: an initial full pipeline registers its
-    // owner on publication. An empty or absent follower batch stays a no-op.
-    if (!this.system) {
-      const owner = getOwningWatchSession(this.key);
-      if (owner && owner !== this && hasBatch) {
-        await owner.ingestForwardedBatch(changes);
-      }
       return;
     }
-
-    await this.ingestForwardedBatch(changes);
+    if (this.system) await this.runWatchAttempt(changes);
   }
 
-  /** The shared owner gate for local and forwarded batches. Every waiter
-   *  rechecks the slot so distinct batches publish in arrival order. */
-  async ingestForwardedBatch(changes: WatchChanges): Promise<void> {
-    if (!this.system) return;
-    for (;;) {
-      const inflight = getWatchTransaction(this.key);
-      if (!inflight) break;
-      await inflight;
+  /** Queues the batch's observations under a new revision, synchronously.
+   *  A batch equivalent to what the active attempt took joins that attempt:
+   *  a second compiler's report of the same edit never analyzes it twice. */
+  private recordObservation(changes: WatchChanges): number {
+    const queue = observationQueue(this.key);
+    const observed = new Map<string, string>();
+    for (const path of changes.modifiedFiles ?? []) {
+      let state: string;
+      try {
+        state = contentHash(readFileSync(path, 'utf-8'));
+      } catch {
+        state = UNREADABLE_OBSERVATION;
+      }
+      observed.set(path, state);
     }
-    // Register before processing: a nested full system reload must inherit
-    // this gate rather than clear it while the enclosing batch is active.
+    for (const path of changes.removedFiles ?? []) {
+      observed.set(path, REMOVED_OBSERVATION);
+    }
+    const revision = ++queue.revision;
+    const active = queue.active;
+    // A path with a queued observation is never equivalent: this newer
+    // observation supersedes the queued one, so it is queued in its place.
+    if (
+      active !== null &&
+      [...observed].every(
+        ([path, state]) =>
+          !queue.untaken.has(path) && active.taken.get(path) === state
+      )
+    ) {
+      queue.revisions.set(revision, active.transaction);
+      return revision;
+    }
+    for (const [path, state] of observed) queue.untaken.set(path, state);
+    queue.revisions.set(revision, null);
+    return revision;
+  }
+
+  /** Settles with the attempt that takes `revision`. Another attempt's
+   *  rejection is its own callers': this observation runs after it. */
+  private async awaitObservation(revision: number): Promise<void> {
+    const queue = observationQueue(this.key);
+    for (;;) {
+      const taken = queue.revisions.get(revision);
+      if (taken !== null && taken !== undefined) {
+        queue.revisions.delete(revision);
+        await taken;
+        return;
+      }
+      const inflight = getWatchTransaction(this.key);
+      if (inflight) {
+        await inflight.catch(() => undefined);
+        continue;
+      }
+      const owner = this.system ? this : getOwningWatchSession(this.key);
+      if (owner === null || !owner.startObservedAttempt()) {
+        // No session of the build can analyze yet: the observation stays
+        // queued for the owner's next attempt.
+        queue.revisions.delete(revision);
+        return;
+      }
+    }
+  }
+
+  /** Starts one attempt over every untaken observation of the build. */
+  startObservedAttempt(): boolean {
+    if (!this.system) return false;
+    const taken = this.takeObservations();
+    const modifiedFiles = new Set<string>();
+    const removedFiles = new Set<string>();
+    for (const [path, state] of taken) {
+      (state === REMOVED_OBSERVATION ? removedFiles : modifiedFiles).add(path);
+    }
+    this.settleTaken(
+      taken,
+      this.runWatchAttempt({ modifiedFiles, removedFiles })
+    );
+    return true;
+  }
+
+  /** Every untaken observation of the build, which the caller's attempt
+   *  now covers. */
+  private takeObservations(): Map<string, string> {
+    const queue = observationQueue(this.key);
+    const taken = new Map(queue.untaken);
+    queue.untaken.clear();
+    return taken;
+  }
+
+  /** `transaction` settles every waiting revision, and is the active
+   *  attempt equivalent observations join until it settles. */
+  private settleTaken(
+    taken: Map<string, string>,
+    transaction: Promise<void>
+  ): void {
+    const queue = observationQueue(this.key);
+    for (const [revision, attempt] of queue.revisions) {
+      if (attempt === null) queue.revisions.set(revision, transaction);
+    }
+    queue.active = { taken, transaction };
+    const settle = () => {
+      if (queue.active?.transaction === transaction) queue.active = null;
+    };
+    transaction.then(settle, settle);
+  }
+
+  /** Registers one attempt in the build's single-flight slot before it
+   *  processes, so a nested full system reload inherits the gate rather
+   *  than clear it, and clears the slot when it settles either way. */
+  private runWatchAttempt(changes: WatchChanges): Promise<void> {
     const transaction = Promise.resolve().then(() =>
       this.processWatchUpdate(changes)
     );
     setWatchTransaction(this.key, transaction);
-    try {
-      await transaction;
-    } finally {
-      setWatchTransaction(this.key, null);
-    }
+    const settle = () => {
+      if (getWatchTransaction(this.key) === transaction) {
+        setWatchTransaction(this.key, null);
+      }
+    };
+    transaction.then(settle, settle);
+    return transaction;
   }
 
   private async processWatchUpdate(changes: WatchChanges): Promise<void> {
@@ -922,16 +1031,38 @@ export class ExtractionSession {
     const priorSystem = this.system;
 
     const nested = getWatchTransaction(this.key) !== null;
+    // A top-level full read covers every observation queued before it, so
+    // it settles them; one queued after it runs next.
+    const taken = nested ? null : this.takeObservations();
     const transaction = this.runPipelineTransaction(pending);
-    if (!nested) setWatchTransaction(this.key, transaction);
+    if (taken !== null) {
+      setWatchTransaction(this.key, transaction);
+      this.settleTaken(taken, transaction);
+    }
     try {
       await transaction;
     } catch (error) {
+      // The authority stays the committed system's, with its proofs.
       this.system = priorSystem;
       throw error;
     } finally {
       if (!nested) setWatchTransaction(this.key, null);
     }
+    this.commitSystemAuthority();
+  }
+
+  /** The build's authority becomes the system this session committed, with
+   *  it and never before: a failed reload leaves the committed one, and the
+   *  context proofs made against it. A committed reload discards every
+   *  other context's proof, even for an unchanged system: the reload may
+   *  have changed what another context resolves, so each loads again. */
+  private commitSystemAuthority(): void {
+    setSystemAuthority(this.key, {
+      ...systemLoad(this.system!),
+      context: this.resolutionContextText(),
+      label: this.resolutionContextLabel(),
+      others: new Map(),
+    });
   }
 
   private async runPipelineTransaction(
@@ -959,15 +1090,7 @@ export class ExtractionSession {
     };
     this.log(`extension order: ${context.extensions.resolverVersion}`);
     let t = this.now();
-    this.system = loadSystemConfig(() => engineApi(this.key), {
-      systemPath: resolvedSystemPath,
-      rootDir,
-      prefix: this.options.prefix,
-      prefixContextualVars: this.options.prefixContextualVars,
-      conditions: context.conditions,
-      workspaces: context.workspaces,
-      extensions: context.extensions,
-    });
+    this.system = this.loadSystemUnder(context);
     this.assetCopyCache.clear();
     this.assetDependencyPaths.clear();
     this.assetDependencyKeys.clear();
@@ -1093,6 +1216,13 @@ export class ExtractionSession {
 
     const collected = await collectExternalPackageSources({
       extensions: context.extensions,
+      kitSourceRoot: nativeKitSourceRoot(
+        engineApi(this.key),
+        rootDir,
+        context.conditions,
+        context.workspaces,
+        extensionPolicyJson(context.extensions)
+      ),
       specifiers: packageNames,
       resolveSpecifier: (name) =>
         preResolved.entries[name]
@@ -1313,6 +1443,75 @@ export class ExtractionSession {
     snapshot: ReturnType<ExtractionSession['snapshotSourceState']>
   ): void {
     Object.assign(this, snapshot);
+  }
+
+  /** The system under `context`: the one load path for the build's
+   *  authority and for a participant checking its own context. */
+  private loadSystemUnder(context: SessionResolutionContext): SystemConfig {
+    return loadSystemConfig(() => engineApi(this.key), {
+      systemPath: resolve(this.rootDir!, this.options.system),
+      rootDir: this.rootDir!,
+      prefix: this.options.prefix,
+      prefixContextualVars: this.options.prefixContextualVars,
+      conditions: context.conditions,
+      workspaces: context.workspaces,
+      extensions: context.extensions,
+    });
+  }
+
+  /** What the system loader reads of this participant besides the root, as
+   *  stable text: its conditions and extension order. */
+  private resolutionContextText(): string {
+    return JSON.stringify([
+      this.conditions,
+      extensionPolicyJson(this.extensionPolicy),
+    ]);
+  }
+
+  private resolutionContextLabel(): string {
+    return (
+      `${this.driverLabel} with conditions [${this.conditions.join(', ')}] ` +
+      `and extension order ${this.extensionPolicy.resolverVersion}`
+    );
+  }
+
+  /** One agreed system authority (SA5): a participant whose resolution
+   *  context differs from the one the build's system was loaded under loads
+   *  it once under its own, and proceeds only on the same system. Otherwise
+   *  it throws, naming both contexts, whichever participant came first. */
+  agreeWithSystemAuthority(): void {
+    const authority = getSystemAuthority(this.key);
+    if (authority === null) return;
+    const context = this.resolutionContextText();
+    if (context === authority.context) return;
+    let own = authority.others.get(context);
+    if (own === undefined) {
+      own = systemLoad(
+        this.loadSystemUnder({
+          conditions: this.conditions,
+          workspaces: declaredWorkspacePackages(this.rootDir!),
+          extensions: this.extensionPolicy,
+        })
+      );
+      authority.others.set(context, own);
+    }
+    if (own.identity === authority.identity) return;
+    const shared = new Set(authority.dependencies);
+    const mine = new Set(own.dependencies);
+    const differing = [
+      ...authority.dependencies.filter((path) => !mine.has(path)),
+      ...own.dependencies.filter((path) => !shared.has(path)),
+    ].map((path) => relative(this.rootDir!, path));
+    throw new SessionConfigurationConflict(
+      this.key,
+      authority.label,
+      this.resolutionContextLabel(),
+      differing.length > 0
+        ? [`system modules ${differing.join(', ')}`]
+        : ['the evaluated system'],
+      'Every participant of one build must evaluate the same system: give ' +
+        'each compiler conditions that select the same system modules.'
+    );
   }
 
   /** Release this session's publication claim so a successor may publish.

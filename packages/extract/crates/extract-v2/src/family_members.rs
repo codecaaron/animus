@@ -736,6 +736,16 @@ impl<'f> ObjectMembers<'f> {
                     }
                 }
             }
+            // Code from a string can `import()` any module and change what
+            // it exports.
+            if let Some(how) = ff.dynamic_code {
+                let reason = format!("{module} {how}, so code from a string can load and change any module");
+                for target in files.keys() {
+                    for object in self.exported_objects(target).iter() {
+                        found.entry(object.clone()).or_insert_with(|| reason.clone());
+                    }
+                }
+            }
         }
         found
     }

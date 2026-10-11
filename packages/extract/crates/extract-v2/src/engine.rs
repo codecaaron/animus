@@ -381,71 +381,6 @@ fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>) -> Vec
     found
 }
 
-/// How a module runs code from a string, which can load any module: it
-/// reads the unbound `eval` or `Function` as a value, so any call, alias or
-/// `Reflect.construct` of it counts, or reads either as a member of the
-/// unbound global object (`globalThis.eval`, `window.Function`). A type
-/// query, and the bare name as a `typeof` operand or the right side of
-/// `instanceof`, run nothing. Not followed: a computed member
-/// (`globalThis['ev' + 'al']`) and an alias of the global object.
-fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::Scoping) -> Option<&'static str> {
-    use oxc::ast::ast::{BinaryExpression, Expression, IdentifierReference, StaticMemberExpression, UnaryExpression};
-    use oxc::ast_visit::Visit;
-    use oxc::syntax::operator::{BinaryOperator, UnaryOperator};
-    const RUNNERS: [&str; 2] = ["eval", "Function"];
-    const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "self", "global"];
-    struct Reads<'s> {
-        scoping: &'s oxc::semantic::Scoping,
-        found: Option<&'static str>,
-    }
-    impl Reads<'_> {
-        fn unbound(&self, id: &IdentifierReference<'_>) -> bool {
-            id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).symbol_id().is_none())
-        }
-        /// The bare unbound `eval` or `Function`, which `typeof` and
-        /// `instanceof` only inspect.
-        fn bare_runner(&self, expr: &Expression<'_>) -> bool {
-            matches!(expr.get_inner_expression(), Expression::Identifier(id)
-                if RUNNERS.contains(&id.name.as_str()) && self.unbound(id))
-        }
-        fn record(&mut self, name: &str) {
-            self.found.get_or_insert(if name == "eval" { "reads eval" } else { "reads Function" });
-        }
-    }
-    impl<'a> Visit<'a> for Reads<'_> {
-        fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
-            let value = id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).is_value());
-            if value && RUNNERS.contains(&id.name.as_str()) && self.unbound(id) {
-                self.record(&id.name);
-            }
-        }
-        fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
-            let global = matches!(member.object.get_inner_expression(), Expression::Identifier(object)
-                if GLOBAL_OBJECTS.contains(&object.name.as_str()) && self.unbound(object));
-            if global && RUNNERS.contains(&member.property.name.as_str()) {
-                self.record(&member.property.name);
-            }
-            oxc::ast_visit::walk::walk_static_member_expression(self, member);
-        }
-        fn visit_unary_expression(&mut self, unary: &UnaryExpression<'a>) {
-            if unary.operator == UnaryOperator::Typeof && self.bare_runner(&unary.argument) {
-                return;
-            }
-            oxc::ast_visit::walk::walk_unary_expression(self, unary);
-        }
-        fn visit_binary_expression(&mut self, binary: &BinaryExpression<'a>) {
-            if binary.operator == BinaryOperator::Instanceof && self.bare_runner(&binary.right) {
-                self.visit_expression(&binary.left);
-                return;
-            }
-            oxc::ast_visit::walk::walk_binary_expression(self, binary);
-        }
-    }
-    let mut reads = Reads { scoping, found: None };
-    reads.visit_program(program);
-    reads.found
-}
-
 /// One module's inputs to `unstable_style_statics`.
 struct StyleModule {
     facts: crate::usage_facts::StyleObjectFacts,
@@ -541,7 +476,50 @@ fn unstable_style_statics(
         let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
         format!("{name} {} in {file}{line}", used.what)
     };
-    let mut unstable: BTreeMap<(String, String), String> = BTreeMap::new();
+    use crate::flow::{AbsenceQuery, ChangeKind, Coverage, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom};
+    let object = |(file, local): (String, String)| ObjectId { module: file, binding: local };
+    let mut flow = FlowBuilder::new();
+    // Each object a module exports, under each name it exports it as.
+    for (module, path) in links.paths.iter().enumerate() {
+        for name in links.table.exported_names(module).names {
+            let terminals = match links.table.resolve_export(module, &name) {
+                ExportLookup::Resolved(terminal) => vec![terminal],
+                ExportLookup::Incomplete { known, .. } => known,
+                ExportLookup::Absent | ExportLookup::Ambiguous(_) => Vec::new(),
+            };
+            for exported in local_bindings(terminals) {
+                flow.export(object(declaration(exported)), path, &name);
+            }
+        }
+    }
+    // A namespace handed on exposes every object the module exports,
+    // through `export *` too, and past a star the analysis cannot open,
+    // whatever that star may bring.
+    let hand_on = |flow: &mut FlowBuilder, target: &str, reason: &str| {
+        let Some(module) = links.module(target) else { return };
+        flow.open(ReasonId::OpaqueEffect, Region::of(RegionAtom::ExportsOf(target.to_string())), reason.to_string());
+        let names = links.table.exported_names(module);
+        for name in &names.names {
+            if let ExportLookup::Incomplete { openings, .. } = links.table.resolve_export(module, name) {
+                for opening in openings {
+                    let reason_id = match opening.reason {
+                        animus_system_loader::module_table::OpeningReason::OutsideStar(_) => ReasonId::OpaqueStar,
+                        animus_system_loader::module_table::OpeningReason::UnresolvedRequest(_) => {
+                            ReasonId::UnresolvedSpecifier
+                        }
+                    };
+                    let region = match opening.name {
+                        Some(asked) => RegionAtom::ExportedAs(asked),
+                        None => RegionAtom::AllExports,
+                    };
+                    flow.open(reason_id, Region::of(region), reason.to_string());
+                }
+            }
+        }
+        if !names.complete() {
+            flow.open(ReasonId::OpaqueStar, Region::of(RegionAtom::AllExports), reason.to_string());
+        }
+    };
     for (file, module) in style {
         // The declarations a use's name stands for that hold an object: a
         // namespace's member, every export of a namespace used whole, or
@@ -574,19 +552,19 @@ fn unstable_style_statics(
                         reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
                     });
                 if !read {
-                    unstable.entry(target).or_insert_with(|| said(file, &handoff.binding, &handoff.used));
+                    flow.change(object(target), Vec::new(), ChangeKind::Escape, said(file, &handoff.binding, &handoff.used));
                 }
             }
         }
         for (name, used) in &module.facts.uses {
             for target in targets_of(name) {
-                unstable.entry(target).or_insert_with(|| said(file, name, used));
+                flow.change(object(target), Vec::new(), ChangeKind::Escape, said(file, name, used));
             }
         }
         for (name, used) in &module.facts.flat_reads {
             for target in targets_of(name).into_iter().filter(|target| nested(target)) {
                 let reason = format!("{}, and it holds a nested object", said(file, name, used));
-                unstable.entry(target).or_insert(reason);
+                flow.change(object(target), Vec::new(), ChangeKind::Escape, reason);
             }
         }
         let reexports = module
@@ -598,45 +576,38 @@ fn unstable_style_statics(
             let Some(target) = analyze_css::resolve_import_source(file, spec, files, inputs) else {
                 continue;
             };
-            let reason = format!("{file} hands on {target} {how}");
-            for export in every_export(&target) {
-                unstable.entry(export).or_insert_with(|| reason.clone());
-            }
+            hand_on(&mut flow, &target, &format!("{file} hands on {target} {how}"));
         }
         // Code from a string can `import()` any module and change what it
         // exports.
         if let Some(how) = module.dynamic_code {
             let reason = format!("{file} {how}, so code from a string can load and change any module");
-            for target in style.keys() {
-                for export in every_export(target) {
-                    unstable.entry(export).or_insert_with(|| reason.clone());
-                }
-            }
+            flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), reason);
         }
     }
-    loop {
-        let mut changed = false;
-        for (file, module) in style {
-            let edges = module
-                .facts
-                .stored
-                .iter()
-                .map(|(stored, container)| (stored, container, "is stored in"))
-                .chain(module.facts.derives.iter().map(|(derived, read)| (derived, read, "reads")));
-            for (dependent, on, how) in edges {
-                let Some(reason) = possible(file, on).iter().find_map(|on_at| unstable.get(on_at)).cloned() else {
-                    continue;
-                };
-                for dependent_at in possible(file, dependent) {
-                    if let std::collections::btree_map::Entry::Vacant(entry) = unstable.entry(dependent_at) {
-                        entry.insert(format!("{dependent} {how} {on}, and {reason}"));
-                        changed = true;
-                    }
-                }
-            }
+    // A static stored in an object, or read from a binding, may change with
+    // it.
+    for (file, module) in style {
+        let edges = module
+            .facts
+            .stored
+            .iter()
+            .map(|(stored, container)| (stored, container, "is stored in"))
+            .chain(module.facts.derives.iter().map(|(derived, read)| (derived, read, "reads")));
+        for (dependent, on, how) in edges {
+            let to = possible(file, dependent).into_iter().map(object).collect();
+            let from = possible(file, on).into_iter().map(object).collect();
+            flow.flow(to, from, format!("{dependent} {how} {on}, and "));
         }
-        if !changed {
-            break;
+    }
+    let effects = flow.close();
+    let mut unstable = BTreeMap::new();
+    for (file, statics) in files {
+        for local in statics.keys() {
+            let query = AbsenceQuery::Stable(ObjectId::new(file, local), Vec::new());
+            if let Coverage::Exposed(exposures) = effects.covers(&query) {
+                unstable.insert((file.clone(), local.clone()), exposures[0].cause().to_string());
+            }
         }
     }
     unstable
@@ -851,7 +822,7 @@ impl ExtractEngine {
                         })
                         .filter_map(|load| load.specifier().map(str::to_string))
                         .collect(),
-                    dynamic_code: dynamic_code(program, &lowered_by_file[&ast.path].scoping),
+                    dynamic_code: lowered_by_file[&ast.path].dynamic_code,
                 },
             );
         }
