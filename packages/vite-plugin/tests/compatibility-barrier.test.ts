@@ -1,5 +1,5 @@
 import { join, resolve } from 'path';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { transformSource } from '../src/transform';
 import { makeContextProbe, makeEnvGraph } from './context-probe';
@@ -148,67 +148,27 @@ describe('compatibility publication barrier', () => {
     expect(parentOut?.code).toContain('TRANSFORMED');
   });
 
-  /** Every raw-serve exit after the manifest calls the file extracted must
-   *  record the fallback, not only the unresolved-parent exit. */
-  const POST_MANIFEST_RAW_EXITS = [
-    ['a non-strict transform failure', 'throws'],
+  /** SA1: a failure for a file the manifest calls extracted is the
+   *  transform's error, never a raw serve, so it never feeds the barrier;
+   *  only the unresolved-extension drop does, until row 11 retires it. */
+  it.each([
+    ['a transform failure', 'throws'],
     ['an engine result carrying no components', 'no-components'],
-  ] as const;
-
-  it.each(POST_MANIFEST_RAW_EXITS)(
-    'withholds the ancestor after %s serves the consumer raw',
+  ] as const)(
+    'fails the consumer on %s and never withholds its ancestor',
     async (_label, outcome) => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      try {
-        const probe = makeProbe((path) =>
-          path === 'src/Consumer.tsx' ? outcome : 'extracted'
-        );
-        publishRecoveredManifest(probe);
-
-        expect(
-          await transformSource(
-            probe.ctx,
-            'export const Fancy = 1;',
-            resolve(ROOT, 'src/Consumer.tsx')
-          )
-        ).toBeNull();
-
-        await expect(
-          transformSource(
-            probe.ctx,
-            'export const Parent = 1;',
-            resolve(ROOT, 'src/Parent.tsx')
-          )
-        ).rejects.toThrow(/ANIMUS_COMPOSITION_RECOVERING/);
-        expect(probe.invalidatedNodes).toContain(
-          resolve(ROOT, 'src/Consumer.tsx')
-        );
-      } finally {
-        warn.mockRestore();
-      }
-    }
-  );
-
-  it('clears the record once the file serves extracted again', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      let consumerOutcome: EngineOutcome = 'throws';
       const probe = makeProbe((path) =>
-        path === 'src/Consumer.tsx' ? consumerOutcome : 'extracted'
+        path === 'src/Consumer.tsx' ? outcome : 'extracted'
       );
       publishRecoveredManifest(probe);
 
-      await transformSource(
-        probe.ctx,
-        'export const Fancy = 1;',
-        resolve(ROOT, 'src/Consumer.tsx')
-      );
-      consumerOutcome = 'extracted';
-      await transformSource(
-        probe.ctx,
-        'export const Fancy = 1;',
-        resolve(ROOT, 'src/Consumer.tsx')
-      );
+      await expect(
+        transformSource(
+          probe.ctx,
+          'export const Fancy = 1;',
+          resolve(ROOT, 'src/Consumer.tsx')
+        )
+      ).rejects.toThrow();
 
       const parentOut = await transformSource(
         probe.ctx,
@@ -216,10 +176,8 @@ describe('compatibility publication barrier', () => {
         resolve(ROOT, 'src/Parent.tsx')
       );
       expect(parentOut?.code).toContain('TRANSFORMED');
-    } finally {
-      warn.mockRestore();
     }
-  });
+  );
 
   it('ignores raw serves that carry no unresolved-extension drop', async () => {
     const probe = makeProbe();

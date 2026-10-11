@@ -134,11 +134,12 @@ afterEach(() => {
 });
 
 describe('turbopack loader hydration', () => {
-  test('passes through untouched when no committed artifacts exist for the session', async () => {
+  test('fails, never passes through, when no analysis exists for the session', async () => {
     const root = makeRoot([]);
     const before = mocks.analyzeProject.mock.calls.length;
-    const out = await runLoader(root, 'app/page.tsx', 'export const a = 1;\n');
-    expect(out).toBe('export const a = 1;\n');
+    await expect(
+      runLoader(root, 'app/page.tsx', 'export const a = 1;\n')
+    ).rejects.toThrow(/ANIMUS_ANALYSIS_MISSING/);
     expect(mocks.analyzeProject.mock.calls.length).toBe(before);
   });
 
