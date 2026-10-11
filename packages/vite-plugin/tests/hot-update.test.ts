@@ -1,4 +1,5 @@
 import { contentHash, createExcludeMatcher } from '@animus-ui/extract/pipeline';
+import { COALESCING_WINDOW_MS } from '@animus-ui/extract/session';
 import {
   mkdirSync,
   mkdtempSync,
@@ -30,7 +31,7 @@ import {
   RESOLVED_SYSTEM_PROPS_ID,
 } from '../src/constants';
 import { PluginContext } from '../src/context';
-import { handleHotUpdate } from '../src/hmr';
+import { flushSystemReload, handleHotUpdate } from '../src/hmr';
 import { HotUpdateEvents } from '../src/hot-update-events';
 import { makeContextProbe, makeEnvGraph, published } from './context-probe';
 import { makeComponent, makeManifest } from './manifest-fixture';
@@ -222,16 +223,18 @@ describe('hotUpdate across environment dispatches', () => {
     expect(client.invalidated).toEqual([]);
   });
 
-  it('submits one system reload per system-dependency event', async () => {
+  it('submits a burst of system-dependency events once, after the coalescing window', async () => {
+    // A watcher can report a write as it starts and drop the event for its
+    // end: the reload reads the disk only once the window has passed.
     const probe = makeContext(root);
     probe.setSystemDependency(file);
     probe.respond(() => [published(probe, { pass: 'full' })]);
     const client = makeEnvironment('client', VIRTUAL_IDS);
     const ssr = makeEnvironment('ssr', VIRTUAL_IDS);
-
-    const types = ['update', 'create', 'delete'] as const;
-    for (const [index, type] of types.entries()) {
-      const timestamp = 30 + index;
+    const dispatch = async (
+      type: HotUpdateOptions['type'],
+      timestamp: number
+    ) => {
       for (const environment of [client.environment, ssr.environment]) {
         const returned = await runHotUpdate(probe.ctx, environment, {
           type,
@@ -243,12 +246,21 @@ describe('hotUpdate across environment dispatches', () => {
         // The reload owns the delivery; no environment gets its own update.
         expect(returned).toEqual([]);
       }
-    }
+    };
 
+    await dispatch('update', 30);
+    await dispatch('create', 31);
+    expect(probe.submissions).toEqual([]);
+    await new Promise((settle) => setTimeout(settle, COALESCING_WINDOW_MS * 3));
     expect(probe.submissions).toEqual([
-      { modifiedFiles: new Set([file]) },
-      { modifiedFiles: new Set([file]) },
-      { removedFiles: new Set([file]) },
+      { modifiedFiles: new Set([file]), removedFiles: new Set() },
+    ]);
+
+    await dispatch('delete', 32);
+    await flushSystemReload(probe.ctx);
+    expect(probe.submissions).toEqual([
+      { modifiedFiles: new Set([file]), removedFiles: new Set() },
+      { modifiedFiles: new Set(), removedFiles: new Set([file]) },
     ]);
     expect(client.invalidated).toEqual([]);
   });
@@ -600,6 +612,7 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
 
     state.systemLoadFails = true;
     await update(join(app, 'src', 'system.ts'));
+    await flushSystemReload(ctx);
     state.systemLoadFails = false;
 
     // The owed reload enters a parse hold. The Card edit that follows is
@@ -642,6 +655,7 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
 
     state.systemLoadFails = true;
     await update(join(app, 'src', 'system.ts'));
+    await flushSystemReload(ctx);
     state.systemLoadFails = false;
 
     const settled = 'export const Button = 3;\n';
@@ -819,6 +833,7 @@ describe('hotUpdate system-reload error wiring', () => {
       });
 
       expect(returned).toEqual([]);
+      await flushSystemReload(probe.ctx);
       expect(
         probe.warnings.some((w) => w.includes('system reload failed'))
       ).toBe(true);

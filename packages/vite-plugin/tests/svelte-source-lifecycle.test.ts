@@ -15,7 +15,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { systemImportFacts } from '../../extract/tests/source-ingestion-fixtures';
 import { runBuildStart } from '../src/build-start';
 import { PluginContext } from '../src/context';
-import { handleHotUpdate } from '../src/hmr';
+import { flushSystemReload, handleHotUpdate } from '../src/hmr';
 import { transformSource } from '../src/transform';
 import { makeEnvGraph } from './context-probe';
 import { makeComponent, makeManifest } from './manifest-fixture';
@@ -300,8 +300,13 @@ async function dispatch(
 }
 
 /** A system reload: the system module's own event, through Vite's hook. */
-function reloadSystem(ctx: PluginContext, timestamp: number): Promise<void> {
-  return dispatch(ctx, 'update', join(ctx.rootDir, 'src', 'ds.ts'), timestamp);
+/** A system-dependency event, and the reload its coalescing window runs. */
+async function reloadSystem(
+  ctx: PluginContext,
+  timestamp: number
+): Promise<void> {
+  await dispatch(ctx, 'update', join(ctx.rootDir, 'src', 'ds.ts'), timestamp);
+  await flushSystemReload(ctx);
 }
 
 const scratchRoots: string[] = [];
