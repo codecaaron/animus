@@ -63,6 +63,7 @@ import {
   walkPackageSources,
   engineModuleParser,
   surfaceManifestDiagnostics,
+  systemLoadReads,
 } from '../pipeline/index';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
 import {
@@ -250,6 +251,8 @@ function isDiskNumber<Value>(value: Value): value is Value & number {
 interface SystemDependencies {
   keys: Set<string>;
   paths: string[];
+  /** Paths the load looked for and found absent. */
+  missing: string[];
   hashes: Map<string, string>;
 }
 
@@ -383,6 +386,9 @@ export class ExtractionSession {
 
   /** Loader-reported dependency paths for bundler watch registration. */
   systemDependencyPaths: string[] = [];
+  /** Paths the system load looked for and found absent: a host registers
+   *  them for creation, which reloads the system. */
+  systemMissingPaths: string[] = [];
 
   // Content hashes at load time — the fallback probe for watch passes that
   // carry no modified/removed sets (webpack's first watchRun).
@@ -438,6 +444,7 @@ export class ExtractionSession {
   private lastGoodSystemDependencies: SystemDependencies = {
     keys: new Set(),
     paths: [],
+    missing: [],
     hashes: new Map(),
   };
   /** Whether the current full pass's system load recorded its
@@ -1164,9 +1171,40 @@ export class ExtractionSession {
     this.lastGoodSystemDependencies = {
       keys: this.systemDependencyKeys,
       paths: this.systemDependencyPaths,
+      missing: this.systemMissingPaths,
       hashes: this.systemDependencyHashes,
     };
     this.commitSystemAuthority();
+  }
+
+  /** This attempt's system dependencies: the files its load read, and the
+   *  paths it found absent, whose creation is a system change. */
+  private recordSystemDependencies(
+    systemPath: string,
+    dependencies: string[],
+    missing: string[]
+  ): void {
+    const keys = new Set<string>();
+    for (const path of [systemPath, ...dependencies, ...missing]) {
+      for (const key of toWatchKeys(path)) keys.add(key);
+    }
+    const hashes = new Map<string, string>();
+    for (const dep of dependencies.length > 0 ? dependencies : [systemPath]) {
+      try {
+        hashes.set(dep, contentHash(readFileSync(dep, 'utf-8')));
+      } catch {
+        // Unreadable now → the probe treats any later readability change
+        // as a system change.
+        hashes.set(dep, '');
+      }
+    }
+    // Absent now → the probe treats its creation as a system change.
+    for (const path of missing) hashes.set(path, '');
+    this.systemDependencyKeys = keys;
+    this.systemDependencyPaths = dependencies;
+    this.systemMissingPaths = missing;
+    this.systemDependencyHashes = hashes;
+    this.attemptRecordedSystemDependencies = true;
   }
 
   /** What hosts watch for assets, and what the last-good generation
@@ -1193,9 +1231,13 @@ export class ExtractionSession {
     if (!this.attemptRecordedSystemDependencies) {
       this.systemDependencyKeys = lastGood.keys;
       this.systemDependencyPaths = lastGood.paths;
+      this.systemMissingPaths = lastGood.missing;
       this.systemDependencyHashes = lastGood.hashes;
       return;
     }
+    this.systemMissingPaths = [
+      ...new Set([...lastGood.missing, ...this.systemMissingPaths]),
+    ];
     this.systemDependencyKeys = new Set([
       ...lastGood.keys,
       ...this.systemDependencyKeys,
@@ -1248,33 +1290,27 @@ export class ExtractionSession {
     };
     this.log(`extension order: ${context.extensions.resolverVersion}`);
     let t = this.now();
-    this.system = this.loadSystemUnder(context);
+    try {
+      this.system = this.loadSystemUnder(context);
+    } catch (error) {
+      // A failed load's reads are its dependencies too: a fix to any of
+      // them must reach the owed reload.
+      const reads = systemLoadReads(error);
+      this.recordSystemDependencies(
+        resolvedSystemPath,
+        reads.dependencies,
+        reads.missing
+      );
+      throw error;
+    }
     this.assetCopyCache.clear();
     this.assetDependencyPaths.clear();
     this.assetDependencyKeys.clear();
-    {
-      const deps = this.system.dependencies ?? [];
-      const keys = new Set<string>();
-      for (const key of toWatchKeys(resolvedSystemPath)) keys.add(key);
-      for (const dep of deps) {
-        for (const key of toWatchKeys(dep)) keys.add(key);
-      }
-      this.systemDependencyKeys = keys;
-      this.systemDependencyPaths = deps;
-
-      const hashes = new Map<string, string>();
-      for (const dep of deps.length > 0 ? deps : [resolvedSystemPath]) {
-        try {
-          hashes.set(dep, contentHash(readFileSync(dep, 'utf-8')));
-        } catch {
-          // Unreadable now → the probe treats any later readability
-          // change as a system change.
-          hashes.set(dep, '');
-        }
-      }
-      this.systemDependencyHashes = hashes;
-      this.attemptRecordedSystemDependencies = true;
-    }
+    this.recordSystemDependencies(
+      resolvedSystemPath,
+      this.system.dependencies ?? [],
+      this.system.missing ?? []
+    );
     bt.systemLoad = this.elapsed(t);
 
     t = this.now();

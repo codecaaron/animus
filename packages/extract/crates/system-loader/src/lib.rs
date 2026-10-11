@@ -1,6 +1,6 @@
 //! Engine-neutral TypeScript system-module loader.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -65,6 +65,9 @@ pub struct SystemConfig {
     /// included and runtime stubs excluded, and of each `package.json` that
     /// selected one; plugins use it as the reload set.
     pub dependencies: Vec<String>,
+    /// Paths the resolution looked for and found absent, ahead of the file
+    /// it chose, sorted: creating one changes what the system loads.
+    pub missing: Vec<String>,
     /// Built-theme token paths, `{ modulePath: { exportName: [paths] } }`,
     /// keyed like `dependencies`. `None` when no module exports a built theme.
     pub source_theme_manifests: Option<String>,
@@ -708,10 +711,62 @@ type DependencyResolution = (
     HashMap<String, HashSet<String>>,
 );
 
+/// The files a system load read or looked for, kept even when the load
+/// fails: what must be watched for a retry to see the fix.
+#[derive(Default)]
+pub struct LoadReads {
+    /// Modules read or attempted, and each `package.json` that selected one.
+    pub read: BTreeSet<String>,
+    /// Paths looked for and found absent, ahead of the file chosen: creating
+    /// one changes what the system loads.
+    pub missing: BTreeSet<String>,
+}
+
 pub fn resolve_all_deps(
+    system_path: &str,
+    root_dir: &str,
+    context: &ResolutionContext,
+) -> Result<DependencyResolution, String> {
+    resolve_all_deps_reading(system_path, root_dir, context, &mut LoadReads::default())
+}
+
+/// The relative candidates the extension policy tries before `resolved`, or
+/// every candidate when nothing resolved.
+fn absent_relative_candidates(
+    base_dir: &Path,
+    specifier: &str,
+    policy: &resolution::ExtensionPolicy,
+    resolved: Option<&str>,
+) -> Vec<String> {
+    let target = resolution::lexical(&base_dir.join(specifier)).to_string_lossy().to_string();
+    policy.candidates(&target).into_iter().take_while(|candidate| Some(candidate.as_str()) != resolved).collect()
+}
+
+/// The `node_modules/<package>` directories nearer `from_dir` than the
+/// manifest that resolved the package, or every one up to the filesystem
+/// root when none did: a package installed in one would win.
+fn absent_package_dirs(specifier: &str, from_dir: &Path, manifest: Option<&Path>) -> Vec<String> {
+    let (package, _) = split_specifier(specifier);
+    let mut absent = Vec::new();
+    let mut dir = from_dir.to_path_buf();
+    loop {
+        let candidate = dir.join("node_modules").join(package);
+        if manifest == Some(candidate.join("package.json").as_path()) {
+            break;
+        }
+        absent.push(candidate.to_string_lossy().to_string());
+        if !dir.pop() {
+            break;
+        }
+    }
+    absent
+}
+
+pub fn resolve_all_deps_reading(
     system_path: &str,
     _root_dir: &str,
     context: &ResolutionContext,
+    reads: &mut LoadReads,
 ) -> Result<DependencyResolution, String> {
     let mut specifier_map: HashMap<(String, String), String> = HashMap::new();
     let mut source_map: HashMap<String, String> = HashMap::new();
@@ -736,6 +791,7 @@ pub fn resolve_all_deps(
             continue;
         }
         visited.insert(current_path.clone());
+        reads.read.insert(current_path.clone());
 
         let raw_source = fs::read_to_string(&current_path)
             .map_err(|e| format!("failed to read '{}': {}", current_path, e))?;
@@ -788,7 +844,14 @@ pub fn resolve_all_deps(
                 ));
             }
             if spec.starts_with('.') || spec.starts_with('/') {
-                match resolve_relative(current_dir, spec, &context.extensions) {
+                let resolution = resolve_relative(current_dir, spec, &context.extensions);
+                reads.missing.extend(absent_relative_candidates(
+                    current_dir,
+                    spec,
+                    &context.extensions,
+                    resolution.as_ref().ok().map(String::as_str),
+                ));
+                match resolution {
                     Ok(resolved) => {
                         let canonical = fs::canonicalize(&resolved)
                             .unwrap_or_else(|_| PathBuf::from(&resolved))
@@ -830,18 +893,24 @@ pub fn resolve_all_deps(
             } else {
                 // No generic stub fallback: a silent stub turns a missing
                 // package into "X is not a function" in an unrelated module.
-                match resolve_bare_specifier(spec, &current_dir.to_string_lossy(), context) {
+                let resolution = resolve_bare_specifier(spec, &current_dir.to_string_lossy(), context);
+                reads.missing.extend(absent_package_dirs(
+                    spec,
+                    current_dir,
+                    resolution.as_ref().ok().map(|(_, manifest)| manifest.as_path()),
+                ));
+                match resolution {
                     Ok((resolved, manifest)) => {
                         let canonical = fs::canonicalize(&resolved)
                             .unwrap_or_else(|_| PathBuf::from(&resolved))
                             .to_string_lossy()
                             .to_string();
-                        manifests.insert(
-                            fs::canonicalize(&manifest)
-                                .unwrap_or(manifest)
-                                .to_string_lossy()
-                                .to_string(),
-                        );
+                        let manifest = fs::canonicalize(&manifest)
+                            .unwrap_or(manifest)
+                            .to_string_lossy()
+                            .to_string();
+                        reads.read.insert(manifest.clone());
+                        manifests.insert(manifest);
                         specifier_map
                             .insert((current_path.clone(), spec.clone()), canonical.clone());
                         if !spec.starts_with("@animus-ui/") {
@@ -1416,6 +1485,7 @@ fn extract_system_config<'js>(
         // Populated by load_system_module from the resolved module graph;
         // execute_bundle only sees the assembled bundle text.
         dependencies: Vec::new(),
+        missing: Vec::new(),
         // Populated by execute_bundle after config extraction (the registry
         // walk needs the live rquickjs context, not the namespace alone).
         source_theme_manifests: None,
@@ -1821,8 +1891,20 @@ pub fn load_system_module(
     export_name: Option<&str>,
     context: &ResolutionContext,
 ) -> Result<SystemConfig, String> {
+    load_system_module_reading(system_path, root_dir, export_name, context, &mut LoadReads::default())
+}
+
+/// [`load_system_module`], recording in `reads` what the load read and
+/// looked for, which a failed load leaves for its caller to watch.
+pub fn load_system_module_reading(
+    system_path: &str,
+    root_dir: &str,
+    export_name: Option<&str>,
+    context: &ResolutionContext,
+    reads: &mut LoadReads,
+) -> Result<SystemConfig, String> {
     let (specifier_map, source_map, stub_exports, manifests, type_exports) =
-        resolve_all_deps(system_path, root_dir, context)?;
+        resolve_all_deps_reading(system_path, root_dir, context, reads)?;
 
     let entry_path = fs::canonicalize(system_path)
         .map_err(|e| format!("failed to canonicalize '{}': {}", system_path, e))?
@@ -1838,6 +1920,7 @@ pub fn load_system_module(
     let mut dependencies: Vec<String> = source_map.keys().cloned().chain(manifests).collect();
     dependencies.sort();
     config.dependencies = dependencies;
+    config.missing = reads.missing.iter().cloned().collect();
 
     Ok(config)
 }

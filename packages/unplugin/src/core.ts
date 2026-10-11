@@ -472,6 +472,8 @@ export const unpluginFactory: UnpluginFactory<
         watchPaths.add(resolve(root, key));
       }
       for (const dep of session.systemDependencyPaths) watchPaths.add(dep);
+      // Absent now; creating one rebuilds against a system that loads it.
+      for (const path of session.systemMissingPaths) watchPaths.add(path);
       for (const dep of session.assetDependencyPaths) watchPaths.add(dep);
       watchPaths.add(join(root, 'tsconfig.json'));
       state.watchPaths = [...watchPaths];
