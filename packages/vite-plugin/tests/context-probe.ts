@@ -162,10 +162,6 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
       abortedParseHashes: new Map<string, string>(),
       reverseProvenance,
       storedManifest: makeManifest(),
-      storedSystemPropMapJson: '{}',
-      storedDynamicPropsJson: '{}',
-      storedAdmittedTransformsJson: '{}',
-      storedTypedSystemPropsJson: '[]',
       system: { groupRegistryJson: '{}', sourceThemeManifestsJson: null },
       transformOutputHashes: new Map<string, string>(),
       recordTransformOutput(relativePath: string, code: string) {

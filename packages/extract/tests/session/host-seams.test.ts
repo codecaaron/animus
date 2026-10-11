@@ -232,7 +232,7 @@ describe('a session that keeps its artifacts in memory', () => {
 });
 
 describe('a session that keeps its artifacts in memory', () => {
-  test('writes no asset copy and leaves a sibling epoch alone', async () => {
+  test('leaves asset placeholders to its host and a sibling epoch alone', async () => {
     setEngineApiOverride(() => ({
       extractFacts: () => '{"files":{},"parseCount":0}',
       loadSystemModule: mocks.loadSystemModule,
@@ -260,12 +260,13 @@ describe('a session that keeps its artifacts in memory', () => {
     );
     const session = makeSession(root);
     session.persistArtifacts = false;
+    session.hostSubstitutesAssets = true;
 
     await session.runFullPipeline();
 
     expect(readdirSync(sessionsRootDir(root))).toEqual(['a-stale-sibling']);
     expect(existsSync(siblingEpoch)).toBe(true);
-    expect(getSharedCss(session.key)).toContain(logo);
+    expect(getSharedCss(session.key)).toContain(`animus-asset:${logo}`);
     session.close();
   });
 });
