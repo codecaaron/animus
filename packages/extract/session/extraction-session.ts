@@ -31,6 +31,7 @@ import {
   excludeCollectedPackages,
   extractSystemFilePackages,
   nativeKitSourceRoot,
+  nativePackageLocator,
   importedKitDiagnostics,
   findPackageRoot,
   findSheetAssetSpecifiers,
@@ -1380,6 +1381,10 @@ export class ExtractionSession {
         context.conditions,
         context.workspaces,
         extensionPolicyJson(context.extensions)
+      ),
+      locatePackage: nativePackageLocator(
+        engineApi(this.key),
+        context.workspaces
       ),
       specifiers: packageNames,
       resolveSpecifier: (name) =>

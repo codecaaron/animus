@@ -130,12 +130,7 @@ pub fn resolve_bare_specifier(
     context: &ResolutionContext,
 ) -> Result<(String, PathBuf), String> {
     let (pkg_name, subpath) = split_specifier(specifier);
-    let pkg_json_path = match find_package_json(pkg_name, from_dir) {
-        Ok(path) => path,
-        // A declared workspace answers where no `node_modules` copy does, as
-        // for a workspace package nothing links there.
-        Err(missing) => context.workspaces.get(pkg_name).map(|dir| dir.join("package.json")).ok_or(missing)?,
-    };
+    let pkg_json_path = locate_package(pkg_name, from_dir, context)?.join("package.json");
     select_package_entry(pkg_json_path, subpath, context, specifier, true)
 }
 
@@ -273,24 +268,26 @@ fn split_specifier(specifier: &str) -> (&str, &str) {
     }
 }
 
-/// The `package.json` path of the nearest `node_modules/<pkg_name>`
-/// directory, as Node's resolver finds a package: the directory is the
-/// package whether or not it holds a manifest.
-fn find_package_json(pkg_name: &str, start_dir: &str) -> Result<PathBuf, String> {
+/// The directory of the package `pkg_name` as the loader locates it from
+/// `start_dir`: the first `node_modules/<pkg_name>` directory up the tree,
+/// as Node's resolver finds it; else the declared workspace of that name, as
+/// for a workspace package nothing links there.
+pub fn locate_package(pkg_name: &str, start_dir: &str, context: &ResolutionContext) -> Result<PathBuf, String> {
     let mut dir = PathBuf::from(start_dir);
     loop {
         let package = dir.join("node_modules").join(pkg_name);
         if package.is_dir() {
-            return Ok(package.join("package.json"));
+            return Ok(package);
         }
         if !dir.pop() {
             break;
         }
     }
-    Err(format!(
-        "could not find package.json for '{}' from '{}'",
-        pkg_name, start_dir
-    ))
+    context
+        .workspaces
+        .get(pkg_name)
+        .cloned()
+        .ok_or_else(|| format!("could not find package.json for '{}' from '{}'", pkg_name, start_dir))
 }
 
 fn resolve_exports_entry(
