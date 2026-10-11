@@ -130,6 +130,9 @@ pub struct BindingTable {
     /// Indexed by `LocalId`.
     pub bindings: Vec<Binding>,
     module_names: FxHashMap<String, LocalId>,
+    /// The parser's import entries by local name. A parse that gave up keeps
+    /// the entries it read, with no binding for them.
+    imports: FxHashMap<String, ImportBinding>,
     /// Every identifier reference, in source order, by span.
     references: Vec<((u32, u32), Identity)>,
     pub default_export: Option<DefaultExport>,
@@ -150,8 +153,7 @@ impl BindingTable {
     /// Prepares the table. Panics when the build breaks its own invariants,
     /// or the program's cells hold another build's numbering: two bindings
     /// one name in one scope, two references at one span, a reference cell
-    /// naming another binding, a reference the walk misses, or an import
-    /// that declares no module binding.
+    /// naming another binding, or a reference the walk misses.
     pub(crate) fn prepare(input: IdentityInput<'_, '_>) -> Self {
         let IdentityInput { module, program, module_record, scoping } = input;
         let mut walk = SourceWalk { scoping, module: &module, scopes: FxHashMap::default(), references: Vec::new() };
@@ -176,7 +178,7 @@ impl BindingTable {
             })
         };
 
-        let mut imports: FxHashMap<&str, ImportBinding> = FxHashMap::default();
+        let mut imports: FxHashMap<String, ImportBinding> = FxHashMap::default();
         for entry in &module_record.import_entries {
             let specifier = entry.module_request.name.to_string();
             let binding = match &entry.import_name {
@@ -185,7 +187,7 @@ impl BindingTable {
                 ImportImportName::NamespaceObject => ImportBinding::Namespace { specifier },
             };
             // A repeated local keeps its first declaration, as lookups by name do.
-            imports.entry(entry.local_name.name.as_str()).or_insert(binding);
+            imports.entry(entry.local_name.name.to_string()).or_insert(binding);
         }
 
         // Bindings in the order the source declares them.
@@ -205,13 +207,10 @@ impl BindingTable {
             if scope_names.insert((scope.as_ref().map(|scope| scope.ordinal), name), local).is_some() {
                 panic!("{}: two bindings named '{name}' in one scope", module.path());
             }
-            let import = if scope.is_none() { imports.remove(name) } else { None };
-            let kind = import.map_or(BindingKind::Declared, BindingKind::Import);
+            let import = scope.is_none().then(|| imports.get(name)).flatten();
+            let kind = import.map_or(BindingKind::Declared, |import| BindingKind::Import(import.clone()));
             let span = scoping.symbol_span(symbol);
             bindings.push(Binding { name: name.to_string(), span: (span.start, span.end), scope, kind });
-        }
-        if let Some(local) = imports.keys().next() {
-            panic!("{}: import '{local}' declares no module binding", module.path());
         }
         let module_names: FxHashMap<String, LocalId> = scope_names
             .into_iter()
@@ -243,7 +242,7 @@ impl BindingTable {
             panic!("{}: two references at {:?}", module.path(), pair[0].0);
         }
 
-        Self { module, bindings, module_names, references, default_export }
+        Self { module, bindings, module_names, imports, references, default_export }
     }
 
     pub fn binding(&self, local: LocalId) -> &Binding {
@@ -255,12 +254,9 @@ impl BindingTable {
         self.module_names.get(name).copied()
     }
 
-    /// The import a module-scope `name` binds, if it is one.
+    /// The import that declares the module-scope `name`, if one does.
     pub fn module_import(&self, name: &str) -> Option<&ImportBinding> {
-        match &self.binding(self.module_binding(name)?).kind {
-            BindingKind::Import(import) => Some(import),
-            _ => None,
-        }
+        self.imports.get(name)
     }
 
     /// The identity of the identifier reference at `span`.
