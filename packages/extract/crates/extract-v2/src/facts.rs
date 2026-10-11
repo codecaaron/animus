@@ -529,6 +529,11 @@ pub struct FileFacts {
     /// follow.
     #[serde(skip)]
     pub(crate) module_loads: Vec<crate::loads::ModuleLoad>,
+    /// The specifiers of this file's bindingless runtime imports
+    /// (`import './x'`): the host loads each for its effects, so each is
+    /// probed (spec §2.2 A8).
+    #[serde(skip)]
+    pub(crate) bindingless_imports: Vec<String>,
     /// Top-level functions and classes, and `const` bindings of a function or
     /// class expression, that nothing in the file writes: a tag that names
     /// one renders an ordinary component, not an Animus one.
@@ -1265,7 +1270,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         unsettled_fx.insert(k.clone(), unsettled.clone());
         statics_fx.remove(k);
     }
-    let statics = eval::Statics::new(&statics_fx, &unsettled_fx);
+    let typed_fx = eval::typed_statics(&statics_fx);
+    let statics = eval::Statics::new(&typed_fx, &unsettled_fx);
     let mut usage_statics_fx = local_usage_statics.clone();
     for (k, v) in extra_usage_statics {
         usage_statics_fx.insert(k.clone(), v.clone());
@@ -1321,14 +1327,15 @@ pub(crate) fn extract_file_facts_from_static_maps(
                     match object_index.get(key) {
                         Some(obj) => match eval::parse_variant_arg(obj, Some(statics)) {
                             Ok((cfg, skips)) => {
-                                let mut value = serde_json::json!({
+                                let value = serde_json::json!({
                                     "prop": cfg.prop,
                                     "defaultVariant": cfg.default_variant,
                                     "base": cfg.base,
                                     "variants": Value::Object(cfg.variants),
                                 });
-                                let lost = eval::take_lost_values(&mut value);
-                                facts.value = Some(value);
+                                let mut typed = eval::typed(&value);
+                                let lost = eval::take_unevaluated(&mut typed);
+                                facts.value = Some(eval::marked(&typed));
                                 for skip in skips {
                                     facts.record_skip(skip, source);
                                 }
@@ -1359,17 +1366,24 @@ pub(crate) fn extract_file_facts_from_static_maps(
                         None => match identifier_index.get(key) {
                             // A stage argument something may change before the
                             // read refuses, by name or by member path.
-                            Some(name) => match eval::static_path(statics, name) {
-                                Some(eval::StaticRead::Unsettled(reason)) => Err(reason.to_string()),
-                                Some(eval::StaticRead::Exact(v)) => match eval::lost_value_reason(v) {
-                                    Some(reason) => Err(reason.to_string()),
-                                    None => Ok((Some(v.clone()), Vec::new(), Vec::new())),
-                                },
-                                None => Err(format!(
-                                    "identifier '{}' not resolvable to static object",
-                                    name
-                                )),
-                            },
+                            Some(name) => {
+                                let mut segments = name.split('.');
+                                let binding = segments.next().unwrap_or_default();
+                                let path: Vec<&str> = segments.collect();
+                                match eval::static_value(statics, binding, &path) {
+                                    Some(eval::StaticAnswer::Unsettled(unsettled)) => Err(unsettled.reason.clone()),
+                                    Some(eval::StaticAnswer::Unevaluated(unevaluated)) => {
+                                        Err(unevaluated.clause.clone())
+                                    }
+                                    Some(eval::StaticAnswer::Exact(value)) => {
+                                        Ok((Some(eval::marked(value)), Vec::new(), Vec::new()))
+                                    }
+                                    None => Err(format!(
+                                        "identifier '{}' not resolvable to static object",
+                                        name
+                                    )),
+                                }
+                            }
                             None => Err("failed to parse object expression".to_string()),
                         },
                     };
@@ -1436,14 +1450,16 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             }
                             facts.value = value;
                             if let Some(value) = facts.value.as_mut() {
+                                let mut typed = eval::typed(value);
                                 if props {
-                                    let lost = eval::take_lost_custom_props(value);
+                                    let lost = eval::take_unevaluated_custom_props(&mut typed);
                                     facts.dropped_transforms.extend(lost.transforms);
                                     facts.dropped_configs.extend(lost.configs);
                                     facts.skipped.extend(lost.skipped);
                                 } else {
-                                    facts.skipped.extend(eval::take_lost_values(value));
+                                    facts.skipped.extend(eval::take_unevaluated(&mut typed));
                                 }
+                                *value = eval::marked(&typed);
                             }
                         }
                         Err(e) => {
@@ -1469,9 +1485,10 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                     obj,
                                     Some(statics),
                                 ) {
-                                    Ok((mut v, skips, _captures)) => {
-                                        let lost = eval::take_lost_values(&mut v);
-                                        facts.second_value = Some(v);
+                                    Ok((v, skips, _captures)) => {
+                                        let mut typed = eval::typed(&v);
+                                        let lost = eval::take_unevaluated(&mut typed);
+                                        facts.second_value = Some(eval::marked(&typed));
                                         for skip in skips {
                                             facts.record_skip(skip, source);
                                         }
@@ -1552,7 +1569,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         scoping,
         program,
         ast.module_record(),
-        &usage_statics_fx,
+        &eval::typed_statics(&usage_statics_fx),
         &descriptors,
         &exports,
         &object_consts,
@@ -1624,6 +1641,11 @@ pub(crate) fn extract_file_facts_from_static_maps(
         value_escapes,
         spread_wrappers,
         module_loads: loads.iter().filter_map(|load| load.module_load(source)).collect(),
+        bindingless_imports: loads
+            .iter()
+            .filter(|load| load.kind == crate::loads::LoadKind::Import { runtime: true, bindingless: true })
+            .filter_map(|load| load.specifier().map(str::to_string))
+            .collect(),
         dynamic_code,
         ordinary_components,
         context_consts,
@@ -1739,6 +1761,99 @@ mod tests {
         );
         let serialized = serde_json::to_value(&facts).unwrap();
         assert_eq!(serialized["statics"], serde_json::json!({ "GAP": 16 }));
+    }
+
+    /// Contract (until serialized statics read typed values): an authored
+    /// object whose key spells a marker reads as that marker, as main's JSON
+    /// readers took it. A `$animus.lost` key refuses the object through a
+    /// stage, a spread and a member read; an unknown `$animus.asset` scope
+    /// is kept as written.
+    #[test]
+    fn an_authored_marker_key_reads_as_the_marker() {
+        let consts = "const preset = { '$animus.lost': 'authored', padding: 4 };\n\
+            const odd = { '$animus.asset': 'other' };\n\
+            const box = { f: { '$animus.asset': 'other', x: 1 } };\n";
+        let rows: [(&str, &str); 6] = [
+            (
+                "export const A = ds.styles(preset).asElement('div');",
+                r#"{"value": null, "skipped": [], "eval_error": "styles eval failed: authored"}"#,
+            ),
+            (
+                "export const A = ds.styles({ ...preset, color: 'red' }).asElement('div');",
+                r#"{"value": null, "skipped": [], "eval_error": "styles eval failed: spread of authored"}"#,
+            ),
+            (
+                "export const A = ds.styles({ p: preset.padding }).asElement('div');",
+                r#"{"value": {}, "skipped": [["p", "member expression (non-static) — authored"]], "eval_error": null}"#,
+            ),
+            (
+                "export const A = ds.styles({ p: preset['padding'] }).asElement('div');",
+                r#"{"value": {}, "skipped": [["p", "member expression (non-static) — authored"]], "eval_error": null}"#,
+            ),
+            (
+                "export const A = ds.styles({ ...odd, color: 'red' }).asElement('div');",
+                r#"{"value": null, "skipped": [], "eval_error": "styles eval failed: spread element in style object"}"#,
+            ),
+            (
+                "export const A = ds.styles({ ...box }).asElement('div');",
+                r#"{"value": {"f": {"$animus.asset": "other", "x": 1}}, "skipped": [], "eval_error": null}"#,
+            ),
+        ];
+        for (chain, expected) in rows {
+            let facts = facts_for(&format!("{consts}{chain}"));
+            let stage = &facts.chains[0].stages[0];
+            let seen = serde_json::json!({ "value": stage.value, "skipped": stage.skipped, "eval_error": stage.eval_error });
+            assert_eq!(seen, serde_json::from_str::<Value>(expected).unwrap(), "{chain}");
+        }
+    }
+
+    /// Contract: a stage takes an authored marker key that a spread copies
+    /// in, nested, as main did: a `$animus.lost` key is a skip, one with a
+    /// `$animus.capture` key is taken without one. A `.props()` config's
+    /// lost `transform` is removed as JSON's map removed it, the last entry
+    /// taking its place, which the config's class reads. An object that
+    /// spells the asset marker with more fields is read through those
+    /// fields, as its JSON was.
+    #[test]
+    fn a_stage_takes_copied_marker_keys_as_main_did() {
+        let rows: [(&str, &str); 5] = [
+            (
+                "const nested = { ':hover': { '$animus.lost': 'authored', padding: 4 }, color: 'red' };\n\
+                 export const A = ds.styles({ ...nested }).asElement('div');",
+                r#"{"value": {"color": "red"}, "skipped": [[":hover", "authored"]], "dropped_transforms": []}"#,
+            ),
+            (
+                "const nested = { ':hover': { '$animus.lost': 'authored', '$animus.capture': false, padding: 4 }, color: 'red' };\n\
+                 export const A = ds.styles({ ...nested }).asElement('div');",
+                r#"{"value": {"color": "red"}, "skipped": [], "dropped_transforms": []}"#,
+            ),
+            (
+                "const cfg = { tone: { transform: { '$animus.lost': 'authored' }, property: 'color', scale: 'colors' }, gap: { property: 'gap' } };\n\
+                 export const A = ds.props(cfg).asElement('div');",
+                r#"{"value": {"tone": {"scale": "colors", "property": "color"}, "gap": {"property": "gap"}}, "skipped": [], "dropped_transforms": [["tone", "authored"]]}"#,
+            ),
+            (
+                "const preset = { '$animus.asset': 'package', extra: { '$animus.lost': 'nested' }, padding: 4 };\n\
+                 export const A = ds.styles(preset).asElement('div');",
+                r#"{"value": {"$animus.asset": "package", "padding": 4}, "skipped": [["extra", "nested"]], "dropped_transforms": []}"#,
+            ),
+            (
+                "const box = { a: { '$animus.asset': 'package', extra: { '$animus.lost': 'nested' }, padding: 4 } };\n\
+                 export const A = ds.styles({ p: box.a.padding }).asElement('div');",
+                r#"{"value": {"p": 4}, "skipped": [], "dropped_transforms": []}"#,
+            ),
+        ];
+        for (source, expected) in rows {
+            let facts = facts_for(source);
+            let stage = &facts.chains[0].stages[0];
+            let seen = serde_json::json!({
+                "value": stage.value,
+                "skipped": stage.skipped,
+                "dropped_transforms": stage.dropped_transforms,
+            });
+            // Compared as text, so the order of a config's keys counts.
+            assert_eq!(seen.to_string(), serde_json::from_str::<Value>(expected).unwrap().to_string(), "{source}");
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Engine-neutral TypeScript system-module loader.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -65,6 +65,9 @@ pub struct SystemConfig {
     /// included and runtime stubs excluded, and of each `package.json` that
     /// selected one; plugins use it as the reload set.
     pub dependencies: Vec<String>,
+    /// Paths the resolution looked for and found absent, ahead of the file
+    /// it chose, sorted: creating one changes what the system loads.
+    pub missing: Vec<String>,
     /// Built-theme token paths, `{ modulePath: { exportName: [paths] } }`,
     /// keyed like `dependencies`. `None` when no module exports a built theme.
     pub source_theme_manifests: Option<String>,
@@ -129,14 +132,20 @@ pub fn resolve_bare_specifier(
     from_dir: &str,
     context: &ResolutionContext,
 ) -> Result<(String, PathBuf), String> {
+    resolve_bare_specifier_observed(specifier, from_dir, context, &mut LoadReads::default())
+}
+
+/// [`resolve_bare_specifier`], recording in `reads` each path it read or
+/// looked for as it probed, whether or not the resolution succeeds.
+pub fn resolve_bare_specifier_observed(
+    specifier: &str,
+    from_dir: &str,
+    context: &ResolutionContext,
+    reads: &mut LoadReads,
+) -> Result<(String, PathBuf), String> {
     let (pkg_name, subpath) = split_specifier(specifier);
-    let pkg_json_path = match find_package_json(pkg_name, from_dir) {
-        Ok(path) => path,
-        // A declared workspace answers where no `node_modules` copy does, as
-        // for a workspace package nothing links there.
-        Err(missing) => context.workspaces.get(pkg_name).map(|dir| dir.join("package.json")).ok_or(missing)?,
-    };
-    select_package_entry(pkg_json_path, subpath, context, specifier, true)
+    let pkg_json_path = locate_package_observed(pkg_name, from_dir, context, reads)?.join("package.json");
+    select_package_entry_observed(pkg_json_path, subpath, context, specifier, true, reads)
 }
 
 /// `path` with its links and `.` segments resolved, as `require.resolve`
@@ -159,7 +168,21 @@ fn select_package_entry(
     specifier: &str,
     source_first: bool,
 ) -> Result<(String, PathBuf), String> {
+    select_package_entry_observed(pkg_json_path, subpath, context, specifier, source_first, &mut LoadReads::default())
+}
+
+/// [`select_package_entry`], recording the manifest it reads (before it is
+/// parsed) and each entry candidate it found absent.
+fn select_package_entry_observed(
+    pkg_json_path: PathBuf,
+    subpath: &str,
+    context: &ResolutionContext,
+    specifier: &str,
+    source_first: bool,
+    reads: &mut LoadReads,
+) -> Result<(String, PathBuf), String> {
     let conditions = &context.conditions;
+    reads.read.insert(pkg_json_path.to_string_lossy().to_string());
     let pkg_dir = pkg_json_path
         .parent()
         .ok_or_else(|| format!("invalid package.json path: {:?}", pkg_json_path))?;
@@ -195,7 +218,11 @@ fn select_package_entry(
                 // `..` taken back lexically, as Node resolves a target: the
                 // path checked is the path opened.
                 let abs_path = resolution::lexical(&pkg_dir.join(&resolved)).to_string_lossy().to_string();
-                match resolution::see_within(pkg_dir, &abs_path) {
+                let seen = resolution::see_within(pkg_dir, &abs_path);
+                if seen == resolution::Seen::Missing {
+                    reads.missing.insert(abs_path.clone());
+                }
+                match seen {
                     resolution::Seen::File => return Ok((abs_path, pkg_json_path)),
                     resolution::Seen::CaseOnly(actual) if !source => {
                         return Err(resolution::case_mismatch_reason(
@@ -224,20 +251,35 @@ fn select_package_entry(
     // The first entry the filesystem answers, even under another case, ends
     // the selection. An entry's `..` is taken back lexically, as Node
     // resolves it, so the file checked is the file opened.
-    let probe = |entry: &str| {
-        context
-            .extensions
-            .probe(&resolution::lexical(&pkg_dir.join(entry)).to_string_lossy(), |candidate| {
-                resolution::see_within(pkg_dir, candidate)
-            })
+    // Each probe records the candidates it found absent ahead of the one it
+    // took, all of them when it took none.
+    let mut probe = |entry: &str| {
+        let base = resolution::lexical(&pkg_dir.join(entry)).to_string_lossy().to_string();
+        let probed = context.extensions.probe(&base, |candidate| resolution::see_within(pkg_dir, candidate));
+        let taken = match &probed {
+            resolution::Probe::Found(path) => Some(path.clone()),
+            resolution::Probe::CaseMismatch { candidate, .. } => Some(candidate.clone()),
+            resolution::Probe::Absent => None,
+        };
+        reads.missing.extend(
+            context.extensions.candidates(&base).into_iter().take_while(|candidate| Some(candidate) != taken.as_ref()),
+        );
+        probed
     };
     let legacy = match subpath.trim_start_matches('.').trim_start_matches('/') {
-        "" => ["module", "main"]
-            .iter()
-            .filter_map(|field| pkg_json.get(*field).and_then(|value| value.as_str()))
-            .map(probe)
-            .find(|probed| *probed != resolution::Probe::Absent)
-            .unwrap_or_else(|| probe("index")),
+        "" => {
+            let mut chosen = None;
+            for field in ["module", "main"] {
+                if let Some(entry) = pkg_json.get(field).and_then(|value| value.as_str()) {
+                    let probed = probe(entry);
+                    if probed != resolution::Probe::Absent {
+                        chosen = Some(probed);
+                        break;
+                    }
+                }
+            }
+            chosen.unwrap_or_else(|| probe("index"))
+        }
         subpath => probe(subpath),
     };
     match legacy {
@@ -273,24 +315,38 @@ fn split_specifier(specifier: &str) -> (&str, &str) {
     }
 }
 
-/// The `package.json` path of the nearest `node_modules/<pkg_name>`
-/// directory, as Node's resolver finds a package: the directory is the
-/// package whether or not it holds a manifest.
-fn find_package_json(pkg_name: &str, start_dir: &str) -> Result<PathBuf, String> {
+/// The directory of the package `pkg_name` as the loader locates it from
+/// `start_dir`: the first `node_modules/<pkg_name>` directory up the tree,
+/// as Node's resolver finds it; else the declared workspace of that name, as
+/// for a workspace package nothing links there.
+pub fn locate_package(pkg_name: &str, start_dir: &str, context: &ResolutionContext) -> Result<PathBuf, String> {
+    locate_package_observed(pkg_name, start_dir, context, &mut LoadReads::default())
+}
+
+/// [`locate_package`], recording each `node_modules/<pkg>` it found absent
+/// before the one it took: a package installed there would win.
+fn locate_package_observed(
+    pkg_name: &str,
+    start_dir: &str,
+    context: &ResolutionContext,
+    reads: &mut LoadReads,
+) -> Result<PathBuf, String> {
     let mut dir = PathBuf::from(start_dir);
     loop {
         let package = dir.join("node_modules").join(pkg_name);
         if package.is_dir() {
-            return Ok(package.join("package.json"));
+            return Ok(package);
         }
+        reads.missing.insert(package.to_string_lossy().to_string());
         if !dir.pop() {
             break;
         }
     }
-    Err(format!(
-        "could not find package.json for '{}' from '{}'",
-        pkg_name, start_dir
-    ))
+    context
+        .workspaces
+        .get(pkg_name)
+        .cloned()
+        .ok_or_else(|| format!("could not find package.json for '{}' from '{}'", pkg_name, start_dir))
 }
 
 fn resolve_exports_entry(
@@ -711,10 +767,42 @@ type DependencyResolution = (
     HashMap<String, HashSet<String>>,
 );
 
+/// The files a system load read or looked for, kept even when the load
+/// fails: what must be watched for a retry to see the fix.
+#[derive(Default)]
+pub struct LoadReads {
+    /// Modules read or attempted, and each `package.json` that selected one.
+    pub read: BTreeSet<String>,
+    /// Paths looked for and found absent, ahead of the file chosen: creating
+    /// one changes what the system loads.
+    pub missing: BTreeSet<String>,
+}
+
 pub fn resolve_all_deps(
+    system_path: &str,
+    root_dir: &str,
+    context: &ResolutionContext,
+) -> Result<DependencyResolution, String> {
+    resolve_all_deps_reading(system_path, root_dir, context, &mut LoadReads::default())
+}
+
+/// The relative candidates the extension policy tries before `resolved`, or
+/// every candidate when nothing resolved.
+fn absent_relative_candidates(
+    base_dir: &Path,
+    specifier: &str,
+    policy: &resolution::ExtensionPolicy,
+    resolved: Option<&str>,
+) -> Vec<String> {
+    let target = resolution::lexical(&base_dir.join(specifier)).to_string_lossy().to_string();
+    policy.candidates(&target).into_iter().take_while(|candidate| Some(candidate.as_str()) != resolved).collect()
+}
+
+pub fn resolve_all_deps_reading(
     system_path: &str,
     _root_dir: &str,
     context: &ResolutionContext,
+    reads: &mut LoadReads,
 ) -> Result<DependencyResolution, String> {
     let mut specifier_map: HashMap<(String, String), String> = HashMap::new();
     let mut source_map: HashMap<String, String> = HashMap::new();
@@ -739,6 +827,7 @@ pub fn resolve_all_deps(
             continue;
         }
         visited.insert(current_path.clone());
+        reads.read.insert(current_path.clone());
 
         let raw_source = fs::read_to_string(&current_path)
             .map_err(|e| format!("failed to read '{}': {}", current_path, e))?;
@@ -791,7 +880,14 @@ pub fn resolve_all_deps(
                 ));
             }
             if spec.starts_with('.') || spec.starts_with('/') {
-                match resolve_relative(current_dir, spec, &context.extensions) {
+                let resolution = resolve_relative(current_dir, spec, &context.extensions);
+                reads.missing.extend(absent_relative_candidates(
+                    current_dir,
+                    spec,
+                    &context.extensions,
+                    resolution.as_ref().ok().map(String::as_str),
+                ));
+                match resolution {
                     Ok(resolved) => {
                         let canonical = fs::canonicalize(&resolved)
                             .unwrap_or_else(|_| PathBuf::from(&resolved))
@@ -833,18 +929,18 @@ pub fn resolve_all_deps(
             } else {
                 // No generic stub fallback: a silent stub turns a missing
                 // package into "X is not a function" in an unrelated module.
-                match resolve_bare_specifier(spec, &current_dir.to_string_lossy(), context) {
+                match resolve_bare_specifier_observed(spec, &current_dir.to_string_lossy(), context, reads) {
                     Ok((resolved, manifest)) => {
                         let canonical = fs::canonicalize(&resolved)
                             .unwrap_or_else(|_| PathBuf::from(&resolved))
                             .to_string_lossy()
                             .to_string();
-                        manifests.insert(
-                            fs::canonicalize(&manifest)
-                                .unwrap_or(manifest)
-                                .to_string_lossy()
-                                .to_string(),
-                        );
+                        let manifest = fs::canonicalize(&manifest)
+                            .unwrap_or(manifest)
+                            .to_string_lossy()
+                            .to_string();
+                        reads.read.insert(manifest.clone());
+                        manifests.insert(manifest);
                         specifier_map
                             .insert((current_path.clone(), spec.clone()), canonical.clone());
                         if !spec.starts_with("@animus-ui/") {
@@ -1419,6 +1515,7 @@ fn extract_system_config<'js>(
         // Populated by load_system_module from the resolved module graph;
         // execute_bundle only sees the assembled bundle text.
         dependencies: Vec::new(),
+        missing: Vec::new(),
         // Populated by execute_bundle after config extraction (the registry
         // walk needs the live rquickjs context, not the namespace alone).
         source_theme_manifests: None,
@@ -1824,8 +1921,20 @@ pub fn load_system_module(
     export_name: Option<&str>,
     context: &ResolutionContext,
 ) -> Result<SystemConfig, String> {
+    load_system_module_reading(system_path, root_dir, export_name, context, &mut LoadReads::default())
+}
+
+/// [`load_system_module`], recording in `reads` what the load read and
+/// looked for, which a failed load leaves for its caller to watch.
+pub fn load_system_module_reading(
+    system_path: &str,
+    root_dir: &str,
+    export_name: Option<&str>,
+    context: &ResolutionContext,
+    reads: &mut LoadReads,
+) -> Result<SystemConfig, String> {
     let (specifier_map, source_map, stub_exports, manifests, type_exports) =
-        resolve_all_deps(system_path, root_dir, context)?;
+        resolve_all_deps_reading(system_path, root_dir, context, reads)?;
 
     let entry_path = fs::canonicalize(system_path)
         .map_err(|e| format!("failed to canonicalize '{}': {}", system_path, e))?
@@ -1841,6 +1950,7 @@ pub fn load_system_module(
     let mut dependencies: Vec<String> = source_map.keys().cloned().chain(manifests).collect();
     dependencies.sort();
     config.dependencies = dependencies;
+    config.missing = reads.missing.iter().cloned().collect();
 
     Ok(config)
 }
@@ -4378,5 +4488,121 @@ export const ds = tokens;
             !config.variable_css.is_empty(),
             "variableCss should not be empty"
         );
+    }
+
+    /// A load records what must be watched for its retry: the paths it
+    /// looked for ahead of each file it chose (never the winner), every
+    /// candidate of an import that names nothing, the nearer
+    /// `node_modules/<pkg>` directories a package resolution skipped, and
+    /// each file it read, even when it then fails.
+    #[test]
+    fn a_load_records_the_paths_it_looked_for_and_the_files_it_read() {
+        let dir = scratch_dir("load-reads");
+        let entry = dir.join("system.ts");
+        fs::create_dir_all(dir.join("tokens")).unwrap();
+        write_fixture(&dir.join("tokens/index.ts"), "export const tokens = {};\n");
+        write_fixture(
+            &entry,
+            "import { tokens } from './tokens';\n\
+             import { palette } from './palette';\n\
+             export const system = { tokens, palette };\n",
+        );
+
+        let mut reads = LoadReads::default();
+        let result = resolve_all_deps_reading(
+            &entry.to_string_lossy(),
+            &dir.to_string_lossy(),
+            &ResolutionContext::default(),
+            &mut reads,
+        );
+
+        assert!(result.is_err(), "'./palette' names no file");
+        let canonical_dir = fs::canonicalize(&dir).unwrap();
+        let path = |rel: &str| canonical_dir.join(rel).to_string_lossy().to_string();
+        let lexical = |rel: &str| dir.join(rel).to_string_lossy().to_string();
+        assert!(reads.read.contains(&path("system.ts")), "{:?}", reads.read);
+        let missing = |rel: &str| reads.missing.iter().any(|p| *p == path(rel) || *p == lexical(rel));
+        assert!(missing("tokens.ts"), "{:?}", reads.missing);
+        assert!(missing("tokens.tsx"), "candidates ahead of the winner: {:?}", reads.missing);
+        assert!(!missing("tokens/index.ts"), "the winner is not absent: {:?}", reads.missing);
+        assert!(missing("palette.ts") && missing("palette/index.ts"), "{:?}", reads.missing);
+
+        let kit_entry = dir.join("kit-system.ts");
+        write_fixture(
+            &kit_entry,
+            "import { kit } from '@animus-test/absent-kit';\nexport const system = kit;\n",
+        );
+        let mut kit_reads = LoadReads::default();
+        let kit_result = resolve_all_deps_reading(
+            &kit_entry.to_string_lossy(),
+            &dir.to_string_lossy(),
+            &ResolutionContext::default(),
+            &mut kit_reads,
+        );
+        assert!(kit_result.is_err(), "the package is not installed");
+        assert!(
+            kit_reads.missing.iter().any(|p| p.ends_with("node_modules/@animus-test/absent-kit")
+                && p.starts_with(&*canonical_dir.to_string_lossy())),
+            "{:?}",
+            kit_reads.missing
+        );
+    }
+
+    /// A failed package resolution keeps what it read and looked for: the
+    /// manifest (even one that does not parse), an exports target or legacy
+    /// entry it found absent, and each nearer `node_modules/<pkg>` it
+    /// checked, never the package directory it took.
+    #[test]
+    fn a_failed_package_resolution_keeps_its_manifest_and_absent_entry() {
+        let dir = scratch_dir("failed-package-reads");
+        let from = dir.join("src");
+        fs::create_dir_all(&from).unwrap();
+        let modules = dir.join("node_modules");
+        write_fixture(&modules.join("bad/package.json"), "{ broken");
+        write_fixture(&modules.join("gone-export/package.json"), r#"{"exports": {".": "./dist/index.js"}}"#);
+        write_fixture(&modules.join("gone-main/package.json"), r#"{"main": "lib/main.js"}"#);
+        let observe = |specifier: &str| {
+            let mut reads = LoadReads::default();
+            let result = resolve_bare_specifier_observed(
+                specifier,
+                &from.to_string_lossy(),
+                &ResolutionContext::default(),
+                &mut reads,
+            );
+            assert!(result.is_err(), "{specifier} resolves to nothing");
+            reads
+        };
+        let path = |rel: &str| dir.join(rel).to_string_lossy().to_string();
+
+        let bad = observe("bad");
+        assert!(bad.read.contains(&path("node_modules/bad/package.json")), "{:?}", bad.read);
+        assert!(bad.missing.contains(&path("src/node_modules/bad")), "{:?}", bad.missing);
+        assert!(!bad.missing.contains(&path("node_modules/bad")), "the package taken: {:?}", bad.missing);
+
+        let export = observe("gone-export");
+        assert!(export.missing.contains(&path("node_modules/gone-export/dist/index.js")), "{:?}", export.missing);
+
+        let main = observe("gone-main");
+        assert!(main.missing.contains(&path("node_modules/gone-main/lib/main.js")), "{:?}", main.missing);
+    }
+
+    /// A package entry records the candidates its probe found absent ahead
+    /// of the one it took, an extension alias's included.
+    #[test]
+    fn a_package_entry_records_the_candidates_ahead_of_the_one_taken() {
+        let dir = scratch_dir("package-entry-candidates");
+        let modules = dir.join("node_modules");
+        write_fixture(&modules.join("aliased/package.json"), r#"{"main": "entry.js"}"#);
+        write_fixture(&modules.join("aliased/entry.js"), "export {};\n");
+        let mut context = ResolutionContext::default();
+        context.extensions.alias = vec![(".js".to_string(), vec![".ts".to_string(), ".js".to_string()])];
+        let mut reads = LoadReads::default();
+
+        let (resolved, _) =
+            resolve_bare_specifier_observed("aliased", &dir.to_string_lossy(), &context, &mut reads).unwrap();
+
+        assert!(resolved.ends_with("aliased/entry.js"), "{resolved}");
+        let entry_ts = modules.join("aliased/entry.ts").to_string_lossy().to_string();
+        assert!(reads.missing.contains(&entry_ts), "{:?}", reads.missing);
     }
 }

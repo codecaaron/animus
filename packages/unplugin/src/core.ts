@@ -1,14 +1,15 @@
 import {
-  buildPathAliasesJson,
   BUILT_IN_EXTENSION_POLICY,
+  builtInAssetClassification,
   DiagnosticFailure,
   ENGINE_TRANSFORM_EXTENSIONS,
+  esbuildAssetClassification,
   esbuildExtensionPolicy,
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
-  readTsconfigAliasPairs,
   rollupExtensionPolicy,
+  viteAssetClassification,
   viteExtensionPolicy,
   webpackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
@@ -34,6 +35,7 @@ import { resolveHostMode, resolveHostOptions } from './options';
 import type { AnimusUnpluginOptions } from './options';
 import type {
   AnimusMode,
+  HostAssetClassification,
   HostExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import type { SessionKey } from '@animus-ui/extract/session';
@@ -368,6 +370,8 @@ export const unpluginFactory: UnpluginFactory<
   /** The bundler's extension order, as its resolved configuration holds
    *  it; the built-in policy for a host none is read from (Rolldown). */
   let hostExtensions: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
+  let hostAssets: HostAssetClassification =
+    builtInAssetClassification('noHost');
   /** Hooks can fire before buildStart (webpack's make taps run
    *  concurrently), so joiners await this before awaiting the pipeline. */
   let signalPipelineStarted!: () => void;
@@ -437,14 +441,24 @@ export const unpluginFactory: UnpluginFactory<
       session.rootDir = root;
       session.conditions = hostConditions;
       session.extensionPolicy = hostExtensions;
+      session.assetClassification = hostAssets;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
-      const aliasPairs = readTsconfigAliasPairs(root);
-      const builtAliases = buildPathAliasesJson(aliasPairs, root);
-      if (builtAliases) {
-        session.pathAliasesJson = builtAliases.json;
-      }
+      // Each full pass re-reads the tsconfig aliases.
+      session.aliasesFromTsconfig = true;
       state.key = session.key;
-      await session.runFullPipeline();
+      try {
+        await session.runFullPipeline();
+      } catch (error) {
+        // A failed load still names what to watch for the retry: the files
+        // it read and the paths it found absent.
+        state.watchPaths = [
+          resolve(root, options.system),
+          ...session.systemDependencyPaths,
+          ...session.systemMissingPaths,
+          join(root, 'tsconfig.json'),
+        ];
+        throw error;
+      }
       state.sessionDir = getSessionArtifactDir(session.key);
       const analyzed = getAnalyzedHashes(session.key);
       if (!analyzed || analyzed.size === 0) {
@@ -465,6 +479,8 @@ export const unpluginFactory: UnpluginFactory<
         watchPaths.add(resolve(root, key));
       }
       for (const dep of session.systemDependencyPaths) watchPaths.add(dep);
+      // Absent now; creating one rebuilds against a system that loads it.
+      for (const path of session.systemMissingPaths) watchPaths.add(path);
       for (const dep of session.assetDependencyPaths) watchPaths.add(dep);
       watchPaths.add(join(root, 'tsconfig.json'));
       state.watchPaths = [...watchPaths];
@@ -544,8 +560,11 @@ export const unpluginFactory: UnpluginFactory<
     enforce: 'pre',
 
     async buildStart() {
-      await startPipeline();
-      registerWatchTargets(this);
+      try {
+        await startPipeline();
+      } finally {
+        registerWatchTargets(this);
+      }
     },
 
     async resolveId(id, importer) {
@@ -691,8 +710,10 @@ export const unpluginFactory: UnpluginFactory<
         command: string;
         build: { watch?: unknown };
         resolve: { extensions: string[] };
+        assetsInclude: (file: string) => boolean;
       }) {
         hostExtensions = viteExtensionPolicy(config.resolve.extensions);
+        hostAssets = viteAssetClassification(config.assetsInclude);
         const serving =
           config.command === 'serve' || Boolean(config.build.watch);
         watching = () => serving;
@@ -707,9 +728,16 @@ export const unpluginFactory: UnpluginFactory<
             (plugin) => plugin?.name === 'node-resolve'
           )
         );
+        hostAssets = builtInAssetClassification(
+          'hostOptionUnreadable',
+          'rollup'
+        );
         modeOracle = this.meta?.watchMode ? 'development' : 'production';
-        await startPipeline();
-        registerWatchTargets(this);
+        try {
+          await startPipeline();
+        } finally {
+          registerWatchTargets(this);
+        }
       },
     },
 
@@ -789,6 +817,7 @@ export const unpluginFactory: UnpluginFactory<
         esbuildOptions = buildOptions;
         hostConditions = buildOptions.conditions ?? [];
         hostExtensions = esbuildExtensionPolicy(buildOptions.resolveExtensions);
+        hostAssets = esbuildAssetClassification(buildOptions.loader);
         watching = () => watch;
         buildOptions.define = {
           ...buildOptions.define,
@@ -875,6 +904,12 @@ export const unpluginFactory: UnpluginFactory<
       meta.framework,
       compiler.options.resolve ?? {},
       compiler.webpack?.version ?? compiler.rspack?.rspackVersion
+    );
+    // webpack's rules are not modelled: a conditional rule may never apply,
+    // so the built-in list answers (spec §2.2 A8).
+    hostAssets = builtInAssetClassification(
+      'hostOptionUnreadable',
+      `${meta.framework === 'rspack' ? 'rspack' : 'webpack'} rules not modelled`
     );
     watching = () => compiler.watchMode === true;
     const DefinePlugin =

@@ -41,6 +41,8 @@ setEngineApiOverride(() => {
     transformFile: mocks.transformFile,
     clearAnalysisCache: mocks.clearAnalysisCache,
     resolveSpecifier: requireResolveSpecifier,
+    // The fixtures install no package.
+    locatePackage: () => null,
   };
   return mocks.extractFactsEnabled
     ? { ...api, extractFacts: mocks.extractFacts }

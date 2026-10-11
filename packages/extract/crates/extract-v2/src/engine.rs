@@ -795,16 +795,25 @@ impl ExtractEngine {
     #[napi]
     pub fn analyze(&mut self, file_entries_json: String, probe_evidence_json: Option<String>) -> napi::Result<String> {
         let entries = canonical_entries(&file_entries_json)?;
+        if let Ok(mut shadowing) = self.opts.css_inputs.shadowing_probes.lock() {
+            shadowing.clear();
+        }
         if let Ok(mut incomplete) = self.opts.css_inputs.incomplete_probes.lock() {
             incomplete.clear();
             // Ingestion's openings are this analysis's own.
             for opening in &self.opts.css_inputs.analysis_context.openings {
-                incomplete.insert((
-                    opening.importer.clone(),
-                    opening.specifier.clone(),
-                    opening.candidate.clone(),
-                    opening.opened.clone(),
-                ));
+                incomplete.insert(analyze_css::IncompleteProbe {
+                    importer: opening.importer.clone(),
+                    specifier: opening.specifier.clone(),
+                    candidate: opening.candidate.clone(),
+                    opened: opening.opened.clone(),
+                    why: match opening.why {
+                        analyze_css::IngestionOpeningKind::CaseMismatch => analyze_css::Opening::CaseMismatch,
+                        analyze_css::IngestionOpeningKind::Skipped => {
+                            analyze_css::Opening::Skipped { later: opening.later.clone() }
+                        }
+                    },
+                });
             }
         }
         // Evidence gathered for other files (a same-count edit since the

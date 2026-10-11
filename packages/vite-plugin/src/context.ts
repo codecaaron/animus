@@ -1,18 +1,21 @@
 import {
+  adaptedOriginals,
+  assertRuntimeImportSuppliesTerminals,
   buildSystemPropsModule,
-  contentHash,
-  createExcludeMatcher,
-  DiagnosticFailure,
-  DEFAULT_EXTENSIONS,
+  BUILT_IN_EXTENSION_POLICY,
+  builtInAssetClassification,
   clearEngineCache,
+  contentHash,
+  createSourceCorpus,
+  declaredWorkspacePackages,
+  DEFAULT_EXTENSIONS,
+  DEFAULT_RUNTIME_IMPORT,
+  DiagnosticFailure,
   diffFilePlans,
   enforceExternalTokenContracts,
-  createSourceCorpus,
   findSheetAssetSpecifiers,
   generatedModuleCode,
   isDeletedSource,
-  BUILT_IN_EXTENSION_POLICY,
-  declaredWorkspacePackages,
   loadSystemConfig,
   parseFilesJson,
   projectExternalFileOwners,
@@ -20,13 +23,14 @@ import {
   resolveAssetFile,
   resolveVerbosity,
   runProjectAnalysis,
+  runStructuralSelfCheck,
   serializeStaticCss,
   snapshotFilePlans,
   staleDistIncludesMessage,
   substituteSheetAssets,
+  writeAssetCopy,
   toWatchKeys,
   unresolvableIncludesMessage,
-  runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
 import {
   CoalescingWindow,
@@ -36,8 +40,8 @@ import {
   releaseEngineHandle,
   sessionKey,
 } from '@animus-ui/extract/session';
-import { statSync } from 'fs';
-import { isAbsolute, relative, resolve } from 'path';
+import { rmSync, statSync } from 'fs';
+import { isAbsolute, join, relative, resolve } from 'path';
 
 import {
   RESOLVED_COMPONENTS_ID,
@@ -55,6 +59,7 @@ import type {
   AssetSheets,
   ExcludeMatcher,
   ExternalPackageOutcome,
+  HostAssetClassification,
   HostExtensionPolicy,
   KitDescriptorRecord,
   ManifestDiagnostic,
@@ -69,16 +74,6 @@ import type {
 } from '@animus-ui/extract/pipeline';
 import type { SessionKey } from '@animus-ui/extract/session';
 import type { Logger } from 'vite';
-
-/** The runtime every adapter emits by default (spine row 1). */
-const DEFAULT_RUNTIME_IMPORT = '@animus-ui/system/runtime';
-
-/** The entries that supply every terminal: an override naming another must
- *  extract only `.asClass()` terminals. */
-const FULL_RUNTIME_IMPORTS: ReadonlySet<string> = new Set([
-  DEFAULT_RUNTIME_IMPORT,
-  '@animus-ui/system',
-]);
 
 function emptySystemConfig(): SystemConfig {
   return {
@@ -209,21 +204,62 @@ export class PluginContext {
   /** Vite's resolved extension order; the built-in policy until
    *  `configResolved`. */
   extensionPolicy: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
+  /** Vite's asset classification, captured at `configResolved`. */
+  assetClassification: HostAssetClassification =
+    builtInAssetClassification('noHost');
 
   /** Development's repeat of buildStart's discovery, with its resolver. */
   rediscoverSources: (() => Promise<DiscoveredSources>) | null = null;
 
   extensionsSet: ReadonlySet<string>;
 
-  excludeMatcher: ExcludeMatcher;
+  /** Built once per buildStart, before any discovery, from the user's
+   *  exclude list and the output directory. */
+  excludeMatcher!: ExcludeMatcher;
+
+  /** Vite's output directory as a structural exclusion; null outside the
+   *  root. Set in `configResolved`. */
+  outputExclude: string | null = null;
 
   // `null` means no analysis has published yet; a failed analysis leaves the
   // previous manifest current instead of clearing it.
   storedManifest: ProjectManifest | null = null;
   storedManifestJson = '';
 
-  globalCss = '';
-  resolvedComponentCss = '';
+  /** The analysis sheets with their asset() placeholders. They are read
+   *  through `globalCss` and `resolvedComponentCss`, which substitute the
+   *  current asset URLs, so an edited asset changes its URL without
+   *  re-analysis. */
+  private analysisGlobalCss = '';
+  private analysisComponentCss = '';
+
+  get globalCss(): string {
+    return this.substitutedSheets().globalCss;
+  }
+
+  set globalCss(css: string) {
+    this.analysisGlobalCss = css;
+  }
+
+  get resolvedComponentCss(): string {
+    return this.substitutedSheets().componentCss;
+  }
+
+  set resolvedComponentCss(css: string) {
+    this.analysisComponentCss = css;
+  }
+
+  private substitutedSheets(): ReturnType<typeof substituteSheetAssets> {
+    return substituteSheetAssets(
+      {
+        ...NO_SHEETS,
+        globalCss: this.analysisGlobalCss,
+        componentCss: this.analysisComponentCss,
+      },
+      this.assetUrlBySpecifier
+    );
+  }
+
   storedSheets: ManifestSheets | null = null;
 
   layerDeclaration = '';
@@ -315,6 +351,20 @@ export class PluginContext {
   // Vite rewrites to the hashed file name before hashing the stylesheet.
   assetUrlBySpecifier = new Map<string, string>();
 
+  /** Where dev asset() copies live, immutable and content-named; null in a
+   *  build, or when the dev server does not serve the directory, which
+   *  serves the live files instead. Set in `configResolved`. */
+  assetCopyDir: string | null = null;
+  /** specifier → the source file its dev copy was made from. */
+  assetSourceBySpecifier = new Map<string, string>();
+  /** source → its copies, oldest first: the current and the previous. */
+  private assetCopyHistory = new Map<string, string[]>();
+  /** Specifiers whose copy the dev server does not serve, warned once. */
+  private unservedAssetCopies = new Set<string>();
+  /** Whether the dev server serves `path`, by Vite's `server.fs` rule;
+   *  set in `configResolved`. */
+  servesFile: (path: string) => boolean = () => true;
+
   assetResolutionFailures = new Set<string>();
 
   assetPassComplete = false;
@@ -380,7 +430,6 @@ export class PluginContext {
     this.verbose = verbosity !== 'quiet';
     this.tracing = verbosity === 'trace';
     this.extensionsSet = new Set(options.extensions ?? DEFAULT_EXTENSIONS);
-    this.excludeMatcher = createExcludeMatcher(options.exclude);
 
     if (engineApiOverride) {
       this.engineApi = engineApiOverride;
@@ -543,7 +592,8 @@ export class PluginContext {
   runAnalysis(
     fileEntries: Array<{ path: string; source: string; hash?: string }>,
     skippedOriginals: readonly string[] = [],
-    openings: readonly IngestionOpening[] = []
+    openings: readonly IngestionOpening[] = [],
+    adapted: ReadonlyMap<string, readonly string[]> = new Map()
   ): boolean {
     const ingestionFailures = this.unsettledIngestionFailures();
     let result: ProjectAnalysisResult;
@@ -562,6 +612,8 @@ export class PluginContext {
           relative(this.rootDir, dir)
         ),
         rootDir: this.rootDir,
+        assets: this.assetClassification,
+        adapted,
         devMode: !this.emissionProd,
         // Rollup leaves an `import(expr)` it cannot read unbundled.
         analysisContext: {
@@ -611,7 +663,10 @@ export class PluginContext {
       return false;
     }
 
-    this.assertRuntimeImportSuppliesTerminals(result.manifest);
+    assertRuntimeImportSuppliesTerminals(
+      this.options.runtimeImport,
+      result.manifest
+    );
     reportSurvivingAssetPlaceholders(generatedModuleCode(result.manifest), {
       strict: this.options.strict,
       warn: (message) => this.warn(message),
@@ -647,33 +702,6 @@ export class PluginContext {
     this.applyAssetSubstitutions();
 
     return true;
-  }
-
-  private assertRuntimeImportSuppliesTerminals(
-    manifest: ProjectManifest
-  ): void {
-    const override = this.options.runtimeImport;
-    if (!override || FULL_RUNTIME_IMPORTS.has(override)) return;
-    const offenders: string[] = [];
-    for (const [id, descriptor] of Object.entries(manifest.components)) {
-      if (
-        /\bcreateComponent\(|\bcreateComposedFamily\(/.test(
-          descriptor.replacement
-        )
-      ) {
-        offenders.push(id);
-      }
-    }
-    if (offenders.length === 0) return;
-    const shown = offenders.slice(0, 5).join(', ');
-    throw new Error(
-      `[animus-extract] runtimeImport '${override}' is valid only when ` +
-        `every extracted terminal is .asClass(), but ${offenders.length} ` +
-        `component(s) need createComponent/createComposedFamily from the ` +
-        `default '${DEFAULT_RUNTIME_IMPORT}' runtime: ${shown}` +
-        (offenders.length > 5 ? ', …' : '') +
-        `. Remove the override or convert these terminals to .asClass().`
-    );
   }
 
   /** The one ingest → quarantine → analyze → publish transaction. The corpus
@@ -743,7 +771,9 @@ export class PluginContext {
         this.runAnalysis(
           accepted.analysisEntries,
           accepted.skippedOriginals,
-          accepted.openings
+          accepted.openings,
+          // The ingestion being analysed publishes only after its analysis.
+          adaptedOriginals(accepted.ownership)
         ) !== false;
       if (!ok) return { ok, accepted, endedHold: false, redeliver: [] };
       this.publishSourceIngestion(accepted);
@@ -796,6 +826,77 @@ export class PluginContext {
     return `${base}/@fs${absPath}`;
   }
 
+  /** A dev asset() URL: an immutable content-named copy of `absPath`, so an
+   *  edit gets a new URL, or the live file where copies are not served. */
+  devAssetUrl(specifier: string, absPath: string): string {
+    if (this.assetCopyDir === null) return this.devFsUrl(absPath);
+    const { fileName } = writeAssetCopy(absPath, this.assetCopyDir);
+    const copyPath = join(this.assetCopyDir, fileName);
+    if (!this.servesFile(copyPath)) {
+      if (!this.unservedAssetCopies.has(specifier)) {
+        this.unservedAssetCopies.add(specifier);
+        this.warn(
+          `[animus-extract] the copy of asset() ${specifier} is not served under server.fs; serving the live file instead, so an edit keeps its URL`
+        );
+      }
+      return this.devFsUrl(absPath);
+    }
+    // Watched once its copy exists, wherever it lives: an edit makes the
+    // next copy.
+    if (this.assetSourceBySpecifier.get(specifier) !== absPath) {
+      this.devServer?.watcher?.add(absPath);
+    }
+    this.assetSourceBySpecifier.set(specifier, absPath);
+    this.retainAssetCopy(absPath, fileName);
+    return this.devFsUrl(copyPath);
+  }
+
+  /** Keeps each source's current copy and the one before it; an asset
+   *  edit reloads the page, so an older URL is never fetched again. A copy
+   *  another source still keeps is never removed. */
+  private retainAssetCopy(source: string, fileName: string): void {
+    const history = this.assetCopyHistory.get(source) ?? [];
+    if (history[history.length - 1] !== fileName) history.push(fileName);
+    this.assetCopyHistory.set(source, history);
+    while (history.length > 2) {
+      const oldest = history.shift()!;
+      const kept = [...this.assetCopyHistory.values()].some((copies) =>
+        copies.includes(oldest)
+      );
+      if (!kept && this.assetCopyDir !== null) {
+        rmSync(join(this.assetCopyDir, oldest), { force: true });
+      }
+    }
+  }
+
+  /** Whether `absFile` is the source of a dev asset copy. */
+  isAssetSource(absFile: string): boolean {
+    const keys = new Set(toWatchKeys(absFile));
+    return [...this.assetSourceBySpecifier.values()].some((source) =>
+      toWatchKeys(source).some((key) => keys.has(key))
+    );
+  }
+
+  /** Copies an edited asset under its new content name and redelivers the
+   *  stylesheet that names it. */
+  refreshAssetCopies(absFile: string): void {
+    const keys = new Set(toWatchKeys(absFile));
+    for (const [specifier, source] of this.assetSourceBySpecifier) {
+      if (!toWatchKeys(source).some((key) => keys.has(key))) continue;
+      try {
+        this.assetUrlBySpecifier.set(
+          specifier,
+          this.devAssetUrl(specifier, source)
+        );
+      } catch (err) {
+        this.warn(
+          `[animus-extract] could not copy edited asset ${source}: ${String(err)}`
+        );
+      }
+    }
+    this.invalidateSystemReloadModules(true);
+  }
+
   assetFallback(specifier: string, message: string, cause?: unknown): void {
     if (this.options.strict) this.strictFailure(message, cause);
     else this.warn(message);
@@ -807,8 +908,8 @@ export class PluginContext {
   sheetAssetSpecifiers(): string[] {
     return findSheetAssetSpecifiers({
       variableCss: this.system.variableCss,
-      globalCss: this.globalCss,
-      componentCss: this.resolvedComponentCss,
+      globalCss: this.analysisGlobalCss,
+      componentCss: this.analysisComponentCss,
     });
   }
 
@@ -821,22 +922,6 @@ export class PluginContext {
       { ...NO_SHEETS, variableCss: this.system.variableCss },
       this.assetUrlBySpecifier
     ).variableCss;
-  }
-
-  /** Substitutes the analysis sheets in place, through the same step as the
-   *  session; the theme's variable CSS is substituted on read
-   *  (`variableCss`). */
-  substituteSheets(): void {
-    const substituted = substituteSheetAssets(
-      {
-        ...NO_SHEETS,
-        globalCss: this.globalCss,
-        componentCss: this.resolvedComponentCss,
-      },
-      this.assetUrlBySpecifier
-    );
-    this.globalCss = substituted.globalCss;
-    this.resolvedComponentCss = substituted.componentCss;
   }
 
   /** Resolves asset specifiers a system reload introduced. Node-side only —
@@ -854,7 +939,10 @@ export class PluginContext {
           this.pathAliasesJson
         );
         if (resolved) {
-          this.assetUrlBySpecifier.set(specifier, this.devFsUrl(resolved));
+          this.assetUrlBySpecifier.set(
+            specifier,
+            this.devAssetUrl(specifier, resolved)
+          );
         } else {
           this.assetFallback(
             specifier,
@@ -863,7 +951,6 @@ export class PluginContext {
         }
       }
     }
-    this.substituteSheets();
   }
 
   private resetCoalescer: ResetCoalescer | null = null;
@@ -904,7 +991,7 @@ export class PluginContext {
     );
   }
 
-  private invalidateSystemReloadModules(reloadClient: boolean): void {
+  invalidateSystemReloadModules(reloadClient: boolean): void {
     const server = this.devServer;
     if (!server) return;
     for (const moduleId of [

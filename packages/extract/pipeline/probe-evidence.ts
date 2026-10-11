@@ -16,6 +16,18 @@ export interface HostCandidate {
   actual: string | null;
   /** The analysed module the candidate is, where the analysis holds one. */
   analysedAs: string | null;
+  /** How the analysis reads a candidate it holds no module for, or one a
+   *  query loads as an opaque value (spec §2.2 A8); absent where it reads
+   *  the module, or the spelling differs. */
+  reading?: 'asset' | 'adapted' | 'unanalysed';
+}
+
+/** What a session knows beside the analysed paths. */
+export interface HostReadings {
+  /** The host's asset and stylesheet classification. */
+  isAsset?(file: string, query: string): boolean;
+  /** Each adapted original (`.mdx`, `.svelte`) and its analysis children. */
+  adapted?: ReadonlyMap<string, readonly string[]>;
 }
 
 let generations = 0;
@@ -38,31 +50,61 @@ function realRoot(rootDir: string): string {
  * folded. Null where no candidate opens.
  *
  * A candidate the analysis holds answers before the filesystem is asked: an
- * adapted original's analysis child need not exist on disk. An original the
- * host opens is analysed as the first later candidate the analysis holds.
+ * adapted original's analysis child need not exist on disk. A file the host
+ * opens that the analysis holds no module for is read as an adapted
+ * original (analysed as its first later child), an asset, or a file
+ * analysis never reads.
  */
 export function hostCandidate(
   rootDir: string,
   base: string,
   analysed: ReadonlySet<string>,
   order: ExtensionOrder | undefined,
+  readings: HostReadings = {},
   root: string = realRoot(rootDir)
 ): HostCandidate | null {
-  const candidates = policyCandidates(base, { policy: order });
-  for (const [index, candidate] of candidates.entries()) {
-    if (analysed.has(candidate)) {
-      return { candidate, actual: null, analysedAs: candidate };
+  // A query (`./x.js?raw`) selects how the host loads the file, not which
+  // file: the file is probed without it, and the host reads it with it.
+  const at = base.indexOf('?');
+  const query = at === -1 ? '' : base.slice(at);
+  const candidates = policyCandidates(at === -1 ? base : base.slice(0, at), {
+    policy: order,
+  });
+  for (const [index, file] of candidates.entries()) {
+    const candidate = `${file}${query}`;
+    const opaque = () => readings.isAsset?.(join(rootDir, file), query);
+    if (analysed.has(file)) {
+      // `?raw` or `?url` loads an analysed module as a string.
+      return query !== '' && opaque()
+        ? { candidate, actual: null, analysedAs: null, reading: 'asset' }
+        : { candidate, actual: null, analysedAs: file };
     }
-    const seen = seeOnDisk(join(rootDir, candidate), rootDir);
+    const seen = seeOnDisk(join(rootDir, file), rootDir);
     if (seen.kind === 'missing') continue;
+    if (seen.kind === 'case-only') {
+      return {
+        candidate,
+        actual: relative(root, seen.actual),
+        analysedAs: null,
+      };
+    }
+    const children = readings.adapted?.get(file);
+    if (children !== undefined) {
+      return {
+        candidate,
+        actual: null,
+        analysedAs:
+          candidates
+            .slice(index + 1)
+            .find((later) => children.includes(later)) ?? null,
+        reading: 'adapted',
+      };
+    }
     return {
       candidate,
-      actual: seen.kind === 'case-only' ? relative(root, seen.actual) : null,
-      analysedAs:
-        seen.kind === 'file'
-          ? (candidates.slice(index + 1).find((later) => analysed.has(later)) ??
-            null)
-          : null,
+      actual: null,
+      analysedAs: null,
+      reading: opaque() ? 'asset' : 'unanalysed',
     };
   }
   return null;
@@ -77,16 +119,41 @@ export function hostCandidate(
 export function gatherProbeEvidence(
   rootDir: string,
   analysed: ReadonlySet<string>,
-  order: ExtensionOrder | undefined
+  order: ExtensionOrder | undefined,
+  readings: HostReadings = {}
 ): (bases: readonly string[], identity: string) => string {
   const root = realRoot(rootDir);
   return (bases, identity) => {
     const byBase: Record<string, HostCandidate> = {};
     for (const base of bases) {
-      const host = hostCandidate(rootDir, base, analysed, order, root);
+      const host = hostCandidate(
+        rootDir,
+        base,
+        analysed,
+        order,
+        readings,
+        root
+      );
       if (host !== null) byBase[base] = host;
     }
     generations += 1;
     return JSON.stringify({ generation: generations, identity, bases: byBase });
   };
+}
+
+/** Each adapted original and its analysis children, from ingestion's
+ *  ownership: an original whose children are other paths than its own. */
+export function adaptedOriginals(
+  ownership: Readonly<
+    Record<string, { readonly analysisPaths: readonly string[] }>
+  >
+): ReadonlyMap<string, readonly string[]> {
+  return new Map(
+    Object.entries(ownership)
+      .filter(
+        ([original, { analysisPaths }]) =>
+          !(analysisPaths.length === 1 && analysisPaths[0] === original)
+      )
+      .map(([original, { analysisPaths }]) => [original, analysisPaths])
+  );
 }
