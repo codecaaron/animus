@@ -835,6 +835,38 @@ test('a manifest nested below the package is no package root', async () => {
   ]);
 });
 
+// An entry linked out of the package is not the package's file, so its
+// nested manifest stays the root, as before.
+test.skipIf(process.platform === 'win32')(
+  'an entry linked out of the package keeps its nested root',
+  async () => {
+    const root = makeRoot();
+    const pkg = join(root, 'node_modules', 'kit');
+    for (const [file, source] of [
+      [
+        'package.json',
+        JSON.stringify({ name: 'kit', main: './dist/index.js' }),
+      ],
+      ['dist/package.json', JSON.stringify({ name: 'kit' })],
+      ['dist/src/index.ts', 'export const t = 2;'],
+      ['src/index.ts', 'export const t = 1;'],
+      ['../../cache/index.js', 'export const t = 7;'],
+    ]) {
+      mkdirSync(join(pkg, file, '..'), { recursive: true });
+      writeFileSync(join(pkg, file), source);
+    }
+    symlinkSync(join(root, 'cache', 'index.js'), join(pkg, 'dist', 'index.js'));
+
+    const result = await collect(root, {
+      kit: join(pkg, 'dist', 'index.js'),
+    });
+
+    expect(result.entries.map((e) => e.path)).toEqual([
+      'node_modules/kit/dist/src/index.ts',
+    ]);
+  }
+);
+
 // Contract: a path the filesystem opens under a spelling no directory lists
 // is never read as that file, and an entry read from its runtime target in
 // its place is analysed (exact spelling, spec §2.2 A2). Where the filesystem

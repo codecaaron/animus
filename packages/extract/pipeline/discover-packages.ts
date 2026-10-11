@@ -711,14 +711,16 @@ export async function collectExternalPackageSources(opts: {
     // A manifest nested below the package Node locates (a published
     // `dist/lib/package.json` carrying the package's name) is part of the
     // package, not its root: the root is the located directory, spelled as
-    // the host spells the entry.
+    // the host spells the entry. Only where the entry's own real path lies
+    // inside it: an entry linked out of the package is not its file.
     let resolvedRoot = absEntry ? findPackageRoot(absEntry) : null;
     const locatedRoot = packageName && locatePackageRoot(packageName, rootDir);
     if (
       resolvedRoot &&
       locatedRoot &&
+      absEntry &&
       realPath(resolvedRoot) !== locatedRoot &&
-      isPathWithinRoot(locatedRoot, realPath(resolvedRoot))
+      isPathWithinRoot(locatedRoot, realPath(absEntry))
     ) {
       while (
         realPath(resolvedRoot) !== locatedRoot &&
