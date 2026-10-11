@@ -4,6 +4,7 @@ import {
   outputSourceGuard,
   outputSourceMessage,
 } from '@animus-ui/extract/pipeline';
+import { CoalescingWindow } from '@animus-ui/extract/session';
 import { extname, relative, resolve } from 'path';
 
 import { RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID } from './constants';
@@ -40,7 +41,7 @@ export async function handleHotUpdate(
   );
 
   if (ctx.isSystemDependency(absFile)) {
-    if (ownsEvent) await reloadSystem(ctx, absFile, type);
+    if (ownsEvent) requestSystemReload(ctx, absFile, type);
     return [];
   }
 
@@ -82,19 +83,74 @@ export async function handleHotUpdate(
   return invalidateStaleModules(ctx, environment, modules, result);
 }
 
-/** A system dependency's event reloads the system through the Session. A
- *  failed reload keeps the last good system served and warns; under
- *  `strict` the client overlay reports it too. */
-async function reloadSystem(
+/** Each context's pending system-dependency events, and the window they
+ *  wait out together. */
+const systemReloads = new WeakMap<
+  PluginContext,
+  {
+    window: CoalescingWindow;
+    pending: Map<string, HotUpdateOptions['type']>;
+  }
+>();
+
+/** A system dependency's event waits out the coalescing window (SA19)
+ *  before the Session reads it: a watcher can report a write as it starts
+ *  and drop the event for its end, so an immediate read would load a
+ *  half-written module. Events in one window reload once. */
+function requestSystemReload(
   ctx: PluginContext,
   absFile: string,
   type: HotUpdateOptions['type']
+): void {
+  let state = systemReloads.get(ctx);
+  if (state === undefined) {
+    const pending = new Map<string, HotUpdateOptions['type']>();
+    state = {
+      pending,
+      window: new CoalescingWindow(() => {
+        if (pending.size === 0) return;
+        const taken = [...pending];
+        pending.clear();
+        return reloadSystem(ctx, taken);
+      }),
+    };
+    systemReloads.set(ctx, state);
+  }
+  ctx.log(`HMR system reload scheduled: ${relative(ctx.rootDir, absFile)}`);
+  state.pending.set(absFile, type);
+  state.window.note();
+}
+
+/** Runs a pending system reload now, closing its window (the window's
+ *  bypass), and settles with it. */
+export async function flushSystemReload(ctx: PluginContext): Promise<void> {
+  await systemReloads.get(ctx)?.window.flush();
+}
+
+/** Drops a pending system reload: the context is closing. */
+export function cancelSystemReload(ctx: PluginContext): void {
+  const state = systemReloads.get(ctx);
+  state?.window.cancel();
+  state?.pending.clear();
+}
+
+/** Reloads the system through the Session over the window's events. It
+ *  runs from a timer, so it never throws: a failed reload keeps the last
+ *  good system served and warns; under `strict` the client overlay reports
+ *  it too. */
+async function reloadSystem(
+  ctx: PluginContext,
+  events: ReadonlyArray<[string, HotUpdateOptions['type']]>
 ): Promise<void> {
   const reloadStart = performance.now();
-  ctx.log(`HMR system reload: ${relative(ctx.rootDir, absFile)}`);
+  const modifiedFiles = new Set<string>();
+  const removedFiles = new Set<string>();
+  for (const [path, type] of events) {
+    (type === 'delete' ? removedFiles : modifiedFiles).add(path);
+  }
   let outcomes: ObservedOutcome[];
   try {
-    outcomes = await ctx.submitChanges(changesOf(type, absFile));
+    outcomes = await ctx.submitChanges({ modifiedFiles, removedFiles });
   } catch (err) {
     ctx.warn(`[animus-extract] system reload failed: ${String(err)}`);
     if (ctx.options.strict) {
