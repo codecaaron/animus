@@ -24,7 +24,8 @@ use crate::declarations::{bind_component_declarations, check_surface_overlap, De
 use crate::dynamic_meta::{share_slots, DynamicPropMeta};
 use crate::evaluator::{EvalError, TransformEvaluator};
 use crate::facts::FileFacts;
-use crate::identity::ImportBinding;
+use crate::identity::{BindingKind, ImportBinding};
+use animus_system_loader::module_table::{ExportLookup, Terminal};
 use crate::jsx_scan::{
     ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult,
 };
@@ -843,13 +844,14 @@ pub(crate) fn resolve_declaration(
     name: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, bool)> {
     let (specifier, imported) = match ff.bindings.module_import(name) {
         Some(ImportBinding::Named { specifier, imported }) => (specifier, imported.as_str()),
         Some(ImportBinding::Default { specifier }) => (specifier, "default"),
         Some(ImportBinding::Namespace { .. }) | None => return Some((file_path.to_string(), name.to_string(), true)),
     };
-    resolve_export(file_path, specifier, imported, files, inputs)
+    resolve_export(file_path, specifier, imported, files, inputs, links)
 }
 
 /// The declaration `imported` from `specifier` lands on, through analyzed
@@ -860,8 +862,9 @@ fn resolve_export(
     imported: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, bool)> {
-    resolve_export_traced(file_path, specifier, imported, files, inputs)
+    resolve_export_traced(file_path, specifier, imported, files, inputs, links)
         .map(|(file, binding, local, _)| (file, binding, local))
 }
 
@@ -873,22 +876,34 @@ fn resolve_export_traced(
     imported: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, bool, Option<String>)> {
     let module = resolve_import_source(file_path, specifier, files, inputs)?;
-    Some(module_declaration(module, imported, files, inputs))
+    Some(module_declaration(module, imported, files, inputs, links))
 }
 
-/// Where `module`'s export `imported` is declared, through analyzed
-/// re-exports: the landing file, the declarator binding there, whether that
-/// file declares it locally, and the first barrel left through a local export
-/// of an import.
+/// Where `module`'s export `imported` is declared: the landing file, the
+/// declarator binding there, whether that file declares it locally, and the
+/// first barrel left through a local export of an import. A binding the
+/// module table resolves the export to lands there, `export *` routes
+/// included; any other answer keeps the analyzed re-export walk.
 fn module_declaration(
     module: String,
     imported: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> (String, String, bool, Option<String>) {
+    let resolved = links.resolve_export(&module, imported);
     let (pf, pn, barrel) = follow_reexports_traced(module, imported.to_string(), files, inputs);
+    if let Some(ExportLookup::Resolved(Terminal::Local { module: declaring, binding })) = resolved {
+        let path = &links.paths[declaring];
+        let declared = files[path].bindings.binding(binding);
+        if declared.kind != BindingKind::DefaultCell {
+            let locally_defined = declares_locally(&files[path], &declared.name);
+            return (path.clone(), declared.name.clone(), locally_defined, barrel);
+        }
+    }
     let landing = files.get(&pf);
 
     // Component ids key on the DECLARATOR, not the exported name, so an
@@ -911,6 +926,14 @@ fn module_declaration(
     (pf, binding, locally_defined, barrel)
 }
 
+/// Whether `ff` declares `binding` itself, as a local export of it or a
+/// chain bound to it; an import is never a declaration.
+fn declares_locally(ff: &FileFacts, binding: &str) -> bool {
+    !ff.imports.iter().any(|i| i.local == binding)
+        && (ff.exports.iter().any(|e| e.source.is_none() && e.local.as_deref() == Some(binding))
+            || ff.chains.iter().any(|c| c.descriptor.binding == binding))
+}
+
 /// A parent bails only when its landing file is in the analyzed set AND
 /// declares the name locally; a barrel the resolver cannot follow, and an
 /// outside file, stay standalone.
@@ -920,8 +943,9 @@ fn resolve_extension_parent(
     extends_binding: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Result<String, String> {
-    match resolve_declaration(file_path, ff, extends_binding, files, inputs) {
+    match resolve_declaration(file_path, ff, extends_binding, files, inputs, links) {
         None => Err(parent_unresolvable_reason(extends_binding)),
         // Nothing proven about the parent: keep the standalone fallback.
         Some((file, binding, false)) => Ok(format!("{}::{}", file, binding)),
@@ -937,8 +961,8 @@ fn has_animus_origin(
     name: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
-    seen: &mut FxHashSet<(String, String)>,
-) -> bool {
+    links: &crate::link::ProjectLinks,
+    seen: &mut FxHashSet<(String, String)>) -> bool {
     if !seen.insert((file.to_string(), name.to_string())) {
         return false;
     }
@@ -952,7 +976,7 @@ fn has_animus_origin(
     {
         return true;
     }
-    let Some((declaring_file, binding, true)) = resolve_declaration(file, ff, name, files, inputs)
+    let Some((declaring_file, binding, true)) = resolve_declaration(file, ff, name, files, inputs, links)
     else {
         return false;
     };
@@ -960,7 +984,7 @@ fn has_animus_origin(
         .get(&declaring_file)
         .and_then(|dff| dff.declaration_roots.get(&binding))
         .cloned();
-    root.is_some_and(|root| has_animus_origin(&declaring_file, &root, files, inputs, seen))
+    root.is_some_and(|root| has_animus_origin(&declaring_file, &root, files, inputs, links, seen))
 }
 
 /// The component an `Object.member` extension parent names — `(file,
@@ -973,9 +997,10 @@ fn member_parent_component(
     extension: &MemberParentExtension,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, bool)> {
     let Some((object_file, object_binding, true)) =
-        resolve_declaration(file_path, ff, &extension.object, files, inputs)
+        resolve_declaration(file_path, ff, &extension.object, files, inputs, links)
     else {
         return None;
     };
@@ -989,7 +1014,7 @@ fn member_parent_component(
         .get(&object_binding)?
         .get(&extension.member)?;
     let Some((component_file, component, true)) =
-        resolve_declaration(&object_file, object_ff, value, files, inputs)
+        resolve_declaration(&object_file, object_ff, value, files, inputs, links)
     else {
         return None;
     };
@@ -1004,8 +1029,8 @@ fn member_parent_component(
             &component,
             files,
             inputs,
-            &mut FxHashSet::default(),
-        );
+            links,
+            &mut FxHashSet::default(),);
     animus.then_some((component_file, component, exported))
 }
 
@@ -1041,8 +1066,9 @@ fn unsupported_object_member(
     chain: &crate::chain_walk::ObjectMemberChain,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<CssDiagnostic> {
-    has_animus_origin(file, &chain.root, files, inputs, &mut FxHashSet::default()).then(|| {
+    has_animus_origin(file, &chain.root, files, inputs, links, &mut FxHashSet::default()).then(|| {
         diagnostic(
             file,
             &format!("{}.{}", chain.object, chain.key),
@@ -1405,10 +1431,11 @@ fn unsupported_default_export(
     ff: &FileFacts,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<CssDiagnostic> {
     let export = ff.default_export_chain.as_ref()?;
     let root = export.root.as_deref()?;
-    has_animus_origin(file, root, files, inputs, &mut FxHashSet::default()).then(|| {
+    has_animus_origin(file, root, files, inputs, links, &mut FxHashSet::default()).then(|| {
         diagnostic(
             file,
             "default",
@@ -1436,15 +1463,16 @@ fn runtime_builder_reference(
     site: &crate::facts::UnwalkedChainSite,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<CssDiagnostic> {
     let chain = &site.chain;
     if chain.methods.first().is_some_and(|method| method == "props")
         && chain.root_bound_once
-        && holds_class_resolver(file, &chain.root, files, inputs, &mut FxHashSet::default())
+        && holds_class_resolver(file, &chain.root, files, inputs, links, &mut FxHashSet::default())
     {
         return None;
     }
-    has_animus_origin(file, &chain.root, files, inputs, &mut FxHashSet::default()).then(|| {
+    has_animus_origin(file, &chain.root, files, inputs, links, &mut FxHashSet::default()).then(|| {
         let spelling = chain
             .methods
             .iter()
@@ -1472,13 +1500,13 @@ fn holds_class_resolver(
     name: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
-    seen: &mut FxHashSet<(String, String)>,
-) -> bool {
+    links: &crate::link::ProjectLinks,
+    seen: &mut FxHashSet<(String, String)>) -> bool {
     if !seen.insert((file.to_string(), name.to_string())) {
         return false;
     }
     let Some((declaring_file, binding, true)) =
-        files.get(file).and_then(|ff| resolve_declaration(file, ff, name, files, inputs))
+        files.get(file).and_then(|ff| resolve_declaration(file, ff, name, files, inputs, links))
     else {
         return false;
     };
@@ -1489,7 +1517,7 @@ fn holds_class_resolver(
         || dff
             .aliases
             .get(&binding)
-            .is_some_and(|target| holds_class_resolver(&declaring_file, target, files, inputs, seen))
+            .is_some_and(|target| holds_class_resolver(&declaring_file, target, files, inputs, links, seen))
 }
 
 /// A chain rooted in `ns.member` where `ns` is a namespace import of an
@@ -1500,10 +1528,11 @@ fn unsupported_namespace_root(
     chain: &crate::chain_walk::MemberRootedChain,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<CssDiagnostic> {
     let specifier = ff.namespace_imports.get(&chain.object)?;
     let Some((defining_file, defining_name, true, barrel)) =
-        resolve_export_traced(file, specifier, &chain.member, files, inputs)
+        resolve_export_traced(file, specifier, &chain.member, files, inputs, links)
     else {
         return None;
     };
@@ -1512,8 +1541,8 @@ fn unsupported_namespace_root(
         &defining_name,
         files,
         inputs,
-        &mut FxHashSet::default(),
-    )
+        links,
+        &mut FxHashSet::default(),)
     .then(|| {
         diagnostic(
             file,
@@ -3729,6 +3758,7 @@ fn identity_uncertainty_diagnostics(
     sites: &[(&String, UncertainIdentity)],
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Vec<CssDiagnostic> {
     let mut seen: FxHashSet<(&str, String)> = FxHashSet::default();
     let mut records: Vec<(TagClass, &str, String, CssDiagnostic)> = Vec::new();
@@ -3760,7 +3790,7 @@ fn identity_uncertainty_diagnostics(
                     true => format!("createElement({tag})"),
                     false => format!("<{tag}>"),
                 };
-                let (class, mut reason) = uncertain_tag_reason(file, ff, tag, origin, files, inputs);
+                let (class, mut reason) = uncertain_tag_reason(file, ff, tag, origin, files, inputs, links);
                 if shared_name {
                     reason.push_str(", and shares its name with an Animus component another file declares");
                 }
@@ -3892,14 +3922,14 @@ fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>
 fn bounded_prop_tags(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
     results: &[UsageScanResult],
     unproven: &std::collections::BTreeSet<String>,
     forwards: &[Forward],
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
     delivered_tags: &[(String, String)],
-    object_members: &mut crate::family_members::ObjectMembers<'_>,
-) -> FxHashSet<(String, u32)> {
+    object_members: &mut crate::family_members::ObjectMembers<'_>) -> FxHashSet<(String, u32)> {
     let open: FxHashSet<&String> = results.iter().flat_map(|result| &result.open_components).collect();
     let open_except: Vec<&(String, std::collections::BTreeSet<String>)> =
         results.iter().flat_map(|result| &result.open_except).collect();
@@ -3908,7 +3938,7 @@ fn bounded_prop_tags(
     // The declaration a module's name or default import resolves to, through
     // any barrel.
     let declared = |file: &str, ff: &FileFacts, name: &str| {
-        let (declaring, binding, _) = resolve_declaration(file, ff, name, files, inputs)?;
+        let (declaring, binding, _) = resolve_declaration(file, ff, name, files, inputs, links)?;
         let binding = match binding.as_str() {
             "default" => files.get(&declaring)?.default_export_binding.clone().unwrap_or(binding),
             _ => binding,
@@ -3947,7 +3977,7 @@ fn bounded_prop_tags(
     let namespace_declared = |file: &str, ff: &FileFacts, path: &str| {
         let (namespace, member) = path.rsplit_once('.')?;
         let module = namespace_path_module(file, ff, namespace, files, inputs)?;
-        let (declaring, binding, _, _) = module_declaration(module, member, files, inputs);
+        let (declaring, binding, _, _) = module_declaration(module, member, files, inputs, links);
         Some((declaring, binding))
     };
     // Whether the component `outer` builds forwards the prop only as written
@@ -3977,7 +4007,7 @@ fn bounded_prop_tags(
             ff.default_export_binding.as_ref().is_some_and(|binding| declared(path, ff, binding).as_ref() == Some(&target))
                 || ff.exports.iter().filter(|export| export.exported == "default").any(|export| {
                     let declaration = match (&export.source, &export.original, &export.local) {
-                        (Some(source), Some(original), _) => resolve_export(path, source, original, files, inputs)
+                        (Some(source), Some(original), _) => resolve_export(path, source, original, files, inputs, links)
                             .map(|(declaring, binding, _)| (declaring, binding)),
                         (None, _, Some(local)) => declared(path, ff, local),
                         _ => None,
@@ -4170,11 +4200,11 @@ fn uncertainty_leaves_usage_proven(
     sites: &[(&String, UncertainIdentity)],
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
     package_members: &FxHashSet<(String, String)>,
-    bounded_tags: &FxHashSet<(String, u32)>,
-) -> bool {
-    let unstable_contexts = &unstable_contexts(files, inputs);
+    bounded_tags: &FxHashSet<(String, u32)>) -> bool {
+    let unstable_contexts = &unstable_contexts(files, inputs, links);
     // Each element of an ordinary component is a site; classify each tag once.
     let mut classified: FxHashSet<(&str, &str, Option<TagOrigin>)> = FxHashSet::default();
     sites.iter().all(|(file, site)| {
@@ -4198,11 +4228,11 @@ fn uncertainty_leaves_usage_proven(
         !classified.insert((file.as_str(), tag, site.origin))
             || names_react_pass_through(ff, tag, site.origin)
             || imported_from_outside(file, ff, tag, site.origin, files, inputs)
-            || names_context_provider(file, ff, tag, site.origin, files, inputs, unstable_contexts)
+            || names_context_provider(file, ff, tag, site.origin, files, inputs, links, unstable_contexts)
             // The module's binding, never a parameter or local of the name.
             || (matches!(site.origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
                 && package_members.contains(&(file.to_string(), tag.to_string())))
-            || uncertain_tag_reason(file, ff, tag, site.origin, files, inputs).0 == TagClass::Ordinary
+            || uncertain_tag_reason(file, ff, tag, site.origin, files, inputs, links).0 == TagClass::Ordinary
             // The module's binding, never a parameter or local of the name.
             || (matches!(site.origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
                 && ordinary_members.contains_key(&(file.to_string(), tag.to_string())))
@@ -4213,6 +4243,7 @@ fn uncertainty_leaves_usage_proven(
 /// builds as a module-scope `const` (`<ThemeContext.Provider>`), named
 /// through the module's own binding or an import of it: it renders its
 /// children in place.
+#[allow(clippy::too_many_arguments)]
 fn names_context_provider(
     file: &str,
     ff: &FileFacts,
@@ -4220,11 +4251,11 @@ fn names_context_provider(
     origin: Option<TagOrigin>,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
-    unstable: &FxHashSet<(String, String)>,
-) -> bool {
+    links: &crate::link::ProjectLinks,
+    unstable: &FxHashSet<(String, String)>) -> bool {
     let Some((root, "Provider")) = tag.split_once('.') else { return false };
     matches!(origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
-        && resolve_declaration(file, ff, root, files, inputs).is_some_and(|(declaring, binding, _)| {
+        && resolve_declaration(file, ff, root, files, inputs, links).is_some_and(|(declaring, binding, _)| {
             files.get(&declaring).is_some_and(|declared| declared.context_consts.contains(&binding))
                 && !unstable.contains(&(declaring, binding))
         })
@@ -4233,12 +4264,12 @@ fn names_context_provider(
 /// The contexts some use in any analysed module may change: a member write
 /// or delete, a hand-off to code other than React's context readers. Their
 /// `Provider` is not proven to be React's.
-fn unstable_contexts(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> FxHashSet<(String, String)> {
+fn unstable_contexts(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs, links: &crate::link::ProjectLinks) -> FxHashSet<(String, String)> {
     let mut unstable = FxHashSet::default();
     for (path, ff) in files {
         for name in ff.unsafe_object_uses.keys() {
             let root = name.split('.').next().unwrap_or(name);
-            let Some((declaring, binding, _)) = resolve_declaration(path, ff, root, files, inputs) else { continue };
+            let Some((declaring, binding, _)) = resolve_declaration(path, ff, root, files, inputs, links) else { continue };
             if files.get(&declaring).is_some_and(|declared| declared.context_consts.contains(&binding)) {
                 unstable.insert((declaring, binding));
             }
@@ -4283,6 +4314,7 @@ fn uncertain_tag_reason(
     origin: Option<TagOrigin>,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> (TagClass, String) {
     let root = tag.split('.').next().unwrap_or(tag);
     let member = root != tag;
@@ -4317,7 +4349,7 @@ fn uncertain_tag_reason(
             }
             let proved = match member {
                 true => None,
-                false => resolve_declaration(file, ff, tag, files, inputs).and_then(
+                false => resolve_declaration(file, ff, tag, files, inputs, links).and_then(
                     |(declaring_file, binding, local)| {
                         let dff = files.get(&declaring_file)?;
                         let binding = match binding.as_str() {
@@ -4604,6 +4636,7 @@ fn proven_slot_conditions(
 fn opaque_delivery(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
     wrapper_targets: &FxHashMap<String, FxHashMap<String, Vec<String>>>,
@@ -4611,7 +4644,7 @@ fn opaque_delivery(
     receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
     renders_in_place: impl Fn(&str) -> bool,
 ) -> (std::collections::BTreeSet<String>, Vec<(String, String)>) {
-    let unstable_contexts = unstable_contexts(files, inputs);
+    let unstable_contexts = unstable_contexts(files, inputs, links);
     // The declaration `name` (`lib.enhance` for a namespace import's
     // member) names from `file`, or `None` outside the analysis.
     let declaration = |file: &str, ff: &FileFacts, name: &str| {
@@ -4620,10 +4653,10 @@ fn opaque_delivery(
             None => (name, None),
         };
         match (ff.namespace_imports.get(root), member) {
-            (Some(source), Some(member)) => resolve_export(file, source, member, files, inputs),
+            (Some(source), Some(member)) => resolve_export(file, source, member, files, inputs, links),
             (Some(source), None) => resolve_import_source(file, source, files, inputs)
                 .map(|module| (module, String::new(), false)),
-            (None, _) => resolve_declaration(file, ff, root, files, inputs),
+            (None, _) => resolve_declaration(file, ff, root, files, inputs, links),
         }
     };
     let outside = |file: &str, ff: &FileFacts, name: &str, forwarding: &FxHashSet<(String, String)>| {
@@ -4638,7 +4671,7 @@ fn opaque_delivery(
         if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
             return true;
         }
-        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, &unstable_contexts) {
+        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, links, &unstable_contexts) {
             return false;
         }
         let ids = receiver_ids(file, ff, &tag.tag);
@@ -4705,7 +4738,7 @@ fn opaque_delivery(
                 .and_then(|module| Some((module.clone(), files.get(&module)?)))
                 .map(|(module, declaring)| declaring.element_consts.values().map(|held| (module.clone(), held)).collect())
                 .unwrap_or_default(),
-            None => resolve_declaration(&file, ff, &import, files, inputs)
+            None => resolve_declaration(&file, ff, &import, files, inputs, links)
                 .filter(|(declaring, _, _)| *declaring != file)
                 .and_then(|(declaring, binding, _)| {
                     let held = files.get(&declaring)?.element_consts.get(&binding)?;
@@ -5423,6 +5456,7 @@ fn run_with_system_floor(
     class_prefix: &str,
     total_system_floor: bool,
 ) -> CssOutput {
+    let links = &crate::link::ProjectLinks::link(files, inputs);
     let breakpoints = extract_breakpoints(&inputs.theme);
     let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
     let evaluator = TransformEvaluator::new();
@@ -5560,8 +5594,8 @@ fn run_with_system_floor(
                         &d.binding,
                         files,
                         inputs,
-                        &mut FxHashSet::default(),
-                    );
+                        links,
+                        &mut FxHashSet::default(),);
                     diagnostics.push(unextractable_chain_bail(file_path, &d.binding, reason, animus));
                 }
                 continue;
@@ -5569,7 +5603,7 @@ fn run_with_system_floor(
             let component_id = format!("{}::{}", file_path, d.binding);
             if let Some(extends_binding) = &d.extends_from {
                 let resolved =
-                    resolve_extension_parent(file_path, ff, extends_binding, files, inputs);
+                    resolve_extension_parent(file_path, ff, extends_binding, files, inputs, links);
                 match resolved {
                     Ok(parent_id) => {
                         parent_map.insert(component_id, parent_id);
@@ -5588,20 +5622,20 @@ fn run_with_system_floor(
             }
         }
         for extension in &ff.member_parent_extensions {
-            if let Some(component) = member_parent_component(file_path, ff, extension, files, inputs)
+            if let Some(component) = member_parent_component(file_path, ff, extension, files, inputs, links)
             {
                 diagnostics.push(unsupported_member_parent_bail(file_path, extension, component));
             }
         }
         for chain in &ff.member_rooted_chains {
-            diagnostics.extend(unsupported_namespace_root(file_path, ff, chain, files, inputs));
+            diagnostics.extend(unsupported_namespace_root(file_path, ff, chain, files, inputs, links));
         }
         for chain in &ff.object_member_chains {
-            diagnostics.extend(unsupported_object_member(file_path, chain, files, inputs));
+            diagnostics.extend(unsupported_object_member(file_path, chain, files, inputs, links));
         }
-        diagnostics.extend(unsupported_default_export(file_path, ff, files, inputs));
+        diagnostics.extend(unsupported_default_export(file_path, ff, files, inputs, links));
         for site in &ff.unwalked_chains {
-            diagnostics.extend(runtime_builder_reference(file_path, site, files, inputs));
+            diagnostics.extend(runtime_builder_reference(file_path, site, files, inputs, links));
         }
     }
 
@@ -5699,8 +5733,8 @@ fn run_with_system_floor(
                     &chain.descriptor.binding,
                     files,
                     inputs,
-                    &mut FxHashSet::default(),
-                )
+                    links,
+                    &mut FxHashSet::default(),)
             })
         };
         if let Some(fatal) = &chain.fatal_error {
@@ -6308,7 +6342,7 @@ fn run_with_system_floor(
         }
     };
     let mut object_members =
-        crate::family_members::ObjectMembers::new(files, inputs, &family_index, &declared_component);
+        crate::family_members::ObjectMembers::new(files, inputs, links, &family_index, &declared_component);
     // A member tag written through a facade or alias whose member is stable
     // resolves like a family member tag.
     let member_bindings: BTreeMap<String, FxHashMap<String, String>> = order
@@ -6699,7 +6733,7 @@ fn run_with_system_floor(
     }
     // Development keeps every component anyway.
     if !inputs.dev_mode {
-        diagnostics.extend(identity_uncertainty_diagnostics(&uncertain_identities, files, inputs));
+        diagnostics.extend(identity_uncertainty_diagnostics(&uncertain_identities, files, inputs, links));
     }
 
     // A component a reference hands somewhere usage tracking does not follow
@@ -6815,7 +6849,7 @@ fn run_with_system_floor(
             if original == "default" {
                 continue;
             }
-            if let Some((declaring, binding, _)) = resolve_export(path, source, original, files, inputs) {
+            if let Some((declaring, binding, _)) = resolve_export(path, source, original, files, inputs, links) {
                 escaped_ids.extend(resolve_declared_identity(&declaring, &binding, files, inputs, &evaluated_ids));
             }
         }
@@ -6885,6 +6919,7 @@ fn run_with_system_floor(
     let (delivered_ids, delivered_tags) = opaque_delivery(
         files,
         inputs,
+        links,
         &evaluated_ids,
         &ids_by_binding,
         &wrapper_targets_by_file,
@@ -6893,8 +6928,7 @@ fn run_with_system_floor(
         |id| {
             !changed_ids.contains(id)
                 && evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement)
-        },
-    );
+        },);
     escaped_ids.extend(delivered_ids);
     // A held wrapper some render of which no member tag shows renders with
     // props no analysed use shows.
@@ -7082,21 +7116,21 @@ fn run_with_system_floor(
             bounded_prop_tags(
                 files,
                 inputs,
+                links,
                 &evaluated_ids,
                 &all_usage_results,
                 &unproven,
                 &forwards,
                 &ordinary_members,
                 &delivered_tags,
-                &mut object_members,
-            )
+                &mut object_members,)
         }
         false => FxHashSet::default(),
     };
     let usage_complete = inputs.analysis_context.skipped_sources.is_empty()
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
-            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, &ordinary_members, &package_members, &bounded_tags));
+            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, links, &ordinary_members, &package_members, &bounded_tags));
     let project_uses = usage_complete
         .then(|| {
             let unproven: std::collections::BTreeSet<String> =
@@ -10952,36 +10986,26 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     #[test]
-    fn extend_through_opaque_barrel_stays_standalone() {
-        // Star exports are not collected, so landing on the barrel proves
-        // nothing about the parent.
+    fn extend_through_star_barrel_inherits_like_a_named_one() {
+        // `export *` reaches the defining chain as a named re-export does.
         let out = analyze(
             &[
-                (
-                    "barrel.tsx",
-                    "export * from './base';\n",
-                ),
+                ("barrel.tsx", "export * from './base';\n"),
                 (
                     "base.tsx",
-                    "export const P = ds.styles({ display: 'flex' });\n",
+                    "export const Parent = ds.styles({ display: 'flex', p: 8 }).asElement('div');\nexport const A = () => <Parent />;\n",
                 ),
                 (
                     "child.tsx",
-                    "import { P } from './barrel';\nexport const Child = P.extend().styles({ p: 8 }).asElement('div');\nexport const B = () => <Child />;\n",
+                    "import { Parent } from './barrel';\nexport const Child = Parent.extend().styles({ display: 'grid' }).asElement('div');\nexport const B = () => <Child />;\n",
                 ),
             ],
             &test_inputs(),
         );
-        assert!(
-            unresolvable_parent_bails(&out, "P").is_empty(),
-            "{:?}",
-            out.diagnostics
-        );
-        assert!(
-            out.sheets.base.contains("animus-Child-"),
-            "{}",
-            out.sheets.base
-        );
+        assert!(unresolvable_parent_bails(&out, "Parent").is_empty(), "{:?}", out.diagnostics);
+        let child_rule = child_rule(&out);
+        assert!(child_rule.contains("display: grid"), "{}", out.sheets.base);
+        assert!(child_rule.contains("padding: 0.5rem"), "{}", out.sheets.base);
     }
 
     #[test]

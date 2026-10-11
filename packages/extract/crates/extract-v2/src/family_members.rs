@@ -209,6 +209,7 @@ struct MemberTable {
 pub(crate) struct ObjectMembers<'f> {
     files: &'f BTreeMap<String, FileFacts>,
     inputs: &'f CssInputs,
+    links: &'f crate::link::ProjectLinks,
     families: &'f FamilyIndex,
     /// The one component a binding of a module names, if any.
     component: &'f dyn Fn(&str, &str) -> Option<String>,
@@ -225,12 +226,14 @@ impl<'f> ObjectMembers<'f> {
     pub(crate) fn new(
         files: &'f BTreeMap<String, FileFacts>,
         inputs: &'f CssInputs,
+        links: &'f crate::link::ProjectLinks,
         families: &'f FamilyIndex,
         component: &'f dyn Fn(&str, &str) -> Option<String>,
     ) -> Self {
         Self {
             files,
             inputs,
+            links,
             families,
             component,
             objects: FxHashMap::default(),
@@ -341,7 +344,7 @@ impl<'f> ObjectMembers<'f> {
     pub(crate) fn ordinary_member(&mut self, file: &str, tag: &str) -> Option<(String, String)> {
         let (module, binding, None) = self.member_entry(file, tag)? else { return None };
         let ff = self.files.get(&module)?;
-        let (declaring, declared, _) = resolve_declaration(&module, ff, &binding, self.files, self.inputs)?;
+        let (declaring, declared, _) = resolve_declaration(&module, ff, &binding, self.files, self.inputs, self.links)?;
         self.files.get(&declaring)?.ordinary_components.contains(&declared).then_some((declaring, declared))
     }
 
