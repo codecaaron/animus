@@ -499,19 +499,25 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     disposeTempRoots();
   });
 
-  it('caches the retried content, not the empty file on disk', async () => {
+  /** A dev context over a kit workspace with a Session behind it, started,
+   *  whose system load fails while `systemLoadFails` is set. */
+  async function startedContext() {
     const { app } = createKitWorkspace();
     const file = join(app, 'src', 'Button.tsx');
     writeFileSync(file, 'export const Button = 1;\n');
+    const state = { systemLoadFails: false };
     const ctx = new PluginContext({ system: './src/system.ts' }, () => ({
-      loadSystemModule: () => ({
-        propConfig: '{}',
-        groupRegistry: '{}',
-        scalesJson: '{}',
-        variableMapJson: '{}',
-        variableCss: '',
-        dependencies: [],
-      }),
+      loadSystemModule: () => {
+        if (state.systemLoadFails) throw new Error('planned system failure');
+        return {
+          propConfig: '{}',
+          groupRegistry: '{}',
+          scalesJson: '{}',
+          variableMapJson: '{}',
+          variableCss: '',
+          dependencies: [],
+        };
+      },
       extractFacts: factsExtractor({
         [join(app, 'src', 'system.ts')]: {
           ...emptyFacts(join(app, 'src', 'system.ts')),
@@ -530,23 +536,55 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     await runBuildStart(ctx, async (specifier) =>
       resolve(app, 'src', specifier)
     );
+    const client = makeEnvironment('client', VIRTUAL_IDS);
+    let timestamp = 60;
+    const update = (path: string, read?: () => Promise<string>) =>
+      runHotUpdate(ctx, client.environment, {
+        type: 'update',
+        file: path,
+        timestamp: timestamp++,
+        modules: [],
+        read,
+      });
+    return { app, file, ctx, state, update };
+  }
+
+  it('caches the retried content, not the empty file on disk', async () => {
+    const { file, ctx, update } = await startedContext();
 
     const settled = 'export const Button = 2;\n';
     // The atomic-save window: the path exists and is empty right now.
     writeFileSync(file, '');
-    const client = makeEnvironment('client', VIRTUAL_IDS);
-    await runHotUpdate(ctx, client.environment, {
-      type: 'update',
-      file,
-      timestamp: 60,
-      modules: [],
-      read: async () => settled,
-    });
+    await update(file, async () => settled);
 
     expect(ctx.session?.heldSources.get('src/Button.tsx')).toEqual({
       hash: contentHash(settled),
       source: settled,
     });
+    ctx.close();
+  });
+
+  it('analyzes the retried content when a system reload debt takes the edit', async () => {
+    // A failed system reload leaves debt, so the next edit is analyzed by a
+    // full pass; that pass must read the settled bytes, not the empty disk.
+    const { app, file, ctx, state, update } = await startedContext();
+    writeFileSync(file, '');
+    await update(file, async () => 'export const Button = 2;\n');
+
+    state.systemLoadFails = true;
+    await update(join(app, 'src', 'system.ts'));
+    state.systemLoadFails = false;
+
+    const settled = 'export const Button = 3;\n';
+    await update(file, async () => settled);
+
+    expect(
+      ctx.session?.corpus.published.analysisEntries.get('src/Button.tsx')
+        ?.source
+    ).toBe(settled);
+    expect(ctx.session?.heldSources.get('src/Button.tsx')?.source).toBe(
+      settled
+    );
     ctx.close();
   });
 });
