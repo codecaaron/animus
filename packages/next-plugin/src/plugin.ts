@@ -2,6 +2,7 @@ import {
   AnimusConfigError,
   assertSupportedEngine,
   buildPathAliasesJson,
+  builtInAssetClassification,
   webpackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -250,6 +251,12 @@ export class AnimusWebpackPlugin {
     const resolve = compiler.options?.resolve;
     const names = resolve?.conditionNames ?? [];
     this.session.conditions = names.filter((name) => name !== '...');
+    // webpack's rules are not modelled: a conditional rule may never apply,
+    // so the built-in list answers (spec §2.2 A8).
+    this.session.assetClassification = builtInAssetClassification(
+      'hostOptionUnreadable',
+      'next-webpack rules not modelled'
+    );
     this.session.extensionPolicy = webpackExtensionPolicy(
       'next-webpack',
       resolve ?? {},

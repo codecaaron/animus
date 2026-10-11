@@ -780,16 +780,25 @@ impl ExtractEngine {
     #[napi]
     pub fn analyze(&mut self, file_entries_json: String, probe_evidence_json: Option<String>) -> napi::Result<String> {
         let entries = canonical_entries(&file_entries_json)?;
+        if let Ok(mut shadowing) = self.opts.css_inputs.shadowing_probes.lock() {
+            shadowing.clear();
+        }
         if let Ok(mut incomplete) = self.opts.css_inputs.incomplete_probes.lock() {
             incomplete.clear();
             // Ingestion's openings are this analysis's own.
             for opening in &self.opts.css_inputs.analysis_context.openings {
-                incomplete.insert((
-                    opening.importer.clone(),
-                    opening.specifier.clone(),
-                    opening.candidate.clone(),
-                    opening.opened.clone(),
-                ));
+                incomplete.insert(analyze_css::IncompleteProbe {
+                    importer: opening.importer.clone(),
+                    specifier: opening.specifier.clone(),
+                    candidate: opening.candidate.clone(),
+                    opened: opening.opened.clone(),
+                    why: match opening.why {
+                        analyze_css::IngestionOpeningKind::CaseMismatch => analyze_css::Opening::CaseMismatch,
+                        analyze_css::IngestionOpeningKind::Skipped => {
+                            analyze_css::Opening::Skipped { later: opening.later.clone() }
+                        }
+                    },
+                });
             }
         }
         // Evidence gathered for other files (a same-count edit since the
@@ -916,8 +925,10 @@ impl ExtractEngine {
             );
         }
 
-        // A static that some use may change before a style reads it stands
-        // as a marker naming that use, so every reader refuses it.
+        // A static that some use may change before a style reads it is
+        // unsettled, naming that use, so every reader refuses it.
+        let mut unsettled_by_file: BTreeMap<String, rustc_hash::FxHashMap<String, crate::eval::Unsettled>> =
+            BTreeMap::new();
         let programs: BTreeMap<&str, &oxc::ast::ast::Program<'_>> =
             store.iter().map(|ast| (ast.path.as_str(), ast.program())).collect();
         let readings_by_file: BTreeMap<String, crate::usage_facts::ParamReadings> =
@@ -932,16 +943,14 @@ impl ExtractEngine {
             &self.opts.css_inputs,
             &mut readings_of,
         ) {
-            if let Some(value) = statics_by_file.get_mut(&file).and_then(|statics| statics.get_mut(&local)) {
+            if statics_by_file.get_mut(&file).and_then(|statics| statics.remove(&local)).is_some() {
                 // Only a value the binding had before const initializers read
-                // other consts stays held; one derived from them refuses.
+                // other consts is held; one derived from them is not.
                 let in_package = crate::analyze_css::is_external_file(&file, &self.opts.css_inputs.external_dirs);
-                *value = match programs.get(file.as_str()).and_then(|program| {
-                    crate::eval::pre_read_static(program, &local, in_package)
-                }) {
-                    Some(held) => crate::eval::held_marker(reason, held),
-                    None => crate::eval::lost_marker(reason),
-                };
+                let held = programs
+                    .get(file.as_str())
+                    .and_then(|program| crate::eval::pre_read_static(program, &local, in_package));
+                unsettled_by_file.entry(file).or_default().insert(local, crate::eval::Unsettled { reason, held });
             }
         }
 
@@ -978,6 +987,8 @@ impl ExtractEngine {
             String,
             rustc_hash::FxHashMap<String, serde_json::Value>,
         > = std::collections::BTreeMap::new();
+        let mut unsettled_imports_by_file: BTreeMap<String, rustc_hash::FxHashMap<String, crate::eval::Unsettled>> =
+            BTreeMap::new();
         let output_dirs = &self.opts.css_inputs.analysis_context.output_dirs;
         // Each unregistered import, by file and local, whose declaration is
         // in a kit's compiled output: the file declaring it.
@@ -986,6 +997,8 @@ impl ExtractEngine {
         for (path, (imports, exports)) in &imports_by_file {
             let mut extra = rustc_hash::FxHashMap::default();
             let mut usage_extra = rustc_hash::FxHashMap::default();
+            let mut unsettled_extra: rustc_hash::FxHashMap<String, crate::eval::Unsettled> =
+                rustc_hash::FxHashMap::default();
             for imp in imports {
                 let Some(target) =
                     analyze_css::resolve_import_source(path, &imp.source, &statics_by_file, &self.opts.css_inputs)
@@ -1006,6 +1019,13 @@ impl ExtractEngine {
                         {
                             extra.insert(imp.local.clone(), val.clone());
                         }
+                        if let Some(unsettled) =
+                            unsettled_by_file.get(declaring).and_then(|unsettled| unsettled.get(local)).filter(
+                                |unsettled| unsettled.held.as_ref().is_none_or(|held| !crate::eval::carries_relative_asset(held)),
+                            )
+                        {
+                            unsettled_extra.insert(imp.local.clone(), unsettled.clone());
+                        }
                         if let Some(val) = complete_statics_by_file[declaring].get(local) {
                             usage_extra.insert(imp.local.clone(), val.clone());
                         }
@@ -1020,6 +1040,7 @@ impl ExtractEngine {
                 let first = registered.next();
                 if let Some(kf) = first.filter(|kf| registered.all(|other| other == *kf)) {
                     extra.insert(imp.local.clone(), kf.clone());
+                    unsettled_extra.remove(&imp.local);
                     usage_extra.insert(imp.local.clone(), kf.clone());
                 } else if let Some((at, _)) = spelled.first() {
                     let declared_in = &read_links.paths[*at];
@@ -1032,6 +1053,7 @@ impl ExtractEngine {
                 if let Some(local) = &exp.local {
                     if let Some(kf) = keyframes_registry.get(&exp.exported) {
                         extra.insert(local.clone(), kf.clone());
+                        unsettled_extra.remove(local);
                         usage_extra.insert(local.clone(), kf.clone());
                     }
                 }
@@ -1041,6 +1063,9 @@ impl ExtractEngine {
             }
             if !usage_extra.is_empty() {
                 usage_enriched_by_file.insert(path.clone(), usage_extra);
+            }
+            if !unsettled_extra.is_empty() {
+                unsettled_imports_by_file.insert(path.clone(), unsettled_extra);
             }
         }
 
@@ -1062,6 +1087,7 @@ impl ExtractEngine {
             }
         }
         let empty = rustc_hash::FxHashMap::default();
+        let none_unsettled = rustc_hash::FxHashMap::default();
         for ast in store.iter() {
             self.order.push(ast.path.clone());
             let extra = enriched_by_file.get(&ast.path).unwrap_or(&empty);
@@ -1079,6 +1105,8 @@ impl ExtractEngine {
                 local_usage_statics,
                 extra,
                 usage_extra,
+                unsettled_by_file.get(&ast.path).unwrap_or(&none_unsettled),
+                unsettled_imports_by_file.get(&ast.path).unwrap_or(&none_unsettled),
                 &references,
                 lowered_by_file.remove(&ast.path),
             );
