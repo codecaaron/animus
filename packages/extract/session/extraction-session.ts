@@ -37,6 +37,9 @@ import {
   findPackageRoot,
   findSheetAssetSpecifiers,
   firstOwners,
+  assertRuntimeImportSuppliesTerminals,
+  DEFAULT_RUNTIME_IMPORT,
+  hostFirstPackageResolver,
   hashReplacementPlans,
   isExcludedPackageRelativePath,
   isPathWithinRoot,
@@ -182,7 +185,12 @@ export interface SessionHost {
   unbundledComputedImports?: boolean;
 }
 
-import type { AnimusMode, ExcludeMatcher, Verbosity } from '../pipeline/index';
+import type {
+  AnimusMode,
+  ExcludeMatcher,
+  HostResolve,
+  Verbosity,
+} from '../pipeline/index';
 import type {
   AssetSheets,
   IngestionOpening,
@@ -285,6 +293,13 @@ function firstChangedFile(
 export class ExtractionSession {
   /** Set by the adapter before any pipeline run. */
   rootDir: string | null = null;
+  /** The module extracted terminals import their factories from; an
+   *  override must supply every terminal the analysis extracts. */
+  runtimeImport: string = DEFAULT_RUNTIME_IMPORT;
+  /** A host that resolves imports itself (Vite's `this.resolve`): package
+   *  discovery asks it first, the loader only for a declared workspace it
+   *  cannot resolve. Null resolves through the loader alone. */
+  hostResolve: HostResolve | null = null;
   /** Serialized path aliases, harvested by the adapter from bundler config. */
   pathAliasesJson: string | null = null;
   /** The host's aliases are the project's tsconfig `paths`: each full pass
@@ -328,6 +343,11 @@ export class ExtractionSession {
   /** Whether the analysis-inputs hydration corpus is written to disk. Only
    *  isolated loader workers replay it; an in-process loader reads memory. */
   persistAnalysisInputs = false;
+  /** Whether the session keeps its artifacts on disk: status, commit,
+   *  manifest, styles and its directory claim. A host that serves every
+   *  result from memory (Vite) turns it off; the shared state still
+   *  publishes. */
+  persistArtifacts = true;
   /** Whether this session serves development (a watch), where an error-level
    *  diagnostic is reported and the session keeps running. Only a build
    *  fails on one. */
@@ -1156,10 +1176,12 @@ export class ExtractionSession {
       );
       // The on-disk record is what stops a sibling from pruning this tree.
       // The build holds it, and releases it only when it retires.
-      mkdirSync(this.sessionDir, { recursive: true });
-      holdBuildClaimRecord(this.key, () =>
-        holdDirectoryClaim(this.sessionDir, { build: this.sessionId })
-      );
+      if (this.persistArtifacts) {
+        mkdirSync(this.sessionDir, { recursive: true });
+        holdBuildClaimRecord(this.key, () =>
+          holdDirectoryClaim(this.sessionDir, { build: this.sessionId })
+        );
+      }
       this.releasePublicationClaim = releaseOwner;
     }
 
@@ -1402,20 +1424,30 @@ export class ExtractionSession {
         );
       },
     };
+    const hostFirst =
+      this.hostResolve === null
+        ? null
+        : hostFirstPackageResolver(this.hostResolve, engineApi(this.key), {
+            rootDir,
+            conditions: context.conditions,
+            workspaces: context.workspaces,
+            extensions: context.extensions,
+          });
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
       engineModuleParser(engineApi(this.key)),
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
-      (name) => {
-        const entry = resolvePackagesByName(
-          rootDir,
-          [name],
-          packageResolution,
-          context
-        ).entries[name];
-        return entry ? resolve(rootDir, entry) : null;
-      },
+      hostFirst?.resolveSpecifier ??
+        ((name) => {
+          const entry = resolvePackagesByName(
+            rootDir,
+            [name],
+            packageResolution,
+            context
+          ).entries[name];
+          return entry ? resolve(rootDir, entry) : null;
+        }),
       context.extensions
     );
     discoveryDiagnostics.push(
@@ -1426,12 +1458,15 @@ export class ExtractionSession {
         packageNames
       )
     );
-    const preResolved = resolvePackagesByName(
-      rootDir,
-      packageNames,
-      packageResolution,
-      context
-    );
+    const preResolved =
+      hostFirst === null
+        ? resolvePackagesByName(
+            rootDir,
+            packageNames,
+            packageResolution,
+            context
+          )
+        : null;
 
     // Raw content hashes of every walked external file, keyed by absolute
     // path — recorded before MDX preprocessing so the diff sees raw bytes.
@@ -1451,11 +1486,14 @@ export class ExtractionSession {
         context.workspaces
       ),
       specifiers: packageNames,
-      resolveSpecifier: (name) =>
-        preResolved.entries[name]
-          ? resolve(rootDir, preResolved.entries[name])
-          : null,
-      unresolvedReason: (name) => preResolved.unresolved[name],
+      resolveSpecifier:
+        hostFirst?.resolveSpecifier ??
+        ((name) =>
+          preResolved?.entries[name]
+            ? resolve(rootDir, preResolved.entries[name])
+            : null),
+      unresolvedReason: (name) => preResolved?.unresolved[name],
+      requireSourceEntry: hostFirst?.requireSourceEntry,
       rootDir,
       extensionsSet,
       hasEntry: (relPath) => rawEntries.some((e) => e.path === relPath),
@@ -2041,7 +2079,7 @@ export class ExtractionSession {
       packageMap,
       system,
       emitter: {
-        runtimeImport: '@animus-ui/system/runtime',
+        runtimeImport: this.runtimeImport,
         cssModuleId: ANIMUS_CSS_MODULE_ID,
         systemPropsModuleId:
           this.systemPropsModuleId ?? systemPropsPath(this.sessionDir),
@@ -2092,6 +2130,9 @@ export class ExtractionSession {
       extraDiagnostics: this.ingestionFailureDiagnostics,
       kitDescriptors: this.kitDescriptors,
     });
+    if (result.manifest) {
+      assertRuntimeImportSuppliesTerminals(this.runtimeImport, result.manifest);
+    }
 
     enforceExternalTokenContracts({
       diagnostics: result.manifest?.diagnostics,
@@ -2566,7 +2607,7 @@ export class ExtractionSession {
   /** Delete legacy flat artifacts and prune sibling session directories past
    *  the retention window — never this session's own dir. */
   private runSessionStartHygiene(): void {
-    if (this.sessionStartHygieneDone) return;
+    if (this.sessionStartHygieneDone || !this.persistArtifacts) return;
     this.sessionStartHygieneDone = true;
     const animusDir = join(this.rootDir!, ANIMUS_ARTIFACT_DIR);
     // A flat set whose commit record VERIFIES is the CLI's published output,
@@ -2621,12 +2662,14 @@ export class ExtractionSession {
   /** Write one artifact write-then-rename, so a cross-process reader never
    *  sees a torn file; the tmp name carries the pid to keep writers apart. */
   private writeSessionArtifact(name: string, content: string): void {
-    const dir = this.sessionDir;
-    // Unconditional: mkdirSync(recursive) is a no-op when the dir exists.
-    mkdirSync(dir, { recursive: true });
-    const tmpPath = join(dir, `.${name}.${process.pid}.tmp`);
-    writeFileSync(tmpPath, content);
-    renameSync(tmpPath, join(dir, name));
+    if (this.persistArtifacts) {
+      const dir = this.sessionDir;
+      // Unconditional: mkdirSync(recursive) is a no-op when the dir exists.
+      mkdirSync(dir, { recursive: true });
+      const tmpPath = join(dir, `.${name}.${process.pid}.tmp`);
+      writeFileSync(tmpPath, content);
+      renameSync(tmpPath, join(dir, name));
+    }
     this.onArtifactWrite?.(name, content);
   }
 

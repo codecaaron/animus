@@ -1,6 +1,5 @@
 import {
   assembleStylesheet,
-  bareSpecifierPackageName,
   clearEngineCache,
   collectExternalPackageSources,
   contentHash,
@@ -13,6 +12,7 @@ import {
   extractSystemFilePackages,
   importedKitDiagnostics,
   firstOwners,
+  hostFirstPackageResolver,
   isDeletedSource,
   nativeKitSourceRoot,
   nativePackageLocator,
@@ -198,35 +198,14 @@ async function discoverSources(
   hostResolve: (specifier: string) => Promise<string | null>
 ): Promise<DiscoveredSources> {
   const t0 = performance.now();
-  // A declared workspace nothing links into node_modules is no package to
-  // Vite, though the system loader resolves it: where the host finds
-  // nothing, discovery asks the loader, as the session does. Vite resolves
-  // such a package's imports only through a source-entry redirect, so the
-  // collector admits a loader answer only where one exists.
   const workspaces = declaredWorkspacePackages(ctx.rootDir);
-  const loaderOnly = new Set<string>();
-  const resolveSpecifier = async (
-    specifier: string
-  ): Promise<string | null> => {
-    const hosted = await hostResolve(specifier);
-    if (
-      hosted !== null ||
-      !Object.hasOwn(workspaces, bareSpecifierPackageName(specifier))
-    ) {
-      return hosted;
-    }
-    const loaded = ctx
-      .engineApi()
-      .resolveSpecifier?.(
-        specifier,
-        ctx.rootDir,
-        ctx.resolveConditions,
-        workspaces,
-        extensionPolicyJson(ctx.extensionPolicy)
-      );
-    if (loaded?.path) loaderOnly.add(specifier);
-    return loaded?.path ?? null;
-  };
+  const packages = hostFirstPackageResolver(hostResolve, ctx.engineApi(), {
+    rootDir: ctx.rootDir,
+    conditions: ctx.resolveConditions,
+    workspaces,
+    extensions: ctx.extensionPolicy,
+  });
+  const resolveSpecifier = packages.resolveSpecifier;
   const filePaths = discoverFiles(
     ctx.rootDir,
     ctx.rootDir,
@@ -291,7 +270,7 @@ async function discoverSources(
       extensionPolicyJson(ctx.extensionPolicy)
     ),
     locatePackage: nativePackageLocator(ctx.engineApi(), workspaces),
-    requireSourceEntry: (specifier) => loaderOnly.has(specifier),
+    requireSourceEntry: packages.requireSourceEntry,
     extensions: ctx.extensionPolicy,
     rootDir: ctx.rootDir,
     extensionsSet: ctx.extensionsSet,
