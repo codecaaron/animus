@@ -23,12 +23,30 @@ afterEach(() => {
   disposeTempRoots();
 });
 
+interface BuildLayout {
+  exclude: string[];
+  /** Vite's `build.outDir`; its default `dist` when absent. */
+  outDir?: string;
+  systemSource?: string;
+  /** App-relative files written before the build. */
+  files?: Record<string, string>;
+}
+
 /** A build of an app with a user exclude list and Vite's default `dist`
  *  output already written: the paths analyzed and the lines reported. */
-async function buildWithUserExcludes(exclude: string[]) {
-  const { app } = createKitWorkspace();
+async function buildWithUserExcludes(excludeOrLayout: string[] | BuildLayout) {
+  const layout: BuildLayout = Array.isArray(excludeOrLayout)
+    ? { exclude: excludeOrLayout }
+    : excludeOrLayout;
+  const { exclude } = layout;
+  const { app } = createKitWorkspace(layout.systemSource);
   mkdirSync(join(app, 'dist', 'assets'), { recursive: true });
   writeFileSync(join(app, 'dist', 'assets', 'index.js'), 'export {};\n');
+  for (const [path, source] of Object.entries(layout.files ?? {})) {
+    mkdirSync(join(app, path, '..'), { recursive: true });
+    writeFileSync(join(app, path), source);
+  }
+  const systemSource = layout.systemSource ?? KIT_SYSTEM_SOURCE;
   const analyzed: string[] = [];
   const reported: string[] = [];
   vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => {
@@ -46,7 +64,7 @@ async function buildWithUserExcludes(exclude: string[]) {
     extractFacts: factsExtractor({
       [join(app, 'src', 'system.ts')]: {
         ...emptyFacts(join(app, 'src', 'system.ts')),
-        imports: systemImportFacts(KIT_SYSTEM_SOURCE),
+        imports: systemImportFacts(systemSource),
       },
     }),
     analyzeProject: (filesJson: string) => {
@@ -59,7 +77,12 @@ async function buildWithUserExcludes(exclude: string[]) {
   applyResolvedConfig(
     ctx,
     await resolveConfig(
-      { configFile: false, root: app, logLevel: 'silent' },
+      {
+        configFile: false,
+        root: app,
+        logLevel: 'silent',
+        build: { outDir: layout.outDir ?? 'dist' },
+      },
       'build'
     )
   );
@@ -73,6 +96,35 @@ describe('a user exclude list never re-admits output', () => {
 
     expect(analyzed).toContain('src/App.tsx');
     expect(analyzed.filter((path) => path.startsWith('dist/'))).toEqual([]);
+  });
+});
+
+describe('a user exclude list never re-admits output', () => {
+  test('a package inside the output directory is never collected', async () => {
+    const { analyzed } = await buildWithUserExcludes({
+      exclude: ['stories'],
+      systemSource: `import { createSystem } from '@animus-ui/system';
+import kit from '../dist/kit/src/index.ts';
+export const system = createSystem({}).extend(kit);
+`,
+      files: {
+        'dist/kit/package.json': '{"name":"@out/kit"}',
+        'dist/kit/src/index.ts': 'export const Kit = 1;\n',
+      },
+    });
+
+    expect(analyzed).toContain('src/App.tsx');
+    expect(analyzed.filter((path) => path.startsWith('dist/'))).toEqual([]);
+  });
+
+  test('an output name is a literal path, never a pattern', async () => {
+    const { analyzed } = await buildWithUserExcludes({
+      exclude: ['stories'],
+      outDir: 'build?',
+      files: { 'buildA/Panel.tsx': 'export const Panel = 1;\n' },
+    });
+
+    expect(analyzed).toContain('buildA/Panel.tsx');
   });
 });
 

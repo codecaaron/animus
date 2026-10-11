@@ -63,12 +63,12 @@ describe('an unmatched user exclude is reported', () => {
     session.close();
   });
 
-  test('a pattern matching only paths an output exclusion takes first counts as matched', async () => {
+  test('a user pattern an output directory also excludes counts as matched', async () => {
     const root = createProject('animus-shadowed-exclude-');
     mkdirSync(join(root, 'out'));
     writeFileSync(join(root, 'out', 'styles.js'), 'export {};\n');
-    const session = makeSession(root, { exclude: ['styles'] });
-    session.structuralExclude = ['out/**'];
+    const session = makeSession(root, { exclude: ['out'] });
+    session.structuralExclude = ['out'];
 
     await session.runFullPipeline();
 

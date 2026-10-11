@@ -207,11 +207,11 @@ describe('createExcludeMatcher', () => {
     expect(matcher.matches('/app/generated/a.ts', 'generated/a.ts')).toBe(true);
   });
 
-  test('extraStructural joins the never-replaceable set without touching replace semantics', () => {
-    const noUser = createExcludeMatcher(undefined, ['out/**']);
+  test('an output directory joins the never-replaceable set without touching replace semantics', () => {
+    const noUser = createExcludeMatcher(undefined, ['out']);
     expect(noUser.matches('/app/out/styles.css', 'out/styles.css')).toBe(true);
     expect(noUser.matches('/app/dist/a.ts', 'dist/a.ts')).toBe(true);
-    const withUser = createExcludeMatcher(['.test.'], ['out/**']);
+    const withUser = createExcludeMatcher(['.test.'], ['out']);
     expect(withUser.matches('/app/out/styles.css', 'out/styles.css')).toBe(
       true
     );

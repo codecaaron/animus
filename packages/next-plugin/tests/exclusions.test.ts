@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -13,6 +13,7 @@ import { setEngineApiOverride } from '../../extract/session/singleton';
 setEngineApiOverride(() => ({
   loadSystemModule: mocks.loadSystemModule,
   extractFacts: () => '{"files":{},"parseCount":0}',
+  resolveSpecifier: requireResolveSpecifier,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));
@@ -22,6 +23,7 @@ import {
   createProject,
   disposeTempRoots,
   lastAnalyzedPaths,
+  requireResolveSpecifier,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from '../../extract/tests/session/session-fixtures';
@@ -48,11 +50,32 @@ afterEach(() => {
   disposeTempRoots();
 });
 
-/** A project whose custom `distDir` already holds Next's output. */
-function projectWithOutput(): string {
-  const root = createProject('animus-next-output-');
+/** A project whose custom `distDir` already holds Next's output; with
+ *  `kitInOutput`, a kit there that the system extends. */
+function projectWithOutput(kitInOutput = false): string {
+  // Realpath'd: macOS resolves `/var` through a symlink, and collection
+  // spells a package's files from the resolved path.
+  const root = realpathSync(createProject('animus-next-output-'));
   mkdirSync(join(root, 'build', 'static'), { recursive: true });
   writeFileSync(join(root, 'build', 'static', 'page.js'), 'export {};\n');
+  if (kitInOutput) {
+    mkdirSync(join(root, 'build', 'kit', 'src'), { recursive: true });
+    writeFileSync(
+      join(root, 'build', 'kit', 'package.json'),
+      '{"name":"@out/kit"}'
+    );
+    writeFileSync(
+      join(root, 'build', 'kit', 'src', 'index.ts'),
+      'export const Kit = 1;\n'
+    );
+    writeFileSync(
+      join(root, 'src', 'system.ts'),
+      `import { createSystem } from '@animus-ui/system';
+import kit from '../build/kit/src/index.ts';
+export const system = createSystem({}).extend(kit);
+`
+    );
+  }
   return root;
 }
 
@@ -65,8 +88,11 @@ type PluginCompiler = Parameters<AnimusWebpackPlugin['apply']>[0];
 type AsyncHandler = Parameters<PluginCompiler['hooks']['run']['tapPromise']>[1];
 
 describe('a user exclude list never re-admits output', () => {
-  test("webpack keeps Next's distDir out of discovery", async () => {
-    const root = projectWithOutput();
+  test.each([
+    ["webpack keeps Next's distDir out of discovery", false],
+    ['webpack never collects a package inside the distDir', true],
+  ])('%s', async (_label, kitInOutput) => {
+    const root = projectWithOutput(kitInOutput);
     const wrapped = withAnimus({
       system: './src/system.ts',
       root,

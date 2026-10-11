@@ -181,10 +181,27 @@ describe('config resolution', () => {
       config.options.exclude,
       session.structuralExclude
     );
-    expect(session.structuralExclude).toEqual(['out/animus/**']);
-    expect(patterns).toContain('out/animus/**');
+    expect(session.structuralExclude).toEqual(['out/animus']);
+    expect(patterns).toContain('out/animus');
     expect(patterns).toContain('dist');
     expect(patterns).toContain('.test.');
+  });
+
+  test('a user exclude list never re-admits output: an empty pattern keeps the outDir excluded', async () => {
+    const root = makeRoot();
+    writeFileSync(
+      join(root, 'animus.config.json'),
+      JSON.stringify({ system: './ds.ts', exclude: [''] })
+    );
+    const config = await resolveCliConfig({ root, outDir: 'out' }, root);
+    const session = createCliSession(config);
+    const matcher = createExcludeMatcher(
+      config.options.exclude,
+      session.structuralExclude
+    );
+    expect(
+      matcher.matches(join(root, 'out', 'styles.css'), 'out/styles.css')
+    ).toBe(true);
   });
 
   test('the outDir exclusion actually matches the artifacts published under it', async () => {
@@ -696,8 +713,10 @@ describe('interrupted-writer debris', () => {
     let heldSigint = -1;
     let heldSigterm = -1;
     const config = await projectConfig(makeRoot());
-    Object.defineProperty(config, 'excludePatterns', {
-      get(): string[] {
+    // Session construction reads it; preflight does not.
+    Object.defineProperty(config.options, 'staticCss', {
+      enumerable: true,
+      get(): undefined {
         heldSigint = process.listenerCount('SIGINT');
         heldSigterm = process.listenerCount('SIGTERM');
         throw new Error('session construction failed');
@@ -1034,8 +1053,10 @@ describe('session-tree cleanup ownership', () => {
     writeFileSync(join(slotDir, 'manifest.json'), '{}');
 
     const configB = await projectConfig(root);
-    Object.defineProperty(configB, 'excludePatterns', {
-      get(): string[] {
+    // Session construction reads it; preflight does not.
+    Object.defineProperty(configB.options, 'staticCss', {
+      enumerable: true,
+      get(): undefined {
         throw new Error('session construction failed');
       },
     });
