@@ -1,6 +1,7 @@
 import { contentHash, createExcludeMatcher } from '@animus-ui/extract/pipeline';
 import { COALESCING_WINDOW_MS } from '@animus-ui/extract/session';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -113,6 +114,17 @@ function makeEnvironment(name: string, moduleIds: string[]) {
 }
 
 const VIRTUAL_IDS = [RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID];
+
+/** Whether the temp volume ignores case, so two spellings name one file. */
+function caseInsensitiveVolume(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), 'animus-case-'));
+  try {
+    writeFileSync(join(dir, 'Probe'), '');
+    return existsSync(join(dir, 'probe'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 /** The change set for an edit whose settled bytes Vite's `read()` handed
  *  over: the file as it now reads on disk. */
@@ -564,9 +576,9 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
         'serve'
       )
     );
-    await runBuildStart(ctx, async (specifier) =>
-      resolve(app, 'src', specifier)
-    );
+    const start = () =>
+      runBuildStart(ctx, async (specifier) => resolve(app, 'src', specifier));
+    await start();
     const client = makeEnvironment('client', VIRTUAL_IDS);
     let timestamp = 60;
     const update = (
@@ -581,7 +593,9 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
         modules: [],
         read,
       });
-    return { app, file, ctx, state, update };
+    const publishedSource = (path: string) =>
+      ctx.session?.corpus.published.analysisEntries.get(path)?.source;
+    return { app, file, ctx, state, update, start, publishedSource };
   }
 
   it('caches the retried content, not the empty file on disk', async () => {
@@ -666,6 +680,73 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     ).toBe(card);
     ctx.close();
   });
+
+  it('a newer observation from disk supersedes published host bytes in a full pass', async () => {
+    // Host bytes are authoritative only while unpublished.
+    const { app, file, ctx, publishedSource, update } = await startedContext();
+    writeFileSync(file, '');
+    await update(file, async () => 'export const Button = 12;\n');
+    expect(publishedSource('src/Button.tsx')).toBe(
+      'export const Button = 12;\n'
+    );
+
+    const card30 = 'export const Button = 30;\n';
+    writeFileSync(file, card30);
+    // A system hit with no bytes runs a full pass over this batch.
+    await ctx.session!.handleWatchUpdate({
+      modifiedFiles: new Set([file, join(app, 'src', 'system.ts')]),
+    });
+    expect(publishedSource('src/Button.tsx')).toBe(card30);
+    ctx.close();
+  });
+
+  it('a closed and restarted context reads the disk, not its old host bytes', async () => {
+    const { file, ctx, publishedSource, start, update } =
+      await startedContext();
+    writeFileSync(file, '');
+    await update(file, async () => 'export const Button = 12;\n');
+
+    ctx.close();
+    const card30 = 'export const Button = 30;\n';
+    writeFileSync(file, card30);
+    await start();
+    expect(publishedSource('src/Button.tsx')).toBe(card30);
+    ctx.close();
+  });
+
+  // Two spellings name one file only on a case-insensitive volume.
+  it.skipIf(!caseInsensitiveVolume())(
+    'a full read that cannot reach held host bytes under their spelling refuses',
+    async () => {
+      const { app, file, ctx, state, publishedSource, update } =
+        await startedContext();
+      const card12 = 'export const Button = 12;\n';
+      writeFileSync(file, card12);
+      await update(file, async () => card12);
+      const broken = join(app, 'src', 'Broken.ts');
+      writeFileSync(broken, 'export const broken = 1;\n');
+      await update(broken, async () => 'export const broken = 1;\n', 'create');
+
+      state.systemLoadFails = true;
+      await update(join(app, 'src', 'system.ts'));
+      await flushSystemReload(ctx);
+      state.systemLoadFails = false;
+
+      // Held under a lowercase spelling while the parse hold lasts.
+      writeFileSync(broken, 'export const broken = ;\n');
+      await update(broken, async () => 'export const broken = ;\n');
+      const lower = join(app, 'src', 'button.tsx');
+      await update(lower, async () => 'export const Button = 20;\n');
+
+      const repaired = 'export const broken = 2;\n';
+      writeFileSync(broken, repaired);
+      await expect(update(broken, async () => repaired)).rejects.toThrow(
+        /reload not published: .*src\/button\.tsx \(read as src\/Button\.tsx\)/
+      );
+      expect(publishedSource('src/Button.tsx')).toBe(card12);
+      ctx.close();
+    }
+  );
 
   it('analyzes the retried content when a system reload debt takes the edit', async () => {
     // A failed system reload leaves debt, so the next edit is analyzed by a
