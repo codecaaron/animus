@@ -3,7 +3,12 @@
  * strings, plus the authoring type surface consumers augment.
  */
 
-export type ConditionKind = 'media' | 'container' | 'supports';
+export type ConditionKind =
+  | 'media'
+  | 'container'
+  | 'supports'
+  | 'scope'
+  | 'starting-style';
 
 /**
  * Augmentable registry of registered condition alias keys. Empty keeps `_`
@@ -39,12 +44,12 @@ export type SelectorsOf<Sys> =
  */
 export interface UnknownConditionAlias<K extends string> {
   readonly __unknownConditionAlias: K;
-  readonly hint: `"${K}" is not a registered condition or selector alias. Register it with .addConditions() / .addSelectors(), or use a raw "&…" selector or "@media|@container|@supports (…)" key.`;
+  readonly hint: `"${K}" is not a registered condition or selector alias. Register it with .addConditions() / .addSelectors(), or use a raw "&…" selector or "@media|@container|@supports|@scope (…)" or "@starting-style" key.`;
 }
 
 export interface UnknownAtRule<K extends string> {
   readonly __unknownAtRule: K;
-  readonly hint: `"${K}" is not a valid at-rule block key. At-rule keys must begin with "@media ", "@container ", or "@supports " followed by a parenthesized/feature tail.`;
+  readonly hint: `"${K}" is not a valid at-rule block key. At-rule keys must begin with "@media ", "@container ", "@supports " or "@scope " followed by a parenthesized/feature tail, or be "@starting-style".`;
 }
 
 /**
@@ -76,7 +81,10 @@ export type NarrowedAliases<U extends string> = `_${string}` extends U
 export type RawAtRuleKey =
   | `@media ${string}`
   | `@container ${string}`
-  | `@supports ${string}`;
+  | `@supports ${string}`
+  | '@scope'
+  | `@scope ${string}`
+  | '@starting-style';
 
 /**
  * No trailing space, unlike `RawAtRuleKey`: a value may open its query
@@ -85,7 +93,11 @@ export type RawAtRuleKey =
 export type AtRuleValue =
   | `@media${string}`
   | `@container${string}`
-  | `@supports${string}`;
+  | `@supports${string}`
+  | '@scope'
+  | `@scope ${string}`
+  | `@scope(${string}`
+  | '@starting-style';
 
 export interface ConditionAlias {
   /** Full at-rule condition string, e.g. `@media print`. */
@@ -157,13 +169,15 @@ const CONDITION_PREFIXES: readonly [string, ConditionKind][] = [
  * callers, complementing `addConditions()`'s value constraint.
  */
 export function inferConditionKind(value: string): ConditionKind {
+  if (value === '@starting-style') return 'starting-style';
+  if (/^@scope(?:$|[\s(])/.test(value)) return 'scope';
   for (const [prefix, kind] of CONDITION_PREFIXES) {
     if (value.startsWith(prefix)) {
       return kind;
     }
   }
   throw new Error(
-    `addConditions: value "${value}" must begin with @media, @container, or @supports`
+    `addConditions: value "${value}" must begin with @media, @container, @supports or @scope, or be @starting-style`
   );
 }
 
