@@ -724,22 +724,25 @@ impl ExtractEngine {
         let mut keyed: Vec<(String, InputEntry)> =
             entries.into_iter().map(|entry| (canonical_analysis_id(&entry.path), entry)).collect();
         keyed.sort_by(|(a, x), (b, y)| a.cmp(b).then_with(|| x.path.cmp(&y.path)));
-        // One file listed twice, in any spelling, is analysed once, under its
-        // least spelling, when both entries carry the same source; with
-        // different sources it names no single input, so the analysis fails
-        // rather than pick one.
+        // A path listed twice with the same source is one file. Listed twice
+        // with different sources, or spelled two ways (`a.tsx`, `./a.tsx`),
+        // it names no single input, so the analysis fails rather than pick
+        // one: lookups keep the spelling the host passed.
         let mut entries: Vec<InputEntry> = Vec::with_capacity(keyed.len());
         let mut kept_id: Option<String> = None;
         for (id, entry) in keyed {
             match entries.last() {
                 Some(kept) if kept_id.as_ref() == Some(&id) => {
-                    if kept.source != entry.source {
-                        let listed = match kept.path == entry.path {
-                            true => format!("'{}' twice", entry.path),
-                            false => format!("'{}' and '{}', one file,", kept.path, entry.path),
-                        };
+                    if kept.path != entry.path {
                         return Err(napi::Error::from_reason(format!(
-                            "file entries list {listed} with different sources; pass each file once"
+                            "file entries list one file as '{}' and as '{}'; pass each file once, under one path",
+                            kept.path, entry.path
+                        )));
+                    }
+                    if kept.source != entry.source {
+                        return Err(napi::Error::from_reason(format!(
+                            "file entries list '{}' twice with different sources; pass each file once",
+                            entry.path
                         )));
                     }
                 }
@@ -2501,9 +2504,9 @@ export const App = () => <Box tone="red" />;
         }
     }
 
-    /// One file listed twice, in any spelling, is analysed once when both
-    /// entries carry the same source, and fails the analysis when they do
-    /// not; a query names another input.
+    /// A path listed twice with the same source is analysed once; listed
+    /// twice with different sources, or as two spellings of one file, it
+    /// fails the analysis. A query names another input.
     #[test]
     fn a_file_listed_twice_is_one_input_or_a_failure() {
         let analyze = |entries: &[(&str, &str)]| {
@@ -2512,12 +2515,18 @@ export const App = () => <Box tone="red" />;
                 entries.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect();
             engine.analyze(serde_json::Value::from(entries).to_string()).map(|_| engine.parse_count).map_err(|e| e.reason)
         };
-        for (one, other) in [("a.tsx", "a.tsx"), ("a.tsx", "./a.tsx"), ("a.tsx", "dir/../a.tsx"), ("a/b.tsx", "a\\b.tsx")] {
-            assert_eq!(analyze(&[(one, "export const x = 1;"), (other, "export const x = 1;")]), Ok(1), "{one} {other}");
-            let failure = analyze(&[(one, "export const x = 1;"), (other, "export const x = 2;")]).unwrap_err();
-            assert!(failure.contains("with different sources"), "{one} {other}: {failure}");
+        let (one, two) = ("export const x = 1;", "export const x = 2;");
+        assert_eq!(analyze(&[("a.tsx", one), ("a.tsx", one)]), Ok(1));
+        let failure = analyze(&[("a.tsx", one), ("a.tsx", two)]).unwrap_err();
+        assert!(failure.contains("'a.tsx' twice with different sources"), "{failure}");
+        for (first, second) in [("a.tsx", "./a.tsx"), ("a.tsx", "dir/../a.tsx"), ("a/b.tsx", "a\\b.tsx")] {
+            for source in [one, two] {
+                let failure = analyze(&[(first, one), (second, source)]).unwrap_err();
+                assert!(failure.contains("list one file as"), "{first} {second}: {failure}");
+                assert!(failure.contains(first) && failure.contains(second), "{first} {second}: {failure}");
+            }
         }
-        assert_eq!(analyze(&[("a.tsx", "export const x = 1;"), ("a.tsx?raw", "export const x = 2;")]), Ok(2));
+        assert_eq!(analyze(&[("a.tsx", one), ("a.tsx?raw", two)]), Ok(2));
     }
 
     /// Contract: analysis output is independent of the order the caller
