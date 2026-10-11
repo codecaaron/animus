@@ -72,7 +72,6 @@ export {
   createBuildId,
   findSession,
   joinSession,
-  leaveSession,
   SessionConfigurationConflict,
   sessionKey,
 } from './singleton';

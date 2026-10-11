@@ -507,17 +507,5 @@ export function findSession(key: SessionKey): SessionState | undefined {
   return sessionRegistry().sessions.get(sessionKeyId(key));
 }
 
-/** `participant` leaves the build of `key`, which leaves the registry with
- *  its last participant: its tree is then no live build's, and a later join
- *  starts it anew. */
-export function leaveSession(key: SessionKey, participant: string): void {
-  const sessions = sessionRegistry().sessions;
-  const id = sessionKeyId(key);
-  const state = sessions.get(id);
-  if (state === undefined) return;
-  state.participants.delete(participant);
-  if (state.participants.size === 0) sessions.delete(id);
-}
-
 /** The registry's global slot, which test harnesses clear. */
 export const SESSION_REGISTRY_KEY = SESSION_REGISTRY;
