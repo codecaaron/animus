@@ -709,22 +709,6 @@ pub struct ExportFact {
     pub original: Option<String>,
 }
 
-/// The identifier `export default X;` names, if any, through type
-/// assertions, which the parser's module record does not see through.
-pub fn collect_default_export_binding(program: &Program<'_>) -> Option<String> {
-    program.body.iter().find_map(|stmt| match stmt {
-        Statement::ExportDefaultDeclaration(export) => match export
-            .declaration
-            .as_expression()
-            .map(crate::chain_walk::unwrap_type_assertions)
-        {
-            Some(Expression::Identifier(id)) => Some(id.name.to_string()),
-            _ => None,
-        },
-        _ => None,
-    })
-}
-
 /// The local names of a file's named and default imports.
 fn named_import_locals(module: &ModuleRecord<'_>) -> BTreeSet<String> {
     module
