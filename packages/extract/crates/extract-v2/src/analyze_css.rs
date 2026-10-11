@@ -11190,6 +11190,27 @@ export const App = () => (
     }
 
     #[test]
+    fn a_binding_evaluates_the_callback_the_runtime_selects() {
+        // JS keeps the last of a repeated key, and a later `.props()`
+        // replaces the prop: each binding evaluates that callback, whatever
+        // the replaced one compiles to (C's reads an import).
+        let source = r#"import { k } from './k';
+export const A = ds.props({ w: { property: 'width', transform: (v) => `${v * 2}px` }, w: { property: 'width', transform: (v) => `${v * 3}px` } }).asElement('div');
+export const B = ds.props({ w: { property: 'height', transform: (v) => `${v * 2}px`, transform: (v) => `${v * 3}px` } }).asElement('div');
+export const C = ds.props({ w: { property: 'minWidth', transform: (v) => `${v * k}px` }, w: { property: 'minWidth', transform: (v) => `${v * 3}px` } }).asElement('div');
+export const D = ds.props({ w: { property: 'maxWidth', transform: (v) => `${v * 2}px` } }).props({ w: { property: 'maxWidth', transform: (v) => `${v * 3}px` } }).asElement('div');
+export const App = () => <><A w={5} /><B w={5} /><C w={5} /><D w={5} /></>;
+"#;
+        let out = analyze(&[("a.tsx", source), ("k.ts", "export const k = 2;\n")], &test_inputs());
+        let selected: Vec<bool> = ["width", "height", "min-width", "max-width"]
+            .iter()
+            .map(|property| out.sheets.custom.contains(&format!("{property}: 15px;")))
+            .collect();
+        assert_eq!(selected, [true; 4], "{}", out.sheets.custom);
+        assert!(!out.sheets.custom.contains(": 10px;"), "{}", out.sheets.custom);
+    }
+
+    #[test]
     fn unbounded_host_sensitive_or_mutating_callbacks_keep_their_runtime_path() {
         let declare = |props: &str, renders: &str| {
             format!(

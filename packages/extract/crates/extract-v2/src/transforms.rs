@@ -26,7 +26,8 @@ use self_contained::{configured_reference_rejections, external_symbol_diagnostic
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallbackDefinition {
     /// The definition's identity: its declaring module and binding, or for
-    /// an inline callback the component and prop that declare it.
+    /// an inline callback the component and prop that declare it and where
+    /// it is written.
     pub key: String,
     /// The readable name diagnostics report.
     pub name: String,
