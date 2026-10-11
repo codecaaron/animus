@@ -151,10 +151,24 @@ describe('the Turbopack first full pass', () => {
     return config;
   }
 
-  /** A root that is already watched refuses a second watcher. */
-  function rootWatched(): boolean {
+  /** The build a resolved config's Animus loader serves. */
+  function loadBuild(
+    resolved: Awaited<
+      ReturnType<ReturnType<typeof turbopackConfigInNewProject>>
+    >
+  ): string {
+    // SAFETY: the Animus rule is buildTurbopackConfig's, whose one loader
+    // carries the session's id in its options.
+    const rule = resolved.turbopack.rules?.[ANIMUS_TURBOPACK_RULE_GLOB] as {
+      loaders: Array<{ options: { sessionId: string } }>;
+    };
+    return rule.loaders[0].options.sessionId;
+  }
+
+  /** A root that build `build` already watches refuses it a second watcher. */
+  function rootWatched(build: string): boolean {
     const probe = startTurbopackWatcher(
-      new ExtractionSession({ system: './src/system.ts' }),
+      new ExtractionSession({ system: './src/system.ts' }, { build }),
       process.cwd()
     );
     if (probe.kind === 'started') probe.handle.close();
@@ -168,7 +182,7 @@ describe('the Turbopack first full pass', () => {
     const config = turbopackConfigInNewProject(mode);
     const resolved = await config(phase);
     const devMode = firstPassDevMode();
-    const watching = rootWatched();
+    const watching = rootWatched(loadBuild(resolved));
     // A load in another phase closes the watcher of the session it replaces.
     if (watching) await config('phase-production-build');
     return {
@@ -219,30 +233,31 @@ describe('the Turbopack first full pass', () => {
 
   test('loading again in the same phase shares the analysis and keeps the watcher', async () => {
     const config = turbopackConfigInNewProject();
-    await config('phase-development-server');
+    const dev = await config('phase-development-server');
     // As Next's validateTurboNextConfig does after Ready.
     await config('phase-development-server');
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
-    expect(rootWatched()).toBe(true);
+    expect(rootWatched(loadBuild(dev))).toBe(true);
     await config('phase-production-build');
   });
 
   test('a load in another phase replaces the session and closes its watcher', async () => {
     const config = turbopackConfigInNewProject();
-    await config('phase-development-server');
-    expect(rootWatched()).toBe(true);
+    const dev = await config('phase-development-server');
+    expect(rootWatched(loadBuild(dev))).toBe(true);
     await config('phase-production-build');
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
-    expect(rootWatched()).toBe(false);
+    expect(rootWatched(loadBuild(dev))).toBe(false);
   });
 
   test('a dev load replaced while it analyzes starts no watcher', async () => {
     const config = turbopackConfigInNewProject();
-    await Promise.allSettled([
+    const [dev] = await Promise.allSettled([
       config('phase-development-server'),
       config('phase-production-build'),
     ]);
-    const watched = rootWatched();
+    const watched =
+      dev.status === 'fulfilled' && rootWatched(loadBuild(dev.value));
     if (watched) await config('phase-production-server');
     expect(watched).toBe(false);
   });

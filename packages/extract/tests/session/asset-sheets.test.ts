@@ -77,7 +77,7 @@ test('asset() in a theme scale value and in component CSS resolves like global s
   session.rootDir = root;
   await session.runFullPipeline();
 
-  const css = getSharedCss();
+  const css = getSharedCss(session.key);
   expect(css).not.toContain('animus-asset:');
   const urls = [...css.matchAll(/url\("?([^")]*dither-rock-1[^")]*)"?\)/g)].map(
     (match) => match[1]

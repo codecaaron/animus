@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 
 import {
   getReplacementEpoch,
+  sessionKey,
   setEngineApiOverride,
 } from '../../extract/session/singleton';
 
@@ -208,6 +209,9 @@ const OPTIONS: AnimusNextOptions & { loaderPath?: string } = {
   system: './src/system.ts',
   loaderPath: LOADER_PATH,
 };
+/** The build every plugin of a test joins, as `withAnimus` gives one
+ *  `next build`. */
+const BUILD = 'needbuild-test-build';
 
 function applyPlugin(
   plugin: AnimusWebpackPlugin,
@@ -273,7 +277,7 @@ describe('runtime existence check (design D7)', () => {
     const root = createProject();
     const { compiler } = createCompiler(root, { omitNormalModule: true });
     expect(() =>
-      applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler)
+      applyPlugin(new AnimusWebpackPlugin(OPTIONS, { build: BUILD }), compiler)
     ).toThrow(/needBuild|getCompilationHooks/);
   });
 
@@ -283,7 +287,10 @@ describe('runtime existence check (design D7)', () => {
     harness.compiler.webpack.NormalModule = {
       getCompilationHooks: () => ({}),
     };
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), harness.compiler);
+    applyPlugin(
+      new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+      harness.compiler
+    );
     expect(() =>
       harness.thisCompilationHandlers.forEach((fn) => fn({}))
     ).toThrow(/needBuild/);
@@ -296,7 +303,7 @@ describe('runtime existence check (design D7)', () => {
       omitNormalModule: true,
     });
     expect(() =>
-      applyPlugin(new AnimusWebpackPlugin(OPTIONS), compiler)
+      applyPlugin(new AnimusWebpackPlugin(OPTIONS, { build: BUILD }), compiler)
     ).not.toThrow();
   });
 });
@@ -308,7 +315,7 @@ describe('watchOptions.ignored gains the replacements-epoch artifact path (desig
   test('absent ignored becomes a one-element array', () => {
     const root = createProject();
     const { compiler } = createCompiler(root);
-    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(plugin, compiler);
     expect(compiler.options.watchOptions).toEqual({
       ignored: [epochPathFor(root, plugin)],
@@ -318,7 +325,7 @@ describe('watchOptions.ignored gains the replacements-epoch artifact path (desig
   test('a string shape is preserved alongside the epoch path', () => {
     const root = createProject();
     const { compiler } = createCompiler(root, { ignored: '**/custom/**' });
-    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(plugin, compiler);
     expect(compiler.options.watchOptions.ignored).toEqual([
       '**/custom/**',
@@ -329,8 +336,8 @@ describe('watchOptions.ignored gains the replacements-epoch artifact path (desig
   test('an array shape is appended exactly once across compilers', () => {
     const root = createProject();
     const { compiler } = createCompiler(root, { ignored: ['**/custom/**'] });
-    const first = new AnimusWebpackPlugin(OPTIONS);
-    const second = new AnimusWebpackPlugin(OPTIONS);
+    const first = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
+    const second = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(first, compiler);
     applyPlugin(second, compiler);
     expect(second.sessionId).toBe(first.sessionId);
@@ -344,7 +351,7 @@ describe('watchOptions.ignored gains the replacements-epoch artifact path (desig
     const root = createProject();
     const userIgnore: WatchIgnoreMatcher = (path) => path.includes('vendor');
     const { compiler } = createCompiler(root, { ignored: userIgnore });
-    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(plugin, compiler);
     const ignored = requireWatchIgnoreMatcher(compiler);
     expect(ignored(epochPathFor(root, plugin))).toBe(true);
@@ -356,7 +363,7 @@ describe('watchOptions.ignored gains the replacements-epoch artifact path (desig
     const root = createProject();
     const userIgnore = /node_modules/;
     const { compiler } = createCompiler(root, { ignored: userIgnore });
-    const plugin = new AnimusWebpackPlugin(OPTIONS);
+    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
     applyPlugin(plugin, compiler);
     const ignored = requireWatchIgnoreMatcher(compiler);
     expect(ignored(epochPathFor(root, plugin))).toBe(true);
@@ -369,7 +376,10 @@ describe('needBuild fan-out after a replacements-epoch move (design D1)', () => 
   test('shape edit forces animus-loader-chain modules in the next compilation; style edit and cold start do not', async () => {
     const root = createProject();
     const harness = createCompiler(root);
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), harness.compiler);
+    applyPlugin(
+      new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+      harness.compiler
+    );
 
     await harness.watchRunHandlers[0](harness.compiler);
     const c1 = {};
@@ -431,8 +441,14 @@ describe('needBuild fan-out after a replacements-epoch move (design D1)', () => 
     const root = createProject();
     const owner = createCompiler(root);
     const follower = createCompiler(root, { name: 'server' });
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), owner.compiler);
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), follower.compiler);
+    applyPlugin(
+      new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+      owner.compiler
+    );
+    applyPlugin(
+      new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+      follower.compiler
+    );
 
     await owner.watchRunHandlers[0](owner.compiler);
     await follower.watchRunHandlers[0](follower.compiler);
@@ -485,7 +501,10 @@ describe('watchRun after a rejected analysis', () => {
     writeFileSync(button, BROKEN);
     mocks.extractFacts.mockImplementation(parserStoppingAt('(('));
     const harness = createCompiler(root);
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), harness.compiler);
+    applyPlugin(
+      new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+      harness.compiler
+    );
 
     await harness.watchRunHandlers[0](harness.compiler);
     const failed = startCompilation(harness);
@@ -501,7 +520,7 @@ describe('watchRun after a rejected analysis', () => {
       removedFiles: new Set<string>(),
     });
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
-    expect(getReplacementEpoch()).not.toBeNull();
+    expect(getReplacementEpoch(sessionKey(BUILD, root))).not.toBeNull();
     const recovered = startCompilation(harness);
     expect(recovered.errors).toEqual([]);
     // Modules built while no generation existed passed through untransformed.
@@ -518,7 +537,10 @@ describe('watchRun after a rejected analysis', () => {
     writeFileSync(join(root, 'src', 'Button.tsx'), BROKEN);
     mocks.extractFacts.mockImplementation(parserStoppingAt('(('));
     const harness = createCompiler(root);
-    applyPlugin(new AnimusWebpackPlugin(OPTIONS), harness.compiler);
+    applyPlugin(
+      new AnimusWebpackPlugin(OPTIONS, { build: BUILD }),
+      harness.compiler
+    );
 
     await expect(harness.runHandlers[0](harness.compiler)).rejects.toThrow(
       /analysis not published: .*src\/Button\.tsx/

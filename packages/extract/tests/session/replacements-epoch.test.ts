@@ -65,10 +65,11 @@ function createProject(): string {
 
 function startSession(
   root: string,
-  components: Record<string, ManifestComponentDescriptor>
+  components: Record<string, ManifestComponentDescriptor>,
+  build?: string
 ): Promise<ExtractionSession> {
   mocks.analyzeProject.mockImplementation(() => buildManifest(components));
-  return startFixtureSession(root);
+  return startFixtureSession(root, {}, { build });
 }
 
 function epochArtifact(session: ExtractionSession): EpochArtifactReading {
@@ -100,7 +101,7 @@ describe('epoch artifact publication', () => {
     expect(parsed.sessionId).toMatch(/^[0-9a-f-]{36}$/);
     expect(parsed.sessionId).toBe(session.sessionId);
     expect(parsed.epoch).toBe(expectedEpoch(PLAN_A));
-    expect(getReplacementEpoch()).toBe(parsed.epoch);
+    expect(getReplacementEpoch(session.key)).toBe(parsed.epoch);
   });
 
   test('style-only re-analysis leaves the artifact bytes and mtime untouched', async () => {
@@ -121,7 +122,7 @@ describe('epoch artifact publication', () => {
     const after = epochArtifact(session);
     expect(after.raw).toBe(before.raw);
     expect(after.mtimeMs).toBe(before.mtimeMs);
-    expect(getReplacementEpoch()).toBe(before.parsed.epoch);
+    expect(getReplacementEpoch(session.key)).toBe(before.parsed.epoch);
   });
 
   test('a plan change rewrites the artifact exactly once with the new epoch', async () => {
@@ -140,7 +141,7 @@ describe('epoch artifact publication', () => {
     expect(after.parsed.epoch).toBe(expectedEpoch(PLAN_B));
     expect(after.parsed.epoch).not.toBe(before.parsed.epoch);
     expect(after.parsed.sessionId).toBe(before.parsed.sessionId);
-    expect(getReplacementEpoch()).toBe(after.parsed.epoch);
+    expect(getReplacementEpoch(session.key)).toBe(after.parsed.epoch);
 
     mocks.analyzeProject.mockImplementation(() =>
       buildManifest(PLAN_B, '.btn{margin:24px;}')
@@ -187,19 +188,20 @@ describe('epoch artifact publication', () => {
     // The predecessor closes first: publication ownership is exclusive, and
     // untouched bytes keep persistent-cache snapshots valid.
     first.close();
-    const second = await startSession(root, PLAN_A);
+    // The host restarts its session within the same build.
+    const second = await startSession(root, PLAN_A, first.sessionId);
     expect(second.sessionId).toBe(first.sessionId);
     const after = epochArtifact(second);
     expect(after.raw).toBe(before.raw);
     expect(after.mtimeMs).toBe(before.mtimeMs);
-    expect(getReplacementEpoch()).toBe(before.parsed.epoch);
+    expect(getReplacementEpoch(second.key)).toBe(before.parsed.epoch);
   });
 
   test('the analyzed-hash map is published alongside the manifest', async () => {
     const root = createProject();
-    await startSession(root, PLAN_A);
+    const session = await startSession(root, PLAN_A);
 
-    const hashes = getAnalyzedHashes();
+    const hashes = getAnalyzedHashes(session.key);
     expect(hashes).not.toBeNull();
     expect(hashes!.get('src/Button.tsx')).toBe(contentHash(BUTTON_SOURCE));
     expect(hashes!.get('src/system.ts')).toBe(
@@ -223,7 +225,7 @@ describe('failed analyses publish no partial generation', () => {
     const root = createProject();
     const session = await startSession(root, PLAN_A);
     const before = epochArtifact(session);
-    const manifestBefore = getManifestJson();
+    const manifestBefore = getManifestJson(session.key);
 
     mocks.analyzeProject.mockImplementationOnce(() => {
       throw new Error('analysis boom');
@@ -236,8 +238,8 @@ describe('failed analyses publish no partial generation', () => {
       })
     ).rejects.toThrow('analysis boom');
 
-    expect(getManifestJson()).toBe(manifestBefore);
-    expect(getReplacementEpoch()).toBe(before.parsed.epoch);
+    expect(getManifestJson(session.key)).toBe(manifestBefore);
+    expect(getReplacementEpoch(session.key)).toBe(before.parsed.epoch);
     const afterFailure = epochArtifact(session);
     expect(afterFailure.raw).toBe(before.raw);
     expect(afterFailure.mtimeMs).toBe(before.mtimeMs);
@@ -249,7 +251,7 @@ describe('failed analyses publish no partial generation', () => {
       removedFiles: new Set(),
     });
     expect(mocks.analyzeProject.mock.calls.length).toBe(3);
-    expect(getReplacementEpoch()).toBe(expectedEpoch(PLAN_B));
+    expect(getReplacementEpoch(session.key)).toBe(expectedEpoch(PLAN_B));
     expect(epochArtifact(session).parsed.epoch).toBe(expectedEpoch(PLAN_B));
   });
 });
