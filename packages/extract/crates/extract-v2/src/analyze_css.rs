@@ -2823,11 +2823,11 @@ fn member_path_ids(
 /// no analysed module.
 pub(crate) fn loaded_modules<'f>(
     file: &str,
-    load: &crate::usage_facts::ModuleLoad,
+    load: &crate::loads::ModuleLoad,
     files: &'f BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
 ) -> Vec<&'f String> {
-    use crate::usage_facts::LoadTarget;
+    use crate::loads::LoadTarget;
     let any = |_: &str| true;
     match &load.target {
         LoadTarget::Specifier(spec) => resolve_import_source(file, spec, files, inputs)

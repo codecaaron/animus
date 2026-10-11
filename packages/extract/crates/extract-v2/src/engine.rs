@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::identity::LocalId;
 use crate::link::ProjectLinks;
+use crate::loads::{LoadKind, Spelling};
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
 use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, Request, Terminal};
 
@@ -377,33 +378,6 @@ fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>) -> Vec
     found.sort();
     found.dedup();
     found
-}
-
-/// The modules a file loads at runtime by a literal specifier:
-/// `import('./x')` and `require('./x')`.
-fn literal_module_loads(program: &oxc::ast::ast::Program<'_>) -> Vec<String> {
-    use oxc::ast::ast::{Argument, CallExpression, Expression, ImportExpression};
-    use oxc::ast_visit::Visit;
-    struct Loads(Vec<String>);
-    impl<'a> Visit<'a> for Loads {
-        fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
-            if let Expression::StringLiteral(literal) = &import.source {
-                self.0.push(literal.value.to_string());
-            }
-            oxc::ast_visit::walk::walk_import_expression(self, import);
-        }
-        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-            if call.callee.is_specific_id("require") {
-                if let Some(Argument::StringLiteral(literal)) = call.arguments.first() {
-                    self.0.push(literal.value.to_string());
-                }
-            }
-            oxc::ast_visit::walk::walk_call_expression(self, call);
-        }
-    }
-    let mut loads = Loads(Vec::new());
-    loads.visit_program(program);
-    loads.0
 }
 
 /// How a module runs code from a string, which can load any module: it
@@ -898,7 +872,15 @@ impl ExtractEngine {
                 StyleModule {
                     facts,
                     namespace_exports: crate::usage_facts::collect_namespace_exports(module),
-                    loads: literal_module_loads(program),
+                    loads: lowered_by_file[&ast.path]
+                        .loads
+                        .iter()
+                        .filter(|load| {
+                            matches!(load.kind, LoadKind::DynamicImport | LoadKind::Call { require: true })
+                                && load.spelling == Spelling::String
+                        })
+                        .filter_map(|load| load.specifier().map(str::to_string))
+                        .collect(),
                     dynamic_code: dynamic_code(program, &lowered_by_file[&ast.path].scoping),
                 },
             );
