@@ -804,6 +804,37 @@ describe('collectExternalPackageSources', () => {
   });
 });
 
+// Contract: a kit's root is the package Node locates for its name. A
+// manifest nested below it, as `@bcoe/v8-coverage` publishes
+// `dist/lib/package.json` with its own name, is part of the package.
+test('a manifest nested below the package is no package root', async () => {
+  const root = makeRoot();
+  const pkg = join(root, 'node_modules', 'nested');
+  for (const [file, source] of [
+    [
+      'package.json',
+      JSON.stringify({ name: 'nested', main: 'dist/lib/index' }),
+    ],
+    ['dist/lib/package.json', JSON.stringify({ name: 'nested' })],
+    ['dist/lib/index.js', 'export const Built = 1;'],
+    ['src/index.ts', 'export const Source = 1;'],
+  ]) {
+    mkdirSync(join(pkg, file, '..'), { recursive: true });
+    writeFileSync(join(pkg, file), source);
+  }
+
+  const result = await collect(root, {
+    nested: join(pkg, 'dist', 'lib', 'index.js'),
+  });
+
+  expect(result.entries.map((e) => e.path)).toEqual([
+    'node_modules/nested/src/index.ts',
+  ]);
+  expect(result.diagnostics.map((d) => [d.file, d.code])).toEqual([
+    ['nested', KIT_WITHOUT_SOURCE_CONDITION],
+  ]);
+});
+
 // Contract: a path the filesystem opens under a spelling no directory lists
 // is never read as that file, and an entry read from its runtime target in
 // its place is analysed (exact spelling, spec §2.2 A2). Where the filesystem

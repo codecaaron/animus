@@ -708,8 +708,26 @@ export async function collectExternalPackageSources(opts: {
     // from where the nearest manifest can be the application's own. Then,
     // and for a source-only kit with no runtime entry to resolve, the package
     // is found as Node finds it, and its condition names the entry.
-    const resolvedRoot = absEntry ? findPackageRoot(absEntry) : null;
+    // A manifest nested below the package Node locates (a published
+    // `dist/lib/package.json` carrying the package's name) is part of the
+    // package, not its root: the root is the located directory, spelled as
+    // the host spells the entry.
+    let resolvedRoot = absEntry ? findPackageRoot(absEntry) : null;
     const locatedRoot = packageName && locatePackageRoot(packageName, rootDir);
+    if (
+      resolvedRoot &&
+      locatedRoot &&
+      realPath(resolvedRoot) !== locatedRoot &&
+      isPathWithinRoot(locatedRoot, realPath(resolvedRoot))
+    ) {
+      while (
+        realPath(resolvedRoot) !== locatedRoot &&
+        resolvedRoot !== dirname(resolvedRoot)
+      ) {
+        resolvedRoot = dirname(resolvedRoot);
+      }
+      if (realPath(resolvedRoot) !== locatedRoot) resolvedRoot = locatedRoot;
+    }
     const pkgRoot =
       resolvedRoot &&
       (!locatedRoot ||
