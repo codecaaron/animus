@@ -390,7 +390,6 @@ pub struct FileFacts {
     pub directive_prologue: Option<DirectivePrologueFact>,
     pub chains: Vec<ChainFacts>,
     /// Same-file static const values (feeds identifier resolution).
-    #[serde(serialize_with = "serialize_statics")]
     pub statics: BTreeMap<String, Value>,
     /// Raw JSX/createElement usage facts, component-agnostic; cross-file
     /// filtering happens later.
@@ -717,12 +716,6 @@ fn expression_root(expr: &Expression<'_>) -> Option<String> {
         Expression::StaticMemberExpression(member) => expression_root(&member.object),
         _ => None,
     }
-}
-
-/// Statics without a binding a lost-value marker stands for whole: its
-/// reason reaches readers in memory, and serialized facts carry no marker.
-fn serialize_statics<S: serde::Serializer>(statics: &BTreeMap<String, Value>, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.collect_map(statics.iter().filter(|(_, value)| eval::lost_value_reason(value).is_none()))
 }
 
 #[derive(Default)]
@@ -1137,7 +1130,7 @@ fn build_identifier_index<'a>(program: &Program<'a>) -> BTreeMap<(u32, u32), Str
 
 fn eval_stage_object(
     obj: &ObjectExpression<'_>,
-    statics: &rustc_hash::FxHashMap<String, Value>,
+    statics: eval::Statics<'_>,
     source: &str,
 ) -> EvaluatedStageObject {
     match eval::eval_object_expr_with_statics(obj, Some(statics)) {
@@ -1215,6 +1208,8 @@ pub fn extract_file_facts_enriched_with_usage_statics(
         &local_usage_statics,
         extra_statics,
         extra_usage_statics,
+        &rustc_hash::FxHashMap::default(),
+        &rustc_hash::FxHashMap::default(),
         &references,
         None,
     )
@@ -1228,6 +1223,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
     local_usage_statics: &rustc_hash::FxHashMap<String, Value>,
     extra_statics: &rustc_hash::FxHashMap<String, Value>,
     extra_usage_statics: &rustc_hash::FxHashMap<String, Value>,
+    local_unsettled: &rustc_hash::FxHashMap<String, eval::Unsettled>,
+    extra_unsettled: &rustc_hash::FxHashMap<String, eval::Unsettled>,
     references: &TransformReferences<'_>,
     lowered: Option<crate::link::Lowered>,
 ) -> FileFacts {
@@ -1249,10 +1246,18 @@ pub(crate) fn extract_file_facts_from_static_maps(
         }
     });
 
+    // An import's statics overwrite same-file ones, settled or not.
     let mut statics_fx = local_statics.clone();
+    let mut unsettled_fx = local_unsettled.clone();
     for (k, v) in extra_statics {
         statics_fx.insert(k.clone(), v.clone());
+        unsettled_fx.remove(k);
     }
+    for (k, unsettled) in extra_unsettled {
+        unsettled_fx.insert(k.clone(), unsettled.clone());
+        statics_fx.remove(k);
+    }
+    let statics = eval::Statics::new(&statics_fx, &unsettled_fx);
     let mut usage_statics_fx = local_usage_statics.clone();
     for (k, v) in extra_usage_statics {
         usage_statics_fx.insert(k.clone(), v.clone());
@@ -1306,7 +1311,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                 }
                 if stage.method == "variant" {
                     match object_index.get(key) {
-                        Some(obj) => match eval::parse_variant_arg(obj, Some(&statics_fx)) {
+                        Some(obj) => match eval::parse_variant_arg(obj, Some(statics)) {
                             Ok((cfg, skips)) => {
                                 let mut value = serde_json::json!({
                                     "prop": cfg.prop,
@@ -1337,7 +1342,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                     let evaluated = match object_index.get(key) {
                         Some(obj) => {
                             let (value, skipped, captured, err) =
-                                eval_stage_object(obj, &statics_fx, source);
+                                eval_stage_object(obj, statics, source);
                             match err {
                                 None => Ok((value, skipped, captured)),
                                 Some(e) => Err(e),
@@ -1346,8 +1351,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
                         None => match identifier_index.get(key) {
                             // A stage argument something may change before the
                             // read refuses, by name or by member path.
-                            Some(name) => match eval::static_path(&statics_fx, name) {
-                                Some(v) => match eval::lost_value_reason(v) {
+                            Some(name) => match eval::static_path(statics, name) {
+                                Some(eval::StaticRead::Unsettled(reason)) => Err(reason.to_string()),
+                                Some(eval::StaticRead::Exact(v)) => match eval::lost_value_reason(v) {
                                     Some(reason) => Err(reason.to_string()),
                                     None => Ok((Some(v.clone()), Vec::new(), Vec::new())),
                                 },
@@ -1453,7 +1459,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             match object_index.get(&sspan) {
                                 Some(obj) => match eval::eval_object_expr_with_statics(
                                     obj,
-                                    Some(&statics_fx),
+                                    Some(statics),
                                 ) {
                                     Ok((mut v, skips, _captures)) => {
                                         let lost = eval::take_lost_values(&mut v);
@@ -1555,11 +1561,12 @@ pub(crate) fn extract_file_facts_from_static_maps(
         path: ast.path.clone(),
         directive_prologue,
         chains,
-        // Serialized facts carry no lost-value markers.
+        // Serialized facts carry no lost-value markers, and an unsettled
+        // binding's held value.
         statics: statics_fx
             .into_iter()
-            .map(|(name, value)| {
-                let mut value = eval::held_value(&value).clone();
+            .chain(unsettled_fx.into_iter().filter_map(|(name, unsettled)| Some((name, unsettled.held?))))
+            .map(|(name, mut value)| {
                 eval::strip_lost_values(&mut value);
                 (name, value)
             })

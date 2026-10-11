@@ -5409,12 +5409,12 @@ fn evaluate_with_statics(
     }
     if let Expression::ObjectExpression(object) = expression {
         let (value, skipped, captured) =
-            crate::eval::eval_object_expr_with_statics(object, Some(static_values)).ok()?;
+            crate::eval::eval_object_expr_with_statics(object, Some(static_values.into())).ok()?;
         return (skipped.is_empty() && captured.is_empty()).then_some(value);
     }
     let mut skipped = Vec::new();
     let value =
-        crate::eval::eval_expression_with_statics(expression, &mut skipped, Some(static_values))
+        crate::eval::eval_expression_with_statics(expression, &mut skipped, Some(static_values.into()))
             .ok()?;
     skipped.is_empty().then_some(value)
 }
