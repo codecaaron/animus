@@ -445,7 +445,13 @@ fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>) -> Vec
     };
     let mut found: Vec<(ModuleIndex, LocalId)> = local_bindings(terminals).collect();
     for opening in openings {
-        found.extend(exposed_bindings(links, opening.name.as_deref()));
+        // A module the analysis cannot find may export any binding under
+        // any name, the one asked for included.
+        let name = match opening.reason {
+            animus_system_loader::module_table::OpeningReason::UnresolvedRequest(_) => None,
+            _ => opening.name.as_deref(),
+        };
+        found.extend(exposed_bindings(links, name));
     }
     found.sort();
     found.dedup();
@@ -512,13 +518,31 @@ fn unstable_style_statics(
         }
     };
     // What a module's namespace import names, by the record's request.
-    let namespace_of = |file: &str, name: &str| -> Option<&Request> {
+    // A named import whose answer is a namespace (`export * as ns from …`
+    // in the module it names) is read as that namespace's request.
+    let namespace_of = |file: &str, name: &str| -> Option<Request> {
         let module = links.module(file)?;
         let local = lowered[file].bindings.module_binding(name)?;
         let record = links.table.record(module);
-        let import =
-            record.imports.iter().find(|import| import.local == local && import.name == ImportName::Namespace)?;
-        Some(&record.requests[import.request])
+        let import = record.imports.iter().find(|import| import.local == local)?;
+        if import.name == ImportName::Namespace {
+            return Some(record.requests[import.request].clone());
+        }
+        match links.table.resolve_request(module, import.request, &import.name) {
+            ExportLookup::Resolved(Terminal::Namespace(target)) => Some(Request::Module(target)),
+            ExportLookup::Resolved(Terminal::External { module, export: None }) => Some(Request::Outside(module)),
+            ExportLookup::Incomplete { known, openings } if known.is_empty() => {
+                openings.into_iter().find_map(|opening| match opening.reason {
+                    animus_system_loader::module_table::OpeningReason::UnresolvedRequest(specifier)
+                        if opening.name.is_none() =>
+                    {
+                        Some(Request::Unresolved(specifier))
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        }
     };
     let exported = |target: &str, name: &str| -> Vec<(ModuleIndex, LocalId)> {
         links.module(target).map(|module| possible_bindings(links, links.table.resolve_export(module, name))).unwrap_or_default()
@@ -658,12 +682,12 @@ fn unstable_style_statics(
             let targets: Vec<(String, String)> = match name.split_once('.') {
                 Some((namespace, member)) => match namespace_of(file, namespace) {
                     Some(Request::Module(target)) => {
-                        exported(&links.paths[*target], member).into_iter().flat_map(declarations).collect()
+                        exported(&links.paths[target], member).into_iter().flat_map(declarations).collect()
                     }
                     Some(Request::Unresolved(_) | Request::Outside(_)) | None => Vec::new(),
                 },
                 None => match namespace_of(file, name) {
-                    Some(Request::Module(target)) => every_export(&links.paths[*target]),
+                    Some(Request::Module(target)) => every_export(&links.paths[target]),
                     Some(Request::Unresolved(_) | Request::Outside(_)) => Vec::new(),
                     None => possible(file, name),
                 },
@@ -705,7 +729,7 @@ fn unstable_style_statics(
             // A namespace used whole may change anything its module exports,
             // as the member tables read it.
             if let Some(Request::Module(target)) = namespace_of(file, name).filter(|_| !name.contains('.')) {
-                hand_on(&mut flow, &links.paths[*target], &said(file, name, used));
+                hand_on(&mut flow, &links.paths[target], &said(file, name, used));
                 continue;
             }
             if unread(&mut flow, name, said(file, name, used)) {
@@ -1012,6 +1036,12 @@ impl ExtractEngine {
                     .chain(default_object(path).then_some("default"))
             })
             .collect();
+        // A namespace a module re-exports by name (`export * as ns from …`)
+        // may hold any object.
+        let namespace_exports: rustc_hash::FxHashSet<String> = store
+            .iter()
+            .flat_map(|ast| crate::usage_facts::collect_namespace_exports(ast.module_record()).into_keys())
+            .collect();
         for ast in store.iter() {
             let program = ast.program();
             let module = ast.module_record();
@@ -1020,7 +1050,9 @@ impl ExtractEngine {
             let namespace_imports = crate::usage_facts::collect_namespace_imports(module);
             let facts = if statics.values().any(|value| matches!(value, crate::static_value::StaticValue::Object(_)))
                 || !namespace_imports.is_empty()
-                || imports.iter().any(|import| object_exports.contains(import.imported.as_str()))
+                || imports.iter().any(|import| {
+                    object_exports.contains(import.imported.as_str()) || namespace_exports.contains(&import.imported)
+                })
             {
                 crate::usage_facts::style_object_uses(program, &lowered_by_file[&ast.path].scoping, statics)
             } else {
@@ -2786,6 +2818,32 @@ export const App = () => <Box tone="red" />;
                 "member of a missing module's namespace held by an alias",
                 "./tokens",
                 vec![file("mutate.ts", "import * as ns from './missing';\nconst tooltip = ns.Tooltip;\ntooltip.padding = 9;\n")],
+            ),
+            // The same through a barrel: a star of the missing module, or its
+            // namespace re-exported and imported by name.
+            (
+                "renamed member through a star of a missing module",
+                "./tokens",
+                vec![
+                    file("barrel.ts", "export * from './missing';\n"),
+                    file("mutate.ts", "import * as ns from './barrel';\nns.Tooltip.padding = 9;\n"),
+                ],
+            ),
+            (
+                "renamed member through a star of a missing module, held by an alias",
+                "./tokens",
+                vec![
+                    file("barrel.ts", "export * from './missing';\n"),
+                    file("mutate.ts", "import * as ns from './barrel';\nconst tooltip = ns.Tooltip;\ntooltip.padding = 9;\n"),
+                ],
+            ),
+            (
+                "renamed member of a missing module's namespace imported by name",
+                "./tokens",
+                vec![
+                    file("barrel.ts", "export * as ns from './missing';\n"),
+                    file("mutate.ts", "import { ns } from './barrel';\nns.Tooltip.padding = 9;\n"),
+                ],
             ),
         ];
         let mut stale = Vec::new();
