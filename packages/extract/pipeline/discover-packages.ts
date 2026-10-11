@@ -628,10 +628,14 @@ export async function collectExternalPackageSources(opts: {
   const reported = new Set<string>();
   const report = (
     packageName: string,
+    pkgRoot: string,
     condition: KitSourceCondition | null
   ): void => {
+    // Keyed by the package's real directory: two copies of one package
+    // report their own findings.
+    const copy = realPath(pkgRoot);
     for (const finding of sourceConditionDiagnostics(packageName, condition)) {
-      const key = `${finding.file}\0${finding.code}\0${finding.message}`;
+      const key = `${copy}\0${finding.code}\0${finding.message}`;
       if (reported.has(key)) continue;
       reported.add(key);
       diagnostics.push(finding);
@@ -741,8 +745,8 @@ export async function collectExternalPackageSources(opts: {
         : null;
     // A refused selection fails the load, so its finding is reported with
     // the unresolvable outcome.
-    if (selection?.unresolved && condition && packageName) {
-      report(packageName, condition);
+    if (selection?.unresolved && condition && packageName && pkgRoot) {
+      report(packageName, pkgRoot, condition);
     }
     const entryKey = packageName && `.${specifier.slice(packageName.length)}`;
     absEntry ??=
@@ -794,7 +798,7 @@ export async function collectExternalPackageSources(opts: {
     let fileCount = 0;
     let staleDist = false;
 
-    if (packageName) report(packageName, condition);
+    if (packageName) report(packageName, pkgRoot, condition);
 
     // The compiled output a runtime entry lives in: its directory, with the
     // entry's own extension, less the paths no package ships as source.
@@ -1107,7 +1111,7 @@ function sourceConditionDiagnostics(
     // The loader refuses a percent-escaped target loudly; any other invalid
     // target falls back to the entry's runtime target.
     message: why.includes('percent-escape unsupported')
-      ? `exports["${subpath}"].${KIT_SOURCE_CONDITION}: ${why}, so the system loader fails to load that entry`
+      ? `exports["${subpath}"].${KIT_SOURCE_CONDITION} names ${target}, which ${why}, so the system loader fails to load that entry`
       : `exports["${subpath}"].${KIT_SOURCE_CONDITION} names ${target}, which ${why}, so that entry is read from its runtime target instead of source`,
     code: INVALID_KIT_SOURCE_CONDITION,
     severity: severityFor(INVALID_KIT_SOURCE_CONDITION),

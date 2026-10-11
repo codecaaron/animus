@@ -601,8 +601,8 @@ describe('collectExternalPackageSources', () => {
         'src/parts/card.tsx': 'export const Card = 3;',
       }
     );
-    // An exact entry only `require` or `types` reaches is not source, so
-    // these warn and keep the src/ guess.
+    // An exact entry only `require` or `types` reaches is not source, but
+    // the entry the specifier selects is, so it is read as source.
     const requireOnly = kit(
       join(root, 'node_modules', '@acme', 'require-only'),
       {
@@ -665,10 +665,10 @@ describe('collectExternalPackageSources', () => {
       'resolved',
       'resolved',
     ]);
+    // The entry each specifier selects targets source, so a `require`- or
+    // `types`-only sibling loses it no fidelity: only the guessed kit warns.
     expect(result.diagnostics.map((d) => [d.file, d.code])).toEqual([
       ['@acme/legacy', KIT_WITHOUT_SOURCE_CONDITION],
-      ['@acme/require-only', KIT_WITHOUT_SOURCE_CONDITION],
-      ['@acme/types-only', KIT_WITHOUT_SOURCE_CONDITION],
     ]);
   });
 });
@@ -1384,3 +1384,85 @@ test.each([[['pct', 'pct/a%20b']], [['pct/a%20b', 'pct']]])(
     ).toEqual([expect.stringContaining('percent-escape unsupported')]);
   }
 );
+
+// Contract: the source-targeting inference reads the entry the specifier
+// selects; an unrelated entry whose target is compiled output vetoes nothing.
+test('a source pattern beside a compiled root entry is read as its source', async () => {
+  const root = realpathSync(makeRoot());
+  const pkg = join(root, 'node_modules', 'mixed-root');
+  for (const file of ['dist/index.js', 'src/entries/foo.ts', 'src/foo.ts']) {
+    mkdirSync(join(pkg, file, '..'), { recursive: true });
+    writeFileSync(join(pkg, file), 'export const t = 1;\n');
+  }
+  writeFileSync(
+    join(pkg, 'package.json'),
+    JSON.stringify({
+      name: 'mixed-root',
+      exports: { '.': './dist/index.js', './*': './src/entries/*.ts' },
+    })
+  );
+
+  const result = await collect(root, {
+    'mixed-root/foo': join(pkg, 'src', 'entries', 'foo.ts'),
+  });
+  const loaded = native.resolveSpecifier('mixed-root/foo', root, []);
+
+  expect({
+    discovery: relative(
+      pkg,
+      result.sourceEntries.get('mixed-root/foo') ??
+        join(root, result.packageMap['mixed-root/foo'] ?? '')
+    ),
+    loader: relative(pkg, loaded.path ?? ''),
+    findings: result.diagnostics.map((d) => d.code),
+  }).toEqual({
+    discovery: 'src/entries/foo.ts',
+    loader: 'src/entries/foo.ts',
+    findings: [],
+  });
+});
+
+// Contract: two copies of one package report their own findings, each
+// naming its own target.
+test('two copies of a kit report their own percent findings', async () => {
+  const root = realpathSync(makeRoot());
+  const copy = (dir: string, escaped: string): string => {
+    for (const file of [
+      'src/index.ts',
+      'src/y.ts',
+      `src/${escaped}.ts`,
+      'dist/index.js',
+      'dist/y.js',
+      'dist/x.js',
+    ]) {
+      mkdirSync(join(dir, file, '..'), { recursive: true });
+      writeFileSync(join(dir, file), 'export const t = 1;\n');
+    }
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({
+        name: 'pct',
+        exports: {
+          '.': { animus: './src/index.ts', import: './dist/index.js' },
+          './y': { animus: './src/y.ts', import: './dist/y.js' },
+          './x': { animus: `./src/${escaped}.ts`, import: './dist/x.js' },
+        },
+      })
+    );
+    return dir;
+  };
+  const first = copy(join(root, 'node_modules', 'pct'), 'a%20b');
+  const second = copy(join(root, 'other', 'node_modules', 'pct'), 'c%20d');
+
+  const result = await collect(root, {
+    pct: join(first, 'dist', 'index.js'),
+    'pct/y': join(second, 'dist', 'y.js'),
+  });
+
+  expect(
+    result.diagnostics
+      .filter((d) => d.code === INVALID_KIT_SOURCE_CONDITION)
+      .map((d) => /a%20b|c%20d/.exec(d.message)?.[0])
+      .sort()
+  ).toEqual(['a%20b', 'c%20d']);
+});
