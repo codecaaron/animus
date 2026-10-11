@@ -107,15 +107,14 @@ export function setSharedExternalSideEffects(
 /** Structural view of the target session, declared here rather than imported
  *  so the singleton never depends on the session module it serves. */
 export interface WatchBatchTarget {
-  ingestForwardedBatch(changes: {
-    modifiedFiles?: ReadonlySet<string>;
-    removedFiles?: ReadonlySet<string>;
-  }): Promise<void>;
+  /** Starts one attempt over the build's untaken observations; false when
+   *  this session cannot analyze. */
+  startObservedAttempt(): boolean;
 }
 
 /**
  * The only session of a build that can run watch analysis. A non-owning
- * session forwards its batch here; dropping it loses files only that
+ * session's observations queue for it; dropping them loses files only that
  * watcher sees.
  */
 export function getOwningWatchSession(
@@ -203,6 +202,61 @@ export function setReplacementEpoch(key: SessionKey, epoch: string): void {
  */
 export function getWatchTransaction(key: SessionKey): Promise<void> | null {
   return findSession(key)?.watchTransaction ?? null;
+}
+
+/**
+ * The build's watch observations, recorded before any await so an attempt
+ * that rejects never erases one it did not take (SA20). An observation's
+ * state is its content hash, `removed` or `unreadable`.
+ */
+export interface ObservationQueue {
+  /** The latest revision handed to a recording caller. */
+  revision: number;
+  /** Each path no attempt has taken yet, with its latest state. */
+  readonly untaken: Map<string, string>;
+  /** Each waiting caller's revision, and the attempt that took it once one
+   *  has. */
+  readonly revisions: Map<number, Promise<void> | null>;
+  /** The active attempt and the states it took: an equivalent observation
+   *  joins it rather than run again. */
+  active: {
+    readonly taken: ReadonlyMap<string, string>;
+    readonly transaction: Promise<void>;
+  } | null;
+}
+
+export function observationQueue(key: SessionKey): ObservationQueue {
+  return joined(key).observations;
+}
+
+/** A system as one resolution context loaded it: the evaluated modules and
+ *  a fingerprint of everything the load produced. */
+export interface SystemLoad {
+  readonly identity: string;
+  readonly dependencies: readonly string[];
+}
+
+/**
+ * The build's one agreed system (SA5): the load its analysis runs on, the
+ * resolution context that made it, and each other participant context's
+ * load of the same system, made once.
+ */
+export interface SystemAuthority extends SystemLoad {
+  /** The context as stable text, and as a conflict names it. */
+  readonly context: string;
+  readonly label: string;
+  readonly others: Map<string, SystemLoad>;
+}
+
+export function getSystemAuthority(key: SessionKey): SystemAuthority | null {
+  return findSession(key)?.systemAuthority ?? null;
+}
+
+export function setSystemAuthority(
+  key: SessionKey,
+  authority: SystemAuthority
+): void {
+  joined(key).systemAuthority = authority;
 }
 
 export function setWatchTransaction(
@@ -318,13 +372,13 @@ export class SessionConfigurationConflict extends Error {
     readonly key: SessionKey,
     readonly established: string,
     readonly joining: string,
-    readonly differing: readonly string[]
+    readonly differing: readonly string[],
+    requirement = 'Every participant of one build must use the same Animus options.'
   ) {
     super(
       `[animus] SessionConfigurationConflict: "${joining}" joined build ` +
         `${key.build} of ${key.root} with ${differing.join(', ')} differing ` +
-        `from "${established}". Every participant of one build must use the ` +
-        `same Animus options.`
+        `from "${established}". ${requirement}`
     );
     this.name = 'SessionConfigurationConflict';
   }
@@ -405,6 +459,8 @@ export interface SessionState {
   analysisStarted: Promise<void> | null;
   /** The one in-flight watch-analysis transaction. */
   watchTransaction: Promise<void> | null;
+  observations: ObservationQueue;
+  systemAuthority: SystemAuthority | null;
   manifestJson: string | null;
   sharedCss: string;
   sharedSystemProps: string;
@@ -469,6 +525,13 @@ export function joinSession(
       authority: null,
       analysisStarted: null,
       watchTransaction: null,
+      observations: {
+        revision: 0,
+        untaken: new Map(),
+        revisions: new Map(),
+        active: null,
+      },
+      systemAuthority: null,
       manifestJson: null,
       sharedCss: '',
       sharedSystemProps: '',

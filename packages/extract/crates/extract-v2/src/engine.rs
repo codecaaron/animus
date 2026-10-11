@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use crate::identity::LocalId;
 use crate::link::ProjectLinks;
 use crate::loads::{LoadKind, Spelling};
+use crate::usage_facts::{reads_only, ReadingsOf};
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
 use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, Request, Terminal};
 
@@ -445,13 +446,6 @@ fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::S
     reads.found
 }
 
-/// One module's functions, each with how its parameters treat an object.
-type FunctionReadings = std::rc::Rc<BTreeMap<String, Vec<crate::usage_facts::ParamReading>>>;
-/// A module's function readings, scanned on first request.
-type ReadingsOf<'r> = dyn FnMut(&str) -> FunctionReadings + 'r;
-/// The declaring module and local name a module's binding names.
-type Declared<'d> = dyn Fn(&str, &str) -> Option<(String, String)> + 'd;
-
 /// One module's inputs to `unstable_style_statics`.
 struct StyleModule {
     facts: crate::usage_facts::StyleObjectFacts,
@@ -529,32 +523,6 @@ fn unstable_style_statics(
         found.dedup();
         found.into_iter().map(declaration).collect()
     };
-    // Whether the function `function` of `file` only reads the object passed
-    // as its parameter `index`, through the read-only callees it passes the
-    // object to, at most four calls deep.
-    fn reads_only(
-        file: &str,
-        function: &str,
-        index: usize,
-        depth: usize,
-        declared: &Declared<'_>,
-        readings_of: &mut ReadingsOf<'_>,
-    ) -> bool {
-        use crate::usage_facts::ParamReading;
-        if depth > 4 {
-            return false;
-        }
-        let readings = readings_of(file);
-        let Some(ParamReading::ReadOnly(passes)) = readings.get(function).and_then(|params| params.get(index)) else {
-            return false;
-        };
-        passes.iter().all(|(callee, at)| match declared(file, callee) {
-            Some((callee_file, callee_name)) => {
-                reads_only(&callee_file, &callee_name, *at, depth + 1, declared, readings_of)
-            }
-            None => false,
-        })
-    }
     // Whether a declaration's static is an object or array: no use can
     // change a primitive.
     let mutable = |(file, local): &(String, String)| {
@@ -573,7 +541,50 @@ fn unstable_style_statics(
         let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
         format!("{name} {} in {file}{line}", used.what)
     };
-    let mut unstable: BTreeMap<(String, String), String> = BTreeMap::new();
+    use crate::flow::{AbsenceQuery, ChangeKind, Coverage, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom};
+    let object = |(file, local): (String, String)| ObjectId { module: file, binding: local };
+    let mut flow = FlowBuilder::new();
+    // Each object a module exports, under each name it exports it as.
+    for (module, path) in links.paths.iter().enumerate() {
+        for name in links.table.exported_names(module).names {
+            let terminals = match links.table.resolve_export(module, &name) {
+                ExportLookup::Resolved(terminal) => vec![terminal],
+                ExportLookup::Incomplete { known, .. } => known,
+                ExportLookup::Absent | ExportLookup::Ambiguous(_) => Vec::new(),
+            };
+            for exported in local_bindings(terminals) {
+                flow.export(object(declaration(exported)), path, &name);
+            }
+        }
+    }
+    // A namespace handed on exposes every object the module exports,
+    // through `export *` too, and past a star the analysis cannot open,
+    // whatever that star may bring.
+    let hand_on = |flow: &mut FlowBuilder, target: &str, reason: &str| {
+        let Some(module) = links.module(target) else { return };
+        flow.open(ReasonId::OpaqueEffect, Region::of(RegionAtom::ExportsOf(target.to_string())), reason.to_string());
+        let names = links.table.exported_names(module);
+        for name in &names.names {
+            if let ExportLookup::Incomplete { openings, .. } = links.table.resolve_export(module, name) {
+                for opening in openings {
+                    let reason_id = match opening.reason {
+                        animus_system_loader::module_table::OpeningReason::OutsideStar(_) => ReasonId::OpaqueStar,
+                        animus_system_loader::module_table::OpeningReason::UnresolvedRequest(_) => {
+                            ReasonId::UnresolvedSpecifier
+                        }
+                    };
+                    let region = match opening.name {
+                        Some(asked) => RegionAtom::ExportedAs(asked),
+                        None => RegionAtom::AllExports,
+                    };
+                    flow.open(reason_id, Region::of(region), reason.to_string());
+                }
+            }
+        }
+        if !names.complete() {
+            flow.open(ReasonId::OpaqueStar, Region::of(RegionAtom::AllExports), reason.to_string());
+        }
+    };
     for (file, module) in style {
         // The declarations a use's name stands for that hold an object: a
         // namespace's member, every export of a namespace used whole, or
@@ -606,19 +617,19 @@ fn unstable_style_statics(
                         reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
                     });
                 if !read {
-                    unstable.entry(target).or_insert_with(|| said(file, &handoff.binding, &handoff.used));
+                    flow.change(object(target), Vec::new(), ChangeKind::Escape, said(file, &handoff.binding, &handoff.used));
                 }
             }
         }
         for (name, used) in &module.facts.uses {
             for target in targets_of(name) {
-                unstable.entry(target).or_insert_with(|| said(file, name, used));
+                flow.change(object(target), Vec::new(), ChangeKind::Escape, said(file, name, used));
             }
         }
         for (name, used) in &module.facts.flat_reads {
             for target in targets_of(name).into_iter().filter(|target| nested(target)) {
                 let reason = format!("{}, and it holds a nested object", said(file, name, used));
-                unstable.entry(target).or_insert(reason);
+                flow.change(object(target), Vec::new(), ChangeKind::Escape, reason);
             }
         }
         let reexports = module
@@ -630,45 +641,38 @@ fn unstable_style_statics(
             let Some(target) = analyze_css::resolve_import_source(file, spec, files, inputs) else {
                 continue;
             };
-            let reason = format!("{file} hands on {target} {how}");
-            for export in every_export(&target) {
-                unstable.entry(export).or_insert_with(|| reason.clone());
-            }
+            hand_on(&mut flow, &target, &format!("{file} hands on {target} {how}"));
         }
         // Code from a string can `import()` any module and change what it
         // exports.
         if let Some(how) = module.dynamic_code {
             let reason = format!("{file} {how}, so code from a string can load and change any module");
-            for target in style.keys() {
-                for export in every_export(target) {
-                    unstable.entry(export).or_insert_with(|| reason.clone());
-                }
-            }
+            flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), reason);
         }
     }
-    loop {
-        let mut changed = false;
-        for (file, module) in style {
-            let edges = module
-                .facts
-                .stored
-                .iter()
-                .map(|(stored, container)| (stored, container, "is stored in"))
-                .chain(module.facts.derives.iter().map(|(derived, read)| (derived, read, "reads")));
-            for (dependent, on, how) in edges {
-                let Some(reason) = possible(file, on).iter().find_map(|on_at| unstable.get(on_at)).cloned() else {
-                    continue;
-                };
-                for dependent_at in possible(file, dependent) {
-                    if let std::collections::btree_map::Entry::Vacant(entry) = unstable.entry(dependent_at) {
-                        entry.insert(format!("{dependent} {how} {on}, and {reason}"));
-                        changed = true;
-                    }
-                }
-            }
+    // A static stored in an object, or read from a binding, may change with
+    // it.
+    for (file, module) in style {
+        let edges = module
+            .facts
+            .stored
+            .iter()
+            .map(|(stored, container)| (stored, container, "is stored in"))
+            .chain(module.facts.derives.iter().map(|(derived, read)| (derived, read, "reads")));
+        for (dependent, on, how) in edges {
+            let to = possible(file, dependent).into_iter().map(object).collect();
+            let from = possible(file, on).into_iter().map(object).collect();
+            flow.flow(to, from, format!("{dependent} {how} {on}, and "));
         }
-        if !changed {
-            break;
+    }
+    let effects = flow.close();
+    let mut unstable = BTreeMap::new();
+    for (file, statics) in files {
+        for local in statics.keys() {
+            let query = AbsenceQuery::Stable(ObjectId::new(file, local), Vec::new());
+            if let Coverage::Exposed(exposures) = effects.covers(&query) {
+                unstable.insert((file.clone(), local.clone()), exposures[0].cause().to_string());
+            }
         }
     }
     unstable
@@ -892,16 +896,8 @@ impl ExtractEngine {
         // as a marker naming that use, so every reader refuses it.
         let programs: BTreeMap<&str, &oxc::ast::ast::Program<'_>> =
             store.iter().map(|ast| (ast.path.as_str(), ast.program())).collect();
-        // Each module's functions, with how their parameters treat an
-        // object, read while the module's scopes are at hand.
-        let readings_by_file: BTreeMap<String, FunctionReadings> = store
-            .iter()
-            .map(|ast| {
-                let readings =
-                    crate::usage_facts::function_param_readings(ast.program(), &lowered_by_file[&ast.path].scoping);
-                (ast.path.clone(), std::rc::Rc::new(readings))
-            })
-            .collect();
+        let readings_by_file: BTreeMap<String, crate::usage_facts::ParamReadings> =
+            lowered_by_file.iter().map(|(path, lowered)| (path.clone(), std::sync::Arc::clone(&lowered.readings))).collect();
         let mut readings_of = |file: &str| readings_by_file.get(file).cloned().unwrap_or_default();
         for ((file, local), reason) in unstable_style_statics(
             &style_modules,
@@ -1072,6 +1068,7 @@ impl ExtractEngine {
 
         // Facts own every resolved reference; release the modules' scopings.
         drop(references);
+        analyze_css::judge_object_handoffs(&mut self.facts, &self.opts.css_inputs, &links);
         let mut css = analyze_css::run(
             &self.facts,
             &self.order,
@@ -2124,10 +2121,15 @@ export const App = () => <Box tone="red" />;
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
         // A type query of eval, or a schema builder's own `Function` member
-        // (TypeBox's `Type.Function`), runs nothing: the static still
+        // (TypeBox's `Type.Function`), runs nothing, and a type query of a
+        // function's `arguments` reads none of them: the static still
         // extracts.
         for (row, module) in [
             ("type query", "export type Evaluate = typeof eval;\n"),
+            (
+                "a type query of arguments in a read-only callee",
+                "import { pad } from './tokens';\nfunction read(o) { type Args = typeof arguments; return o.padding; }\nread(pad);\n",
+            ),
             (
                 "a namespace's Function member",
                 "import * as Type from './typebox';\nexport const schema = Type.Function([], Type.String());\n",

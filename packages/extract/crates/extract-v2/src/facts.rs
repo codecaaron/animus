@@ -466,6 +466,15 @@ pub struct FileFacts {
     /// a namespace import.
     #[serde(skip)]
     pub(crate) unsafe_object_uses: BTreeMap<String, crate::usage_facts::ObjectUse>,
+    /// Each object binding the module passes whole to a module-scope
+    /// function nothing writes, which the engine judges once every module's
+    /// parameter readings are known: a hand-off to a parameter that does
+    /// more than read joins `unsafe_object_uses`.
+    #[serde(skip)]
+    pub(crate) object_handoffs: Vec<crate::usage_facts::Handoff>,
+    /// How each of the module's functions treats an object passed to it.
+    #[serde(skip)]
+    pub(crate) param_readings: crate::usage_facts::ParamReadings,
     /// Extensions of an `Object.member` parent, which are never chains.
     #[serde(skip)]
     pub member_parent_extensions: Vec<chain_walk::MemberParentExtension>,
@@ -1214,7 +1223,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let program = ast.program();
     // The engine lowers every file before static enrichment; any other
     // caller lowers this one here.
-    let crate::link::Lowered { scoping, bindings, record: module_record, loads } =
+    let crate::link::Lowered { scoping, bindings, record: module_record, loads, readings: param_readings } =
         lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
     let source = ast.source();
     let directive_prologue = program.directives.last().map(|last| {
@@ -1502,6 +1511,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         escapes: value_escapes,
         spread_wrappers,
         unsafe_object_uses,
+        object_handoffs,
         ordinary_components,
         context_consts,
         prop_tags,
@@ -1560,6 +1570,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         object_members: const_initializers.objects,
         facades: const_initializers.facades,
         unsafe_object_uses,
+        object_handoffs,
+        param_readings,
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,
         object_member_chains: const_initializers.chains,

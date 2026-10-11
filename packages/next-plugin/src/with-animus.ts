@@ -13,6 +13,7 @@ import {
 import {
   createBuildId,
   ExtractionSession,
+  requireEngine,
   runSessionPipeline,
   startTurbopackWatcher,
   stylesPath,
@@ -429,7 +430,9 @@ function withSourceKits<Config extends NextOwnedConfig>(
   rootDir: string
 ): NextConfigInput<Config> {
   const declared = nextConfig.transpilePackages ?? [];
-  const kits = sourceKitDependencies(rootDir)
+  // The native module answers the kit source table directly; the build's
+  // session engine is not created at config time.
+  const kits = sourceKitDependencies(rootDir, requireEngine())
     .map((kit) => kit.name)
     .filter((name) => !declared.includes(name));
   if (kits.length === 0) return nextConfig;
