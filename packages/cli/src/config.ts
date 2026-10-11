@@ -1,7 +1,7 @@
 import {
   AnimusConfigError,
   assertKnownOptionKeys,
-  assertNoRetiredEngineSelection,
+  assertSupportedEngine,
   createExcludeMatcher,
   DIAGNOSTIC_LEVELS,
   resolveMode,
@@ -210,9 +210,7 @@ function configDiagnostics(value: ConfigValue): DiagnosticLevels | undefined {
 function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
   // This projection drops `engine`, so without this gate a config asking
   // for the retired v1 engine would silently run v2.
-  assertNoRetiredEngineSelection(
-    isConfigString(raw.engine) ? raw.engine : undefined
-  );
+  assertSupportedEngine(isConfigString(raw.engine) ? raw.engine : undefined);
   // Runs before the projection, so the shared validator's key and
   // primitive error precedence is what the user sees.
   assertKnownOptionKeys(raw);

@@ -1,6 +1,6 @@
 import {
   assertKnownOptionKeys,
-  assertNoRetiredEngineSelection,
+  assertSupportedEngine,
   isPathWithinRoot,
   keepsKitSourceEffects,
   resolveMode,
@@ -153,7 +153,7 @@ type AnimusExtractOptionRecord = {
 
 export function animusExtract(options: AnimusExtractOptions): Plugin {
   // The option type excludes 'v1', but a raw runtime value still reaches here.
-  assertNoRetiredEngineSelection(options.engine);
+  assertSupportedEngine(options.engine);
   // Warn, never throw: an extra key must not kill Vite config loading during
   // a consumer upgrade. Invalid `mode` values still throw.
   const optionRecord: AnimusExtractOptionRecord = options;
