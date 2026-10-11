@@ -171,9 +171,10 @@ export interface SessionHost {
   unbundledComputedImports?: boolean;
 }
 
-import type { ExcludeMatcher } from '../pipeline/index';
+import type { AnimusMode, ExcludeMatcher, Verbosity } from '../pipeline/index';
 import type {
   AssetSheets,
+  IngestionOpening,
   LightningTargets,
   ManifestDiagnostic,
   SourceCorpus,
@@ -336,6 +337,8 @@ export class ExtractionSession {
   /** Whether the corpus being analyzed left a file out, whose renders the
    *  analysis cannot see. */
   private skippedSources: readonly string[] = [];
+  /** Resolver calls ingestion ended under another spelling. */
+  private ingestionOpenings: readonly IngestionOpening[] = [];
   /** Full package-resolution map from the last full pipeline — replayed by
    *  incremental passes (sourceEntries alone omits dist-resolved packages). */
   private lastPackageMap: Record<string, string> = {};
@@ -351,6 +354,7 @@ export class ExtractionSession {
     warn: (message: string) => this.warn(message),
     reportErrors: () => this.reportErrors(),
     extensions: () => this.extensionPolicy,
+    rootDir: () => this.rootDir!,
   });
 
   // Membership keys (lexical + canonical) for the system's evaluated module
@@ -379,6 +383,11 @@ export class ExtractionSession {
    *  shares its artifact tree and state; another build of the root never
    *  does. */
   readonly sessionId: string;
+  /** The log tier, from the option and `ANIMUS_DEBUG` at construction. */
+  private readonly verbosity: Verbosity;
+  /** The emission mode at construction: explicit, else `NODE_ENV`'s. It
+   *  defaults minify. */
+  private readonly startupMode: AnimusMode;
   private joinedKey: SessionKey | null = null;
   /** This instance as a participant of its build, once joined. */
   private participant: string | null = null;
@@ -421,6 +430,15 @@ export class ExtractionSession {
     // Serialized once (stable key order) so the analysis-inputs hash is
     // insensitive to option-object identity.
     this.staticCssJson = serializeStaticCss(options.staticCss);
+    // Startup inputs, captured once (SA2, SA3): no later stage reads
+    // `ANIMUS_DEBUG` or `NODE_ENV`.
+    this.verbosity = resolveVerbosity(
+      options.verbose,
+      process.env.ANIMUS_DEBUG
+    );
+    this.startupMode = resolveMode(options.mode, () =>
+      process.env.NODE_ENV === 'production' ? 'production' : 'development'
+    ).mode;
   }
 
   /** Forgets that `relPath` could not be read once an incremental pass reads
@@ -451,10 +469,7 @@ export class ExtractionSession {
   }
 
   get verbose(): boolean {
-    return (
-      resolveVerbosity(this.options.verbose, process.env.ANIMUS_DEBUG) !==
-      'quiet'
-    );
+    return this.verbosity !== 'quiet';
   }
 
   private log(msg: string): void {
@@ -963,6 +978,7 @@ export class ExtractionSession {
         });
         this.throwOnAbortedParse(ingested);
         this.skippedSources = ingested.skippedOriginals ?? [];
+        this.ingestionOpenings = ingested.openings ?? [];
         if (this.systemReloadOwed) {
           this.log(
             'system reload: publishing the reload a parse hold deferred'
@@ -1400,6 +1416,7 @@ export class ExtractionSession {
         accepted = await this.corpus.prepare(rawEntries);
         this.throwOnAbortedParse(accepted);
         this.skippedSources = accepted.skippedOriginals ?? [];
+        this.ingestionOpenings = accepted.openings ?? [];
       } catch (err) {
         this.debouncePending.clear();
         this.writeAnalysisStatus('failed', pending, String(err));
@@ -1840,6 +1857,7 @@ export class ExtractionSession {
           isAbsolute(file) ? relative(this.rootDir!, file) : file
         ),
         unbundledComputedImports: this.host.unbundledComputedImports,
+        openings: [...this.ingestionOpenings],
         packageDirs: this.externalPackageDirs.map((dir) =>
           relative(this.rootDir!, dir)
         ),
@@ -1921,11 +1939,7 @@ export class ExtractionSession {
       );
     }
     const processedBody = postProcessCss(body, {
-      minify:
-        this.options.minify ??
-        resolveMode(this.options.mode, () =>
-          process.env.NODE_ENV === 'production' ? 'production' : 'development'
-        ).mode === 'production',
+      minify: this.options.minify ?? this.startupMode === 'production',
       targets: this.lcssTargets,
       warnFn: (msg) => this.warn(msg),
     });

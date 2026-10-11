@@ -19,6 +19,7 @@ import type {
   ManifestDiagnostic,
 } from './manifest-diagnostics';
 import type { ProjectManifest } from './manifest-schema';
+import type { IngestionOpening } from './source-ingestion';
 import type { SystemConfig } from './system-config';
 
 /**
@@ -88,6 +89,9 @@ export interface AnalysisContext {
   /** The host's extension order (spec §2.2 A2), through which analysis
    *  resolves a relative import; the built-in policy without one. */
   extensions?: ExtensionOrder;
+  /** Resolver calls ingestion ended under another spelling (spec §2.2
+   *  A8): openings analysis reports and never prunes past. */
+  openings?: IngestionOpening[];
 }
 
 /**

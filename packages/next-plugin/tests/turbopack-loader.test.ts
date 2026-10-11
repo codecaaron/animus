@@ -134,11 +134,12 @@ afterEach(() => {
 });
 
 describe('turbopack loader hydration', () => {
-  test('passes through untouched when no committed artifacts exist for the session', async () => {
+  test('fails, never passes through, when no analysis exists for the session', async () => {
     const root = makeRoot([]);
     const before = mocks.analyzeProject.mock.calls.length;
-    const out = await runLoader(root, 'app/page.tsx', 'export const a = 1;\n');
-    expect(out).toBe('export const a = 1;\n');
+    await expect(
+      runLoader(root, 'app/page.tsx', 'export const a = 1;\n')
+    ).rejects.toThrow(/ANIMUS_ANALYSIS_MISSING/);
     expect(mocks.analyzeProject.mock.calls.length).toBe(before);
   });
 
@@ -207,6 +208,25 @@ describe('turbopack loader hydration', () => {
     );
     await runLoader(root, 'app/a.tsx', 'export {};\n');
     expect(mocks.analyzeProject.mock.calls.length).toBe(before + 1);
+  });
+
+  /** Contract: the worker rejects an engine other than v2 before any
+   *  native load (SA2). */
+  test('a worker under ANIMUS_ENGINE=v3 rejects before transforming', async () => {
+    const root = makeRoot([{ path: 'app/a.tsx', source: 'export {};\n' }]);
+    const saved = process.env.ANIMUS_ENGINE;
+    process.env.ANIMUS_ENGINE = 'v3';
+    // A worker started under it.
+    __resetTurbopackLoaderStateForTests?.();
+    try {
+      await expect(
+        runLoader(root, 'app/a.tsx', 'export {};\n')
+      ).rejects.toThrow(expect.objectContaining({ name: 'AnimusConfigError' }));
+      expect(mocks.analyzeProject).not.toHaveBeenCalled();
+    } finally {
+      if (saved === undefined) delete process.env.ANIMUS_ENGINE;
+      else process.env.ANIMUS_ENGINE = saved;
+    }
   });
 
   /** Contract: engine state is per build (SA18). A worker serving two

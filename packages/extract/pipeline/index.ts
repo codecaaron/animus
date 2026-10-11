@@ -22,7 +22,7 @@ export type {
 } from './engine-adapter';
 export { createV2EngineApi } from './engine-adapter';
 export {
-  assertNoRetiredEngineSelection,
+  assertSupportedEngine,
   RETIRED_ENGINE_MESSAGE,
 } from './engine-retirement';
 export { contentHash } from './content-hash';
@@ -232,3 +232,4 @@ export {
 export { applyUnitFallback } from './unit-fallback';
 export { camelToKebab, stableStringify } from './utils';
 export { toWatchKeys } from './watch-keys';
+export type { IngestionOpening } from './source-ingestion';

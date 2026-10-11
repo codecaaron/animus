@@ -7,7 +7,12 @@ import {
   replacementEpochPath,
   sessionArtifactDir,
 } from '../../extract/session/session-paths';
-import { joinSession, sessionKey } from '../../extract/session/singleton';
+import {
+  engineApi,
+  joinSession,
+  sessionKey,
+  setEngineFactoryLoaderForTests,
+} from '../../extract/session/singleton';
 import {
   disposeTempRoots,
   makeTempRoot,
@@ -24,15 +29,22 @@ let restoreGlobals: () => void;
 /** The build of the test's root, which `createRoot` joins. */
 let state: SessionState;
 
-const unreachableEngine: V2ExtractEngine = {
-  analyze: () => {
-    throw new Error('engine must not be called for unknown paths');
-  },
-  transformFile: () => {
-    throw new Error('engine must not be called for unknown paths');
-  },
-  clearCache: () => {
-    throw new Error('engine must not be called for unknown paths');
+/** A native module whose engine analyzed nothing and is never called for
+ *  a path outside that analysis. */
+const unreachableNative = {
+  ExtractEngine: class implements V2ExtractEngine {
+    prepare(): string {
+      throw new Error('engine must not be called for unknown paths');
+    }
+    analyze(): string {
+      return '{}';
+    }
+    transformFile(): string {
+      throw new Error('engine must not be called for unknown paths');
+    }
+    clearCache(): void {
+      throw new Error('engine must not be called for unknown paths');
+    }
   },
 };
 
@@ -45,6 +57,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setEngineFactoryLoaderForTests(null);
   restoreGlobals();
   disposeTempRoots();
 });
@@ -56,8 +69,19 @@ function createRoot(withArtifact: boolean) {
     system: './src/ds.ts',
   });
   state.manifestJson = JSON.stringify({ components: {} });
-  state.engine = unreachableEngine;
-  state.sentSources = new Map<string, string>();
+  setEngineFactoryLoaderForTests(() => unreachableNative);
+  // An analysis of no files: every path the loader sees is outside it.
+  engineApi(sessionKey(SESSION_ID, root)).analyzeProject(
+    '[]',
+    '{}',
+    '{}',
+    null,
+    '{}',
+    '{}',
+    '{}',
+    false,
+    '{}'
+  );
   state.artifactDir = sessionDir;
   const epochPath = replacementEpochPath(sessionDir);
   if (withArtifact) {
@@ -91,17 +115,32 @@ function runLoader(args: {
 }
 
 describe('replacements-epoch artifact registered as a file dependency (design D2)', () => {
-  test('every dev invocation registers the session-scoped artifact — transform-eligible, passthrough, and manifest-absent alike', () => {
+  test('every dev invocation registers the session-scoped artifact, transform-eligible, passthrough and manifest-absent alike', () => {
     const { root, epochPath } = createRoot(true);
 
     expect(runLoader({ root, source: OLD_SOURCE }).dependencies).toEqual([
       epochPath,
     ]);
 
+    // Without an analysis the module fails rather than serve raw (SA1),
+    // having registered the artifact first.
     state.manifestJson = null;
-    const absent = runLoader({ root, source: OLD_SOURCE });
-    expect(absent.output).toBe(OLD_SOURCE);
-    expect(absent.dependencies).toEqual([epochPath]);
+    const dependencies: string[] = [];
+    expect(() =>
+      animusLoader.call(
+        {
+          resourcePath: join(root, 'src/C.tsx'),
+          rootContext: root,
+          getOptions: () => ({ build: SESSION_ID, root }),
+          addDependency: (file: string) => {
+            dependencies.push(file);
+          },
+          mode: 'development' as const,
+        },
+        OLD_SOURCE
+      )
+    ).toThrow(/no analysis is available/);
+    expect(dependencies).toEqual([epochPath]);
   });
 
   test('no dependency when the artifact does not exist', () => {

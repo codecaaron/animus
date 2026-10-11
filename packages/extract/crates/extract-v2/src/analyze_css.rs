@@ -101,6 +101,9 @@ pub struct CssInputs {
     /// The host's first candidate for each probe base, as the session
     /// gathered it at ingest; none where no session did.
     pub probe_evidence: Option<ProbeEvidence>,
+    /// Each probe this analysis ended Incomplete: its importer, specifier,
+    /// the candidate, and the spelling the host's filesystem opens.
+    pub incomplete_probes: std::sync::Mutex<BTreeSet<(String, String, String, String)>>,
     /// `{ definitionKey: sourceText }` for the loaded system's configured
     /// transforms, keyed as its props' `transformId` (or, for a system that
     /// predates identities, their name).
@@ -172,6 +175,21 @@ pub struct AnalysisContext {
     /// The host's extension order (spec §2.2 A2), as the session captured
     /// it; the built-in policy where no host resolves.
     pub extensions: Option<animus_system_loader::resolution::ExtensionPolicy>,
+    /// Probes ingestion ended under another spelling (a Svelte resolver
+    /// call whose import the host opens as another file, spec §2.2 A8):
+    /// each is an opening of this analysis, as one of its own probes is.
+    pub openings: Vec<CaseOpening>,
+}
+
+/// A probe ingestion ended because the host opens its candidate under
+/// another spelling.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaseOpening {
+    pub importer: String,
+    pub specifier: String,
+    pub candidate: String,
+    pub opened: String,
 }
 
 impl CssInputs {
@@ -281,6 +299,7 @@ impl CssInputs {
             external_dirs: parse("externalDirsJson", external_dirs_json)?,
             analysis_context: AnalysisContext::default(),
             probe_evidence: None,
+            incomplete_probes: Default::default(),
             dev_mode,
             numeric_properties: FxHashSet::default(),
             system_hash,
@@ -517,6 +536,10 @@ const UNREAD_CREATE_ELEMENT_PROPS: &str = "animus.usage.unread-create-element-pr
 /// A warning: one runtime module load opens more components than
 /// `WIDE_MODULE_LOAD_LIMIT`, so the user can see why pruning stopped.
 const WIDE_MODULE_LOAD: &str = "animus.usage.wide-module-load";
+/// A probe the host's first candidate ends under another spelling (spec
+/// §2.2 A8, Incomplete(CaseMismatch)): a case- or normalization-insensitive
+/// host opens a file analysis never reads, so nothing is pruned.
+const RESOLVE_CASE_MISMATCH: &str = "animus.resolve.case-mismatch";
 const WIDE_MODULE_LOAD_LIMIT: usize = 20;
 /// A warning, once per production analysis: tags usage cannot match to an
 /// Animus component stop whole-component removal, so every extracted
@@ -589,6 +612,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (UNTRACKED_CLONE_PROPS, "warn"),
     (UNREAD_CREATE_ELEMENT_PROPS, "warn"),
     (WIDE_MODULE_LOAD, "warn"),
+    (RESOLVE_CASE_MISMATCH, "warn"),
     (IDENTITY_UNCERTAIN, "warn"),
     (IDENTITY_UNCERTAIN_TAG, "info"),
     (UNEXTRACTABLE_CHAIN, "warn"),
@@ -777,10 +801,29 @@ pub fn resolve_import_source<T>(
     files: &BTreeMap<String, T>,
     inputs: &CssInputs,
 ) -> Option<String> {
-    match probe_base(from_file, spec, inputs) {
-        Some(base) => probe_files(&base, files, inputs),
-        None => inputs.package_map.get(spec).cloned(),
+    let Some(base) = probe_base(from_file, spec, inputs) else {
+        return inputs.package_map.get(spec).cloned();
+    };
+    match probe_files(&base, files, inputs) {
+        animus_system_loader::resolution::Probe::Found(module) => Some(module),
+        // The host opens another spelling: no module, and the analysis is
+        // incomplete (spec §2.2 A8).
+        animus_system_loader::resolution::Probe::CaseMismatch { candidate, actual } => {
+            if let Ok(mut incomplete) = inputs.incomplete_probes.lock() {
+                incomplete.insert((from_file.to_string(), spec.to_string(), candidate, actual));
+            }
+            None
+        }
+        animus_system_loader::resolution::Probe::Absent => None,
     }
+}
+
+/// Whether the analysis leaves a source unseen: a skipped source, or a
+/// probe that ended Incomplete. Either may render any option, so nothing is
+/// pruned.
+fn analysis_incomplete(inputs: &CssInputs) -> bool {
+    !inputs.analysis_context.skipped_sources.is_empty()
+        || inputs.incomplete_probes.lock().map(|incomplete| !incomplete.is_empty()).unwrap_or(true)
 }
 
 #[cfg(test)]
@@ -792,21 +835,25 @@ thread_local! {
 }
 
 /// The analyzed file `base` names, through the host's extension order.
-fn probe_files<T>(base: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> Option<String> {
-    use animus_system_loader::resolution::{extension_policy, Seen};
+fn probe_files<T>(
+    base: &str,
+    files: &BTreeMap<String, T>,
+    inputs: &CssInputs,
+) -> animus_system_loader::resolution::Probe {
+    use animus_system_loader::resolution::{extension_policy, Probe, Seen};
     #[cfg(test)]
     PROBED.with(|probed| probed.borrow_mut().insert(base.to_string()));
-    // The session's evidence answers in one lookup where the host's first
-    // candidate is an analysed module spelled as the probe spells it.
-    let evidenced = inputs
-        .probe_evidence
-        .as_ref()
-        .and_then(|evidence| evidence.bases.get(base))
-        .filter(|host| host.actual.is_none())
-        .and_then(|host| host.analysed_as.as_ref())
-        .filter(|module| files.contains_key(module.as_str()));
-    if let Some(module) = evidenced {
-        return Some(module.clone());
+    // The session's evidence answers in one lookup: the host's first
+    // candidate, opened under another spelling, ends the probe; spelled as
+    // the probe spells it, it is the analysed module it names.
+    let host = inputs.probe_evidence.as_ref().and_then(|evidence| evidence.bases.get(base));
+    if let Some(host) = host {
+        if let Some(actual) = &host.actual {
+            return Probe::CaseMismatch { candidate: host.candidate.clone(), actual: actual.clone() };
+        }
+        if let Some(module) = host.analysed_as.as_ref().filter(|module| files.contains_key(module.as_str())) {
+            return Probe::Found(module.clone());
+        }
     }
     // The analyzed set is keyed by each file's own spelling, so a lookup is
     // exact: a specifier that differs only in case names no analyzed file.
@@ -819,7 +866,6 @@ fn probe_files<T>(base: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -
             true => Seen::File,
             false => Seen::Missing,
         })
-        .found()
 }
 
 /// The first module on the module table's route for `module`'s export
@@ -5492,13 +5538,13 @@ fn report_key(diagnostic: &CssDiagnostic) -> ReportKey {
 /// Components with the CSS reconciliation keeps for them.
 type Reconciled = [(String, ComponentCss)];
 
-/// `skip_pruned`: while sources are skipped, what pruning would have kept,
-/// and those sources. An error from an option kept only because of the skip
-/// is a warning that says so.
+/// `skip_pruned`: while the analysis leaves a source unseen, what pruning
+/// would have kept, and why pruning is off (the openings that kept it). An
+/// error from an option kept only for that reason is a warning that says so.
 fn resolve_deferred_component_errors(
     deferred: &mut Vec<DeferredComponentError>,
     reconciled: &Reconciled,
-    skip_pruned: Option<(&Reconciled, &[String])>,
+    skip_pruned: Option<(&Reconciled, &str)>,
     diagnostics: &mut Vec<CssDiagnostic>,
 ) {
     fn survives(components: &Reconciled, entry: &DeferredComponentError) -> bool {
@@ -5524,16 +5570,13 @@ fn resolve_deferred_component_errors(
         if entry.once && !reported_once.insert(report_key(diagnostic)) {
             continue;
         }
-        if let Some((pruned, skipped)) = skip_pruned {
+        if let Some((pruned, unseen)) = skip_pruned {
             if !survives(pruned, &entry) {
                 let diagnostic = &mut entry.diagnostic;
                 diagnostic.kind = "warn".to_string();
                 diagnostic.severity = Some("warn".to_string());
-                diagnostic.message = format!(
-                    "{} (this option ships only because pruning is off while {} is skipped)",
-                    diagnostic.message,
-                    skipped.join(", ")
-                );
+                diagnostic.message =
+                    format!("{} (this option ships only because pruning is off while {unseen})", diagnostic.message);
             }
         }
         diagnostics.push(entry.diagnostic);
@@ -7386,7 +7429,7 @@ fn run_with_system_floor(
         }
         false => FxHashSet::default(),
     };
-    let usage_complete = inputs.analysis_context.skipped_sources.is_empty()
+    let usage_complete = !analysis_incomplete(inputs)
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
             || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, links, &ordinary_members, &package_members, &bounded_tags));
@@ -8044,10 +8087,44 @@ fn run_with_system_floor(
     }
     crate::reconcile::pool_shared_usage(&mut usage_ledger, copies.into_values(), &parent_ids);
 
-    // A skipped source may render any option, so nothing is pruned. The
-    // pruned result still tells which options its errors come from.
+    // A probe the host ends under another spelling opens a file analysis
+    // never reads (spec §2.2 A8): reported once per importer and specifier.
+    let incomplete: Vec<(String, String, String, String)> =
+        inputs.incomplete_probes.lock().map(|probes| probes.iter().cloned().collect()).unwrap_or_default();
+    for (importer, specifier, candidate, actual) in &incomplete {
+        diagnostics.push(diagnostic(
+            importer,
+            specifier,
+            "warn",
+            animus_system_loader::resolution::case_mismatch_reason(
+                &format!("'{specifier}'"),
+                candidate,
+                actual,
+                "spell the import as the file is spelled; until then analysis reads neither file, and nothing is pruned",
+            ),
+            Some(RESOLVE_CASE_MISMATCH),
+        ));
+    }
+
+    // A skipped source, or a file a probe's host opens that analysis never
+    // reads, may render any option, so nothing is pruned. The pruned result
+    // still tells which options its errors come from.
     let skipped = &inputs.analysis_context.skipped_sources;
-    let pruned_components = (!inputs.dev_mode && !skipped.is_empty()).then(|| {
+    let unseen = [
+        (!skipped.is_empty()).then(|| format!("{} is skipped", skipped.join(", "))),
+        (!incomplete.is_empty()).then(|| {
+            let openings: Vec<String> = incomplete
+                .iter()
+                .map(|(importer, specifier, _, actual)| format!("'{specifier}' from {importer} opens {actual}"))
+                .collect();
+            format!("{}, which analysis does not read", openings.join(", "))
+        }),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", and ");
+    let pruned_components = (!inputs.dev_mode && !unseen.is_empty()).then(|| {
         let mut pruned = reconciled_components.clone();
         reconcile(&mut pruned, &usage_ledger, &parent_ids);
         pruned
@@ -8076,7 +8153,7 @@ fn run_with_system_floor(
     resolve_deferred_component_errors(
         &mut deferred_errors,
         &reconciled_components,
-        pruned_components.as_deref().map(|pruned| (pruned, skipped.as_slice())),
+        pruned_components.as_deref().map(|pruned| (pruned, unseen.as_str())),
         &mut diagnostics,
     );
 
@@ -14980,6 +15057,46 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             (vec!["sm"], vec!["active"])
         );
         let out = analyze(&[("r.tsx", RECIPE), ("app.tsx", app)], &inputs);
+        assert_eq!(kept_sizes(&out, "r.tsx::R"), vec!["sm", "md", "lg"]);
+    }
+
+    /// An Incomplete probe opens a file analysis never reads (spec §2.2
+    /// A8): it is reported, nothing is pruned while it stands, and an error
+    /// from an option kept only for that reason is a warning naming it.
+    #[test]
+    fn an_incomplete_probe_reports_itself_and_keeps_every_option() {
+        let opened = |inputs: &mut CssInputs| {
+            inputs.probe_evidence = Some(ProbeEvidence {
+                generation: 1,
+                identity: String::new(),
+                bases: [(
+                    "twin".to_string(),
+                    HostCandidate { candidate: "twin.ts".into(), actual: Some("Twin.ts".into()), analysed_as: None },
+                )]
+                .into_iter()
+                .collect(),
+            });
+        };
+        let source = "export const Button = ds.styles({}).variant({ prop: 'tone', defaultVariant: 'quiet', variants: { quiet: { w: 1 }, loud: { w: 2 } } }).asElement('button');\n";
+        let app = "import { Twin } from './twin';\nexport const App = () => <><Button tone=\"quiet\" /><Twin /></>;\n";
+        let mut inputs = failing_transform_variant_inputs(false);
+        opened(&mut inputs);
+        let out = analyze(&[("one.tsx", source), ("app.tsx", app), ("twin.tsx", "export const Twin = () => null;\n")], &inputs);
+        let mismatches: Vec<&CssDiagnostic> =
+            out.diagnostics.iter().filter(|d| d.code.as_deref() == Some(RESOLVE_CASE_MISMATCH)).collect();
+        assert_eq!(mismatches.len(), 1, "{:#?}", out.diagnostics);
+        assert!(mismatches[0].message.contains("Twin.ts"), "{}", mismatches[0].message);
+        let downgraded = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.kind == "warn" && d.message.contains("'./twin' from app.tsx opens Twin.ts, which analysis does not read"))
+            .count();
+        assert_eq!(downgraded, 1, "{:#?}", out.diagnostics);
+        // Nothing is pruned while the probe stands.
+        let mut inputs = test_inputs();
+        opened(&mut inputs);
+        let app = "import { Twin } from './twin';\nimport { R } from './r';\nexport const App = () => <><R size=\"sm\" active /><Twin /></>;\n";
+        let out = analyze(&[("r.tsx", RECIPE), ("app.tsx", app), ("twin.tsx", "export const Twin = () => null;\n")], &inputs);
         assert_eq!(kept_sizes(&out, "r.tsx::R"), vec!["sm", "md", "lg"]);
     }
 
