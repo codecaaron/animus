@@ -1742,10 +1742,11 @@ export class ExtractionSession {
     }
 
     bt.fileRead = this.elapsed(t);
+    const rawPaths = new Set(rawEntries.map((entry) => entry.path));
 
-    // Package resolution, as system loading resolves: under the same
-    // context, every answer the loader's. The traversal and ingest below
-    // are the shared collector.
+    // Package resolution: the host's own where it resolves imports (spec
+    // §2.2 A4), else the system loader's under the same context. The
+    // traversal and ingest below are the shared collector.
     t = this.now();
     const packageResolution: PackageResolution = {
       resolveSpecifier: (
@@ -1799,7 +1800,8 @@ export class ExtractionSession {
         rawEntries,
         this.engine(),
         rootDir,
-        packageNames
+        packageNames,
+        (entries) => this.corpus.facts(entries)
       )
     );
     const preResolved =
@@ -1837,7 +1839,7 @@ export class ExtractionSession {
       requireSourceEntry: hostFirst?.requireSourceEntry,
       rootDir,
       extensionsSet,
-      hasEntry: (relPath) => rawEntries.some((e) => e.path === relPath),
+      hasEntry: (relPath) => rawPaths.has(relPath),
       hostOutputDirs: this.structuralExclude.map((dir) =>
         resolve(rootDir, dir)
       ),

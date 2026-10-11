@@ -702,7 +702,10 @@ export async function ingestSourceEntries(
  */
 function collectFileFacts(
   analysisEntries: readonly AnalysisSourceEntry[],
-  options: SourceIngestionOptions
+  options: SourceIngestionOptions,
+  /** Drop cached facts for paths not in `analysisEntries`: a full corpus
+   *  pass's set, never a partial read's. */
+  evict = true
 ): ExtractFactsResult {
   const cache = options.factsCache;
   if (!cache) {
@@ -729,9 +732,11 @@ function collectFileFacts(
       else cache.delete(entry.path);
     }
   }
-  const currentPaths = new Set(analysisEntries.map((entry) => entry.path));
-  for (const path of [...cache.keys()]) {
-    if (!currentPaths.has(path)) cache.delete(path);
+  if (evict) {
+    const currentPaths = new Set(analysisEntries.map((entry) => entry.path));
+    for (const path of [...cache.keys()]) {
+      if (!currentPaths.has(path)) cache.delete(path);
+    }
   }
   const files: Record<string, ExtractFileFacts> = {};
   for (const entry of analysisEntries) {
@@ -815,6 +820,9 @@ export interface SourceIngestorHost {
 
 export interface SourceIngestor {
   ingest(entries: readonly RawSourceEntry[]): Promise<SourceIngestionResult>;
+  /** The engine's facts for parser-ready entries, through the ingestion's
+   *  own cache, so a later ingest of the same bytes parses nothing. */
+  facts(entries: readonly AnalysisSourceEntry[]): ExtractFactsResult;
   /** Returns originals to quarantine. Fatal diagnostics throw under strict
    *  (strict development reports them), else warn once per (original,
    *  message); advisory ones never quarantine. */
@@ -835,20 +843,30 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
   /** Non-strict dedupe: a quarantined original re-ingests on every later
    *  corpus pass, so re-warning it on each save is noise. */
   const warnedByOriginal = new Map<string, Set<string>>();
+  const extractFacts = (): ((filesJson: string) => string) => {
+    const extract = host.engineApi().extractFacts;
+    if (extract === undefined) {
+      throw new Error(
+        `${host.prefix} native engine does not expose extractFacts required for source adaptation`
+      );
+    }
+    return extract;
+  };
   return {
     async ingest(entries) {
-      const extractFacts = host.engineApi().extractFacts;
-      if (extractFacts === undefined) {
-        throw new Error(
-          `${host.prefix} native engine does not expose extractFacts required for source adaptation`
-        );
-      }
       return ingestSourceEntries(entries, {
-        extractFacts,
+        extractFacts: extractFacts(),
         factsCache,
         extensions: host.extensions?.(),
         rootDir: host.rootDir?.(),
       });
+    },
+    facts(entries) {
+      return collectFileFacts(
+        entries,
+        { extractFacts: extractFacts(), factsCache },
+        false
+      );
     },
     surfaceDiagnostics(diagnostics) {
       const fatal = diagnostics.filter(
