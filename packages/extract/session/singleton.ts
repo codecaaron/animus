@@ -110,6 +110,9 @@ export interface WatchBatchTarget {
   /** Starts one attempt over the build's untaken observations; false when
    *  this session cannot analyze. */
   startObservedAttempt(): boolean;
+  /** Probes every file for a change no observation reported, after any
+   *  attempt in flight. */
+  probe(): Promise<void>;
 }
 
 /**

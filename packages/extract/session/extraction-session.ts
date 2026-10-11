@@ -378,6 +378,8 @@ export class ExtractionSession {
   private joinedKey: SessionKey | null = null;
   /** This instance as a participant of its build, once joined. */
   private participant: string | null = null;
+  /** Closed: it left its build and starts no attempt until it reattaches. */
+  private detached = false;
   /** Epoch of the last published analysis; null seeds from disk so a
    *  same-session restart with unchanged plans rewrites no bytes. */
   private lastEpochValue: string | null = null;
@@ -570,7 +572,7 @@ export class ExtractionSession {
       await inflight;
       return;
     }
-    if (this.system) await this.runWatchAttempt(changes);
+    if (this.system && !this.detached) await this.runWatchAttempt(changes);
   }
 
   /** Queues the batch's observations under a new revision, synchronously.
@@ -626,8 +628,13 @@ export class ExtractionSession {
         await inflight.catch(() => undefined);
         continue;
       }
-      const owner = this.system ? this : getOwningWatchSession(this.key);
-      if (owner === null && getManifestJson(this.key) !== null) {
+      const owner =
+        this.system && !this.detached ? this : getOwningWatchSession(this.key);
+      if (
+        owner === null &&
+        !this.detached &&
+        getManifestJson(this.key) !== null
+      ) {
         // The publisher left a build this participant still uses: it takes
         // over, and its full read settles the queued observations.
         await this.runFullPipeline();
@@ -644,7 +651,7 @@ export class ExtractionSession {
 
   /** Starts one attempt over every untaken observation of the build. */
   startObservedAttempt(): boolean {
-    if (!this.system) return false;
+    if (!this.system || this.detached) return false;
     const taken = this.takeObservations();
     const modifiedFiles = new Set<string>();
     const removedFiles = new Set<string>();
@@ -1529,7 +1536,7 @@ export class ExtractionSession {
 
   /** Release this session's publication claim so a successor may publish,
    *  and leave the build, which retires with its last participant.
-   *  Idempotent; a later use joins the build again. */
+   *  Idempotent; `reattach` joins the build again. */
   close(): void {
     this.releasePublicationClaim?.();
     this.releasePublicationClaim = null;
@@ -1539,8 +1546,40 @@ export class ExtractionSession {
       setOwningWatchSession(this.joinedKey, null);
     }
     leaveSession(this.joinedKey, this.participant);
-    this.joinedKey = null;
     this.participant = null;
+    // The key stays pinned: an attempt in flight finishes under it and never
+    // joins the build again. Only `reattach` joins again.
+    this.detached = true;
+  }
+
+  /** A closed participant attaching again: its private analysis is stale,
+   *  so it is discarded, and it joins its build again. Idempotent. */
+  reattach(): void {
+    if (!this.detached) return;
+    this.detached = false;
+    this.system = null;
+    this.joinedKey = null;
+  }
+
+  /** Brings a reattached participant up to date. A live build answers
+   *  through its current publisher, which probes every file for what
+   *  changed meanwhile, or this participant takes it over with a full read;
+   *  true then. A retired build is false: the host starts it as at first. */
+  async catchUp(): Promise<boolean> {
+    if (getManifestJson(this.key) === null) return false;
+    const owner = getOwningWatchSession(this.key);
+    if (owner !== null && owner !== this) await owner.probe();
+    else await this.runFullPipeline();
+    return true;
+  }
+
+  async probe(): Promise<void> {
+    for (;;) {
+      const inflight = getWatchTransaction(this.key);
+      if (!inflight) break;
+      await inflight.catch(() => undefined);
+    }
+    if (this.system && !this.detached) await this.runWatchAttempt({});
   }
 
   /** Reset analysis state for a system reload: write guards go back to null
