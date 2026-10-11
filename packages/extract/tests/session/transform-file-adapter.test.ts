@@ -15,6 +15,9 @@ function transformOnlyEngine(
 ): V2ExtractEngine {
   return {
     transformFile,
+    prepare: () => {
+      throw new Error('prepare() must not run during a transform');
+    },
     analyze: () => {
       throw new Error('analyze() must not run during a transform');
     },

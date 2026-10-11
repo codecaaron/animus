@@ -23,6 +23,7 @@ export type AnalyzeProjectArgs = [
   analysisContextJson?: string,
   generatedNamesJson?: string,
   propertyRecordsJson?: string,
+  probeEvidence?: (bases: readonly string[]) => string,
 ];
 
 /** @internal */
@@ -98,4 +99,63 @@ export function buildAnalyzeProjectArgs(
     args.push(slot || undefined);
   }
   return args;
+}
+
+/** `args` with the session's host-candidate evidence gatherer in its own
+ *  slot, after every optional one. */
+export function withProbeEvidence(
+  args: AnalyzeProjectArgs,
+  probeEvidence: (bases: readonly string[]) => string
+): AnalyzeProjectArgs {
+  const [
+    filesJson,
+    scalesJson,
+    variableMapJson,
+    contextualVarsJson,
+    propConfigJson,
+    groupRegistryJson,
+    packageResolutionJson,
+    devMode,
+    emitterConfigJson,
+    selectorAliasesJson,
+    selectorOrderJson,
+    globalStyleBlocksJson,
+    pathAliasesJson,
+    keyframesJson,
+    staticCssJson,
+    conditionAliasesJson,
+    externalDirsJson,
+    transformSourcesJson,
+    transformProvenanceJson,
+    declarationScalesJson,
+    analysisContextJson,
+    generatedNamesJson,
+    propertyRecordsJson,
+  ] = args;
+  return [
+    filesJson,
+    scalesJson,
+    variableMapJson,
+    contextualVarsJson,
+    propConfigJson,
+    groupRegistryJson,
+    packageResolutionJson,
+    devMode,
+    emitterConfigJson,
+    selectorAliasesJson,
+    selectorOrderJson,
+    globalStyleBlocksJson,
+    pathAliasesJson,
+    keyframesJson,
+    staticCssJson,
+    conditionAliasesJson,
+    externalDirsJson,
+    transformSourcesJson,
+    transformProvenanceJson,
+    declarationScalesJson,
+    analysisContextJson,
+    generatedNamesJson,
+    propertyRecordsJson,
+    probeEvidence,
+  ];
 }

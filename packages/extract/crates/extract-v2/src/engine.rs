@@ -310,6 +310,54 @@ pub struct ExtractEngine {
     order: Vec<String>,
     css: Option<analyze_css::CssOutput>,
     parse_count: usize,
+    /// The files `prepare` parsed, by path and source, and their parse, which
+    /// the next `analyze` of the same files reads instead of parsing again.
+    prepared: Option<(Vec<(String, String)>, ast_store::AstStore)>,
+}
+
+#[derive(serde::Deserialize)]
+struct InputEntry {
+    path: String,
+    source: String,
+}
+
+/// The files of `file_entries_json` in canonical order (by canonical
+/// analysis id), so analysis does not depend on the order a host lists them
+/// in, or on how it spells a path. A path listed twice with the same source
+/// is one file; listed twice with different sources, or spelled two ways
+/// (`a.tsx`, `./a.tsx`), it names no single input, so this fails rather than
+/// pick one: lookups keep the spelling the host passed.
+fn canonical_entries(file_entries_json: &str) -> napi::Result<Vec<InputEntry>> {
+    let entries: Vec<InputEntry> = serde_json::from_str(file_entries_json)
+        .map_err(|e| napi::Error::from_reason(format!("invalid file entries JSON: {e}")))?;
+    let mut keyed: Vec<(String, InputEntry)> =
+        entries.into_iter().map(|entry| (canonical_analysis_id(&entry.path), entry)).collect();
+    keyed.sort_by(|(a, x), (b, y)| a.cmp(b).then_with(|| x.path.cmp(&y.path)));
+    let mut entries: Vec<InputEntry> = Vec::with_capacity(keyed.len());
+    let mut kept_id: Option<String> = None;
+    for (id, entry) in keyed {
+        match entries.last() {
+            Some(kept) if kept_id.as_ref() == Some(&id) => {
+                if kept.path != entry.path {
+                    return Err(napi::Error::from_reason(format!(
+                        "file entries list one file as '{}' and as '{}'; pass each file once, under one path",
+                        kept.path, entry.path
+                    )));
+                }
+                if kept.source != entry.source {
+                    return Err(napi::Error::from_reason(format!(
+                        "file entries list '{}' twice with different sources; pass each file once",
+                        entry.path
+                    )));
+                }
+            }
+            _ => {
+                kept_id = Some(id);
+                entries.push(entry);
+            }
+        }
+    }
+    Ok(entries)
 }
 
 type ModuleFacts = BTreeMap<
@@ -740,65 +788,67 @@ impl ExtractEngine {
             order: Vec::new(),
             css: None,
             parse_count: 0,
+            prepared: None,
         })
     }
 
+    /// Parses `file_entries_json` for the next `analyze` of the same files,
+    /// and returns the path each of their specifiers probes (`probe_base`),
+    /// sorted: the bases a session gathers host-candidate evidence for.
     #[napi]
-    pub fn analyze(&mut self, file_entries_json: String) -> napi::Result<String> {
-        #[derive(serde::Deserialize)]
-        struct InputEntry {
-            path: String,
-            source: String,
-        }
-        let entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
-            .map_err(|e| napi::Error::from_reason(format!("invalid file entries JSON: {e}")))?;
-        // Analysis sees the files in canonical order, so its output does not
-        // depend on the order a host lists them in, or on how it spells a path.
-        let mut keyed: Vec<(String, InputEntry)> =
-            entries.into_iter().map(|entry| (canonical_analysis_id(&entry.path), entry)).collect();
-        keyed.sort_by(|(a, x), (b, y)| a.cmp(b).then_with(|| x.path.cmp(&y.path)));
-        // A path listed twice with the same source is one file. Listed twice
-        // with different sources, or spelled two ways (`a.tsx`, `./a.tsx`),
-        // it names no single input, so the analysis fails rather than pick
-        // one: lookups keep the spelling the host passed.
-        let mut entries: Vec<InputEntry> = Vec::with_capacity(keyed.len());
-        let mut kept_id: Option<String> = None;
-        for (id, entry) in keyed {
-            match entries.last() {
-                Some(kept) if kept_id.as_ref() == Some(&id) => {
-                    if kept.path != entry.path {
-                        return Err(napi::Error::from_reason(format!(
-                            "file entries list one file as '{}' and as '{}'; pass each file once, under one path",
-                            kept.path, entry.path
-                        )));
-                    }
-                    if kept.source != entry.source {
-                        return Err(napi::Error::from_reason(format!(
-                            "file entries list '{}' twice with different sources; pass each file once",
-                            entry.path
-                        )));
-                    }
-                }
-                _ => {
-                    kept_id = Some(id);
-                    entries.push(entry);
+    pub fn prepare(&mut self, file_entries_json: String) -> napi::Result<String> {
+        let entries = canonical_entries(&file_entries_json)?;
+        let kept: Vec<(String, String)> = entries.iter().map(|e| (e.path.clone(), e.source.clone())).collect();
+        let store = ast_store::AstStore::build(
+            entries.into_iter().map(|e| ast_store::FileEntry { path: e.path, source: e.source }).collect(),
+        );
+        let mut bases = std::collections::BTreeSet::new();
+        for ast in store.iter() {
+            for load in crate::loads::collect(ast.program()) {
+                if let Some(base) =
+                    load.specifier().and_then(|spec| analyze_css::probe_base(&ast.path, spec, &self.opts.css_inputs))
+                {
+                    bases.insert(base);
                 }
             }
         }
+        self.prepared = Some((kept, store));
+        serde_json::to_string(&bases).map_err(|e| napi::Error::from_reason(format!("probe bases: {e}")))
+    }
 
+    /// Analyzes `file_entries_json`, reading `probe_evidence_json`, the
+    /// session's host-candidate evidence for this ingest generation, where
+    /// given. A `prepare` of the same files lends its parse.
+    #[napi]
+    pub fn analyze(&mut self, file_entries_json: String, probe_evidence_json: Option<String>) -> napi::Result<String> {
+        let entries = canonical_entries(&file_entries_json)?;
+        self.opts.css_inputs.probe_evidence = match probe_evidence_json {
+            Some(json) => Some(
+                serde_json::from_str(&json)
+                    .map_err(|e| napi::Error::from_reason(format!("invalid probe evidence JSON: {e}")))?,
+            ),
+            None => None,
+        };
         self.facts.clear();
         self.sources.clear();
         self.order.clear();
 
-        let store = ast_store::AstStore::build(
-            entries
-                .into_iter()
-                .map(|e| ast_store::FileEntry {
-                    path: e.path,
-                    source: e.source,
-                })
-                .collect(),
-        );
+        let prepared = self.prepared.take().filter(|(kept, _)| {
+            kept.len() == entries.len()
+                && kept.iter().zip(&entries).all(|((path, source), e)| *path == e.path && *source == e.source)
+        });
+        let store = match prepared {
+            Some((_, store)) => store,
+            None => ast_store::AstStore::build(
+                entries
+                    .into_iter()
+                    .map(|e| ast_store::FileEntry {
+                        path: e.path,
+                        source: e.source,
+                    })
+                    .collect(),
+            ),
+        };
         self.parse_count = store.parse_count();
 
         use crate::usage_facts::{collect_export_facts, collect_import_facts};
@@ -1117,6 +1167,7 @@ impl ExtractEngine {
         self.order.clear();
         self.css = None;
         self.parse_count = 0;
+        self.prepared = None;
     }
 
     #[napi(getter)]
@@ -1385,6 +1436,7 @@ mod tests {
                     "source": source,
                 }])
                 .to_string(),
+                None,
             )
             .unwrap();
         replacement_import_needs(
@@ -1437,6 +1489,7 @@ mod tests {
                     "source": source,
                 }])
                 .to_string(),
+                None,
             )
             .unwrap();
         let result = engine.transform_file("directive.tsx".to_string()).unwrap();
@@ -1450,6 +1503,34 @@ mod tests {
             .to_string()
     }
 
+    /// Contract: `prepare` names every base analysis probes, so a session
+    /// that gathers evidence for its bases leaves no probe unanswered:
+    /// imports, re-exports, `import()` and an alias's expansion alike.
+    #[test]
+    fn prepare_names_every_base_analysis_probes() {
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            path_aliases_json: Some(r#"{"aliases":[{"pattern":"@ui/","replacement":"ui/","type":"prefix"}]}"#.to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        let files = serde_json::json!([
+            { "path": "src/app.tsx", "source": "import { Box } from './box';\nexport { Row } from '../row';\nimport { Card } from '@ui/card';\nconst Lazy = () => import('./lazy');\nexport const App = () => <Box><Card /></Box>;" },
+            { "path": "src/box.tsx", "source": "export const Box = ds.styles({ p: 4 }).asElement('div');" },
+            { "path": "row.tsx", "source": "export const Row = ds.styles({ m: 2 }).asElement('div');" },
+            { "path": "ui/card.tsx", "source": "export const Card = ds.styles({ p: 1 }).asElement('div');" },
+            { "path": "src/lazy.tsx", "source": "export default 1;" },
+        ])
+        .to_string();
+        let bases: std::collections::BTreeSet<String> =
+            serde_json::from_str(&engine.prepare(files.clone()).unwrap()).unwrap();
+        crate::analyze_css::PROBED.with(|probed| probed.borrow_mut().clear());
+        engine.analyze(files, None).unwrap();
+        let probed = crate::analyze_css::PROBED.with(|probed| probed.borrow().clone());
+        assert!(!probed.is_empty());
+        let unprepared: Vec<_> = probed.difference(&bases).collect();
+        assert!(unprepared.is_empty(), "probed without a prepared base: {unprepared:?} (prepared {bases:?})");
+    }
+
     #[test]
     fn analyze_retains_state_and_reports_parse_count() {
         let mut engine = ExtractEngine::new(None).unwrap();
@@ -1458,6 +1539,7 @@ mod tests {
                 r#"[{"path":"a.tsx","source":"export const Box = ds.styles({ p: 4 }).asElement('div');"},
                     {"path":"b.tsx","source":"export const App = () => <Box p={2} />;"}]"#
                     .to_string(),
+                None,
             )
             .unwrap();
         assert!(out.contains("\"parseCount\":2"));
@@ -1485,6 +1567,7 @@ mod tests {
                         { "path": "a.tsx", "source": a_source }
                     ])
                     .to_string(),
+                    None,
                 )
                 .unwrap(),
         )
@@ -1543,6 +1626,7 @@ mod tests {
                         "source": "const GAP = 24; export const App = ({ open }) => <Box p={GAP} display={open ? 'block' : 'none'} />;"
                     }])
                     .to_string(),
+                    None,
                 )
                 .unwrap(),
         )
@@ -1567,7 +1651,7 @@ mod tests {
     #[test]
     fn malformed_input_is_a_loud_error() {
         let mut engine = ExtractEngine::new(None).unwrap();
-        let err = engine.analyze("not json".to_string()).unwrap_err();
+        let err = engine.analyze("not json".to_string(), None).unwrap_err();
         assert!(err.reason.contains("invalid file entries JSON"));
     }
 
@@ -1695,8 +1779,8 @@ mod tests {
     fn two_instances_are_isolated() {
         let mut a = ExtractEngine::new(None).unwrap();
         let mut b = ExtractEngine::new(None).unwrap();
-        a.analyze(r#"[{"path":"a.tsx","source":"export const A = ds.styles({ p: 1 }).asElement('div');\nexport const UseA = () => <A/>;"}]"#.to_string()).unwrap();
-        b.analyze(r#"[{"path":"b.tsx","source":"export const B = ds.styles({ p: 2 }).asElement('span');"}]"#.to_string()).unwrap();
+        a.analyze(r#"[{"path":"a.tsx","source":"export const A = ds.styles({ p: 1 }).asElement('div');\nexport const UseA = () => <A/>;"}]"#.to_string(), None).unwrap();
+        b.analyze(r#"[{"path":"b.tsx","source":"export const B = ds.styles({ p: 2 }).asElement('span');"}]"#.to_string(), None).unwrap();
         let ta = a.transform_file("a.tsx".to_string()).unwrap();
         assert!(ta.contains("createComponent('div'"));
         assert!(b.transform_file("a.tsx".to_string()).is_err());
@@ -1713,6 +1797,7 @@ mod tests {
             .analyze(
                 r#"[{"path":"fam.tsx","source":"import { compose } from '@animus-ui/system/compose';\nconst Root = ds.styles({}).asElement('div');\nexport const Fam = compose({ Root }, { name: 'Card', shared: {} });\nexport const App = () => <Fam.Root />;\n"}]"#
                     .to_string(),
+                None,
             )
             .unwrap();
         let out = engine.transform_file("fam.tsx".to_string()).unwrap();
@@ -1746,6 +1831,7 @@ mod tests {
                     },
                 ])
                 .to_string(),
+                None,
             )
             .unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
@@ -1995,6 +2081,7 @@ export const App = () => <Box tone="red" />;
                 r#"[{"path":"base.tsx","source":"export const Parent = ds.variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: {} } }).states({ loading: {} }).asElement('div');\nexport const A = () => <Parent />;\n"},
                     {"path":"child.tsx","source":"import { Parent } from './base';\nexport const Child = Parent.extend().styles({ p: 4 }).asElement('div');\nexport const B = () => <Child size='sm' />;\n"}]"#
                     .to_string(),
+                None,
             )
             .unwrap();
         let out = engine.transform_file("child.tsx".to_string()).unwrap();
@@ -2014,6 +2101,7 @@ export const App = () => <Box tone="red" />;
                     { "path": "a.tsx", "source": "import { asset } from '@animus-ui/system';\nimport { relative, bare } from './assets';\nexport const Own = ds.styles({ backgroundImage: `url(\"${asset('./own.svg')}\")` }).asElement('div');\nexport const Relative = ds.styles({ backgroundImage: relative }).asElement('div');\nexport const Bare = ds.styles({ backgroundImage: bare }).asElement('div');\nexport const App = () => <><Own /><Relative /><Bare /></>;\n" }
                 ])
                 .to_string(),
+                None,
             )
             .unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -2031,6 +2119,7 @@ export const App = () => <Box tone="red" />;
                 r#"[{"path":"tokens.ts","source":"export const pad = { p: 4 };\n"},
                     {"path":"a.tsx","source":"import { pad } from './tokens';\nexport const C = ds.styles(pad).asElement('div');\nexport const App = () => <C />;\n"}]"#
                     .to_string(),
+                None,
             )
             .unwrap();
         assert!(
@@ -2117,7 +2206,7 @@ export const App = () => <Box tone="red" />;
                     ),
                 },
             ]);
-            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
         // A type query of eval, or a schema builder's own `Function` member
@@ -2150,7 +2239,7 @@ export const App = () => <Box tone="red" />;
                                export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
                 },
             ]);
-            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
             assert!(out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
     }
@@ -2174,6 +2263,7 @@ export const App = () => <Box tone="red" />;
                         { "path": "a.tsx", "source": "import { kitMotion } from '@kit/ds';\nexport const Loading = ds.styles({ animationName: kitMotion.pulse }).asElement('span');\nexport const App = () => <Loading />;\n" }
                     ])
                     .to_string(),
+                    None,
                 )
                 .unwrap(),
         )
@@ -2234,7 +2324,7 @@ export const App = () => <Box tone="red" />;
                 ExtractEngine::new(Some(EngineOptions { keyframes_json: Some(registry.clone()), ..Default::default() }))
                     .unwrap();
             let manifest: serde_json::Value =
-                serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
+                serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
             let css = manifest["css"].as_str().unwrap();
             if !css.contains("animation-name: animus-kf-motion") || !manifest["diagnostics"].as_array().unwrap().is_empty() {
                 wrong.push((row, css.to_string(), manifest["diagnostics"].to_string()));
@@ -2254,7 +2344,7 @@ export const App = () => <Box tone="red" />;
         ]);
         let run = |files: serde_json::Value| -> serde_json::Value {
             let mut engine = ExtractEngine::new(None).unwrap();
-            serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap()
+            serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap()
         };
         let bound = run(source_binding);
         let inline = run(source_inline);
@@ -2292,6 +2382,7 @@ export const App = () => <Box tone="red" />;
                         { "path": "a.tsx", "source": "import { SPACING } from './barrel';\nimport { WIDE_SPACING } from './compiled';\nexport const Box = ds.system({ space: true }).asElement('div');\nexport const App = () => <><Box p={SPACING} /><Box p={WIDE_SPACING} /></>;\n" }
                     ])
                     .to_string(),
+                    None,
                 )
                 .unwrap(),
         )
@@ -2323,6 +2414,7 @@ export const App = () => <Box tone="red" />;
                         { "path": "a.tsx", "source": "import { GAP } from './barrel';\nimport { pad } from './tokens';\nexport const Box = ds.system({ space: true }).asElement('div');\nexport const Card = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <><Box p={GAP} /><Card /></>;\n" }
                     ])
                     .to_string(),
+                    None,
                 )
                 .unwrap(),
         )
@@ -2446,7 +2538,7 @@ export const App = () => <Box tone="red" />;
                 files.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect();
             let mut engine = ExtractEngine::new(None).unwrap();
             let manifest: serde_json::Value =
-                serde_json::from_str(&engine.analyze(serde_json::Value::Array(entries).to_string()).unwrap()).unwrap();
+                serde_json::from_str(&engine.analyze(serde_json::Value::Array(entries).to_string(), None).unwrap()).unwrap();
             let refused = manifest["diagnostics"]
                 .as_array()
                 .unwrap()
@@ -2476,6 +2568,7 @@ export const App = () => <Box tone="red" />;
                         { "path": "a.tsx", "source": "import { PARTIAL } from './tokens';\nexport const Box = ds.system({ space: true }).asElement('div');\nexport const App = () => <Box mt={PARTIAL} />;\n" }
                     ])
                     .to_string(),
+                    None,
                 )
                 .unwrap(),
         )
@@ -2502,6 +2595,7 @@ export const App = () => <Box tone="red" />;
                         "source": "export const Box = ds.system({ layout: true }).asElement('div');\nexport const App = ({ open }) => <Box display={open ? 'block' : 'none'} />;\n"
                     }])
                     .to_string(),
+                    None,
                 )
                 .unwrap(),
         )
@@ -2549,6 +2643,7 @@ export const App = () => <Box tone="red" />;
                         { "path": "a.tsx", "source": "import { animations } from './system';\nexport const Pulse = ds.styles({ animationName: animations.pulse }).asElement('span');\nexport const App = () => <Pulse />;\n" }
                     ])
                     .to_string(),
+                    None,
                 )
                 .unwrap(),
         )
@@ -2590,6 +2685,7 @@ export const App = () => <Box tone="red" />;
                         { "path": "a.tsx", "source": "import { animations } from './system';\nexport const Pulse = ds.styles({ animationName: animations.pulse }).asElement('span');\nexport const App = () => <Pulse />;\n" }
                     ])
                     .to_string(),
+                    None,
                 )
                 .unwrap(),
         )
@@ -2636,6 +2732,7 @@ export const App = () => <Box tone="red" />;
                         { "path": "a.tsx", "source": "import { feedbackMotion, Spinner } from '@kit/ds';\nimport { localMotion } from './motion';\nexport const LoaderDot = ds.styles({ animationName: feedbackMotion.loaderDot }).asElement('span');\nexport const Local = ds.styles({ animationName: localMotion.loaderDot }).asElement('span');\nexport const App = () => <><LoaderDot /><Local /><Spinner /></>;\n" }
                     ])
                     .to_string(),
+                    None,
                 )
                 .unwrap(),
         )
@@ -2680,6 +2777,7 @@ export const App = () => <Box tone="red" />;
                         { "path": "a.tsx", "source": "import { motion } from './system';\nexport const Ember = ds.styles({ animationName: motion.ember }).asElement('span');\nexport const App = () => <Ember />;\n" }
                     ])
                     .to_string(),
+                    None,
                 )
                 .unwrap(),
         )
@@ -2705,7 +2803,7 @@ export const App = () => <Box tone="red" />;
         }))
         .unwrap();
         let out = engine
-            .analyze(r#"[{"path":"a.tsx","source":"const x = 1;"}]"#.to_string())
+            .analyze(r#"[{"path":"a.tsx","source":"const x = 1;"}]"#.to_string(), None)
             .unwrap();
         assert!(out.contains("anm-global"), "{out}");
         assert!(out.contains("margin"), "{out}");
@@ -2720,6 +2818,7 @@ export const App = () => <Box tone="red" />;
             .analyze(
                 r#"[{"path":"a.tsx","source":"const label = '日本語ラベル';\nconst x = '🔥頑張って';\nexport const C = ds.styles({ display: 'flex' }).asElement('div');\nexport const App = () => <C title={label} />;\n"}]"#
                     .to_string(),
+                None,
             )
             .unwrap();
         let out = engine.transform_file("a.tsx".to_string()).unwrap();
@@ -2733,7 +2832,7 @@ export const App = () => <Box tone="red" />;
     fn clear_cache_resets() {
         let mut engine = ExtractEngine::new(None).unwrap();
         engine
-            .analyze(r#"[{"path":"a.tsx","source":"const x = 1;"}]"#.to_string())
+            .analyze(r#"[{"path":"a.tsx","source":"const x = 1;"}]"#.to_string(), None)
             .unwrap();
         engine.clear_cache();
         assert!(engine.facts.is_empty());
@@ -2756,7 +2855,7 @@ export const App = () => <Box tone="red" />;
             );
             let mut engine = ExtractEngine::new(None).unwrap();
             engine
-                .analyze(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string())
+                .analyze(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string(), None)
                 .unwrap();
             let out: serde_json::Value =
                 serde_json::from_str(&engine.transform_file("a.tsx".to_string()).unwrap()).unwrap();
@@ -2782,6 +2881,7 @@ export const App = () => <Box tone="red" />;
                     },
                 ])
                 .to_string(),
+                None,
             )
             .unwrap();
         let out: serde_json::Value =
@@ -2813,7 +2913,7 @@ export const App = () => <Box tone="red" />;
             export const FromShared = shared.asElement('b');\n\
             export const App = () => <><Staged size='sm' /><Twin /><Extended /><FromKept /><FromShared /></>;\n";
         let out = engine
-            .analyze(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string())
+            .analyze(serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string(), None)
             .unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&out).unwrap();
         let css = manifest["css"].as_str().unwrap();
@@ -2887,7 +2987,7 @@ export const App = () => <Box tone="red" />;
             let mut engine = ExtractEngine::new(None).unwrap();
             let entries: Vec<_> =
                 entries.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect();
-            engine.analyze(serde_json::Value::from(entries).to_string()).map(|_| engine.parse_count).map_err(|e| e.reason)
+            engine.analyze(serde_json::Value::from(entries).to_string(), None).map(|_| engine.parse_count).map_err(|e| e.reason)
         };
         let (one, two) = ("export const x = 1;", "export const x = 2;");
         assert_eq!(analyze(&[("a.tsx", one), ("a.tsx", one)]), Ok(1));
@@ -2935,7 +3035,7 @@ export const App = () => <Box tone="red" />;
             let mut engine = ExtractEngine::new(None).unwrap();
             let entries: Vec<_> =
                 order.iter().map(|&i| serde_json::json!({ "path": files[i].0, "source": files[i].1 })).collect();
-            let analysis = engine.analyze(serde_json::Value::from(entries).to_string()).unwrap();
+            let analysis = engine.analyze(serde_json::Value::from(entries).to_string(), None).unwrap();
             let transforms: Vec<String> =
                 files.iter().map(|(path, _)| engine.transform_file(path.to_string()).unwrap()).collect();
             (analysis, transforms)

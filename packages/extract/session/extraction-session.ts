@@ -1671,6 +1671,7 @@ export class ExtractionSession {
       externalDirs: this.externalPackageDirs.map((dir) =>
         relative(this.rootDir!, dir)
       ),
+      rootDir: this.rootDir!,
       devMode: this.engineDevMode(devMode),
       // A skipped or unreadable file may render any option, so nothing is
       // pruned while one is.

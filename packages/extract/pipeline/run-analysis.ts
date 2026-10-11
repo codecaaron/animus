@@ -1,4 +1,7 @@
-import { buildAnalyzeProjectArgs } from './analyze-project-args';
+import {
+  buildAnalyzeProjectArgs,
+  withProbeEvidence,
+} from './analyze-project-args';
 import { kitDescriptorDiagnostics } from './kit-descriptor';
 import {
   collectSelectorAliasDiagnostics,
@@ -7,6 +10,7 @@ import {
   surfaceManifestDiagnostics,
   systemLoadDiagnostics,
 } from './manifest-diagnostics';
+import { gatherProbeEvidence } from './probe-evidence';
 import { checkCustomProperties } from './property-diagnostics';
 import { applyUnitFallback } from './unit-fallback';
 
@@ -54,6 +58,10 @@ export interface AnalysisOptions {
   devMode: boolean;
   /** What the host knows that the analysis cannot see. */
   analysisContext?: AnalysisContext;
+  /** The session root the analysed paths are relative to. Given, the
+   *  host-candidate evidence for each probe is gathered from its filesystem
+   *  (spec §2.2 A2, A8); without it, analysis probes its file set alone. */
+  rootDir?: string;
   /** Diagnostics gathered outside analysis, surfaced through the same
    *  policy point as the manifest's own. */
   extraDiagnostics?: import('./manifest-diagnostics').ManifestDiagnostic[];
@@ -228,8 +236,18 @@ export function runProjectAnalysis(
   const serializeMs = Math.round(performance.now() - t);
 
   t = performance.now();
+  const args = buildAnalyzeProjectArgs(inputs);
   const manifestJson: string = analyzeProject(
-    ...buildAnalyzeProjectArgs(inputs)
+    ...(opts.rootDir === undefined
+      ? args
+      : withProbeEvidence(
+          args,
+          gatherProbeEvidence(
+            opts.rootDir,
+            new Set(opts.fileEntries.map((entry) => entry.path)),
+            opts.analysisContext?.extensions
+          )
+        ))
   );
   const extractMs = Math.round(performance.now() - t);
 
