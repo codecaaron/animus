@@ -1196,9 +1196,11 @@ pub fn extract_file_facts_enriched_with_usage_statics(
         extra_statics,
         extra_usage_statics,
         &references,
+        None,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn extract_file_facts_from_static_maps(
     ast: &OwnedAst,
     prefix: &str,
@@ -1207,8 +1209,13 @@ pub(crate) fn extract_file_facts_from_static_maps(
     extra_statics: &rustc_hash::FxHashMap<String, Value>,
     extra_usage_statics: &rustc_hash::FxHashMap<String, Value>,
     references: &TransformReferences<'_>,
+    lowered: Option<crate::link::Lowered>,
 ) -> FileFacts {
     let program = ast.program();
+    // The engine lowers every file before static enrichment; any other
+    // caller lowers this one here.
+    let crate::link::Lowered { scoping, bindings, record: module_record } =
+        lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
     let source = ast.source();
     let directive_prologue = program.directives.last().map(|last| {
         let end = extend_directive_trailing_trivia(source, last.span.end);
@@ -1508,9 +1515,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         element_consts,
         opaque_tags,
         builder_import_references,
-        bindings,
     } = crate::usage_facts::collect_enriched_usage(
-        crate::identity::ModuleId::new(&ast.path),
+        scoping,
         program,
         ast.module_record(),
         &usage_statics_fx,
@@ -1520,7 +1526,6 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &assigned_targets,
     );
 
-    let module_record = crate::link::copy_module_record(ast.module_record(), &bindings, ast.source(), program);
 
     FileFacts {
         path: ast.path.clone(),

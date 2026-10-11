@@ -14,11 +14,36 @@ use oxc::syntax::module_record::{
 
 use crate::analyze_css::{expand_alias, resolve_import_source, CssInputs};
 use crate::facts::FileFacts;
-use crate::identity::{BindingKind, BindingTable, LocalId};
+use crate::identity::{BindingKind, BindingTable, IdentityInput, LocalId, ModuleId};
+use oxc::semantic::{Scoping, SemanticBuilder};
 use rustc_hash::FxHashSet;
 
 /// A module's record with its requests as written.
 pub type OwnedModuleRecord = ModuleRecord<LocalId, String>;
+
+/// One file's Lower output: its identity table and owned module record,
+/// and the semantic build both were read from, which fact extraction
+/// reuses rather than building again.
+pub(crate) struct Lowered {
+    pub(crate) scoping: Scoping,
+    pub(crate) bindings: BindingTable,
+    pub(crate) record: OwnedModuleRecord,
+}
+
+impl Lowered {
+    pub(crate) fn of(ast: &crate::owned_ast::OwnedAst) -> Self {
+        Self::from_parts(ModuleId::new(&ast.path), ast.program(), ast.module_record())
+    }
+
+    /// Lowers `program` with one semantic build. The table is read straight
+    /// after it, while the program's reference cells hold its numbering.
+    pub(crate) fn from_parts(module: ModuleId, program: &Program<'_>, module_record: &ParsedRecord<'_>) -> Self {
+        let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
+        let bindings = BindingTable::prepare(IdentityInput { module, program, module_record, scoping: &scoping });
+        let record = copy_module_record(module_record, &bindings, program.source_text, program);
+        Self { scoping, bindings, record }
+    }
+}
 
 /// Copies the parser's record of `module`, whose text is `source`, leaving
 /// out type-only entries. Bindings are the table's; an entry whose binding a

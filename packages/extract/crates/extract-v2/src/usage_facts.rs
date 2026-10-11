@@ -711,8 +711,6 @@ pub(crate) struct EnrichedUsage {
     pub opaque_tags: Vec<OpaqueTag>,
     /// See `FileFacts::builder_import_references`.
     pub builder_import_references: Vec<BuilderImportReferences>,
-    /// See `FileFacts::bindings`.
-    pub bindings: crate::identity::BindingTable,
 }
 
 /// A component element that hands its children and props to its receiver,
@@ -947,7 +945,7 @@ fn call_loads(call: &CallExpression<'_>) -> Vec<LoadTarget> {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_enriched_usage(
-    module_id: crate::identity::ModuleId,
+    built: Scoping,
     program: &Program<'_>,
     module: &ModuleRecord<'_>,
     static_values: &FxHashMap<String, Value>,
@@ -973,16 +971,9 @@ pub(crate) fn collect_enriched_usage(
         || !candidates.is_empty()
         || may_escape
         || !wrapper_candidates.is_empty();
-    // Tag origins and ordinary components read the same scopes, so a module
-    // that needs none of the above still builds them, and so does the
-    // binding table.
-    let built = SemanticBuilder::new().build(program).semantic.into_scoping();
-    let bindings = crate::identity::BindingTable::prepare(crate::identity::IdentityInput {
-        module: module_id,
-        program,
-        module_record: module,
-        scoping: &built,
-    });
+    // `built` is the module's one semantic build, Lower's. Tag origins and
+    // ordinary components read those scopes even when nothing above needs
+    // them.
     let (scoping, tag_scoping) = if needs_scoping { (Some(built), None) } else { (None, Some(built)) };
     let react = match &scoping {
         Some(scoping) => ReactNames::from_imports(program, scoping),
@@ -1113,7 +1104,6 @@ pub(crate) fn collect_enriched_usage(
         element_consts,
         opaque_tags,
         builder_import_references,
-        bindings,
     }
 }
 
@@ -5034,9 +5024,8 @@ pub fn collect_usage_facts_with_statics(
     module: &ModuleRecord<'_>,
     static_values: &FxHashMap<String, Value>,
 ) -> Vec<UsageFact> {
-    // Only the usage facts are read, so no module path names the table.
-    let module_id = crate::identity::ModuleId::new("");
-    collect_enriched_usage(module_id, program, module, static_values, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
+    let built = SemanticBuilder::new().build(program).semantic.into_scoping();
+    collect_enriched_usage(built, program, module, static_values, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
 }
 
 fn attribute_expression<'a, 'b>(
