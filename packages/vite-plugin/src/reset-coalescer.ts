@@ -8,10 +8,13 @@ import type { WindowClock } from '@animus-ui/extract/session';
 type ResetErrorHandler = <Thrown>(error: Thrown) => void;
 
 /** Single-flight system resets on the session's one coalescing window: a
- *  request during a running reset schedules exactly one follow-up. */
+ *  request during a running reset schedules exactly one follow-up, due a
+ *  fixed interval after its own first request. */
 export class ResetCoalescer {
   private running = false;
-  private dirty = false;
+  /** The window came due while a reset ran: the follow-up runs as that
+   *  reset settles. */
+  private due = false;
   private readonly window: CoalescingWindow;
 
   constructor(
@@ -22,15 +25,20 @@ export class ResetCoalescer {
     windowMs = COALESCING_WINDOW_MS,
     clock?: WindowClock
   ) {
-    this.window = new CoalescingWindow(() => this.runReset(), windowMs, clock);
+    this.window = new CoalescingWindow(
+      () => {
+        if (!this.running) return this.runReset();
+        this.due = true;
+      },
+      windowMs,
+      clock
+    );
   }
 
-  /** Ask for a reset; requests within the open window collapse. */
+  /** Ask for a reset; requests within the open window collapse. A request
+   *  during a running reset opens the follow-up's window now, so its
+   *  deadline counts from that request, not from the settlement. */
   request(): void {
-    if (this.running) {
-      this.dirty = true;
-      return;
-    }
     this.window.note();
   }
 
@@ -43,9 +51,9 @@ export class ResetCoalescer {
       this.onError(err);
     } finally {
       this.running = false;
-      if (this.dirty) {
-        this.dirty = false;
-        this.request();
+      if (this.due) {
+        this.due = false;
+        void this.runReset();
       }
     }
   }
