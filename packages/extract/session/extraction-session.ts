@@ -56,6 +56,7 @@ import {
   serializeStaticCss,
   sharesVolumeRoot,
   snapshotFilePlans,
+  diffFilePlans,
   staleDistIncludesMessage,
   generatedModuleCode,
   reportSurvivingAssetPlaceholders,
@@ -188,7 +189,9 @@ import type {
   IngestionOpening,
   LightningTargets,
   ManifestDiagnostic,
+  ProjectManifest,
   SourceCorpus,
+  SourceEntryOwnership,
   SourceIdentity,
   SourceIngestionResult,
   SystemConfig,
@@ -251,6 +254,38 @@ function isDiskNumber<Value>(value: Value): value is Value & number {
     Object.prototype.toString.call(value) === '[object Number]'
   );
 }
+
+/** One published generation, as a host serving from memory reads it. */
+export interface SessionPublication {
+  manifest: ProjectManifest;
+  manifestJson: string;
+  /** The analysis sheets with asset() URLs substituted. */
+  globalCss: string;
+  componentCss: string;
+  system: SystemConfig;
+  packageMap: Record<string, string>;
+  ownership: Readonly<Record<string, SourceEntryOwnership>>;
+}
+
+/** How an attempt ended, for a host that redelivers modules itself. */
+export type SessionOutcome =
+  | {
+      kind: 'published';
+      publication: SessionPublication;
+      /** A full pass (startup, system reload, rescan) or an incremental one. */
+      pass: 'full' | 'incremental';
+      /** Files whose replacement plans differ from the last publication. */
+      planChanged: string[];
+      /** Whether this publication ended an aborted parse's hold. */
+      endedHold: boolean;
+      /** Originals whose admitted bytes changed while the hold stood. */
+      redeliver: string[];
+    }
+  | {
+      kind: 'held';
+      /** Original path → hash of the bytes whose parse aborted. */
+      abortedOriginals: ReadonlyMap<string, string>;
+    };
 
 /** The files a system load read: its watch keys, paths and content
  *  hashes. */
@@ -380,6 +415,14 @@ export class ExtractionSession {
   /** Fires exactly once per settled `handleWatchUpdate` — the failure cause,
    *  or null when clean. Observation never alters delivery. */
   onCycleSettled: ((cause: unknown) => void) | null = null;
+  /** Fires once per published generation, and per held attempt. */
+  onOutcome: ((outcome: SessionOutcome) => void) | null = null;
+  /** The last published generation; null before the first. */
+  publication: SessionPublication | null = null;
+  /** The generation an emit produced, current once its ingestion
+   *  publishes. */
+  private stagedPublication: Omit<SessionPublication, 'ownership'> | null =
+    null;
 
   private readonly options: SessionOptions;
   private readonly staticCssJson: string | null;
@@ -1111,7 +1154,7 @@ export class ExtractionSession {
         }
         throw err;
       }
-      this.publishSourceIngestion(ingested);
+      this.publishSourceIngestion(ingested, 'incremental');
       commitObservedBatch();
     } else if (this.statusAttemptOpen) {
       // A debounced burst produced nothing analyzable — close the attempt so
@@ -1130,10 +1173,16 @@ export class ExtractionSession {
     const rejection = this.corpus.rejection(prepared);
     if (!rejection) return;
     this.heldRejection = rejection.message;
+    this.onOutcome?.({ kind: 'held', abortedOriginals: rejection.originals });
     throw new AbortedParseRejection(rejection.message);
   }
 
-  private publishSourceIngestion(result: SourceIngestionResult): void {
+  private publishSourceIngestion(
+    result: SourceIngestionResult,
+    pass: 'full' | 'incremental'
+  ): void {
+    const endedHold = this.heldRejection !== null;
+    const previousOwnership = this.corpus.published.ownership;
     this.heldRejection = null;
     this.fileCache = new Map(
       result.originalEntries.map((entry) => [
@@ -1142,6 +1191,31 @@ export class ExtractionSession {
       ])
     );
     this.corpus.publish(result);
+    const staged = this.stagedPublication;
+    if (staged === null) return;
+    this.stagedPublication = null;
+    const previous = this.publication;
+    const publication = { ...staged, ownership: result.ownership };
+    this.publication = publication;
+    this.onOutcome?.({
+      kind: 'published',
+      publication,
+      pass,
+      planChanged: diffFilePlans(
+        snapshotFilePlans(previous?.manifest ?? null),
+        snapshotFilePlans(publication.manifest)
+      ),
+      endedHold,
+      redeliver: endedHold
+        ? Object.values(result.ownership)
+            .filter(
+              (owner) =>
+                previousOwnership[owner.originalPath]?.originalHash !==
+                owner.originalHash
+            )
+            .map((owner) => owner.originalPath)
+        : [],
+    });
   }
 
   /** Full analysis + publication, registered in the one in-flight
@@ -1625,7 +1699,7 @@ export class ExtractionSession {
         pipelineStart,
         pending
       );
-      this.publishSourceIngestion(accepted);
+      this.publishSourceIngestion(accepted, 'full');
 
       // External package state publishes in the same successful generation
       // as the source projection.
@@ -2182,6 +2256,16 @@ export class ExtractionSession {
     setSharedSystemProps(this.key, systemPropsContent);
 
     setManifestJson(this.key, result.manifestJson);
+    if (manifest) {
+      this.stagedPublication = {
+        manifest,
+        manifestJson: result.manifestJson,
+        globalCss: sheets.globalCss,
+        componentCss: sheets.componentCss,
+        system,
+        packageMap,
+      };
+    }
 
     // The analyzed-hash map publishes with the manifest — one generation,
     // one publication; it is the loader's stale-input witness.
