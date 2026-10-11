@@ -627,7 +627,9 @@ pub fn resolve_all_deps(
             }
         }
 
-        let is_ts = current_path.ends_with(".ts") || current_path.ends_with(".tsx");
+        // Every source the extension policy can resolve to that is not plain
+        // JavaScript: TypeScript in any module flavour, and JSX.
+        let is_ts = [".ts", ".tsx", ".mts", ".cts", ".jsx"].iter().any(|extension| current_path.ends_with(extension));
         let processed = if is_ts {
             strip_typescript_module(&raw_source, &current_path)?
         } else {
