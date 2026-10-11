@@ -1,25 +1,19 @@
 import {
   contentHash,
-  diffFilePlans,
   isPathWithinRoot,
   outputSourceGuard,
   outputSourceMessage,
-  snapshotFilePlans,
 } from '@animus-ui/extract/pipeline';
-import { readFileSync } from 'fs';
+import { CoalescingWindow } from '@animus-ui/extract/session';
 import { extname, relative, resolve } from 'path';
 
 import { RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID } from './constants';
-import {
-  pruneFileCache,
-  runExclusiveAnalysis,
-  systemPropsModuleSource,
-} from './context';
 import { invalidateFileModules } from './module-invalidation';
 import { reconcileSourceCorpus } from './rediscovery';
+import { applyPublished, changesOf, mergePublished } from './session-outcomes';
 import { applyDevBridgeImport, extendingFiles } from './transform';
 
-import type { PluginContext } from './context';
+import type { ObservedOutcome, PluginContext } from './context';
 import type { HotUpdateResult } from './hot-update-events';
 import type {
   DevEnvironment,
@@ -28,23 +22,14 @@ import type {
 } from 'vite';
 
 /** Vite dispatches this hook once per environment for one file event: the
- *  analysis half is claimed by one dispatch, invalidation runs in each. */
+ *  dispatch that claims it submits the file to the Session, and invalidation
+ *  runs in each. */
 export async function handleHotUpdate(
-  ctx: PluginContext,
-  environment: DevEnvironment,
-  options: HotUpdateOptions
-): Promise<EnvironmentModuleNode[] | void> {
-  if (ctx.isProd) return;
-  return runExclusiveAnalysis(ctx, () =>
-    handleHotUpdateExclusive(ctx, environment, options)
-  );
-}
-
-async function handleHotUpdateExclusive(
   ctx: PluginContext,
   environment: DevEnvironment,
   { type, file, timestamp, modules, read }: HotUpdateOptions
 ): Promise<EnvironmentModuleNode[] | void> {
+  if (ctx.isProd) return;
   const ownsEvent = ctx.hotUpdateEvents.claim(
     environment.name,
     file,
@@ -56,10 +41,7 @@ async function handleHotUpdateExclusive(
   );
 
   if (ctx.isSystemDependency(absFile)) {
-    if (ownsEvent) {
-      await reconcileSourceEntry(ctx, absFile, type, read);
-      ctx.requestSystemReload(relative(ctx.rootDir, absFile));
-    }
+    if (ownsEvent) requestSystemReload(ctx, absFile, type);
     return [];
   }
 
@@ -101,45 +83,97 @@ async function handleHotUpdateExclusive(
   return invalidateStaleModules(ctx, environment, modules, result);
 }
 
-/** Prefers Vite's `read`, which retries on the empty content an atomic save
- *  exposes; the direct read serves hosts that supply no `read`. */
-async function readChangedSource(
-  absFile: string,
-  read: HotUpdateOptions['read'] | undefined
-): Promise<string> {
-  return read ? await read() : readFileSync(absFile, 'utf-8');
-}
+/** Each context's pending system-dependency events, and the window they
+ *  wait out together. */
+const systemReloads = new WeakMap<
+  PluginContext,
+  {
+    window: CoalescingWindow;
+    pending: Map<string, HotUpdateOptions['type']>;
+  }
+>();
 
-/** Keeps the cache entry of a file that is both a system dependency and a
- *  discovered source; a file with no entry must never gain one here. */
-async function reconcileSourceEntry(
+/** A system dependency's event waits out the coalescing window (SA19)
+ *  before the Session reads it: a watcher can report a write as it starts
+ *  and drop the event for its end, so an immediate read would load a
+ *  half-written module. Events in one window reload once. */
+function requestSystemReload(
   ctx: PluginContext,
   absFile: string,
-  type: HotUpdateOptions['type'],
-  read: HotUpdateOptions['read'] | undefined
+  type: HotUpdateOptions['type']
+): void {
+  let state = systemReloads.get(ctx);
+  if (state === undefined) {
+    const pending = new Map<string, HotUpdateOptions['type']>();
+    state = {
+      pending,
+      window: new CoalescingWindow(() => {
+        if (pending.size === 0) return;
+        const taken = [...pending];
+        pending.clear();
+        return reloadSystem(ctx, taken);
+      }),
+    };
+    systemReloads.set(ctx, state);
+  }
+  ctx.log(`HMR system reload scheduled: ${relative(ctx.rootDir, absFile)}`);
+  state.pending.set(absFile, type);
+  state.window.note();
+}
+
+/** Runs a pending system reload now, closing its window (the window's
+ *  bypass), and settles with it. */
+export async function flushSystemReload(ctx: PluginContext): Promise<void> {
+  await systemReloads.get(ctx)?.window.flush();
+}
+
+/** Drops a pending system reload: the context is closing. */
+export function cancelSystemReload(ctx: PluginContext): void {
+  const state = systemReloads.get(ctx);
+  state?.window.cancel();
+  state?.pending.clear();
+}
+
+/** Reloads the system through the Session over the window's events. It
+ *  runs from a timer, so it never throws: a failed reload keeps the last
+ *  good system served and warns; under `strict` the client overlay reports
+ *  it too. */
+async function reloadSystem(
+  ctx: PluginContext,
+  events: ReadonlyArray<[string, HotUpdateOptions['type']]>
 ): Promise<void> {
-  if (type === 'delete') {
-    ctx.mutateFileCache((cache) => pruneFileCache(cache, ctx.rootDir, absFile));
-    return;
+  const reloadStart = performance.now();
+  const modifiedFiles = new Set<string>();
+  const removedFiles = new Set<string>();
+  for (const [path, type] of events) {
+    (type === 'delete' ? removedFiles : modifiedFiles).add(path);
   }
-
-  const relPath = relative(ctx.rootDir, absFile);
-  if (!ctx.fileCache.has(relPath)) return;
-
-  let source: string;
+  let outcomes: ObservedOutcome[];
   try {
-    source = await readChangedSource(absFile, read);
-  } catch {
-    ctx.warn(
-      `could not re-read ${relPath} after a system-dependency edit — ` +
-        `system reloads will analyze its pre-edit text until a later ` +
-        `edit is read successfully`
-    );
+    outcomes = await ctx.submitChanges({ modifiedFiles, removedFiles });
+  } catch (err) {
+    ctx.warn(`[animus-extract] system reload failed: ${String(err)}`);
+    if (ctx.options.strict) {
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? (err.stack ?? '') : '';
+      ctx.devServer?.hot?.send({
+        type: 'error',
+        err: { message, stack, plugin: 'animus-extract' },
+      });
+    }
+    // The failed reload re-serves the last good system.
+    ctx.invalidateSystemReloadModules(true);
     return;
   }
-  ctx.mutateFileCache((cache) =>
-    cache.set(relPath, { hash: contentHash(source), source })
-  );
+  const merged = mergePublished(outcomes);
+  applyPublished(ctx, merged);
+  // A held reload re-serves the published system's unchanged bytes.
+  if (!merged.published) ctx.invalidateSystemReloadModules(false);
+  else {
+    ctx.log(
+      `HMR system reload complete: ${Math.round(performance.now() - reloadStart)}ms`
+    );
+  }
 }
 
 /** The once-per-event analysis half; its result is what the remaining
@@ -174,115 +208,80 @@ async function analyzeChangedFile(
     return { kind: 'ignored' };
   }
 
-  let source: string;
+  // Vite's `read` retries on the empty content an atomic save exposes, and
+  // returns the settled bytes while the disk may still be empty: the
+  // Session analyzes those bytes, not a second read of the disk.
+  let settled: string | undefined;
   try {
-    source = await readChangedSource(absFile, read);
+    settled = read ? await read() : undefined;
   } catch {
     return { kind: 'ignored' };
   }
 
-  const hash = contentHash(source);
-  const cached = ctx.fileCache.get(relPath);
-  if (cached && cached.hash === hash) {
+  const hmrStart = performance.now();
+  const changes = changesOf('update', absFile);
+  const outcomes = await ctx.submitChanges(
+    settled === undefined
+      ? changes
+      : { ...changes, sources: new Map([[absFile, settled]]) }
+  );
+  const last = outcomes.at(-1)?.outcome;
+  // Nothing published: the Session read no change.
+  if (last === undefined) {
     ctx.trace(`HMR skip: ${relPath} (unchanged)`);
     return { kind: 'unchanged' };
   }
-
-  const priorExternalOwner = ctx.externalFileOwners[relPath];
-  if (isExternalPkg && !priorExternalOwner) {
-    const owner = Object.entries(ctx.externalDirOwners).find(([dir]) =>
-      isPathWithinRoot(dir, absFile)
-    );
-    if (owner) ctx.externalFileOwners[relPath] = owner[1];
-  }
-
-  ctx.mutateFileCache((cache) => cache.set(relPath, { hash, source }));
-  const restoreEntry = () => {
-    ctx.mutateFileCache((cache) => {
-      if (cached) cache.set(relPath, cached);
-      else cache.delete(relPath);
-    });
-    if (priorExternalOwner) {
-      ctx.externalFileOwners[relPath] = priorExternalOwner;
-    } else {
-      delete ctx.externalFileOwners[relPath];
-    }
-  };
-
-  const hmrStart = performance.now();
-
-  const prevPlans = snapshotFilePlans(ctx.storedManifest);
-
-  const analysisStart = performance.now();
-  const systemPropsBefore = systemPropsModuleSource(ctx);
-  let analysis: Awaited<ReturnType<PluginContext['analyzeIngested']>>;
-  try {
-    analysis = await ctx.analyzeIngested();
-  } catch (e) {
-    restoreEntry();
-    throw e;
-  }
-  if (!analysis.ok) {
-    // An aborted parse holds publication and keeps this edit for the repair
-    // to publish. Only broken bytes reach Vite, which reports them; a held
-    // valid edit delivers nothing until the repair re-delivers it.
-    if (analysis.abortedOriginals) {
-      return analysis.abortedOriginals.has(relPath)
-        ? { kind: 'ignored' }
-        : { kind: 'unchanged' };
-    }
-    restoreEntry();
-    return { kind: 'ignored' };
+  // An aborted parse holds publication and keeps this edit for the repair
+  // to publish. Only broken bytes reach Vite, which reports them; a held
+  // valid edit delivers nothing until the repair re-delivers it.
+  if (last.kind === 'held') {
+    return last.abortedOriginals.has(relPath)
+      ? { kind: 'ignored' }
+      : { kind: 'unchanged' };
   }
   // Reconcile on-disk sources before acting on the result: a parent whose
   // create event was lost folds in here, so the consumer re-serves extracted.
-  // Keep the catch — reconciliation re-analyzes and throws on error
-  // diagnostics, and a throw past the restore strands the entry at the edit.
-  try {
-    await reconcileSourceCorpus(ctx);
-  } catch (e) {
-    restoreEntry();
-    throw e;
-  }
-  const systemPropsChanged = systemPropsModuleSource(ctx) !== systemPropsBefore;
-  const analysisMs = Math.round(performance.now() - analysisStart);
+  const merged = mergePublished([
+    ...outcomes,
+    ...(await reconcileSourceCorpus(ctx)),
+  ]);
+  applyPublished(ctx, merged);
 
   // Ending a hold re-delivers the edited module too: the client may hold a
   // failed request for it, or none after a reload during the failure.
-  const nativeEntry = ctx.corpus.published.analysisEntries.get(relPath);
+  const published = ctx.session!.corpus.published;
+  const nativeEntry = published.analysisEntries.get(relPath);
   const presentationOnly =
-    nativeEntry && !analysis.endedHold
+    nativeEntry && !merged.endedHold
       ? isPresentationOnlyEdit(ctx, relPath, nativeEntry.source)
       : false;
 
   // An extension reads the callbacks it inherits from its parent's module as
   // it runs, so every module re-delivered here re-delivers its extensions.
-  const redelivered = presentationOnly ? [] : [relPath, ...analysis.redeliver];
+  const redelivered = presentationOnly ? [] : [relPath, ...merged.redeliver];
   // Filtered by resolved path, not cache key — MDX plans carry the
   // `.tsx`-suffixed key, and the changed file is already in the module list.
   const staleDefinitionFiles = [
     ...new Set([
-      ...diffFilePlans(prevPlans, snapshotFilePlans(ctx.storedManifest)),
-      ...analysis.redeliver,
+      ...merged.planChanged,
+      ...merged.redeliver,
       ...extendingFiles(
         ctx,
         redelivered.flatMap(
-          (path) =>
-            ctx.corpus.published.ownership[path]?.analysisPaths ?? [path]
+          (path) => published.ownership[path]?.analysisPaths ?? [path]
         )
       ),
     ]),
   ].filter((defFile) => resolve(ctx.rootDir, defFile) !== absFile);
 
-  const hmrMs = Math.round(performance.now() - hmrStart);
   ctx.log(
-    `HMR update: ${relPath} — analysis ${analysisMs}ms, total ${hmrMs}ms${presentationOnly ? ' (presentation-only)' : ''}`
+    `HMR update: ${relPath} — total ${Math.round(performance.now() - hmrStart)}ms${presentationOnly ? ' (presentation-only)' : ''}`
   );
 
   return {
     kind: 'analyzed',
     staleDefinitionFiles,
-    systemPropsChanged,
+    systemPropsChanged: merged.systemPropsChanged,
     presentationOnly,
   };
 }
@@ -307,31 +306,23 @@ function isPresentationOnlyEdit(
   }
 }
 
-/** Prune a deleted file from the cache: a surviving entry is re-fed to the
- *  engine forever, so the deleted component's CSS never disappears. */
+/** A deleted file leaves the Session's corpus, so its CSS stops being
+ *  re-emitted. */
 async function pruneDeletedFile(
   ctx: PluginContext,
   absFile: string
 ): Promise<void> {
-  const relPath = relative(ctx.rootDir, absFile);
-  const cached = ctx.fileCache.get(relPath);
-  if (!cached) return;
-  const pruned = ctx.mutateFileCache((cache) =>
-    pruneFileCache(cache, ctx.rootDir, absFile)
+  const merged = mergePublished(
+    await ctx.submitChanges(changesOf('delete', absFile))
   );
-  if (!pruned) return;
-
-  const prevPlans = snapshotFilePlans(ctx.storedManifest);
-  const { ok } = await ctx.analyzeIngested();
-  if (!ok) return;
+  if (!merged.published) return;
+  applyPublished(ctx, merged);
   ctx.trace(`Deleted file pruned: ${relative(ctx.rootDir, absFile)}`);
 
   // No exclusion: evicting the deleted file's own residual nodes is harmless
-  // and closes the delete-then-recreate-same-path window.
-  invalidateFileModules(
-    ctx,
-    diffFilePlans(prevPlans, snapshotFilePlans(ctx.storedManifest))
-  );
+  // and closes the delete-then-recreate-same-path window. A full pass has
+  // already evicted them (applyPublished).
+  if (!merged.full) invalidateFileModules(ctx, [...merged.planChanged]);
 
   ctx.invalidateExtractedModules();
 }

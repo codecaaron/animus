@@ -1,12 +1,13 @@
-import { contentHash } from '@animus-ui/extract/pipeline';
+import {
+  contentHash,
+  droppedExtensionMessage,
+  servedFiles,
+} from '@animus-ui/extract/pipeline';
 import { ANIMUS_CSS_MODULE_ID } from '@animus-ui/extract/session';
 
-import type { ProjectManifest } from '@animus-ui/extract/pipeline';
+import type { ProjectManifest, ServedFiles } from '@animus-ui/extract/pipeline';
 
 export interface LoaderPolicyOptions {
-  /** Carried in the loaders' options; since SA1 no loader reads it, as a
-   *  transform failure fails the module in every mode. */
-  strict?: boolean;
   /** `next dev`: the Turbopack loader waits for and re-delivers the dev
    *  watcher's generations. A transform failure fails the module in every
    *  mode (SA1). */
@@ -116,27 +117,19 @@ export function extensionLineage(
   return `\nvoid "animus-lineage:${contentHash(lineage)}";\n`;
 }
 
-let parsedManifest: { json: string; files: ReadonlySet<string> } | null = null;
+let parsedManifest: { json: string; served: ServedFiles } | null = null;
 
-/** The files a manifest lists components for, parsed once per manifest:
- *  every module of a compilation reads the same one. */
-function componentFiles(manifestJson: string): ReadonlySet<string> {
+/** What a manifest's transform serves, parsed once per manifest: every
+ *  module of a compilation reads the same one. */
+function manifestServedFiles(manifestJson: string): ServedFiles {
   if (parsedManifest?.json !== manifestJson) {
-    // SAFETY: the session's own published manifest, whose `files` maps each
-    // root-relative file to the component ids extracted from it.
-    const { files } = JSON.parse(manifestJson) as {
-      files?: Record<string, readonly string[]>;
-    };
+    // SAFETY: the session's own published manifest.
     parsedManifest = {
       json: manifestJson,
-      files: new Set(
-        Object.entries(files ?? {})
-          .filter(([, ids]) => ids.length > 0)
-          .map(([file]) => file)
-      ),
+      served: servedFiles(JSON.parse(manifestJson) as ProjectManifest),
     };
   }
-  return parsedManifest.files;
+  return parsedManifest.served;
 }
 
 export function transformWithManifest(args: {
@@ -155,9 +148,15 @@ export function transformWithManifest(args: {
     const { transformFile } = engineApi();
 
     const result = transformFile(source, filename, manifestJson);
-    // A file the analysis extracted must transform: serving it raw would
-    // ship builder code (SA1). Usage-only and outside-analysis files pass.
-    if (!result.hasComponents && componentFiles(manifestJson).has(filename)) {
+    // A file the analysis extracted must transform, and an extension it
+    // dropped over its parent is not served: either raw would ship builder
+    // code (SA1). Usage-only and outside-analysis files pass.
+    const served = manifestServedFiles(manifestJson);
+    // A dropped extension is never served raw, even beside components
+    // that did extract.
+    const drop = served.dropped.get(filename);
+    if (drop !== undefined) throw new Error(droppedExtensionMessage(drop));
+    if (!result.hasComponents && served.listed.has(filename)) {
       throw new Error(
         `the analysis extracted components from ${filename}, but its ` +
           `transform found none`

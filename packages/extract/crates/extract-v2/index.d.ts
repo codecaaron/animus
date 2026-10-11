@@ -97,6 +97,20 @@ export declare function engineVersion(): string
 export declare function extractFacts(fileEntriesJson: string): string
 
 /**
+ * `fingerprint_file` of bytes already read, so a reader that keeps them
+ * fingerprints exactly what it kept.
+ */
+export declare function fingerprintBytes(bytes: Buffer): string
+
+/**
+ * A fast fingerprint of the bytes at `path` (foldhash, 64 bits, hex), for
+ * telling whether a file changed between watch passes in one process: no
+ * security property, and no stability across versions. `None` where the
+ * file cannot be read.
+ */
+export declare function fingerprintFile(path: string): string | null
+
+/**
  * A failed load throws an `Error` carrying `dependencies` (the files it
  * read or attempted) and `missing` (the paths it looked for and found
  * absent), so the host watches them for the retry.

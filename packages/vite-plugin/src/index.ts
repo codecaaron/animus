@@ -11,7 +11,7 @@ import { resolve } from 'path';
 import { runBuildStart } from './build-start';
 import { applyResolvedConfig } from './config';
 import { PluginContext } from './context';
-import { handleHotUpdate } from './hmr';
+import { cancelSystemReload, handleHotUpdate } from './hmr';
 import { buildIndexHtmlTags } from './index-html';
 import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
@@ -207,16 +207,17 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     // The end of a build, and of a dev server, which Vite closes the same
-    // way: the context's engine is released with it.
+    // way: the context's Session and engine are retired with it.
     closeBundle() {
-      ctx.releaseEngine();
+      cancelSystemReload(ctx);
+      ctx.close();
     },
 
     async buildStart() {
       await runBuildStart(
         ctx,
-        async (specifier) => {
-          const resolved = await this.resolve(specifier);
+        async (specifier, importer) => {
+          const resolved = await this.resolve(specifier, importer);
           return resolved?.id ?? null;
         },
         // Rollup asset emission exists in build only; dev serves resolved

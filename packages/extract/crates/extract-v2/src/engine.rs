@@ -8,7 +8,7 @@ use crate::link::ProjectLinks;
 use crate::loads::LoadKind;
 use crate::usage_facts::{reads_only, ReadingsOf};
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
-use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, Request, Terminal};
+use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, OpeningReason, Request, Terminal};
 
 const SYSTEM_PROPS_MODULE_ID: &str = "virtual:animus/system-props";
 
@@ -46,6 +46,9 @@ struct AnalyzeResult<'a> {
     reverse_provenance: &'a std::collections::BTreeMap<String, Vec<String>>,
     components: &'a std::collections::BTreeMap<String, analyze_css::ComponentDescriptor>,
     files: &'a std::collections::BTreeMap<String, Vec<String>>,
+    /// Present only where an extension was dropped over its parent.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    missing_inputs: &'a [analyze_css::MissingInput],
     timing: serde_json::Value,
 }
 
@@ -433,16 +436,25 @@ fn exposed_bindings(links: &ProjectLinks, name: Option<&str>) -> Vec<(ModuleInde
 
 /// Every binding a module table answer may name: the one it resolves to
 /// or, when an open route leaves it incomplete, each binding it already
-/// knows and every binding the open route may reach.
-fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>) -> Vec<(ModuleIndex, LocalId)> {
+/// knows and every binding the open route may reach. `through_namespace`
+/// says the answer is a namespace member's.
+fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>, through_namespace: bool) -> Vec<(ModuleIndex, LocalId)> {
     let (terminals, openings) = match lookup {
         ExportLookup::Resolved(terminal) => (vec![terminal], Vec::new()),
         ExportLookup::Incomplete { known, openings } => (known, openings),
         ExportLookup::Absent | ExportLookup::Ambiguous(_) => return Vec::new(),
     };
+    // Through a namespace, a module the analysis cannot find may export any
+    // binding under the member's name; where another route already answers
+    // it, that name would be ambiguous and export nothing.
+    let unanswered = through_namespace && terminals.is_empty();
     let mut found: Vec<(ModuleIndex, LocalId)> = local_bindings(terminals).collect();
     for opening in openings {
-        found.extend(exposed_bindings(links, opening.name.as_deref()));
+        let name = match opening.reason {
+            OpeningReason::UnresolvedRequest(_) if unanswered => None,
+            _ => opening.name.as_deref(),
+        };
+        found.extend(exposed_bindings(links, name));
     }
     found.sort();
     found.dedup();
@@ -475,13 +487,31 @@ fn unstable_style_statics(
     modules: &ModuleFacts,
     links: &ProjectLinks,
     lowered: &BTreeMap<String, crate::link::Lowered>,
-    files: &BTreeMap<String, rustc_hash::FxHashMap<String, serde_json::Value>>,
+    files: &BTreeMap<String, rustc_hash::FxHashMap<String, crate::static_value::StaticValue>>,
     inputs: &analyze_css::CssInputs,
     readings_of: &mut ReadingsOf<'_>,
-) -> BTreeMap<(String, String), String> {
-    let declaration = |(module, binding): (ModuleIndex, LocalId)| -> (String, String) {
-        let path = &links.paths[module];
-        (path.clone(), lowered[path].bindings.binding(binding).name.clone())
+) -> BTreeMap<(String, String), (String, crate::flow::Uncertainty)> {
+    // The declarations a binding names: itself or, for `export default
+    // X`'s cell, X, whose object the cell shares, through each binding X's
+    // import may be.
+    let declarations = |start: (ModuleIndex, LocalId)| -> Vec<(String, String)> {
+        let (mut found, mut seen, mut work) = (Vec::new(), std::collections::BTreeSet::new(), vec![start]);
+        while let Some((module, binding)) = work.pop() {
+            if !seen.insert((module, binding)) {
+                continue;
+            }
+            let path = &links.paths[module];
+            let bindings = &lowered[path].bindings;
+            let held = bindings.held(binding);
+            let imports = &links.table.record(module).imports;
+            match imports.iter().find(|import| held != binding && import.local == held) {
+                Some(import) => {
+                    work.extend(possible_bindings(links, links.table.resolve_request(module, import.request, &import.name), false))
+                }
+                None => found.push((path.clone(), bindings.binding(held).name.clone())),
+            }
+        }
+        found
     };
     // The declarations a module's binding may name: itself, or each binding
     // what it imports may be.
@@ -492,28 +522,51 @@ fn unstable_style_statics(
             Some(links.table.resolve_request(module, import.request, &import.name))
         });
         match imported {
-            Some(lookup) => possible_bindings(links, lookup).into_iter().map(declaration).collect(),
+            Some(lookup) => possible_bindings(links, lookup, false).into_iter().flat_map(declarations).collect(),
             None => vec![(file.to_string(), name.to_string())],
         }
     };
     // What a module's namespace import names, by the record's request.
-    let namespace_of = |file: &str, name: &str| -> Option<&Request> {
+    // A named import whose answer is a namespace (`export * as ns from …`
+    // in the module it names) is read as that namespace's request.
+    let namespace_of = |file: &str, name: &str| -> Option<Request> {
         let module = links.module(file)?;
         let local = lowered[file].bindings.module_binding(name)?;
         let record = links.table.record(module);
-        let import =
-            record.imports.iter().find(|import| import.local == local && import.name == ImportName::Namespace)?;
-        Some(&record.requests[import.request])
+        let import = record.imports.iter().find(|import| import.local == local)?;
+        if import.name == ImportName::Namespace {
+            return Some(record.requests[import.request].clone());
+        }
+        match links.table.resolve_request(module, import.request, &import.name) {
+            ExportLookup::Resolved(Terminal::Namespace(target)) => Some(Request::Module(target)),
+            ExportLookup::Resolved(Terminal::External { module, export: None }) => Some(Request::Outside(module)),
+            ExportLookup::Incomplete { known, openings } if known.is_empty() => {
+                openings.into_iter().find_map(|opening| match opening.reason {
+                    OpeningReason::UnresolvedRequest(specifier)
+                        if opening.name.is_none() =>
+                    {
+                        Some(Request::Unresolved(specifier))
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        }
     };
     let exported = |target: &str, name: &str| -> Vec<(ModuleIndex, LocalId)> {
-        links.module(target).map(|module| possible_bindings(links, links.table.resolve_export(module, name))).unwrap_or_default()
+        links.module(target).map(|module| possible_bindings(links, links.table.resolve_export(module, name), true)).unwrap_or_default()
     };
     // The declaration a module's binding names: itself, or what it imports.
     let declared = |file: &str, name: &str| -> Option<(String, String)> {
         let (imports, _) = modules.get(file)?;
         match imports.iter().find(|import| import.local == name) {
             Some(import) => {
-                import_binding(file, &import.source, &import.imported, links, files, inputs).map(declaration)
+                // Only one declaration answers for a callee.
+                let declared = import_binding(file, &import.source, &import.imported, links, files, inputs);
+                match declared.map(declarations).as_deref() {
+                    Some([one]) => Some(one.clone()),
+                    _ => None,
+                }
             }
             None => Some((file.to_string(), name.to_string())),
         }
@@ -530,22 +583,58 @@ fn unstable_style_statics(
         }
         found.sort();
         found.dedup();
-        found.into_iter().map(declaration).collect()
+        found.into_iter().flat_map(declarations).collect()
     };
-    // Whether a declaration's static is an object or array: no use can
-    // change a primitive.
-    let mutable = |(file, local): &(String, String)| {
-        files
-            .get(file)
-            .and_then(|statics| statics.get(local))
-            .is_some_and(|value| value.is_object() || value.is_array())
-    };
-    // Whether a declaration's static holds an object among its values.
-    let nested = |(file, local): &(String, String)| {
-        files.get(file).and_then(|statics| statics.get(local)).and_then(serde_json::Value::as_object).is_some_and(
-            |object| object.values().any(|value| value.is_object() || value.is_array()),
+    // Whether a static may be an object: an object or array, the `asset`
+    // function, or what evaluation could not settle. No use can change a
+    // primitive.
+    let object_like = |value: &crate::static_value::StaticValue| {
+        use crate::static_value::StaticValue;
+        matches!(
+            value,
+            StaticValue::Object(_) | StaticValue::Array(_) | StaticValue::AssetFunction { .. } | StaticValue::Unevaluated(_)
         )
     };
+    let mutable = |(file, local): &(String, String)| {
+        files.get(file).and_then(|statics| statics.get(local)).is_some_and(object_like)
+    };
+    // Whether a declaration's static holds an object among its values.
+    let nested = |(file, local): &(String, String)| match files.get(file).and_then(|statics| statics.get(local)) {
+        Some(crate::static_value::StaticValue::Object(entries)) => entries.iter().any(|(_, value)| object_like(value)),
+        _ => false,
+    };
+    // The paths of the members of a declaration's object at `at` that pass
+    // `keep`; the object itself when it has none or is not an object.
+    let members_at = |(file, local): &(String, String), at: &[String], keep: &dyn Fn(&crate::static_value::StaticValue) -> bool| {
+        let mut value = files.get(file).and_then(|statics| statics.get(local));
+        for segment in at {
+            value = value.and_then(|value| value.get(segment));
+        }
+        let members: Vec<Vec<String>> = match value {
+            Some(crate::static_value::StaticValue::Object(entries)) => entries
+                .iter()
+                .filter(|(_, value)| keep(value))
+                .map(|(key, _)| at.iter().cloned().chain(std::iter::once(key.clone())).collect())
+                .collect(),
+            _ => Vec::new(),
+        };
+        if members.is_empty() { vec![at.to_vec()] } else { members }
+    };
+    // Where a use changes a declaration's object: a member's value handed on
+    // escapes below the member's slot, and an escape of a nested object's
+    // members leaves the object's own slots as they were.
+    let changes_of = |target: &(String, String), at: &crate::usage_facts::UseAt| -> Vec<(Vec<String>, ChangeKind)> {
+        use crate::usage_facts::UseAt;
+        match at {
+            UseAt::Member(path) => vec![(path.clone(), ChangeKind::Escape)],
+            UseAt::AnyMember(path) => {
+                members_at(target, path, &|_| true).into_iter().map(|path| (path, ChangeKind::Escape)).collect()
+            }
+            UseAt::Written(path) => vec![(path.clone(), ChangeKind::Write)],
+            UseAt::UnknownKeyWritten(path) => vec![(path.clone(), ChangeKind::UnknownKeyWrite)],
+        }
+    };
+    let nested_members = |target: &(String, String)| members_at(target, &[], &object_like);
     let said = |file: &str, name: &str, used: &crate::usage_facts::ObjectUse| {
         let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
         format!("{name} {} in {file}{line}", used.what)
@@ -561,8 +650,8 @@ fn unstable_style_statics(
                 ExportLookup::Incomplete { known, .. } => known,
                 ExportLookup::Absent | ExportLookup::Ambiguous(_) => Vec::new(),
             };
-            for exported in local_bindings(terminals) {
-                flow.export(object(declaration(exported)), path, &name);
+            for declared in local_bindings(terminals).flat_map(declarations) {
+                flow.export(object(declared), path, &name);
             }
         }
     }
@@ -578,7 +667,7 @@ fn unstable_style_statics(
                 for opening in openings {
                     let reason_id = match opening.reason {
                         animus_system_loader::module_table::OpeningReason::OutsideStar(_) => ReasonId::OpaqueStar,
-                        animus_system_loader::module_table::OpeningReason::UnresolvedRequest(_) => {
+                        OpeningReason::UnresolvedRequest(_) => {
                             ReasonId::UnresolvedSpecifier
                         }
                     };
@@ -598,19 +687,22 @@ fn unstable_style_statics(
         // The declarations a use's name stands for that hold an object: a
         // namespace's member, every export of a namespace used whole, or
         // the binding's own.
+        // A module the analysis cannot find may re-export any object under
+        // any name, so a use through its namespace may reach every exported
+        // object, as the member tables read it.
         let targets_of = |name: &str| -> Vec<(String, String)> {
-            let exposed = |name: Option<&str>| exposed_bindings(links, name).into_iter().map(declaration).collect();
+            let anywhere = || exposed_bindings(links, None).into_iter().flat_map(declarations).collect();
             let targets: Vec<(String, String)> = match name.split_once('.') {
                 Some((namespace, member)) => match namespace_of(file, namespace) {
                     Some(Request::Module(target)) => {
-                        exported(&links.paths[*target], member).into_iter().map(declaration).collect()
+                        exported(&links.paths[target], member).into_iter().flat_map(declarations).collect()
                     }
-                    Some(Request::Unresolved(_)) => exposed(Some(member)),
+                    Some(Request::Unresolved(_)) => anywhere(),
                     Some(Request::Outside(_)) | None => Vec::new(),
                 },
                 None => match namespace_of(file, name) {
-                    Some(Request::Module(target)) => every_export(&links.paths[*target]),
-                    Some(Request::Unresolved(_)) => exposed(None),
+                    Some(Request::Module(target)) => every_export(&links.paths[target]),
+                    Some(Request::Unresolved(_)) => anywhere(),
                     Some(Request::Outside(_)) => Vec::new(),
                     None => possible(file, name),
                 },
@@ -621,31 +713,48 @@ fn unstable_style_statics(
         // members to, so only an object of primitives passes as a read.
         for handoff in &module.facts.handoffs {
             for target in possible(file, &handoff.binding).into_iter().filter(|target| mutable(target)) {
-                let read = !nested(&target)
-                    && declared(file, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
-                        reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
-                    });
-                if !read {
-                    flow.change(object(target), Vec::new(), ChangeKind::Escape, said(file, &handoff.binding, &handoff.used));
+                let reads = declared(file, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
+                    reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
+                });
+                // A callee that only reads the object may still hand its
+                // nested objects on.
+                let escaped = match (reads, nested(&target)) {
+                    (true, false) => continue,
+                    (true, true) => nested_members(&target),
+                    (false, _) => vec![Vec::new()],
+                };
+                for path in escaped {
+                    let cause = said(file, &handoff.binding, &handoff.used);
+                    flow.change(object(target.clone()), path, ChangeKind::Escape, cause);
                 }
             }
         }
-        for (name, used) in &module.facts.uses {
+        for (name, used, at) in &module.facts.uses {
+            // A namespace used whole may change anything its module exports,
+            // as the member tables read it.
+            if let Some(Request::Module(target)) = namespace_of(file, name).filter(|_| !name.contains('.')) {
+                hand_on(&mut flow, &links.paths[target], &said(file, name, used));
+                continue;
+            }
             for target in targets_of(name) {
-                flow.change(object(target), Vec::new(), ChangeKind::Escape, said(file, name, used));
+                for (path, kind) in changes_of(&target, at) {
+                    flow.change(object(target.clone()), path, kind, said(file, name, used));
+                }
             }
         }
         for (name, used) in &module.facts.flat_reads {
             for target in targets_of(name).into_iter().filter(|target| nested(target)) {
-                let reason = format!("{}, and it holds a nested object", said(file, name, used));
-                flow.change(object(target), Vec::new(), ChangeKind::Escape, reason);
+                for path in nested_members(&target) {
+                    let reason = format!("{}, and it holds a nested object", said(file, name, used));
+                    flow.change(object(target.clone()), path, ChangeKind::Escape, reason);
+                }
             }
         }
         // A package may re-export our objects (a linked workspace package)
         // under any name: a use that may write through its namespace may
         // reach any of them.
         for (namespace, (subject, used)) in &module.written_namespaces {
-            if matches!(namespace_of(file, namespace), Some(Request::Outside(identity)) if !crate::link::is_node_builtin(identity)) {
+            if matches!(namespace_of(file, namespace), Some(Request::Outside(identity)) if !crate::link::is_node_builtin(&identity)) {
                 flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), said(file, subject, used));
             }
         }
@@ -716,14 +825,23 @@ fn unstable_style_statics(
     // A static stored in an object, or read from a binding, may change with
     // it.
     for (file, module) in style {
+        // A container's change hands out the object stored in it whole, or
+        // the members a spread copied in; a `const` that reads a binding
+        // holds what it read in its members.
         let edges = module
             .facts
             .stored
             .iter()
-            .map(|(stored, container)| (stored, container, "is stored in"))
-            .chain(module.facts.derives.iter().map(|(derived, read)| (derived, read, "reads")));
-        for (dependent, on, how) in edges {
-            let to = possible(file, dependent).into_iter().map(object).collect();
+            .map(|(stored, container, copied)| (stored, container, "is stored in", *copied))
+            .chain(module.facts.derives.iter().map(|(derived, read)| (derived, read, "reads", true)));
+        for (dependent, on, how, below) in edges {
+            let to = possible(file, dependent)
+                .into_iter()
+                .flat_map(|target| {
+                    let paths = if below { members_at(&target, &[], &|_| true) } else { vec![Vec::new()] };
+                    paths.into_iter().map(move |path| (object(target.clone()), path))
+                })
+                .collect();
             let from = possible(file, on).into_iter().map(object).collect();
             flow.flow(to, from, format!("{dependent} {how} {on}, and "));
         }
@@ -734,7 +852,14 @@ fn unstable_style_statics(
         for local in statics.keys() {
             let query = AbsenceQuery::Stable(ObjectId::new(file, local), Vec::new());
             if let Coverage::Exposed(exposures) = effects.covers(&query) {
-                unstable.insert((file.clone(), local.clone()), exposures[0].cause().to_string());
+                // Every exposure is what the binding is uncertain as; the
+                // first names it.
+                let uncertainty = exposures
+                    .iter()
+                    .map(crate::flow::Exposure::uncertainty)
+                    .reduce(crate::flow::Uncertainty::join)
+                    .expect("an exposed subject has an exposure");
+                unstable.insert((file.clone(), local.clone()), (exposures[0].cause().to_string(), uncertainty));
             }
         }
     }
@@ -909,11 +1034,11 @@ impl ExtractEngine {
         use crate::usage_facts::{collect_export_facts, collect_import_facts};
         let mut statics_by_file: std::collections::BTreeMap<
             String,
-            rustc_hash::FxHashMap<String, serde_json::Value>,
+            rustc_hash::FxHashMap<String, crate::static_value::StaticValue>,
         > = std::collections::BTreeMap::new();
         let mut complete_statics_by_file: std::collections::BTreeMap<
             String,
-            rustc_hash::FxHashMap<String, serde_json::Value>,
+            rustc_hash::FxHashMap<String, crate::static_value::StaticValue>,
         > = std::collections::BTreeMap::new();
         let mut imports_by_file: ModuleFacts = std::collections::BTreeMap::new();
         let mut style_modules: BTreeMap<String, StyleModule> = BTreeMap::new();
@@ -934,11 +1059,11 @@ impl ExtractEngine {
         for ast in store.iter() {
             let program = ast.program();
             let statics = if crate::analyze_css::is_external_file(&ast.path, &self.opts.css_inputs.external_dirs) {
-                crate::eval::collect_package_static_values(program)
+                crate::eval::collect_package_static_values(program, &ast.path)
             } else {
-                crate::eval::collect_static_values(program)
+                crate::eval::collect_static_values(program, &ast.path)
             };
-            let complete_statics = crate::eval::collect_complete_static_values(program);
+            let complete_statics = crate::eval::collect_complete_static_values(program, &ast.path);
             let exports = collect_export_facts(program);
             let imports = collect_import_facts(ast.module_record());
             statics_by_file.insert(ast.path.clone(), statics);
@@ -948,19 +1073,38 @@ impl ExtractEngine {
 
         // Names some module exports an object static under, by name alone:
         // a module that imports none of them and declares no object static
-        // has no use to scan.
+        // has no use to scan. `export default X` exports X's object too, and
+        // an imported X may be one.
+        let is_object = |path: &str, local: &str| {
+            matches!(statics_by_file[path].get(local), Some(crate::static_value::StaticValue::Object(_)))
+        };
+        let default_object = |path: &str| {
+            let bindings = &lowered_by_file[path].bindings;
+            match bindings.default_export {
+                Some(crate::identity::DefaultExport::Snapshot { cell, of: Some(_) }) => {
+                    let held = &bindings.binding(bindings.held(cell)).name;
+                    is_object(path, held) || bindings.module_import(held).is_some()
+                }
+                _ => false,
+            }
+        };
         let object_exports: rustc_hash::FxHashSet<&str> = imports_by_file
             .iter()
             .flat_map(|(path, (_, exports))| {
-                let statics = &statics_by_file[path];
-                exports.iter().filter(move |export| {
-                    export.source.is_some()
-                        || export.local.as_ref().is_some_and(|local| {
-                            statics.get(local).is_some_and(serde_json::Value::is_object)
-                        })
-                })
+                exports
+                    .iter()
+                    .filter(|export| {
+                        export.source.is_some() || export.local.as_ref().is_some_and(|local| is_object(path, local))
+                    })
+                    .map(|export| export.exported.as_str())
+                    .chain(default_object(path).then_some("default"))
             })
-            .map(|export| export.exported.as_str())
+            .collect();
+        // A namespace a module re-exports by name (`export * as ns from …`)
+        // may hold any object.
+        let namespace_exports: rustc_hash::FxHashSet<String> = store
+            .iter()
+            .flat_map(|ast| crate::usage_facts::collect_namespace_exports(ast.module_record()).into_keys())
             .collect();
         for ast in store.iter() {
             let program = ast.program();
@@ -968,9 +1112,11 @@ impl ExtractEngine {
             let statics = &statics_by_file[&ast.path];
             let (imports, _) = &imports_by_file[&ast.path];
             let namespace_imports = crate::usage_facts::collect_namespace_imports(module);
-            let facts = if statics.values().any(serde_json::Value::is_object)
+            let facts = if statics.values().any(|value| matches!(value, crate::static_value::StaticValue::Object(_)))
                 || !namespace_imports.is_empty()
-                || imports.iter().any(|import| object_exports.contains(import.imported.as_str()))
+                || imports.iter().any(|import| {
+                    object_exports.contains(import.imported.as_str()) || namespace_exports.contains(&import.imported)
+                })
             {
                 crate::usage_facts::style_object_uses(program, &lowered_by_file[&ast.path].scoping, statics)
             } else {
@@ -1012,7 +1158,7 @@ impl ExtractEngine {
         let readings_by_file: BTreeMap<String, crate::usage_facts::ParamReadings> =
             lowered_by_file.iter().map(|(path, lowered)| (path.clone(), std::sync::Arc::clone(&lowered.readings))).collect();
         let mut readings_of = |file: &str| readings_by_file.get(file).cloned().unwrap_or_default();
-        for ((file, local), reason) in unstable_style_statics(
+        for ((file, local), (reason, uncertainty)) in unstable_style_statics(
             &style_modules,
             &imports_by_file,
             &links,
@@ -1027,12 +1173,15 @@ impl ExtractEngine {
                 let in_package = crate::analyze_css::is_external_file(&file, &self.opts.css_inputs.external_dirs);
                 let held = programs
                     .get(file.as_str())
-                    .and_then(|program| crate::eval::pre_read_static(program, &local, in_package));
-                unsettled_by_file.entry(file).or_default().insert(local, crate::eval::Unsettled { reason, held });
+                    .and_then(|program| crate::eval::pre_read_static(program, &file, &local, in_package));
+                unsettled_by_file
+                    .entry(file)
+                    .or_default()
+                    .insert(local, crate::eval::Unsettled { reason, uncertainty, held });
             }
         }
 
-        let keyframes_registry: rustc_hash::FxHashMap<String, serde_json::Value> = self
+        let keyframes_registry: rustc_hash::FxHashMap<String, crate::static_value::StaticValue> = self
             .opts
             .css_inputs
             .keyframes_blocks
@@ -1042,16 +1191,13 @@ impl ExtractEngine {
                 obj.iter()
                     .filter_map(|(export_name, collection)| {
                         let coll_obj = collection.as_object()?;
-                        let mut map = serde_json::Map::new();
+                        let mut map = crate::static_value::StaticValue::Object(Vec::new());
                         for (key_name, block) in coll_obj {
                             if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
-                                map.insert(
-                                    key_name.clone(),
-                                    serde_json::Value::String(name.to_string()),
-                                );
+                                map.insert(key_name, crate::static_value::StaticValue::String(name.to_string()));
                             }
                         }
-                        Some((export_name.clone(), serde_json::Value::Object(map)))
+                        Some((export_name.clone(), map))
                     })
                     .collect()
             })
@@ -1059,11 +1205,11 @@ impl ExtractEngine {
 
         let mut enriched_by_file: std::collections::BTreeMap<
             String,
-            rustc_hash::FxHashMap<String, serde_json::Value>,
+            rustc_hash::FxHashMap<String, crate::static_value::StaticValue>,
         > = std::collections::BTreeMap::new();
         let mut usage_enriched_by_file: std::collections::BTreeMap<
             String,
-            rustc_hash::FxHashMap<String, serde_json::Value>,
+            rustc_hash::FxHashMap<String, crate::static_value::StaticValue>,
         > = std::collections::BTreeMap::new();
         let mut unsettled_imports_by_file: BTreeMap<String, rustc_hash::FxHashMap<String, crate::eval::Unsettled>> =
             BTreeMap::new();
@@ -1232,6 +1378,7 @@ impl ExtractEngine {
             reverse_provenance: &css.reverse_provenance,
             components: &css.components,
             files: &css.files_map,
+            missing_inputs: &css.missing_inputs,
             timing: serde_json::json!({ "parseCount": self.parse_count }),
         });
         self.cross = Some(cross);
@@ -2475,6 +2622,136 @@ export const App = () => <Box tone="red" />;
         ]);
         let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
         assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "a loader held in hot data: {}", out["css"]);
+        // `export default pad` holds `pad`'s object, so a write through the
+        // default reaches it: by default import, a re-export by name, a star
+        // past that, the namespace's `default`, a hand-off, or a further
+        // module's `export default` of the imported `pad`. A read through the
+        // default changes nothing.
+        // Each row: its name, the route's modules, and whether `pad` still
+        // extracts.
+        type Row<'r> = (&'r str, &'r [(&'r str, &'r str)], bool);
+        let default_rows: [Row<'_>; 7] = [
+            ("default import written", &[("mutate.js", "import d from './tokens.js';\nd.padding = 9;\n")], false),
+            (
+                "default re-exported by name, written",
+                &[
+                    ("named.js", "export { default as p } from './tokens.js';\n"),
+                    ("mutate.js", "import { p } from './named.js';\np.padding = 9;\n"),
+                ],
+                false,
+            ),
+            (
+                "default re-exported by name behind a star, written",
+                &[
+                    ("named.js", "export { default as p } from './tokens.js';\n"),
+                    ("barrel.js", "export * from './named.js';\n"),
+                    ("mutate.js", "import { p } from './barrel.js';\np.padding = 9;\n"),
+                ],
+                false,
+            ),
+            ("the namespace's default written", &[("mutate.js", "import * as ns from './tokens.js';\nns.default.padding = 9;\n")], false),
+            ("default handed on", &[("mutate.js", "import d from './tokens.js';\nregister(d);\n")], false),
+            (
+                "an imported default re-exported by default, written",
+                &[
+                    ("defaults.js", "import { pad } from './tokens.js';\nexport default pad;\n"),
+                    ("mutate.js", "import d from './defaults.js';\nd.padding = 9;\n"),
+                ],
+                false,
+            ),
+            ("default only read", &[("mutate.js", "import d from './tokens.js';\nexport const read = () => d.padding;\n")], true),
+        ];
+        for (row, route, extracts) in default_rows {
+            let mut files = vec![
+                serde_json::json!({ "path": "tokens.js", "source": "const pad = { padding: 4 };\nexport { pad };\nexport default pad;\n" }),
+                serde_json::json!({
+                    "path": "reader.tsx",
+                    "source": "import './mutate.js';\nimport { pad } from './tokens.js';\n\
+                               export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+                }),
+            ];
+            files.extend(route.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })));
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let out: serde_json::Value =
+                serde_json::from_str(&engine.analyze(serde_json::Value::Array(files).to_string(), None).unwrap()).unwrap();
+            assert_eq!(out["css"].as_str().unwrap_or_default().contains("padding"), extracts, "{row}: {}", out["css"]);
+        }
+        // An extension of a parent refused for a possibly-mutated static is
+        // refused with it, named, never shipped without what it inherits;
+        // with nothing mutated, it inherits the parent's styles.
+        let kit = "import { pad } from './tokens';\n\
+                   export const Parent = ds.styles({ ...pad, display: 'flex', cursor: 'pointer' }).asElement('button');\n\
+                   export const Child = Parent.extend().styles({ color: 'red' }).asElement('button');\n";
+        for mutated in [true, false] {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let mut files = vec![
+                serde_json::json!({ "path": "tokens.ts", "source": "export const pad = { padding: 4 };\n" }),
+                serde_json::json!({ "path": "kit.tsx", "source": kit }),
+                serde_json::json!({
+                    "path": "app.tsx",
+                    "source": "import { Parent, Child } from './kit';\nexport const App = () => <><Parent /><Child /></>;\n",
+                }),
+            ];
+            if mutated {
+                files.push(serde_json::json!({ "path": "mutate.ts", "source": "import { pad } from './tokens';\npad.padding = 9;\n" }));
+            }
+            let files = serde_json::Value::Array(files);
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+            let child = out["component_fragments"]["kit.tsx::Child"]["base"].as_str().unwrap_or_default();
+            let named = out["diagnostics"].as_array().unwrap().iter().any(|d| {
+                d["component"] == "Child" && d["code"] == "animus.extension.unresolved-parent"
+            });
+            if mutated {
+                assert!(child.is_empty() && named, "{child}: {}", out["diagnostics"]);
+            } else {
+                assert!(["padding", "display: flex", "cursor: pointer", "color: red"].iter().all(|d| child.contains(d)), "{child}");
+            }
+        }
+        // A parent that skips one property for a possibly-mutated static
+        // still extracts the rest, and so does its extension, which reports
+        // the property it inherits skipped.
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let files = serde_json::json!([
+            { "path": "tokens.ts", "source": "export const pad = { padding: 4 };\n" },
+            { "path": "mutate.ts", "source": "import { pad } from './tokens';\npad.padding = 9;\n" },
+            {
+                "path": "kit.tsx",
+                "source": "import { pad } from './tokens';\n\
+                           export const Parent = ds.styles({ padding: pad.padding, display: 'flex' }).asElement('button');\n\
+                           export const Child = Parent.extend().styles({ color: 'red' }).asElement('button');\n",
+            },
+            { "path": "app.tsx", "source": "import { Parent, Child } from './kit';\nexport const App = () => <><Parent /><Child /></>;\n" },
+        ]);
+        let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+        let child = out["component_fragments"]["kit.tsx::Child"]["base"].as_str().unwrap_or_default();
+        let skips: Vec<(&str, &str)> = out["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| d["code"] == "animus.chain.skipped-value")
+            .map(|d| (d["component"].as_str().unwrap_or_default(), d["dropped"].as_str().unwrap_or_default()))
+            .collect();
+        assert!(child.contains("display: flex") && child.contains("color: red") && !child.contains("padding"), "{child}");
+        assert!(skips.contains(&("Child", "padding")), "{skips:?}: {}", out["diagnostics"]);
+        // An unrelated extension cycle sets only its own members aside: an
+        // extension whose id sorts before its parent's still follows it.
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let files = serde_json::json!([
+            {
+                "path": "cycle.tsx",
+                "source": "export const A = B.extend().styles({ margin: 1 }).asElement('div');\n\
+                           export const B = A.extend().styles({ margin: 2 }).asElement('div');\n",
+            },
+            { "path": "z.tsx", "source": "export const Parent = ds.styles({ display: 'flex' }).asElement('button');\n" },
+            {
+                "path": "b.tsx",
+                "source": "import { Parent } from './z';\nexport const Child = Parent.extend().styles({ color: 'red' }).asElement('button');\n",
+            },
+            { "path": "app.tsx", "source": "import { Child } from './b';\nexport const App = () => <Child />;\n" },
+        ]);
+        let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+        let child = out["component_fragments"]["b.tsx::Child"]["base"].as_str().unwrap_or_default();
+        assert!(child.contains("display: flex") && child.contains("color: red"), "{child}: {}", out["diagnostics"]);
         // A type query of eval, or a schema builder's own `Function` member
         // (TypeBox's `Type.Function`), runs nothing, a type query of a
         // function's `arguments` reads none of them, and a direct `require`
@@ -2511,6 +2788,223 @@ export const App = () => <Box tone="red" />;
             ]);
             let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
             assert!(out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
+        }
+    }
+
+    /// What an analysis emits, by the channel that carries it (spec §6.4
+    /// F6): static components, their declarations by section, system-prop
+    /// utilities and dynamic slots, each only where the stylesheet carries
+    /// it; what it reports losing, whole chains apart from single
+    /// properties; what it prunes; and the imports each transform removes
+    /// from its file.
+    #[derive(Debug, Default)]
+    struct Emission {
+        components: std::collections::BTreeSet<String>,
+        declarations: BTreeMap<(String, String, String, String), String>,
+        utilities: std::collections::BTreeSet<(String, String)>,
+        dynamic_slots: std::collections::BTreeSet<String>,
+        lost_chains: std::collections::BTreeSet<(String, String)>,
+        lost_properties: std::collections::BTreeSet<(String, String, String)>,
+        pruned: std::collections::BTreeSet<(String, String, String)>,
+        removed_imports: std::collections::BTreeSet<(String, String)>,
+    }
+
+    fn emission(files: &[(String, String)]) -> Emission {
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            config_json: Some(r#"{"p":{"property":"padding","scale":"space"},"m":{"property":"margin","scale":"space"}}"#.to_string()),
+            group_registry_json: Some(r#"{"space":["p","m"]}"#.to_string()),
+            theme_json: Some(r#"{"space.4":"0.25rem","space.8":"0.5rem"}"#.to_string()),
+            ..Default::default()
+        }))
+        .unwrap();
+        let entries: Vec<serde_json::Value> =
+            files.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&engine.analyze(serde_json::Value::Array(entries).to_string(), None).unwrap()).unwrap();
+        let mut out = Emission::default();
+        // What the stylesheets deliver: the CSS and every sheet.
+        let mut stylesheet = manifest["css"].as_str().unwrap_or_default().to_string();
+        for sheet in manifest["sheets"].as_object().into_iter().flatten().filter_map(|(_, sheet)| sheet.as_str()) {
+            stylesheet.push_str(sheet);
+        }
+        let keys = |value: &serde_json::Value| value.as_object().map(|map| map.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
+        out.components.extend(keys(&manifest["components"]));
+        for (id, fragments) in manifest["component_fragments"].as_object().into_iter().flatten() {
+            for (section, css) in fragments.as_object().into_iter().flatten() {
+                let mut selector = String::new();
+                for line in css.as_str().unwrap_or_default().lines().map(str::trim) {
+                    if let Some(open) = line.strip_suffix('{') {
+                        selector = open.trim().to_string();
+                    } else if let Some((property, value)) = line.strip_suffix(';').and_then(|line| line.split_once(": ")) {
+                        if stylesheet.contains(&selector) {
+                            let key = (id.clone(), section.clone(), selector.clone(), property.to_string());
+                            out.declarations.insert(key, value.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        for (prop, values) in manifest["system_prop_map"].as_object().into_iter().flatten() {
+            for (value, class) in values.as_object().into_iter().flatten() {
+                if class.as_str().is_some_and(|class| stylesheet.contains(&format!(".{class}"))) {
+                    out.utilities.insert((prop.clone(), value.clone()));
+                }
+            }
+        }
+        for (prop, slot) in manifest["dynamic_props"].as_object().into_iter().flatten() {
+            if slot["slotClass"].as_str().is_some_and(|class| stylesheet.contains(&format!(".{class}"))) {
+                out.dynamic_slots.insert(prop.clone());
+            }
+        }
+        let whole = ["animus.chain.unextractable", "animus.chain.stage-evaluation-failed", "animus.extension.unresolved-parent"];
+        for diagnostic in manifest["diagnostics"].as_array().into_iter().flatten() {
+            let field = |key: &str| diagnostic[key].as_str().unwrap_or_default().to_string();
+            let code = diagnostic["code"].as_str().unwrap_or_default();
+            if whole.contains(&code) {
+                out.lost_chains.insert((field("file"), field("component")));
+            } else if code == "animus.chain.skipped-value" {
+                // A skip names the key it dropped: `property 'padding'`.
+                let message = field("message");
+                if let Some(key) = message.split("property '").nth(1).and_then(|rest| rest.split('\'').next()) {
+                    out.lost_properties.insert((field("file"), field("component"), key.to_string()));
+                }
+            }
+        }
+        for pruned in manifest["report"]["eliminated_details"].as_array().into_iter().flatten() {
+            let field = |key: &str| pruned[key].as_str().unwrap_or_default().to_string();
+            out.pruned.insert((field("component"), field("kind"), field("name")));
+        }
+        // The module each import line names, by its last quoted string.
+        let specifiers = |code: &str| -> std::collections::BTreeSet<String> {
+            code.lines()
+                .filter(|line| line.trim_start().starts_with("import "))
+                .filter_map(|line| line.rsplit(['\'', '"']).nth(1).map(str::to_string))
+                .collect()
+        };
+        for (path, source) in files {
+            let transformed: serde_json::Value = serde_json::from_str(&engine.transform_file(path.clone()).unwrap()).unwrap();
+            let kept = specifiers(transformed["code"].as_str().unwrap_or(source));
+            let removed = specifiers(source).into_iter().filter(|specifier| !kept.contains(specifier));
+            out.removed_imports.extend(removed.map(|specifier| (path.clone(), specifier)));
+        }
+        out
+    }
+
+    /// Each way `head` emits less than `base` without reporting it.
+    fn shrinkage(base: &Emission, head: &Emission) -> Vec<String> {
+        let mut found = Vec::new();
+        // A component id is `file::binding`; a whole-chain loss names its
+        // file and binding.
+        let split = |id: &str| id.rsplit_once("::").map(|(file, binding)| (file.to_string(), binding.to_string()));
+        let chain_lost = |id: &str| split(id).is_some_and(|key| head.lost_chains.contains(&key));
+        // A skip of a key covers its declaration (`fontSize` as
+        // `font-size`), or its whole section (`variants`).
+        let property_lost = |id: &str, section: &str, property: &str| {
+            split(id).is_some_and(|(file, binding)| {
+                head.lost_properties.iter().any(|(lost_file, lost_binding, key)| {
+                    let kebab: String = key
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or(key)
+                        .chars()
+                        .flat_map(|c| if c.is_ascii_uppercase() { vec!['-', c.to_ascii_lowercase()] } else { vec![c] })
+                        .collect();
+                    *lost_file == file && *lost_binding == binding && (kebab == property || key == section)
+                })
+            })
+        };
+        found.extend(head.pruned.difference(&base.pruned).map(|pruned| format!("newly pruned {pruned:?}")));
+        found.extend(
+            base.components
+                .iter()
+                .filter(|id| !head.components.contains(*id) && !chain_lost(id))
+                .map(|id| format!("component {id} lost unreported")),
+        );
+        for (key @ (id, section, selector, property), value) in &base.declarations {
+            match head.declarations.get(key) {
+                Some(now) if now != value => found.push(format!("{id} {selector} {property} changed from {value} to {now}")),
+                None if !chain_lost(id) && !property_lost(id, section, property) => {
+                    found.push(format!("{id} {selector} {property} lost unreported"))
+                }
+                _ => {}
+            }
+        }
+        found.extend(
+            base.utilities
+                .iter()
+                .filter(|(prop, value)| !head.utilities.contains(&(prop.clone(), value.clone())) && !head.dynamic_slots.contains(prop))
+                .map(|utility| format!("utility {utility:?} lost with no dynamic slot")),
+        );
+        found.extend(base.dynamic_slots.difference(&head.dynamic_slots).map(|prop| format!("dynamic slot {prop} lost")));
+        found.extend(head.components.difference(&base.components).map(|id| format!("component {id} newly static")));
+        found.extend(
+            head.removed_imports.difference(&base.removed_imports).map(|import| format!("import {import:?} newly removed")),
+        );
+        found
+    }
+
+    /// Contract (spec §6.4 F6, §6.9 FL-11): adding opacity never shrinks
+    /// emission. One opaque module added to an analysis (code run from a
+    /// string, a computed load, a hand-on of any module's namespace, a load
+    /// of a module the analysis cannot find) may turn what it emitted into
+    /// a reported loss, but never prunes more, drops a style or a component
+    /// without a finding naming it, changes a static value, makes a
+    /// component static, or removes an import.
+    #[test]
+    fn adding_opacity_never_shrinks_emission() {
+        let file = |path: &str, source: &str| (path.to_string(), source.to_string());
+        let project = vec![
+            file(
+                "kit.tsx",
+                "export const Box = ds.system({ space: true }).asElement('div');\n\
+                 export const Base = ds.styles({ padding: 4 })\n\
+                   .variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: { margin: 1 }, lg: { margin: 9 } } })\n\
+                   .states({ busy: { opacity: 0.5 } })\n\
+                   .asElement('div');\n",
+            ),
+            file("tokens.ts", "export const pad = { padding: 2 };\n"),
+            file(
+                "held.tsx",
+                "import { pad } from './tokens';\nexport const Held = ds.styles({ ...pad }).asElement('span');\n\
+                 export const HeldChild = Held.extend().styles({ color: 'red' }).asElement('span');\n",
+            ),
+            file("fam.tsx", "import { Box } from './kit';\nexport const Fam = { Box };\n"),
+            file("skip.tsx", "export const Skip = ds.styles({ color: globalThis.tone, padding: 3 }).asElement('p');\n"),
+            file(
+                "card.tsx",
+                "import { compose } from '@animus-ui/system/compose';\nimport { pad } from './tokens';\n\
+                 const Root = ds.styles({ ...pad }).asElement('div');\n\
+                 export const Card = compose({ Root }, { name: 'Card', shared: {} });\n",
+            ),
+            file(
+                "app.tsx",
+                "import { Base, Box } from './kit';\nimport { Held, HeldChild } from './held';\nimport { Fam } from './fam';\n\
+                 import { Skip } from './skip';\nimport { Card } from './card';\n\
+                 export const App = () => <><Base size='sm' /><Box p={8} /><Fam.Box m={4} /><Held /><HeldChild /><Skip /><Card.Root /></>;\n",
+            ),
+        ];
+        let modules: Vec<&str> = project.iter().map(|(path, _)| path.trim_end_matches(".tsx").trim_end_matches(".ts")).collect();
+        let mut injections = vec![
+            "globalThis.run?.(eval);\n".to_string(),
+            "import(globalThis.name);\n".to_string(),
+            "import './not-there.js';\n".to_string(),
+        ];
+        injections.extend(modules.iter().map(|module| format!("import * as ns from './{module}';\nglobalThis.keep?.(ns);\n")));
+        let base = emission(&project);
+        let channels = [
+            base.components.len(),
+            base.declarations.len(),
+            base.utilities.len(),
+            base.dynamic_slots.len(),
+            base.pruned.len(),
+            base.lost_properties.len(),
+        ];
+        assert!(channels.iter().all(|count| *count > 0) && !base.removed_imports.is_empty(), "{base:?}");
+        for injected in injections {
+            let mut files = project.clone();
+            files.push(file("opaque.ts", &injected));
+            let shrunk = shrinkage(&base, &emission(&files));
+            assert!(shrunk.is_empty(), "{injected}{shrunk:#?}");
         }
     }
 
@@ -2792,6 +3286,44 @@ export const App = () => <Box tone="red" />;
                 "namespace of a missing module",
                 "./tokens",
                 vec![file("mutate.ts", "import * as ns from './missing';\nns.pad.padding = 9;\n")],
+            ),
+            // A module the analysis cannot find may re-export `pad` under any
+            // name.
+            (
+                "renamed member of a missing module's namespace",
+                "./tokens",
+                vec![file("mutate.ts", "import * as ns from './missing';\nns.Tooltip.padding = 9;\n")],
+            ),
+            (
+                "member of a missing module's namespace held by an alias",
+                "./tokens",
+                vec![file("mutate.ts", "import * as ns from './missing';\nconst tooltip = ns.Tooltip;\ntooltip.padding = 9;\n")],
+            ),
+            // The same through a barrel: a star of the missing module, or its
+            // namespace re-exported and imported by name.
+            (
+                "renamed member through a star of a missing module",
+                "./tokens",
+                vec![
+                    file("barrel.ts", "export * from './missing';\n"),
+                    file("mutate.ts", "import * as ns from './barrel';\nns.Tooltip.padding = 9;\n"),
+                ],
+            ),
+            (
+                "renamed member through a star of a missing module, held by an alias",
+                "./tokens",
+                vec![
+                    file("barrel.ts", "export * from './missing';\n"),
+                    file("mutate.ts", "import * as ns from './barrel';\nconst tooltip = ns.Tooltip;\ntooltip.padding = 9;\n"),
+                ],
+            ),
+            (
+                "renamed member of a missing module's namespace imported by name",
+                "./tokens",
+                vec![
+                    file("barrel.ts", "export * as ns from './missing';\n"),
+                    file("mutate.ts", "import { ns } from './barrel';\nns.Tooltip.padding = 9;\n"),
+                ],
             ),
         ];
         let mut stale = Vec::new();

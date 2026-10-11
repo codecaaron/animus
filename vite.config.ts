@@ -14,6 +14,7 @@ const typescriptTestTargets = [
   'packages/_parity/__tests__',
   'packages/oracle/__tests__',
   'packages/extract/tests/session',
+  'packages/extract/tests/alias-agreement.test.ts',
   'packages/extract/tests/asset-placeholders.test.ts',
   'packages/extract/tests/core-options.test.ts',
   'packages/extract/tests/css-keywords.test.ts',

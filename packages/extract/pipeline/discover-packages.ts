@@ -25,6 +25,7 @@ import {
   KIT_SYSTEM_NOT_INCLUDED,
   KIT_WITHOUT_SOURCE_CONDITION,
   noKitFilesDiagnostics,
+  PACKAGE_MISMATCH,
   severityFor,
   UNIMPORTED_CREATE_SYSTEM,
   UNPROVEN_ROOT_BINDING,
@@ -281,10 +282,23 @@ export function nativeKitSourceRoot(
   };
 }
 
-/** Whether the manifest at `dir` names the package `name`. */
-function isPackageNamed(dir: string, name: string | null): boolean {
+/**
+ * Whether `dir`, the nearest manifest above a host's answer, is a package
+ * the host resolved into: its manifest names a package, and it is not the
+ * project or a directory holding it. A host answer from a dependency cache
+ * (`node_modules/.vite/deps`), or from a file outside every package, finds
+ * the application's own manifest, which is no package root. The name need
+ * not be the specifier's: a host alias resolves one package to another,
+ * and the host's package is the one the bundle renders (spec §2.2 A4).
+ */
+function isHostPackageRoot(dir: string, rootDir: string): boolean {
   const manifest = readPackageManifest(dir);
-  return isJsonBlock(manifest) && manifest.name === name;
+  return (
+    isJsonBlock(manifest) &&
+    isJsonString(manifest.name) &&
+    manifest.name !== '' &&
+    !isPathWithinRoot(realPath(dir), realPath(rootDir))
+  );
 }
 
 function realPath(path: string): string {
@@ -509,6 +523,9 @@ export interface CollectedExternalPackages {
   diagnostics: ManifestDiagnostic[];
   /** Each resolved package's kit descriptor, once per package root. */
   kitDescriptors: KitDescriptorRecord[];
+  /** Package name → the real root of the instance read for it (spec §2.2
+   *  A4): another instance an importer resolves is not this one. */
+  packageInstances: Record<string, string>;
 }
 
 export async function collectExternalPackageSources(opts: {
@@ -662,6 +679,7 @@ export async function collectExternalPackageSources(opts: {
   };
 
   const kitDescriptors: KitDescriptorRecord[] = [];
+  const packageInstances: Record<string, string> = {};
   const describedRoots = new Set<string>();
   for (const specifier of specifiers) {
     let absEntry: string | null;
@@ -736,10 +754,29 @@ export async function collectExternalPackageSources(opts: {
     const pkgRoot =
       resolvedRoot &&
       (!locatedRoot ||
-        isPackageNamed(resolvedRoot, packageName) ||
+        isHostPackageRoot(resolvedRoot, rootDir) ||
         realPath(resolvedRoot) === locatedRoot)
         ? resolvedRoot
         : locatedRoot || resolvedRoot;
+    // The host's file lies in no package, and not in the located one: the
+    // bundle may render another module than the one read. A dependency
+    // cache lies under node_modules and holds the located package's build.
+    if (
+      absEntry &&
+      packageName &&
+      locatedRoot &&
+      pkgRoot === locatedRoot &&
+      !isPathWithinRoot(locatedRoot, realPath(absEntry)) &&
+      !realPath(absEntry).split(sep).includes('node_modules')
+    ) {
+      diagnostics.push(
+        packageMismatchDiagnostic(
+          specifier,
+          relative(rootDir, absEntry),
+          relative(rootDir, locatedRoot)
+        )
+      );
+    }
     // The table selects the kit's source: its `animus` targets, else its
     // source-targeting exports, else a `src/` guess, else the runtime
     // entry's directory. The host's entry stays the runtime entry.
@@ -822,6 +859,7 @@ export async function collectExternalPackageSources(opts: {
     }
 
     const realRoot = realPath(pkgRoot);
+    if (packageName) packageInstances[packageName] ??= realRoot;
     if (!describedRoots.has(realRoot)) {
       describedRoots.add(realRoot);
       const described = readKitDescriptor(pkgRoot, rootDir);
@@ -958,6 +996,33 @@ export async function collectExternalPackageSources(opts: {
       }
     }
 
+    // A host alias hands the host's plugins this package under its own
+    // name, so each redirect is keyed by that name too. Only where the host
+    // answered another directory than the located package: an npm alias
+    // installs a renamed package where Node finds it, and its own name may
+    // be another installed package's.
+    const ownManifest = readPackageManifest(pkgRoot);
+    const hostName = isJsonBlock(ownManifest) ? ownManifest.name : undefined;
+    if (
+      packageName &&
+      locatedRoot &&
+      realPath(pkgRoot) !== locatedRoot &&
+      isJsonString(hostName) &&
+      hostName !== '' &&
+      hostName !== packageName
+    ) {
+      for (const [key, entry] of [...sourceEntries]) {
+        if (key !== packageName && !key.startsWith(`${packageName}/`)) continue;
+        const hostKey = hostName + key.slice(packageName.length);
+        if (sourceEntries.has(hostKey)) continue;
+        sourceEntries.set(hostKey, entry);
+        const sideEffects = sourceEntrySideEffects.get(key);
+        if (sideEffects !== undefined) {
+          sourceEntrySideEffects.set(hostKey, sideEffects);
+        }
+      }
+    }
+
     outcomes.push({
       specifier,
       outcome: staleDist ? 'stale-dist' : fileCount > 0 ? 'resolved' : 'empty',
@@ -979,6 +1044,7 @@ export async function collectExternalPackageSources(opts: {
     outcomes,
     diagnostics: [...diagnostics, ...noKitFilesDiagnostics(outcomes)],
     kitDescriptors,
+    packageInstances,
   };
 }
 
@@ -1053,7 +1119,7 @@ export function sourceKitDependencies(
 
 /** A specifier that names a package: not relative or absolute, and no URL,
  *  scheme (`node:`, `virtual:`), subpath import or virtual id. */
-function isPackageSpecifier(specifier: string): boolean {
+export function isPackageSpecifier(specifier: string): boolean {
   return /^(?:@[^/\\:]+\/)?[^./\\#\0:][^:]*$/.test(specifier);
 }
 
@@ -1133,6 +1199,21 @@ export function importedKitDiagnostics(
  *  the loader does not read as source: missing, spelled otherwise on disk,
  *  no package target Node accepts (each read from its runtime target), or
  *  percent-escaped (refused, failing the load). */
+function packageMismatchDiagnostic(
+  specifier: string,
+  hostEntry: string,
+  located: string
+): ManifestDiagnostic {
+  return {
+    file: specifier,
+    component: 'kit',
+    kind: 'warn',
+    message: `the host bundler resolves '${specifier}' to ${hostEntry}, which lies in no package, so discovery reads the installed package at ${located} instead and the bundle may render another module than the one analysed — make the bundler resolve '${specifier}' to a package`,
+    code: PACKAGE_MISMATCH,
+    severity: severityFor(PACKAGE_MISMATCH),
+  };
+}
+
 function sourceConditionDiagnostics(
   packageName: string,
   condition: KitSourceCondition | null
@@ -1250,6 +1331,11 @@ export function excludeCollectedPackages(
         !rejectedDirs.some((dir) =>
           isPathWithinRoot(resolve(rootDir, record.packageRoot), dir)
         )
+    ),
+    packageInstances: Object.fromEntries(
+      Object.entries(collected.packageInstances).filter(
+        ([, root]) => !rejectedDirs.some((dir) => isPathWithinRoot(root, dir))
+      )
     ),
   };
 }

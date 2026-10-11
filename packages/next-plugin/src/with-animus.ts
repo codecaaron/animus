@@ -361,6 +361,17 @@ export function withAnimus(
                 nmf.hooks.afterResolve.tap(
                   'AnimusVirtualResolve',
                   (resolveData) => {
+                    const issuer = resolveData.contextInfo?.issuer;
+                    const resolved = resolveData.createData?.resource;
+                    if (issuer && resolved !== undefined) {
+                      // A redirected request is pinned to the instance read;
+                      // another resolves with its importer's rule options.
+                      plugin.reportHostResolution(
+                        issuer,
+                        resolveData.request,
+                        resolved
+                      );
+                    }
                     const sideEffects = redirectSideEffects.get(resolveData);
                     const settings = resolveData.createData?.settings;
                     if (!settings) return;
@@ -400,7 +411,6 @@ export function withAnimus(
             {
               loader: actualLoaderPath,
               options: {
-                strict: options.strict,
                 development: context.dev === true,
                 cssImportTarget: options.cssImportTarget,
                 build,
@@ -419,6 +429,7 @@ export function withAnimus(
 /** The part of webpack's resolve data the kit redirect reads and writes. */
 interface KitResolveData {
   request: string;
+  contextInfo?: { issuer?: string };
   createData?: { resource?: string; settings?: { sideEffects?: boolean } };
 }
 

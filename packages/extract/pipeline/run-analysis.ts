@@ -165,30 +165,42 @@ export function buildAnalysisInputs(
   if (opts.system.propertyRecordsJson) {
     inputs.propertyRecordsJson = opts.system.propertyRecordsJson;
   }
-  // Present only when the host knows something, for the same reason.
-  const context = opts.analysisContext;
-  if (
-    context?.skippedSources?.length ||
-    context?.unbundledComputedImports ||
-    context?.packageDirs?.length ||
-    context?.extensions
-  ) {
-    inputs.analysisContextJson = JSON.stringify({
-      skippedSources: context.skippedSources ?? [],
-      unbundledComputedImports: context.unbundledComputedImports ?? false,
-      packageDirs: context.packageDirs ?? [],
-      linkedDirs: context.linkedDirs ?? [],
-      outputDirs: context.outputDirs ?? [],
-      ...(context.extensions && {
-        extensions: {
-          appended: context.extensions.appended,
-          nodeNext: context.extensions.nodeNext,
-          alias: context.extensions.alias,
-        },
-      }),
-    });
-  }
+  const context = analysisContextJson(opts.analysisContext);
+  if (context !== undefined) inputs.analysisContextJson = context;
   return inputs;
+}
+
+/** The engine's wire for what the host knows; present only when the host
+ *  knows something, so a host that knows nothing persists unchanged inputs. */
+export function analysisContextJson(
+  context: AnalysisContext | undefined
+): string | undefined {
+  if (
+    !(
+      context?.skippedSources?.length ||
+      context?.unbundledComputedImports ||
+      context?.packageDirs?.length ||
+      context?.extensions ||
+      context?.openings?.length
+    )
+  ) {
+    return undefined;
+  }
+  return JSON.stringify({
+    skippedSources: context.skippedSources ?? [],
+    unbundledComputedImports: context.unbundledComputedImports ?? false,
+    packageDirs: context.packageDirs ?? [],
+    linkedDirs: context.linkedDirs ?? [],
+    outputDirs: context.outputDirs ?? [],
+    ...(context.extensions && {
+      extensions: {
+        appended: context.extensions.appended,
+        nodeNext: context.extensions.nodeNext,
+        alias: context.extensions.alias,
+      },
+    }),
+    ...(context.openings?.length && { openings: context.openings }),
+  });
 }
 
 function hasSourceThemeManifests(system: SystemConfig): boolean {

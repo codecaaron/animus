@@ -18,6 +18,7 @@ import {
   viteExtensionPolicy,
 } from '../pipeline/host-extensions';
 import { gatherProbeEvidence } from '../pipeline/probe-evidence';
+import { analysisContextJson } from '../pipeline/run-analysis';
 import { ingestSourceEntries } from '../pipeline/source-ingestion';
 
 const v2 = require('../index-v2.js');
@@ -320,7 +321,8 @@ test.each([
 // Contract: a Svelte resolver call whose import the host opens under another
 // spelling is an opening of the analysis (spec §2.2 A8), though it is
 // attributed to no module: the finding is reported and nothing is pruned,
-// so the variant it renders keeps its CSS. spike-codex's witness: Known
+// so the variant it renders keeps its CSS. The opening reaches the engine
+// on the host's own context wire. spike-codex's witness: Known
 // reads `./Definition` (quiet, the control that lets pruning run); Usage
 // reads `./definition` (loud), which a case-insensitive host opens as
 // `Definition.ts`, beside a `definition.tsx` exporting another badge.
@@ -349,7 +351,7 @@ test('a mismatched Svelte resolver call keeps the variant it renders', async () 
     { extractFacts: (filesJson) => v2.extractFacts(filesJson), rootDir: root }
   );
   const engine = new v2.ExtractEngine({
-    analysisContextJson: JSON.stringify({ openings: ingested.openings ?? [] }),
+    analysisContextJson: analysisContextJson({ openings: ingested.openings }),
   });
   const filesJson = JSON.stringify(ingested.analysisEntries);
   const prepared = JSON.parse(engine.prepare(filesJson));

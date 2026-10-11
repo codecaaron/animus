@@ -5,37 +5,39 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { reconcileSourceCorpus } from '../src/rediscovery';
-import { makeContextProbe } from './context-probe';
+import { makeContextProbe, published } from './context-probe';
 import { makeComponent, makeManifest } from './manifest-fixture';
 
 import type { ContextProbe } from './context-probe';
-import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
+import type { ManifestMissingInput } from '@animus-ui/extract/pipeline';
 
-interface RediscoveryProbe extends ContextProbe {
-  warns: string[];
-}
-
-function makeProbe(rootDir: string): RediscoveryProbe {
-  const warns: string[] = [];
-  const base = makeContextProbe(rootDir, {
+function makeProbe(rootDir: string): ContextProbe {
+  return makeContextProbe(rootDir, {
     extensionsSet: new Set(['.ts', '.tsx']),
-    warn(msg: string) {
-      warns.push(msg);
-    },
   });
-  return Object.assign(base, { warns });
 }
 
-function dropDiagnostic(
-  file: string,
-  component: string,
-  parent: string
-): ManifestDiagnostic {
+/** The change sets submitted to the Session, as sorted absolute paths. */
+function submittedPaths(probe: ContextProbe): string[][] {
+  return probe.submissions.map((changes) =>
+    [...(changes.modifiedFiles ?? [])].sort()
+  );
+}
+
+/** An extension in `Consumer.tsx` dropped because analysis found no module
+ *  at `base`. */
+function absentParent(
+  parent: string,
+  base: string,
+  outcome: ManifestMissingInput['outcome'] = 'absent'
+): ManifestMissingInput {
   return {
-    file,
-    component,
-    kind: 'bail',
-    message: `chain dropped: could not resolve parent component '${parent}'`,
+    file: 'Consumer.tsx',
+    component: 'Fancy',
+    parent,
+    specifier: `./${base}`,
+    base,
+    outcome,
   };
 }
 
@@ -50,151 +52,120 @@ describe('reconcileSourceCorpus', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('folds an on-disk parent and re-analyzes before publishing', async () => {
-    writeFileSync(
-      join(root, 'Parent.tsx'),
-      "export const Parent = ds.styles({}).asElement('div');\n"
-    );
-    const probe = makeProbe(root);
-    const ctx = probe.ctx;
-    ctx.mutateFileCache((cache) =>
-      cache.set('Consumer.tsx', { hash: 'h', source: 'src' })
-    );
-    ctx.storedManifest = makeManifest({
-      diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
-    });
-    ctx.runAnalysis = () => {
-      probe.analyses++;
-      ctx.storedManifest = makeManifest({
-        components: {
-          'Consumer.tsx::Fancy': makeComponent('Consumer.tsx', 'r'),
-        },
-        files: { 'Consumer.tsx': ['Consumer.tsx::Fancy'] },
-      });
-      return true;
-    };
-
-    const reanalyzed = await reconcileSourceCorpus(probe.ctx);
-
-    expect(reanalyzed).toBe(true);
-    expect(probe.analyses).toBe(1);
-    expect(probe.ctx.fileCache.has('Parent.tsx')).toBe(true);
-    expect(probe.warns).toEqual([]);
-  });
-
-  it('does nothing when no unresolved-parent drops are present', async () => {
-    writeFileSync(join(root, 'New.tsx'), 'export const x = 1;\n');
-    const probe = makeProbe(root);
-    probe.ctx.storedManifest = makeManifest();
-
-    expect(await reconcileSourceCorpus(probe.ctx)).toBe(false);
-    expect(probe.analyses).toBe(0);
-    expect(probe.ctx.fileCache.has('New.tsx')).toBe(false);
-  });
-
-  it('returns without re-analyzing when the walk finds nothing new', async () => {
-    const probe = makeProbe(root);
-    probe.ctx.storedManifest = makeManifest({
-      diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Ghost')],
-    });
-
-    expect(await reconcileSourceCorpus(probe.ctx)).toBe(false);
-    expect(probe.analyses).toBe(0);
-  });
-
-  /** A caller that advanced the file cache rolls it back when the analysis
-   *  does not publish; stranded entries memoize the next walk as barren. */
-  for (const [label, fail] of [
-    [
-      'returns false',
-      (ctx: { runAnalysis: unknown }) => {
-        ctx.runAnalysis = () => false;
-      },
-    ],
-    [
-      'throws',
-      (ctx: { runAnalysis: unknown }) => {
-        ctx.runAnalysis = () => {
-          throw new Error('error diagnostics fail the build');
-        };
-      },
-    ],
-  ] as const) {
-    it(`rolls the fold back and stays retryable when analysis ${label}`, async () => {
+  // `incomplete`: the host opens the file, which the Session does not hold
+  // yet (a creation the watcher has not reported).
+  for (const outcome of ['absent', 'incomplete'] as const) {
+    it(`folds an on-disk ${outcome} parent and re-analyzes before publishing`, async () => {
       writeFileSync(
         join(root, 'Parent.tsx'),
         "export const Parent = ds.styles({}).asElement('div');\n"
       );
       const probe = makeProbe(root);
-      const ctx = probe.ctx;
-      ctx.mutateFileCache((cache) =>
-        cache.set('Consumer.tsx', { hash: 'h', source: 'src' })
-      );
-      ctx.storedManifest = makeManifest({
-        diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
+      probe.session.heldSources.set('Consumer.tsx', {
+        hash: 'h',
+        source: 'src',
       });
-      fail(ctx);
+      probe.ctx.storedManifest = makeManifest({
+        missing_inputs: [absentParent('Parent', 'Parent', outcome)],
+      });
+      probe.respond(() => [
+        published(probe, {
+          manifest: makeManifest({
+            components: {
+              'Consumer.tsx::Fancy': makeComponent('Consumer.tsx', 'r'),
+            },
+            files: { 'Consumer.tsx': ['Consumer.tsx::Fancy'] },
+          }),
+          planChanged: ['Consumer.tsx'],
+        }),
+      ]);
+
+      const outcomes = await reconcileSourceCorpus(probe.ctx);
+
+      expect(submittedPaths(probe)).toEqual([[join(root, 'Parent.tsx')]]);
+      expect(outcomes).toHaveLength(1);
+      expect(probe.warnings).toEqual([]);
+    });
+  }
+
+  it('does nothing when no extension was dropped', async () => {
+    writeFileSync(join(root, 'New.tsx'), 'export const x = 1;\n');
+    const probe = makeProbe(root);
+    probe.ctx.storedManifest = makeManifest();
+
+    expect(await reconcileSourceCorpus(probe.ctx)).toEqual([]);
+    expect(probe.submissions).toEqual([]);
+  });
+
+  it('returns without re-analyzing when no file answers the parent', async () => {
+    const probe = makeProbe(root);
+    probe.ctx.storedManifest = makeManifest({
+      missing_inputs: [absentParent('Ghost', 'Ghost')],
+    });
+
+    expect(await reconcileSourceCorpus(probe.ctx)).toEqual([]);
+    expect(probe.submissions).toEqual([]);
+  });
+
+  /** A fold that publishes nothing is not remembered as barren: the next
+   *  walk submits it again. The Session keeps none of a failed attempt's
+   *  sources (session/replacements-epoch.test.ts). */
+  for (const [label, fail] of [
+    ['publishes nothing', () => []],
+    [
+      'throws',
+      () => {
+        throw new Error('error diagnostics fail the build');
+      },
+    ],
+  ] as const) {
+    it(`stays retryable when the fold's analysis ${label}`, async () => {
+      writeFileSync(
+        join(root, 'Parent.tsx'),
+        "export const Parent = ds.styles({}).asElement('div');\n"
+      );
+      const probe = makeProbe(root);
+      probe.session.heldSources.set('Consumer.tsx', {
+        hash: 'h',
+        source: 'src',
+      });
+      probe.ctx.storedManifest = makeManifest({
+        missing_inputs: [absentParent('Parent', 'Parent')],
+      });
+      probe.respond(fail);
 
       const first = reconcileSourceCorpus(probe.ctx);
       if (label === 'throws') await expect(first).rejects.toThrow();
       else await first;
 
-      expect(ctx.fileCache.has('Parent.tsx')).toBe(false);
-
-      let retried = false;
-      ctx.runAnalysis = () => {
-        retried = true;
-        ctx.storedManifest = makeManifest();
-        return true;
-      };
+      probe.respond(() => [published(probe, { manifest: makeManifest() })]);
       await reconcileSourceCorpus(probe.ctx);
-      expect(retried, 'stabilize must remain retryable').toBe(true);
-      expect(ctx.fileCache.has('Parent.tsx')).toBe(true);
+      expect(submittedPaths(probe), 'the fold must remain retryable').toEqual([
+        [join(root, 'Parent.tsx')],
+        [join(root, 'Parent.tsx')],
+      ]);
     });
   }
 
-  /** A size comparison cannot stand in for "the cache has not moved": a
-   *  delete plus an unrelated create strands the parent for the session. */
-  it('walks again after a delete and a create that restore the cache size', async () => {
+  /** Each pass probes afresh: a parent written after a barren pass folds
+   *  on the next one. */
+  it('folds a parent that appears after a barren pass', async () => {
     const probe = makeProbe(root);
-    const ctx = probe.ctx;
-    const consumerSource =
-      "export const Fancy = Parent.extend().styles({}).asElement('div');\n";
-    writeFileSync(join(root, 'Consumer.tsx'), consumerSource);
-    writeFileSync(join(root, 'Note.tsx'), 'export const note = 1;\n');
-    ctx.mutateFileCache((cache) =>
-      cache.set('Consumer.tsx', { hash: 'h', source: consumerSource })
-    );
-    ctx.mutateFileCache((cache) =>
-      cache.set('Note.tsx', { hash: 'h', source: 'note' })
-    );
-    ctx.storedManifest = makeManifest({
-      diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
+    probe.ctx.storedManifest = makeManifest({
+      missing_inputs: [absentParent('Parent', 'Parent')],
     });
 
     await reconcileSourceCorpus(probe.ctx);
-    expect(probe.analyses).toBe(0);
+    expect(probe.submissions).toEqual([]);
 
-    rmSync(join(root, 'Note.tsx'));
-    ctx.mutateFileCache((cache) => cache.delete('Note.tsx'));
     writeFileSync(
       join(root, 'Parent.tsx'),
       "export const Parent = ds.styles({}).asElement('div');\n"
     );
-    writeFileSync(join(root, 'Other.tsx'), 'export const other = 1;\n');
-    ctx.mutateFileCache((cache) =>
-      cache.set('Other.tsx', { hash: 'h', source: 'other' })
-    );
-    ctx.runAnalysis = () => {
-      probe.analyses++;
-      ctx.storedManifest = makeManifest();
-      return true;
-    };
-
+    probe.respond(() => [published(probe, { manifest: makeManifest() })]);
     await reconcileSourceCorpus(probe.ctx);
 
-    expect(ctx.fileCache.has('Parent.tsx')).toBe(true);
-    expect(probe.analyses).toBe(1);
+    expect(submittedPaths(probe)).toEqual([[join(root, 'Parent.tsx')]]);
   });
 
   it('names the exclusion rule for a resolvable but excluded parent', async () => {
@@ -210,22 +181,20 @@ describe('reconcileSourceCorpus', () => {
     // The matcher is memoized, so mutating `options.exclude` after
     // construction only takes effect once it is rebuilt.
     ctx.excludeMatcher = createExcludeMatcher(ctx.options.exclude);
-    ctx.mutateFileCache((cache) =>
-      cache.set('Consumer.tsx', {
-        hash: 'h',
-        source:
-          "import { Parent } from './generated/Parent';\n" +
-          "export const Fancy = Parent.extend().styles({}).asElement('div');\n",
-      })
-    );
+    probe.session.heldSources.set('Consumer.tsx', {
+      hash: 'h',
+      source:
+        "import { Parent } from './generated/Parent';\n" +
+        "export const Fancy = Parent.extend().styles({}).asElement('div');\n",
+    });
     ctx.storedManifest = makeManifest({
-      diagnostics: [dropDiagnostic('Consumer.tsx', 'Fancy', 'Parent')],
+      missing_inputs: [absentParent('Parent', 'generated/Parent')],
     });
 
     await reconcileSourceCorpus(probe.ctx);
 
-    expect(probe.analyses).toBe(0);
-    const joined = probe.warns.join('\n');
+    expect(probe.submissions).toEqual([]);
+    const joined = probe.warnings.join('\n');
     expect(joined).toContain("'Fancy'");
     expect(joined).toContain("'Parent'");
     expect(joined).toContain("excluded by pattern 'generated'");

@@ -49,7 +49,7 @@ describe('bridge delivery via transformIndexHtml', () => {
     // A document served without the bridge has no adopted stylesheet for the
     // life of the page, and the hook holds no per-server state to spend.
     const ctx = contextWith({ isProd: false });
-    expect(ctx.storedSheets).toBeNull();
+    expect(ctx.storedManifest).toBeNull();
 
     for (const tags of [
       buildIndexHtmlTags(ctx),

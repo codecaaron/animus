@@ -22,9 +22,9 @@ use crate::css::{
 };
 use crate::declarations::{bind_component_declarations, check_surface_overlap, DeclarationBinding, DeclarationScales};
 use crate::dynamic_meta::{share_slots, DynamicPropMeta};
-use crate::evaluator::{EvalError, TransformEvaluator};
+use crate::evaluator::{Admission, EvalError, TransformAdmission, TransformEvaluator};
 use crate::facts::FileFacts;
-use crate::identity::{BindingKind, ImportBinding};
+use crate::identity::ImportBinding;
 use animus_system_loader::module_table::{ExportLookup, Request, Terminal};
 use crate::jsx_scan::{
     ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult,
@@ -37,7 +37,7 @@ use crate::theme::{
     TransformFailure, TransformFailureSink, VariableMap, extracts_callback_value, extracts_configured_value, resolve_styles, skips_transforms, strict_token_miss_of,
     unresolved_alias, unresolved_alias_spans, writes_token_reference, UnresolvedAlias,
 };
-use crate::transforms::CallbackDefinition;
+
 use crate::usage_facts::{is_animus_system_specifier, TagFact, TagOrigin, UsageFact, UsageResidueRecord};
 
 type ComponentPropSetMap = FxHashMap<String, FxHashSet<String>>;
@@ -564,6 +564,10 @@ const STRICT_TOKEN_MISS: &str = "animus.props.strict-token-miss";
 /// host where no runtime slot exists (style blocks, variants, states,
 /// global styles): its declaration falls back to the raw value.
 const STATIC_EVALUATION_UNAVAILABLE: &str = "animus.transform.static-evaluation-unavailable";
+
+/// An error: a binding names a key the sealed transform registry lacks
+/// (spec §7.4 D10), an internal invariant failure; nothing is evaluated.
+const TRANSFORM_UNSEALED_BINDING: &str = "animus.transform.unsealed-binding";
 /// A warning: a chain built inside a function or render, or a builder a
 /// later declaration completes, is never extracted, so its styles reach no
 /// stylesheet and the system builder stays in the bundle. Valid runtime
@@ -659,6 +663,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (STYLING_NAME_COLLISION, "error"),
     (CONFIGURED_TRANSFORM_REJECTED, "error"),
     (STATIC_EVALUATION_UNAVAILABLE, "error"),
+    (TRANSFORM_UNSEALED_BINDING, "error"),
     (STRICT_TOKEN_MISS, "error"),
     (TRANSFORM_INVALID_RESULT, "error"),
     (UNATTRIBUTED_SYSTEM_PROPS, "warn"),
@@ -769,6 +774,9 @@ pub struct CssOutput {
     /// Consuming file → member tag as written there (`Panel.Body`,
     /// `ui.Card.Body`) → the component its slot renders.
     pub member_bindings: BTreeMap<String, BTreeMap<String, String>>,
+    /// Each extension dropped over a parent that is no analysed chain, with
+    /// why (spec §12.2 row 11).
+    pub missing_inputs: Vec<MissingInput>,
 }
 
 pub fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
@@ -902,9 +910,13 @@ pub fn probe_base(from_file: &str, spec: &str, inputs: &CssInputs) -> Option<Str
     for seg in spec.split('/') {
         match seg {
             "." | "" => {}
-            ".." => {
-                parts.pop();
-            }
+            // Above the root the step stays: the base is outside the root.
+            ".." => match parts.last() {
+                Some(&last) if last != ".." => {
+                    parts.pop();
+                }
+                _ => parts.push(".."),
+            },
             s => parts.push(s),
         }
     }
@@ -1095,6 +1107,98 @@ fn parent_failed_reason(named: &str) -> String {
         "chain dropped: parent chain '{}' failed evaluation before extension",
         named
     )
+}
+
+/// Why an extension's parent is no analysed chain: the typed evidence a
+/// host's fold reads (spec §12.2 row 11), in place of the drop's message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MissingParent {
+    /// The parent's import names a path no analysed module answers.
+    Absent,
+    /// The host opens a file the analysis does not read (spec §2.2 A8).
+    Incomplete,
+    /// The host opens an opaque file there.
+    Opaque,
+    /// The host opens an adapted original there (`.mdx`, `.svelte`) whose
+    /// analysis holds no module the probe names.
+    Adapted,
+    /// A package the package map does not answer.
+    Package,
+    /// The import resolves, but the parent is not reached past it.
+    Unreached,
+    /// The parent is declared in an analysed module, but not as a chain.
+    NotAChain,
+    /// The parent chain failed its own evaluation.
+    FailedParent,
+}
+
+/// One extension dropped over its parent: the file and component, the
+/// parent as written, the specifier it is imported by and the path that
+/// probes, where known.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingInput {
+    pub file: String,
+    pub component: String,
+    pub parent: String,
+    pub specifier: Option<String>,
+    pub base: Option<String>,
+    pub outcome: MissingParent,
+}
+
+/// Why `component`'s parent `extends_binding` is no analysed chain.
+fn missing_parent_input(
+    file_path: &str,
+    ff: &FileFacts,
+    component: &str,
+    extends_binding: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> MissingInput {
+    let record = |specifier: Option<&str>, base: Option<String>, outcome| MissingInput {
+        file: file_path.to_string(),
+        component: component.to_string(),
+        parent: extends_binding.to_string(),
+        specifier: specifier.map(str::to_string),
+        base,
+        outcome,
+    };
+    let specifier = match ff.bindings.module_import(extends_binding) {
+        Some(ImportBinding::Named { specifier, .. } | ImportBinding::Default { specifier }) => Some(specifier.as_str()),
+        _ => None,
+    };
+    if let Some((file, binding, true)) = resolve_declaration(file_path, ff, extends_binding, files, inputs, links) {
+        let outcome = match chain_extractable(files, &file, &binding) {
+            Some(false) => MissingParent::FailedParent,
+            _ => MissingParent::NotAChain,
+        };
+        return record(specifier, None, outcome);
+    }
+    let Some(specifier) = specifier else {
+        return record(None, None, MissingParent::NotAChain);
+    };
+    let Some(base) = probe_base(file_path, specifier, inputs) else {
+        return record(Some(specifier), None, MissingParent::Package);
+    };
+    let outcome = match probe_files(&base, files, inputs) {
+        // The probe names no module, but the host opens a file there.
+        ProbeOutcome::Absent => match inputs
+            .probe_evidence
+            .as_ref()
+            .and_then(|evidence| evidence.bases.get(&base))
+            .and_then(|host| host.reading)
+        {
+            Some(HostReading::Asset) => MissingParent::Opaque,
+            Some(HostReading::Adapted) => MissingParent::Adapted,
+            _ => MissingParent::Absent,
+        },
+        ProbeOutcome::Incomplete { .. } => MissingParent::Incomplete,
+        ProbeOutcome::Shadowing { .. } => MissingParent::Opaque,
+        ProbeOutcome::Found(_) => MissingParent::Unreached,
+    };
+    record(Some(specifier), Some(base), outcome)
 }
 
 fn classify_parent(
@@ -3479,12 +3583,8 @@ pub(crate) fn binding_name(
     binding: crate::identity::LocalId,
 ) -> (String, String) {
     let path = &links.paths[module];
-    let declared = files[path].bindings.binding(binding);
-    let name = match declared.kind {
-        BindingKind::DefaultCell => files[path].default_export_binding.clone().unwrap_or_else(|| declared.name.clone()),
-        _ => declared.name.clone(),
-    };
-    (path.clone(), name)
+    let bindings = &files[path].bindings;
+    (path.clone(), bindings.binding(bindings.held(binding)).name.clone())
 }
 
 /// The (slot, binding) pairs of the compose family `declaring` declares as
@@ -4631,6 +4731,7 @@ fn bounded_prop_tags(
 /// component, a relative or aliased import extraction cannot read (an
 /// excluded file may render our components) or any other declaration may
 /// be one of our components, so it blocks every component.
+#[allow(clippy::too_many_arguments)]
 fn uncertainty_leaves_usage_proven(
     sites: &[(&String, UncertainIdentity)],
     files: &BTreeMap<String, FileFacts>,
@@ -4638,8 +4739,8 @@ fn uncertainty_leaves_usage_proven(
     links: &crate::link::ProjectLinks,
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
     package_members: &FxHashSet<(String, String)>,
-    bounded_tags: &FxHashSet<(String, u32)>) -> bool {
-    let contexts = &context_changes(files, inputs, links);
+    bounded_tags: &FxHashSet<(String, u32)>,
+    contexts: &crate::flow::ValueEffects) -> bool {
     // Each element of an ordinary component is a site; classify each tag once.
     let mut classified: FxHashSet<(&str, &str, Option<TagOrigin>)> = FxHashSet::default();
     sites.iter().all(|(file, site)| {
@@ -4747,27 +4848,6 @@ pub(crate) fn judge_object_handoffs(
             }
         }
     }
-}
-
-/// What a use in any analysed module may change of the contexts React's
-/// `createContext` builds: a member write or delete, a hand-off to code
-/// other than React's context readers. A changed context's `Provider` is
-/// not proven to be React's.
-fn context_changes(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs, links: &crate::link::ProjectLinks) -> crate::flow::ValueEffects {
-    let mut flow = crate::flow::FlowBuilder::new();
-    for (path, ff) in files {
-        for (name, used) in &ff.unsafe_object_uses {
-            let root = name.split('.').next().unwrap_or(name);
-            let Some((declaring, binding, _)) = resolve_declaration(path, ff, root, files, inputs, links) else { continue };
-            if files.get(&declaring).is_some_and(|declared| declared.context_consts.contains(&binding)) {
-                let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
-                let cause = format!("{name} {} in {path}{line}", used.what);
-                let context = crate::flow::ObjectId::new(&declaring, &binding);
-                flow.change(context, Vec::new(), crate::flow::ChangeKind::Escape, cause);
-            }
-        }
-    }
-    flow.close()
 }
 
 /// Whether `tag`, or the binding it is a member of, is imported from a
@@ -5138,8 +5218,8 @@ fn opaque_delivery(
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
     receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
     renders_in_place: impl Fn(&str) -> bool,
+    contexts: &crate::flow::ValueEffects,
 ) -> (std::collections::BTreeSet<String>, Vec<(String, String)>) {
-    let contexts = context_changes(files, inputs, links);
     // The declaration `name` (`lib.enhance` for a namespace import's
     // member) names from `file`, or `None` outside the analysis.
     let declaration = |file: &str, ff: &FileFacts, name: &str| {
@@ -5166,7 +5246,7 @@ fn opaque_delivery(
         if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
             return true;
         }
-        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, links, &contexts) {
+        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, links, contexts) {
             return false;
         }
         let ids = receiver_ids(file, ff, &tag.tag);
@@ -5682,15 +5762,12 @@ fn sorted_resolvable_component_ids(
 
     match topological_sort(&nodes) {
         TopoResult::Sorted(order) => order,
-        TopoResult::Cycle(cycle_ids) => {
+        TopoResult::Cycle(cycle_ids, rest) => {
             // A binding declared by more than one chain is one id, listed once.
             let unique: BTreeSet<&String> = cycle_ids.iter().collect();
             diagnostics.extend(unique.into_iter().map(|id| extension_cycle_bail(id, files, parent_map)));
-            let cycle_set: FxHashSet<&String> = cycle_ids.iter().collect();
-            all_component_ids
-                .into_iter()
-                .filter(|id| !cycle_set.contains(id))
-                .collect()
+            // The rest keep the order parents first, which no cycle breaks.
+            rest
         }
     }
 }
@@ -5834,41 +5911,53 @@ fn bound_props_clause(props: &[&str]) -> String {
     }
 }
 
-/// Whether `definition` is registered for evaluation, admitting it on first
-/// use; a callback that cannot be isolated keeps only its runtime delivery,
-/// which is no authoring failure.
-fn admit_callback(
-    definition: &CallbackDefinition,
-    evaluator: &TransformEvaluator,
-    attempted: &mut FxHashSet<String>,
-) -> bool {
-    if attempted.insert(definition.key.clone()) {
-        if let Some(source) = definition.isolated_source() {
-            // A source the engine cannot compile stays unregistered.
-            let _ = evaluator.register(&definition.key, &source);
-        }
-    }
-    evaluator.is_registered(&definition.key)
-}
-
 /// Whether extraction resolves `value` of a custom prop: a callback that
-/// cannot evaluate it applies it at runtime, and no callback sees a CSS-wide
-/// keyword.
+/// `admits` refuses or that cannot evaluate it applies it at runtime, and no
+/// callback sees a CSS-wide keyword.
 fn extracts_custom_value(
     prop_config: &PropConfig,
     value: &Value,
-    evaluator: &TransformEvaluator,
-    attempted: &mut FxHashSet<String>,
     ctx: &ResolveContext,
+    admits: impl FnOnce(&crate::transforms::CallbackBinding) -> bool,
 ) -> bool {
     match &prop_config.callback {
         _ if prop_config.transform_fn_source.is_none() || skips_transforms(prop_config, value, ctx) => true,
         Some(callback) => {
             let definition = &callback.definition;
-            admit_callback(definition, evaluator, attempted)
-                && extracts_callback_value(prop_config, &definition.key, &definition.name, value, ctx)
+            admits(callback) && extracts_callback_value(prop_config, &definition.key, &definition.name, value, ctx)
         }
         None => false,
+    }
+}
+
+/// The bindings, by rendering owner, whose keys the sealed registry lacks.
+type UnsealedBindings = std::cell::RefCell<Vec<(String, TransformFailure)>>;
+
+/// Whether the sealed registry admits `callback` for `owner`'s `prop`: one it
+/// holds as runtime-only applies at runtime, and a key it lacks is recorded
+/// in `unsealed` and never evaluated.
+fn sealed_admits(
+    evaluator: &TransformEvaluator,
+    callback: &crate::transforms::CallbackBinding,
+    (owner, prop): (&str, &str),
+    unsealed: &UnsealedBindings,
+) -> bool {
+    let definition = &callback.definition;
+    match evaluator.admission(&definition.key) {
+        Admission::Admitted => true,
+        Admission::RuntimeOnly(_) => false,
+        Admission::Unsealed => {
+            unsealed.borrow_mut().push((
+                owner.to_string(),
+                TransformFailure {
+                    transform_name: definition.name.clone(),
+                    prop: prop.to_string(),
+                    failure: EvalError::UnsealedBinding { key: definition.key.clone() },
+                    variant_origin: None,
+                },
+            ));
+            false
+        }
     }
 }
 
@@ -5924,6 +6013,18 @@ fn drain_transform_failures(
                 ),
                 Some(TRANSFORM_THREW),
             ),
+            EvalError::UnsealedBinding { key } => diagnostic(
+                file,
+                &component,
+                "error",
+                format!(
+                    "transform '{}' for prop '{}' binds '{key}', which the sealed transform registry \
+                     lacks; nothing is evaluated — an internal failure: Define admits every definition \
+                     before usage, so report it",
+                    failure.transform_name, failure.prop
+                ),
+                Some(TRANSFORM_UNSEALED_BINDING),
+            ),
         }
         .dropping(&failure.prop);
         // Only an error that names a component can be pruned by reconciliation.
@@ -5951,7 +6052,7 @@ fn run_with_system_floor(
     let links = &crate::link::ProjectLinks::link(files, inputs);
     let breakpoints = extract_breakpoints(&inputs.theme);
     let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
-    let evaluator = TransformEvaluator::new();
+    let mut admission = TransformAdmission::new();
     let transform_failures = TransformFailureSink::default();
     let token_misses = StrictTokenMissSink::default();
     let dropped_keys = crate::theme::DroppedStyleKeySink::default();
@@ -6032,7 +6133,7 @@ fn run_with_system_floor(
             ));
             continue;
         }
-        match evaluator.register(key, source) {
+        match admission.admit_configured(key, source) {
             Ok(()) => {
                 admitted_transforms.insert(key.clone(), source.clone());
             }
@@ -6069,6 +6170,21 @@ fn run_with_system_floor(
         }
     }
 
+    // Every callback a definition names, its own or inherited (an inherited
+    // one is its parent's `.props()` capture), inline included, is admitted
+    // before the first usage pass, reading only the callback; then the
+    // registry is sealed (spec §7.4 D9).
+    for path in order {
+        let Some(ff) = files.get(path) else { continue };
+        for capture in ff.chains.iter().flat_map(|chain| &chain.stages).flat_map(|stage| &stage.captured) {
+            if let Some(callback) = &capture.callback {
+                let definition = &callback.definition;
+                admission.admit_callback(&definition.key, definition.isolated_source().as_deref());
+            }
+        }
+    }
+    let evaluator = admission.seal();
+
     let resolve_ctx = ResolveContext {
         config: &inputs.config,
         theme: &inputs.theme,
@@ -6097,6 +6213,7 @@ fn run_with_system_floor(
 
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
     let mut unresolvable_extensions: FxHashSet<String> = FxHashSet::default();
+    let mut missing_inputs: Vec<MissingInput> = Vec::new();
     for (file_path, ff) in files {
         for chain in &ff.chains {
             let d = &chain.descriptor;
@@ -6129,6 +6246,15 @@ fn run_with_system_floor(
                             diagnostic(file_path, &d.binding, "bail", reason, Some(UNRESOLVED_PARENT))
                                 .dropping(&parent),
                         );
+                        missing_inputs.push(missing_parent_input(
+                            file_path,
+                            ff,
+                            &d.binding,
+                            extends_binding,
+                            files,
+                            inputs,
+                            links,
+                        ));
                         unresolvable_extensions.insert(component_id);
                     }
                 }
@@ -6176,6 +6302,9 @@ fn run_with_system_floor(
         Vec<(BTreeMap<String, Value>, String)>, // POST-MERGE compound configs
     );
     let mut evaluated: FxHashMap<String, EvalEntry> = FxHashMap::default();
+    // Each component's skipped (stage, key) pairs, its own and those it
+    // inherits without setting itself.
+    let mut skipped_keys: FxHashMap<String, Vec<(String, String)>> = FxHashMap::default();
     let scale_family_props = scale_family_css_properties(&inputs.config, &inputs.theme);
     let theme_tokens = tokens_by_name(&inputs.theme, &inputs.contextual_vars);
     let scale_names = if inputs.external_dirs.is_empty() {
@@ -6265,6 +6394,47 @@ fn run_with_system_floor(
             );
             continue;
         }
+        // A parent the analysis refused after the walk (an unsettled static,
+        // a stage that failed) leaves what the extension inherits unknown,
+        // so the extension is refused with it rather than shipped without
+        // it. A parent outside the analysis leaves it standalone.
+        let refused_parent = parent_map
+            .get(component_id)
+            .is_some_and(|parent_id| chain_lookup.contains_key(parent_id.as_str()) && !evaluated.contains_key(parent_id));
+        if refused_parent {
+            let parent = chain.descriptor.extends_from.clone().unwrap_or_default();
+            let reason = parent_failed_reason(&parent);
+            diagnostics.push(
+                diagnostic(file_path, &chain.descriptor.binding, "bail", reason, Some(UNRESOLVED_PARENT)).dropping(&parent),
+            );
+            continue;
+        }
+        // What the parent skipped, the extension inherits skipped, unless it
+        // sets that key in the same stage itself.
+        let sets = |method: &str, key: &str| {
+            chain.stages.iter().any(|stage| {
+                stage.method == method && stage.value.as_ref().and_then(Value::as_object).is_some_and(|value| value.contains_key(key))
+            })
+        };
+        let inherited: Vec<(String, String)> = parent_map
+            .get(component_id)
+            .and_then(|parent_id| skipped_keys.get(parent_id))
+            .into_iter()
+            .flatten()
+            .filter(|(method, key)| !sets(method, key))
+            .cloned()
+            .collect();
+        if let Some(parent) = &chain.descriptor.extends_from {
+            for (_, key) in &inherited {
+                let message =
+                    format!("[skip] {}: property '{key}' — inherited from {parent}, which could not evaluate it", chain.descriptor.binding);
+                diagnostics.push(
+                    diagnostic(file_path, &chain.descriptor.binding, "skip", message, Some(SKIPPED_VALUE)).dropping(key),
+                );
+            }
+        }
+        let own = chain.stages.iter().flat_map(|stage| stage.skipped.iter().map(|(key, _)| (stage.method.clone(), key.clone())));
+        skipped_keys.insert(component_id.clone(), own.chain(inherited).collect());
         let parent_variant_configs = parent_map
             .get(component_id)
             .and_then(|parent_id| inherited_variant_configs.get(parent_id))
@@ -6961,7 +7131,7 @@ fn run_with_system_floor(
 
     let mut all_utility_inputs: Vec<UtilityInput> = Vec::new();
     let mut all_custom_inputs: Vec<(String, UtilityInput)> = Vec::new();
-    let mut attempted_callbacks: FxHashSet<String> = FxHashSet::default();
+    let unsealed = UnsealedBindings::default();
     let mut all_custom_dynamic_usages: Vec<DynamicPropUsage> = Vec::new();
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
     let mut forwards: Vec<Forward> = Vec::new();
@@ -7236,13 +7406,9 @@ fn run_with_system_floor(
                         (&usage.prop_name, &usage.value, &uses),
                         &mut diagnostics,
                     );
-                    if extracts_custom_value(
-                        prop_config,
-                        &usage.value,
-                        &evaluator,
-                        &mut attempted_callbacks,
-                        &resolve_ctx,
-                    ) {
+                    let admits =
+                        |callback: &_| sealed_admits(&evaluator, callback, (&owner, &usage.prop_name), &unsealed);
+                    if extracts_custom_value(prop_config, &usage.value, &resolve_ctx, admits) {
                         all_custom_inputs.extend(input.map(|input| (owner.clone(), input)));
                     }
                 }
@@ -7456,7 +7622,8 @@ fn run_with_system_floor(
         |id| {
             !changed_ids.contains(id)
                 && evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement)
-        },);
+        },
+        object_members.changes(),);
     escaped_ids.extend(delivered_ids);
     // A held wrapper some render of which no member tag shows renders with
     // props no analysed use shows.
@@ -7658,7 +7825,16 @@ fn run_with_system_floor(
     let usage_complete = !analysis_incomplete(files, inputs)
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
-            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, links, &ordinary_members, &package_members, &bounded_tags));
+            || uncertainty_leaves_usage_proven(
+                &uncertain_identities,
+                files,
+                inputs,
+                links,
+                &ordinary_members,
+                &package_members,
+                &bounded_tags,
+                object_members.changes(),
+            ));
     let project_uses = usage_complete
         .then(|| {
             let unproven: std::collections::BTreeSet<String> =
@@ -7820,7 +7996,7 @@ fn run_with_system_floor(
     // surface it, and kept while the rendering owner survives. A
     // configured transform's failure stays the system's.
     let mut reported: FxHashSet<ReportKey> = FxHashSet::default();
-    let attribute_callback_failures = |owner: &str, failures: Vec<TransformFailure>| {
+    let mut attribute_callback_failures = |owner: &str, failures: Vec<TransformFailure>| {
         for failure in failures {
             let declarer = custom_configs_by_id
                 .get(owner)
@@ -7848,7 +8024,7 @@ fn run_with_system_floor(
         &custom_configs_by_id,
         &resolve_ctx,
         class_prefix,
-        attribute_callback_failures,
+        &mut attribute_callback_failures,
     );
 
     let mut custom_dynamic_by_id: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
@@ -7894,10 +8070,10 @@ fn run_with_system_floor(
                     confined.covers(prop_name, |value| custom_classes.has_class(component_id, prop_name, value))
                 })
             };
-            let mut callback_admitted = || {
+            let callback_admitted = || {
                 config.callback.as_ref().is_none_or(|callback| {
                     delivery != Some(callback.definition.source.as_str())
-                        || (admit_callback(&callback.definition, &evaluator, &mut attempted_callbacks)
+                        || (sealed_admits(&evaluator, callback, (component_id, prop_name), &unsealed)
                             && !reads_import(callback))
                 })
             };
@@ -7913,6 +8089,11 @@ fn run_with_system_floor(
                 }
             }
         }
+    }
+    // A binding the sealed registry lacks fails, once, against the component
+    // that declares it.
+    for (owner, failure) in unsealed.take() {
+        attribute_callback_failures(&owner, vec![failure]);
     }
     // An extension reads an inherited callback from its parent's runtime
     // component, so a parent delivers each callback a delivering extension
@@ -8784,6 +8965,7 @@ fn run_with_system_floor(
             .into_iter()
             .map(|(path, members)| (path, members.into_iter().collect()))
             .collect(),
+        missing_inputs,
     }
 }
 
@@ -8913,6 +9095,76 @@ mod tests {
              {render}\n"
         );
         analyze(&[("a.tsx", source.as_str())], &test_inputs())
+    }
+
+    /// Contract: an extension dropped over its parent carries typed
+    /// evidence of why (spec §12.2 row 11), which a host's rediscovery
+    /// reads in place of the drop's message.
+    #[test]
+    fn a_dropped_extension_names_its_missing_input() {
+        let child = |name: &str, import: &str| {
+            format!("import {{ {name} }} from '{import}';\nexport const Child{name} = {name}.extend().styles({{ m: 1 }}).asElement('div');\n")
+        };
+        let files = [
+            ("absent.tsx", child("Gone", "./gone")),
+            ("package.tsx", child("Kit", "some-kit")),
+            ("plain.tsx", child("Plain", "./plain")),
+            ("plain.ts", "export const Plain = 1;\n".to_string()),
+            ("local.tsx", "const Local = makeIt();\nexport const ChildLocal = Local.extend().styles({ m: 1 }).asElement('div');\n".to_string()),
+            ("src/asset.tsx", child("Data", "./parent.json")),
+            ("src/adapted.tsx", child("Doc", "./doc.mdx")),
+            ("src/above.tsx", child("Gen", "../../generated")),
+        ];
+        // The host opens a file at these bases that no analysed module is.
+        let mut inputs = test_inputs();
+        let opens = |candidate: &str, reading| HostCandidate {
+            candidate: candidate.into(),
+            actual: None,
+            analysed_as: None,
+            reading: Some(reading),
+        };
+        inputs.probe_evidence = Some(ProbeEvidence {
+            generation: 1,
+            identity: String::new(),
+            bases: [
+                ("src/parent.json".to_string(), opens("src/parent.json", HostReading::Asset)),
+                ("src/doc.mdx".to_string(), opens("src/doc.mdx", HostReading::Adapted)),
+            ]
+            .into_iter()
+            .collect(),
+        });
+        let entries: Vec<(&str, &str)> = files.iter().map(|(path, source)| (*path, source.as_str())).collect();
+        let out = analyze(&entries, &inputs);
+        let records: Vec<(String, Option<String>, Option<String>, MissingParent)> = out
+            .missing_inputs
+            .iter()
+            .map(|r| (r.component.clone(), r.specifier.clone(), r.base.clone(), r.outcome))
+            .collect();
+        assert_eq!(
+            records,
+            [
+                ("ChildGone".to_string(), Some("./gone".to_string()), Some("gone".to_string()), MissingParent::Absent),
+                ("ChildLocal".to_string(), None, None, MissingParent::NotAChain),
+                ("ChildKit".to_string(), Some("some-kit".to_string()), None, MissingParent::Package),
+                ("ChildPlain".to_string(), Some("./plain".to_string()), None, MissingParent::NotAChain),
+                // A base above the root keeps its step out of the root.
+                (
+                    "ChildGen".to_string(),
+                    Some("../../generated".to_string()),
+                    Some("../generated".to_string()),
+                    MissingParent::Absent
+                ),
+                ("ChildDoc".to_string(), Some("./doc.mdx".to_string()), Some("src/doc.mdx".to_string()), MissingParent::Adapted),
+                ("ChildData".to_string(), Some("./parent.json".to_string()), Some("src/parent.json".to_string()), MissingParent::Opaque),
+            ],
+            "{:?}",
+            out.diagnostics
+        );
+        // The file above the root answers that base: nothing is dropped.
+        let generated = "export const Gen = ds.styles({ m: 2 }).asElement('div');\n";
+        let above = child("Gen", "../../generated");
+        let out = analyze(&[("src/above.tsx", above.as_str()), ("../generated.tsx", generated)], &test_inputs());
+        assert_eq!(out.missing_inputs, [], "{:?}", out.diagnostics);
     }
 
     #[test]
@@ -10933,6 +11185,55 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let files = [("kit.tsx", kit), ("contexts.tsx", contexts.as_str()), ("read.tsx", read), ("app.tsx", app)];
             assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{more}");
         }
+        // Nor is one an opening may reach: code run from a string, a hand-on
+        // of its module's namespace, a runtime load of it, or a write through
+        // the namespace of a module the analysis cannot find or does not read,
+        // which may re-export it.
+        let app = "import { Box } from './kit';\nimport { Shared } from './contexts';\n\
+                   export const App = () => <Shared.Provider value={1}><Box p={8} /></Shared.Provider>;\n";
+        for (other, want) in [
+            ("export const make = (source) => new Function(source);\n", &["p"][..]),
+            ("import * as contexts from './contexts';\nconsume(contexts);\n", &["p"][..]),
+            ("export * as contexts from './contexts';\n", &["p"][..]),
+            ("import('./contexts').then(consume);\n", &["p"][..]),
+            ("import * as lib from './missing';\nlib.Shared.Provider = pick();\n", &["p"][..]),
+            ("import * as ui from '@local/proxy';\nui.Shared.Provider = pick();\n", &["p"][..]),
+            ("export const other = 1;\n", &[][..]),
+        ] {
+            let files = [("kit.tsx", kit), ("contexts.tsx", contexts), ("other.ts", other), ("app.tsx", app)];
+            assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{other}");
+        }
+        // A use reaches the context however it is named: through a namespace
+        // member path, a renamed re-export, a star, a default that holds it or
+        // a local alias.
+        let renamed = "export { Shared as Renamed } from './contexts';\n";
+        let star = "export * from './contexts';\n";
+        let default = "import { Shared } from './contexts';\nexport default Shared;\n";
+        for (barrel, other) in [
+            ("", "import * as contexts from './contexts';\ncontexts.Shared.Provider = pick();\n"),
+            ("", "import * as contexts from './contexts';\ndelete contexts.Shared.Provider;\n"),
+            ("", "import * as contexts from './contexts';\nconsume(contexts.Shared);\n"),
+            (renamed, "import * as b from './barrel';\nb.Renamed.Provider = pick();\n"),
+            (star, "import * as b from './barrel';\nb.Shared.Provider = pick();\n"),
+            (default, "import D from './barrel';\nD.Provider = pick();\n"),
+            (default, "import * as b from './barrel';\nb.default.Provider = pick();\n"),
+            ("", "import { Shared } from './contexts';\nconst Alias = Shared;\nAlias.Provider = pick();\n"),
+        ] {
+            let files =
+                [("kit.tsx", kit), ("contexts.tsx", contexts), ("barrel.ts", barrel), ("other.ts", other), ("app.tsx", app)];
+            assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), ["p"], "{barrel}{other}");
+        }
+        // A context's members are not known, so a facade that spreads one
+        // may hold any member: `<Parts.Root>` stays uncertain.
+        let parts = "import { createContext } from 'react';\nexport const Shared = createContext(null);\n\
+                     export const Root = ds.styles({ padding: 4 })\n\
+                       .variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: { margin: 1 }, lg: { margin: 9 } } })\n\
+                       .asElement('div');\n\
+                     export const Parts = { Root, ...Shared };\n";
+        let app = "import { Box } from './kit';\nimport { Parts, Shared } from './parts';\n\
+                   export const App = () => <Shared.Provider value={1}><Parts.Root size='sm' /><Box p={8} /></Shared.Provider>;\n";
+        let files = [("kit.tsx", kit), ("contexts.tsx", contexts), ("parts.tsx", parts), ("app.tsx", app)];
+        assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), ["p"]);
     }
 
     /// A tag whose type a function's own prop chooses (`createElement(as ??
@@ -11227,6 +11528,27 @@ export const App = () => (
         // A prop without a callback keeps the shared value keys.
         assert_eq!(custom_classes(&out, "a.tsx::Box", "plain").keys().collect::<Vec<_>>(), ["5"]);
         assert_eq!(out.replacement_configs["a.tsx::Box"].typed_custom_props, ["tp"]);
+    }
+
+    #[test]
+    fn a_binding_evaluates_the_callback_the_runtime_selects() {
+        // JS keeps the last of a repeated key, and a later `.props()`
+        // replaces the prop: each binding evaluates that callback, whatever
+        // the replaced one compiles to (C's reads an import).
+        let source = r#"import { k } from './k';
+export const A = ds.props({ w: { property: 'width', transform: (v) => `${v * 2}px` }, w: { property: 'width', transform: (v) => `${v * 3}px` } }).asElement('div');
+export const B = ds.props({ w: { property: 'height', transform: (v) => `${v * 2}px`, transform: (v) => `${v * 3}px` } }).asElement('div');
+export const C = ds.props({ w: { property: 'minWidth', transform: (v) => `${v * k}px` }, w: { property: 'minWidth', transform: (v) => `${v * 3}px` } }).asElement('div');
+export const D = ds.props({ w: { property: 'maxWidth', transform: (v) => `${v * 2}px` } }).props({ w: { property: 'maxWidth', transform: (v) => `${v * 3}px` } }).asElement('div');
+export const App = () => <><A w={5} /><B w={5} /><C w={5} /><D w={5} /></>;
+"#;
+        let out = analyze(&[("a.tsx", source), ("k.ts", "export const k = 2;\n")], &test_inputs());
+        let selected: Vec<bool> = ["width", "height", "min-width", "max-width"]
+            .iter()
+            .map(|property| out.sheets.custom.contains(&format!("{property}: 15px;")))
+            .collect();
+        assert_eq!(selected, [true; 4], "{}", out.sheets.custom);
+        assert!(!out.sheets.custom.contains(": 10px;"), "{}", out.sheets.custom);
     }
 
     #[test]

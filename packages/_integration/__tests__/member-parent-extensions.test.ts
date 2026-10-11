@@ -1,7 +1,4 @@
-import {
-  isUnresolvedParentDrop,
-  surfaceManifestDiagnostics,
-} from '@animus-ui/extract/pipeline';
+import { surfaceManifestDiagnostics } from '@animus-ui/extract/pipeline';
 import { beforeAll, describe, expect, test } from 'vitest';
 
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';
@@ -159,10 +156,10 @@ describe('extending a member of an exported Animus namespace object', () => {
   });
 
   test('the bail is not an unresolved-parent rediscovery request', () => {
-    expect(isUnresolvedParentDrop(childDiagnostics[0])).toBe(false);
-    expect(diagnostics.filter((d) => isUnresolvedParentDrop(d))).toHaveLength(
-      0
-    );
+    expect(manifest.missing_inputs ?? []).toEqual([]);
+    expect(
+      diagnostics.filter((d) => d.code === 'animus.extension.unresolved-parent')
+    ).toHaveLength(0);
   });
 
   test('shared delivery warns once with omitted or false build strictness', () => {

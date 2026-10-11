@@ -56,6 +56,12 @@ pub enum ReasonId {
     FlowBound,
     /// A function the analysis does not admit.
     UnadmittedFunction,
+    /// What Lower's evaluation could not settle in a static value: a
+    /// computed key, a call or spread in a const, a captured `transform`.
+    Unevaluated(crate::static_value::UnevaluatedKind),
+    /// A change Flow saw: a write, a write under an unknown key, an escape
+    /// or a rebind of the object at a path.
+    Changed(ChangeKind),
 }
 
 /// One part of what an opening may reach.
@@ -169,7 +175,7 @@ pub enum Known<T: Ord> {
 }
 
 /// How a change touches an object at its path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ChangeKind {
     /// A write, delete or `defineProperty` of the member at the path.
     Write,
@@ -235,6 +241,18 @@ pub enum Exposure<'e> {
 }
 
 impl Exposure<'_> {
+    /// What the exposure makes uncertain (spec §6.2 F1a): an opening's
+    /// reason and region, or a seen change at its object's path.
+    pub fn uncertainty(&self) -> Uncertainty {
+        match self {
+            Exposure::Opened(opening) => Uncertainty::new(opening.reason, opening.exposure.clone()),
+            Exposure::Changed(change) => Uncertainty::new(
+                ReasonId::Changed(change.kind),
+                Region::of(RegionAtom::Path(change.object.clone(), change.path.clone())),
+            ),
+        }
+    }
+
     /// The clause that says what may reach the subject.
     pub fn cause(&self) -> &str {
         match self {
@@ -261,11 +279,11 @@ pub enum Coverage<'e> {
 }
 
 /// Objects that hold what other objects hold, or read from them: a change
-/// that may reach any of `from` may reach each of `to`, said as `prefix`
-/// followed by the first such change's clause.
+/// that may reach any of `from` may reach each of `to` at its path, said as
+/// `prefix` followed by the first such change's clause.
 #[derive(Debug, Clone)]
 struct Flow {
-    to: Vec<ObjectId>,
+    to: Vec<(ObjectId, Vec<String>)>,
     from: Vec<ObjectId>,
     prefix: String,
 }
@@ -301,10 +319,11 @@ impl FlowBuilder {
         self.recorded += 1;
     }
 
-    /// Whatever may change any of `from` may change each of `to`: `to`
-    /// holds or reads what `from` holds. Its change is said as `prefix`
-    /// followed by the clause of the first change that reaches `from`.
-    pub fn flow(&mut self, to: Vec<ObjectId>, from: Vec<ObjectId>, prefix: String) {
+    /// Whatever may change any of `from` may change each of `to` at its
+    /// path: `to` holds or reads what `from` holds, the whole object at `[]`
+    /// or a member's value below it. Its change is said as `prefix` followed
+    /// by the clause of the first change that reaches `from`.
+    pub fn flow(&mut self, to: Vec<(ObjectId, Vec<String>)>, from: Vec<ObjectId>, prefix: String) {
         self.flows.push(Flow { to, from, prefix });
     }
 
@@ -326,15 +345,16 @@ impl FlowBuilder {
             let mut grew = false;
             for flow in &self.flows {
                 let Some(cause) = flow.from.iter().find_map(|object| effects.first_cause(object)) else { continue };
-                for object in &flow.to {
-                    // An exposure of only part of the object leaves room for
-                    // the whole-object change the flow carries.
-                    if !effects.wholly_exposed(object) {
+                for (object, at) in &flow.to {
+                    // An exposure of only part of the object, or of a member
+                    // apart from this one, leaves room for the change the
+                    // flow carries.
+                    if !effects.exposed_at(object, at) {
                         let order = effects.recorded;
                         effects.recorded += 1;
                         let cause = format!("{}{cause}", flow.prefix);
-                        let kind = ChangeKind::Escape;
-                        effects.add(Change { object: object.clone(), path: Vec::new(), kind, cause, order });
+                        let (path, kind) = (at.clone(), ChangeKind::Escape);
+                        effects.add(Change { object: object.clone(), path, kind, cause, order });
                         grew = true;
                     }
                 }
@@ -388,6 +408,13 @@ impl ValueEffects {
                     atom => self.reaches(&Region::of(atom.clone()), object, &[], false),
                 }),
             })
+    }
+
+    /// Whether a change of the object at `at` or above, or an opening that
+    /// reaches all of it, is already recorded.
+    fn exposed_at(&self, object: &ObjectId, at: &[String]) -> bool {
+        self.wholly_exposed(object)
+            || self.changed.get(object).into_iter().flatten().any(|&index| prefix_of(&self.changes[index].path, at))
     }
 
     fn first_cause(&self, object: &ObjectId) -> Option<String> {
@@ -498,6 +525,34 @@ mod tests {
         inputs
     }
 
+    /// Contract (spec §6.2 F1a): what an exposure makes uncertain. A seen
+    /// change is `Changed(kind)` at its object's path; an opening keeps its
+    /// own reason and region.
+    #[test]
+    fn an_exposure_is_uncertain_as_its_change_or_opening() {
+        let o = ObjectId::new("m.ts", "preset");
+        let mut flow = FlowBuilder::new();
+        flow.export(o.clone(), "m.ts", "preset");
+        flow.change(o.clone(), vec!["a".to_string()], ChangeKind::Write, "preset.a is written".to_string());
+        flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), "m.ts runs code".to_string());
+        let effects = flow.close();
+        let Coverage::Exposed(exposures) = effects.covers(&AbsenceQuery::Stable(o.clone(), Vec::new())) else {
+            panic!("a written object is exposed");
+        };
+        let uncertainties: Vec<Uncertainty> = exposures.iter().map(Exposure::uncertainty).collect();
+
+        assert_eq!(
+            uncertainties,
+            [
+                Uncertainty::new(
+                    ReasonId::Changed(ChangeKind::Write),
+                    Region::of(RegionAtom::Path(o, vec!["a".to_string()])),
+                ),
+                Uncertainty::new(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports)),
+            ]
+        );
+    }
+
     /// A slot is exposed only by what can rebind it: a write of it or of a
     /// container above it, a write under an unknown key or an escape of a
     /// container above it, a reassignment of the binding, or an opening
@@ -568,7 +623,7 @@ mod tests {
                 let region = Region::of(RegionAtom::Path(x.clone(), vec!["a".to_string()]));
                 builder.open(ReasonId::OpaqueEffect, region, "x.a may change".to_string());
             }
-            builder.flow(vec![x.clone()], vec![y.clone()], "x reads y, and ".to_string());
+            builder.flow(vec![(x.clone(), Vec::new())], vec![y.clone()], "x reads y, and ".to_string());
             builder.close()
         };
         let member_b = AbsenceQuery::Stable(x.clone(), vec!["b".to_string()]);

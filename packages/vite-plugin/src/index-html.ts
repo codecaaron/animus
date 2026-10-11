@@ -29,7 +29,7 @@ export function buildIndexHtmlTags(ctx: PluginContext): HtmlTagDescriptor[] {
     });
   }
 
-  // Dev only, never gated on `storedSheets`: index.html can be served before
+  // Dev only, never gated on a publication: index.html can be served before
   // the first analysis, and a document missing the tag stays unstyled.
   if (!ctx.isProd) {
     tags.push({

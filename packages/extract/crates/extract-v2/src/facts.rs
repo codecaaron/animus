@@ -11,6 +11,8 @@ use serde_json::Value;
 
 use crate::chain_walk::{self, ChainDescriptor};
 use crate::eval;
+use crate::flow::Known;
+use crate::static_value::StaticValue;
 use crate::jsx_scan::{scan_compose_calls, ComposeFamilyInfo};
 use crate::owned_ast::OwnedAst;
 use crate::transforms::{CallbackBinding, CallbackDefinition, TransformReferences};
@@ -23,6 +25,11 @@ pub struct CapturedTransformFact {
     pub key: String,
     /// User-authored function source text, copied from the input file.
     pub source: String,
+    /// Where the authored function starts in its file: an inline callback's
+    /// definition is keyed by it, so a callback JS replaces (a repeated prop
+    /// or `transform` key, a later `.props()`) is its own definition.
+    #[serde(skip)]
+    pub start: u32,
     /// The callback the prop binds, with its declaring component; `None`
     /// until an inline callback is keyed to its component.
     #[serde(skip)]
@@ -30,7 +37,7 @@ pub struct CapturedTransformFact {
 }
 
 type EvaluatedStageObject = (
-    Option<Value>,
+    Option<StaticValue>,
     Vec<eval::SkippedProperty>,
     Vec<CapturedTransformFact>,
     Option<String>,
@@ -391,7 +398,7 @@ pub struct FileFacts {
     pub chains: Vec<ChainFacts>,
     /// Same-file static const values (feeds identifier resolution).
     #[serde(serialize_with = "serialize_statics")]
-    pub statics: BTreeMap<String, Value>,
+    pub statics: BTreeMap<String, StaticValue>,
     /// Raw JSX/createElement usage facts, component-agnostic; cross-file
     /// filtering happens later.
     pub usage: Vec<UsageFact>,
@@ -733,10 +740,26 @@ fn expression_root(expr: &Expression<'_>) -> Option<String> {
     }
 }
 
-/// Statics without a binding whose whole value reads as a lost-value
-/// marker: serialized facts carry no marker.
-fn serialize_statics<S: serde::Serializer>(statics: &BTreeMap<String, Value>, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.collect_map(statics.iter().filter(|(_, value)| eval::lost_value_reason(value).is_none()))
+/// Statics as JSON, data only: no binding, member or item is the `asset`
+/// function or a node evaluation could not settle.
+fn serialize_statics<S: serde::Serializer>(
+    statics: &BTreeMap<String, StaticValue>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_map(statics.iter().filter_map(|(name, value)| Some((name, serialized(value)?))))
+}
+
+/// A static value as serialized facts carry it; `None` for the `asset`
+/// function or an unevaluated node, which no JSON value stands for.
+fn serialized(value: &StaticValue) -> Option<Value> {
+    Some(match value {
+        StaticValue::AssetFunction { .. } | StaticValue::Unevaluated(_) => return None,
+        StaticValue::Array(items) => Value::Array(items.iter().filter_map(serialized).collect()),
+        StaticValue::Object(entries) => Value::Object(
+            entries.iter().filter_map(|(key, value)| Some((key.clone(), serialized(value)?))).collect(),
+        ),
+        scalar => eval::plain(scalar),
+    })
 }
 
 #[derive(Default)]
@@ -1163,6 +1186,7 @@ fn eval_stage_object(
                 .map(|c| CapturedTransformFact {
                     key: c.key,
                     source: source[c.span.start as usize..c.span.end as usize].to_string(),
+                    start: c.span.start,
                     callback: None,
                 })
                 .collect(),
@@ -1197,7 +1221,7 @@ pub fn extract_file_facts_with_prefix(ast: &OwnedAst, prefix: &str) -> FileFacts
 pub fn extract_file_facts_enriched(
     ast: &OwnedAst,
     prefix: &str,
-    extra_statics: &rustc_hash::FxHashMap<String, Value>,
+    extra_statics: &rustc_hash::FxHashMap<String, StaticValue>,
 ) -> FileFacts {
     extract_file_facts_enriched_with_usage_statics(
         ast,
@@ -1210,12 +1234,12 @@ pub fn extract_file_facts_enriched(
 pub fn extract_file_facts_enriched_with_usage_statics(
     ast: &OwnedAst,
     prefix: &str,
-    extra_statics: &rustc_hash::FxHashMap<String, Value>,
-    extra_usage_statics: &rustc_hash::FxHashMap<String, Value>,
+    extra_statics: &rustc_hash::FxHashMap<String, StaticValue>,
+    extra_usage_statics: &rustc_hash::FxHashMap<String, StaticValue>,
 ) -> FileFacts {
     let program = ast.program();
-    let local_statics = eval::collect_static_values(program);
-    let local_usage_statics = eval::collect_complete_static_values(program);
+    let local_statics = eval::collect_static_values(program, &ast.path);
+    let local_usage_statics = eval::collect_complete_static_values(program, &ast.path);
     let imports = collect_import_facts(ast.module_record());
     let exports = crate::usage_facts::collect_export_facts(program);
     let inputs = crate::analyze_css::CssInputs::default();
@@ -1240,10 +1264,10 @@ pub fn extract_file_facts_enriched_with_usage_statics(
 pub(crate) fn extract_file_facts_from_static_maps(
     ast: &OwnedAst,
     prefix: &str,
-    local_statics: &rustc_hash::FxHashMap<String, Value>,
-    local_usage_statics: &rustc_hash::FxHashMap<String, Value>,
-    extra_statics: &rustc_hash::FxHashMap<String, Value>,
-    extra_usage_statics: &rustc_hash::FxHashMap<String, Value>,
+    local_statics: &rustc_hash::FxHashMap<String, StaticValue>,
+    local_usage_statics: &rustc_hash::FxHashMap<String, StaticValue>,
+    extra_statics: &rustc_hash::FxHashMap<String, StaticValue>,
+    extra_usage_statics: &rustc_hash::FxHashMap<String, StaticValue>,
     local_unsettled: &rustc_hash::FxHashMap<String, eval::Unsettled>,
     extra_unsettled: &rustc_hash::FxHashMap<String, eval::Unsettled>,
     references: &TransformReferences<'_>,
@@ -1285,8 +1309,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         unsettled_fx.insert(k.clone(), unsettled.clone());
         statics_fx.remove(k);
     }
-    let typed_fx = eval::typed_statics(&statics_fx);
-    let statics = eval::Statics::new(&typed_fx, &unsettled_fx);
+    let statics = eval::Statics::new(&statics_fx, &unsettled_fx, &ast.path);
     let mut usage_statics_fx = local_usage_statics.clone();
     for (k, v) in extra_usage_statics {
         usage_statics_fx.insert(k.clone(), v.clone());
@@ -1342,15 +1365,17 @@ pub(crate) fn extract_file_facts_from_static_maps(
                     match object_index.get(key) {
                         Some(obj) => match eval::parse_variant_arg(obj, Some(statics)) {
                             Ok((cfg, skips)) => {
-                                let value = serde_json::json!({
-                                    "prop": cfg.prop,
-                                    "defaultVariant": cfg.default_variant,
-                                    "base": cfg.base,
-                                    "variants": Value::Object(cfg.variants),
-                                });
-                                let mut typed = eval::typed(&value);
-                                let lost = eval::take_unevaluated(&mut typed);
-                                facts.value = Some(eval::marked(&typed));
+                                let mut value = StaticValue::Object(vec![
+                                    ("prop".to_string(), StaticValue::String(cfg.prop)),
+                                    (
+                                        "defaultVariant".to_string(),
+                                        cfg.default_variant.map_or(StaticValue::Null, StaticValue::String),
+                                    ),
+                                    ("base".to_string(), cfg.base.unwrap_or(StaticValue::Null)),
+                                    ("variants".to_string(), cfg.variants),
+                                ]);
+                                let lost = eval::take_unevaluated(&mut value);
+                                facts.value = Some(eval::plain(&value));
                                 for skip in skips {
                                     facts.record_skip(skip, source);
                                 }
@@ -1386,13 +1411,12 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                 let binding = segments.next().unwrap_or_default();
                                 let path: Vec<&str> = segments.collect();
                                 match eval::static_value(statics, binding, &path) {
-                                    Some(eval::StaticAnswer::Unsettled(unsettled)) => Err(unsettled.reason.clone()),
-                                    Some(eval::StaticAnswer::Unevaluated(unevaluated)) => {
-                                        Err(unevaluated.clause.clone())
-                                    }
-                                    Some(eval::StaticAnswer::Exact(value)) => {
-                                        Ok((Some(eval::marked(value)), Vec::new(), Vec::new()))
-                                    }
+                                    Some(Known::Finite(_) | Known::Uncertain(_)) => Err(eval::uncertain_clause(
+                                        statics, binding, &path,
+                                    )
+                                    .unwrap_or_default()
+                                    .to_string()),
+                                    Some(Known::Exact(value)) => Ok((Some(value.clone()), Vec::new(), Vec::new())),
                                     None => Err(format!(
                                         "identifier '{}' not resolvable to static object",
                                         name
@@ -1414,7 +1438,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                     capture.callback = Some(CallbackBinding {
                                         declarer: declarer.clone(),
                                         definition: CallbackDefinition {
-                                            key: format!("{}#{}.{prop}", ast.path, descriptor.binding),
+                                            key: format!("{}#{}.{prop}@{}", ast.path, descriptor.binding, capture.start),
                                             name: "inline".to_string(),
                                             source: capture.source.clone(),
                                             module_host_bindings: module_host_bindings.clone(),
@@ -1445,6 +1469,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                                         facts.captured.push(CapturedTransformFact {
                                                             key: format!("{prop}.transform"),
                                                             source: reference.name.to_string(),
+                                                            start: reference.span.start,
                                                             callback: resolved.definition.map(|definition| {
                                                                 CallbackBinding { declarer: declarer.clone(), definition }
                                                             }),
@@ -1463,18 +1488,17 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                 }
                                 facts.record_skip(skip, source);
                             }
-                            facts.value = value;
-                            if let Some(value) = facts.value.as_mut() {
-                                let mut typed = eval::typed(value);
+                            facts.value = None;
+                            if let Some(mut value) = value {
                                 if props {
-                                    let lost = eval::take_unevaluated_custom_props(&mut typed);
+                                    let lost = eval::take_unevaluated_custom_props(&mut value);
                                     facts.dropped_transforms.extend(lost.transforms);
                                     facts.dropped_configs.extend(lost.configs);
                                     facts.skipped.extend(lost.skipped);
                                 } else {
-                                    facts.skipped.extend(eval::take_unevaluated(&mut typed));
+                                    facts.skipped.extend(eval::take_unevaluated(&mut value));
                                 }
-                                *value = eval::marked(&typed);
+                                facts.value = Some(eval::plain(&value));
                             }
                         }
                         Err(e) => {
@@ -1500,10 +1524,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                     obj,
                                     Some(statics),
                                 ) {
-                                    Ok((v, skips, _captures)) => {
-                                        let mut typed = eval::typed(&v);
-                                        let lost = eval::take_unevaluated(&mut typed);
-                                        facts.second_value = Some(eval::marked(&typed));
+                                    Ok((mut v, skips, _captures)) => {
+                                        let lost = eval::take_unevaluated(&mut v);
+                                        facts.second_value = Some(eval::plain(&v));
                                         for skip in skips {
                                             facts.record_skip(skip, source);
                                         }
@@ -1584,7 +1607,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         scoping,
         program,
         ast.module_record(),
-        &eval::typed_statics(&usage_statics_fx),
+        &usage_statics_fx,
+        &ast.path,
         &descriptors,
         &exports,
         &object_consts,
@@ -1601,13 +1625,13 @@ pub(crate) fn extract_file_facts_from_static_maps(
         path: ast.path.clone(),
         directive_prologue,
         chains,
-        // Serialized facts carry no lost-value markers, and an unsettled
+        // Serialized facts carry no unevaluated node, and an unsettled
         // binding's held value.
         statics: statics_fx
             .into_iter()
             .chain(unsettled_fx.into_iter().filter_map(|(name, unsettled)| Some((name, unsettled.held?))))
             .map(|(name, mut value)| {
-                eval::strip_lost_values(&mut value);
+                eval::strip_unevaluated(&mut value);
                 (name, value)
             })
             .collect(),
@@ -1762,102 +1786,40 @@ mod tests {
         assert_eq!(stage.value.as_ref().unwrap()["gap"], 16);
         assert_eq!(stage.skipped.len(), 1);
         assert_eq!(stage.skipped[0].0, "color");
-        assert_eq!(&facts.statics["GAP"], &Value::from(16));
+        assert_eq!(eval::plain(&facts.statics["GAP"]), Value::from(16));
     }
 
-    /// A static whose own key spells the lost-value marker reads as one, so
-    /// serialized facts leave it out.
+    /// Contract (spec §6.2 F1): no key inside a static value stands in for
+    /// what evaluation could not read, so an authored key that spells one
+    /// (`$animus.lost`, `$animus.capture`, `$animus.asset`) is plain data:
+    /// it reads, spreads and serializes as written.
     #[test]
-    fn serialized_statics_leave_out_a_value_that_reads_as_a_lost_marker() {
-        let facts = facts_for(
-            r#"
-            const pad = { '$animus.lost': 'authored', padding: 4 };
-            const GAP = 16;
-            export const Box = ds.styles({ gap: GAP }).asElement('div');
-            "#,
-        );
-        let serialized = serde_json::to_value(&facts).unwrap();
-        assert_eq!(serialized["statics"], serde_json::json!({ "GAP": 16 }));
-    }
-
-    /// Contract (until serialized statics read typed values): an authored
-    /// object whose key spells a marker reads as that marker, as main's JSON
-    /// readers took it. A `$animus.lost` key refuses the object through a
-    /// stage, a spread and a member read; an unknown `$animus.asset` scope
-    /// is kept as written.
-    #[test]
-    fn an_authored_marker_key_reads_as_the_marker() {
-        let consts = "const preset = { '$animus.lost': 'authored', padding: 4 };\n\
-            const odd = { '$animus.asset': 'other' };\n\
-            const box = { f: { '$animus.asset': 'other', x: 1 } };\n";
-        let rows: [(&str, &str); 6] = [
-            (
-                "export const A = ds.styles(preset).asElement('div');",
-                r#"{"value": null, "skipped": [], "eval_error": "styles eval failed: authored"}"#,
-            ),
-            (
-                "export const A = ds.styles({ ...preset, color: 'red' }).asElement('div');",
-                r#"{"value": null, "skipped": [], "eval_error": "styles eval failed: spread of authored"}"#,
-            ),
-            (
-                "export const A = ds.styles({ p: preset.padding }).asElement('div');",
-                r#"{"value": {}, "skipped": [["p", "member expression (non-static) — authored"]], "eval_error": null}"#,
-            ),
-            (
-                "export const A = ds.styles({ p: preset['padding'] }).asElement('div');",
-                r#"{"value": {}, "skipped": [["p", "member expression (non-static) — authored"]], "eval_error": null}"#,
-            ),
-            (
-                "export const A = ds.styles({ ...odd, color: 'red' }).asElement('div');",
-                r#"{"value": null, "skipped": [], "eval_error": "styles eval failed: spread element in style object"}"#,
-            ),
-            (
-                "export const A = ds.styles({ ...box }).asElement('div');",
-                r#"{"value": {"f": {"$animus.asset": "other", "x": 1}}, "skipped": [], "eval_error": null}"#,
-            ),
-        ];
-        for (chain, expected) in rows {
-            let facts = facts_for(&format!("{consts}{chain}"));
-            let stage = &facts.chains[0].stages[0];
-            let seen = serde_json::json!({ "value": stage.value, "skipped": stage.skipped, "eval_error": stage.eval_error });
-            assert_eq!(seen, serde_json::from_str::<Value>(expected).unwrap(), "{chain}");
-        }
-    }
-
-    /// Contract: a stage takes an authored marker key that a spread copies
-    /// in, nested, as main did: a `$animus.lost` key is a skip, one with a
-    /// `$animus.capture` key is taken without one. A `.props()` config's
-    /// lost `transform` is removed as JSON's map removed it, the last entry
-    /// taking its place, which the config's class reads. An object that
-    /// spells the asset marker with more fields is read through those
-    /// fields, as its JSON was.
-    #[test]
-    fn a_stage_takes_copied_marker_keys_as_main_did() {
+    fn an_authored_marker_spelling_is_plain_data() {
         let rows: [(&str, &str); 5] = [
             (
-                "const nested = { ':hover': { '$animus.lost': 'authored', padding: 4 }, color: 'red' };\n\
-                 export const A = ds.styles({ ...nested }).asElement('div');",
-                r#"{"value": {"color": "red"}, "skipped": [[":hover", "authored"]], "dropped_transforms": []}"#,
+                "const preset = { '$animus.lost': 'authored', padding: 4 };\n\
+                 export const A = ds.styles(preset).asElement('div');",
+                r#"{"value": {"$animus.lost": "authored", "padding": 4}, "skipped": [], "statics": {"preset": {"$animus.lost": "authored", "padding": 4}}}"#,
+            ),
+            (
+                "const preset = { '$animus.lost': 'authored', padding: 4 };\n\
+                 export const A = ds.styles({ p: preset.padding }).asElement('div');",
+                r#"{"value": {"p": 4}, "skipped": [], "statics": {"preset": {"$animus.lost": "authored", "padding": 4}}}"#,
             ),
             (
                 "const nested = { ':hover': { '$animus.lost': 'authored', '$animus.capture': false, padding: 4 }, color: 'red' };\n\
                  export const A = ds.styles({ ...nested }).asElement('div');",
-                r#"{"value": {"color": "red"}, "skipped": [], "dropped_transforms": []}"#,
+                r#"{"value": {":hover": {"$animus.lost": "authored", "$animus.capture": false, "padding": 4}, "color": "red"}, "skipped": [], "statics": {"nested": {":hover": {"$animus.lost": "authored", "$animus.capture": false, "padding": 4}, "color": "red"}}}"#,
             ),
             (
-                "const cfg = { tone: { transform: { '$animus.lost': 'authored' }, property: 'color', scale: 'colors' }, gap: { property: 'gap' } };\n\
+                "const odd = { '$animus.asset': 'other' };\n\
+                 export const A = ds.styles({ ...odd, color: 'red' }).asElement('div');",
+                r#"{"value": {"$animus.asset": "other", "color": "red"}, "skipped": [], "statics": {"odd": {"$animus.asset": "other"}}}"#,
+            ),
+            (
+                "const cfg = { tone: { transform: { '$animus.lost': 'authored' }, property: 'color', scale: 'colors' } };\n\
                  export const A = ds.props(cfg).asElement('div');",
-                r#"{"value": {"tone": {"scale": "colors", "property": "color"}, "gap": {"property": "gap"}}, "skipped": [], "dropped_transforms": [["tone", "authored"]]}"#,
-            ),
-            (
-                "const preset = { '$animus.asset': 'package', extra: { '$animus.lost': 'nested' }, padding: 4 };\n\
-                 export const A = ds.styles(preset).asElement('div');",
-                r#"{"value": {"$animus.asset": "package", "padding": 4}, "skipped": [["extra", "nested"]], "dropped_transforms": []}"#,
-            ),
-            (
-                "const box = { a: { '$animus.asset': 'package', extra: { '$animus.lost': 'nested' }, padding: 4 } };\n\
-                 export const A = ds.styles({ p: box.a.padding }).asElement('div');",
-                r#"{"value": {"p": 4}, "skipped": [], "dropped_transforms": []}"#,
+                r#"{"value": {"tone": {"transform": {"$animus.lost": "authored"}, "property": "color", "scale": "colors"}}, "skipped": [], "statics": {"cfg": {"tone": {"transform": {"$animus.lost": "authored"}, "property": "color", "scale": "colors"}}}}"#,
             ),
         ];
         for (source, expected) in rows {
@@ -1866,11 +1828,26 @@ mod tests {
             let seen = serde_json::json!({
                 "value": stage.value,
                 "skipped": stage.skipped,
-                "dropped_transforms": stage.dropped_transforms,
+                "statics": serde_json::to_value(&facts).unwrap()["statics"],
             });
-            // Compared as text, so the order of a config's keys counts.
+            // Compared as text, so key order counts.
             assert_eq!(seen.to_string(), serde_json::from_str::<Value>(expected).unwrap().to_string(), "{source}");
         }
+    }
+
+    /// Contract: serialized statics carry data only, so the `asset` function
+    /// a module imports is no serialized static.
+    #[test]
+    fn serialized_statics_carry_no_asset_function() {
+        let facts = facts_for(
+            r#"
+            import { asset } from '@animus-ui/system';
+            const GAP = 16;
+            export const Box = ds.styles({ gap: GAP }).asElement('div');
+            "#,
+        );
+        let serialized = serde_json::to_value(&facts).unwrap();
+        assert_eq!(serialized["statics"], serde_json::json!({ "GAP": 16 }));
     }
 
     #[test]
