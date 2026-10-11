@@ -22,6 +22,7 @@ const typescriptTestTargets = [
   'packages/extract/tests/dynamic-prop-config.test.ts',
   'packages/extract/tests/error-diagnostics.test.ts',
   'packages/extract/tests/files-json-decode.test.ts',
+  'packages/extract/tests/host-expansions.test.ts',
   'packages/extract/tests/manifest-diagnostics.test.ts',
   'packages/extract/tests/path-aliases.test.ts',
   'packages/extract/tests/post-process-css.test.ts',

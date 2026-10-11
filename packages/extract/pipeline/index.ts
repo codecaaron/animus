@@ -253,4 +253,10 @@ export {
   viteAssetClassification,
 } from './host-assets';
 export type { HostAssetClassification } from './host-assets';
+export type {
+  ExpandedPath,
+  HostLoadExpander,
+  ListedArgs,
+  ListedLoad,
+} from './host-expansions';
 export { adaptedOriginals } from './probe-evidence';

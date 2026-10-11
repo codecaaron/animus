@@ -1,3 +1,5 @@
+import type { ProbeEvidenceGatherer } from './probe-evidence';
+
 /** @internal */
 export type AnalyzeProjectArgs = [
   filesJson: string,
@@ -23,7 +25,7 @@ export type AnalyzeProjectArgs = [
   analysisContextJson?: string,
   generatedNamesJson?: string,
   propertyRecordsJson?: string,
-  probeEvidence?: (bases: readonly string[], identity: string) => string,
+  probeEvidence?: ProbeEvidenceGatherer,
 ];
 
 /** @internal */
@@ -66,7 +68,7 @@ export function buildAnalyzeProjectArgs(
   inputs: AnalyzeProjectInputs,
   /** The session's host-candidate evidence gatherer, which no persisted
    *  input carries. */
-  probeEvidence?: (bases: readonly string[], identity: string) => string
+  probeEvidence?: ProbeEvidenceGatherer
 ): AnalyzeProjectArgs {
   const args: AnalyzeProjectArgs = [
     inputs.filesJson,

@@ -145,6 +145,7 @@ import type {
   ExternalPackageOutcome,
   HostAssetClassification,
   HostExtensionPolicy,
+  HostLoadExpander,
   KitDescriptorRecord,
 } from '../pipeline/index';
 import type {
@@ -365,6 +366,9 @@ export class ExtractionSession {
    *  classification where no host's can be read. */
   assetClassification: HostAssetClassification =
     builtInAssetClassification('noHost');
+  /** How the host's bundler expands computed loads (spec §6.3); without
+   *  one, every computed load keeps its widest reading. */
+  loadExpander: HostLoadExpander | undefined;
 
   // Per-specifier asset resolve/copy memo — stable per loaded system, so
   // loading a system clears it.
@@ -2209,6 +2213,7 @@ export class ExtractionSession {
       rootDir: this.rootDir!,
       assets: this.assetClassification,
       adapted: this.ingestionAdapted,
+      loadExpander: this.loadExpander,
       devMode: this.engineDevMode(devMode),
       // A skipped or unreadable file may render any option, so nothing is
       // pruned while one is.
