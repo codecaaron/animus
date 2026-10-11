@@ -289,6 +289,11 @@ function isDiskString<Value>(value: Value): value is Value & string {
 /** Rejection of an attempt whose corpus holds an aborted parse. */
 class AbortedParseRejection extends Error {}
 
+/** A system reload a parse hold deferred, refused because its full read
+ *  would replace host-supplied bytes the Session holds with the disk's.
+ *  Like a hold, it keeps the prior publication and the observed sources. */
+class DeferredReloadRefusal extends Error {}
+
 function isDiskNumber<Value>(value: Value): value is Value & number {
   return (
     Object(value) !== value &&
@@ -520,6 +525,9 @@ export class ExtractionSession {
   // Raw/original paths and hashes only. Generated MDX/Svelte parser entries
   // live in the published source corpus.
   private fileCache = new Map<string, { hash: string; source: string }>();
+  /** Held sources whose bytes the host supplied (WatchChanges.sources),
+   *  by root-relative path; a read from disk drops the path. */
+  private hostSuppliedKeys = new Set<string>();
 
   readonly corpus: SourceCorpus = createSourceCorpus(this.corpusHost());
 
@@ -1095,6 +1103,7 @@ export class ExtractionSession {
         }
         recordPrior(key);
         this.clearIngestionFailure(key);
+        this.hostSuppliedKeys.delete(key);
         if (this.fileCache.delete(key)) {
           removedAny = true;
           if (!owningRoot) removedProjectFiles.set(key, removedPath);
@@ -1145,8 +1154,10 @@ export class ExtractionSession {
       }
       let source: string;
       try {
-        source =
-          changes.sources?.get(target.abs) ?? readFileSync(target.abs, 'utf-8');
+        const supplied = changes.sources?.get(target.abs);
+        source = supplied ?? readFileSync(target.abs, 'utf-8');
+        if (supplied === undefined) this.hostSuppliedKeys.delete(relPath);
+        else this.hostSuppliedKeys.add(relPath);
       } catch (err) {
         // Benign race: the file vanished between the watch event and this
         // read — it will surface in removedFiles on the next watch cycle.
@@ -1237,6 +1248,16 @@ export class ExtractionSession {
           this.log(
             'system reload: publishing the reload a parse hold deferred'
           );
+          const stale = this.staleHostSuppliedSources(changes.sources);
+          if (stale.length > 0) {
+            throw new DeferredReloadRefusal(
+              `[${this.driverLabel}] system reload not published: its full ` +
+                `read would take ${stale.join(', ')} from disk, which does ` +
+                `not hold the bytes the host supplied; the last generation ` +
+                `stays served, and the reload publishes with the next ` +
+                `change once the disk holds them`
+            );
+          }
           this.resetForHmr();
           await this.runFullPipeline(pending, changes.sources);
           return;
@@ -1254,9 +1275,13 @@ export class ExtractionSession {
         setAnalysisStartedPromise(this.key, promise);
         await promise;
       } catch (err) {
-        if (err instanceof AbortedParseRejection) {
-          // An aborted parse holds publication: keep every observed source,
-          // valid edits included, for the repair to publish together.
+        if (
+          err instanceof AbortedParseRejection ||
+          err instanceof DeferredReloadRefusal
+        ) {
+          // An aborted parse holds publication, and a refused deferred reload
+          // keeps it: keep every observed source, valid edits included, for
+          // the attempt that publishes them together.
           commitObservedBatch();
         } else {
           // Roll the cache back: the failed attempt published nothing, so
@@ -1298,6 +1323,28 @@ export class ExtractionSession {
     this.heldRejection = rejection.message;
     this.onOutcome?.({ kind: 'held', abortedOriginals: rejection.originals });
     throw new AbortedParseRejection(rejection.message);
+  }
+
+  /** Held sources whose bytes the host supplied and which the disk no
+   *  longer matches: a full read not carrying them (`carried`) would
+   *  publish the disk's bytes in their place. */
+  private staleHostSuppliedSources(
+    carried: ReadonlyMap<string, string> | undefined
+  ): string[] {
+    const stale: string[] = [];
+    for (const key of this.hostSuppliedKeys) {
+      const held = this.fileCache.get(key);
+      const abs = resolve(this.rootDir!, key);
+      if (held === undefined || carried?.has(abs)) continue;
+      let onDisk: string | null;
+      try {
+        onDisk = readFileSync(abs, 'utf-8');
+      } catch {
+        onDisk = null;
+      }
+      if (onDisk === null || contentHash(onDisk) !== held.hash) stale.push(key);
+    }
+    return stale.sort();
   }
 
   /** `raw` is the attempt's input by original path, from which a
@@ -1619,7 +1666,10 @@ export class ExtractionSession {
       const relPath = relative(rootDir, filePath);
       let source: string;
       try {
-        source = hostSources.get(filePath) ?? readFileSync(filePath, 'utf-8');
+        const supplied = hostSources.get(filePath);
+        source = supplied ?? readFileSync(filePath, 'utf-8');
+        if (supplied === undefined) this.hostSuppliedKeys.delete(relPath);
+        else this.hostSuppliedKeys.add(relPath);
       } catch (err) {
         if (!isDeletedSource(err)) {
           ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
