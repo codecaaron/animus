@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -800,5 +801,72 @@ describe('collectExternalPackageSources', () => {
       ['@acme/require-only', KIT_WITHOUT_SOURCE_CONDITION],
       ['@acme/types-only', KIT_WITHOUT_SOURCE_CONDITION],
     ]);
+  });
+});
+
+// Contract: a path the filesystem opens under a spelling no directory lists
+// is never read as that file, and an entry read from its runtime target in
+// its place is analysed (exact spelling, spec §2.2 A2). Where the filesystem
+// does not open the misspelling, the host finds nothing there either.
+describe('collectExternalPackageSources under exact case', () => {
+  test('an absolute include the host answers through a case variant is unresolvable', async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'tokens'), {
+      'src/Token.ts': 'export const t = 1;',
+    });
+    const specifier = join(pkg, 'src', 'token.ts');
+    // A case-insensitive host opens the file under the include's spelling;
+    // a case-sensitive one finds nothing.
+    const opens = existsSync(specifier);
+    const result = await collect(root, {
+      [specifier]: opens ? specifier : null,
+    });
+
+    expect(result.entries).toEqual([]);
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({ specifier, outcome: 'unresolvable' }),
+    ]);
+    if (opens) {
+      expect(result.outcomes[0].reason).toContain('spelled differently');
+    }
+  });
+
+  test('an entry whose source target is misspelled is analysed from its runtime target', async () => {
+    const root = makeRoot();
+    const pkg = join(root, 'node_modules', 'kit');
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(
+      join(pkg, 'package.json'),
+      JSON.stringify({
+        name: 'kit',
+        exports: {
+          '.': { animus: './src/Index.ts', import: './dist/index.js' },
+          './other': { animus: './src/other.ts' },
+        },
+      })
+    );
+    for (const [file, source] of [
+      ['src/index.ts', 'export const Root = 1;'],
+      ['src/other.ts', 'export const Other = 1;'],
+      ['dist/index.js', 'export const Root = 1;'],
+    ]) {
+      mkdirSync(join(pkg, file, '..'), { recursive: true });
+      writeFileSync(join(pkg, file), source);
+    }
+
+    const result = await collect(
+      root,
+      { kit: join(pkg, 'dist', 'index.js') },
+      { extensionsSet: new Set(['.ts', '.tsx', '.js']) }
+    );
+
+    expect(result.entries.map((e) => e.path)).toContain(
+      'node_modules/kit/dist/index.js'
+    );
+    expect(result.packageMap.kit).toBe('node_modules/kit/dist/index.js');
+    const opens = existsSync(join(pkg, 'src', 'Index.ts'));
+    expect(result.diagnostics.map((d) => d.message).join('\n')).toContain(
+      opens ? 'spelled otherwise on disk' : 'is missing'
+    );
   });
 });

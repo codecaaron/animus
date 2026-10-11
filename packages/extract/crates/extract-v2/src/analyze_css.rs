@@ -744,7 +744,15 @@ pub fn resolve_import_source<T>(
 
 /// The analyzed file `base` names, through the one extension policy.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
-    animus_system_loader::resolution::extension_policy().probe(base, |candidate| files.contains_key(candidate))
+    use animus_system_loader::resolution::{extension_policy, Seen};
+    // The analyzed set is keyed by each file's own spelling, so a lookup is
+    // exact: a specifier that differs only in case names no analyzed file.
+    extension_policy()
+        .probe(base, |candidate| match files.contains_key(candidate) {
+            true => Seen::File,
+            false => Seen::Missing,
+        })
+        .found()
 }
 
 /// Follow `export { X as Y } from '...'` hops, and local exports of an
@@ -3401,6 +3409,7 @@ fn spread_wrapper_targets(
             continue;
         }
         proxies.forwarding.extend(spans);
+        proxies.may_omit.extend(wrapper.may_omit.iter().copied());
         for pass in &wrapper.passed {
             let values = crate::usage_facts::passed_values(
                 usage,
@@ -8637,7 +8646,9 @@ mod tests {
         assert_eq!(resolve("./icon.js").as_deref(), Some("src/icon.tsx"));
         assert_eq!(resolve("./real.js").as_deref(), Some("src/real.js"));
         assert_eq!(resolve("./m.mjs").as_deref(), Some("src/m.mts"));
-        assert_eq!(resolve("./signals.JS").as_deref(), Some("src/signals.ts"));
+        // Exact case, as Node, TypeScript and the hosts read it: `.JS` is no
+        // emitted `.js`.
+        assert_eq!(resolve("./signals.JS"), None);
         assert_eq!(resolve("./icon.jsx").as_deref(), Some("src/icon.tsx"));
         assert_eq!(resolve("./missing.js"), None);
     }
@@ -12730,6 +12741,29 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             (
                 "const Button = (props) => <R {...props} />;\nexport const App = () => <R size=\"sm\" active />;",
                 vec!["sm"],
+                vec!["active"],
+            ),
+            // Contract: a conditional props split is attributed like a rest
+            // spread, and a spread that may carry nothing also renders the
+            // target with none of them.
+            (
+                "const Button = (props) => { const rest = visible ? props : {}; return <R {...rest} />; };\n\
+                 export const App = () => <Button size=\"sm\" active />;",
+                vec!["sm", "md"],
+                vec!["active"],
+            ),
+            // A type query is no read of the alias, before its declaration
+            // or after.
+            (
+                "const Button = (props) => { const rest = visible ? props : {}; type Rest = typeof rest; return <R {...rest} />; };\n\
+                 export const App = () => <Button size=\"sm\" active />;",
+                vec!["sm", "md"],
+                vec!["active"],
+            ),
+            (
+                "const Button = (props) => { type Rest = typeof rest; const rest = visible ? props : {}; return <R {...rest} />; };\n\
+                 export const App = () => <Button size=\"sm\" active />;",
+                vec!["sm", "md"],
                 vec!["active"],
             ),
         ] {
