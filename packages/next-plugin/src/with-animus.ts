@@ -3,12 +3,11 @@ import {
   assembleStylesheet,
   assertSupportedEngine,
   assertKnownOptionKeys,
-  buildPathAliasesJson,
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
   nextImageAssetClassification,
-  readTsconfigAliasPairs,
+  outputExclusion,
   resolveMode,
   sourceKitDependencies,
   turbopackExtensionPolicy,
@@ -238,6 +237,9 @@ export function withAnimus(
           { development: context.dev === true, build }
         );
         plugin.setRootDir(rootDir);
+        if (nextConfig.distDir) {
+          plugin.excludeOutputDir(resolve(rootDir, nextConfig.distDir));
+        }
         const sessionDir = plugin.sessionDir;
 
         if (!existsSync(sessionDir)) {
@@ -487,11 +489,15 @@ function turbopackConfig<Config extends NextOwnedConfig>(
   const resolveExtensions =
     nextConfig.turbopack?.resolveExtensions ??
     nextConfig.experimental?.turbo?.resolveExtensions;
+  const outputExclude = nextConfig.distDir
+    ? outputExclusion(appRoot, resolve(appRoot, nextConfig.distDir))
+    : null;
   const load = (phase: string): Promise<TurbopackNextConfigObject<Config>> =>
     loadTurbopackFragment(
       options,
       phase,
       resolveExtensions,
+      outputExclude,
       nextConfig.images?.disableStaticImages === true,
       build,
       appRoot
@@ -548,6 +554,7 @@ function loadTurbopackFragment(
   options: AnimusNextOptions,
   phase: string,
   resolveExtensions: readonly string[] | undefined,
+  outputExclude: string | null,
   disableStaticImages: boolean,
   build: string,
   rootDir: string
@@ -566,6 +573,7 @@ function loadTurbopackFragment(
     phase,
     rootDir,
     resolveExtensions,
+    outputExclude,
     disableStaticImages,
     build
   );
@@ -582,6 +590,7 @@ async function analyzeForTurbopack(
   phase: string,
   rootDir: string,
   resolveExtensions: readonly string[] | undefined,
+  outputExclude: string | null,
   disableStaticImages: boolean,
   build: string
 ): Promise<TurbopackConfigFragment> {
@@ -606,16 +615,14 @@ async function analyzeForTurbopack(
   // diagnostic reports there and the session keeps publishing.
   session.development = development;
   session.rootDir = rootDir;
+  if (outputExclude !== null) session.structuralExclude = [outputExclude];
   session.extensionPolicy = turbopackExtensionPolicy(resolveExtensions);
   session.assetClassification = nextImageAssetClassification(
     rootDir,
     disableStaticImages
   );
-  const aliasPairs = readTsconfigAliasPairs(rootDir);
-  const builtAliases = buildPathAliasesJson(aliasPairs, rootDir);
-  if (builtAliases) {
-    session.pathAliasesJson = builtAliases.json;
-  }
+  // Each full pass re-reads the tsconfig aliases.
+  session.aliasesFromTsconfig = true;
   await runSessionPipeline(session);
 
   // A load that started while this one analyzed has replaced its session.

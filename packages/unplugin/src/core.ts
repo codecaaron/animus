@@ -1,5 +1,4 @@
 import {
-  buildPathAliasesJson,
   BUILT_IN_EXTENSION_POLICY,
   builtInAssetClassification,
   DiagnosticFailure,
@@ -9,7 +8,6 @@ import {
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
-  readTsconfigAliasPairs,
   rollupExtensionPolicy,
   viteAssetClassification,
   viteExtensionPolicy,
@@ -445,11 +443,8 @@ export const unpluginFactory: UnpluginFactory<
       session.extensionPolicy = hostExtensions;
       session.assetClassification = hostAssets;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
-      const aliasPairs = readTsconfigAliasPairs(root);
-      const builtAliases = buildPathAliasesJson(aliasPairs, root);
-      if (builtAliases) {
-        session.pathAliasesJson = builtAliases.json;
-      }
+      // Each full pass re-reads the tsconfig aliases.
+      session.aliasesFromTsconfig = true;
       state.key = session.key;
       try {
         await session.runFullPipeline();

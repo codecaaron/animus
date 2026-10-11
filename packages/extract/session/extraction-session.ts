@@ -16,6 +16,7 @@ import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
 import {
   adaptedOriginals,
   assembleStylesheet,
+  buildPathAliasesJson,
   buildSystemPropsModule,
   BUILT_IN_EXTENSION_POLICY,
   builtInAssetClassification,
@@ -42,7 +43,10 @@ import {
   declaredWorkspacePackages,
   extensionPolicyJson,
   loadSystemConfig,
+  outputSourceGuard,
+  outputSourceMessage,
   postProcessCss,
+  readTsconfigAliasPairs,
   projectExternalFileOwners,
   resolveAssetFile,
   resolveLightningTargets,
@@ -57,8 +61,10 @@ import {
   reportSurvivingAssetPlaceholders,
   substituteSheetAssets,
   toWatchKeys,
+  tsconfigChainPaths,
   isDeletedSource,
   unreadableSourceDiagnostic,
+  unmatchedExcludeLines,
   unresolvableIncludesMessage,
   walkPackageSources,
   engineModuleParser,
@@ -103,6 +109,7 @@ import {
   joinSession,
   sessionKey,
   getOwningWatchSession,
+  claimUnmatchedExcludeReport,
   getManifestJson,
   getSystemAuthority,
   holdBuildClaimRecord,
@@ -256,6 +263,26 @@ interface SystemDependencies {
   hashes: Map<string, string>;
 }
 
+/** A file's content hash, or '' when it cannot be read. */
+function fileHashOrEmpty(path: string): string {
+  try {
+    return contentHash(readFileSync(path, 'utf-8'));
+  } catch {
+    return '';
+  }
+}
+
+/** The first file whose content no longer has its recorded hash: an
+ *  unreadable or deleted file reads as '', which mismatches a real one. */
+function firstChangedFile(
+  hashes: ReadonlyMap<string, string>
+): string | undefined {
+  for (const [path, hash] of hashes) {
+    if (fileHashOrEmpty(path) !== hash) return path;
+  }
+  return undefined;
+}
+
 /** Bundler-agnostic extraction pipeline: system load, source ingestion,
  *  analysis, emission, and watch-cycle diffing. Carries no bundler types. */
 export class ExtractionSession {
@@ -263,6 +290,16 @@ export class ExtractionSession {
   rootDir: string | null = null;
   /** Serialized path aliases, harvested by the adapter from bundler config. */
   pathAliasesJson: string | null = null;
+  /** The host's aliases are the project's tsconfig `paths`: each full pass
+   *  re-reads them, so a tsconfig edit takes effect. */
+  aliasesFromTsconfig = false;
+  /** The root package.json and the tsconfig chain, absent files included:
+   *  a change to any is a configuration change, which runs the full pass. */
+  configInputPaths: string[] = [];
+  private configInputKeys = new Set<string>();
+  /** Each configuration input's content hash at the last full pass, ''
+   *  for an absent one: the probe's basis when the host reports nothing. */
+  private configInputHashes = new Map<string, string>();
   /** The host's export conditions, in its order, for the system loader. */
   conditions: readonly string[] = [];
   /** The host's extension order, as its adapter captured it; the built-in
@@ -568,20 +605,15 @@ export class ExtractionSession {
    *  driver serving the dir in place, `'every-cycle'` one republishing it. */
   staleAssetPruning: 'full-pipeline' | 'every-cycle' = 'full-pipeline';
 
-  /** Driver-owned STRUCTURAL exclusions, joined to the never-replaceable set
-   *  — never the user list, whose presence flips the replace semantics. */
+  /** The host's output directories (`outputExclusion`): root-relative,
+   *  excluded as literal path prefixes from discovery and from package
+   *  collection, whatever the user's list. */
   structuralExclude: string[] = [];
 
   private scanConfigMemo: {
     excludeMatcher: ExcludeMatcher;
     extensionsSet: ReadonlySet<string>;
   } | null = null;
-
-  /** Per-pattern exclusion hit counts from this session's matcher —
-   *  driver-consumed reporting surface (dead-pattern visibility). */
-  getExcludeStats(): ReadonlyMap<string, number> {
-    return this.resolveScanConfig().excludeMatcher.stats();
-  }
 
   /** Resolve the scan configuration from options — the single source of the
    *  exclude/extension policy shared by the full and incremental pipelines. */
@@ -795,21 +827,15 @@ export class ExtractionSession {
     // module set. Keys are lexical and canonical, so symlinked paths match.
     let assetChanged = false;
     let systemHit: string | undefined;
+    let configHit: string | undefined;
     try {
-      if (!changes.modifiedFiles && !changes.removedFiles) {
-        // No change sets (webpack's first watchRun): probe the dependency
-        // files by content hash.
-        for (const [dep, hash] of this.systemDependencyHashes) {
-          let current = '';
-          try {
-            current = contentHash(readFileSync(dep, 'utf-8'));
-          } catch {
-            // unreadable/deleted → hash stays '' and mismatches a real one
-          }
-          if (current !== hash) {
-            systemHit = dep;
-            break;
-          }
+      if (changed.length === 0) {
+        // No changes from the host (webpack's first watchRun, or empty
+        // sets): probe the dependency and configuration files by content
+        // hash.
+        systemHit = firstChangedFile(this.systemDependencyHashes);
+        if (systemHit === undefined) {
+          configHit = firstChangedFile(this.configInputHashes);
         }
       } else {
         systemHit = changed.find((path) =>
@@ -821,12 +847,17 @@ export class ExtractionSession {
       this.warn(`HMR system-reload check failed: ${String(err)}`);
     }
 
+    configHit ??= changed.find((path) =>
+      toWatchKeys(path).some((key) => this.configInputKeys.has(key))
+    );
     const debtRetry = this.systemReloadOwed && this.heldRejection === null;
-    if (systemHit || debtRetry) {
+    if (systemHit || configHit || debtRetry) {
       this.log(
         systemHit
           ? `system reload: system dependency changed (${relative(rootDir, systemHit)})`
-          : 'system reload: retrying the reload a failure left owed'
+          : configHit
+            ? `system reload: configuration changed (${relative(rootDir, configHit)})`
+            : 'system reload: retrying the reload a failure left owed'
       );
       this.resetForHmr();
       try {
@@ -946,12 +977,18 @@ export class ExtractionSession {
     }
 
     const changedPaths: string[] = [];
+    const inOutput = outputSourceGuard(rootDir, this.structuralExclude);
     // A read that fails or recovers changes the report, even with no source
     // change.
     let readFailuresChanged = false;
 
     for (const target of targets) {
       const relPath = target.key;
+      const outputDir = inOutput(target.abs);
+      if (outputDir !== null) {
+        this.warn(outputSourceMessage(relPath, outputDir));
+        continue;
+      }
       let source: string;
       try {
         source = readFileSync(target.abs, 'utf-8');
@@ -1207,6 +1244,26 @@ export class ExtractionSession {
     this.attemptRecordedSystemDependencies = true;
   }
 
+  /** Records the configuration inputs and, for a tsconfig-aliased host,
+   *  re-reads its aliases. */
+  private readConfigInputs(rootDir: string): void {
+    this.configInputPaths = [
+      join(rootDir, 'package.json'),
+      ...tsconfigChainPaths(rootDir),
+    ];
+    this.configInputKeys = new Set(
+      this.configInputPaths.flatMap((path) => toWatchKeys(path))
+    );
+    this.configInputHashes = new Map(
+      this.configInputPaths.map((path) => [path, fileHashOrEmpty(path)])
+    );
+    if (this.aliasesFromTsconfig) {
+      this.pathAliasesJson =
+        buildPathAliasesJson(readTsconfigAliasPairs(rootDir), rootDir)?.json ??
+        null;
+    }
+  }
+
   /** What hosts watch for assets, and what the last-good generation
    *  reported about its kits and packages, which a failed full pass must
    *  leave in place. */
@@ -1279,6 +1336,7 @@ export class ExtractionSession {
     const rootDir = this.rootDir!;
     const priorSourceState = this.snapshotSourceState();
     const resolvedSystemPath = resolve(rootDir, this.options.system);
+    this.readConfigInputs(rootDir);
 
     // One resolution context, which system loading and package resolution
     // both read: the host's conditions and extension order, and the session
@@ -1321,6 +1379,12 @@ export class ExtractionSession {
       excludeMatcher,
       extensionsSet
     );
+    // Once per build: its first full discovery, whether or not it publishes.
+    if (claimUnmatchedExcludeReport(this.key)) {
+      for (const line of unmatchedExcludeLines(excludeMatcher)) {
+        console.error(line);
+      }
+    }
 
     bt.fileDiscovery = this.elapsed(t);
 
@@ -1431,6 +1495,9 @@ export class ExtractionSession {
       rootDir,
       extensionsSet,
       hasEntry: (relPath) => rawEntries.some((e) => e.path === relPath),
+      hostOutputDirs: this.structuralExclude.map((dir) =>
+        resolve(rootDir, dir)
+      ),
       onSourceRead: (source, _relPath, absPath) => {
         rawExternalFiles.set(absPath, contentHash(source));
       },
@@ -1566,7 +1633,9 @@ export class ExtractionSession {
       this.beginStatusAttempt();
       let accepted: SourceIngestionResult;
       try {
-        accepted = await this.corpus.prepare(rawEntries);
+        accepted = await this.corpus.prepare(
+          this.withoutOutputSources(rawEntries)
+        );
         this.throwOnAbortedParse(accepted);
         this.skippedSources = accepted.skippedOriginals ?? [];
         this.ingestionOpenings = accepted.openings ?? [];
@@ -1613,6 +1682,18 @@ export class ExtractionSession {
 
   /** Per-generation source state captured as ONE object so the restore
    *  cannot omit a member; deep-copied fields are mutated in place. */
+  /** The full pass's analysis inputs, less any file whose real path lies in
+   *  an output directory, each reported. */
+  private withoutOutputSources(entries: FileEntry[]): FileEntry[] {
+    const inOutput = outputSourceGuard(this.rootDir!, this.structuralExclude);
+    return entries.filter((entry) => {
+      const outputDir = inOutput(resolve(this.rootDir!, entry.path));
+      if (outputDir === null) return true;
+      this.warn(outputSourceMessage(entry.path, outputDir));
+      return false;
+    });
+  }
+
   private snapshotSourceState() {
     return {
       sourceIdentity: this.sourceIdentity,

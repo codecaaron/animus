@@ -42,10 +42,14 @@ export {
   createExcludeMatcher,
   DEFAULT_EXCLUDE,
   DRIVER_NAMESPACES,
+  outputExclusion,
+  outputSourceGuard,
+  outputSourceMessage,
   REPLACEABLE_DEFAULT_EXCLUDE,
   STRUCTURAL_EXCLUDE,
   resolveMode,
   resolveVerbosity,
+  unmatchedExcludeLines,
 } from './core-options';
 export { compareDiscoveryOrder, discoverFiles } from './discover-files';
 export type {
@@ -181,7 +185,7 @@ export { declaredWorkspacePackages } from './workspace-packages';
 export type { StructuralCheckInput } from './structural-self-check';
 export { runStructuralSelfCheck } from './structural-self-check';
 export { buildSystemPropsModule } from './system-props-module';
-export { readTsconfigAliasPairs } from './tsconfig-paths';
+export { readTsconfigAliasPairs, tsconfigChainPaths } from './tsconfig-paths';
 export type {
   DynamicPropConfigEntry,
   DynamicPropMeta,
