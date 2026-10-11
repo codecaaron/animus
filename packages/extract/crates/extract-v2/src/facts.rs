@@ -1196,9 +1196,11 @@ pub fn extract_file_facts_enriched_with_usage_statics(
         extra_statics,
         extra_usage_statics,
         &references,
+        None,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn extract_file_facts_from_static_maps(
     ast: &OwnedAst,
     prefix: &str,
@@ -1207,8 +1209,13 @@ pub(crate) fn extract_file_facts_from_static_maps(
     extra_statics: &rustc_hash::FxHashMap<String, Value>,
     extra_usage_statics: &rustc_hash::FxHashMap<String, Value>,
     references: &TransformReferences<'_>,
+    lowered: Option<crate::link::Lowered>,
 ) -> FileFacts {
     let program = ast.program();
+    // The engine lowers every file before static enrichment; any other
+    // caller lowers this one here.
+    let crate::link::Lowered { scoping, bindings, record: module_record } =
+        lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
     let source = ast.source();
     let directive_prologue = program.directives.last().map(|last| {
         let end = extend_directive_trailing_trivia(source, last.span.end);
@@ -1238,7 +1245,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let walked = chain_walk::walk_program_facts(program);
     let member_parent_extensions = walked.member_parents;
     let walked_chains = walked.chains;
-    let props_forwarding = crate::usage_facts::collect_props_forwarding(program);
+    let props_forwarding = crate::usage_facts::collect_props_forwarding(program, &scoping);
     let const_initializers = collect_const_initializers(program, &props_forwarding);
     let imports = collect_import_facts(ast.module_record());
     let create_transform_locals: rustc_hash::FxHashSet<String> = imports
@@ -1508,9 +1515,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         element_consts,
         opaque_tags,
         builder_import_references,
-        bindings,
     } = crate::usage_facts::collect_enriched_usage(
-        crate::identity::ModuleId::new(&ast.path),
+        scoping,
         program,
         ast.module_record(),
         &usage_statics_fx,
@@ -1520,7 +1526,11 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &assigned_targets,
     );
 
-    let module_record = crate::link::copy_module_record(ast.module_record(), &bindings, ast.source());
+    // `export default X` of a module binding X names X.
+    let default_export_binding = match bindings.default_export {
+        Some(crate::identity::DefaultExport::Snapshot { of: Some(of), .. }) => Some(bindings.binding(of).name.clone()),
+        _ => None,
+    };
 
     FileFacts {
         path: ast.path.clone(),
@@ -1542,7 +1552,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         compose,
         star_exports: crate::usage_facts::collect_star_exports(ast.module_record()),
         namespace_exports: crate::usage_facts::collect_namespace_exports(ast.module_record()),
-        default_export_binding: crate::usage_facts::collect_default_export_binding(program),
+        default_export_binding,
         builder_import_references,
         aliases: const_initializers.aliases,
         assigned_aliases: const_initializers.assigned,

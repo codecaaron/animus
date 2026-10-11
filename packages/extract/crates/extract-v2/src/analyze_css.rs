@@ -744,7 +744,15 @@ pub fn resolve_import_source<T>(
 
 /// The analyzed file `base` names, through the one extension policy.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
-    animus_system_loader::resolution::extension_policy().probe(base, |candidate| files.contains_key(candidate))
+    use animus_system_loader::resolution::{extension_policy, Seen};
+    // The analyzed set is keyed by each file's own spelling, so a lookup is
+    // exact: a specifier that differs only in case names no analyzed file.
+    extension_policy()
+        .probe(base, |candidate| match files.contains_key(candidate) {
+            true => Seen::File,
+            false => Seen::Missing,
+        })
+        .found()
 }
 
 /// Follow `export { X as Y } from '...'` hops, and local exports of an
@@ -2639,6 +2647,11 @@ fn resolve_identity(
             return import_identity(&module, last, files, links, evaluated_ids, &by_bare_name);
         }
         let root = path_head.split('.').next().unwrap_or(path_head);
+        // A namespace the module table rejects names no member: none is
+        // picked by its spelling.
+        if files.get(file).is_some_and(|ff| namespace_root_rejected(file, ff, root, files, inputs, links)) {
+            return Vec::new();
+        }
         // An imported root (named or namespace) names its module, and one the
         // analysis cannot resolve names nothing here.
         let root_file = match files.get(file).map(|ff| {
@@ -2669,6 +2682,37 @@ fn resolve_identity(
         return by_bare_name(&imp.imported);
     }
     by_bare_name(local)
+}
+
+/// Whether the root `root` of a dotted path in `file` names a namespace the
+/// module table rejects: a namespace import of an analysed module, or a
+/// named import whose export is absent, ambiguous, open, or a namespace.
+/// The path reaches here only when a segment did not resolve. An import of
+/// an object, or of a module outside the analysis, is no such rejection.
+fn namespace_root_rejected(
+    file: &str,
+    ff: &FileFacts,
+    root: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> bool {
+    let analysed = |source: &str| {
+        resolve_import_source(file, source, files, inputs).filter(|module| links.module(module).is_some())
+    };
+    if let Some(source) = ff.namespace_imports.get(root) {
+        return analysed(source).is_some();
+    }
+    let Some(import) = ff.imports.iter().find(|import| import.local == root) else { return false };
+    let Some(module) = analysed(&import.source) else { return false };
+    match links.resolve_export(&module, &import.imported) {
+        Some(ExportLookup::Resolved(Terminal::Namespace(_))) => true,
+        Some(ExportLookup::Resolved(Terminal::Local { .. })) => {
+            crate::family_members::namespace_export(module, import.imported.clone(), files, inputs, links).is_some()
+        }
+        Some(ExportLookup::Resolved(Terminal::External { .. })) | None => false,
+        Some(ExportLookup::Absent | ExportLookup::Ambiguous(_) | ExportLookup::Incomplete { .. }) => true,
+    }
 }
 
 /// The components `module`'s export `name` may be, as the module table
@@ -3046,9 +3090,9 @@ fn exported_component_ids(
         if !seen.insert(module.clone()) {
             continue;
         }
-        for name in crate::family_members::module_export_names(&module, files, inputs, links) {
+        for name in crate::family_members::module_export_names(&module, links) {
             let namespace =
-                crate::family_members::namespace_export(module.clone(), name.clone(), links);
+                crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs, links);
             match namespace {
                 Some(namespace) => modules.push(namespace),
                 None => ids.extend(export_ids(&module, name, true, files, inputs, links, evaluated_ids)),
@@ -3095,44 +3139,28 @@ pub(crate) fn declared_export(
     files: &BTreeMap<String, FileFacts>,
     links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, String)> {
-    let ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) = links.resolve_export(module, &name)?
-    else {
-        return None;
-    };
-    let exports: Vec<&String> = links
-        .table
-        .record(declaring)
-        .local_exports
-        .iter()
-        .filter(|(_, exported)| *exported == binding)
-        .map(|(exported_as, _)| exported_as)
-        .collect();
-    let exported = exports.iter().find(|exported_as| **exported_as == &name).or(exports.first())?.to_string();
+    let (declaring, binding) = links.declared(module, &name)?;
+    let exports: Vec<&str> = links.exported_as(declaring, binding).collect();
+    let exported = exports.iter().find(|exported_as| **exported_as == name).or(exports.first())?.to_string();
     let (path, declared) = binding_name(links, files, declaring, binding);
     Some((path, exported, declared))
 }
 
-/// The binding the module table resolves `module`'s export `name` to, as
-/// the facts name it: its declaring file and binding. `None` for any other
-/// answer: absent, ambiguous, open, a namespace, an export of a module
-/// outside the analysis, or a module the analysis does not hold.
+/// The binding `ProjectLinks::declared` finds for `module`'s export
+/// `name`, as the facts name it: its declaring file and binding.
 fn declared_binding(
     links: &crate::link::ProjectLinks,
     files: &BTreeMap<String, FileFacts>,
     module: &str,
     name: &str,
 ) -> Option<(String, String)> {
-    match links.resolve_export(module, name)? {
-        ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) => {
-            Some(binding_name(links, files, declaring, binding))
-        }
-        _ => None,
-    }
+    let (declaring, binding) = links.declared(module, name)?;
+    Some(binding_name(links, files, declaring, binding))
 }
 
 /// A resolved binding's file and name; for `export default X`'s cell, X,
 /// as the facts name it.
-fn binding_name(
+pub(crate) fn binding_name(
     links: &crate::link::ProjectLinks,
     files: &BTreeMap<String, FileFacts>,
     module: usize,
@@ -3180,17 +3208,10 @@ pub(crate) fn namespace_path_module(
 ) -> Option<String> {
     let mut segments = path.split('.');
     let local = segments.next()?;
-    let mut module = crate::family_members::local_namespace(
-        file,
-        ff,
-        local,
-        files,
-        inputs,
-        &mut FxHashSet::default(),
-    )?;
+    let mut module = crate::family_members::local_namespace(file, ff, local, files, inputs, links)?;
     for segment in segments {
         let segment = segment.to_string();
-        module = crate::family_members::namespace_export(module, segment, links)?;
+        module = crate::family_members::namespace_export(module, segment, files, inputs, links)?;
     }
     Some(module)
 }
@@ -3388,6 +3409,7 @@ fn spread_wrapper_targets(
             continue;
         }
         proxies.forwarding.extend(spans);
+        proxies.may_omit.extend(wrapper.may_omit.iter().copied());
         for pass in &wrapper.passed {
             let values = crate::usage_facts::passed_values(
                 usage,
@@ -3414,6 +3436,7 @@ fn spread_wrapper_targets(
 /// warns.
 /// `takes_system_prop(file, name, prop)`: whether `name`, as `file` declares
 /// or imports it, is an extracted component taking `prop` as a system prop.
+#[allow(clippy::too_many_arguments)]
 fn unattributed_system_props(
     file: &str,
     ff: &FileFacts,
@@ -3421,6 +3444,7 @@ fn unattributed_system_props(
     attributed: &dyn Fn(&str) -> bool,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
 ) -> Vec<CssDiagnostic> {
     let mut reported: FxHashSet<(&str, Vec<&str>)> = FxHashSet::default();
@@ -3435,7 +3459,7 @@ fn unattributed_system_props(
         if !tag.starts_with(|c: char| c.is_ascii_uppercase()) || !(imported || local) {
             continue;
         }
-        let Some((declaration_file, declaration, lost)) = lost_through_binding(file, tag, files, inputs) else {
+        let Some((declaration_file, declaration, lost)) = lost_through_binding(file, tag, files, inputs, links) else {
             continue;
         };
         warnings.extend(lost_props_warning(
@@ -3445,6 +3469,7 @@ fn unattributed_system_props(
             props,
             (&declaration_file, &declaration, &lost),
             (files, inputs),
+            links,
             takes_system_prop,
             &mut reported,
         ));
@@ -3508,44 +3533,30 @@ fn lost_through_binding<'f>(
     binding: &str,
     files: &'f BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, LostThrough<'f>)> {
     let ff = files.get(file)?;
     match ff.imports.iter().find(|import| import.local == binding) {
         Some(import) => {
             let module = resolve_import_source(file, &import.source, files, inputs)?;
-            lost_through_export(module, import.imported.clone(), files, inputs, &mut FxHashSet::default())
+            lost_through_export(&module, &import.imported, files, links)
         }
         None => LostThrough::of(file, binding, files).map(|lost| (file.to_string(), binding.to_string(), lost)),
     }
 }
 
 /// The declaration `module` exports as `name` that loses the props it is
-/// passed, followed through re-exports and imported names exported again,
-/// then through `export *` when the module exports no `name` of its own.
+/// passed: the binding the module table resolves the export to. An
+/// ambiguous or open export names none.
 fn lost_through_export<'f>(
-    module: String,
-    name: String,
+    module: &str,
+    name: &str,
     files: &'f BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-    visited: &mut FxHashSet<(String, String)>,
+    links: &crate::link::ProjectLinks,
 ) -> Option<(String, String, LostThrough<'f>)> {
-    if !visited.insert((module.clone(), name.clone())) {
-        return None;
-    }
-    let (file, declaration) = follow_reexports(module, name, files, inputs);
-    if let Some(lost) = LostThrough::of(&file, &declaration, files) {
-        return Some((file, declaration, lost));
-    }
-    let ff = files.get(&file)?;
-    // `export *` never carries a default export, nor a name the module
-    // exports itself.
-    if declaration == "default" || ff.exports.iter().any(|export| export.exported == declaration) {
-        return None;
-    }
-    ff.star_exports
-        .iter()
-        .filter_map(|spec| resolve_import_source(&file, spec, files, inputs))
-        .find_map(|next| lost_through_export(next, declaration.clone(), files, inputs, visited))
+    let (file, declaration) = declared_binding(links, files, module, name)?;
+    let lost = LostThrough::of_binding(&file, &declaration, files)?;
+    Some((file, declaration, lost))
 }
 
 /// The extracted component taking `prop` that `lost`, read in `file`, hands
@@ -3556,6 +3567,7 @@ fn component_reached(
     lost: &LostThrough<'_>,
     prop: &str,
     (files, inputs): (&BTreeMap<String, FileFacts>, &CssInputs),
+    links: &crate::link::ProjectLinks,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
     visited: &mut FxHashSet<(String, String)>,
 ) -> Option<(String, Option<String>)> {
@@ -3563,11 +3575,11 @@ fn component_reached(
         if takes_system_prop(file, target, prop) {
             return Some((target.clone(), None));
         }
-        let (next_file, next, next_lost) = lost_through_binding(file, target, files, inputs)?;
+        let (next_file, next, next_lost) = lost_through_binding(file, target, files, inputs, links)?;
         if !visited.insert((next_file.clone(), next)) {
             return None;
         }
-        let (component, _) = component_reached(&next_file, &next_lost, prop, (files, inputs), takes_system_prop, visited)?;
+        let (component, _) = component_reached(&next_file, &next_lost, prop, (files, inputs), links, takes_system_prop, visited)?;
         Some((component, Some(target.clone())))
     })
 }
@@ -3582,12 +3594,13 @@ fn lost_props_warning<'u>(
     props: Vec<&'u str>,
     (declaration_file, declaration, lost): (&str, &str, &LostThrough<'_>),
     analysis: (&BTreeMap<String, FileFacts>, &CssInputs),
+    links: &crate::link::ProjectLinks,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
     reported: &mut FxHashSet<(&'u str, Vec<&'u str>)>,
 ) -> Option<CssDiagnostic> {
     let takes = |prop: &str| {
         let mut visited = FxHashSet::from_iter([(declaration_file.to_string(), declaration.to_string())]);
-        component_reached(declaration_file, lost, prop, analysis, takes_system_prop, &mut visited)
+        component_reached(declaration_file, lost, prop, analysis, links, takes_system_prop, &mut visited)
     };
     let mut props: Vec<&str> = props.into_iter().filter(|prop| takes(prop).is_some()).collect();
     props.sort_unstable();
@@ -3663,12 +3676,14 @@ fn passed_system_props<'u>(
 /// one that named an extracted component when the object was built, but
 /// which something may have changed since, or one that names a function
 /// component forwarding its props (`LostThrough`).
+#[allow(clippy::too_many_arguments)]
 fn untraced_member_system_props(
     file: &str,
     ff: &FileFacts,
     member_expr_bindings: &FxHashMap<String, String>,
     objects: &mut crate::family_members::ObjectMembers<'_>,
     (files, inputs): (&BTreeMap<String, FileFacts>, &CssInputs),
+    links: &crate::link::ProjectLinks,
     component_takes: &dyn Fn(&str, &str) -> bool,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
 ) -> Vec<CssDiagnostic> {
@@ -3688,7 +3703,7 @@ fn untraced_member_system_props(
             Some(Member::Unstable(component, reason)) if !call => (component, reason),
             Some(Member::Bound { module, binding }) if member => {
                 if let Some((declaration_file, declaration, lost)) =
-                    lost_through_binding(&module, &binding, files, inputs)
+                    lost_through_binding(&module, &binding, files, inputs, links)
                 {
                     warnings.extend(lost_props_warning(
                         file,
@@ -3697,6 +3712,7 @@ fn untraced_member_system_props(
                         props,
                         (&declaration_file, &declaration, &lost),
                         (files, inputs),
+                        links,
                         takes_system_prop,
                         &mut reported,
                     ));
@@ -4051,15 +4067,11 @@ fn bounded_prop_tags(
     // The declaration a module's name or default import resolves to, through
     // any barrel.
     let declared = |file: &str, ff: &FileFacts, name: &str| {
-        let (declaring, binding, _) = resolve_declaration(file, ff, name, files, inputs, links)?;
-        let binding = match binding.as_str() {
-            "default" => files.get(&declaring)?.default_export_binding.clone().unwrap_or(binding),
-            _ => binding,
-        };
-        Some((declaring, binding))
+        resolve_declaration(file, ff, name, files, inputs, links).map(|(declaring, binding, _)| (declaring, binding))
     };
-    // Whether `module` is `declaring`, or re-exports from it at any depth:
-    // `export … from`, or an import it exports again (`export { F }`).
+    // Whether `module` is `declaring`, or re-exports from it at any depth,
+    // as the module table links them: by name, as a namespace, through
+    // `export *`, or as `export default` of an imported binding.
     let reexports_from = |module: &String, declaring: &String| {
         let mut seen: FxHashSet<String> = FxHashSet::default();
         let mut pending = vec![module.clone()];
@@ -4070,19 +4082,17 @@ fn bounded_prop_tags(
             if !seen.insert(next.clone()) {
                 continue;
             }
-            let Some(ff) = files.get(&next) else { continue };
-            let exported_imports = ff.imports.iter().filter(|import| {
-                ff.default_export_binding.as_ref() == Some(&import.local)
-                    || ff.exports.iter().any(|export| export.source.is_none() && export.local.as_ref() == Some(&import.local))
+            let Some(index) = links.module(&next) else { continue };
+            pending.extend(links.table.reexported_modules(index).map(|target| links.paths[target].clone()));
+            // `export default X` of an imported X, named or a namespace.
+            let default_import = files.get(&next).and_then(|ff| {
+                let local = ff.default_export_binding.as_ref()?;
+                let named = ff.imports.iter().find(|import| &import.local == local).map(|import| &import.source);
+                named.or_else(|| ff.namespace_imports.get(local))
             });
-            let sources = ff
-                .exports
-                .iter()
-                .filter_map(|export| export.source.as_ref())
-                .chain(&ff.star_exports)
-                .chain(ff.namespace_exports.values())
-                .chain(exported_imports.map(|import| &import.source));
-            pending.extend(sources.filter_map(|source| resolve_import_source(&next, source, files, inputs)));
+            if let Some(source) = default_import {
+                pending.extend(resolve_import_source(&next, source, files, inputs));
+            }
         }
         false
     };
@@ -4465,10 +4475,6 @@ fn uncertain_tag_reason(
                 false => resolve_declaration(file, ff, tag, files, inputs, links).and_then(
                     |(declaring_file, binding, local)| {
                         let dff = files.get(&declaring_file)?;
-                        let binding = match binding.as_str() {
-                            "default" => dff.default_export_binding.clone().unwrap_or(binding),
-                            _ => binding,
-                        };
                         // `export function` and `export class` record no export
                         // fact, so a declaration the file does not import is
                         // its own.
@@ -4540,10 +4546,17 @@ impl<'f> LostThrough<'f> {
             .find(|e| e.exported == name && e.source.is_none())
             .and_then(|e| e.local.as_deref())
             .unwrap_or(name);
-        if let Some(target) = ff.aliases.get(local).or_else(|| ff.assigned_aliases.get(local)) {
+        Self::of_binding(file, local, files)
+    }
+
+    /// How the declaration bound to `binding` in `file` loses props, read
+    /// from that binding itself.
+    fn of_binding(file: &str, binding: &str, files: &'f BTreeMap<String, FileFacts>) -> Option<Self> {
+        let ff = files.get(file)?;
+        if let Some(target) = ff.aliases.get(binding).or_else(|| ff.assigned_aliases.get(binding)) {
             return Some(Self::Alias(target));
         }
-        let forwarding = ff.props_forwarding.get(local)?;
+        let forwarding = ff.props_forwarding.get(binding)?;
         Some(Self::Spread(&forwarding.routes))
     }
 
@@ -5615,22 +5628,33 @@ fn run_with_system_floor(
                  standard globals, btoa and atob",
             )
         };
+        const CAPTURED_ADVICE: &str = "declare what it reads inside the callback or read the standard global \
+             itself; a configured source is evaluated and delivered as its own text, so it cannot carry its \
+             module's bindings";
         let hosts = match crate::transforms::admit_configured_host_reads(name, source) {
             Ok(hosts) => hosts,
             Err(rejections) => {
-                diagnostics.extend(rejections.into_iter().map(rejected));
+                // A callable reading an import is captured from the loader's
+                // bundle, where the import reads the loader's module cell.
+                // Where the loader shows every read of the cell is an
+                // import's, each import replaces the cell's reason. Every
+                // other reason stands.
+                let cell = crate::transforms::module_cell_rejection(name);
+                let imports = inputs.transform_provenance.import_rejections(key, name);
+                for reason in rejections {
+                    if reason == cell && !imports.is_empty() {
+                        diagnostics.extend(imports.iter().map(|import| rejected_with(import.clone(), CAPTURED_ADVICE)));
+                    } else {
+                        diagnostics.push(rejected(reason));
+                    }
+                }
                 continue;
             }
         };
         // Equal text cannot show which binding of a standard-global name a
         // callable closes over; the loader's evidence for its own function can.
         if let Some(reason) = inputs.transform_provenance.captured_rejection(key, name).filter(|_| hosts.is_empty()) {
-            diagnostics.push(rejected_with(
-                reason,
-                "declare what it reads inside the callback or read the standard global itself; \
-                 a configured source is evaluated and delivered as its own text, so it cannot \
-                 carry its module's bindings",
-            ));
+            diagnostics.push(rejected_with(reason, CAPTURED_ADVICE));
             continue;
         }
         // Its text alone cannot show which `btoa` or `atob` it captured.
@@ -6757,6 +6781,7 @@ fn run_with_system_floor(
             &attributed,
             files,
             inputs,
+            links,
             &takes_system_prop,
         ));
         diagnostics.extend(untraced_member_system_props(
@@ -6765,6 +6790,7 @@ fn run_with_system_floor(
             member_expr_bindings,
             &mut object_members,
             (files, inputs),
+            links,
             &component_takes,
             &takes_system_prop,
         ));
@@ -8611,7 +8637,9 @@ mod tests {
         assert_eq!(resolve("./icon.js").as_deref(), Some("src/icon.tsx"));
         assert_eq!(resolve("./real.js").as_deref(), Some("src/real.js"));
         assert_eq!(resolve("./m.mjs").as_deref(), Some("src/m.mts"));
-        assert_eq!(resolve("./signals.JS").as_deref(), Some("src/signals.ts"));
+        // Exact case, as Node, TypeScript and the hosts read it: `.JS` is no
+        // emitted `.js`.
+        assert_eq!(resolve("./signals.JS"), None);
         assert_eq!(resolve("./icon.jsx").as_deref(), Some("src/icon.tsx"));
         assert_eq!(resolve("./missing.js"), None);
     }
@@ -11357,6 +11385,61 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     #[test]
+    fn a_default_exported_namespace_keeps_its_members() {
+        // `import * as ns …; export default ns`: the default import is the
+        // namespace, and its member's system props extract.
+        let recipe = "export const R = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let out = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("index.ts", "import * as ns from './recipe';\nexport default ns;\n"),
+            ("app.tsx", "import ui from './index';\nexport const App = () => <ui.R marginInlineStart={8} />;\n"),
+        ]);
+        assert!(out.css.contains("margin-inline-start: 0.5rem;"), "{}", out.css);
+        assert!(
+            !out.diagnostics.iter().any(|d| d.code.as_deref().is_some_and(|code| code.starts_with("animus.usage.identity-uncertain"))),
+            "{:?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn a_rejected_namespace_names_no_member_by_its_spelling() {
+        // A namespace import the module table finds ambiguous, open or absent
+        // names nothing, even beside a same-spelled component of that module.
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let root = "const Root = ds.styles({ display: 'flex' }).asElement('div');\nexport const Use = () => <Root />;\n";
+        let files: BTreeMap<String, FileFacts> = [
+            ("x.ts", "export const Root = ds.styles({ display: 'grid' }).asElement('div');".to_string()),
+            ("y.ts", "export const Root = ds.styles({ display: 'block' }).asElement('div');".to_string()),
+            ("a.ts", "export * as ns from './x';".to_string()),
+            ("b.ts", "export * as ns from './y';".to_string()),
+            ("both.ts", format!("export * from './a';\nexport * from './b';\n{root}")),
+            ("open.ts", format!("export * from './a';\nexport * from './missing';\n{root}")),
+            ("none.ts", format!("export const other = 1;\n{root}")),
+            (
+                "app.ts",
+                "import { ns as amb } from './both';\nimport { ns as opn } from './open';\nimport { ns as abs } from './none';".to_string(),
+            ),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let ast = crate::owned_ast::OwnedAst::parse(path.to_string(), source, &counter);
+            (path.to_string(), crate::facts::extract_file_facts(&ast))
+        })
+        .collect();
+        let inputs = test_inputs();
+        let links = crate::link::ProjectLinks::link(&files, &inputs);
+        let evaluated: FxHashSet<String> =
+            ["x.ts::Root", "y.ts::Root", "both.ts::Root", "open.ts::Root", "none.ts::Root"].into_iter().map(String::from).collect();
+        let by_binding: IdsByBinding =
+            [("Root".to_string(), evaluated.iter().cloned().collect::<Vec<_>>())].into_iter().collect();
+        for tag in ["amb.Root", "opn.Root", "abs.Root"] {
+            let ids = resolve_identity("app.ts", tag, &files, &inputs, &links, &evaluated, Some(&by_binding));
+            assert!(ids.is_empty(), "{tag}: {ids:?}");
+        }
+    }
+
+    #[test]
     fn an_exported_namespace_is_one_only_where_the_module_table_resolves_it() {
         // Two stars bringing in different namespaces, or one beside an
         // unresolved path, name no namespace.
@@ -11369,6 +11452,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("both.ts", "export * from './a';\nexport * from './b';"),
             ("open.ts", "export * from './a';\nexport * from './missing';"),
             ("one.ts", "export * from './a';"),
+            ("app.ts", "import { ns } from './both';\nimport { ns as only } from './one';"),
         ]
         .into_iter()
         .map(|(path, source)| {
@@ -11376,11 +11460,20 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             (path.to_string(), crate::facts::extract_file_facts(&ast))
         })
         .collect();
-        let links = crate::link::ProjectLinks::link(&files, &test_inputs());
-        let namespace = |module: &str| crate::family_members::namespace_export(module.to_string(), "ns".to_string(), &links);
+        let inputs = test_inputs();
+        let links = crate::link::ProjectLinks::link(&files, &inputs);
+        let namespace = |module: &str| {
+            crate::family_members::namespace_export(module.to_string(), "ns".to_string(), &files, &inputs, &links)
+        };
         assert_eq!(namespace("both.ts"), None);
         assert_eq!(namespace("open.ts"), None);
         assert_eq!(namespace("one.ts"), Some("x.ts".to_string()));
+        // A named import of such a namespace holds the same answer.
+        let held = |local: &str| {
+            crate::family_members::local_namespace("app.ts", &files["app.ts"], local, &files, &inputs, &links)
+        };
+        assert_eq!(held("ns"), None);
+        assert_eq!(held("only"), Some("x.ts".to_string()));
     }
 
     #[test]
@@ -12641,6 +12734,29 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 vec!["sm"],
                 vec!["active"],
             ),
+            // Contract: a conditional props split is attributed like a rest
+            // spread, and a spread that may carry nothing also renders the
+            // target with none of them.
+            (
+                "const Button = (props) => { const rest = visible ? props : {}; return <R {...rest} />; };\n\
+                 export const App = () => <Button size=\"sm\" active />;",
+                vec!["sm", "md"],
+                vec!["active"],
+            ),
+            // A type query is no read of the alias, before its declaration
+            // or after.
+            (
+                "const Button = (props) => { const rest = visible ? props : {}; type Rest = typeof rest; return <R {...rest} />; };\n\
+                 export const App = () => <Button size=\"sm\" active />;",
+                vec!["sm", "md"],
+                vec!["active"],
+            ),
+            (
+                "const Button = (props) => { type Rest = typeof rest; const rest = visible ? props : {}; return <R {...rest} />; };\n\
+                 export const App = () => <Button size=\"sm\" active />;",
+                vec!["sm", "md"],
+                vec!["active"],
+            ),
         ] {
             let (kept_sizes, kept_states, _) = wrapper_kept(app);
             assert_eq!((kept_sizes, kept_states), (sizes, states), "{app}");
@@ -12916,6 +13032,54 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             .collect()
     }
 
+    /// A wrapper that loses a prop is the binding the module table resolves
+    /// the import to: one exported under another name is found, an import
+    /// two stars make ambiguous names no wrapper, and the resolved binding
+    /// is never swapped for another that an export spells like it.
+    #[test]
+    fn a_wrapper_that_loses_props_is_found_as_the_module_table_resolves_it() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let wrapper = |name: &str| {
+            format!(
+                "import {{ Box }} from './recipe';\n\
+                 const {name} = (props) => {{ const {{ children, ...rest }} = props; return <Box {{...rest}} />; }};\n\
+                 export {{ {name} as Top }};\n"
+            )
+        };
+        let app = "import { Top } from './index';\nexport const App = () => <Top marginInlineStart={8} />;\n";
+        let (one, two) = (wrapper("Inner"), wrapper("Other"));
+        let renamed = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("one.tsx", one.as_str()),
+            ("index.ts", "export * from './one';\n"),
+            ("app.tsx", app),
+        ]);
+        let warned: Vec<_> = unattributed(&renamed).iter().map(|d| d.dropped.as_deref()).collect();
+        assert_eq!(warned, [Some("marginInlineStart")], "{:?}", renamed.diagnostics);
+        let ambiguous = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("one.tsx", one.as_str()),
+            ("two.tsx", two.as_str()),
+            ("index.ts", "export * from './one';\nexport * from './two';\n"),
+            ("app.tsx", app),
+        ]);
+        assert!(unattributed(&ambiguous).is_empty(), "{:?}", ambiguous.diagnostics);
+        // The resolved binding is the wrapper itself, never the binding an
+        // export of the same spelling names.
+        let crossed = "import { Box } from './recipe';\n\
+                       const Inner = (props) => { const { children, ...rest } = props; return <Box {...rest} />; };\n\
+                       const Other = () => null;\n\
+                       export { Inner as Top, Other as Inner };\n";
+        let crossed = analyze_with_logical_space(&[
+            ("recipe.tsx", recipe),
+            ("one.tsx", crossed),
+            ("index.ts", "export * from './one';\n"),
+            ("app.tsx", app),
+        ]);
+        let warned: Vec<_> = unattributed(&crossed).iter().map(|d| d.dropped.as_deref()).collect();
+        assert_eq!(warned, [Some("marginInlineStart")], "{:?}", crossed.diagnostics);
+    }
+
     /// Each wrapper shape the attribution does not follow warns once, at the
     /// use: a wrapper reached through `export *`, one that destructures its
     /// props in its body, a function declaration, one with two rest routes
@@ -13033,14 +13197,23 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
         // A spread of what a call returns warns that it may forward, for
         // every name the call's result binds; a spread of the props says
-        // it forwards them.
-        let routes: [(&str, &str); 6] = [
-            ("const [styling = {}] = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
-            ("const { styling = {} } = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
-            ("const { part: { styling } } = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
-            ("const styling = pick(props); return <Box {...styling} />;", "may forward"),
-            ("let styling = pick(props); styling = {}; return <Box {...styling} />;", "may forward"),
-            ("return <Box {...props} />;", "forwards them by spread"),
+        // it forwards them. Contract: a conditional props split is
+        // attributed like a rest spread, alternative by alternative.
+        let routes: [(&str, Option<&str>); 9] = [
+            ("const [styling = {}] = splitProps(props, KEYS); return <Box {...styling} />;", Some("may forward")),
+            ("const { styling = {} } = splitProps(props, KEYS); return <Box {...styling} />;", Some("may forward")),
+            ("const { part: { styling } } = splitProps(props, KEYS); return <Box {...styling} />;", Some("may forward")),
+            ("const styling = pick(props); return <Box {...styling} />;", Some("may forward")),
+            ("let styling = pick(props); styling = {}; return <Box {...styling} />;", Some("may forward")),
+            ("return <Box {...props} />;", Some("forwards them by spread")),
+            (
+                "const [legend, styling] = visible ? splitProps(props, KEYS) : [{}, props]; return <Box {...styling} />;",
+                Some("may forward"),
+            ),
+            // The spread reads its own binding, which only shares the name.
+            ("const styling = visible ? props : {}; return ((styling) => <Box {...styling} />)({});", None),
+            // Only a falsy `false` reaches the spread.
+            ("const styling = false && props; return <Box {...styling} />;", None),
         ];
         for (body, how) in routes {
             let wrapper = format!(
@@ -13049,7 +13222,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             );
             let out = analyze_with_logical_space(&[("recipe.tsx", recipe), ("wrapper.tsx", &wrapper), ("app.tsx", rendered)]);
             let messages: Vec<_> = unattributed(&out).iter().map(|d| d.message.as_str()).collect();
-            assert!(matches!(messages.as_slice(), [one] if one.contains(how)), "{body}: {messages:?}");
+            match how {
+                Some(how) => assert!(matches!(messages.as_slice(), [one] if one.contains(how)), "{body}: {messages:?}"),
+                None => assert!(messages.is_empty(), "{body}: {messages:?}"),
+            }
         }
     }
 
@@ -14130,6 +14306,41 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(out.admitted_transforms.keys().collect::<Vec<_>>(), ["enc@a", "enc@b"]);
         assert!(out.diagnostics.iter().any(|d| d.code.as_deref() == Some(CONFIGURED_TRANSFORM_REJECTED)
             && d.message.contains("'plain'") && d.message.contains("its callable reads 'String' declared in /m.ts outside the callback")));
+        // A callable reading an import is captured from the loader's bundle,
+        // where the import reads the loader's module cell. Where the loader
+        // shows each read of the cell is an import's, the rejection names the
+        // imports, not the cell, and keeps every other reason. Without that
+        // evidence, a `__modules` the source declares outside the callback
+        // keeps its own reason, whatever else the loader captured first.
+        let import = "reads 'btoa' declared in /m.ts outside the callback";
+        let imports = format!(r#"{{"enc@a": {{"rejection": "{import}", "importReads": ["{import}"]}}}}"#);
+        let authored = r#"{"enc@a": {"rejection": "reads 'bias' declared in /m.ts outside the callback"}}"#.to_string();
+        let cell = "(0, __modules['/enc.ts']['btoa'])(String(v))";
+        for (source, provenance, expected, absent) in [
+            (format!("(v) => {cell}"), &imports, vec![import], vec!["__modules"]),
+            (format!("(v) => this.bias + {cell}"), &imports, vec![import, "reads 'this' of the callback"], vec!["__modules"]),
+            (format!("(v) => unknown(v) + {cell}"), &imports, vec![import, "external symbol 'unknown'"], vec!["__modules"]),
+            (
+                "(v) => bias(v) + __modules(v)".to_string(),
+                &authored,
+                vec!["external symbol '__modules'", "external symbol 'bias'"],
+                vec!["its callable reads"],
+            ),
+        ] {
+            let config = r#"{"a": {"property": "width", "transform": "enc", "transformId": "enc@a"}}"#;
+            let sources = serde_json::json!({ "enc@a": source }).to_string();
+            let mut inputs = configured_inputs(config, r#"["a"]"#, Some(&sources), false);
+            inputs.transform_provenance = crate::transforms::TransformProvenance::from_json(Some(provenance));
+            let out = analyze(&[("use.tsx", "export const Box = ds.styles({ a: 'x' }).asElement('div');\nexport const App = () => <Box />;\n")], &inputs);
+            let rejected: Vec<&String> = out.diagnostics.iter()
+                .filter(|d| d.code.as_deref() == Some(CONFIGURED_TRANSFORM_REJECTED)).map(|d| &d.message).collect();
+            for reason in expected {
+                assert!(rejected.iter().any(|m| m.contains(reason)), "{source}: {reason}: {rejected:#?}");
+            }
+            for reason in absent {
+                assert!(rejected.iter().all(|m| !m.contains(reason)), "{source}: {reason}: {rejected:#?}");
+            }
+        }
     }
 
     fn failing_transform_variant_inputs(dev_mode: bool) -> CssInputs {

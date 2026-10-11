@@ -1,6 +1,6 @@
 //! Engine-neutral TypeScript system-module loader.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,7 @@ use oxc::ast::ast::Statement;
 use oxc::codegen::Codegen;
 use oxc::parser::{Parser, ParserReturn};
 use oxc::semantic::SemanticBuilder;
-use oxc::span::{GetSpan, SourceType};
+use oxc::span::SourceType;
 use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::{Context, Function, Object, Runtime};
 
@@ -95,6 +95,28 @@ pub fn strip_typescript_module(source: &str, file_path: &str) -> Result<String, 
     Ok(codegen.build(&program).code)
 }
 
+/// What a resolution resolves under (pipeline spec §2.2): the host's export
+/// conditions, in its order, the session root's declared workspace
+/// packages, by name, at their canonical directories, and the host's
+/// extension order (A2), which no probe reads yet: the built-in policy
+/// answers until each host's order is measured against it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolutionContext {
+    pub conditions: Vec<String>,
+    pub workspaces: BTreeMap<String, PathBuf>,
+    pub extensions: resolution::ExtensionPolicy,
+}
+
+impl Default for ResolutionContext {
+    fn default() -> Self {
+        Self {
+            conditions: Vec::new(),
+            workspaces: BTreeMap::new(),
+            extensions: resolution::extension_policy().clone(),
+        }
+    }
+}
+
 /// Resolve a bare specifier to an absolute file path and the `package.json`
 /// that selected it. Resolution chain: `exports` (a kit's `animus` source
 /// condition, else the host's `conditions`, `import` and `default`) →
@@ -102,25 +124,16 @@ pub fn strip_typescript_module(source: &str, file_path: &str) -> Result<String, 
 pub fn resolve_bare_specifier(
     specifier: &str,
     from_dir: &str,
-    conditions: &[String],
+    context: &ResolutionContext,
 ) -> Result<(String, PathBuf), String> {
     let (pkg_name, subpath) = split_specifier(specifier);
-    let pkg_json_path = find_package_json(pkg_name, from_dir)?;
-    select_package_entry(pkg_json_path, subpath, conditions, specifier)
-}
-
-/// The entry `subpath` (`""` or `"."` for the root, else `./x` or `/x`) of
-/// the package in `package_dir`, selected as `resolve_bare_specifier`
-/// selects it once it has found the package: for a package located some
-/// other way, such as a workspace.
-pub fn resolve_package_entry(
-    package_dir: &Path,
-    subpath: &str,
-    conditions: &[String],
-) -> Result<(PathBuf, PathBuf), String> {
-    let label = format!("{}{}", package_dir.display(), subpath.trim_start_matches('.'));
-    select_package_entry(package_dir.join("package.json"), subpath, conditions, &label)
-        .map(|(path, manifest)| (real_path(PathBuf::from(path)), real_path(manifest)))
+    let pkg_json_path = match find_package_json(pkg_name, from_dir) {
+        Ok(path) => path,
+        // A declared workspace answers where no `node_modules` copy does, as
+        // for a workspace package nothing links there.
+        Err(missing) => context.workspaces.get(pkg_name).map(|dir| dir.join("package.json")).ok_or(missing)?,
+    };
+    select_package_entry(pkg_json_path, subpath, &context.conditions, specifier)
 }
 
 /// `path` with its links and `.` segments resolved, as `require.resolve`
@@ -146,20 +159,35 @@ fn select_package_entry(
         .parent()
         .ok_or_else(|| format!("invalid package.json path: {:?}", pkg_json_path))?;
 
-    let pkg_json_str = fs::read_to_string(&pkg_json_path)
-        .map_err(|e| format!("failed to read {:?}: {}", pkg_json_path, e))?;
-    let pkg_json: serde_json::Value = serde_json::from_str(&pkg_json_str)
-        .map_err(|e| format!("failed to parse {:?}: {}", pkg_json_path, e))?;
+    // A package directory without a manifest is still a package, as Node's
+    // resolver reads it: nothing in `exports`, `module` or `main`, so its
+    // root `index`.
+    let pkg_json: serde_json::Value = match fs::read_to_string(&pkg_json_path) {
+        Ok(pkg_json_str) => serde_json::from_str(&pkg_json_str)
+            .map_err(|e| format!("failed to parse {:?}: {}", pkg_json_path, e))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && pkg_dir.is_dir() => serde_json::Value::Null,
+        Err(e) => return Err(format!("failed to read {:?}: {}", pkg_json_path, e)),
+    };
 
     if let Some(exports) = pkg_json.get("exports") {
         let export_key = if subpath.is_empty() { "." } else { subpath };
-        // A missing source target, which discovery reports, falls back to
-        // the runtime entry.
+        // A source target that is missing or differs from its file only in
+        // case, which discovery reports, falls back to the runtime entry; a
+        // runtime target differing only in case names no file.
         for source in [true, false] {
             if let Some(resolved) = resolve_exports_entry(exports, export_key, source, conditions) {
-                let abs_path = pkg_dir.join(&resolved);
-                if abs_path.is_file() {
-                    return Ok((abs_path.to_string_lossy().to_string(), pkg_json_path));
+                let abs_path = pkg_dir.join(&resolved).to_string_lossy().to_string();
+                match resolution::see_within(pkg_dir, &abs_path) {
+                    resolution::Seen::File => return Ok((abs_path, pkg_json_path)),
+                    resolution::Seen::CaseOnly(actual) if !source => {
+                        return Err(resolution::case_mismatch_reason(
+                            &format!("'{specifier}', through the exports of {pkg_json_path:?},"),
+                            &abs_path,
+                            &actual,
+                            "spell the export target as the file is spelled",
+                        ));
+                    }
+                    resolution::Seen::CaseOnly(_) | resolution::Seen::Missing => {}
                 }
             }
         }
@@ -175,24 +203,34 @@ fn select_package_entry(
     // a directory's index through the extension policy, then an `index` at
     // its root, as Node's legacy resolution reads them; a subpath names a
     // file or directory in the package.
+    // The first entry the filesystem answers, even under another case, ends
+    // the selection.
     let probe = |entry: &str| {
         resolution::extension_policy()
-            .probe(&pkg_dir.join(entry).to_string_lossy(), |candidate| Path::new(candidate).is_file())
+            .probe(&pkg_dir.join(entry).to_string_lossy(), |candidate| resolution::see_within(pkg_dir, candidate))
     };
     let legacy = match subpath.trim_start_matches('.').trim_start_matches('/') {
         "" => ["module", "main"]
             .iter()
             .filter_map(|field| pkg_json.get(*field).and_then(|value| value.as_str()))
-            .find_map(probe)
-            .or_else(|| probe("index")),
+            .map(probe)
+            .find(|probed| *probed != resolution::Probe::Absent)
+            .unwrap_or_else(|| probe("index")),
         subpath => probe(subpath),
     };
-    legacy.map(|path| (path, pkg_json_path.clone())).ok_or_else(|| {
-        format!(
+    match legacy {
+        resolution::Probe::Found(path) => Ok((path, pkg_json_path.clone())),
+        resolution::Probe::CaseMismatch { candidate, actual } => Err(resolution::case_mismatch_reason(
+            &format!("'{specifier}', through {pkg_json_path:?},"),
+            &candidate,
+            &actual,
+            "spell its module, main or import as the file is spelled",
+        )),
+        resolution::Probe::Absent => Err(format!(
             "could not resolve '{}': no module, main or index file in {:?}",
             specifier, pkg_dir
-        )
-    })
+        )),
+    }
 }
 
 fn split_specifier(specifier: &str) -> (&str, &str) {
@@ -213,12 +251,15 @@ fn split_specifier(specifier: &str) -> (&str, &str) {
     }
 }
 
+/// The `package.json` path of the nearest `node_modules/<pkg_name>`
+/// directory, as Node's resolver finds a package: the directory is the
+/// package whether or not it holds a manifest.
 fn find_package_json(pkg_name: &str, start_dir: &str) -> Result<PathBuf, String> {
     let mut dir = PathBuf::from(start_dir);
     loop {
-        let candidate = dir.join("node_modules").join(pkg_name).join("package.json");
-        if candidate.exists() {
-            return Ok(candidate);
+        let package = dir.join("node_modules").join(pkg_name);
+        if package.is_dir() {
+            return Ok(package.join("package.json"));
         }
         if !dir.pop() {
             break;
@@ -388,26 +429,49 @@ fn valid_package_target(target: &str) -> bool {
 pub fn resolve_specifier(
     specifier: &str,
     from_dir: &str,
-    conditions: &[String],
+    context: &ResolutionContext,
 ) -> Result<(PathBuf, Option<PathBuf>), String> {
     if specifier.starts_with('.') || specifier.starts_with('/') {
-        resolve_relative(Path::new(from_dir), specifier).map(|path| (real_path(PathBuf::from(path)), None))
+        resolve_relative(Path::new(from_dir), specifier)
+            .map(|path| (real_path(PathBuf::from(path)), None))
+            .map_err(|miss| match miss {
+                RelativeMiss::Absent => format!("could not resolve '{specifier}' from {from_dir:?}"),
+                RelativeMiss::CaseMismatch(reason) => reason,
+            })
     } else {
-        resolve_bare_specifier(specifier, from_dir, conditions)
+        resolve_bare_specifier(specifier, from_dir, context)
             .map(|(path, manifest)| (real_path(PathBuf::from(path)), Some(real_path(manifest))))
     }
 }
 
-fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, String> {
-    // Appended, not replaced: `./tokens.theme` names `tokens.theme.ts`.
-    let target = base_dir.join(specifier).to_string_lossy().to_string();
-    resolution::extension_policy()
-        .probe(&target, |candidate| Path::new(candidate).is_file())
-        .ok_or_else(|| format!("could not resolve '{}' from {:?}", specifier, base_dir))
+/// Why a relative specifier resolved to no file.
+enum RelativeMiss {
+    Absent,
+    /// A file differs from it only in case: never resolved, never absent.
+    CaseMismatch(String),
+}
+
+fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, RelativeMiss> {
+    // Appended, not replaced: `./tokens.theme` names `tokens.theme.ts`. `..`
+    // is taken back lexically, as Node resolves it, so the file checked is
+    // the file opened.
+    let target = resolution::lexical(&base_dir.join(specifier)).to_string_lossy().to_string();
+    match resolution::extension_policy().probe(&target, |candidate| resolution::see_within(base_dir, candidate)) {
+        resolution::Probe::Found(path) => Ok(path),
+        resolution::Probe::CaseMismatch { candidate, actual } => {
+            Err(RelativeMiss::CaseMismatch(resolution::case_mismatch_reason(
+                &format!("relative import '{specifier}' from {base_dir:?}"),
+                &candidate,
+                &actual,
+                "spell the import as the file is spelled",
+            )))
+        }
+        resolution::Probe::Absent => Err(RelativeMiss::Absent),
+    }
 }
 
 /// `names` are the names as the *imported* module defines them — what a stub
-/// must define, since the bundle rewrite destructures `{ imported: local }`.
+/// must define, since the bundle reads `__modules['__stub__/x']['name']`.
 struct ImportInfo {
     specifier: String,
     names: Vec<String>,
@@ -482,7 +546,7 @@ fn has_esm_syntax(source: &str, file_path: &str) -> bool {
     })
 }
 
-/// The bundle rewrites ESM into IIFEs, so a CJS body would evaluate against
+/// The bundle rewrites ESM into functions, so a CJS body would evaluate against
 /// an undefined `module`/`require` and fail far from its cause.
 fn looks_like_commonjs(source: &str, file_path: &str) -> bool {
     if has_esm_syntax(source, file_path) {
@@ -591,7 +655,7 @@ type DependencyResolution = (
 pub fn resolve_all_deps(
     system_path: &str,
     _root_dir: &str,
-    conditions: &[String],
+    context: &ResolutionContext,
 ) -> Result<DependencyResolution, String> {
     let mut specifier_map: HashMap<(String, String), String> = HashMap::new();
     let mut source_map: HashMap<String, String> = HashMap::new();
@@ -682,7 +746,8 @@ pub fn resolve_all_deps(
                     }
                     // The evaluated module makes this import, so it would
                     // read as undefined.
-                    Err(_) => {
+                    Err(RelativeMiss::CaseMismatch(reason)) => return Err(reason),
+                    Err(RelativeMiss::Absent) => {
                         return Err(format!(
                             "relative import '{}' in '{}' names no file, and the module \
                              evaluates it (it is not a type-only import), so the system cannot \
@@ -709,7 +774,7 @@ pub fn resolve_all_deps(
             } else {
                 // No generic stub fallback: a silent stub turns a missing
                 // package into "X is not a function" in an unrelated module.
-                match resolve_bare_specifier(spec, &current_dir.to_string_lossy(), conditions) {
+                match resolve_bare_specifier(spec, &current_dir.to_string_lossy(), context) {
                     Ok((resolved, manifest)) => {
                         let canonical = fs::canonicalize(&resolved)
                             .unwrap_or_else(|_| PathBuf::from(&resolved))
@@ -770,323 +835,7 @@ fn type_only_export_names(source: &str, file_path: &str) -> HashSet<String> {
         .collect()
 }
 
-struct RewriteOp {
-    start: usize,
-    end: usize,
-    replacement: String,
-}
-
-/// `require_literal` is the registry key ALREADY escaped by `js_quoted` — it is
-/// spliced straight into `__require('…')` and must never be used as a map key.
-fn rewrite_import_specifiers(
-    specifiers: &[oxc::ast::ast::ImportDeclarationSpecifier<'_>],
-    require_literal: &str,
-) -> String {
-    let mut destructure_parts = Vec::new();
-    let mut default_name: Option<String> = None;
-    let mut namespace_name: Option<String> = None;
-
-    for specifier in specifiers {
-        match specifier {
-            oxc::ast::ast::ImportDeclarationSpecifier::ImportSpecifier(import) => {
-                let imported = module_export_name(&import.imported);
-                let local = import.local.name.to_string();
-                if imported == local {
-                    destructure_parts.push(imported);
-                } else {
-                    destructure_parts.push(format!("{}: {}", imported, local));
-                }
-            }
-            oxc::ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
-                default_name = Some(default.local.name.to_string());
-            }
-            oxc::ast::ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
-                namespace_name = Some(namespace.local.name.to_string());
-            }
-        }
-    }
-
-    let mut parts = Vec::new();
-    if let Some(namespace_name) = namespace_name {
-        parts.push(format!(
-            "const {} = __require('{}')",
-            namespace_name, require_literal
-        ));
-    } else {
-        if let Some(default_name) = default_name {
-            parts.push(format!(
-                "const {} = __require('{}').default",
-                default_name, require_literal
-            ));
-        }
-        if !destructure_parts.is_empty() {
-            parts.push(format!(
-                "const {{ {} }} = __require('{}')",
-                destructure_parts.join(", "),
-                require_literal
-            ));
-        }
-    }
-    parts.join(";\n")
-}
-
-/// Replace import/export statements with `__require()`/`__exports`
-/// assignments. The IIFE wrapper is the caller's.
-fn rewrite_module_for_bundle(
-    source: &str,
-    canonical_path: &str,
-    specifier_map: &HashMap<(String, String), String>,
-) -> Result<String, String> {
-    let allocator = Allocator::default();
-    let source_type = SourceType::from_path(Path::new(canonical_path))
-        .unwrap_or_else(|_| SourceType::mjs())
-        .with_module(true);
-
-    let ParserReturn { program, .. } = Parser::new(&allocator, source, source_type).parse();
-
-    let mut ops: Vec<RewriteOp> = Vec::new();
-    let mut trailing_exports: Vec<(String, String)> = Vec::new();
-
-    for stmt in &program.body {
-        match stmt {
-            Statement::ImportDeclaration(decl) => {
-                let spec = decl.source.value.to_string();
-                let require_literal = js_quoted(
-                    &specifier_map
-                        .get(&(canonical_path.to_string(), spec.clone()))
-                        .cloned()
-                        .unwrap_or_else(|| stub_key(&spec)),
-                );
-
-                // The span takes the statement's own `;`, and compacted output
-                // starts the next statement on the same line, so the
-                // replacement ends itself.
-                let replacement = match &decl.specifiers {
-                    Some(specifiers) if !specifiers.is_empty() => format!(
-                        "{};",
-                        rewrite_import_specifiers(specifiers, &require_literal)
-                    ),
-                    _ => format!("__require('{}');", require_literal),
-                };
-
-                ops.push(RewriteOp {
-                    start: decl.span.start as usize,
-                    end: decl.span.end as usize,
-                    replacement,
-                });
-            }
-
-            Statement::ExportNamedDeclaration(decl) => {
-                if decl.source.is_some() {
-                    // The module table resolves a re-export; its value is
-                    // assigned after the module runs.
-                    ops.push(RewriteOp {
-                        start: decl.span.start as usize,
-                        end: decl.span.end as usize,
-                        replacement: String::new(),
-                    });
-                } else if !decl.specifiers.is_empty() {
-                    for es in &decl.specifiers {
-                        trailing_exports.push((
-                            module_export_name(&es.exported),
-                            module_export_name(&es.local),
-                        ));
-                    }
-                    ops.push(RewriteOp {
-                        start: decl.span.start as usize,
-                        end: decl.span.end as usize,
-                        replacement: String::new(),
-                    });
-                } else if decl.declaration.is_none() {
-                    // `export {}`, which the strip leaves in a module that
-                    // exports only types, exports nothing.
-                    ops.push(RewriteOp {
-                        start: decl.span.start as usize,
-                        end: decl.span.end as usize,
-                        replacement: String::new(),
-                    });
-                } else if let Some(declaration) = &decl.declaration {
-                    let decl_start = declaration.span().start as usize;
-                    let export_keyword_end = decl_start;
-                    ops.push(RewriteOp {
-                        start: decl.span.start as usize,
-                        end: export_keyword_end,
-                        replacement: String::new(),
-                    });
-                    collect_declaration_export_names(declaration, &mut trailing_exports);
-                }
-            }
-
-            Statement::ExportDefaultDeclaration(decl) => {
-                let decl_start = decl.declaration.span().start as usize;
-                ops.push(RewriteOp {
-                    start: decl.span.start as usize,
-                    end: decl_start,
-                    replacement: "__exports.default = ".to_string(),
-                });
-                // A function or class declaration becomes an expression here,
-                // which compacted output must not run into the next statement.
-                if matches!(
-                    decl.declaration,
-                    oxc::ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(_)
-                        | oxc::ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(_)
-                ) {
-                    let decl_end = decl.span.end as usize;
-                    ops.push(RewriteOp {
-                        start: decl_end,
-                        end: decl_end,
-                        replacement: ";".to_string(),
-                    });
-                }
-            }
-
-            // The module table resolves what `export *` and `export * as`
-            // bring in; their values are assigned after the module runs.
-            Statement::ExportAllDeclaration(decl) => {
-                ops.push(RewriteOp {
-                    start: decl.span.start as usize,
-                    end: decl.span.end as usize,
-                    replacement: String::new(),
-                });
-            }
-
-            _ => {}
-        }
-    }
-
-    // Reverse order keeps the not-yet-applied offsets valid. At one offset,
-    // the op replacing text runs before an insertion there, so the insertion
-    // lands ahead of that replacement and shifts no pending range.
-    ops.sort_by_key(|op| std::cmp::Reverse((op.start, op.end)));
-    let mut result = source.to_string();
-    for op in &ops {
-        result.replace_range(op.start..op.end, &op.replacement);
-    }
-
-    if !trailing_exports.is_empty() {
-        result.push('\n');
-        for (exported, local) in &trailing_exports {
-            // `local` is a bare JS binding identifier; `exported` is a module
-            // namespace name, which may be an arbitrary string literal.
-            let _ = writeln!(result, "__exports['{}'] = {};", js_quoted(exported), local);
-        }
-    }
-
-    Ok(result)
-}
-
-fn collect_declaration_export_names(
-    declaration: &oxc::ast::ast::Declaration<'_>,
-    exports: &mut Vec<(String, String)>,
-) {
-    match declaration {
-        oxc::ast::ast::Declaration::VariableDeclaration(var_decl) => {
-            for declarator in &var_decl.declarations {
-                collect_binding_names(&declarator.id, exports);
-            }
-        }
-        oxc::ast::ast::Declaration::FunctionDeclaration(fn_decl) => {
-            if let Some(id) = &fn_decl.id {
-                let name = id.name.to_string();
-                exports.push((name.clone(), name));
-            }
-        }
-        oxc::ast::ast::Declaration::ClassDeclaration(class_decl) => {
-            if let Some(id) = &class_decl.id {
-                let name = id.name.to_string();
-                exports.push((name.clone(), name));
-            }
-        }
-        _ => {}
-    }
-}
-
-fn collect_binding_names(
-    pattern: &oxc::ast::ast::BindingPattern<'_>,
-    exports: &mut Vec<(String, String)>,
-) {
-    match pattern {
-        oxc::ast::ast::BindingPattern::BindingIdentifier(id) => {
-            let name = id.name.to_string();
-            exports.push((name.clone(), name));
-        }
-        oxc::ast::ast::BindingPattern::ObjectPattern(obj) => {
-            for prop in &obj.properties {
-                collect_binding_names(&prop.value, exports);
-            }
-        }
-        oxc::ast::ast::BindingPattern::ArrayPattern(arr) => {
-            for elem in arr.elements.iter().flatten() {
-                collect_binding_names(elem, exports);
-            }
-        }
-        oxc::ast::ast::BindingPattern::AssignmentPattern(assign) => {
-            collect_binding_names(&assign.left, exports);
-        }
-    }
-}
-
-/// Returns modules in execution order: dependencies before dependents.
-fn topological_sort(
-    specifier_map: &HashMap<(String, String), String>,
-    source_map: &HashMap<String, String>,
-    _entry_path: &str,
-) -> Result<Vec<String>, String> {
-    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
-    let mut in_degree: HashMap<&str, usize> = HashMap::new();
-
-    for key in source_map.keys() {
-        dependents.entry(key.as_str()).or_default();
-        in_degree.entry(key.as_str()).or_insert(0);
-    }
-
-    for ((from, _), to) in specifier_map {
-        if source_map.contains_key(to.as_str()) && source_map.contains_key(from.as_str()) {
-            dependents
-                .entry(to.as_str())
-                .or_default()
-                .push(from.as_str());
-            *in_degree.entry(from.as_str()).or_insert(0) += 1;
-        }
-    }
-
-    // HashMap iteration order is unspecified: sorting every adjacency list
-    // and the root queue is what keeps the emitted bundle byte-stable.
-    for node_dependents in dependents.values_mut() {
-        node_dependents.sort_unstable();
-    }
-
-    let mut roots: Vec<&str> = in_degree
-        .iter()
-        .filter(|(_, &degree)| degree == 0)
-        .map(|(node, _)| *node)
-        .collect();
-    roots.sort_unstable();
-    let mut queue: VecDeque<&str> = roots.into_iter().collect();
-
-    let mut sorted: Vec<String> = Vec::new();
-    while let Some(node) = queue.pop_front() {
-        sorted.push(node.to_string());
-        if let Some(node_dependents) = dependents.get(node) {
-            for dep in node_dependents {
-                if let Some(d) = in_degree.get_mut(dep) {
-                    *d -= 1;
-                    if *d == 0 {
-                        queue.push_back(dep);
-                    }
-                }
-            }
-        }
-    }
-
-    if sorted.len() != in_degree.len() {
-        return Err("circular dependency detected in module graph".to_string());
-    }
-
-    Ok(sorted)
-}
-
-/// Marker emitted before each module's IIFE; bundle-line-to-module
+/// Marker emitted before each module; bundle-line-to-module
 /// attribution keys off it.
 const MODULE_MARKER_PREFIX: &str = "// __module__: ";
 
@@ -1107,6 +856,9 @@ struct BundleLayout {
     stub_specifiers: Vec<String>,
     /// Byte range of each real module's rewritten text in the bundle.
     module_spans: Vec<(usize, usize, String)>,
+    /// The bundle range of each reference to an imported binding, and the
+    /// local name the module refers to it by.
+    import_refs: Vec<(usize, usize, String)>,
 }
 
 impl BundleLayout {
@@ -1141,17 +893,27 @@ fn offsets_to_line_numbers(bundle: &str, offsets: Vec<(usize, String)>) -> Vec<(
         .collect()
 }
 
-/// Generated structure:
+/// Generated structure (see `linked`):
 /// ```js
 /// globalThis.console = globalThis.console || ...;  // host shim
 /// const __modules = {};
-/// const __require = (n) => __modules[n];
 /// // __module__: __stub__/react
 /// (function(){ const __exports = {}; ... __modules['__stub__/react'] = __exports; })();
+/// __modules['/path/to/dep.js'] = {};  // every module, in evaluation order
+/// __modules['/path/to/mod.js'] = {};
 /// // __module__: /path/to/mod.js
-/// (function(){ const __exports = {}; ... __modules['/path/to/mod.js'] = __exports; })();
+/// const __linked0 = (function*(){ const __exports = __modules['/path/to/mod.js'];
+/// Object.defineProperty(__exports, 'name', { enumerable: true, get: () => name });
+/// yield;
+/// ... })();
+/// __linked0.next();
+/// __linked1.next();  // each module's body, in evaluation order
 /// ```
-/// The returned [`BundleLayout`] attributes an eval failure to its module.
+/// Every module's export object exists first, so the content scans that walk
+/// `__modules` meet modules in the order they ran. Each module then runs to
+/// its `yield` to link, defining its export getters; then each finishes in
+/// evaluation order. The returned [`BundleLayout`] attributes an eval failure
+/// to its module.
 fn build_bundle(
     specifier_map: &HashMap<(String, String), String>,
     source_map: &HashMap<String, String>,
@@ -1165,12 +927,9 @@ fn build_bundle(
     let mut marker_offsets: Vec<(usize, String)> = Vec::new();
 
     bundle.push_str(CONSOLE_SHIM);
-    bundle.push_str("const __modules = {};\nconst __require = (n) => __modules[n];\n");
-    // A module namespace lists its names in code-unit order, as Node lists
-    // them; plain assignment leaves them in the order the module ran.
-    bundle.push_str(
-        "const __namespace = (e) => { const ns = {}; for (const k of Object.keys(e).sort()) ns[k] = e[k]; return ns; };\n\n",
-    );
+    bundle.push_str("const __modules = {};\n");
+    bundle.push_str(linked::PRELUDE);
+    bundle.push('\n');
 
     // Stub modules first, emitted in sorted key order (and with sorted export
     // names) so the same inputs always produce the same bytes.
@@ -1195,115 +954,6 @@ fn build_bundle(
         bundle.push_str("})();\n\n");
     }
 
-    let order = match topological_sort(specifier_map, source_map, entry_path) {
-        Ok(order) => order,
-        Err(_) => {
-            let prelude = Prelude { bundle, marker_offsets, stub_specifiers };
-            return build_linked_bundle(specifier_map, source_map, stub_exports, type_exports, entry_path, prelude);
-        }
-    };
-    // Every module's names come from the shared module table, as a cyclic
-    // graph's do: an import or re-export that links to nothing fails here,
-    // before any module runs.
-    let mut modules: HashMap<String, linked::LinkedModule> = HashMap::with_capacity(order.len());
-    for path in &order {
-        let module = linked::rewrite_module_for_linking(&source_map[path], path, specifier_map)?;
-        modules.insert(path.clone(), module);
-    }
-    let linker = linked::Linker::new(&modules, stub_exports, type_exports);
-    let mut paths: Vec<&String> = order.iter().collect();
-    paths.sort();
-    for path in paths {
-        linker.check_links(path)?;
-    }
-    let mut module_spans = Vec::with_capacity(order.len());
-
-    for module_path in &order {
-        push_module_iife(
-            &mut bundle,
-            &mut marker_offsets,
-            &mut module_spans,
-            module_path,
-            source_map,
-            specifier_map,
-            &linker.forwarded(module_path),
-        )?;
-    }
-
-    let module_starts = offsets_to_line_numbers(&bundle, marker_offsets);
-    Ok((
-        bundle,
-        BundleLayout {
-            module_starts,
-            stub_specifiers,
-            module_spans,
-        },
-    ))
-}
-
-/// Appends `module_path` as an IIFE that evaluates it at once and registers
-/// its exports.
-fn push_module_iife(
-    bundle: &mut String,
-    marker_offsets: &mut Vec<(usize, String)>,
-    module_spans: &mut Vec<(usize, usize, String)>,
-    module_path: &String,
-    source_map: &HashMap<String, String>,
-    specifier_map: &HashMap<(String, String), String>,
-    forwarded: &[(String, String)],
-) -> Result<(), String> {
-    let source = source_map
-        .get(module_path)
-        .ok_or_else(|| format!("module '{}' not found in source_map", module_path))?;
-
-    let mut rewritten = rewrite_module_for_bundle(source, module_path, specifier_map)?;
-    // What the module re-exports, or `export *` brings in, reads the binding
-    // it resolves to, once the modules it imports have run.
-    if !forwarded.is_empty() {
-        rewritten.push('\n');
-        for (name, read) in forwarded {
-            let _ = writeln!(rewritten, "__exports['{}'] = {};", js_quoted(name), read);
-        }
-    }
-
-    marker_offsets.push((bundle.len(), module_path.clone()));
-    let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, module_path);
-    bundle.push_str("(function(){ const __exports = {};\n");
-    let start = bundle.len();
-    bundle.push_str(&rewritten);
-    module_spans.push((start, bundle.len(), module_path.clone()));
-    bundle.push('\n');
-    let _ = writeln!(
-        bundle,
-        "__modules['{}'] = __namespace(__exports);",
-        js_quoted(module_path)
-    );
-    bundle.push_str("})();\n\n");
-    Ok(())
-}
-
-/// What a bundle holds before its modules: the shims and stub modules, where
-/// each stub starts, and the stubs' specifiers.
-struct Prelude {
-    bundle: String,
-    marker_offsets: Vec<(usize, String)>,
-    stub_specifiers: Vec<String>,
-}
-
-/// The bundle of a graph with an import cycle (see `linked`), after the
-/// stub modules `bundle` already holds. Every module's export object exists
-/// first; each module is then a generator that runs to its `yield` to link,
-/// defining its namespace imports and its export getters; then each finishes
-/// in evaluation order.
-fn build_linked_bundle(
-    specifier_map: &HashMap<(String, String), String>,
-    source_map: &HashMap<String, String>,
-    stub_exports: &HashMap<String, HashSet<String>>,
-    type_exports: &HashMap<String, HashSet<String>>,
-    entry_path: &str,
-    prelude: Prelude,
-) -> Result<(String, BundleLayout), String> {
-    let Prelude { mut bundle, mut marker_offsets, stub_specifiers } = prelude;
     let order = linked::evaluation_order(specifier_map, source_map, entry_path);
     let mut paths: Vec<&String> = source_map.keys().collect();
     paths.sort();
@@ -1312,6 +962,8 @@ fn build_linked_bundle(
         let module = linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map)?;
         modules.insert((*path).clone(), module);
     }
+    // An import or re-export that links to nothing fails here, before any
+    // module runs.
     let linker = linked::Linker::new(&modules, stub_exports, type_exports);
     for path in &paths {
         linker.check_links(path)?;
@@ -1320,11 +972,13 @@ fn build_linked_bundle(
         paths.iter().enumerate().map(|(index, path)| (path.as_str(), format!("__linked{index}"))).collect();
     let generator = |module: &str| &generators[module];
 
-    for path in &paths {
+    // The global-style and theme scans walk `__modules` in this order.
+    for path in &order {
         let _ = writeln!(bundle, "__modules['{}'] = {{}};", js_quoted(path));
     }
     bundle.push('\n');
     let mut module_spans = Vec::with_capacity(paths.len());
+    let mut import_refs = Vec::new();
     for path in &paths {
         let module = &modules[*path];
         marker_offsets.push((bundle.len(), (*path).clone()));
@@ -1348,6 +1002,7 @@ fn build_linked_bundle(
         let start = bundle.len();
         bundle.push_str(&module.body);
         module_spans.push((start, bundle.len(), (*path).clone()));
+        import_refs.extend(module.import_refs.iter().map(|(from, to, local)| (start + from, start + to, local.clone())));
         bundle.push_str("\n})();\n");
         let _ = writeln!(bundle, "{}.next();\n", generator(path));
     }
@@ -1362,6 +1017,7 @@ fn build_linked_bundle(
             module_starts,
             stub_specifiers,
             module_spans,
+            import_refs,
         },
     ))
 }
@@ -1760,8 +1416,10 @@ struct AuthoredPosition {
 
 /// Why an authored callable's bindings cannot be admitted.
 enum BindingFailure {
-    /// A reference inside the callable resolves to a binding outside it.
-    Captured(String),
+    /// A reference inside the callable resolves to a binding outside it: the
+    /// first, and each read of an import through the bundle's module cell
+    /// when every read of the cell is one.
+    Captured { reason: String, import_reads: Vec<String> },
     /// The callable's function or a host read could not be established.
     Inconclusive(String),
 }
@@ -1800,7 +1458,12 @@ fn transform_provenance<'js>(
             id.clone(),
             match evidence {
                 Ok(globals) => serde_json::json!({ "hostGlobals": globals }),
-                Err(BindingFailure::Captured(reason)) => serde_json::json!({ "rejection": reason }),
+                Err(BindingFailure::Captured { reason, import_reads }) if import_reads.is_empty() => {
+                    serde_json::json!({ "rejection": reason })
+                }
+                Err(BindingFailure::Captured { reason, import_reads }) => {
+                    serde_json::json!({ "rejection": reason, "importReads": import_reads })
+                }
                 Err(BindingFailure::Inconclusive(reason)) if reads_shared_host_name(source) => {
                     serde_json::json!({ "rejection": reason })
                 }
@@ -1843,7 +1506,9 @@ fn authored_positions<'js>(
 /// The shared host names the authored function reads as the host's, or why
 /// its bindings cannot be admitted: the position must start exactly that
 /// function of a bundled module and its text must be the configured source;
-/// a reference resolving to a binding outside the function is captured; and
+/// a reference resolving to a binding outside the function, or reading an
+/// imported binding, is captured, and each import read is named when the
+/// module cell is read for nothing else; and
 /// every `btoa` or `atob` it reads must be unbound in a module without
 /// direct eval.
 fn host_binding_evidence(
@@ -1891,6 +1556,11 @@ fn host_binding_evidence(
     let direct_eval = scoping.root_unresolved_references().contains_key("eval");
     let mut globals = Vec::new();
     let mut unproven = None;
+    let mut captured: Option<String> = None;
+    let mut import_reads: Vec<String> = Vec::new();
+    // Whether the callable reads the bundle's module cell other than to read
+    // an import: then the cell's reads are not all imports.
+    let mut cell_read_otherwise = false;
     // Nodes come in source order, so the first captured name is reported.
     for node in semantic.nodes().iter() {
         let AstKind::IdentifierReference(reference) = node.kind() else { continue };
@@ -1902,9 +1572,22 @@ fn host_binding_evidence(
         match symbol {
             Some(symbol) if span.contains_inclusive(scoping.symbol_span(symbol)) => {}
             Some(_) => {
-                return Err(BindingFailure::Captured(format!(
-                    "reads '{name}' declared in {module} outside the callback"
-                )));
+                cell_read_otherwise |= name == "__modules";
+                captured.get_or_insert_with(|| format!("reads '{name}' declared in {module} outside the callback"));
+            }
+            // The bundle refers to an imported binding through its module's
+            // cell, within the range the rewrite recorded for that read.
+            None if name == "__modules" => {
+                let at = start + reference.span.start as usize;
+                let imported = layout.import_refs.iter().find(|(from, to, _)| (*from..*to).contains(&at));
+                let reason =
+                    format!("reads '{}' declared in {module} outside the callback", imported.map_or(name, |(_, _, local)| local.as_str()));
+                match imported {
+                    Some(_) if !import_reads.contains(&reason) => import_reads.push(reason.clone()),
+                    Some(_) => {}
+                    None => cell_read_otherwise = true,
+                }
+                captured.get_or_insert(reason);
             }
             None => {
                 let Some(host) = SHARED_HOST_NAMES.iter().find(|host| name == **host) else { continue };
@@ -1915,6 +1598,12 @@ fn host_binding_evidence(
                 }
             }
         }
+    }
+    if let Some(reason) = captured {
+        if cell_read_otherwise {
+            import_reads.clear();
+        }
+        return Err(BindingFailure::Captured { reason, import_reads });
     }
     if let Some(reason) = unproven {
         return Err(inconclusive(reason));
@@ -1963,8 +1652,9 @@ fn extract_vocabulary_record<'js>(
   // Registration copies a block's styles, so its declaring module is found by
   // content: the module exporting a block with the same styles, the export
   // named like the registration breaking a tie between distinct blocks. A
-  // module registers after the modules it imports, so the first exporter of
-  // a block declares it.
+  // module registers after the modules it imports, and `__modules` holds
+  // modules in evaluation order (build_bundle registers them so), so the
+  // first exporter of a block declares it.
   const exported = [];
   for (const path in __modules) {
     const ns = __modules[path];
@@ -2065,16 +1755,16 @@ fn list_export_keys(namespace: &Object<'_>) -> Vec<String> {
     keys
 }
 
-/// Load a system module and return its serialized configuration.
-/// `conditions` are the host's export conditions, in its order.
+/// Load a system module and return its serialized configuration, resolving
+/// its imports under `context`.
 pub fn load_system_module(
     system_path: &str,
     root_dir: &str,
     export_name: Option<&str>,
-    conditions: &[String],
+    context: &ResolutionContext,
 ) -> Result<SystemConfig, String> {
     let (specifier_map, source_map, stub_exports, manifests, type_exports) =
-        resolve_all_deps(system_path, root_dir, conditions)?;
+        resolve_all_deps(system_path, root_dir, context)?;
 
     let entry_path = fs::canonicalize(system_path)
         .map_err(|e| format!("failed to canonicalize '{}': {}", system_path, e))?
@@ -2180,66 +1870,6 @@ export const ds = tokens;
     }
 
     #[test]
-    fn import_rewrite_preserves_existing_output_matrix() {
-        let stub_map = HashMap::new();
-
-        assert_eq!(
-            rewrite_module_for_bundle("import 'react';", "/entry.ts", &stub_map).unwrap(),
-            "__require('__stub__/react');"
-        );
-        assert_eq!(
-            rewrite_module_for_bundle("import {} from 'react';", "/entry.ts", &stub_map,).unwrap(),
-            "__require('__stub__/react');"
-        );
-        assert_eq!(
-            rewrite_module_for_bundle(
-                "import { same, source as local } from 'react-dom';",
-                "/entry.ts",
-                &stub_map,
-            )
-            .unwrap(),
-            "const { same, source: local } = __require('__stub__/react-dom');"
-        );
-        assert_eq!(
-            rewrite_module_for_bundle(
-                "import Default, { same, source as local } from 'react';",
-                "/entry.ts",
-                &stub_map,
-            )
-            .unwrap(),
-            "const Default = __require('__stub__/react').default;\nconst { same, source: local } = __require('__stub__/react');"
-        );
-        assert_eq!(
-            rewrite_module_for_bundle(
-                "import * as namespace from 'react/jsx-runtime';",
-                "/entry.ts",
-                &stub_map,
-            )
-            .unwrap(),
-            "const namespace = __require('__stub__/react/jsx-runtime');"
-        );
-        assert_eq!(
-            rewrite_module_for_bundle(
-                "import Default, * as namespace from 'react';",
-                "/entry.ts",
-                &stub_map,
-            )
-            .unwrap(),
-            "const namespace = __require('__stub__/react');"
-        );
-
-        let resolved_map = HashMap::from([(
-            ("/entry.ts".to_string(), "pkg".to_string()),
-            "/canonical/pkg.ts".to_string(),
-        )]);
-        assert_eq!(
-            rewrite_module_for_bundle("import { same } from 'pkg';", "/entry.ts", &resolved_map,)
-                .unwrap(),
-            "const { same } = __require('/canonical/pkg.ts');"
-        );
-    }
-
-    #[test]
     fn runtime_stub_list_matches_exactly_not_by_prefix() {
         for specifier in [
             "react",
@@ -2291,17 +1921,15 @@ export const ds = tokens;
             HashMap::from([(stub_key("react"), HashSet::from(["space".to_string()]))]);
         let source_map = single_module(
             "/entry.js",
-            "import { space as dsSpace } from 'react';\nconst applied = dsSpace();\n",
+            "import { space as dsSpace } from 'react';\nexport const applied = dsSpace();\n",
         );
         let (bundle, _) =
             build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
 
-        assert!(bundle.contains("__exports['space'] = noop;"), "{bundle}");
-        assert!(
-            bundle.contains("const { space: dsSpace } = __require('__stub__/react')"),
-            "{bundle}"
+        let checked = format!(
+            "{bundle}\nif (typeof __modules['/entry.js'].applied !== 'object') throw new Error('dsSpace is not the noop');\n"
         );
-        eval_bundle(&bundle).expect("aliased stub import must bind a callable noop");
+        eval_bundle(&checked).expect("aliased stub import must bind a callable noop");
     }
 
     #[test]
@@ -2327,8 +1955,10 @@ export const ds = tokens;
         let (bundle, _) =
             build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
 
-        assert!(bundle.contains("__exports['dsSpace'] = __modules['__stub__/react']['space'];"), "{bundle}");
-        eval_bundle(&bundle).expect("re-export from a stub must not read a property of undefined");
+        let checked = format!(
+            "{bundle}\nif (__modules['/entry.js'].dsSpace !== __modules['__stub__/react'].space) throw new Error('dsSpace is not the stub\\'s space');\n"
+        );
+        eval_bundle(&checked).expect("re-export from a stub must not read a property of undefined");
     }
 
     #[test]
@@ -2337,9 +1967,11 @@ export const ds = tokens;
         let (bundle, _) =
             build_bundle(&HashMap::new(), &source_map, &HashMap::new(), &HashMap::new(), "/entry.js").unwrap();
 
-        // An unregistered module brings in no name, so nothing is assigned.
-        assert!(!bundle.contains("__exports['"), "{bundle}");
-        eval_bundle(&bundle).expect("`export *` from an unregistered module must not throw");
+        // An unregistered module brings in no name.
+        let checked = format!(
+            "{bundle}\nif (Object.keys(__modules['/entry.js']).length !== 0) throw new Error('a name was brought in');\n"
+        );
+        eval_bundle(&checked).expect("`export *` from an unregistered module must not throw");
     }
 
     #[test]
@@ -2348,17 +1980,11 @@ export const ds = tokens;
             ("/entry.ts".to_string(), "pkg".to_string()),
             "/canonical/pkg.ts".to_string(),
         )]);
-        // The module table binds the name; the rewrite only drops the syntax.
-        assert_eq!(
-            rewrite_module_for_bundle("export * as ns from 'pkg';", "/entry.ts", &resolved_map).unwrap(),
-            ""
-        );
         let source_map = HashMap::from([
             ("/entry.ts".to_string(), "export * as ns from 'pkg';\n".to_string()),
             ("/canonical/pkg.ts".to_string(), "export const v = 7;\n".to_string()),
         ]);
         let (bundle, _) = build_bundle(&resolved_map, &source_map, &HashMap::new(), &HashMap::new(), "/entry.ts").unwrap();
-        assert!(bundle.contains("__exports['ns'] = __modules['/canonical/pkg.ts'];"), "{bundle}");
         let checked = format!("{bundle}\nif (__modules['/entry.ts'].ns.v !== 7) throw new Error('ns is not pkg');\n");
         eval_bundle(&checked).expect("`export * as ns` binds pkg's namespace");
 
@@ -2367,12 +1993,10 @@ export const ds = tokens;
         let source_map = single_module("/entry.js", "export * as R from 'react';\n");
         let (bundle, _) =
             build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
-        assert!(bundle.contains("__exports['R'] = __modules['__stub__/react'];"), "{bundle}");
-        assert!(
-            !bundle.contains("Object.assign(__exports, __require('__stub__/react')"),
-            "namespace form must not spread into __exports: {bundle}"
+        let checked = format!(
+            "{bundle}\nif (__modules['/entry.js'].R !== __modules['__stub__/react']) throw new Error('R is not the stub');\n"
         );
-        eval_bundle(&bundle).expect("`export * as ns` from a stub must bind an object");
+        eval_bundle(&checked).expect("`export * as ns` from a stub must bind an object");
     }
 
     #[test]
@@ -2544,10 +2168,20 @@ export const ds = tokens;
             &["runtime.js"],
         );
         fs::write(dir.join("node_modules/escape.ts"), "export {};\n").expect("write escape");
+        // A target differing from its file only in case: a source target
+        // falls back to the runtime one, and a runtime target names no file.
+        package(
+            "case-source",
+            serde_json::json!({ "exports": { ".": { "animus": "./src/Index.ts", "import": "./runtime.js" } } }),
+            &["src/index.ts", "runtime.js"],
+        );
+        package("case-runtime", serde_json::json!({ "exports": { ".": "./dist/Index.js" } }), &["dist/index.js"]);
+        package("case-main", serde_json::json!({ "main": "./Main.js" }), &["main.js"]);
         let from = dir.to_string_lossy().to_string();
         let resolved = |specifier: &str, conditions: &[&str]| {
             let conditions: Vec<String> = conditions.iter().map(|condition| condition.to_string()).collect();
-            resolve_bare_specifier(specifier, &from, &conditions)
+            let context = ResolutionContext { conditions, ..ResolutionContext::default() };
+            resolve_bare_specifier(specifier, &from, &context)
                 .map(|(path, _)| path.rsplit("node_modules/").next().unwrap_or_default().replace("/./", "/"))
         };
         assert_eq!(resolved("legacy-main", &[]).as_deref(), Ok("legacy-main/index.js"));
@@ -2560,6 +2194,14 @@ export const ds = tokens;
         assert_eq!(resolved("conditions", &[]).as_deref(), Ok("conditions/import.js"));
         assert_eq!(resolved("import-first", &["browser"]).as_deref(), Ok("import-first/import.js"));
         assert_eq!(resolved("escaping-source", &[]).as_deref(), Ok("escaping-source/runtime.js"));
+        assert_eq!(resolved("case-source", &[]).as_deref(), Ok("case-source/runtime.js"));
+        // Where the filesystem opens the misspelled entry, the selection
+        // fails naming the file it opens; elsewhere it names no file.
+        for (specifier, spelled, actual) in [("case-runtime", "dist/Index.js", "dist/index.js"), ("case-main", "Main.js", "main.js")] {
+            let opens = dir.join("node_modules").join(specifier).join(spelled).is_file();
+            let error = resolved(specifier, &[]).expect_err("a misspelled entry names no file");
+            assert!(!opens || (error.contains(actual) && error.contains("spelled differently")), "{error}");
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -2572,22 +2214,23 @@ export const ds = tokens;
         // competing rows pin the order: appended extensions, index files and
         // NodeNext sources each in policy order, an appended file before an
         // index, and the literal spelling before any source it stands for.
-        let witnesses: [(&[&str], &str, &str); 15] = [
-            (&["x.ts"], "./x.js", "x.ts"),
-            (&["x.js", "x.ts"], "./x.js", "x.js"),
-            (&["x.tsx"], "./x.jsx", "x.tsx"),
-            (&["x.mts"], "./x.mjs", "x.mts"),
-            (&["x.cts"], "./x.cjs", "x.cts"),
-            (&["x.ts"], "./x.JS", "x.ts"),
-            (&["x.jsx"], "./x", "x.jsx"),
-            (&["x.mjs"], "./x", "x.mjs"),
-            (&["x.ts", "x.tsx", "x.js", "x.jsx", "x.mjs"], "./x", "x.ts"),
-            (&["x.tsx", "x.js"], "./x", "x.tsx"),
-            (&["x.jsx", "x.mjs"], "./x", "x.jsx"),
-            (&["x/index.ts", "x/index.tsx", "x/index.js"], "./x", "x/index.ts"),
-            (&["x.ts", "x/index.ts"], "./x", "x.ts"),
-            (&["x.ts", "x.tsx", "x.jsx"], "./x.js", "x.ts"),
-            (&["x.tsx", "x.jsx"], "./x.js", "x.tsx"),
+        let witnesses: [(&[&str], &str, Option<&str>); 15] = [
+            (&["x.ts"], "./x.js", Some("x.ts")),
+            (&["x.js", "x.ts"], "./x.js", Some("x.js")),
+            (&["x.tsx"], "./x.jsx", Some("x.tsx")),
+            (&["x.mts"], "./x.mjs", Some("x.mts")),
+            (&["x.cts"], "./x.cjs", Some("x.cts")),
+            // Exact case: `.JS` is no emitted `.js`, so nothing stands for it.
+            (&["x.ts"], "./x.JS", None),
+            (&["x.jsx"], "./x", Some("x.jsx")),
+            (&["x.mjs"], "./x", Some("x.mjs")),
+            (&["x.ts", "x.tsx", "x.js", "x.jsx", "x.mjs"], "./x", Some("x.ts")),
+            (&["x.tsx", "x.js"], "./x", Some("x.tsx")),
+            (&["x.jsx", "x.mjs"], "./x", Some("x.jsx")),
+            (&["x/index.ts", "x/index.tsx", "x/index.js"], "./x", Some("x/index.ts")),
+            (&["x.ts", "x/index.ts"], "./x", Some("x.ts")),
+            (&["x.ts", "x.tsx", "x.jsx"], "./x.js", Some("x.ts")),
+            (&["x.tsx", "x.jsx"], "./x.js", Some("x.tsx")),
         ];
         for (index, (present, specifier, expected)) in witnesses.into_iter().enumerate() {
             let dir = scratch_dir(&format!("extension-policy-{index}"));
@@ -2597,13 +2240,80 @@ export const ds = tokens;
                 fs::write(path, "export {};\n").expect("write witness");
             }
             let prefix = format!("{}/", dir.to_string_lossy());
-            let system = resolve_relative(&dir, specifier).map(|path| path.trim_start_matches(&prefix).trim_start_matches("./").to_string());
+            let system = resolve_relative(&dir, specifier)
+                .map(|path| path.trim_start_matches(&prefix).trim_start_matches("./").to_string())
+                .ok();
             let base = specifier.trim_start_matches("./");
-            let analysis = resolution::extension_policy().probe(base, |candidate| present.contains(&candidate));
-            assert_eq!(system.as_deref(), Ok(expected), "system: {present:?} {specifier}");
-            assert_eq!(analysis.as_deref(), Some(expected), "analysis: {present:?} {specifier}");
+            let analysis = resolution::extension_policy()
+                .probe(base, |candidate| match present.contains(&candidate) {
+                    true => resolution::Seen::File,
+                    false => resolution::Seen::Missing,
+                })
+                .found();
+            assert_eq!(system.as_deref(), expected, "system: {present:?} {specifier}");
+            assert_eq!(analysis.as_deref(), expected, "analysis: {present:?} {specifier}");
             let _ = fs::remove_dir_all(&dir);
         }
+        // A candidate the filesystem opens under a spelling no directory
+        // lists fails loudly, naming the file it opens; where the filesystem
+        // does not open it, the host's exact answer stands. Nothing is
+        // folded: `X.ts` for `./X` beside `x.ts`; `ä.ts` beside `Ä.ts` and an
+        // exact `ä.tsx`; an NFD `é.ts` beside an NFC `é.ts` and an exact NFD
+        // `é.tsx`; and `ς.ts` beside `Σ.ts` and an exact `ς.tsx`, which APFS
+        // opens as `Σ.ts`. Analysis keys each file by its own spelling.
+        let rows: [(&[&str], &str, &str, Option<&str>); 4] = [
+            (&["x.ts"], "./X", "X.ts", None),
+            (&["\u{c4}.ts", "\u{e4}.tsx"], "./\u{e4}", "\u{e4}.ts", Some("\u{e4}.tsx")),
+            (&["\u{e9}.ts", "e\u{301}.tsx"], "./e\u{301}", "e\u{301}.ts", Some("e\u{301}.tsx")),
+            (&["\u{3a3}.ts", "\u{3c2}.tsx"], "./\u{3c2}", "\u{3c2}.ts", Some("\u{3c2}.tsx")),
+        ];
+        for (present, specifier, asked, exact) in rows {
+            let dir = scratch_dir("extension-policy-case");
+            for file in present {
+                fs::write(dir.join(file), "export {};\n").expect("write witness");
+            }
+            let opens = dir.join(asked).is_file();
+            let resolved = resolve_relative(&dir, specifier);
+            let _ = fs::remove_dir_all(&dir);
+            match (opens, resolved, exact) {
+                (true, Err(RelativeMiss::CaseMismatch(reason)), _) => {
+                    assert!(reason.contains(present[0]), "{specifier}: {reason}")
+                }
+                (false, Ok(path), Some(exact)) => assert!(path.ends_with(exact), "{specifier}: {path}"),
+                (false, Err(RelativeMiss::Absent), None) => {}
+                (opens, Ok(path), _) => panic!("{specifier} (opens {opens}): resolved to {path}"),
+                (opens, Err(miss), _) => panic!(
+                    "{specifier} (opens {opens}): {}",
+                    match miss {
+                        RelativeMiss::Absent => "absent".to_string(),
+                        RelativeMiss::CaseMismatch(reason) => reason,
+                    }
+                ),
+            }
+        }
+        let analysis = resolution::extension_policy()
+            .probe("X", |candidate| match candidate == "x.ts" {
+                true => resolution::Seen::File,
+                false => resolution::Seen::Missing,
+            })
+            .found();
+        assert_eq!(analysis, None);
+        // The host's root spelled in another case: only the names a
+        // specifier spells are checked, so its imports still resolve where
+        // the filesystem opens that root, and are absent where it does not.
+        let dir = scratch_dir("extension-policy-host-case");
+        fs::create_dir_all(dir.join("sub")).expect("create directory");
+        fs::write(dir.join("sub/x.ts"), "export {};\n").expect("write witness");
+        let name = dir.file_name().expect("a scratch dir has a name").to_string_lossy().to_ascii_uppercase();
+        let host_root = dir.with_file_name(name);
+        match (host_root.exists(), resolve_relative(&host_root, "./sub/x")) {
+            (true, Ok(path)) => assert!(path.ends_with("sub/x.ts"), "{path}"),
+            (false, Err(RelativeMiss::Absent)) => {}
+            (opens, Ok(path)) => panic!("opens root {opens}: resolved to {path}"),
+            (opens, Err(RelativeMiss::Absent)) => panic!("opens root {opens}: read as absent"),
+            (opens, Err(RelativeMiss::CaseMismatch(reason))) => panic!("opens root {opens}: {reason}"),
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A relative import the evaluated module makes and that names no file
@@ -2616,7 +2326,7 @@ export const ds = tokens;
         write_fixture(&dir.join("erased.ts"), "import { Shape } from './types';\ntype T = Shape;\nexport default {};\n");
         write_fixture(&dir.join("types.ts"), "import './missing';\nexport interface Shape {}\n");
         write_fixture(&dir.join("value.ts"), "import { size } from './tokens';\nexport const s = size;\n");
-        let crawl = |entry: &str| resolve_all_deps(&dir.join(entry).to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let crawl = |entry: &str| resolve_all_deps(&dir.join(entry).to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         assert!(crawl("erased.ts").is_ok(), "{:?}", crawl("erased.ts").err());
         let error = crawl("value.ts").err().unwrap_or_default();
         assert!(error.contains("'./tokens'") && error.contains("value.ts"), "{error}");
@@ -2651,16 +2361,21 @@ export const ds = tokens;
         write_fixture(&dir.join("factory.js"), "export const made = ((btoa) => (v) => btoa(String(v)))((s) => s);\n");
         write_fixture(&dir.join("direct.js"), "eval('');\nexport const viaEval = (v) => btoa(String(v));\n");
         write_fixture(
+            &dir.join("authored.js"),
+            "export const authored = (() => { const bias = (v) => v; const __modules = (v) => v; return (v) => bias(v) + __modules(v); })();\n",
+        );
+        write_fixture(
             &dir.join("ds.js"),
             &format!(
                 "import {{ local, mathLocal, setImported }} from './local.js';\n\
                  import {{ global, decl, own, mathOwn, mathGlobal }} from './global.js';\n\
                  import {{ made }} from './factory.js';\n\
                  import {{ viaEval }} from './direct.js';\n\
+                 import {{ authored }} from './authored.js';\n\
                  const link = Symbol.for('animus.transform.authored');\n\
                  const forward = (fn) => {{ const w = (v) => fn(v); Object.defineProperty(w, link, {{ value: fn }}); return w; }};\n\
                  const built = new Function('v', 'return btoa(String(v))');\n\
-                 const linked = {{ local, global, decl, own, made, viaEval, built, mathLocal, setImported, mathOwn, mathGlobal }};\n\
+                 const linked = {{ local, global, decl, own, made, viaEval, built, mathLocal, setImported, mathOwn, mathGlobal, authored }};\n\
                  const transforms = Object.fromEntries(Object.entries(linked).map(([id, fn]) => [id, forward(fn)]));\n\
                  transforms.unlinked = (v) => btoa(String(v));\n\
                  transforms.renamed = forward(global);\n\
@@ -2678,7 +2393,7 @@ export const ds = tokens;
                  {FIXTURE_THEME}"
             ),
         );
-        let config = load_system_module(&dir.join("ds.js").to_string_lossy(), &dir.to_string_lossy(), None, &[])
+        let config = load_system_module(&dir.join("ds.js").to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default())
             .expect("fixture system loads");
         let provenance: serde_json::Value =
             serde_json::from_str(config.transform_provenance.as_deref().expect("provenance")).unwrap();
@@ -2696,6 +2411,11 @@ export const ds = tokens;
         // source reading neither host name keeps its text admission.
         assert!(reason("mathLocal").contains("reads 'Math' declared in"), "{}", reason("mathLocal"));
         assert!(reason("setImported").contains("reads 'Set' declared in"), "{}", reason("setImported"));
+        // An import read through the bundle's module cell is named as one; a
+        // `__modules` the module declares itself is no import.
+        assert_eq!(provenance["setImported"]["importReads"], serde_json::json!([reason("setImported")]));
+        assert!(reason("authored").contains("reads 'bias' declared in"), "{}", reason("authored"));
+        assert!(provenance["authored"].get("importReads").is_none(), "{}", provenance["authored"]);
         assert_eq!(provenance["mathOwn"], serde_json::json!({ "hostGlobals": [] }));
         assert_eq!(provenance["mathGlobal"], serde_json::json!({ "hostGlobals": [] }));
         assert_eq!(provenance["mathUnlinked"], serde_json::json!({ "hostGlobals": [] }));
@@ -2741,7 +2461,7 @@ export const ds = tokens;
         let entry = dir.join("entry.ts");
         write_fixture(&entry, &sealed_system_fixture(TWO_COLLECTION_RECORD));
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("sealed system must load");
@@ -2771,7 +2491,7 @@ export const ds = tokens;
         );
         write_fixture(&entry, &source);
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("sealed system must load");
@@ -2785,10 +2505,10 @@ export const ds = tokens;
     #[test]
     fn a_systems_explicit_reexport_is_never_overridden_by_a_star() {
         // Contract: an explicit export wins over a name `export *` brings in,
-        // whatever their order, as Node links them, on the acyclic path as on
-        // the cyclic one. A TypeScript type re-exported or imported without
-        // `type` links to nothing and fails nothing, as a bundler without
-        // isolated modules accepts it, and a module exporting only types loads.
+        // whatever their order, as Node links them. A TypeScript type
+        // re-exported or imported without `type` links to nothing and fails
+        // nothing, as a bundler without isolated modules accepts it, and a
+        // module exporting only types loads.
         const PROTOCOL: &str = "export const ds = { toConfig: () => ({ propConfig: JSON.stringify(data), groupRegistry: '{}' }), \
              getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [] }) };\n\
              export const theme = { serialize: () => ({ scalesJson: '{}', variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n";
@@ -2839,7 +2559,7 @@ export const ds = tokens;
                 write_fixture(&dir.join(file), &source);
             }
             let entry = files.iter().find(|(file, _)| file.starts_with("entry.")).map(|(file, _)| dir.join(file)).unwrap();
-            let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+            let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
             let _ = fs::remove_dir_all(&dir);
             assert_eq!(result.map(|loaded| loaded.prop_config).as_deref(), Ok(expected), "{name}");
         }
@@ -2863,7 +2583,7 @@ export const ds = tokens;
         );
         write_fixture(&dir.join("c.js"), "export const y = 3;\n");
         write_fixture(&dir.join("d.js"), "export const B = 4;\n");
-        let result = load_system_module(&dir.join("entry.js").to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&dir.join("entry.js").to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
         let order = r#"["B","a","default","w","y","z"]"#;
         assert_eq!(
@@ -2872,24 +2592,26 @@ export const ds = tokens;
         );
     }
 
-    /// Contract: a system whose module graph has an import cycle loads as
-    /// Node loads it. Each module evaluates once, after the modules it imports
-    /// outside its cycle. A hoisted function, an anonymous default function,
+    /// Contract: a system's module graph, with or without an import cycle,
+    /// loads as Node loads it. Each module evaluates once, after the modules
+    /// it imports outside its cycle. A hoisted function, an anonymous default function,
     /// a namespace import and a name `export *` brings in are all readable
     /// before their module evaluates, and every import, including one from
     /// outside the cycle, reads the exporting binding live, `export *`
     /// included when star exports form a cycle. An import of a name the
     /// module does not export, or a re-export that resolves to no binding or
-    /// ambiguously, fails the load, naming the module.
+    /// ambiguously, fails the load, naming the module. A write to an import
+    /// throws at the write, and the loader's default binding takes no name
+    /// the module uses.
     #[test]
-    fn cyclic_module_graph_evaluates_with_node_semantics() {
+    fn module_graphs_evaluate_with_node_semantics() {
         const PROTOCOL: &str = "export const ds = { toConfig: () => ({ propConfig: JSON.stringify(data), groupRegistry: '{}' }), \
              getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [] }) };\n\
              export const theme = { serialize: () => ({ scalesJson: '{}', variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n";
         /// A case's name, its modules, and the loaded propConfig or a part
         /// of the load's error.
         type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], Result<&'a str, &'a str>);
-        let cases: [Case; 13] = [
+        let cases: [Case; 16] = [
             (
                 "hoisted-live",
                 &[
@@ -2982,6 +2704,47 @@ export const ds = tokens;
                 Ok(r#"{"same":true}"#),
             ),
             (
+                // A write to an import reads and evaluates what it would
+                // write, then throws at the write.
+                "import-writes-throw-at-the-write",
+                &[
+                    ("m", "export const log = [];\nexport let v = 0;\nexport let n = { valueOf() { log.push('valueOf'); return 1; } };\n"),
+                    ("entry", "import { v, n, log } from './m.js';\n\
+                        const attempt = (write) => { try { write(); } catch (e) { log.push(e.constructor.name); } };\n\
+                        attempt(() => { v = (log.push('rhs'), 2); });\n\
+                        attempt(() => { v += (log.push('compound'), 2); });\n\
+                        attempt(() => { n++; });\n\
+                        attempt(() => { ({ v } = { get v() { log.push('get'); return 3; } }); });\n\
+                        attempt(() => { [v] = [(log.push('element'), 4)]; });\n\
+                        const data = { log, v };\n"),
+                ],
+                Ok(r#"{"log":["rhs","TypeError","compound","TypeError","valueOf","TypeError","get","TypeError","element","TypeError"],"v":0}"#),
+            ),
+            (
+                "import-logical-assignment-short-circuits",
+                &[
+                    ("m", "export let one = 1;\nexport let zero = 0;\n"),
+                    ("entry", "import { one, zero } from './m.js';\n\
+                        const seen = [];\n\
+                        const rhs = (x) => { seen.push(x); return x; };\n\
+                        one ||= rhs('or');\none ??= rhs('nullish');\nzero &&= rhs('and');\n\
+                        let thrown = null;\n\
+                        try { zero ||= rhs('written'); } catch (e) { thrown = e.constructor.name; }\n\
+                        const data = { seen, thrown, one, zero };\n"),
+                ],
+                Ok(r#"{"seen":["written"],"thrown":"TypeError","one":1,"zero":0}"#),
+            ),
+            (
+                // The loader names a default export's binding itself, never
+                // taking a name the module declares.
+                "authored-default-name",
+                &[
+                    ("b", "const __default = 4;\nexport default function () { return __default; }\n"),
+                    ("entry", "import f from './b.js';\nconst __default = 7;\nexport default 3;\nconst data = { ok: __default, f: f(), name: f.name };\n"),
+                ],
+                Ok(r#"{"ok":7,"f":4,"name":"default"}"#),
+            ),
+            (
                 "missing-import",
                 &[
                     ("entry", "import { nope } from './b.js';\nconst data = { nope };\n"),
@@ -3011,13 +2774,13 @@ export const ds = tokens;
             ),
         ];
         for (name, files, expected) in cases {
-            let dir = scratch_dir(&format!("cyclic-{name}"));
+            let dir = scratch_dir(&format!("node-{name}"));
             for (file, source) in files {
                 let source = if *file == "entry" { format!("{source}{PROTOCOL}") } else { source.to_string() };
                 write_fixture(&dir.join(format!("{file}.js")), &source);
             }
             let entry = dir.join("entry.js");
-            let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+            let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
             let _ = fs::remove_dir_all(&dir);
             match expected {
                 Ok(config) => assert_eq!(result.map(|loaded| loaded.prop_config).as_deref(), Ok(config), "{name}"),
@@ -3040,7 +2803,7 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("incompatible record version must fail loud");
@@ -3063,7 +2826,7 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("two distinct system-like exports must fail loud");
@@ -3086,7 +2849,7 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         result.expect("aliases of ONE instance stay unambiguous");
@@ -3098,9 +2861,9 @@ export const ds = tokens;
         let entry = dir.join("entry.ts");
         write_fixture(&entry, &sealed_system_fixture(TWO_COLLECTION_RECORD));
 
-        let first = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[])
+        let first = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default())
             .expect("first load");
-        let second = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[])
+        let second = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default())
             .expect("second load");
         let _ = fs::remove_dir_all(&dir);
 
@@ -3128,7 +2891,7 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("sealed system must load");
@@ -3174,7 +2937,7 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         result.expect("the load must succeed without touching the root barrel");
@@ -3195,9 +2958,9 @@ export const ds = tokens;
         );
         write_fixture(&entry, &source);
 
-        let first = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[])
+        let first = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default())
             .expect("sealed system must load");
-        let second = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[])
+        let second = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default())
             .expect("second load");
         let _ = fs::remove_dir_all(&dir);
 
@@ -3233,7 +2996,7 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a recordless system must fail the load");
@@ -3253,7 +3016,7 @@ export const ds = tokens;
              export const value = thing;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("an unresolvable bare specifier must fail the load");
@@ -3301,7 +3064,12 @@ export const ds = tokens;
         write_fixture(&dir.join("blocked.ts"), "export * from '@probe/kit/blocked';\n");
         let load = |entry: &str, conditions: &[&str]| {
             let conditions: Vec<String> = conditions.iter().map(|c| c.to_string()).collect();
-            load_system_module(&dir.join(entry).to_string_lossy(), &dir.to_string_lossy(), None, &conditions)
+            load_system_module(
+                &dir.join(entry).to_string_lossy(),
+                &dir.to_string_lossy(),
+                None,
+                &ResolutionContext { conditions, ..ResolutionContext::default() },
+            )
         };
 
         let source = load("system.ts", &["source", "development"]);
@@ -3354,7 +3122,7 @@ export const ds = tokens;
             "export const base = { color: 'red' };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
 
         let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
         let _ = fs::remove_dir_all(&dir);
@@ -3371,6 +3139,53 @@ export const ds = tokens;
             config.dependencies, expected,
             "dependencies must be the sorted canonical transitive module set"
         );
+    }
+
+    /// Contract: a workspace package resolves the same for system evaluation
+    /// and analysis. A declared workspace that nothing links into
+    /// `node_modules` answers once the `node_modules` lookup misses: the
+    /// system that imports it loads it, and `resolve_specifier`, which the
+    /// session's package map reads, names the same file.
+    #[test]
+    fn unlinked_workspace_resolves_alike_for_evaluation_and_analysis() {
+        let dir = scratch_dir("unlinked-workspace");
+        let app = dir.join("app");
+        let entry = app.join("entry.ts");
+        write_fixture(
+            &entry,
+            "import { base } from '@probe/tokens';\n\
+             export const theme = { serialize: () => ({ scalesJson: JSON.stringify(base), variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n\
+             export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
+        );
+        let workspace = dir.join("packages/tokens");
+        write_fixture(&workspace.join("package.json"), r#"{ "name": "@probe/tokens", "main": "./index.ts" }"#);
+        write_fixture(&workspace.join("index.ts"), "export const base = { color: 'red' };\n");
+        let canonical = fs::canonicalize(&workspace).expect("canonicalize workspace");
+        let context = ResolutionContext {
+            workspaces: BTreeMap::from([("@probe/tokens".to_string(), canonical.clone())]),
+            ..ResolutionContext::default()
+        };
+        let load = |context: &ResolutionContext| {
+            load_system_module(&entry.to_string_lossy(), &app.to_string_lossy(), None, context)
+        };
+        let undeclared = load(&ResolutionContext::default());
+        let evaluated = load(&context);
+        let analyzed = resolve_specifier("@probe/tokens", &app.to_string_lossy(), &context);
+        let _ = fs::remove_dir_all(&dir);
+
+        assert!(undeclared.is_err(), "an undeclared, unlinked workspace names no package");
+        // An installed package directory without a manifest is still the
+        // package Node loads (its `index`), so the workspace never answers.
+        let installed = scratch_dir("installed-without-manifest");
+        write_fixture(&installed.join("node_modules/@probe/tokens/index.js"), "export const base = 'installed';\n");
+        let installed_answer = resolve_specifier("@probe/tokens", &installed.to_string_lossy(), &context);
+        let installed_file = fs::canonicalize(installed.join("node_modules/@probe/tokens/index.js")).expect("canonicalize");
+        let _ = fs::remove_dir_all(&installed);
+        assert_eq!(installed_answer.map(|(path, _)| path), Ok(installed_file));
+        let config = evaluated.expect("a declared workspace loads");
+        let file = canonical.join("index.ts");
+        assert!(config.dependencies.contains(&file.to_string_lossy().to_string()), "{:?}", config.dependencies);
+        assert_eq!(analyzed.map(|(path, _)| path), Ok(file));
     }
 
     #[test]
@@ -3402,7 +3217,7 @@ export const ds = tokens;
              };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
 
         let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
         let _ = fs::remove_dir_all(&dir);
@@ -3453,7 +3268,7 @@ export const ds = tokens;
              };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
 
         let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
         let _ = fs::remove_dir_all(&dir);
@@ -3504,7 +3319,7 @@ export const ds = tokens;
              };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
 
         let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
         let _ = fs::remove_dir_all(&dir);
@@ -3554,7 +3369,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [{ name: 'globals', styles: globals.styles, fontFaces: globals.fontFaces }], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("system with an asset placeholder must load");
@@ -3565,6 +3380,59 @@ export const ds = tokens;
             blocks.contains("animus-asset:@acme/tokens/fonts/inter.woff2"),
             "placeholder must survive serialization verbatim: {blocks}"
         );
+    }
+
+    #[test]
+    fn a_systems_modules_evaluate_in_esm_order_and_global_styles_register_in_that_order() {
+        // Each module registers a global style as it runs. The record's order
+        // is ECMA's evaluation order, as Node and Bun run it: `c` (through
+        // `a`'s star), `a`, then `b`'s requests `d` and `x`, `b`, the entry.
+        // So the last registration for a selector wins as it would in Node.
+        // A block that `c` exports and `a` re-exports through its star is
+        // declared by `c`, the first module in that order to export it; path
+        // order would name `a.ts`.
+        let dir = scratch_dir("esm-order");
+        let register = |name: &str| {
+            format!("import {{ register }} from './registry';\nregister('{name}', {{ body: {{ color: '{name}' }} }});\n")
+        };
+        write_fixture(
+            &dir.join("registry.ts"),
+            "export const registered = [];\n\
+             export const register = (name, styles) => { registered.push({ name, styles }); };\n",
+        );
+        write_fixture(
+            &dir.join("c.ts"),
+            &format!(
+                "{}export const declared = {{ __brand: 'GlobalStyleBlock', styles: {{ main: {{ margin: 0 }} }} }};\n\
+                 register('declared', declared.styles);\n",
+                register("c")
+            ),
+        );
+        write_fixture(&dir.join("a.ts"), &format!("{}export * from './c';\n", register("a")));
+        write_fixture(&dir.join("d.ts"), &format!("{}export const y = 1;\n", register("d")));
+        write_fixture(&dir.join("x.ts"), &register("x"));
+        write_fixture(&dir.join("b.ts"), &format!("export {{ y }} from './d';\nimport './x';\n{}", register("b")));
+        let entry = dir.join("entry.ts");
+        write_fixture(
+            &entry,
+            &format!(
+                "import './a';\nimport './b';\nimport {{ registered }} from './registry';\n{}{}",
+                register("entry"),
+                sealed_system_fixture(
+                    "{ version: 1, keyframes: [], globalStyles: registered, collisions: [], legacyVerbs: [] }"
+                )
+            ),
+        );
+
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
+        let _ = fs::remove_dir_all(&dir);
+
+        let config = result.expect("ordered system loads");
+        let blocks: serde_json::Value =
+            serde_json::from_str(&config.global_style_blocks.expect("registered globals")).unwrap();
+        let order: Vec<&str> = blocks.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(order, ["c", "declared", "a", "d", "x", "b", "entry"]);
+        assert_eq!(blocks["declared"]["source"], "c.ts", "{blocks}");
     }
 
     #[test]
@@ -3597,7 +3465,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [{ name: 'docsResources', styles: copied(docsResources) }, { name: 'inline', styles: copied(inline) }], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("system with registered globals must load");
@@ -3627,7 +3495,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("plain system must load");
@@ -3655,7 +3523,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("'theme' beside a non-theme 'tokens' must load");
@@ -3683,7 +3551,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("a tokens-only system must load");
@@ -3712,7 +3580,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("built tokens beside unrelated theme must load");
@@ -3737,7 +3605,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let err = result.expect_err("an un-built 'theme' export must fail the load");
@@ -3769,7 +3637,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let err =
@@ -3794,7 +3662,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let err = result.expect_err("an un-built 'tokens' export must fail the load");
@@ -3815,7 +3683,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let err = result.expect_err("an unrelated 'theme' with no fallback must fail the load");
@@ -3844,7 +3712,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         result.expect("aliasing 'tokens' to 'theme' must stay a valid load");
@@ -3876,7 +3744,7 @@ export const ds = tokens;
              export const system = { toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }), getVocabularyRecord: () => ({ version: 1, keyframes: [], globalStyles: [], collisions: [], legacyVerbs: [] }) };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("two distinct built themes must fail the load");
@@ -3901,7 +3769,7 @@ export const ds = tokens;
              export const value = fontUrl;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a bundler asset-query import must fail the load");
@@ -3930,7 +3798,7 @@ export const ds = tokens;
              export const value = fontUrl;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a binary asset import must fail the load");
@@ -3950,7 +3818,7 @@ export const ds = tokens;
              export const value = createHash;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a Node builtin import must fail the load");
@@ -3979,7 +3847,7 @@ export const ds = tokens;
             "import { thing } from 'fake-esm-pkg';\nexport const value = thing;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let (specifier_map, source_map, stub_exports, _, _) =
@@ -4025,7 +3893,7 @@ export const ds = tokens;
              export const value: Thing = 1;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let (specifier_map, _, stub_exports, _, _) =
@@ -4052,7 +3920,7 @@ export const ds = tokens;
             "import { thing } from 'fake-cjs-pkg';\nexport const value = thing;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &[]);
+        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a CommonJS dependency must fail the load");
@@ -4241,10 +4109,10 @@ export const ds = tokens;
         fs::create_dir_all(&from_dir).expect("create importing dir");
 
         let resolved =
-            resolve_bare_specifier("@fixture/wildcard-kit/field", &from_dir.to_string_lossy(), &[]);
-        let root = resolve_bare_specifier("@fixture/wildcard-kit", &from_dir.to_string_lossy(), &[]);
+            resolve_bare_specifier("@fixture/wildcard-kit/field", &from_dir.to_string_lossy(), &ResolutionContext::default());
+        let root = resolve_bare_specifier("@fixture/wildcard-kit", &from_dir.to_string_lossy(), &ResolutionContext::default());
         let missing =
-            resolve_bare_specifier("@fixture/wildcard-kit/absent", &from_dir.to_string_lossy(), &[]);
+            resolve_bare_specifier("@fixture/wildcard-kit/absent", &from_dir.to_string_lossy(), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let (resolved, _) = resolved.expect("a `./*` exports pattern must resolve its subpath");
@@ -4275,7 +4143,7 @@ export const ds = tokens;
         }
 
         // @animus-ui/system has exports field
-        let (path, _) = resolve_bare_specifier("@animus-ui/system", &dir_str, &[])
+        let (path, _) = resolve_bare_specifier("@animus-ui/system", &dir_str, &ResolutionContext::default())
             .expect("built @animus-ui/system package must resolve");
         assert!(path.contains("dist/index.js") || path.contains("dist/index.mjs"));
     }
@@ -4292,7 +4160,7 @@ export const ds = tokens;
             return;
         }
 
-        let (path, _) = resolve_bare_specifier("@animus-ui/system/groups", &dir_str, &[])
+        let (path, _) = resolve_bare_specifier("@animus-ui/system/groups", &dir_str, &ResolutionContext::default())
             .expect("built @animus-ui/system/groups subpath must resolve");
         assert!(path.contains("groups"));
     }
@@ -4317,9 +4185,9 @@ export const ds = tokens;
         package("main-only", r#"{"main": "dist/index.js"}"#, &["dist/index.js"]);
         let from = dir.to_string_lossy();
 
-        let (module, _) = resolve_bare_specifier("with-module", &from, &[]).expect("module resolves");
+        let (module, _) = resolve_bare_specifier("with-module", &from, &ResolutionContext::default()).expect("module resolves");
         assert!(module.ends_with("with-module/dist/index.mjs"), "{module}");
-        let (main, _) = resolve_bare_specifier("main-only", &from, &[]).expect("main resolves");
+        let (main, _) = resolve_bare_specifier("main-only", &from, &ResolutionContext::default()).expect("main resolves");
         assert!(main.ends_with("main-only/dist/index.js"), "{main}");
     }
 
@@ -4340,7 +4208,7 @@ export const ds = tokens;
             return;
         }
 
-        let config = load_system_module(&ds_path.to_string_lossy(), &root_str, None, &[])
+        let config = load_system_module(&ds_path.to_string_lossy(), &root_str, None, &ResolutionContext::default())
             .expect("load_system_module should succeed");
 
         assert!(
