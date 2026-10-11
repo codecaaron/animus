@@ -32,7 +32,9 @@ export function declaredWorkspacePackages(rootDir: string): WorkspacePackages {
   const workspaces = rootPkg.workspaces;
   const declared = isJsonBlock(workspaces) ? workspaces.packages : workspaces;
   if (!Array.isArray(declared)) return {};
-  const packages: Record<string, string> = {};
+  // A Map, so a package named `constructor` or `__proto__` is a name like
+  // any other.
+  const packages = new Map<string, string>();
   for (const entry of declared) {
     if (!isJsonString(entry)) continue;
     let dir: string;
@@ -44,9 +46,9 @@ export function declaredWorkspacePackages(rootDir: string): WorkspacePackages {
     // A directory with no readable manifest, or no name, is no package.
     const manifest = readManifest(dir);
     const name = isJsonBlock(manifest) ? manifest.name : undefined;
-    if (isJsonString(name) && name !== '' && !(name in packages)) {
-      packages[name] = dir;
+    if (isJsonString(name) && name !== '' && !packages.has(name)) {
+      packages.set(name, dir);
     }
   }
-  return packages;
+  return Object.fromEntries(packages);
 }

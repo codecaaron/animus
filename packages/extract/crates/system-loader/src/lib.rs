@@ -146,10 +146,15 @@ fn select_package_entry(
         .parent()
         .ok_or_else(|| format!("invalid package.json path: {:?}", pkg_json_path))?;
 
-    let pkg_json_str = fs::read_to_string(&pkg_json_path)
-        .map_err(|e| format!("failed to read {:?}: {}", pkg_json_path, e))?;
-    let pkg_json: serde_json::Value = serde_json::from_str(&pkg_json_str)
-        .map_err(|e| format!("failed to parse {:?}: {}", pkg_json_path, e))?;
+    // A package directory without a manifest is still a package, as Node's
+    // resolver reads it: nothing in `exports`, `module` or `main`, so its
+    // root `index`.
+    let pkg_json: serde_json::Value = match fs::read_to_string(&pkg_json_path) {
+        Ok(pkg_json_str) => serde_json::from_str(&pkg_json_str)
+            .map_err(|e| format!("failed to parse {:?}: {}", pkg_json_path, e))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && pkg_dir.is_dir() => serde_json::Value::Null,
+        Err(e) => return Err(format!("failed to read {:?}: {}", pkg_json_path, e)),
+    };
 
     if let Some(exports) = pkg_json.get("exports") {
         let export_key = if subpath.is_empty() { "." } else { subpath };
@@ -213,12 +218,15 @@ fn split_specifier(specifier: &str) -> (&str, &str) {
     }
 }
 
+/// The `package.json` path of the nearest `node_modules/<pkg_name>`
+/// directory, as Node's resolver finds a package: the directory is the
+/// package whether or not it holds a manifest.
 fn find_package_json(pkg_name: &str, start_dir: &str) -> Result<PathBuf, String> {
     let mut dir = PathBuf::from(start_dir);
     loop {
-        let candidate = dir.join("node_modules").join(pkg_name).join("package.json");
-        if candidate.exists() {
-            return Ok(candidate);
+        let package = dir.join("node_modules").join(pkg_name);
+        if package.is_dir() {
+            return Ok(package.join("package.json"));
         }
         if !dir.pop() {
             break;
@@ -3024,6 +3032,14 @@ export const ds = tokens;
         let _ = fs::remove_dir_all(&dir);
 
         assert!(undeclared.is_err(), "an undeclared, unlinked workspace names no package");
+        // An installed package directory without a manifest is still the
+        // package Node loads (its `index`), so the workspace never answers.
+        let installed = scratch_dir("installed-without-manifest");
+        write_fixture(&installed.join("node_modules/@probe/tokens/index.js"), "export const base = 'installed';\n");
+        let installed_answer = resolve_specifier("@probe/tokens", &installed.to_string_lossy(), &context);
+        let installed_file = fs::canonicalize(installed.join("node_modules/@probe/tokens/index.js")).expect("canonicalize");
+        let _ = fs::remove_dir_all(&installed);
+        assert_eq!(installed_answer.map(|(path, _)| path), Ok(installed_file));
         let config = evaluated.expect("a declared workspace loads");
         let file = canonical.join("index.ts");
         assert!(config.dependencies.contains(&file.to_string_lossy().to_string()), "{:?}", config.dependencies);
@@ -3266,7 +3282,7 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &[]);
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("ordered system loads");

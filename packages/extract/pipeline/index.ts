@@ -56,6 +56,7 @@ export type {
   SourceKitDependency,
 } from './discover-packages';
 export {
+  bareSpecifierPackageName,
   collectExternalPackageSources,
   engineModuleParser,
   excludeCollectedPackages,
