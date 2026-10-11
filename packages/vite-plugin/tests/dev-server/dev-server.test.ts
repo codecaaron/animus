@@ -518,45 +518,34 @@ suite(
     it('a broken system dependency keeps the server up on the last good config', async () => {
       const before = await adapter.read();
 
-      // A failed system load warns in non-strict mode; capturing it turns
-      // expected stderr noise into an assertion.
-      const warnings: string[] = [];
-      const warnSpy = vi
-        .spyOn(console, 'warn')
-        .mockImplementation((...args: unknown[]) => {
-          warnings.push(args.map(String).join(' '));
-        });
+      fixture.write('src/theme.ts', brokenThemeSource());
+      fixture.write('src/ds.ts', systemSource('reset-over-broken-theme'));
 
-      try {
-        fixture.write('src/theme.ts', brokenThemeSource());
-        fixture.write('src/ds.ts', systemSource('reset-over-broken-theme'));
+      // The reset invalidates the static module even when the system load
+      // fails, so the revision is the observable that it was attempted.
+      const after = await until(
+        async () => {
+          const served = await adapter.read();
+          return served.staticRevision > before.staticRevision ? served : false;
+        },
+        {
+          what: 'static module is invalidated by the reset over a broken theme',
+          describe: async () =>
+            `static revision stuck at ${(await adapter.read()).staticRevision} (was ${before.staticRevision})${renderTrace(adapter)}`,
+        }
+      );
 
-        // The reset invalidates the static module even when the system load
-        // fails, so the revision is the observable that it was attempted.
-        const after = await until(
-          async () => {
-            const served = await adapter.read();
-            return served.staticRevision > before.staticRevision
-              ? served
-              : false;
-          },
-          {
-            what: 'static module is invalidated by the reset over a broken theme',
-            describe: async () =>
-              `static revision stuck at ${(await adapter.read()).staticRevision} (was ${before.staticRevision})${renderTrace(adapter)}`,
-          }
-        );
-
-        expect(
-          warnings.some((line) => line.includes('Failed to load system from')),
-          `expected a failed-system-load warning, saw: ${JSON.stringify(warnings)}`
-        ).toBe(true);
-        expect(after.staticCss).toEqual(before.staticCss);
-        expect(after.staticCss).toContain(EDITED_BRAND_HEX);
-        expect(after.componentCss).toContain(buttonClass);
-      } finally {
-        warnSpy.mockRestore();
-      }
+      // A failed system load warns through Vite's logger in non-strict mode.
+      const warnings = adapter.trace!().filter((line) =>
+        line.includes('log.warn')
+      );
+      expect(
+        warnings.some((line) => line.includes('system reload failed')),
+        `expected a failed-system-load warning, saw: ${JSON.stringify(warnings)}`
+      ).toBe(true);
+      expect(after.staticCss).toEqual(before.staticCss);
+      expect(after.staticCss).toContain(EDITED_BRAND_HEX);
+      expect(after.componentCss).toContain(buttonClass);
     });
 
     it('repairing the system dependency recovers without a restart', async () => {
