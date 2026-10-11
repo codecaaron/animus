@@ -489,20 +489,38 @@ export class PluginContext {
     this.applyAssetSubstitutions();
   }
 
-  /** Environments whose build started and has not closed. A custom
-   *  `buildApp` builds a shared plugin's environments in parallel, so the
-   *  context's build retires with the last of them, not the first. */
-  private readonly openBuilds = new Set<string>();
+  /** Each environment whose build started and has not closed, by name. A
+   *  custom `buildApp` builds a shared plugin's environments in parallel, so
+   *  the context's build retires with the last of them, not the first. */
+  private readonly openBuilds = new Map<string, object>();
 
-  openBuild(environment: string): void {
-    this.openBuilds.add(environment);
+  /** Opens `environment`'s build. Builds are tracked by environment, not by
+   *  generation, so a second build of an active environment, or a second
+   *  environment under an active name, is refused. */
+  openBuild(name: string, environment: object): void {
+    const open = this.openBuilds.get(name);
+    if (open === environment) {
+      throw new Error(
+        `[animus-extract] a previous build of environment ${name} is still ` +
+          `running on this plugin instance; wait for it to finish before ` +
+          `building it again`
+      );
+    }
+    if (open !== undefined) {
+      throw new Error(
+        `[animus-extract] two environments named ${name} build on this ` +
+          `plugin instance at once; give each environment its own name`
+      );
+    }
+    this.openBuilds.set(name, environment);
   }
 
-  /** Whether `environment` was the last open build. Vite can close one
-   *  environment twice (a failed build) or close one that never started
-   *  (dev), so the set, not a count, decides. */
-  closeBuild(environment: string): boolean {
-    this.openBuilds.delete(environment);
+  /** Whether no build is open once `environment`'s closes. Vite can close
+   *  one environment twice (a failed build), close one that never started
+   *  (dev), or close a build this context refused, so only the environment
+   *  that opened an entry removes it. */
+  closeBuild(name: string, environment: object): boolean {
+    if (this.openBuilds.get(name) === environment) this.openBuilds.delete(name);
     return this.openBuilds.size === 0;
   }
 

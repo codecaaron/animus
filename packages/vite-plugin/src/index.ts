@@ -153,6 +153,18 @@ type AnimusExtractOptionRecord = {
   [Key in keyof AnimusExtractOptions]: AnimusExtractOptions[Key];
 };
 
+/** The building environment's name and identity; a host without
+ *  environments builds as one, the context itself. */
+function environmentOf(
+  hook: { environment?: { name: string } },
+  ctx: PluginContext
+): [string, object] {
+  const environment = hook.environment;
+  return environment === undefined
+    ? ['build', ctx]
+    : [environment.name, environment];
+}
+
 export function animusExtract(options: AnimusExtractOptions): Plugin {
   // The option type excludes 'v1', but a raw runtime value still reaches here.
   assertSupportedEngine(options.engine);
@@ -210,13 +222,13 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     // way: the context's Session and engine are retired with it.
     closeBundle() {
       // The last open environment build retires the context's build.
-      if (!ctx.closeBuild(this.environment?.name ?? 'build')) return;
+      if (!ctx.closeBuild(...environmentOf(this, ctx))) return;
       cancelSystemReload(ctx);
       ctx.close();
     },
 
     async buildStart() {
-      ctx.openBuild(this.environment?.name ?? 'build');
+      ctx.openBuild(...environmentOf(this, ctx));
       await runBuildStart(
         ctx,
         async (specifier) => {
