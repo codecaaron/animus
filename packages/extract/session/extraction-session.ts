@@ -1854,7 +1854,7 @@ export class ExtractionSession {
         ...systemInstanceMismatches({
           rootDir,
           specifiers: packageNames,
-          dirOwnerSets: collected.dirOwnerSets,
+          instances: collected.packageInstances,
           evaluated: this.systemDependencyPaths,
           loaderResolve: (specifier) =>
             resolver.loaderResolve(specifier, dirname(resolvedSystemPath)),

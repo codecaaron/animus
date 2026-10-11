@@ -1650,7 +1650,7 @@ describe('a kit the system evaluates', () => {
       systemInstanceMismatches({
         rootDir: root,
         specifiers: ['kit/definition'],
-        dirOwnerSets: { [join(analysedDir, 'src')]: ['kit/definition'] },
+        instances: { kit: analysedDir },
         evaluated,
         loaderResolve: () => evaluatedFile,
       }).map(({ code, message }) => [code, message]);
