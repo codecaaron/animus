@@ -1,19 +1,21 @@
 import {
+  adaptedOriginals,
   buildSystemPropsModule,
+  BUILT_IN_EXTENSION_POLICY,
+  builtInAssetClassification,
+  clearEngineCache,
   contentHash,
   createExcludeMatcher,
-  DiagnosticFailure,
+  createSourceCorpus,
   createV2EngineApi,
+  declaredWorkspacePackages,
   DEFAULT_EXTENSIONS,
-  clearEngineCache,
+  DiagnosticFailure,
   diffFilePlans,
   enforceExternalTokenContracts,
-  createSourceCorpus,
   findSheetAssetSpecifiers,
   generatedModuleCode,
   isDeletedSource,
-  BUILT_IN_EXTENSION_POLICY,
-  declaredWorkspacePackages,
   loadSystemConfig,
   parseFilesJson,
   projectExternalFileOwners,
@@ -21,13 +23,13 @@ import {
   resolveAssetFile,
   resolveVerbosity,
   runProjectAnalysis,
+  runStructuralSelfCheck,
   serializeStaticCss,
   snapshotFilePlans,
   staleDistIncludesMessage,
   substituteSheetAssets,
   toWatchKeys,
   unresolvableIncludesMessage,
-  runStructuralSelfCheck,
 } from '@animus-ui/extract/pipeline';
 import { CoalescingWindow } from '@animus-ui/extract/session';
 import { statSync } from 'fs';
@@ -49,6 +51,7 @@ import type {
   AssetSheets,
   ExcludeMatcher,
   ExternalPackageOutcome,
+  HostAssetClassification,
   HostExtensionPolicy,
   KitDescriptorRecord,
   ManifestDiagnostic,
@@ -193,6 +196,9 @@ export class PluginContext {
   /** Vite's resolved extension order; the built-in policy until
    *  `configResolved`. */
   extensionPolicy: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
+  /** Vite's asset classification, captured at `configResolved`. */
+  assetClassification: HostAssetClassification =
+    builtInAssetClassification('noHost');
 
   /** Development's repeat of buildStart's discovery, with its resolver. */
   rediscoverSources: (() => Promise<DiscoveredSources>) | null = null;
@@ -540,6 +546,8 @@ export class PluginContext {
           relative(this.rootDir, dir)
         ),
         rootDir: this.rootDir,
+        assets: this.assetClassification,
+        adapted: adaptedOriginals(this.corpus.published.ownership),
         devMode: !this.emissionProd,
         // Rollup leaves an `import(expr)` it cannot read unbundled.
         analysisContext: {

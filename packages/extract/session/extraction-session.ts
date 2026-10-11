@@ -14,9 +14,11 @@ import {
 import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
 
 import {
+  adaptedOriginals,
   assembleStylesheet,
   buildSystemPropsModule,
   BUILT_IN_EXTENSION_POLICY,
+  builtInAssetClassification,
   clearEngineCache,
   collectExternalPackageSources,
   contentHash,
@@ -126,6 +128,7 @@ import { logBuildTimings } from './timing';
 import type {
   AnimusCoreOptions,
   ExternalPackageOutcome,
+  HostAssetClassification,
   HostExtensionPolicy,
   KitDescriptorRecord,
 } from '../pipeline/index';
@@ -253,6 +256,10 @@ export class ExtractionSession {
   /** The host's extension order, as its adapter captured it; the built-in
    *  policy where no host resolves. */
   extensionPolicy: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
+  /** Which files the host serves as assets (spec §2.2 A8); the built-in
+   *  classification where no host's can be read. */
+  assetClassification: HostAssetClassification =
+    builtInAssetClassification('noHost');
 
   // Per-specifier asset resolve/copy memo — stable per loaded system, so
   // loading a system clears it.
@@ -1835,6 +1842,8 @@ export class ExtractionSession {
         relative(this.rootDir!, dir)
       ),
       rootDir: this.rootDir!,
+      assets: this.assetClassification,
+      adapted: adaptedOriginals(this.corpus.published.ownership),
       devMode: this.engineDevMode(devMode),
       // A skipped or unreadable file may render any option, so nothing is
       // pruned while one is.

@@ -12,6 +12,7 @@ import { join } from 'path';
 import { describe, expect, test } from 'vitest';
 
 import { probeAbsolutePathSpecifier } from '../pipeline/discover-packages';
+import { builtInAssetClassification } from '../pipeline/host-assets';
 import {
   extensionPolicyJson,
   viteExtensionPolicy,
@@ -367,4 +368,118 @@ test('a mismatched Svelte resolver call keeps the variant it renders', async () 
       (d: { code?: string }) => d.code === 'animus.resolve.case-mismatch'
     ),
   }).toEqual({ loud: true, mismatch: opensVariant });
+});
+
+// Contract: the probe stops at the host's first candidate (spec §2.2 A8).
+// Under an order that tries `.json` first, `./a` beside `a.json` (outside
+// the analysed set) and `a.ts` ends at `a.json`, reported as a skipped
+// source, and the child is never linked to `a.ts`; under the default order
+// `a.ts` is the parent. A host-classified asset ends a probe with no finding.
+test.each([
+  [['.json', '.ts', '.js'], null, 1],
+  [undefined, 'a.ts::Parent', 0],
+])(
+  "analysis stops './a' where the host order %j stops",
+  (appended, parent, skipped) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-skipped-')));
+    const analysed = {
+      'a.ts': "export const Parent = ds.styles({ p: 9 }).asElement('div');\n",
+      'app.tsx':
+        "import { Parent } from './a';\nimport logo from './logo.png';\nexport const Child = Parent.extend().styles({ m: 1 }).asElement('div');\nexport const App = () => <Child data-logo={logo} />;\n",
+    } satisfies Record<string, string>;
+    for (const [path, source] of Object.entries(analysed)) {
+      writeFileSync(join(root, path), source);
+    }
+    writeFileSync(join(root, 'a.json'), '{ "p": 4 }\n');
+    writeFileSync(join(root, 'logo.png'), '');
+    const order =
+      appended === undefined
+        ? undefined
+        : { appended, nodeNext: [], alias: [] };
+    const files = Object.entries(analysed).map(([path, source]) => ({
+      path,
+      source,
+    }));
+    const filesJson = JSON.stringify(files);
+    const engine = new v2.ExtractEngine(
+      order === undefined
+        ? {}
+        : { analysisContextJson: JSON.stringify({ extensions: order }) }
+    );
+    const prepared = JSON.parse(engine.prepare(filesJson));
+    const evidence = gatherProbeEvidence(
+      root,
+      new Set(Object.keys(analysed)),
+      order,
+      { isAsset: builtInAssetClassification('noHost').isAsset }
+    )(prepared.bases, prepared.identity);
+    const manifest = JSON.parse(engine.analyze(filesJson, evidence));
+    rmSync(root, { recursive: true, force: true });
+
+    expect({
+      parent: manifest.components['app.tsx::Child']?.extends_from ?? null,
+      skipped: manifest.diagnostics.filter(
+        (d: { code?: string; message: string }) =>
+          d.code === 'animus.resolve.skipped-source' &&
+          d.message.includes('a.json')
+      ).length,
+      resolve: manifest.diagnostics.filter((d: { code?: string }) =>
+        d.code?.startsWith('animus.resolve.')
+      ).length,
+    }).toEqual({ parent, skipped, resolve: skipped });
+  }
+);
+
+// Contract: a Svelte resolver call stops at the host's first candidate too
+// (spec §2.2 A8). Under an order that tries `.json` first, Usage's
+// `./badge` opens `badge.json`, which analysis never reads: the call is
+// attributed to no module, never to the later `badge.ts`, and is reported
+// as a skipped source.
+test('a Svelte resolver call stops at an unanalysed host-first file', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-svelte-skip-')));
+  const sources = {
+    'src/badge.ts':
+      "export const badge=ds.styles({}).variant({prop:'tone',defaultVariant:'quiet',variants:{quiet:{color:'blue'},loud:{color:'red'}}}).asClass();\n",
+    'src/Known.svelte':
+      "<script>import{badge}from'./badge.ts';const attrs=badge.attrs({tone:'quiet'});</script><div {...attrs}></div>\n",
+    'src/Usage.svelte':
+      "<script>import{badge}from'./badge';const attrs=badge.attrs({tone:'loud'});</script><div {...attrs}></div>\n",
+  } satisfies Record<string, string>;
+  mkdirSync(join(root, 'src'));
+  for (const [path, source] of Object.entries(sources)) {
+    writeFileSync(join(root, path), source);
+  }
+  writeFileSync(join(root, 'src', 'badge.json'), '{}\n');
+  const order = { appended: ['.json', '.ts'], nodeNext: [], alias: [] };
+
+  const ingested = await ingestSourceEntries(
+    Object.entries(sources).map(([path, source]) => ({ path, source })),
+    {
+      extractFacts: (filesJson) => v2.extractFacts(filesJson),
+      rootDir: root,
+      extensions: order,
+    }
+  );
+  const engine = new v2.ExtractEngine({
+    analysisContextJson: JSON.stringify({
+      extensions: order,
+      openings: ingested.openings ?? [],
+    }),
+  });
+  const manifest = JSON.parse(
+    engine.analyze(JSON.stringify(ingested.analysisEntries))
+  );
+  rmSync(root, { recursive: true, force: true });
+
+  expect({
+    attributed:
+      ingested.analysisEntries
+        .find((entry) => entry.path === 'src/Usage.svelte.instance.tsx')
+        ?.source.includes('<badge') ?? false,
+    skipped: manifest.diagnostics.filter(
+      (d: { code?: string; message: string }) =>
+        d.code === 'animus.resolve.skipped-source' &&
+        d.message.includes('badge.json')
+    ).length,
+  }).toEqual({ attributed: false, skipped: 1 });
 });

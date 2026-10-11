@@ -5,6 +5,7 @@ import {
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
+  nextImageAssetClassification,
   readTsconfigAliasPairs,
   resolveMode,
   sourceKitDependencies,
@@ -450,9 +451,13 @@ function turbopackConfig<Config extends NextOwnedConfig>(
     nextConfig.turbopack?.resolveExtensions ??
     nextConfig.experimental?.turbo?.resolveExtensions;
   const load = (phase: string): Promise<TurbopackNextConfigObject<Config>> =>
-    loadTurbopackFragment(options, phase, resolveExtensions, build).then(
-      (fragment) => mergeTurbopackFragment(nextConfig, fragment)
-    );
+    loadTurbopackFragment(
+      options,
+      phase,
+      resolveExtensions,
+      nextConfig.images?.disableStaticImages === true,
+      build
+    ).then((fragment) => mergeTurbopackFragment(nextConfig, fragment));
   function then<Resolved = TurbopackNextConfigObject<Config>, Rejected = never>(
     onResolved?:
       | ((
@@ -505,6 +510,7 @@ function loadTurbopackFragment(
   options: AnimusNextOptions,
   phase: string,
   resolveExtensions: readonly string[] | undefined,
+  disableStaticImages: boolean,
   build: string
 ): Promise<TurbopackConfigFragment> {
   // `next dev <subdir>` under Turbopack is a known gap: no dir reaches a
@@ -513,7 +519,12 @@ function loadTurbopackFragment(
   // the scan instead of closing the gap.
   const rootDir = process.cwd();
   // The extension order is part of the analysis a load shares.
-  const key = JSON.stringify([phase, rootDir, resolveExtensions ?? null]);
+  const key = JSON.stringify([
+    phase,
+    rootDir,
+    resolveExtensions ?? null,
+    disableStaticImages,
+  ]);
   const owner = turbopackOwner(build);
   if (owner.load?.key === key) return owner.load.fragment;
   const fragment = analyzeForTurbopack(
@@ -521,6 +532,7 @@ function loadTurbopackFragment(
     phase,
     rootDir,
     resolveExtensions,
+    disableStaticImages,
     build
   );
   const load = { key, fragment };
@@ -536,6 +548,7 @@ async function analyzeForTurbopack(
   phase: string,
   rootDir: string,
   resolveExtensions: readonly string[] | undefined,
+  disableStaticImages: boolean,
   build: string
 ): Promise<TurbopackConfigFragment> {
   const development = phase === PHASE_DEVELOPMENT_SERVER;
@@ -560,6 +573,10 @@ async function analyzeForTurbopack(
   session.development = development;
   session.rootDir = rootDir;
   session.extensionPolicy = turbopackExtensionPolicy(resolveExtensions);
+  session.assetClassification = nextImageAssetClassification(
+    rootDir,
+    disableStaticImages
+  );
   const aliasPairs = readTsconfigAliasPairs(rootDir);
   const builtAliases = buildPathAliasesJson(aliasPairs, rootDir);
   if (builtAliases) {

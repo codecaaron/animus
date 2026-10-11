@@ -103,7 +103,7 @@ pub struct CssInputs {
     pub probe_evidence: Option<ProbeEvidence>,
     /// Each probe this analysis ended Incomplete: its importer, specifier,
     /// the candidate, and the spelling the host's filesystem opens.
-    pub incomplete_probes: std::sync::Mutex<BTreeSet<(String, String, String, String)>>,
+    pub incomplete_probes: std::sync::Mutex<BTreeSet<IncompleteProbe>>,
     /// `{ definitionKey: sourceText }` for the loaded system's configured
     /// transforms, keyed as its props' `transformId` (or, for a system that
     /// predates identities, their name).
@@ -175,21 +175,33 @@ pub struct AnalysisContext {
     /// The host's extension order (spec §2.2 A2), as the session captured
     /// it; the built-in policy where no host resolves.
     pub extensions: Option<animus_system_loader::resolution::ExtensionPolicy>,
-    /// Probes ingestion ended under another spelling (a Svelte resolver
-    /// call whose import the host opens as another file, spec §2.2 A8):
-    /// each is an opening of this analysis, as one of its own probes is.
-    pub openings: Vec<CaseOpening>,
+    /// Probes ingestion ended Incomplete (a Svelte resolver call whose
+    /// import the host opens under another spelling, or opens as a file
+    /// analysis never reads, spec §2.2 A8): each is an opening of this
+    /// analysis, as one of its own probes is.
+    pub openings: Vec<IngestionOpening>,
 }
 
-/// A probe ingestion ended because the host opens its candidate under
-/// another spelling.
+/// Why ingestion ended a probe Incomplete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IngestionOpeningKind {
+    CaseMismatch,
+    Skipped,
+}
+
+/// A probe ingestion ended Incomplete.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CaseOpening {
+pub struct IngestionOpening {
     pub importer: String,
     pub specifier: String,
     pub candidate: String,
     pub opened: String,
+    pub why: IngestionOpeningKind,
+    /// The analysed candidate a fall-through would have read.
+    #[serde(default)]
+    pub later: Option<String>,
 }
 
 impl CssInputs {
@@ -540,6 +552,10 @@ const WIDE_MODULE_LOAD: &str = "animus.usage.wide-module-load";
 /// §2.2 A8, Incomplete(CaseMismatch)): a case- or normalization-insensitive
 /// host opens a file analysis never reads, so nothing is pruned.
 const RESOLVE_CASE_MISMATCH: &str = "animus.resolve.case-mismatch";
+/// A probe the host ends at a file analysis never reads, where analysis
+/// would otherwise have read a later candidate (spec §2.2 A8,
+/// Incomplete(SkippedSource)).
+const RESOLVE_SKIPPED_SOURCE: &str = "animus.resolve.skipped-source";
 const WIDE_MODULE_LOAD_LIMIT: usize = 20;
 /// A warning, once per production analysis: tags usage cannot match to an
 /// Animus component stop whole-component removal, so every extracted
@@ -613,6 +629,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (UNREAD_CREATE_ELEMENT_PROPS, "warn"),
     (WIDE_MODULE_LOAD, "warn"),
     (RESOLVE_CASE_MISMATCH, "warn"),
+    (RESOLVE_SKIPPED_SOURCE, "warn"),
     (IDENTITY_UNCERTAIN, "warn"),
     (IDENTITY_UNCERTAIN_TAG, "info"),
     (UNEXTRACTABLE_CHAIN, "warn"),
@@ -756,6 +773,53 @@ pub struct HostCandidate {
     /// The analysed module the candidate is, where the analysis holds one:
     /// the candidate itself, or the analysis child of an adapted original.
     pub analysed_as: Option<String>,
+    /// How the analysis reads a candidate it holds no module for; none
+    /// where it holds one.
+    #[serde(default)]
+    pub reading: Option<HostReading>,
+}
+
+/// How the analysis reads a host-opened file it holds no module for (spec
+/// §2.2 A8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HostReading {
+    /// An asset under the host's captured classification: an opaque value
+    /// with no exports or effects, Resolved(asset).
+    Asset,
+    /// An adapted original (`.mdx`, `.svelte`), read through its analysis
+    /// children.
+    Adapted,
+    /// A file the analysis never reads: Incomplete(SkippedSource).
+    Unanalysed,
+}
+
+/// Why a probe ended Incomplete (spec §2.2 A8).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Opening {
+    /// The host opens the candidate under another spelling.
+    CaseMismatch,
+    /// The host opens a file the analysis never reads; `later` is the
+    /// analysed candidate a fall-through would have chosen, if any.
+    Skipped { later: Option<String> },
+}
+
+/// A probe that ended Incomplete: its importer, specifier, the candidate,
+/// the file the host opens, and why.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct IncompleteProbe {
+    pub importer: String,
+    pub specifier: String,
+    pub candidate: String,
+    pub opened: String,
+    pub why: Opening,
+}
+
+/// How a probe ends.
+enum ProbeOutcome {
+    Found(String),
+    Incomplete { candidate: String, opened: String, why: Opening },
+    Absent,
 }
 
 /// The host-candidate evidence for one analysis, by probe base, from one
@@ -805,16 +869,22 @@ pub fn resolve_import_source<T>(
         return inputs.package_map.get(spec).cloned();
     };
     match probe_files(&base, files, inputs) {
-        animus_system_loader::resolution::Probe::Found(module) => Some(module),
-        // The host opens another spelling: no module, and the analysis is
-        // incomplete (spec §2.2 A8).
-        animus_system_loader::resolution::Probe::CaseMismatch { candidate, actual } => {
+        ProbeOutcome::Found(module) => Some(module),
+        // The host opens a file analysis does not read: no module, and the
+        // analysis is incomplete (spec §2.2 A8).
+        ProbeOutcome::Incomplete { candidate, opened, why } => {
             if let Ok(mut incomplete) = inputs.incomplete_probes.lock() {
-                incomplete.insert((from_file.to_string(), spec.to_string(), candidate, actual));
+                incomplete.insert(IncompleteProbe {
+                    importer: from_file.to_string(),
+                    specifier: spec.to_string(),
+                    candidate,
+                    opened,
+                    why,
+                });
             }
             None
         }
-        animus_system_loader::resolution::Probe::Absent => None,
+        ProbeOutcome::Absent => None,
     }
 }
 
@@ -835,37 +905,58 @@ thread_local! {
 }
 
 /// The analyzed file `base` names, through the host's extension order.
-fn probe_files<T>(
-    base: &str,
-    files: &BTreeMap<String, T>,
-    inputs: &CssInputs,
-) -> animus_system_loader::resolution::Probe {
+fn probe_files<T>(base: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> ProbeOutcome {
     use animus_system_loader::resolution::{extension_policy, Probe, Seen};
     #[cfg(test)]
     PROBED.with(|probed| probed.borrow_mut().insert(base.to_string()));
-    // The session's evidence answers in one lookup: the host's first
-    // candidate, opened under another spelling, ends the probe; spelled as
-    // the probe spells it, it is the analysed module it names.
-    let host = inputs.probe_evidence.as_ref().and_then(|evidence| evidence.bases.get(base));
-    if let Some(host) = host {
-        if let Some(actual) = &host.actual {
-            return Probe::CaseMismatch { candidate: host.candidate.clone(), actual: actual.clone() };
-        }
-        if let Some(module) = host.analysed_as.as_ref().filter(|module| files.contains_key(module.as_str())) {
-            return Probe::Found(module.clone());
-        }
-    }
     // The analyzed set is keyed by each file's own spelling, so a lookup is
     // exact: a specifier that differs only in case names no analyzed file.
     let policy = match &inputs.analysis_context.extensions {
         Some(policy) => policy,
         None => extension_policy(),
     };
-    policy
-        .probe(base, |candidate| match files.contains_key(candidate) {
+    let in_set = || {
+        match policy.probe(base, |candidate| match files.contains_key(candidate) {
             true => Seen::File,
             false => Seen::Missing,
-        })
+        }) {
+            Probe::Found(module) => Some(module),
+            Probe::CaseMismatch { .. } | Probe::Absent => None,
+        }
+    };
+    // The session's evidence answers in one lookup, and the probe stops at
+    // the host's first candidate: opened under another spelling, or a file
+    // analysis never reads, it ends Incomplete; an asset or an adapted
+    // original names no module, as before; otherwise it is the analysed
+    // module it names.
+    let host = inputs.probe_evidence.as_ref().and_then(|evidence| evidence.bases.get(base));
+    if let Some(host) = host {
+        if let Some(actual) = &host.actual {
+            return ProbeOutcome::Incomplete {
+                candidate: host.candidate.clone(),
+                opened: actual.clone(),
+                why: Opening::CaseMismatch,
+            };
+        }
+        if let Some(module) = host.analysed_as.as_ref().filter(|module| files.contains_key(module.as_str())) {
+            return ProbeOutcome::Found(module.clone());
+        }
+        match host.reading {
+            Some(HostReading::Asset | HostReading::Adapted) => return ProbeOutcome::Absent,
+            Some(HostReading::Unanalysed) => {
+                return ProbeOutcome::Incomplete {
+                    candidate: host.candidate.clone(),
+                    opened: host.candidate.clone(),
+                    why: Opening::Skipped { later: in_set() },
+                };
+            }
+            None => {}
+        }
+    }
+    match in_set() {
+        Some(module) => ProbeOutcome::Found(module),
+        None => ProbeOutcome::Absent,
+    }
 }
 
 /// The first module on the module table's route for `module`'s export
@@ -8087,23 +8178,40 @@ fn run_with_system_floor(
     }
     crate::reconcile::pool_shared_usage(&mut usage_ledger, copies.into_values(), &parent_ids);
 
-    // A probe the host ends under another spelling opens a file analysis
-    // never reads (spec §2.2 A8): reported once per importer and specifier.
-    let incomplete: Vec<(String, String, String, String)> =
+    // A probe whose host opens a file analysis never reads (spec §2.2 A8)
+    // is reported once per importer and specifier: a case variant always, a
+    // skipped source only where analysis would otherwise have read a later
+    // candidate; any other opening is recorded silently.
+    let incomplete: Vec<IncompleteProbe> =
         inputs.incomplete_probes.lock().map(|probes| probes.iter().cloned().collect()).unwrap_or_default();
-    for (importer, specifier, candidate, actual) in &incomplete {
-        diagnostics.push(diagnostic(
-            importer,
-            specifier,
-            "warn",
-            animus_system_loader::resolution::case_mismatch_reason(
-                &format!("'{specifier}'"),
-                candidate,
-                actual,
-                "spell the import as the file is spelled; until then analysis reads neither file, and nothing is pruned",
-            ),
-            Some(RESOLVE_CASE_MISMATCH),
-        ));
+    for probe in &incomplete {
+        let IncompleteProbe { importer, specifier, candidate, opened, why } = probe;
+        match why {
+            Opening::CaseMismatch => diagnostics.push(diagnostic(
+                importer,
+                specifier,
+                "warn",
+                animus_system_loader::resolution::case_mismatch_reason(
+                    &format!("'{specifier}'"),
+                    candidate,
+                    opened,
+                    "spell the import as the file is spelled; until then analysis reads neither file, and nothing is pruned",
+                ),
+                Some(RESOLVE_CASE_MISMATCH),
+            )),
+            Opening::Skipped { later: Some(later) } => diagnostics.push(diagnostic(
+                importer,
+                specifier,
+                "warn",
+                format!(
+                    "'{specifier}' opens {opened}, which analysis does not read, so analysis reads no module \
+                     for it, never the later {later:?}, and nothing is pruned — analyse {opened}, or name \
+                     {later:?} in the import"
+                ),
+                Some(RESOLVE_SKIPPED_SOURCE),
+            )),
+            Opening::Skipped { later: None } => {}
+        }
     }
 
     // A skipped source, or a file a probe's host opens that analysis never
@@ -8115,7 +8223,7 @@ fn run_with_system_floor(
         (!incomplete.is_empty()).then(|| {
             let openings: Vec<String> = incomplete
                 .iter()
-                .map(|(importer, specifier, _, actual)| format!("'{specifier}' from {importer} opens {actual}"))
+                .map(|probe| format!("'{}' from {} opens {}", probe.specifier, probe.importer, probe.opened))
                 .collect();
             format!("{}, which analysis does not read", openings.join(", "))
         }),
@@ -15020,7 +15128,12 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 identity: String::new(),
                 bases: [(
                     "twin".to_string(),
-                    HostCandidate { candidate: "twin.ts".into(), actual: Some("Twin.ts".into()), analysed_as: None },
+                    HostCandidate {
+                        candidate: "twin.ts".into(),
+                        actual: Some("Twin.ts".into()),
+                        analysed_as: None,
+                        reading: None,
+                    },
                 )]
                 .into_iter()
                 .collect(),
@@ -15047,6 +15160,54 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let app = "import { Twin } from './twin';\nimport { R } from './r';\nexport const App = () => <><R size=\"sm\" active /><Twin /></>;\n";
         let out = analyze(&[("r.tsx", RECIPE), ("app.tsx", app), ("twin.tsx", "export const Twin = () => null;\n")], &inputs);
         assert_eq!(kept_sizes(&out, "r.tsx::R"), vec!["sm", "md", "lg"]);
+    }
+
+    /// The probe stops at the host's first candidate (spec §2.2 A8): a file
+    /// analysis never reads ends it Incomplete, reported only where a later
+    /// analysed candidate would otherwise have been read, and recorded
+    /// silently otherwise; either way nothing is pruned. An asset, or an
+    /// adapted original, names no module, as before, and stops nothing.
+    #[test]
+    fn a_skipped_source_ends_the_probe_and_an_asset_does_not() {
+        let evidence = |reading: HostReading| {
+            Some(ProbeEvidence {
+                generation: 1,
+                identity: String::new(),
+                bases: [(
+                    "a".to_string(),
+                    HostCandidate { candidate: "a.json".into(), actual: None, analysed_as: None, reading: Some(reading) },
+                )]
+                .into_iter()
+                .collect(),
+            })
+        };
+        let app = "import { R } from './r';\nimport { A } from './a';\nexport const App = () => <><R size=\"sm\" active /><A /></>;\n";
+        let run = |reading: Option<HostReading>, with_later: bool| {
+            let mut inputs = test_inputs();
+            inputs.probe_evidence = reading.and_then(evidence);
+            let mut files = vec![("r.tsx", RECIPE), ("app.tsx", app)];
+            if with_later {
+                files.push(("a.ts", "export const A = () => null;\n"));
+            }
+            analyze(&files, &inputs)
+        };
+        let skipped = |out: &CssOutput| {
+            out.diagnostics.iter().filter(|d| d.code.as_deref() == Some(RESOLVE_SKIPPED_SOURCE)).count()
+        };
+        // A later analysed candidate: reported, and the probe never reads it.
+        let out = run(Some(HostReading::Unanalysed), true);
+        assert_eq!(skipped(&out), 1, "{:#?}", out.diagnostics);
+        assert_eq!(kept_sizes(&out, "r.tsx::R"), vec!["sm", "md", "lg"]);
+        // None: recorded silently, and still nothing is pruned.
+        let out = run(Some(HostReading::Unanalysed), false);
+        assert_eq!(skipped(&out), 0, "{:#?}", out.diagnostics);
+        assert_eq!(kept_sizes(&out, "r.tsx::R"), vec!["sm", "md", "lg"]);
+        // An asset or an adapted original stops nothing.
+        for reading in [HostReading::Asset, HostReading::Adapted] {
+            let out = run(Some(reading), false);
+            assert_eq!(skipped(&out), 0);
+            assert_eq!(kept_sizes(&out, "r.tsx::R"), kept_sizes(&run(None, false), "r.tsx::R"), "{reading:?}");
+        }
     }
 
     #[test]

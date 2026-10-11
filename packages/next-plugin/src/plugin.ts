@@ -1,6 +1,7 @@
 import {
   assertNoRetiredEngineSelection,
   buildPathAliasesJson,
+  webpackAssetClassification,
   webpackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -24,6 +25,7 @@ import { existsSync } from 'fs';
 import { resolveAnimusLoaderPath } from './loader-path';
 
 import type { AnimusNextOptions } from './types';
+import type { RuleEntry } from '@animus-ui/extract/pipeline';
 
 export { ANIMUS_CSS_MODULE_ID } from '@animus-ui/extract/session';
 
@@ -139,6 +141,9 @@ type Compiler = {
     watchOptions?: {
       ignored?: WatchIgnored;
     };
+    module?: {
+      rules?: readonly RuleEntry[];
+    };
   };
   webpack?: {
     version?: string;
@@ -248,6 +253,11 @@ export class AnimusWebpackPlugin {
     const resolve = compiler.options?.resolve;
     const names = resolve?.conditionNames ?? [];
     this.session.conditions = names.filter((name) => name !== '...');
+    this.session.assetClassification = webpackAssetClassification(
+      'next-webpack',
+      compiler.options?.module?.rules,
+      compiler.webpack?.version
+    );
     this.session.extensionPolicy = webpackExtensionPolicy(
       'next-webpack',
       resolve ?? {},

@@ -784,12 +784,18 @@ impl ExtractEngine {
             incomplete.clear();
             // Ingestion's openings are this analysis's own.
             for opening in &self.opts.css_inputs.analysis_context.openings {
-                incomplete.insert((
-                    opening.importer.clone(),
-                    opening.specifier.clone(),
-                    opening.candidate.clone(),
-                    opening.opened.clone(),
-                ));
+                incomplete.insert(analyze_css::IncompleteProbe {
+                    importer: opening.importer.clone(),
+                    specifier: opening.specifier.clone(),
+                    candidate: opening.candidate.clone(),
+                    opened: opening.opened.clone(),
+                    why: match opening.why {
+                        analyze_css::IngestionOpeningKind::CaseMismatch => analyze_css::Opening::CaseMismatch,
+                        analyze_css::IngestionOpeningKind::Skipped => {
+                            analyze_css::Opening::Skipped { later: opening.later.clone() }
+                        }
+                    },
+                });
             }
         }
         // Evidence gathered for other files (a same-count edit since the
