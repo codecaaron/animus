@@ -108,7 +108,6 @@ describe('buildTurbopackConfig', () => {
       sessionId: SESSION_ID,
       sessionDir: SESSION_DIR,
       development: true,
-      strict: true,
       cssImportTarget: 'src/app/[locale]/layout.tsx',
     });
     expect(JSON.parse(JSON.stringify(rule.loaders[0].options))).toEqual(

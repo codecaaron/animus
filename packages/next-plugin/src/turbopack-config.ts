@@ -87,7 +87,6 @@ export function buildTurbopackConfig(args: {
     sessionDir,
     development,
   };
-  if (options.strict !== undefined) loaderOptions.strict = options.strict;
   if (options.cssImportTarget !== undefined) {
     loaderOptions.cssImportTarget = options.cssImportTarget;
   }
