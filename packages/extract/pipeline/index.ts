@@ -67,12 +67,13 @@ export {
   firstOwners,
   importedKitDiagnostics,
   isExcludedPackageRelativePath,
-  resolveAbsolutePathSpecifier,
+  probeAbsolutePathSpecifier,
   sourceKitDependencies,
   staleDistIncludesMessage,
   unresolvableIncludesMessage,
   walkPackageSources,
 } from './discover-packages';
+export { caseMismatchReason } from './extension-policy';
 export type { KitDescriptor, KitDescriptorRecord } from './kit-descriptor';
 export {
   buildKitDescriptor,

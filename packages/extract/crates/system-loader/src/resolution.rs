@@ -97,6 +97,15 @@ impl ExtensionPolicy {
     }
 }
 
+/// Why `subject` names no file: `candidate`, the file it would load, is
+/// spelled otherwise on disk (`actual`). `remedy` says what to respell.
+pub fn case_mismatch_reason(subject: &str, candidate: &str, actual: &str, remedy: &str) -> String {
+    format!(
+        "{subject} names {candidate:?}, but the file on disk is {actual:?}, spelled differently: a case- \
+         or normalization-insensitive filesystem loads it and a sensitive one does not — {remedy}"
+    )
+}
+
 /// What the filesystem holds at `candidate`: a file it opens under exactly
 /// that spelling, or one it opens although a directory below the one the
 /// candidate shares with `base` lists no entry spelled as the candidate
