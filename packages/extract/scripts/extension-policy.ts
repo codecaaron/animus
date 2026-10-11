@@ -43,18 +43,18 @@ if (process.argv.includes('--check')) {
   const unknown = Object.keys(generated).filter((key) => !(key in expected));
   if (differences.length > 0 || unknown.length > 0) {
     for (const key of differences) {
-      console.error(
+      process.stderr.write(
         `extension_policy.json ${key} is ${JSON.stringify(generated[key])}; ` +
-          `EXTENSION_POLICY ${key} is ${JSON.stringify(expected[key])}`
+          `EXTENSION_POLICY ${key} is ${JSON.stringify(expected[key])}\n`
       );
     }
     for (const key of unknown) {
-      console.error(
-        `extension_policy.json has ${key}, which EXTENSION_POLICY lacks`
+      process.stderr.write(
+        `extension_policy.json has ${key}, which EXTENSION_POLICY lacks\n`
       );
     }
-    console.error(
-      'Regenerate it: node packages/extract/scripts/extension-policy.ts --write'
+    process.stderr.write(
+      'Regenerate it: node packages/extract/scripts/extension-policy.ts --write\n'
     );
     process.exit(1);
   }
