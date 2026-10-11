@@ -291,6 +291,18 @@ export class AnimusWebpackPlugin {
   }
 
   apply(compiler: Compiler): void {
+    // The compiler's end leaves the build, which retires with its last
+    // compiler. A watch started again analyzes in full: its build may have
+    // retired meanwhile. The edge compiler joins too, through the resolver
+    // lookups withAnimus wires, so it leaves the same way.
+    const leave = () => {
+      this.session.close();
+      this.initialized = false;
+      this.rejoining = true;
+    };
+    compiler.hooks.shutdown?.tap(PLUGIN_NAME, leave);
+    compiler.hooks.watchClose?.tap(PLUGIN_NAME, leave);
+
     // Edge compiler has no CSS dependencies.
     if (compiler.options?.name === 'edge-server') return;
 
@@ -300,17 +312,6 @@ export class AnimusWebpackPlugin {
     }
 
     this.appendEpochWatchIgnore(compiler);
-
-    // The compiler's end leaves the build, which retires with its last
-    // compiler. A watch started again analyzes in full: its build may have
-    // retired meanwhile.
-    const leave = () => {
-      this.session.close();
-      this.initialized = false;
-      this.rejoining = true;
-    };
-    compiler.hooks.shutdown?.tap(PLUGIN_NAME, leave);
-    compiler.hooks.watchClose?.tap(PLUGIN_NAME, leave);
 
     compiler.hooks.thisCompilation.tap(PLUGIN_NAME, (compilation) => {
       const epochMoved = this.epochMovedForNextCompilation;
