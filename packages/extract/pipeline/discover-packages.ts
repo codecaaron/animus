@@ -659,15 +659,17 @@ export async function collectExternalPackageSources(opts: {
     // case-insensitive filesystem opens a file that differs only in case.
     // Node's resolver refuses extensionless TS paths, so one it declines is
     // found here too.
-    // The path used is the path checked: a host's answer with `..` taken
-    // back lexically, as Node reads it, or the probe's own.
+    // The include's own spelling is checked, and so is a host's answer for
+    // it, `..` taken back lexically as Node reads it: a host can answer with
+    // the file's canonical spelling. The path used is the path checked.
     let caseMismatch: string | undefined;
     if (isAbsolute(specifier)) {
+      const own = probeAbsolutePathSpecifier(specifier, extensionsSet, rootDir);
       const hosted = absEntry === null ? null : normalize(absEntry);
       const seen = hosted === null ? null : seeOnDisk(hosted, rootDir);
       const probed: ProbedFile =
-        hosted === null || seen === null
-          ? probeAbsolutePathSpecifier(specifier, extensionsSet, rootDir)
+        own.kind === 'case-mismatch' || hosted === null || seen === null
+          ? own
           : seen.kind === 'case-only'
             ? { kind: 'case-mismatch', candidate: hosted, actual: seen.actual }
             : { kind: 'found', path: hosted };

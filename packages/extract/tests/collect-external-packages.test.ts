@@ -831,6 +831,28 @@ describe('collectExternalPackageSources under exact case', () => {
     }
   });
 
+  test("a misspelled absolute include stays unresolvable when the host answers with the file's spelling", async () => {
+    const root = makeRoot();
+    const pkg = makePackage(join(root, 'packages', 'tokens'), {
+      'token.ts': 'export const t = 1;',
+    });
+    const specifier = join(pkg, 'Token.ts');
+    // A case-insensitive host opens the include and answers with the
+    // file's canonical spelling; a case-sensitive one finds nothing.
+    const opens = existsSync(specifier);
+    const result = await collect(root, {
+      [specifier]: opens ? join(pkg, 'token.ts') : null,
+    });
+
+    expect(result.entries).toEqual([]);
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({ specifier, outcome: 'unresolvable' }),
+    ]);
+    if (opens) {
+      expect(result.outcomes[0].reason).toContain('spelled differently');
+    }
+  });
+
   test("an absolute include's `..` past a link is taken back lexically, as Node reads it", async () => {
     const root = makeRoot();
     const pkg = makePackage(join(root, 'packages', 'kit'), {

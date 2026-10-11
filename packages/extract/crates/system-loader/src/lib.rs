@@ -336,7 +336,35 @@ fn resolve_exports_pattern(
 
     let (prefix, suffix, value) = best?;
     let matched = &lookup_key[prefix.len()..lookup_key.len() - suffix.len()];
+    if refused_pattern_match(matched) {
+        return None;
+    }
     Some(resolve_condition_value(value, source, conditions)?.replace('*', matched))
+}
+
+/// Whether Node refuses a pattern's match (`ERR_INVALID_MODULE_SPECIFIER`):
+/// a segment that is empty, `.`, `..` or `node_modules`, in any case and
+/// percent-encoded.
+fn refused_pattern_match(matched: &str) -> bool {
+    matched.split(['/', '\\']).any(|segment| {
+        let bytes = segment.as_bytes();
+        let mut decoded = String::new();
+        let mut index = 0;
+        while index < bytes.len() {
+            let hex = segment.get(index + 1..index + 3).and_then(|hex| u8::from_str_radix(hex, 16).ok());
+            match (bytes[index], hex) {
+                (b'%', Some(byte)) => {
+                    decoded.push(char::from(byte));
+                    index += 3;
+                }
+                (byte, _) => {
+                    decoded.push(char::from(byte));
+                    index += 1;
+                }
+            }
+        }
+        matches!(decoded.to_ascii_lowercase().as_str(), "" | "." | ".." | "node_modules")
+    })
 }
 
 /// With `source`, a kit's `animus` condition, its original source, which
@@ -2173,6 +2201,8 @@ export const ds = tokens;
         // entry is the package's own `token.ts`, never the `Token.ts` the
         // link's parent holds.
         package("linked-main", serde_json::json!({ "main": "./link/../token.ts" }), &["token.ts", "other/Token.ts", "other/sub/x.ts"]);
+        // A pattern's match may not hold `..`, as Node refuses it.
+        package("wild", serde_json::json!({ "exports": { "./*": "./src/*.ts" } }), &["src/token.ts"]);
         #[cfg(unix)]
         std::os::unix::fs::symlink(
             dir.join("node_modules/linked-main/other/sub"),
@@ -2199,6 +2229,8 @@ export const ds = tokens;
         assert_eq!(resolved("case-source", &[]).as_deref(), Ok("case-source/runtime.js"));
         #[cfg(unix)]
         assert_eq!(resolved("linked-main", &[]).as_deref(), Ok("linked-main/token.ts"));
+        assert_eq!(resolved("wild/token", &[]).as_deref(), Ok("wild/src/token.ts"));
+        assert!(resolved("wild/link/../token", &[]).is_err(), "a `..` in a pattern's match is refused");
         // Where the filesystem opens the misspelled entry, the selection
         // fails naming the file it opens; elsewhere it names no file.
         for (specifier, spelled, actual) in [("case-runtime", "dist/Index.js", "dist/index.js"), ("case-main", "Main.js", "main.js")] {
