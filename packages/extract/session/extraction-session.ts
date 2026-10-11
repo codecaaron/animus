@@ -941,7 +941,9 @@ export class ExtractionSession {
   ): Promise<void> {
     // A rescan is a full read, nested in this attempt's slot.
     const transaction = Promise.resolve().then(() =>
-      rescan ? this.runFullPipeline() : this.processWatchUpdate(changes)
+      rescan
+        ? this.runFullPipeline([], changes.sources)
+        : this.processWatchUpdate(changes)
     );
     setWatchTransaction(this.key, transaction);
     const settle = () => {
@@ -1005,7 +1007,10 @@ export class ExtractionSession {
       );
       this.resetForHmr();
       try {
-        const promise = this.runFullPipeline(this.pendingFromBatch(changes));
+        const promise = this.runFullPipeline(
+          this.pendingFromBatch(changes),
+          changes.sources
+        );
         setAnalysisStartedPromise(this.key, promise);
         await promise;
       } catch (err) {
@@ -1233,7 +1238,7 @@ export class ExtractionSession {
             'system reload: publishing the reload a parse hold deferred'
           );
           this.resetForHmr();
-          await this.runFullPipeline(pending);
+          await this.runFullPipeline(pending, changes.sources);
           return;
         }
         this.externalFileOwners = projectExternalFileOwners(
@@ -1353,7 +1358,13 @@ export class ExtractionSession {
 
   /** Full analysis + publication, registered in the one in-flight
    *  transaction slot; a nested reload leaves the enclosing registration. */
-  async runFullPipeline(pending: Array<[string, string]> = []): Promise<void> {
+  /** `sources` are bytes a host already read (see WatchChanges.sources):
+   *  the full read uses them, and those of the observations it takes, in
+   *  place of the disk. */
+  async runFullPipeline(
+    pending: Array<[string, string]> = [],
+    sources: ReadonlyMap<string, string> = new Map()
+  ): Promise<void> {
     // Publication exclusivity is the pipeline's claim, so the per-instance
     // write guards hold by construction. Re-entrant for this instance.
     if (this.releasePublicationClaim === null) {
@@ -1381,8 +1392,12 @@ export class ExtractionSession {
     const nested = getWatchTransaction(this.key) !== null;
     // A top-level full read covers every observation queued before it, so
     // it settles them; one queued after it runs next.
-    const taken = nested ? null : this.takeObservations().taken;
-    const transaction = this.runPipelineTransaction(pending);
+    const observations = nested ? null : this.takeObservations();
+    const taken = observations?.taken ?? null;
+    const transaction = this.runPipelineTransaction(
+      pending,
+      new Map([...(observations?.sources ?? []), ...sources])
+    );
     if (taken !== null) {
       setWatchTransaction(this.key, transaction);
       this.settleTaken(taken, transaction);
@@ -1525,7 +1540,8 @@ export class ExtractionSession {
   }
 
   private async runPipelineTransaction(
-    pending: Array<[string, string]>
+    pending: Array<[string, string]>,
+    hostSources: ReadonlyMap<string, string>
   ): Promise<void> {
     const pipelineStart = this.now();
     const bt: Record<string, number> = {};
@@ -1603,7 +1619,7 @@ export class ExtractionSession {
       const relPath = relative(rootDir, filePath);
       let source: string;
       try {
-        source = readFileSync(filePath, 'utf-8');
+        source = hostSources.get(filePath) ?? readFileSync(filePath, 'utf-8');
       } catch (err) {
         if (!isDeletedSource(err)) {
           ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
@@ -1835,8 +1851,13 @@ export class ExtractionSession {
       this.externalSourceEntries = admitted.sourceEntries;
       this.externalSourceSideEffects = admitted.sourceEntrySideEffects;
       for (const entry of admitted.entries) {
-        const hash = contentHash(entry.source);
-        rawEntries.push({ path: entry.path, source: entry.source, hash });
+        const source =
+          hostSources.get(resolve(rootDir, entry.path)) ?? entry.source;
+        rawEntries.push({
+          path: entry.path,
+          source,
+          hash: contentHash(source),
+        });
       }
 
       this.externalPackageDirs = admitted.packageDirs;
