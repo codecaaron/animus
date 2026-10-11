@@ -2765,13 +2765,13 @@ fn member_path_ids(
     let Some((namespace, name)) = path.rsplit_once('.') else {
         return Vec::new();
     };
-    if let Some(module) = namespace_path_module(file, ff, namespace, files, inputs) {
+    if let Some(module) = namespace_path_module(file, ff, namespace, files, inputs, links) {
         return export_ids(&module, name.to_string(), slots, files, inputs, links, evaluated_ids);
     }
     // `ui.sub.Card.Body`: a slot of a family the namespace exports.
     let slot_ids = || {
         let (namespace, family) = namespace.rsplit_once('.')?;
-        let module = namespace_path_module(file, ff, namespace, files, inputs)?;
+        let module = namespace_path_module(file, ff, namespace, files, inputs, links)?;
         let (declaring, exported, declared) =
             declared_export(&module, family.to_string(), files, links)?;
         Some(
@@ -3047,7 +3047,7 @@ fn exported_component_ids(
         }
         for name in crate::family_members::module_export_names(&module, files, inputs) {
             let namespace =
-                crate::family_members::namespace_export(module.clone(), name.clone(), files, inputs);
+                crate::family_members::namespace_export(module.clone(), name.clone(), links);
             match namespace {
                 Some(namespace) => modules.push(namespace),
                 None => ids.extend(export_ids(&module, name, true, files, inputs, links, evaluated_ids)),
@@ -3147,6 +3147,7 @@ pub(crate) fn namespace_path_module(
     path: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
 ) -> Option<String> {
     let mut segments = path.split('.');
     let local = segments.next()?;
@@ -3160,7 +3161,7 @@ pub(crate) fn namespace_path_module(
     )?;
     for segment in segments {
         let segment = segment.to_string();
-        module = crate::family_members::namespace_export(module, segment, files, inputs)?;
+        module = crate::family_members::namespace_export(module, segment, links)?;
     }
     Some(module)
 }
@@ -4055,7 +4056,7 @@ fn bounded_prop_tags(
     // A namespace member path (`ns.X`) a module reads, as a declaration.
     let namespace_declared = |file: &str, ff: &FileFacts, path: &str| {
         let (namespace, member) = path.rsplit_once('.')?;
-        let module = namespace_path_module(file, ff, namespace, files, inputs)?;
+        let module = namespace_path_module(file, ff, namespace, files, inputs, links)?;
         let (declaring, binding, _, _) = module_declaration(module, member, files, inputs, links)?;
         Some((declaring, binding))
     };
@@ -6903,7 +6904,7 @@ fn run_with_system_floor(
             }
             // A namespace object hands over everything its module exports, and
             // a member of one at any depth (`ui.sub.X`) that component.
-            match namespace_path_module(path, ff, name, files, inputs) {
+            match namespace_path_module(path, ff, name, files, inputs, links) {
                 Some(module) => {
                     escaped_ids.extend(exported_component_ids(&module, files, inputs, links, &evaluated_ids));
                 }
@@ -11318,6 +11319,33 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "{}",
             out.sheets.base
         );
+    }
+
+    #[test]
+    fn an_exported_namespace_is_one_only_where_the_module_table_resolves_it() {
+        // Two stars bringing in different namespaces, or one beside an
+        // unresolved path, name no namespace.
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let files: BTreeMap<String, FileFacts> = [
+            ("x.ts", "export const X = 1;"),
+            ("y.ts", "export const Y = 1;"),
+            ("a.ts", "export * as ns from './x';"),
+            ("b.ts", "export * as ns from './y';"),
+            ("both.ts", "export * from './a';\nexport * from './b';"),
+            ("open.ts", "export * from './a';\nexport * from './missing';"),
+            ("one.ts", "export * from './a';"),
+        ]
+        .into_iter()
+        .map(|(path, source)| {
+            let ast = crate::owned_ast::OwnedAst::parse(path.to_string(), source.to_string(), &counter);
+            (path.to_string(), crate::facts::extract_file_facts(&ast))
+        })
+        .collect();
+        let links = crate::link::ProjectLinks::link(&files, &test_inputs());
+        let namespace = |module: &str| crate::family_members::namespace_export(module.to_string(), "ns".to_string(), &links);
+        assert_eq!(namespace("both.ts"), None);
+        assert_eq!(namespace("open.ts"), None);
+        assert_eq!(namespace("one.ts"), Some("x.ts".to_string()));
     }
 
     #[test]

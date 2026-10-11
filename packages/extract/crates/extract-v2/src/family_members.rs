@@ -13,6 +13,7 @@ use crate::analyze_css::{
     declared_export, loaded_modules, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
 };
 use crate::facts::{FacadeEntry, FileFacts};
+use animus_system_loader::module_table::{ExportLookup, Terminal};
 
 /// Every compose family, keyed by the names its module gives it.
 pub(crate) struct FamilyIndex {
@@ -441,7 +442,7 @@ impl<'f> ObjectMembers<'f> {
         let files = self.files;
         match path.rsplit_once('.') {
             Some((namespace, name)) => {
-                let module = namespace_path_module(file, files.get(file)?, namespace, files, self.inputs)?;
+                let module = namespace_path_module(file, files.get(file)?, namespace, files, self.inputs, self.links)?;
                 self.exported_object(&module, name)
             }
             None => self.local_object(file, path),
@@ -800,13 +801,15 @@ fn resolve_export(
 /// `export * as name from '…'`, or a namespace import exported again
 /// (`import * as name from '…'; export { name }`), followed through
 /// re-exports and barrels. `None` when `name` is no namespace there.
-pub(crate) fn namespace_export(
-    module: String,
-    name: String,
-    files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-) -> Option<String> {
-    resolve_namespace(module, name, files, inputs, &mut FxHashSet::default())
+///
+/// Only a module namespace the module table resolves the export to is a
+/// namespace: an absent, ambiguous or open answer, a binding and an
+/// export of a module outside the analysis are none.
+pub(crate) fn namespace_export(module: String, name: String, links: &crate::link::ProjectLinks) -> Option<String> {
+    match links.resolve_export(&module, &name)? {
+        ExportLookup::Resolved(Terminal::Namespace(target)) => Some(links.paths[target].clone()),
+        _ => None,
+    }
 }
 
 fn resolve_namespace(
