@@ -91,7 +91,10 @@ export interface FontFaceLocalSrc {
 export type FontFaceSrc = FontFaceUrlSrc | FontFaceLocalSrc;
 
 /**
- * `family` may use a font-scale token reference (`{fonts.body}`); the other
+ * `family` names one font: a name (`'Mona Sans'`) or a font-scale token
+ * reference (`{fonts.brand}`) that resolves to one name. A token that
+ * resolves to a stack (`Inter, sans-serif`) or to a `var()` reports
+ * `animus.style.font-face-dropped`, and the face is not emitted. The other
  * descriptors take CSS literals only, written as strings.
  */
 export interface FontFace {

@@ -165,13 +165,44 @@ pub struct NapiResolvedSpecifier {
 /// `conditions`, `import` and `default`), then `module`, then `main`.
 #[napi]
 pub fn resolve_specifier(specifier: String, from_dir: String, conditions: Option<Vec<String>>) -> NapiResolvedSpecifier {
-    match animus_system_loader::resolve_specifier(&specifier, &from_dir, conditions.as_deref().unwrap_or_default()) {
-        Ok((path, manifest)) => NapiResolvedSpecifier {
-            path: Some(path.to_string_lossy().to_string()),
-            manifest: manifest.map(|manifest| manifest.to_string_lossy().to_string()),
-            unresolved: None,
-        },
-        Err(reason) => NapiResolvedSpecifier { path: None, manifest: None, unresolved: Some(reason) },
+    NapiResolvedSpecifier::from(animus_system_loader::resolve_specifier(
+        &specifier,
+        &from_dir,
+        conditions.as_deref().unwrap_or_default(),
+    ))
+}
+
+/// Selects the entry `subpath` (omitted for the root, else `./x`) of the
+/// package in `package_dir` as the system loader selects a package's entry
+/// once it has found it: for a package located another way, such as a
+/// workspace. `exports` (its `animus` source condition, then `conditions`,
+/// `import` and `default`), then for the root `module`, then `main`.
+#[napi]
+pub fn resolve_package_entry(
+    package_dir: String,
+    subpath: Option<String>,
+    conditions: Option<Vec<String>>,
+) -> NapiResolvedSpecifier {
+    NapiResolvedSpecifier::from(
+        animus_system_loader::resolve_package_entry(
+            std::path::Path::new(&package_dir),
+            subpath.as_deref().unwrap_or_default(),
+            conditions.as_deref().unwrap_or_default(),
+        )
+        .map(|(path, manifest)| (path, Some(manifest))),
+    )
+}
+
+impl From<Result<(std::path::PathBuf, Option<std::path::PathBuf>), String>> for NapiResolvedSpecifier {
+    fn from(result: Result<(std::path::PathBuf, Option<std::path::PathBuf>), String>) -> Self {
+        match result {
+            Ok((path, manifest)) => Self {
+                path: Some(path.to_string_lossy().to_string()),
+                manifest: manifest.map(|manifest| manifest.to_string_lossy().to_string()),
+                unresolved: None,
+            },
+            Err(reason) => Self { path: None, manifest: None, unresolved: Some(reason) },
+        }
     }
 }
 

@@ -1,0 +1,9 @@
+{
+  "appended": [".ts", ".tsx", ".js", ".jsx", ".mjs"],
+  "nodeNext": [
+    [".js", [".ts", ".tsx", ".jsx"]],
+    [".jsx", [".tsx"]],
+    [".mjs", [".mts"]],
+    [".cjs", [".cts"]]
+  ]
+}

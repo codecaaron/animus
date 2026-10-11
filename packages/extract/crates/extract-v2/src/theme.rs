@@ -369,6 +369,11 @@ pub const AT_RULE_PLACEMENT: &str = "animus.style.at-rule-placement";
 /// font nor a `url`, or a descriptor whose value is not a string.
 pub const FONT_FACE_DROPPED: &str = "animus.style.font-face-dropped";
 
+/// A typed font face's family of several words that starts with a generic
+/// family (`serif Pro`): Lightning CSS unquotes it, and browsers then drop
+/// the face.
+pub const FONT_FACE_GENERIC_FIRST_WORD: &str = "animus.style.font-face-generic-first-word";
+
 /// A style-object key given an object that resolves to nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DroppedStyleKey {
@@ -384,6 +389,9 @@ pub enum DroppedStyleKey {
     /// (`within`: a keyframe frame, or a prop's value), with its block and
     /// what is not emitted for it (`lost`).
     AtRulePlacement { key: String, within: String, lost: String, block: Value },
+    /// A typed font face whose `family` of several words starts with a
+    /// generic family: emitted, but Lightning CSS unquotes it.
+    FontFaceGenericFirstWord { face: String, family: String },
     /// The typed font face named `face`, or a part of it (`part`: a source
     /// or a descriptor), that is left out, and why.
     FontFace { face: String, part: Option<String>, reason: String },
@@ -430,7 +438,7 @@ impl DroppedStyleKey {
             | Self::NonBlockValue { key, .. }
             | Self::AtRuleSelectorNesting { key, .. } => key,
             Self::SharedProperty { winner, .. } => winner,
-            Self::FontFace { face, .. } => face,
+            Self::FontFace { face, .. } | Self::FontFaceGenericFirstWord { face, .. } => face,
         }
     }
 }
@@ -2744,7 +2752,20 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext) -> String {
             drop(None, "it has no source in `src`".into());
             continue;
         }
-        let family = resolve_token_aliases(family, ctx.theme, ctx.variable_map, ctx.contextual_vars);
+        let resolved = resolve_token_aliases(family, ctx.theme, ctx.variable_map, ctx.contextual_vars);
+        let family = match family_name(&resolved) {
+            Ok(printed) => {
+                if starts_with_generic(resolved.trim().trim_matches(|c| c == '"' || c == '\'')) {
+                    let warning = DroppedStyleKey::FontFaceGenericFirstWord { face: name.clone(), family: printed.clone() };
+                    record_dropped_key_at(ctx, &[], warning);
+                }
+                printed
+            }
+            Err(what) => {
+                drop(None, format!("its `family` {family:?} resolves to `{resolved}`, {what}, and a face declares one family name: use a token or literal that names one font"));
+                continue;
+            }
+        };
         let mut decls = vec![format!("font-family: {family};"), format!("src: {};", sources.join(", "))];
         for (key, descriptor) in FONT_FACE_DESCRIPTORS {
             match obj.get(key) {
@@ -2782,15 +2803,59 @@ fn font_face_source(entry: &Value) -> Result<String, String> {
     Ok(source.join(" "))
 }
 
-/// A font's full name as `local()` takes it: bare when every word is a
-/// plain identifier other than a CSS-wide keyword (`Arial`, `Helvetica
-/// Neue`), else quoted.
+/// The keywords a font name written bare would read as, not as a name: the
+/// CSS-wide keywords and the generic families.
+const CSS_WIDE_KEYWORDS: [&str; 6] = ["inherit", "initial", "unset", "revert", "revert-layer", "default"];
+const GENERIC_FAMILIES: [&str; 13] = [
+    "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace",
+    "ui-rounded", "emoji", "math", "fangsong",
+];
+
+/// A font's name as `local()` and a face's `font-family` take it: its words,
+/// escapes decoded, joined by one space; bare when every word is a plain
+/// identifier other than a keyword (`Arial`, `Helvetica Neue`), else quoted.
 fn font_name(name: &str) -> String {
-    let bare = |word: &str| {
+    let words: Vec<Cow<'_, str>> = name.split_whitespace().map(crate::css_tokens::decoded_identifier).collect();
+    let name = words.join(" ");
+    let bare = |word: &Cow<'_, str>| {
+        let lower = word.to_ascii_lowercase();
         crate::css_tokens::is_plain_identifier(word)
-            && !matches!(word.to_ascii_lowercase().as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer" | "default")
+            && !CSS_WIDE_KEYWORDS.contains(&lower.as_str())
+            && !GENERIC_FAMILIES.contains(&lower.as_str())
     };
-    if !name.is_empty() && name.split(' ').all(bare) { name.to_string() } else { css_string(name) }
+    if !words.is_empty() && words.iter().all(bare) { name } else { css_string(&name) }
+}
+
+/// Whether a family name of several words starts with a generic family
+/// (`serif Pro`): Lightning CSS unquotes such a name, and a browser then
+/// reads the generic and drops the face.
+fn starts_with_generic(family: &str) -> bool {
+    let mut words = family.split_whitespace();
+    let first = words.next().map(|word| crate::css_tokens::decoded_identifier(word).to_ascii_lowercase());
+    words.next().is_some() && first.is_some_and(|first| GENERIC_FAMILIES.contains(&first.as_str()))
+}
+
+/// A face's family as its one `<family-name>`: a single CSS string as
+/// written, else the name `font_name` prints. What else it is, when it
+/// cannot be one name: a list of families, or a custom property's value,
+/// which no `@font-face` descriptor reads.
+fn family_name(family: &str) -> Result<String, &'static str> {
+    use crate::css_tokens::Kind;
+    let family = family.trim();
+    let tokens = crate::css_tokens::tokenize(family);
+    if tokens.iter().any(|token| token.kind == Kind::Function && token.value.eq_ignore_ascii_case("var")) {
+        return Err("which reads a custom property, and none applies inside `@font-face`");
+    }
+    if split_top_level_commas(family).len() > 1 {
+        return Err("a list of families");
+    }
+    let mut significant = tokens.iter().filter(|token| token.kind != Kind::Whitespace);
+    if let (Some(only), None) = (significant.next(), significant.next()) {
+        if only.kind == Kind::String {
+            return Ok(family.to_string());
+        }
+    }
+    Ok(font_name(family))
 }
 
 /// `text` as a single-quoted CSS string: a quote and a backslash are
@@ -3827,7 +3892,7 @@ mod tests {
         let mut owner = TestCtxOwner::new();
         owner
             .theme
-            .insert("fonts.body".to_string(), "Inter, sans-serif".to_string());
+            .insert("fonts.body".to_string(), "Inter".to_string());
         let blocks = json!({
             "globals": {
                 "styles": {},
@@ -3839,7 +3904,7 @@ mod tests {
         });
         let css = resolve_all_global_blocks(&blocks, &owner.ctx());
         assert!(
-            css.contains("font-family: Inter, sans-serif;"),
+            css.contains("font-family: Inter;"),
             "family token unresolved:\n{css}"
         );
     }

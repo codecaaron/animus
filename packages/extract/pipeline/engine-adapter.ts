@@ -31,6 +31,20 @@ export interface EngineApi {
   moduleSpecifiers?: (filesJson: string) => string;
   /** The engine's code-to-severity table, as JSON. */
   diagnosticCodes?: () => string;
+  /** A specifier resolved as the system loader resolves it: the real path
+   *  of the file it names, or why it names none. */
+  resolveSpecifier?: (
+    specifier: string,
+    fromDir: string,
+    conditions?: readonly string[]
+  ) => { path?: string | null; unresolved?: string | null };
+  /** The entry of the package in a directory, selected as the system
+   *  loader selects a package's entry. */
+  resolvePackageEntry?: (
+    packageDir: string,
+    subpath?: string,
+    conditions?: readonly string[]
+  ) => { path?: string | null; unresolved?: string | null };
   analyzeProject: (
     filesJson: string,
     scalesJson: string,
@@ -147,6 +161,17 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
       extractFacts: (filesJson) => native.extractFacts(filesJson),
       moduleSpecifiers: (filesJson) => native.moduleSpecifiers(filesJson),
       diagnosticCodes: () => native.diagnosticCodes(),
+      // Absent where the native module lacks them, so callers can say so.
+      resolveSpecifier:
+        native.resolveSpecifier === undefined
+          ? undefined
+          : (specifier, fromDir, conditions) =>
+              native.resolveSpecifier(specifier, fromDir, conditions),
+      resolvePackageEntry:
+        native.resolvePackageEntry === undefined
+          ? undefined
+          : (packageDir, subpath, conditions) =>
+              native.resolvePackageEntry(packageDir, subpath, conditions),
       analyzeProject: (
         filesJsonRaw,
         scalesJson,

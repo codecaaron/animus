@@ -742,19 +742,36 @@ impl<'f> ObjectMembers<'f> {
     }
 }
 
-/// The module `module` exports as the namespace `name`:
-/// `export * as name from '…'`, or a namespace import exported again
-/// (`import * as name from '…'; export { name }`), followed through
-/// re-exports and barrels. `None` when `name` is no namespace there.
-///
-/// Only a module namespace the module table resolves the export to is a
-/// namespace: an absent, ambiguous or open answer, a binding and an
-/// export of a module outside the analysis are none.
-pub(crate) fn namespace_export(module: String, name: String, links: &crate::link::ProjectLinks) -> Option<String> {
+/// The module `module` exports as the namespace `name`, as the module
+/// table resolves it: a module namespace, or a binding that holds one
+/// (`import * as ns …; export default ns`). An absent, ambiguous or open
+/// answer, and any other binding, are no namespace.
+pub(crate) fn namespace_export(
+    module: String,
+    name: String,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> Option<String> {
     match links.resolve_export(&module, &name)? {
         ExportLookup::Resolved(Terminal::Namespace(target)) => Some(links.paths[target].clone()),
+        ExportLookup::Resolved(Terminal::Local { module: declaring, binding }) => {
+            let (path, held) = crate::analyze_css::binding_name(links, files, declaring, binding);
+            held_namespace(&path, files.get(&path)?, &held, files, inputs)
+        }
         _ => None,
     }
+}
+
+/// The module the binding `binding` of `file` holds as a namespace import.
+pub(crate) fn held_namespace(
+    file: &str,
+    ff: &FileFacts,
+    binding: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) -> Option<String> {
+    resolve_import_source(file, ff.namespace_imports.get(binding)?, files, inputs)
 }
 
 /// The module a local binding of `file` holds as a namespace: a namespace
@@ -768,12 +785,12 @@ pub(crate) fn local_namespace(
     inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
 ) -> Option<String> {
-    if let Some(spec) = ff.namespace_imports.get(local) {
-        return resolve_import_source(file, spec, files, inputs);
+    if ff.namespace_imports.contains_key(local) {
+        return held_namespace(file, ff, local, files, inputs);
     }
     let import = ff.imports.iter().find(|import| import.local == local)?;
     let module = resolve_import_source(file, &import.source, files, inputs)?;
-    namespace_export(module, import.imported.clone(), links)
+    namespace_export(module, import.imported.clone(), files, inputs, links)
 }
 
 /// Every name `module` exports, including through its `export *` sources,
