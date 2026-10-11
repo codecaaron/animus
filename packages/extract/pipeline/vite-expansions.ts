@@ -319,12 +319,21 @@ function defaultImportVars(
   );
 }
 
+/** The aliases Vite adds to every configuration (`clientAlias`), which
+ *  name only its own `@vite/` modules. */
+const VITE_CLIENT_ALIASES = new Set([
+  '^\\/?@vite\\/env',
+  '^\\/?@vite\\/client',
+]);
+
 /** Whether an alias could rewrite a relative or root specifier, which the
- *  expander reads without the resolver. */
+ *  expander reads without the resolver: a string from `.` or `/`, or a
+ *  RegExp other than Vite's own client aliases. */
 function aliasesRelative(aliases: readonly ViteAlias[] | undefined): boolean {
-  return (aliases ?? []).some(
-    ({ find }) =>
-      find instanceof RegExp || find.startsWith('.') || find.startsWith('/')
+  return (aliases ?? []).some(({ find }) =>
+    find instanceof RegExp
+      ? !(find.flags === '' && VITE_CLIENT_ALIASES.has(find.source))
+      : find.startsWith('.') || find.startsWith('/')
   );
 }
 

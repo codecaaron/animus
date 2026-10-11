@@ -179,7 +179,11 @@ describe('viteLoadExpander', () => {
           root
         );
       expect({
-        everyDefault: host([/node_modules/], [])?.map(({ path }) => path),
+        // Vite's own client aliases are in every configuration.
+        everyDefault: host(
+          [/node_modules/],
+          [{ find: /^\/?@vite\/env/ }, { find: /^\/?@vite\/client/ }]
+        )?.map(({ path }) => path),
         ssrExcluded: host(['**/entry.js'], []),
         relativeAlias: host([/node_modules/], [{ find: './pages' }]),
         regExpAlias: host([/node_modules/], [{ find: /^@/ }]),
