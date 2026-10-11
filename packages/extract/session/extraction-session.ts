@@ -332,6 +332,13 @@ function firstChangedFile(
   return undefined;
 }
 
+/** How a session fingerprints an asset's bytes, of a file or of bytes
+ *  already read; both always agree. */
+interface AssetFingerprints {
+  ofFile: (path: string) => string;
+  ofBytes: (bytes: Buffer) => string;
+}
+
 /** Bundler-agnostic extraction pipeline: system load, source ingestion,
  *  analysis, emission, and watch-cycle diffing. Carries no bundler types. */
 export class ExtractionSession {
@@ -372,8 +379,8 @@ export class ExtractionSession {
     string,
     {
       sourcePath: string;
-      /** The content hash the copy was made from. */
-      digest: string;
+      /** The fingerprint of the bytes the copy was made from. */
+      fingerprint: string;
       fileName: string;
       url: string;
     }
@@ -2807,6 +2814,24 @@ export class ExtractionSession {
     this.onArtifactWrite?.(name, content);
   }
 
+  /** How an asset's bytes are fingerprinted, of a file or of bytes read:
+   *  the engine's fast fingerprint where it has both, the content hash
+   *  otherwise, so the two always agree. */
+  private assetFingerprints(): AssetFingerprints {
+    const { fingerprintFile, fingerprintBytes } = engineApi(this.key);
+    if (fingerprintFile && fingerprintBytes) {
+      return {
+        ofFile: (path) =>
+          fingerprintFile(path) ?? contentHash(readFileSync(path)),
+        ofBytes: fingerprintBytes,
+      };
+    }
+    return {
+      ofFile: (path) => contentHash(readFileSync(path)),
+      ofBytes: contentHash,
+    };
+  }
+
   /** Copy each asset() specifier's bytes, from every sheet, into `assets/`
    *  under a content-hashed name and substitute a url relative to
    *  styles.css. */
@@ -2837,13 +2862,17 @@ export class ExtractionSession {
       return substituteSheetAssets(sheets, urlBySpecifier);
     }
     for (const specifier of specifiers) {
-      // The memo saves resolution and the copy, never the hash: bytes can
-      // change with mtime and size unchanged (SE-5). A missing copy
-      // (concurrent prune) falls through and self-heals.
+      // The memo saves resolution and the copy, never the bytes' check:
+      // they can change with mtime and size unchanged (SE-5), so each pass
+      // fingerprints them. A missing copy (concurrent prune) falls through
+      // and self-heals.
       const cached = this.assetCopyCache.get(specifier);
       if (cached && existsSync(join(assetsDir, cached.fileName))) {
         try {
-          if (contentHash(readFileSync(cached.sourcePath)) === cached.digest) {
+          if (
+            this.assetFingerprints().ofFile(cached.sourcePath) ===
+            cached.fingerprint
+          ) {
             this.trackAssetDependency(cached.sourcePath);
             expected.add(cached.fileName);
             urlBySpecifier.set(specifier, cached.url);
@@ -2859,14 +2888,16 @@ export class ExtractionSession {
         urlBySpecifier.set(specifier, specifier);
         continue;
       }
-      const { fileName, digest } = writeAssetCopy(resolvedPath, assetsDir);
+      const { fileName, bytes } = writeAssetCopy(resolvedPath, assetsDir);
       this.trackAssetDependency(resolvedPath);
       expected.add(fileName);
       const url = `./${SESSION_ASSETS_DIR}/${fileName}`;
       urlBySpecifier.set(specifier, url);
       this.assetCopyCache.set(specifier, {
         sourcePath: resolvedPath,
-        digest,
+        // The bytes the copy holds, never a second read: an edit in
+        // between would pair the copy with another file's fingerprint.
+        fingerprint: this.assetFingerprints().ofBytes(bytes),
         fileName,
         url,
       });
