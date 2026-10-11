@@ -2393,12 +2393,16 @@ export class ExtractionSession {
     const fullCss = [declaration, variables, processedBody]
       .filter(Boolean)
       .join('\n');
-    reportSurvivingAssetPlaceholders(fullCss, {
-      strict: this.options.strict,
-      warn: (message) => this.warn(message),
-      reportErrors: this.reportErrors(),
-      prefix: `[${this.driverLabel}]`,
-    });
+    // A host that substitutes assets itself receives the placeholders on
+    // purpose and reports the specifiers it cannot resolve.
+    if (!this.hostSubstitutesAssets) {
+      reportSurvivingAssetPlaceholders(fullCss, {
+        strict: this.options.strict,
+        warn: (message) => this.warn(message),
+        reportErrors: this.reportErrors(),
+        prefix: `[${this.driverLabel}]`,
+      });
+    }
     reportSurvivingAssetPlaceholders(generatedModuleCode(manifest), {
       strict: this.options.strict,
       warn: (message) => this.warn(message),
