@@ -1,5 +1,6 @@
 import {
   AnimusConfigError,
+  assertSupportedEngine,
   buildAnalyzeProjectArgs,
   contentHash,
   parseFilesJson,
@@ -101,8 +102,20 @@ export function __setTurbopackLoaderFsForTests(fs: LoaderFs | null): void {
 
 const epochSeenPaths = new Set<string>();
 
-/** @internal test seam. */
+/** The worker's startup inputs, captured once when it starts (SA2, SA3):
+ *  no later call reads `ANIMUS_ENGINE` or `NODE_ENV`. */
+function captureWorkerStartup() {
+  return {
+    engine: process.env.ANIMUS_ENGINE,
+    development: isTurbopackDevelopment(),
+  };
+}
+let workerStartup = captureWorkerStartup();
+
+/** @internal test seam: also captures the startup inputs again, as a new
+ *  worker would. */
 export function __resetTurbopackLoaderStateForTests(): void {
+  workerStartup = captureWorkerStartup();
   hydrations.clear();
   epochSeenPaths.clear();
 }
@@ -281,6 +294,8 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
     (sessionId !== undefined
       ? sessionArtifactDir(rootDir, sessionId)
       : undefined);
+  // Before anything loads the native module (SA2).
+  assertSupportedEngine(undefined, workerStartup.engine);
   // withAnimus always names the session: a loader without one is set up by
   // hand, and serving raw would ship builder code (SA1).
   if (sessionId === undefined || sessionDir === undefined) {
@@ -327,7 +342,7 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
       opts,
     });
 
-  const development = opts.development ?? isTurbopackDevelopment();
+  const development = opts.development ?? workerStartup.development;
   const deliver = async (covering: Hydration): Promise<string> => {
     if (!development) {
       return transform(covering.manifestJson);

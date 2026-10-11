@@ -1,5 +1,6 @@
 import {
-  assertNoRetiredEngineSelection,
+  AnimusConfigError,
+  assertSupportedEngine,
   buildPathAliasesJson,
   webpackExtensionPolicy,
 } from '@animus-ui/extract/pipeline';
@@ -22,6 +23,7 @@ import {
 import { existsSync } from 'fs';
 
 import { resolveAnimusLoaderPath } from './loader-path';
+import { sameDirectory } from './same-directory';
 
 import type { AnimusNextOptions } from './types';
 
@@ -190,7 +192,7 @@ export class AnimusWebpackPlugin {
     }: { development?: boolean; build?: string } = {}
   ) {
     this.options = options;
-    assertNoRetiredEngineSelection(options.engine);
+    assertSupportedEngine(options.engine);
     // Every compiler of one `next build` joins the build its config wrapper
     // created; a plugin made alone is a build of its own.
     this.session = new ExtractionSession(options, { build });
@@ -477,29 +479,24 @@ export class AnimusWebpackPlugin {
     this.session.rootDir = rootDir;
   }
 
-  private warnedRootDivergence = false;
-
   /** Adopts `compiler.context` only when no config-time root exists: every
    *  frozen derivation came from that root, so an overwrite re-keys it.
    *  Stub path, css alias, virtual system-props target and watch-ignore are
-   *  all frozen from it, so a disagreement is warned, never reconciled. */
+   *  all frozen from it, so a disagreement fails, never reconciled. */
   private adoptCompilerContext(compiler: Compiler): void {
     const context = compiler.context;
     if (!this.session.rootDir) {
       this.session.rootDir = context;
       return;
     }
-    if (
-      context &&
-      this.session.rootDir !== context &&
-      !this.warnedRootDivergence
-    ) {
-      this.warnedRootDivergence = true;
-      console.warn(
+    // A root override the plugin cannot honor fails (SA2): the analysis
+    // would read one tree while webpack builds another.
+    if (context && !sameDirectory(context, this.session.rootDir)) {
+      throw new AnimusConfigError(
         `[animus-extract] compiler.context (${context}) differs from the ` +
-          `configured project root (${this.session.rootDir}); keeping the ` +
-          `configured root — run next against the app directory (or align ` +
-          `your custom webpack context) so both agree`
+          `configured project root (${this.session.rootDir}). Run next ` +
+          `against the app directory, or align your custom webpack context, ` +
+          `so both agree.`
       );
     }
   }

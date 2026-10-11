@@ -171,7 +171,7 @@ export interface SessionHost {
   unbundledComputedImports?: boolean;
 }
 
-import type { ExcludeMatcher } from '../pipeline/index';
+import type { AnimusMode, ExcludeMatcher, Verbosity } from '../pipeline/index';
 import type {
   AssetSheets,
   LightningTargets,
@@ -379,6 +379,11 @@ export class ExtractionSession {
    *  shares its artifact tree and state; another build of the root never
    *  does. */
   readonly sessionId: string;
+  /** The log tier, from the option and `ANIMUS_DEBUG` at construction. */
+  private readonly verbosity: Verbosity;
+  /** The emission mode at construction: explicit, else `NODE_ENV`'s. It
+   *  defaults minify. */
+  private readonly startupMode: AnimusMode;
   private joinedKey: SessionKey | null = null;
   /** This instance as a participant of its build, once joined. */
   private participant: string | null = null;
@@ -421,6 +426,15 @@ export class ExtractionSession {
     // Serialized once (stable key order) so the analysis-inputs hash is
     // insensitive to option-object identity.
     this.staticCssJson = serializeStaticCss(options.staticCss);
+    // Startup inputs, captured once (SA2, SA3): no later stage reads
+    // `ANIMUS_DEBUG` or `NODE_ENV`.
+    this.verbosity = resolveVerbosity(
+      options.verbose,
+      process.env.ANIMUS_DEBUG
+    );
+    this.startupMode = resolveMode(options.mode, () =>
+      process.env.NODE_ENV === 'production' ? 'production' : 'development'
+    ).mode;
   }
 
   /** Forgets that `relPath` could not be read once an incremental pass reads
@@ -451,10 +465,7 @@ export class ExtractionSession {
   }
 
   get verbose(): boolean {
-    return (
-      resolveVerbosity(this.options.verbose, process.env.ANIMUS_DEBUG) !==
-      'quiet'
-    );
+    return this.verbosity !== 'quiet';
   }
 
   private log(msg: string): void {
@@ -1921,11 +1932,7 @@ export class ExtractionSession {
       );
     }
     const processedBody = postProcessCss(body, {
-      minify:
-        this.options.minify ??
-        resolveMode(this.options.mode, () =>
-          process.env.NODE_ENV === 'production' ? 'production' : 'development'
-        ).mode === 'production',
+      minify: this.options.minify ?? this.startupMode === 'production',
       targets: this.lcssTargets,
       warnFn: (msg) => this.warn(msg),
     });

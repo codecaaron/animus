@@ -4,7 +4,7 @@
 import {
   AnimusConfigError,
   assertKnownOptionKeys,
-  assertNoRetiredEngineSelection,
+  assertSupportedEngine,
   resolveMode,
 } from '@animus-ui/extract/pipeline';
 import { resolve } from 'node:path';
@@ -54,7 +54,7 @@ export function resolveHostOptions(
   cwd: string = process.cwd()
 ): ResolvedHostOptions {
   const options: HostOptionRecord = raw ?? {};
-  assertNoRetiredEngineSelection(options.engine);
+  assertSupportedEngine(options.engine);
   assertKnownOptionKeys(options, ['watch']);
   if (!hasRequiredSystem(options)) {
     throw new AnimusConfigError(

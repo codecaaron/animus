@@ -647,6 +647,8 @@ describe('extensions re-deliver with the generation of the file they extend', ()
 
   beforeEach(() => {
     vi.stubEnv('NODE_ENV', 'development');
+    // A worker started under it.
+    __resetTurbopackLoaderStateForTests?.();
     mocks.analyzeProject.mockImplementation(lineageManifest);
   });
   afterEach(() => {
@@ -828,6 +830,8 @@ describe('extensions re-deliver with the generation of the file they extend', ()
         pending: [[PARENT, contentHash(parentSource(4))]],
       });
       vi.stubEnv('NODE_ENV', value);
+      // A worker started under it.
+      __resetTurbopackLoaderStateForTests?.();
 
       const { code, dependencies } = await childAt(root);
       const plain = `${CHILD_SOURCE}/* via ${fixedManifest(
@@ -847,6 +851,8 @@ describe('extensions re-deliver with the generation of the file they extend', ()
     writeFileSync(join(root, PARENT), parentSource(4));
     writeStatus(sessionDir, { state: 'idle', pending: [] });
     vi.stubEnv('NODE_ENV', nodeEnv);
+    // A worker started under it.
+    __resetTurbopackLoaderStateForTests?.();
     const plain = `${CHILD_SOURCE}/* via ${fixedManifest(
       buildInputs(fixedGeneration(parentSource(3), 1)).filesJson
     )} */`;

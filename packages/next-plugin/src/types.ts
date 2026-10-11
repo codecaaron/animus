@@ -9,7 +9,9 @@ export interface AnimusNextOptions {
   /** The app's directory, for a `next` run from another directory. Next
    *  passes no dir to a config module, so the app's root is the current
    *  directory without it. Its source kits and analysis read this root; under
-   *  webpack, a root that is not Next's dir fails. */
+   *  webpack, a root that is not Next's dir fails. A relative root resolves
+   *  against the current directory when `withAnimus()` is called, not
+   *  against `next.config`'s directory. */
   root?: string;
   /** Substrings, or globs when `*`/`?` present. Replaces `dist`/`.test.`/
    *  `.spec.`; `node_modules`, `.next` and `.animus` are always excluded. */
