@@ -13113,23 +13113,32 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// An object reached through a star the analysis cannot open is still
     /// the object a write through that route changes: a named import, a
     /// namespace member and a whole namespace through such a barrel all
-    /// leave its member table unproven; a read leaves it.
+    /// leave its member table unproven, and so do a namespace of a missing
+    /// module and a name an unread module may rename the object to; a read
+    /// leaves it, and a package's namespace holds none of our objects.
     #[test]
     fn a_write_through_an_open_star_reaches_the_object_it_names() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
         let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
         let barrel = "export * from './fam';\nexport * from 'some-package';\n";
+        // `./bridge` is outside the analysis and may `export { Fam as X }`.
+        let bridged = "export * from './bridge';\n";
         let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
         for (mutate, warns) in [
             ("import { Fam } from './barrel';\nFam.Box = () => null;\n", true),
             ("import * as ui from './barrel';\nui.Fam.Box = () => null;\n", true),
             ("import * as ui from './barrel';\nregister(ui);\n", true),
             ("import { Fam } from './barrel';\nexport const has = Fam.Box ? 1 : 0;\n", false),
+            ("import * as ui from './missing';\nui.Fam.Box = () => null;\n", true),
+            ("import * as ui from './missing';\nregister(ui);\n", true),
+            ("import { X } from './bridged';\nX.Box = () => null;\n", true),
+            ("import * as ui from 'some-package';\nui.Fam.Box = () => null;\n", false),
         ] {
             let out = analyze_with_logical_space(&[
                 ("recipe.tsx", recipe),
                 ("fam.tsx", fam),
                 ("barrel.ts", barrel),
+                ("bridged.ts", bridged),
                 ("mutate.ts", mutate),
                 ("app.tsx", app),
             ]);

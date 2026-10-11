@@ -13,7 +13,7 @@ use crate::analyze_css::{
     declared_export, loaded_modules, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
 };
 use crate::facts::{FacadeEntry, FileFacts};
-use animus_system_loader::module_table::{ExportLookup, Terminal};
+use animus_system_loader::module_table::{ExportLookup, ImportName, Request, Terminal};
 
 /// Every compose family, keyed by the names its module gives it.
 pub(crate) struct FamilyIndex {
@@ -668,13 +668,18 @@ impl<'f> ObjectMembers<'f> {
                                 Some(object) => vec![object],
                                 None => self.opened_export(&target, member),
                             },
+                            // A module the analysis cannot find may re-export
+                            // any object under any name.
+                            None if self.missing_namespace(module, ff, namespace) => self.every_exported_object(),
                             None => Vec::new(),
                         }
                     }
                     None => match ff.namespace_imports.get(name) {
-                        Some(spec) => resolve_import_source(module, spec, files, inputs)
-                            .map(|target| self.namespace_objects(&target))
-                            .unwrap_or_default(),
+                        Some(spec) => match resolve_import_source(module, spec, files, inputs) {
+                            Some(target) => self.namespace_objects(&target),
+                            None if self.missing_namespace(module, ff, name) => self.every_exported_object(),
+                            None => Vec::new(),
+                        },
                         None => match self.unresolved_import(module, ff, name) {
                             // An import the analysis cannot follow may be any
                             // object its name names.
@@ -727,7 +732,7 @@ impl<'f> ObjectMembers<'f> {
             objects.extend(self.opened_export(module, name));
         }
         if !names.complete() {
-            objects.extend(self.exposed(None));
+            objects.extend(self.every_exported_object());
         }
         objects
     }
@@ -744,9 +749,9 @@ impl<'f> ObjectMembers<'f> {
 
     /// The objects `module`'s export `name` may hold when an open route
     /// leaves the answer incomplete: each object the answer knows, and every
-    /// object exported under the name the route was asked for (under any
-    /// name, when it was asked for a whole namespace). Nothing for a
-    /// complete answer.
+    /// exported object, since the module the route passes is one the
+    /// analysis does not read and may re-export any object under any name.
+    /// Nothing for a complete answer.
     fn opened_export(&mut self, module: &str, name: &str) -> Vec<Object> {
         let Some(index) = self.links.module(module) else { return Vec::new() };
         let ExportLookup::Incomplete { known, openings } = self.links.table.resolve_export(index, name) else {
@@ -759,21 +764,32 @@ impl<'f> ObjectMembers<'f> {
                 objects.extend(self.local_object(&path, &local));
             }
         }
-        for opening in openings {
-            objects.extend(self.exposed(opening.name.as_deref()));
+        if !openings.is_empty() {
+            objects.extend(self.every_exported_object());
         }
         objects
     }
 
-    /// Every object a module exports under `name`, or under any name.
-    fn exposed(&mut self, name: Option<&str>) -> Vec<Object> {
+    /// Whether `module` imports `local` as the namespace of a module the
+    /// analysis cannot find (a package is not one).
+    fn missing_namespace(&self, module: &str, ff: &FileFacts, local: &str) -> bool {
+        let (Some(index), Some(binding)) = (self.links.module(module), ff.bindings.module_binding(local)) else {
+            return false;
+        };
+        let record = self.links.table.record(index);
+        record.imports.iter().any(|import| {
+            import.local == binding
+                && import.name == ImportName::Namespace
+                && matches!(record.requests[import.request], Request::Unresolved(_))
+        })
+    }
+
+    /// Every object any module exports.
+    fn every_exported_object(&mut self) -> Vec<Object> {
         let modules: Vec<String> = self.files.keys().cloned().collect();
         let mut objects = Vec::new();
         for module in &modules {
-            match name {
-                Some(name) => objects.extend(self.exported_object(module, name)),
-                None => objects.extend(self.exported_objects(module).iter().cloned()),
-            }
+            objects.extend(self.exported_objects(module).iter().cloned());
         }
         objects
     }
