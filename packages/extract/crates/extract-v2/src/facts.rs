@@ -962,6 +962,39 @@ fn object_member_chains(name: &str, init: &Expression<'_>, chains: &mut Vec<chai
     }
 }
 
+/// What a module's own source says of the objects the member tables follow
+/// (its facades, aliases, compose families and contexts) and of the uses
+/// that may change them: read from its parse and semantic build alone, so
+/// the relation of what may change can be built before any static value is
+/// evaluated.
+pub(crate) struct ObjectFacts {
+    props_forwarding: BTreeMap<String, crate::usage_facts::PropsForwarding>,
+    const_initializers: ConstInitializerFacts,
+    compose: Vec<ComposeFamilyInfo>,
+    uses: crate::usage_facts::ObjectUses,
+}
+
+/// `program`'s object facts, through its one semantic build.
+pub(crate) fn object_facts(program: &Program<'_>, scoping: &oxc::semantic::Scoping) -> ObjectFacts {
+    let props_forwarding = crate::usage_facts::collect_props_forwarding(program, scoping);
+    let const_initializers = collect_const_initializers(program, &props_forwarding);
+    let compose = scan_compose_calls(program);
+    // The module's own bindings that can hold a family or facade, flagged
+    // when a facade, whose top-level member writes its entries record.
+    let object_consts: BTreeMap<&str, bool> = const_initializers
+        .aliases
+        .keys()
+        .map(|name| (name.as_str(), false))
+        .chain(compose.iter().filter_map(|family| Some((family.family_binding.as_deref()?, false))))
+        .chain(const_initializers.facades.keys().map(|name| (name.as_str(), true)))
+        .collect();
+    // Assigned facades' targets (`Root`, `Fam.Root`): a write to one after
+    // the facade is built changes the facade too.
+    let assigned_targets: BTreeSet<&str> = const_initializers.targets.values().map(String::as_str).collect();
+    let uses = crate::usage_facts::object_uses(program, scoping, &object_consts, &assigned_targets);
+    ObjectFacts { props_forwarding, const_initializers, compose, uses }
+}
+
 /// Top-level `const` initializer facts: bare-identifier aliases, each
 /// declaration's root identifier, and object literals' identifier members.
 /// `let`/`var` are excluded: a mutable binding carries no static guarantee.
@@ -1248,6 +1281,7 @@ pub fn extract_file_facts_enriched_with_usage_statics(
         &rustc_hash::FxHashMap::default(),
         &references,
         None,
+        None,
     )
 }
 
@@ -1263,6 +1297,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
     extra_unsettled: &rustc_hash::FxHashMap<String, eval::Unsettled>,
     references: &TransformReferences<'_>,
     lowered: Option<crate::link::Lowered>,
+    objects: Option<ObjectFacts>,
 ) -> FileFacts {
     let program = ast.program();
     // The engine lowers every file before static enrichment; any other
@@ -1306,8 +1341,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let walked = chain_walk::walk_program_facts(program);
     let member_parent_extensions = walked.member_parents;
     let walked_chains = walked.chains;
-    let props_forwarding = crate::usage_facts::collect_props_forwarding(program, &scoping);
-    let const_initializers = collect_const_initializers(program, &props_forwarding);
+    let ObjectFacts { props_forwarding, const_initializers, compose, uses: object_uses } =
+        objects.unwrap_or_else(|| object_facts(program, &scoping));
     let imports = collect_import_facts(ast.module_record());
     let create_transform_locals: rustc_hash::FxHashSet<String> = imports
         .iter()
@@ -1556,29 +1591,12 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let exports = crate::usage_facts::collect_export_facts(program);
     let descriptors: Vec<&ChainDescriptor> = chains.iter().map(|chain| &chain.descriptor).collect();
     let usage = crate::usage_facts::collect_usage_facts(program);
-    let compose = scan_compose_calls(program);
-    // The module's own bindings that can hold a family or facade, flagged
-    // when a facade, whose top-level member writes its entries record.
-    let object_consts: BTreeMap<&str, bool> = const_initializers
-        .aliases
-        .keys()
-        .map(|name| (name.as_str(), false))
-        .chain(compose.iter().filter_map(|family| Some((family.family_binding.as_deref()?, false))))
-        .chain(const_initializers.facades.keys().map(|name| (name.as_str(), true)))
-        .collect();
-    // Assigned facades' targets (`Root`, `Fam.Root`): a write to one after
-    // the facade is built changes the facade too.
-    let assigned_targets: BTreeSet<&str> = const_initializers.targets.values().map(String::as_str).collect();
     let crate::usage_facts::EnrichedUsage {
         usage: usage_enriched,
         confined: confined_components,
         escapes: value_escapes,
         spread_wrappers,
-        unsafe_object_uses,
-        object_handoffs,
-        written_namespaces,
         ordinary_components,
-        context_consts,
         prop_tags,
         name_uses,
         namespace_member_uses,
@@ -1595,9 +1613,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &ast.path,
         &descriptors,
         &exports,
-        &object_consts,
-        &assigned_targets,
     );
+    let crate::usage_facts::ObjectUses { context_consts, unsafe_object_uses, object_handoffs, written_namespaces } =
+        object_uses;
 
     // `export default X` of a module binding X names X.
     let default_export_binding = match bindings.default_export {

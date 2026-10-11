@@ -973,6 +973,12 @@ impl ExtractEngine {
         // Each file's Lower output, before anything reads across files.
         let mut lowered_by_file: BTreeMap<String, crate::link::Lowered> =
             store.iter().map(|ast| (ast.path.clone(), crate::link::Lowered::of(ast))).collect();
+        // What each module's own source says of the objects the member
+        // tables follow, read before any static value is evaluated.
+        let mut objects_by_file: BTreeMap<String, facts::ObjectFacts> = store
+            .iter()
+            .map(|ast| (ast.path.clone(), facts::object_facts(ast.program(), &lowered_by_file[&ast.path].scoping)))
+            .collect();
         let links = ProjectLinks::of_records(&lowered_by_file, |lowered| &lowered.record, &self.opts.css_inputs);
         // Static reads follow explicit exports only, never `export *`, until
         // mutation tracking can bound every source a star exposes a binding
@@ -1255,6 +1261,7 @@ impl ExtractEngine {
                 unsettled_imports_by_file.get(&ast.path).unwrap_or(&none_unsettled),
                 &references,
                 lowered_by_file.remove(&ast.path),
+                objects_by_file.remove(&ast.path),
             );
             if let Some(names) = global_declarations.get(ast.path.as_str()) {
                 file_facts.global_keys = facts::declaration_keys(ast.program(), ast.source(), names);
