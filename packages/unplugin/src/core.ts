@@ -245,6 +245,19 @@ function canResolve(
   return 'resolve' in context;
 }
 
+/** One environment's build, as Vite hands it to a hook: the object is its
+ *  identity, the name its key. */
+interface BuildingEnvironment {
+  readonly name: string;
+}
+
+/** Whether a hook context names the environment it builds (Vite). */
+function hasEnvironment(
+  context: UnpluginBuildContext
+): context is UnpluginBuildContext & { environment: BuildingEnvironment } {
+  return 'environment' in context;
+}
+
 /** Marks the esbuild resolve that `esbuild.setup` makes for itself. */
 const KIT_SOURCE_RESOLVE = 'animus:kit-source-resolve';
 
@@ -488,6 +501,60 @@ export const unpluginFactory: UnpluginFactory<
     });
   }
 
+  /** Each Rollup-family environment build that started and has not
+   *  ended, by name. A Vite buildApp can build environments in parallel on
+   *  one plugin instance; they share one pipeline and one Session, retired
+   *  by the last to end. Builds are tracked by environment, not by
+   *  generation, so a second build of an active environment, or a second
+   *  environment under an active name, is refused. webpack-like hosts run
+   *  one compile at a time and are not tracked. */
+  const openBuilds = new Map<string, BuildingEnvironment>();
+  const singleEnvironment: BuildingEnvironment = { name: 'build' };
+  const tracksEnvironments =
+    meta.framework === 'rollup' ||
+    meta.framework === 'rolldown' ||
+    meta.framework === 'vite';
+
+  /** Opens this hook's environment build; whether another environment's
+   *  build was already open. */
+  function openEnvironmentBuild(context: UnpluginBuildContext): boolean {
+    if (!tracksEnvironments) return false;
+    const environment = hasEnvironment(context)
+      ? context.environment
+      : singleEnvironment;
+    const { name } = environment;
+    const open = openBuilds.get(name);
+    if (open === environment) {
+      throw new Error(
+        `[animus] a previous build of environment ${name} is still running ` +
+          `on this plugin instance; wait for it to finish before building ` +
+          `it again`
+      );
+    }
+    if (open !== undefined) {
+      throw new Error(
+        `[animus] two environments named ${name} build on this plugin ` +
+          `instance at once; give each environment its own name`
+      );
+    }
+    openBuilds.set(name, environment);
+    return openBuilds.size > 1;
+  }
+
+  /** Ends this hook's environment build; whether none is left open. Only
+   *  the environment that opened an entry removes it, since a refused
+   *  build ends too. */
+  function closeEnvironmentBuild(context: UnpluginBuildContext): boolean {
+    if (!tracksEnvironments) return true;
+    const environment = hasEnvironment(context)
+      ? context.environment
+      : singleEnvironment;
+    if (openBuilds.get(environment.name) === environment) {
+      openBuilds.delete(environment.name);
+    }
+    return openBuilds.size === 0;
+  }
+
   async function joinPipeline(): Promise<void> {
     await pipelineStarted;
     await state.pipeline;
@@ -561,7 +628,10 @@ export const unpluginFactory: UnpluginFactory<
 
     async buildStart() {
       try {
-        await startPipeline();
+        // Another environment's build already runs this build's pipeline
+        // (a parallel Vite buildApp): share it rather than claim again.
+        if (openEnvironmentBuild(this)) await joinPipeline();
+        else await startPipeline();
       } finally {
         registerWatchTargets(this);
       }
@@ -698,8 +768,11 @@ export const unpluginFactory: UnpluginFactory<
       try {
         emitCssAsset(this);
       } finally {
-        disposeSessionDir(state);
-        releaseClaim();
+        // The last environment's build retires the shared one.
+        if (closeEnvironmentBuild(this)) {
+          disposeSessionDir(state);
+          releaseClaim();
+        }
       }
     },
 
