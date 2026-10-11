@@ -1124,9 +1124,14 @@ export const Use${name} = () => <${name} />;`,
     expect(JSON.stringify(escaped.manifest.diagnostics)).toContain(
       'preset is passed to decorate() in fixtures/Escaped.tsx on line 4'
     );
+    // Read by name, the escaped object refuses too: the runtime reads
+    // whatever it holds then, never the value it was declared with.
     const named = runPipeline([source('Named', 'preset', prelude)]);
     assertNoUnresolvedTokens(named.css);
-    expect(body(named.css, 'Named')).toBe('.C {\n    cursor: pointer;\n  }');
+    expect(body(named.css, 'Named')).toBeUndefined();
+    expect(JSON.stringify(named.manifest.diagnostics)).toContain(
+      'preset is passed to decorate() in fixtures/Named.tsx on line 4'
+    );
     const copied = runPipeline([
       source('Copied', 'copy', `${prelude}\nconst copy = { ...preset };`),
     ]);

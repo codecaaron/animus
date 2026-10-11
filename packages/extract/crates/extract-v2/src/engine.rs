@@ -406,6 +406,71 @@ fn literal_module_loads(program: &oxc::ast::ast::Program<'_>) -> Vec<String> {
     loads.0
 }
 
+/// How a module runs code from a string, which can load any module: it
+/// reads the unbound `eval` or `Function` as a value, so any call, alias or
+/// `Reflect.construct` of it counts, or reads either as a member of the
+/// unbound global object (`globalThis.eval`, `window.Function`). A type
+/// query, and the bare name as a `typeof` operand or the right side of
+/// `instanceof`, run nothing. Not followed: a computed member
+/// (`globalThis['ev' + 'al']`) and an alias of the global object.
+fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::Scoping) -> Option<&'static str> {
+    use oxc::ast::ast::{BinaryExpression, Expression, IdentifierReference, StaticMemberExpression, UnaryExpression};
+    use oxc::ast_visit::Visit;
+    use oxc::syntax::operator::{BinaryOperator, UnaryOperator};
+    const RUNNERS: [&str; 2] = ["eval", "Function"];
+    const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "self", "global"];
+    struct Reads<'s> {
+        scoping: &'s oxc::semantic::Scoping,
+        found: Option<&'static str>,
+    }
+    impl Reads<'_> {
+        fn unbound(&self, id: &IdentifierReference<'_>) -> bool {
+            id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).symbol_id().is_none())
+        }
+        /// The bare unbound `eval` or `Function`, which `typeof` and
+        /// `instanceof` only inspect.
+        fn bare_runner(&self, expr: &Expression<'_>) -> bool {
+            matches!(expr.get_inner_expression(), Expression::Identifier(id)
+                if RUNNERS.contains(&id.name.as_str()) && self.unbound(id))
+        }
+        fn record(&mut self, name: &str) {
+            self.found.get_or_insert(if name == "eval" { "reads eval" } else { "reads Function" });
+        }
+    }
+    impl<'a> Visit<'a> for Reads<'_> {
+        fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
+            let value = id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).is_value());
+            if value && RUNNERS.contains(&id.name.as_str()) && self.unbound(id) {
+                self.record(&id.name);
+            }
+        }
+        fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
+            let global = matches!(member.object.get_inner_expression(), Expression::Identifier(object)
+                if GLOBAL_OBJECTS.contains(&object.name.as_str()) && self.unbound(object));
+            if global && RUNNERS.contains(&member.property.name.as_str()) {
+                self.record(&member.property.name);
+            }
+            oxc::ast_visit::walk::walk_static_member_expression(self, member);
+        }
+        fn visit_unary_expression(&mut self, unary: &UnaryExpression<'a>) {
+            if unary.operator == UnaryOperator::Typeof && self.bare_runner(&unary.argument) {
+                return;
+            }
+            oxc::ast_visit::walk::walk_unary_expression(self, unary);
+        }
+        fn visit_binary_expression(&mut self, binary: &BinaryExpression<'a>) {
+            if binary.operator == BinaryOperator::Instanceof && self.bare_runner(&binary.right) {
+                self.visit_expression(&binary.left);
+                return;
+            }
+            oxc::ast_visit::walk::walk_binary_expression(self, binary);
+        }
+    }
+    let mut reads = Reads { scoping, found: None };
+    reads.visit_program(program);
+    reads.found
+}
+
 /// One module's functions, each with how its parameters treat an object.
 type FunctionReadings = std::rc::Rc<BTreeMap<String, Vec<crate::usage_facts::ParamReading>>>;
 /// A module's function readings, scanned on first request.
@@ -418,6 +483,8 @@ struct StyleModule {
     facts: crate::usage_facts::StyleObjectFacts,
     namespace_exports: BTreeMap<String, String>,
     loads: Vec<String>,
+    /// How it runs code from a string, which can load any module.
+    dynamic_code: Option<&'static str>,
 }
 
 /// Each module-scope static that a use anywhere in the analysis may change
@@ -592,6 +659,16 @@ fn unstable_style_statics(
             let reason = format!("{file} hands on {target} {how}");
             for export in every_export(&target) {
                 unstable.entry(export).or_insert_with(|| reason.clone());
+            }
+        }
+        // Code from a string can `import()` any module and change what it
+        // exports.
+        if let Some(how) = module.dynamic_code {
+            let reason = format!("{file} {how}, so code from a string can load and change any module");
+            for target in style.keys() {
+                for export in every_export(target) {
+                    unstable.entry(export).or_insert_with(|| reason.clone());
+                }
             }
         }
     }
@@ -822,6 +899,7 @@ impl ExtractEngine {
                     facts,
                     namespace_exports: crate::usage_facts::collect_namespace_exports(module),
                     loads: literal_module_loads(program),
+                    dynamic_code: dynamic_code(program, &lowered_by_file[&ast.path].scoping),
                 },
             );
         }
@@ -1990,25 +2068,108 @@ export const App = () => <Box tone="red" />;
     /// rather than emitting `padding: 4`.
     #[test]
     fn a_possibly_mutated_static_never_yields_its_pre_mutation_value_as_static_css() {
+        // The mutating module imports `pad` itself, except where code from a
+        // string loads it.
+        macro_rules! import_pad {
+            () => {
+                "import { pad } from './tokens.js';\n"
+            };
+        }
         let rows = [
             // A concise arrow returns what it evaluates (PF2).
-            ("sync return", "const get = () => pad; get().padding = 9;"),
-            ("async return", "const get = async () => pad; (await get()).padding = 9;"),
-            ("then callback return", "await Promise.resolve(0).then(() => pad).then((p) => { p.padding = 9; });"),
+            ("sync return", concat!(import_pad!(), "const get = () => pad; get().padding = 9;"), "{ ...pad }"),
+            ("async return", concat!(import_pad!(), "const get = async () => pad; (await get()).padding = 9;"), "{ ...pad }"),
+            ("then callback return", concat!(import_pad!(), "await Promise.resolve(0).then(() => pad).then((p) => { p.padding = 9; });"), "{ ...pad }"),
+            // A read by name or by one member takes no held value (PF1).
+            ("held by name", concat!(import_pad!(), "pad.padding = 9;"), "pad"),
+            ("held one member", concat!(import_pad!(), "pad.padding = 9;"), "{ padding: pad.padding }"),
+            ("direct eval, by name", concat!(import_pad!(), "eval('pad.padding = 9');"), "pad"),
+            // Code from a string can load and change any module (PF3).
+            (
+                "eval loads the module",
+                "await eval(\"import('./tokens.js')\").then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
+            (
+                "indirect eval loads the module",
+                "await (0, eval)(\"import('./tokens.js')\").then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
+            (
+                "a function from a string loads the module",
+                "await new Function(\"return import('./tokens.js')\")().then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
+            (
+                "the global object's eval loads the module",
+                "await globalThis.eval(\"import('./tokens.js')\").then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
+            (
+                "Reflect constructs a function that loads the module",
+                "await Reflect.construct(Function, [\"return import('./tokens.js')\"])().then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
+            (
+                "an alias of Function loads the module",
+                "const Make = Function;\nawait Make(\"return import('./tokens.js')\")().then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
+            // `typeof` and `instanceof` run what their member's object runs.
+            (
+                "a typeof operand's object loads the module",
+                "typeof (await eval(\"import('./tokens.js')\").then((m) => { m.pad.padding = 9; return m; })).Function;",
+                "{ ...pad }",
+            ),
+            (
+                "an instanceof right side's object loads the module",
+                "try { ({}) instanceof (await eval(\"import('./tokens.js')\").then((m) => { m.pad.padding = 9; return m; })).Function; } catch {}",
+                "{ ...pad }",
+            ),
         ];
-        for (row, mutation) in rows {
+        for (row, mutation, read) in rows {
             let mut engine = ExtractEngine::new(None).unwrap();
             let files = serde_json::json!([
                 { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
-                { "path": "mutate.js", "source": format!("import {{ pad }} from './tokens.js';\n{mutation}\n") },
+                { "path": "mutate.js", "source": format!("{mutation}\n") },
                 {
                     "path": "reader.tsx",
-                    "source": "import './mutate.js';\nimport { pad } from './tokens.js';\n\
-                               export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+                    "source": format!(
+                        "import './mutate.js';\nimport {{ pad }} from './tokens.js';\n\
+                         export const C = ds.styles({read}).asElement('div');\nexport const App = () => <C />;\n"
+                    ),
                 },
             ]);
             let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
+        }
+        // A type query of eval, or a schema builder's own `Function` member
+        // (TypeBox's `Type.Function`), runs nothing: the static still
+        // extracts.
+        for (row, module) in [
+            ("type query", "export type Evaluate = typeof eval;\n"),
+            (
+                "a namespace's Function member",
+                "import * as Type from './typebox';\nexport const schema = Type.Function([], Type.String());\n",
+            ),
+        ] {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let files = serde_json::json!([
+                { "path": "tokens.ts", "source": "export const pad = { padding: 4 };\n" },
+                {
+                    "path": "typebox.ts",
+                    "source": "export function Function(parameters: unknown[], returns: unknown) { return { parameters, returns }; }\n\
+                               export function String() { return { type: 'string' }; }\n",
+                },
+                { "path": "other.ts", "source": module },
+                {
+                    "path": "reader.tsx",
+                    "source": "import './other';\nimport { pad } from './tokens';\n\
+                               export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+                },
+            ]);
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string()).unwrap()).unwrap();
+            assert!(out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
     }
 

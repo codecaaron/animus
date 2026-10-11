@@ -176,7 +176,9 @@ fn select_package_entry(
         // runtime target differing only in case names no file.
         for source in [true, false] {
             if let Some(resolved) = resolve_exports_entry(exports, export_key, source, conditions) {
-                let abs_path = pkg_dir.join(&resolved).to_string_lossy().to_string();
+                // `..` taken back lexically, as Node resolves a target: the
+                // path checked is the path opened.
+                let abs_path = resolution::lexical(&pkg_dir.join(&resolved)).to_string_lossy().to_string();
                 match resolution::see_within(pkg_dir, &abs_path) {
                     resolution::Seen::File => return Ok((abs_path, pkg_json_path)),
                     resolution::Seen::CaseOnly(actual) if !source => {
@@ -204,10 +206,13 @@ fn select_package_entry(
     // its root, as Node's legacy resolution reads them; a subpath names a
     // file or directory in the package.
     // The first entry the filesystem answers, even under another case, ends
-    // the selection.
+    // the selection. An entry's `..` is taken back lexically, as Node
+    // resolves it, so the file checked is the file opened.
     let probe = |entry: &str| {
         resolution::extension_policy()
-            .probe(&pkg_dir.join(entry).to_string_lossy(), |candidate| resolution::see_within(pkg_dir, candidate))
+            .probe(&resolution::lexical(&pkg_dir.join(entry)).to_string_lossy(), |candidate| {
+                resolution::see_within(pkg_dir, candidate)
+            })
     };
     let legacy = match subpath.trim_start_matches('.').trim_start_matches('/') {
         "" => ["module", "main"]
@@ -344,7 +349,35 @@ fn resolve_exports_pattern(
 
     let (prefix, suffix, value) = best?;
     let matched = &lookup_key[prefix.len()..lookup_key.len() - suffix.len()];
+    if refused_pattern_match(matched) {
+        return None;
+    }
     Some(resolve_condition_value(value, source, conditions)?.replace('*', matched))
+}
+
+/// Whether Node refuses a pattern's match (`ERR_INVALID_MODULE_SPECIFIER`):
+/// a segment that is `.`, `..` or `node_modules`, in any case and
+/// percent-encoded. An empty segment loads (only deprecated, DEP0166).
+fn refused_pattern_match(matched: &str) -> bool {
+    matched.split(['/', '\\']).any(|segment| {
+        let bytes = segment.as_bytes();
+        let mut decoded = String::new();
+        let mut index = 0;
+        while index < bytes.len() {
+            let hex = segment.get(index + 1..index + 3).and_then(|hex| u8::from_str_radix(hex, 16).ok());
+            match (bytes[index], hex) {
+                (b'%', Some(byte)) => {
+                    decoded.push(char::from(byte));
+                    index += 3;
+                }
+                (byte, _) => {
+                    decoded.push(char::from(byte));
+                    index += 1;
+                }
+            }
+        }
+        matches!(decoded.to_ascii_lowercase().as_str(), "." | ".." | "node_modules")
+    })
 }
 
 /// With `source`, a kit's `animus` condition, its original source, which
@@ -2179,6 +2212,18 @@ export const ds = tokens;
         );
         package("case-runtime", serde_json::json!({ "exports": { ".": "./dist/Index.js" } }), &["dist/index.js"]);
         package("case-main", serde_json::json!({ "main": "./Main.js" }), &["main.js"]);
+        // `..` past a link is taken back lexically, as Node reads it: the
+        // entry is the package's own `token.ts`, never the `Token.ts` the
+        // link's parent holds.
+        package("linked-main", serde_json::json!({ "main": "./link/../token.ts" }), &["token.ts", "other/Token.ts", "other/sub/x.ts"]);
+        // A pattern's match may not hold `..`, as Node refuses it.
+        package("wild", serde_json::json!({ "exports": { "./*": "./src/*.ts" } }), &["src/token.ts", "src/a/b.ts"]);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            dir.join("node_modules/linked-main/other/sub"),
+            dir.join("node_modules/linked-main/link"),
+        )
+        .expect("link");
         let from = dir.to_string_lossy().to_string();
         let resolved = |specifier: &str, conditions: &[&str]| {
             let conditions: Vec<String> = conditions.iter().map(|condition| condition.to_string()).collect();
@@ -2197,6 +2242,12 @@ export const ds = tokens;
         assert_eq!(resolved("import-first", &["browser"]).as_deref(), Ok("import-first/import.js"));
         assert_eq!(resolved("escaping-source", &[]).as_deref(), Ok("escaping-source/runtime.js"));
         assert_eq!(resolved("case-source", &[]).as_deref(), Ok("case-source/runtime.js"));
+        #[cfg(unix)]
+        assert_eq!(resolved("linked-main", &[]).as_deref(), Ok("linked-main/token.ts"));
+        assert_eq!(resolved("wild/token", &[]).as_deref(), Ok("wild/src/token.ts"));
+        assert!(resolved("wild/link/../token", &[]).is_err(), "a `..` in a pattern's match is refused");
+        // An empty segment is not refused, as Node 24 loads it.
+        assert_eq!(resolved("wild/a//b", &[]).as_deref(), Ok("wild/src/a/b.ts"));
         // Where the filesystem opens the misspelled entry, the selection
         // fails naming the file it opens; elsewhere it names no file.
         for (specifier, spelled, actual) in [("case-runtime", "dist/Index.js", "dist/index.js"), ("case-main", "Main.js", "main.js")] {
