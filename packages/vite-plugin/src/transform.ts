@@ -148,15 +148,14 @@ export async function transformSource(
           `failed; see the error above.`
       );
     }
-    if (!ctx.storedManifest.files[relativePath]?.length) {
-      // An extension dropped over a parent the analysis could not resolve
-      // is never served untransformed, in any mode: its builder code would
-      // render with empty classes (SA1).
-      const drop = droppedExtensions(ctx).get(relativePath);
-      if (drop !== undefined) throw new Error(droppedExtensionMessage(drop));
-      return null;
-    }
   }
+
+  // An extension dropped over a parent the analysis could not resolve is
+  // never served untransformed, in any mode, even beside components that
+  // did extract: its builder code would render with empty classes (SA1).
+  const drop = droppedExtensions(ctx).get(relativePath);
+  if (drop !== undefined) throw new Error(droppedExtensionMessage(drop));
+  if (!ctx.storedManifest.files[relativePath]?.length) return null;
 
   try {
     const { transformFile } = ctx.engineApi();

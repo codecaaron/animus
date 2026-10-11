@@ -154,36 +154,46 @@ describe('a dropped extension is never served raw', () => {
   // Contract (SA1, spec §12.2 row 11): every host fails the transform of a
   // file whose extension the analysis dropped over its parent, naming the
   // component, parent and specifier, in development and in a build.
-  test('unplugin', () => {
-    expect(() =>
-      transformWithEngine(BUILDER_SOURCE, '/app/src/Fancy.tsx', {
-        rootDir: '/app',
-        manifestJson: '{}',
-        transformFile: (source) => ({ code: source, hasComponents: false }),
-        served: { listed: new Set(), dropped: new Map([[DROP.file, DROP]]) },
-      })
-    ).toThrow(DROPPED_MESSAGE);
-  });
-
-  for (const development of [true, false]) {
-    test(`webpack loader, ${development ? 'development' : 'build'}`, () => {
-      vi.spyOn(console, 'warn').mockImplementation(() => {});
+  // Mixed: another component of the same file extracted.
+  for (const mixed of [false, true]) {
+    const label = mixed ? ', beside an extracted component' : '';
+    test(`unplugin${label}`, () => {
       expect(() =>
-        transformWithManifest({
-          source: BUILDER_SOURCE,
-          filename: DROP.file,
-          manifestJson: JSON.stringify(
-            makeManifest({ missing_inputs: [{ ...DROP }] })
-          ),
-          engineApi: () => ({
-            transformFile: (source: string) => ({
-              code: source,
-              hasComponents: false,
-            }),
-          }),
-          opts: { development },
+        transformWithEngine(BUILDER_SOURCE, '/app/src/Fancy.tsx', {
+          rootDir: '/app',
+          manifestJson: '{}',
+          transformFile: (source) => ({ code: source, hasComponents: mixed }),
+          served: {
+            listed: new Set(mixed ? [DROP.file] : []),
+            dropped: new Map([[DROP.file, DROP]]),
+          },
         })
       ).toThrow(DROPPED_MESSAGE);
     });
+
+    for (const development of [true, false]) {
+      test(`webpack loader, ${development ? 'development' : 'build'}${label}`, () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        expect(() =>
+          transformWithManifest({
+            source: BUILDER_SOURCE,
+            filename: DROP.file,
+            manifestJson: JSON.stringify(
+              makeManifest({
+                files: mixed ? { [DROP.file]: [`${DROP.file}::Good`] } : {},
+                missing_inputs: [{ ...DROP }],
+              })
+            ),
+            engineApi: () => ({
+              transformFile: (source: string) => ({
+                code: source,
+                hasComponents: mixed,
+              }),
+            }),
+            opts: { development },
+          })
+        ).toThrow(DROPPED_MESSAGE);
+      });
+    }
   }
 });

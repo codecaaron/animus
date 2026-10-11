@@ -193,11 +193,21 @@ describe('transform: a dropped extension is never served raw', () => {
   // dropped over a parent it could not resolve fails its transform in every
   // mode, naming the component, parent and specifier; served untransformed,
   // its builder code would render with empty classes.
-  for (const isProd of [false, true]) {
-    it(`fails the transform in ${isProd ? 'a build' : 'development'}`, async () => {
+  // Mixed: another component of the same file extracted.
+  for (const [isProd, mixed] of [
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ] as const) {
+    it(`fails the transform in ${isProd ? 'a build' : 'development'}${mixed ? ' beside an extracted component' : ''}`, async () => {
       const probe = makeContextProbe(ROOT, {
         isProd,
+        engineApi: () => ({
+          transformFile: () => ({ hasComponents: true, code: 'TRANSFORMED' }),
+        }),
         storedManifest: makeManifest({
+          files: mixed ? { 'src/Fancy.tsx': ['src/Fancy.tsx::Good'] } : {},
           missing_inputs: [
             {
               file: 'src/Fancy.tsx',

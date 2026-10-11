@@ -151,16 +151,16 @@ export function transformWithManifest(args: {
     // A file the analysis extracted must transform, and an extension it
     // dropped over its parent is not served: either raw would ship builder
     // code (SA1). Usage-only and outside-analysis files pass.
-    if (!result.hasComponents) {
-      const served = manifestServedFiles(manifestJson);
-      if (served.listed.has(filename)) {
-        throw new Error(
-          `the analysis extracted components from ${filename}, but its ` +
-            `transform found none`
-        );
-      }
-      const drop = served.dropped.get(filename);
-      if (drop !== undefined) throw new Error(droppedExtensionMessage(drop));
+    const served = manifestServedFiles(manifestJson);
+    // A dropped extension is never served raw, even beside components
+    // that did extract.
+    const drop = served.dropped.get(filename);
+    if (drop !== undefined) throw new Error(droppedExtensionMessage(drop));
+    if (!result.hasComponents && served.listed.has(filename)) {
+      throw new Error(
+        `the analysis extracted components from ${filename}, but its ` +
+          `transform found none`
+      );
     }
 
     let code = result.hasComponents ? result.code : source;

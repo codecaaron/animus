@@ -193,6 +193,10 @@ export function transformWithEngine(
   }
 ): string | null {
   const filename = relative(ctx.rootDir, resolve(id)).split('\\').join('/');
+  // A dropped extension is never served raw, even beside components that
+  // did extract (SA1).
+  const drop = ctx.served?.dropped.get(filename);
+  if (drop !== undefined) throw new Error(droppedExtensionMessage(drop));
   const result = ctx.transformFile(code, filename, ctx.manifestJson);
   if (result.hasComponents) return result.code;
   // Serving it raw would ship builder code (SA1).
@@ -202,8 +206,6 @@ export function transformWithEngine(
         `transform found none`
     );
   }
-  const drop = ctx.served?.dropped.get(filename);
-  if (drop !== undefined) throw new Error(droppedExtensionMessage(drop));
   return null;
 }
 
