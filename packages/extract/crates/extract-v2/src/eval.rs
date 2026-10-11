@@ -410,7 +410,12 @@ fn eval_expression_scoped(
         Expression::Identifier(ident) => {
             if let Some(sv) = static_values {
                 if let Some(val) = sv.get(ident.name.as_str()).filter(|val| asset_function(val).is_none()) {
-                    return Ok(held_value(val).clone());
+                    // A static something may change before the read is no
+                    // value: the runtime reads whatever it holds then.
+                    if let Some(reason) = lost_value_reason(val) {
+                        return Err(BailError::new(format!("variable reference (non-static) — {reason}")));
+                    }
+                    return Ok(val.clone());
                 }
             }
             Err(BailError::new("variable reference (non-static)"))
@@ -425,22 +430,11 @@ fn eval_expression_scoped(
             Err(BailError::new("tagged template (non-static)"))
         }
         Expression::StaticMemberExpression(member) => {
-            // One member of a binding reads its held value; deeper paths do not.
-            let held = match (static_values, &member.object) {
-                (Some(sv), Expression::Identifier(ident)) => sv
-                    .get(ident.name.as_str())
-                    .map(held_value)
-                    .and_then(|value| value.get(member.property.name.as_str()))
-                    .filter(|value| lost_value_reason(value).is_none()),
-                _ => None,
-            };
-            if let Some(val) = held.or_else(|| static_values.and_then(|sv| static_path_value(expr, sv))) {
+            if let Some(val) = static_values.and_then(|sv| static_path_value(expr, sv)) {
                 return Ok(val.clone());
             }
-            if !matches!(member.object, Expression::Identifier(_)) {
-                if let Some(reason) = static_values.and_then(|sv| lost_path_reason(expr, sv)) {
-                    return Err(BailError::new(format!("member expression (non-static) — {reason}")));
-                }
+            if let Some(reason) = static_values.and_then(|sv| lost_path_reason(expr, sv)) {
+                return Err(BailError::new(format!("member expression (non-static) — {reason}")));
             }
             Err(BailError::new(member_expression_skip_reason(
                 &member.object,
