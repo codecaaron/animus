@@ -4,9 +4,6 @@ import { ANIMUS_CSS_MODULE_ID } from '@animus-ui/extract/session';
 import type { ProjectManifest } from '@animus-ui/extract/pipeline';
 
 export interface LoaderPolicyOptions {
-  /** Carried in the loaders' options; since SA1 no loader reads it, as a
-   *  transform failure fails the module in every mode. */
-  strict?: boolean;
   /** `next dev`: the Turbopack loader waits for and re-delivers the dev
    *  watcher's generations. A transform failure fails the module in every
    *  mode (SA1). */

@@ -298,7 +298,6 @@ describe('withAnimus', () => {
     expect(plugin.getOptions()).toEqual({ ...options, mode: 'production' });
 
     expect(config?.module?.rules?.[0]?.use?.[0]?.options).toEqual({
-      strict: true,
       development: false,
       cssImportTarget: 'src/app/[locale]/layout.tsx',
       // The build the wrapper created, and the root its plugin analyses.
