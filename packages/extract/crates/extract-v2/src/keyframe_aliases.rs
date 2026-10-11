@@ -5,6 +5,7 @@
 //! that writes one. The value is never rewritten, and a name no collection
 //! registers stays external CSS.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
@@ -88,8 +89,9 @@ impl KeyframeKeys {
         for (key, value) in entries {
             let responsive = crate::theme::is_responsive_value(value, ctx.breakpoint_keys);
             if value.is_object() && !responsive {
-                // An unregistered alias block emits nothing, and reports so.
-                if !key.starts_with('_') || ctx.selector_aliases.contains_key(key) {
+                // Only a block that emits is read: an unregistered alias, an
+                // unsupported at-rule or a prop given an object reports itself.
+                if admits_block(key, ctx) {
                     self.walk(value, ctx, found, seen);
                 }
                 continue;
@@ -123,20 +125,22 @@ impl KeyframeKeys {
     }
 
     /// The registered keys an `animation` or `animation-name` declaration
-    /// names as identifiers of its comma-separated list, other than a key
-    /// that already is a generated name.
+    /// uses as an animation's name, other than one that is itself some
+    /// registered generated name.
     fn raw_aliases(&self, declaration: &CssDeclaration) -> Vec<RawAlias> {
-        if !is_animation(&declaration.property) {
-            return Vec::new();
-        }
+        let shorthand = match declaration.property.as_str() {
+            "animation" => true,
+            "animation-name" => false,
+            _ => return Vec::new(),
+        };
         let mut found: Vec<RawAlias> = Vec::new();
-        for animation in crate::theme::split_top_level_commas(&declaration.value) {
-            for word in animation.split_whitespace() {
-                let Some(candidates) = self.0.get(word) else { continue };
-                let generated = candidates.iter().any(|(_, name)| name == word);
-                if !generated && !found.iter().any(|alias| alias.key == word) {
-                    found.push(RawAlias { key: word.to_string(), candidates: candidates.clone() });
-                }
+        for name in animation_names(&declaration.value, shorthand) {
+            if self.0.values().flatten().any(|(_, generated)| *generated == name) {
+                continue;
+            }
+            let Some(candidates) = self.0.get(name.as_ref()) else { continue };
+            if !found.iter().any(|alias| alias.key == name) {
+                found.push(RawAlias { key: name.into_owned(), candidates: candidates.clone() });
             }
         }
         found
@@ -145,4 +149,78 @@ impl KeyframeKeys {
 
 fn is_animation(property: &str) -> bool {
     matches!(property, "animation" | "animation-name")
+}
+
+/// Whether a block under `key` emits, so its declarations are read: a
+/// registered alias, a supported at-rule or a selector.
+fn admits_block(key: &str, ctx: &ResolveContext) -> bool {
+    if key.starts_with('_') {
+        ctx.selector_aliases.contains_key(key) || ctx.condition_aliases.contains_key(key)
+    } else if key.starts_with('@') {
+        crate::theme::condition_from_raw_key(key).is_some()
+    } else {
+        crate::selector_subject::has_subject(key) || key.starts_with(':')
+    }
+}
+
+/// The keywords each other longhand of the `animation` shorthand takes; the
+/// first of a group in an animation fills that longhand, not the name.
+const SHORTHAND_KEYWORDS: [&[&str]; 5] = [
+    &["ease", "ease-in", "ease-out", "ease-in-out", "linear", "step-start", "step-end"],
+    &["infinite"],
+    &["normal", "reverse", "alternate", "alternate-reverse"],
+    &["none", "forwards", "backwards", "both"],
+    &["running", "paused"],
+];
+
+/// The animation names a value gives, one per comma-separated animation, as
+/// CSS reads it: comments are trivia, escapes are decoded, nothing inside a
+/// function or after `!` is a name. An `animation-name` animation is a name
+/// only as a single identifier. In the shorthand (CSS Animations §4.9), each
+/// identifier first fills the longhand whose keyword it is, while that
+/// longhand is unset; the first one left over is the name.
+fn animation_names(value: &str, shorthand: bool) -> Vec<Cow<'_, str>> {
+    use crate::css_tokens::Kind;
+    let mut names = Vec::new();
+    let mut depth = 0usize;
+    let mut idents: Vec<Cow<'_, str>> = Vec::new();
+    let mut other = false;
+    let mut priority = false;
+    for token in crate::css_tokens::tokenize(value) {
+        match token.kind {
+            Kind::Whitespace => {}
+            Kind::Function => {
+                depth += 1;
+                other = true;
+            }
+            Kind::Delim(b'(') => depth += 1,
+            Kind::Delim(b')') => depth = depth.saturating_sub(1),
+            _ if depth > 0 || priority => {}
+            Kind::Delim(b',') => {
+                names.extend(animation_name(std::mem::take(&mut idents), other, shorthand));
+                other = false;
+            }
+            Kind::Delim(b'!') => priority = true,
+            Kind::Ident => idents.push(token.value),
+            _ => other = true,
+        }
+    }
+    names.extend(animation_name(idents, other, shorthand));
+    names
+}
+
+/// One animation's name from its top-level identifiers, `other` telling
+/// whether anything else was written.
+fn animation_name(mut idents: Vec<Cow<'_, str>>, other: bool, shorthand: bool) -> Option<Cow<'_, str>> {
+    if !shorthand {
+        return (idents.len() == 1 && !other).then(|| idents.remove(0));
+    }
+    let mut filled = [false; SHORTHAND_KEYWORDS.len()];
+    idents.into_iter().find(|ident| match SHORTHAND_KEYWORDS.iter().position(|keywords| keywords.contains(&ident.as_ref())) {
+        Some(group) if !filled[group] => {
+            filled[group] = true;
+            false
+        }
+        _ => true,
+    })
 }

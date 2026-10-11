@@ -9087,33 +9087,57 @@ mod tests {
         let mut inputs = test_inputs();
         inputs.config.insert("animation".into(), serde_json::from_str(r#"{"property":"animation"}"#).unwrap());
         inputs.group_registry.insert("motion".into(), vec!["animation".into()]);
+        inputs.condition_aliases.insert(
+            "_motion".into(),
+            crate::theme::ConditionAliasEntry { value: "@media (prefers-reduced-motion: no-preference)".into(), order: 500, kind: "media".into() },
+        );
+        // `ease` is registered as a key, and `fadeOut` is one key's name and
+        // another's generated name.
+        let frames = serde_json::json!({ "to": { "opacity": 1 } });
         inputs.keyframes_blocks = Some(serde_json::json!({
-            "motion": { "fadeIn": { "name": "animus-kf-honfj9", "frames": { "to": { "opacity": 1 } } } }
+            "motion": {
+                "fadeIn": { "name": "animus-kf-honfj9", "frames": frames },
+                "ease": { "name": "animus-kf-ease", "frames": frames },
+                "fadeOut": { "name": "animus-kf-out", "frames": frames },
+                "glow": { "name": "fadeOut", "frames": frames }
+            }
         }));
         let source = "export const Card = ds.styles({ animation: 'fadeIn 1s ease' }).asElement('div');\n\
                       export const Pill = ds.styles({ animationName: 'animus-kf-honfj9' }).asElement('span');\n\
                       export const Spin = ds.styles({ animationName: 'spin' }).asElement('i');\n\
+                      export const Note = ds.styles({ animation: 'external 1s /* fadeIn */' }).asElement('i');\n\
+                      export const Joined = ds.styles({ animation: 'fadeIn/**/1s' }).asElement('i');\n\
+                      export const Escaped = ds.styles({ animationName: 'fade\\\\49 n' }).asElement('i');\n\
+                      export const Loud = ds.styles({ animation: 'fadeIn 1s!important' }).asElement('i');\n\
+                      export const Named = ds.styles({ animationName: 'fadeOut' }).asElement('i');\n\
+                      export const Calm = ds.styles({ _motion: { animation: 'fadeIn 2s' } }).asElement('i');\n\
+                      export const Bogus = ds.styles({ '@bogus x': { animation: 'fadeIn 2s' } }).asElement('i');\n\
                       export const Box = ds.system({ motion: true }).asElement('div');\n\
-                      export const App = () => <><Card /><Pill /><Spin /><Box animation=\"fadeIn 2s\" /><Box animation={{ _: 'fadeIn 3s' }} /></>;\n";
+                      export const App = () => <><Card /><Pill /><Spin /><Note /><Joined /><Escaped /><Loud /><Named /><Calm /><Bogus />\
+                      <Box animation=\"fadeIn 2s\" /><Box animation={{ _: 'fadeIn 3s' }} /></>;\n";
         let out = analyze(&[("a.tsx", source)], &inputs);
-        let warned: Vec<_> = out
+        let mut warned: Vec<_> = out
             .diagnostics
             .iter()
             .filter(|d| d.code.as_deref() == Some("animus.keyframes.raw-alias-string"))
-            .map(|d| (d.component.as_str(), d.offset, d.severity.as_deref()))
+            .map(|d| (d.component.as_str(), d.offset, d.message.contains("'fadeIn'")))
             .collect();
-        // A definition is located at its chain, a use at the attribute.
+        warned.sort();
+        // A definition is located at its chain, a use at the attribute. Only
+        // an animation's name is read: a comment, a function, a keyword that
+        // fills another longhand and a generated name are not.
         let at = |written: &str| source.find(written).map(|at| at as u32);
-        assert_eq!(
-            warned,
-            [
-                ("Card", at("ds.styles({ animation"), Some("warn")),
-                ("Box", at("animation=\"fadeIn 2s\""), Some("warn")),
-                ("Box", at("animation={{"), Some("warn")),
-            ],
-            "{:#?}",
-            out.diagnostics
-        );
+        let mut expected = vec![
+            ("Box", at("animation=\"fadeIn 2s\""), true),
+            ("Box", at("animation={{"), true),
+            ("Calm", at("ds.styles({ _motion"), true),
+            ("Card", at("ds.styles({ animation: 'fadeIn 1s ease'"), true),
+            ("Escaped", at("ds.styles({ animationName: 'fade"), true),
+            ("Joined", at("ds.styles({ animation: 'fadeIn/**/"), true),
+            ("Loud", at("ds.styles({ animation: 'fadeIn 1s!"), true),
+        ];
+        expected.sort();
+        assert_eq!(warned, expected, "{:#?}", out.diagnostics);
         assert!(out.css.contains("animation: fadeIn 1s ease;"), "{}", out.css);
         assert!(out.css.contains("animation: fadeIn 2s;"), "{}", out.css);
     }
