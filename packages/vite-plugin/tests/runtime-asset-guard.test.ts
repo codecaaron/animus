@@ -1,8 +1,14 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterAll, expect, test, vi } from 'vitest';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { createLogger, resolveConfig } from 'vite';
+import { afterEach, expect, test } from 'vitest';
 
+import {
+  disposeTempRoots,
+  makeTempRoot,
+} from '../../extract/tests/session/session-fixtures';
+import { runBuildStart } from '../src/build-start';
+import { applyResolvedConfig } from '../src/config';
 import { PluginContext } from '../src/context';
 import { makeManifest } from './manifest-fixture';
 
@@ -12,10 +18,8 @@ import type { ProjectManifest } from '@animus-ui/extract/pipeline';
  *  modules, where an asset() placeholder loads nothing. Extraction lifts each
  *  one into a root variable, and the guard reports any that is left. */
 
-const scratch = mkdtempSync(join(tmpdir(), 'animus-runtime-asset-guard-'));
-
-afterAll(() => {
-  rmSync(scratch, { recursive: true, force: true });
+afterEach(() => {
+  disposeTempRoots();
 });
 
 const ROCK = 'url("animus-asset:@acme/media/rock.jpg")';
@@ -33,19 +37,19 @@ function scaleValuesManifest(rock: string): ProjectManifest {
   });
 }
 
-/** The manifest a later analysis returns, once a test sets it. */
-interface NextAnalysis {
-  manifest?: ProjectManifest;
-}
-
-function analyze(
-  manifest: ProjectManifest,
-  strict: boolean,
-  next: NextAnalysis = {}
-) {
-  mkdirSync(join(scratch, 'src'), { recursive: true });
-  writeFileSync(join(scratch, 'src', 'ds.ts'), 'export const ds = {};\n');
-  const engine = {
+/** A Vite build whose analysis returns `manifest`; the warnings Vite's
+ *  logger received. */
+async function build(manifest: ProjectManifest, strict: boolean) {
+  const root = realpathSync(makeTempRoot('animus-runtime-asset-guard-'));
+  mkdirSync(join(root, 'src'), { recursive: true });
+  writeFileSync(join(root, 'src', 'ds.ts'), 'export const ds = {};\n');
+  writeFileSync(join(root, 'src', 'App.tsx'), 'export const App = 1;\n');
+  const warnings: string[] = [];
+  const customLogger = createLogger('silent');
+  customLogger.warn = (message) => {
+    warnings.push(message);
+  };
+  const ctx = new PluginContext({ system: './src/ds.ts', strict }, () => ({
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
@@ -55,66 +59,37 @@ function analyze(
       dependencies: [],
     }),
     extractFacts: () => JSON.stringify({ files: {}, parseCount: 0 }),
-    analyzeProject: () => JSON.stringify(next.manifest ?? manifest),
-  };
-  const ctx = new PluginContext({ system: 'src/ds.ts', strict }, () => engine);
-  ctx.rootDir = scratch;
-  ctx.loadSystem();
-  const warn = vi.spyOn(ctx, 'warn').mockImplementation(() => {});
-  return { ctx, run: () => ctx.runAnalysis([]), warn };
+    analyzeProject: () => JSON.stringify(manifest),
+  }));
+  applyResolvedConfig(
+    ctx,
+    await resolveConfig(
+      { configFile: false, root, logLevel: 'silent', customLogger },
+      'build'
+    )
+  );
+  const run = () =>
+    runBuildStart(ctx, async (specifier) => resolve(root, specifier));
+  return { run, warnings };
 }
 
-test('a placeholder left in a runtime config fails a strict build', () => {
-  const { run } = analyze(scaleValuesManifest(ROCK), true);
-  expect(run).toThrow(
+test('a placeholder left in a runtime config fails a strict build', async () => {
+  const { run } = await build(scaleValuesManifest(ROCK), true);
+  await expect(run()).rejects.toThrow(
     'asset() placeholders reached generated runtime modules unsubstituted: @acme/media/rock.jpg (animus.asset.unsubstituted-placeholder)'
   );
 });
 
-test('a non-strict build warns about it', () => {
-  const { run, warn } = analyze(scaleValuesManifest(ROCK), false);
-  run();
-  expect(warn).toHaveBeenCalledWith(
-    expect.stringContaining('generated runtime modules')
-  );
+test('a non-strict build warns about it', async () => {
+  const { run, warnings } = await build(scaleValuesManifest(ROCK), false);
+  await run();
+  expect(warnings.join('\n')).toContain('generated runtime modules');
 });
 
-test('a runtime config reading a root variable reports nothing', () => {
+test('a runtime config reading a root variable reports nothing', async () => {
   const lifted = scaleValuesManifest('var(--animus-asset-1a2b3c4d)');
   lifted.sheets.global = `@layer anm-global {\n:root {\n  --animus-asset-1a2b3c4d: ${ROCK};\n}\n}\n`;
-  const { run, warn } = analyze(lifted, true);
-  expect(run()).toBe(true);
-  expect(warn).not.toHaveBeenCalled();
-});
-
-test('a strict failure keeps the last published analysis whole', () => {
-  const published = scaleValuesManifest('var(--animus-asset-1a2b3c4d)');
-  published.css = '.animus-u-1 { padding: 4px; }';
-  published.sheets.global = '@layer anm-global {\n:root {}\n}\n';
-  published.system_prop_map = { p: { '4': 'animus-u-1' } };
-  const next: NextAnalysis = {};
-  const { ctx, run } = analyze(published, true, next);
-  run();
-  const before = {
-    manifest: ctx.storedManifest,
-    manifestJson: ctx.storedManifestJson,
-    propMap: ctx.storedSystemPropMapJson,
-    dynamicProps: ctx.storedDynamicPropsJson,
-    globalCss: ctx.globalCss,
-    componentCss: ctx.resolvedComponentCss,
-  };
-
-  next.manifest = scaleValuesManifest(ROCK);
-  next.manifest.css = '.animus-u-2 { padding: 8px; }';
-  next.manifest.system_prop_map = { p: { '8': 'animus-u-2' } };
-  expect(run).toThrow('generated runtime modules');
-
-  expect({
-    manifest: ctx.storedManifest,
-    manifestJson: ctx.storedManifestJson,
-    propMap: ctx.storedSystemPropMapJson,
-    dynamicProps: ctx.storedDynamicPropsJson,
-    globalCss: ctx.globalCss,
-    componentCss: ctx.resolvedComponentCss,
-  }).toEqual(before);
+  const { run, warnings } = await build(lifted, true);
+  await run();
+  expect(warnings).toEqual([]);
 });

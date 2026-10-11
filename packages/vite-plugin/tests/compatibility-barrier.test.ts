@@ -35,8 +35,6 @@ function makeProbe(
 ): BarrierProbe {
   const graph = makeEnvGraph({ rootDir: ROOT, file: 'src/Consumer.tsx' });
   const base = makeContextProbe(ROOT, {
-    externalDirOwners: {},
-    externalFileOwners: {},
     reverseProvenance: {},
     storedManifest: makeManifest(),
     storedManifestJson: '{}',
@@ -61,12 +59,14 @@ function makeProbe(
 }
 
 async function serveConsumerRaw(probe: BarrierProbe): Promise<void> {
-  probe.ctx.mutateFileCache((cache) =>
-    cache.set('src/Consumer.tsx', { hash: 'h', source: 's' })
-  );
-  probe.ctx.mutateFileCache((cache) =>
-    cache.set('src/Parent.tsx', { hash: 'h2', source: 's2' })
-  );
+  probe.session.publishedSources.set('src/Consumer.tsx', {
+    hash: 'h',
+    source: 's',
+  });
+  probe.session.publishedSources.set('src/Parent.tsx', {
+    hash: 'h2',
+    source: 's2',
+  });
   probe.ctx.storedManifest = makeManifest({
     diagnostics: [
       {
@@ -181,12 +181,14 @@ describe('compatibility publication barrier', () => {
 
   it('ignores raw serves that carry no unresolved-extension drop', async () => {
     const probe = makeProbe();
-    probe.ctx.mutateFileCache((cache) =>
-      cache.set('src/util.ts', { hash: 'h', source: 's' })
-    );
-    probe.ctx.mutateFileCache((cache) =>
-      cache.set('src/Parent.tsx', { hash: 'h2', source: 's2' })
-    );
+    probe.session.publishedSources.set('src/util.ts', {
+      hash: 'h',
+      source: 's',
+    });
+    probe.session.publishedSources.set('src/Parent.tsx', {
+      hash: 'h2',
+      source: 's2',
+    });
     expect(
       await transformSource(
         probe.ctx,

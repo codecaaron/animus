@@ -13,15 +13,16 @@ import {
   VIRTUAL_COMPONENTS_ID,
 } from '../src/constants';
 import { transformSource } from '../src/transform';
-import { makeContextProbe, makeEnvGraph } from './context-probe';
+import { makeContextProbe, makeEnvGraph, published } from './context-probe';
 import { makeComponent, makeManifest } from './manifest-fixture';
 
 import type { ContextProbe } from './context-probe';
 import type { ManifestSheets } from '@animus-ui/extract/pipeline';
 
 /**
- * The `transform` hook driven through its body with a canned engine: `vi.mock`
- * is a no-op in this runner, so the engine arrives through an injected seam.
+ * The `transform` hook driven through its body with a canned engine and a
+ * scripted Session: `vi.mock` is a no-op in this runner, so both arrive
+ * through injected seams.
  */
 
 const ROOT = join('/tmp', 'animus-transform-root');
@@ -48,8 +49,6 @@ function makeProbe(
 ): ContextProbe {
   const probe = makeContextProbe(ROOT, {
     isProd: options.isProd ?? false,
-    externalDirOwners: {},
-    externalFileOwners: {},
     storedManifest: makeManifest({ files: options.knownFiles ?? {} }),
     storedManifestJson: '{}',
     storedSheets: SHEETS,
@@ -61,11 +60,10 @@ function makeProbe(
     }),
   });
   const ctx = probe.ctx;
-  ctx.runAnalysis = () => {
-    probe.analyses++;
+  probe.respond(() => {
     Object.assign(ctx.storedManifest!.files, options.discoversOnAnalysis ?? {});
-    return true;
-  };
+    return [published(probe)];
+  });
   return probe;
 }
 
@@ -82,15 +80,14 @@ describe('transform: the plugin never treats its own virtual modules as sources'
   ];
 
   it.each(VIRTUAL_IDS)(
-    '%j is not transformed, cached, or analyzed',
+    '%j is not transformed or submitted to the Session',
     async (id) => {
       const probe = makeProbe();
 
       const result = await transformSource(probe.ctx, 'export default ``;', id);
 
       expect(result).toBeNull();
-      expect(probe.analyses).toBe(0);
-      expect([...probe.ctx.fileCache.keys()]).toEqual([]);
+      expect(probe.submissions).toEqual([]);
     }
   );
 
@@ -140,7 +137,7 @@ describe('transform: the file-class gate is the shared engine-transform set', ()
         join(ROOT, 'src/Usage.svelte')
       )
     ).toBeNull();
-    expect(probe.analyses).toBe(0);
+    expect(probe.submissions).toEqual([]);
   });
 });
 
@@ -194,7 +191,7 @@ describe('transform: dev output carries the bridge import, prod is engine-verbat
 describe('transform: dependencies resolved outside the root are not new files', () => {
   // Vite realpaths module ids, so a symlinked package's dist file arrives with
   // no `node_modules` segment and the dependency filter never sees it.
-  it('an out-of-root dist file is not cached, analyzed, or invalidated', async () => {
+  it('an out-of-root dist file is not submitted or invalidated', async () => {
     const probe = makeProbe();
 
     const result = await transformSource(
@@ -204,8 +201,7 @@ describe('transform: dependencies resolved outside the root are not new files', 
     );
 
     expect(result).toBeNull();
-    expect(probe.analyses).toBe(0);
-    expect([...probe.ctx.fileCache.keys()]).toEqual([]);
+    expect(probe.submissions).toEqual([]);
     expect(probe.extractedInvalidations).toBe(0);
   });
 
@@ -222,7 +218,9 @@ describe('transform: dependencies resolved outside the root are not new files', 
       join(externalDir, 'index.js')
     );
 
-    expect(probe.analyses).toBe(1);
+    expect(probe.submissions).toEqual([
+      { modifiedFiles: new Set([join(externalDir, 'index.js')]) },
+    ]);
     expect(probe.extractedInvalidations).toBe(1);
   });
 });
@@ -237,7 +235,7 @@ describe('transform: new-file detection logs at the standard level', () => {
       join(ROOT, 'src/New.tsx')
     );
 
-    expect(probe.analyses).toBe(1);
+    expect(probe.submissions).toHaveLength(1);
     expect(probe.infoLines).toEqual([
       'New file detected: src/New.tsx — no components',
     ]);
@@ -257,7 +255,7 @@ describe('transform: new-file invalidation is unconditional', () => {
       join(ROOT, 'src/New.tsx')
     );
 
-    expect(probe.analyses).toBe(1);
+    expect(probe.submissions).toHaveLength(1);
     expect(probe.ctx.storedSystemPropMapJson).toBe('{}');
     expect(probe.ctx.storedDynamicPropsJson).toBe('{}');
     expect(probe.extractedInvalidations).toBe(1);
@@ -274,7 +272,7 @@ describe('transform: new-file invalidation is unconditional', () => {
       join(ROOT, 'src/Plain.ts')
     );
 
-    expect(probe.analyses).toBe(1);
+    expect(probe.submissions).toHaveLength(1);
     expect(probe.extractedInvalidations).toBe(1);
   });
 
@@ -284,31 +282,32 @@ describe('transform: new-file invalidation is unconditional', () => {
     const consumerAbs = join(ROOT, 'src/Fancy.tsx');
     const probe = makeProbe();
     const ctx = probe.ctx;
-    ctx.runAnalysis = () => {
-      probe.analyses++;
-      // Publish a fresh manifest object as the real analysis does: snapshot
-      // derivation is keyed on manifest identity.
-      ctx.storedManifest = makeManifest({
-        ...ctx.storedManifest,
-        components: {
-          ...ctx.storedManifest!.components,
-          'src/Fancy.tsx::Fancy': makeComponent(
-            'src/Fancy.tsx',
-            "createComponent('div', 'recovered')"
-          ),
-          'src/New.tsx::New': makeComponent(
-            'src/New.tsx',
-            "createComponent('div', 'new')"
-          ),
-        },
-        files: {
-          ...ctx.storedManifest!.files,
-          'src/Fancy.tsx': ['src/Fancy.tsx::Fancy'],
-          'src/New.tsx': ['src/New.tsx::New'],
-        },
-      });
-      return true;
-    };
+    // The Session reports the plans its publication changed, the detected
+    // file's own among them.
+    probe.respond(() => [
+      published(probe, {
+        planChanged: ['src/Fancy.tsx', 'src/New.tsx'],
+        manifest: makeManifest({
+          ...ctx.storedManifest,
+          components: {
+            ...ctx.storedManifest!.components,
+            'src/Fancy.tsx::Fancy': makeComponent(
+              'src/Fancy.tsx',
+              "createComponent('div', 'recovered')"
+            ),
+            'src/New.tsx::New': makeComponent(
+              'src/New.tsx',
+              "createComponent('div', 'new')"
+            ),
+          },
+          files: {
+            ...ctx.storedManifest!.files,
+            'src/Fancy.tsx': ['src/Fancy.tsx::Fancy'],
+            'src/New.tsx': ['src/New.tsx::New'],
+          },
+        }),
+      }),
+    ]);
     const graph = makeEnvGraph({ rootDir: ROOT, file: 'src/Fancy.tsx' });
     const invalidated = graph.invalidated;
     ctx.devServer = {
@@ -334,10 +333,9 @@ describe('transform: new-file invalidation is unconditional', () => {
     // and must not register the file, or the next transform skips detection
     // forever.
     const probe = makeProbe();
-    probe.ctx.runAnalysis = () => {
-      probe.analyses++;
-      return false;
-    };
+    probe.respond(() => {
+      throw new Error('planned analysis failure');
+    });
 
     await expect(
       transformSource(
@@ -346,7 +344,7 @@ describe('transform: new-file invalidation is unconditional', () => {
         join(ROOT, 'src/New.tsx')
       )
     ).rejects.toThrow(/analysis of the new file src\/New\.tsx failed/);
-    expect(probe.ctx.fileCache.has('src/New.tsx')).toBe(false);
+    expect(probe.session.publishedSources.has('src/New.tsx')).toBe(false);
     expect(probe.extractedInvalidations).toBe(0);
 
     await expect(
@@ -356,7 +354,7 @@ describe('transform: new-file invalidation is unconditional', () => {
         join(ROOT, 'src/New.tsx')
       )
     ).rejects.toThrow();
-    expect(probe.analyses).toBe(2);
+    expect(probe.submissions).toHaveLength(2);
   });
 
   it('stabilizes interdependent new files found on disk during detection', async () => {
@@ -370,8 +368,6 @@ describe('transform: new-file invalidation is unconditional', () => {
       );
       const probe = makeContextProbe(root, {
         extensionsSet: new Set(['.ts', '.tsx']),
-        externalDirOwners: {},
-        externalFileOwners: {},
         storedManifest: makeManifest(),
         storedManifestJson: '{}',
         storedSheets: SHEETS,
@@ -379,35 +375,39 @@ describe('transform: new-file invalidation is unconditional', () => {
           transformFile: () => ({ hasComponents: true, code: 'TRANSFORMED' }),
         }),
       });
-      const ctx = probe.ctx;
-      ctx.runAnalysis = () => {
-        probe.analyses++;
-        if (probe.analyses === 1) {
-          ctx.storedManifest = makeManifest({
-            diagnostics: [
-              {
-                file: 'New.tsx',
-                component: 'Child',
-                kind: 'bail',
-                message:
-                  "chain dropped: could not resolve parent component 'Base'",
-              },
-            ],
-          });
-        } else {
-          ctx.storedManifest = makeManifest({
-            components: {
-              'Base.tsx::Base': makeComponent('Base.tsx', 'rb'),
-              'New.tsx::Child': makeComponent('New.tsx', 'rc'),
-            },
-            files: {
-              'Base.tsx': ['Base.tsx::Base'],
-              'New.tsx': ['New.tsx::Child'],
-            },
-          });
+      probe.respond(() => {
+        if (probe.submissions.length === 1) {
+          return [
+            published(probe, {
+              manifest: makeManifest({
+                diagnostics: [
+                  {
+                    file: 'New.tsx',
+                    component: 'Child',
+                    kind: 'bail',
+                    message:
+                      "chain dropped: could not resolve parent component 'Base'",
+                  },
+                ],
+              }),
+            }),
+          ];
         }
-        return true;
-      };
+        return [
+          published(probe, {
+            manifest: makeManifest({
+              components: {
+                'Base.tsx::Base': makeComponent('Base.tsx', 'rb'),
+                'New.tsx::Child': makeComponent('New.tsx', 'rc'),
+              },
+              files: {
+                'Base.tsx': ['Base.tsx::Base'],
+                'New.tsx': ['New.tsx::Child'],
+              },
+            }),
+          }),
+        ];
+      });
 
       const result = await transformSource(
         probe.ctx,
@@ -415,8 +415,11 @@ describe('transform: new-file invalidation is unconditional', () => {
         join(root, 'New.tsx')
       );
 
-      expect(probe.analyses).toBe(2);
-      expect(probe.ctx.fileCache.has('Base.tsx')).toBe(true);
+      // The fold submits the on-disk base the Session does not hold.
+      expect(probe.submissions).toEqual([
+        { modifiedFiles: new Set([join(root, 'New.tsx')]) },
+        { modifiedFiles: new Set([join(root, 'Base.tsx')]) },
+      ]);
       // The consumer-of-a-consumer serve is extracted on the first response.
       expect(result?.code).toContain('TRANSFORMED');
     } finally {

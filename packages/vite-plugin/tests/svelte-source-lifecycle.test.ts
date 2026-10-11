@@ -235,6 +235,7 @@ function writeProject(root: string, includeExternal: boolean) {
   return { appRoot, localUsage, externalUsage };
 }
 
+/** A dev context whose Session reads the fixture through `engine`. */
 function makeContext(
   appRoot: string,
   engine: EngineApi,
@@ -246,7 +247,18 @@ function makeContext(
   );
   ctx.rootDir = appRoot;
   ctx.isProd = false;
+  ctx.development = true;
   return ctx;
+}
+
+/** The sources the context's Session holds, by root-relative path. */
+function heldSources(ctx: PluginContext) {
+  return ctx.session!.publishedSources;
+}
+
+/** The Session's published source ownership. */
+function ownership(ctx: PluginContext) {
+  return ctx.session!.corpus.published.ownership;
 }
 
 function warningLogger(warnings: string[]) {
@@ -257,12 +269,13 @@ function warningLogger(warnings: string[]) {
   return logger;
 }
 
+/** One client dispatch of Vite's hot update for `file`, which the Session
+ *  reads from disk. */
 async function dispatch(
   ctx: PluginContext,
   type: 'create' | 'update' | 'delete',
   file: string,
-  timestamp: number,
-  source?: string
+  timestamp: number
 ): Promise<void> {
   const graph = makeEnvGraph({ rootDir: ctx.rootDir, ids: [] });
   const environment: Pick<
@@ -276,14 +289,7 @@ async function dispatch(
   const options: Pick<
     HotUpdateOptions,
     'type' | 'file' | 'timestamp' | 'modules'
-  > &
-    Partial<Pick<HotUpdateOptions, 'read'>> = {
-    type,
-    file,
-    timestamp,
-    modules: [],
-    read: source === undefined ? undefined : async () => source,
-  };
+  > = { type, file, timestamp, modules: [] };
   await handleHotUpdate(
     ctx,
     // SAFETY: Models every DevEnvironment field handleHotUpdate reads.
@@ -291,6 +297,11 @@ async function dispatch(
     // SAFETY: Provides every option handleHotUpdate reads; server is unused.
     options as HotUpdateOptions
   );
+}
+
+/** A system reload: the system module's own event, through Vite's hook. */
+function reloadSystem(ctx: PluginContext, timestamp: number): Promise<void> {
+  return dispatch(ctx, 'update', join(ctx.rootDir, 'src', 'ds.ts'), timestamp);
 }
 
 const scratchRoots: string[] = [];
@@ -313,7 +324,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     } satisfies EngineApi;
     const ctx = new PluginContext({ system: 'src/ds.ts' }, () => legacyEngine);
 
-    await expect(ctx.corpus.prepare([])).rejects.toThrow(
+    await expect(ctx.createSession().corpus.prepare([])).rejects.toThrow(
       '[animus-extract] native engine does not expose extractFacts required for source adaptation'
     );
   });
@@ -329,11 +340,11 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
 
     const localPath = relative(appRoot, localUsage);
     const externalPath = relative(appRoot, externalUsage);
-    expect([...ctx.fileCache.keys()]).toEqual(
+    expect([...heldSources(ctx).keys()]).toEqual(
       expect.arrayContaining([localPath, externalPath])
     );
     expect(
-      [...ctx.fileCache.keys()].some((path) => path.endsWith('.tsx'))
+      [...heldSources(ctx).keys()].some((path) => path.endsWith('.tsx'))
     ).toBe(false);
     expect(probe.analyses.at(-1)?.map((entry) => entry.path)).toEqual(
       expect.arrayContaining([
@@ -344,13 +355,13 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     expect(
       probe.analyses.at(-1)?.some((entry) => entry.path.endsWith('.svelte'))
     ).toBe(false);
-    expect(ctx.corpus.published.ownership[externalPath].analysisPaths).toEqual([
+    expect(ownership(ctx)[externalPath].analysisPaths).toEqual([
       `${externalPath}.instance.tsx`,
     ]);
 
     await transformSource(
       ctx,
-      ctx.fileCache.get(localPath)!.source,
+      heldSources(ctx).get(localPath)!.source,
       localUsage
     );
     expect(probe.transformedPaths).not.toContain(localPath);
@@ -366,7 +377,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     await runBuildStart(ctx, async () => null);
 
     expect(
-      [...ctx.fileCache.keys()].some((path) => path.endsWith('.svelte'))
+      [...heldSources(ctx).keys()].some((path) => path.endsWith('.svelte'))
     ).toBe(false);
     expect(
       probe.factsInputs.flat().some((entry) => entry.path.includes('.svelte'))
@@ -386,8 +397,9 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
 
     const usagePath = relative(appRoot, localUsage);
     const dynamicSource = `<script>\nimport { badge } from './definition';\nlet tone = 'quiet';\nconst attrs = badge.attrs({ tone });\n</script>\n`;
-    await dispatch(ctx, 'update', localUsage, 1, dynamicSource);
-    expect(ctx.fileCache.get(usagePath)).toEqual({
+    writeFileSync(localUsage, dynamicSource);
+    await dispatch(ctx, 'update', localUsage, 1);
+    expect(heldSources(ctx).get(usagePath)).toEqual({
       hash: contentHash(dynamicSource),
       source: dynamicSource,
     });
@@ -397,19 +409,24 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
         ?.find((entry) => entry.path === `${usagePath}.instance.tsx`)?.source
     ).toContain('tone={tone}');
 
+    // A failed attempt rolls the original back, so the equal-content retry
+    // analyzes instead of matching a poisoned hash.
     const failedSource = dynamicSource.replace("'quiet'", "'loud'");
     probe.failNextAnalysis();
-    await dispatch(ctx, 'update', localUsage, 2, failedSource);
-    expect(ctx.fileCache.get(usagePath)?.source).toBe(dynamicSource);
-    await dispatch(ctx, 'update', localUsage, 3, failedSource);
-    expect(ctx.fileCache.get(usagePath)?.source).toBe(failedSource);
+    writeFileSync(localUsage, failedSource);
+    await expect(dispatch(ctx, 'update', localUsage, 2)).rejects.toThrow(
+      'planned analysis failure'
+    );
+    expect(heldSources(ctx).get(usagePath)?.source).toBe(dynamicSource);
+    await dispatch(ctx, 'update', localUsage, 3);
+    expect(heldSources(ctx).get(usagePath)?.source).toBe(failedSource);
 
     const createdFile = join(appRoot, 'src', 'Created.svelte');
     const createdPath = relative(appRoot, createdFile);
     const createdSource = `<script>\nimport { badge } from './definition';\nconst attrs = badge.attrs();\n</script>\n`;
     writeFileSync(createdFile, createdSource);
-    await dispatch(ctx, 'create', createdFile, 4, createdSource);
-    expect(ctx.corpus.published.ownership[createdPath].analysisPaths).toEqual([
+    await dispatch(ctx, 'create', createdFile, 4);
+    expect(ownership(ctx)[createdPath].analysisPaths).toEqual([
       `${createdPath}.instance.tsx`,
     ]);
     expect(
@@ -420,8 +437,8 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
 
     unlinkSync(createdFile);
     await dispatch(ctx, 'delete', createdFile, 5);
-    expect(ctx.fileCache.has(createdPath)).toBe(false);
-    expect(ctx.corpus.published.ownership[createdPath]).toBeUndefined();
+    expect(heldSources(ctx).has(createdPath)).toBe(false);
+    expect(ownership(ctx)[createdPath]).toBeUndefined();
     expect(
       probe.analyses.at(-1)?.some((entry) => entry.path.includes(createdPath))
     ).toBe(false);
@@ -429,7 +446,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     const beforeReset = probe.analyses
       .at(-1)!
       .map(({ path, source }) => ({ path, source }));
-    await ctx.performSystemReload();
+    await reloadSystem(ctx, 6);
     expect(
       probe.analyses.at(-1)!.map(({ path, source }) => ({ path, source }))
     ).toEqual(beforeReset);
@@ -461,18 +478,14 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     const clearsBeforeReset = probe.clearCount();
     const malformedSource = `<script>import { badge } from './definition'; const attrs = badge.attrs({</script>`;
     const usagePath = relative(appRoot, localUsage);
-    ctx.mutateFileCache((cache) =>
-      cache.set(usagePath, {
-        hash: contentHash(malformedSource),
-        source: malformedSource,
-      })
-    );
+    // The reload reads the corpus again, the malformed original with it.
+    writeFileSync(localUsage, malformedSource);
 
-    await ctx.performSystemReload();
+    await reloadSystem(ctx, 11);
 
     let transformError: string | null = null;
     try {
-      const definition = ctx.fileCache.get(definitionPath)!;
+      const definition = heldSources(ctx).get(definitionPath)!;
       ctx
         .engineApi()
         .transformFile(
@@ -491,7 +504,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
       hotMessages,
       transformError,
       transformedPaths: probe.transformedPaths,
-      quarantinedOwnership: ctx.corpus.published.ownership[usagePath],
+      quarantinedOwnership: ownership(ctx)[usagePath],
       engineActive: probe.isActive(),
     }).toEqual({
       clears: clearsBeforeReset + 1,
@@ -505,7 +518,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     });
 
     // Warn dedup is keyed on (path, diagnostic), not on the reset.
-    await ctx.performSystemReload();
+    await reloadSystem(ctx, 12);
     expect(warnings).toHaveLength(1);
   });
 
@@ -526,34 +539,35 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     expect(warnings).toEqual([
       expect.stringContaining(`SVELTE_PARSE_ERROR ${badPath}`),
     ]);
-    expect(ctx.corpus.published.ownership[badPath]).toBeUndefined();
+    expect(ownership(ctx)[badPath]).toBeUndefined();
 
     const analysesBefore = probe.analyses.length;
     const usagePath = relative(appRoot, localUsage);
     const edited = `<script>\nimport { badge } from './definition';\nconst attrs = badge.attrs({ tone: 'quiet' });\n</script>\n<!-- edited -->\n`;
-    await dispatch(ctx, 'update', localUsage, 21, edited);
+    writeFileSync(localUsage, edited);
+    await dispatch(ctx, 'update', localUsage, 21);
     expect(probe.analyses.length).toBeGreaterThan(analysesBefore);
-    expect(ctx.fileCache.get(usagePath)).toEqual({
+    expect(heldSources(ctx).get(usagePath)).toEqual({
       hash: contentHash(edited),
       source: edited,
     });
 
     // A quarantined original keeps its cached source for the next fix edit.
-    await dispatch(ctx, 'update', badFile, 22, badSource);
-    expect(ctx.fileCache.get(badPath)?.source).toBe(badSource);
-    expect(ctx.corpus.published.ownership[badPath]).toBeUndefined();
+    await dispatch(ctx, 'update', badFile, 22);
+    expect(heldSources(ctx).get(badPath)?.source).toBe(badSource);
+    expect(ownership(ctx)[badPath]).toBeUndefined();
     expect(warnings).toHaveLength(1);
 
     unlinkSync(localUsage);
     await dispatch(ctx, 'delete', localUsage, 23);
-    expect(ctx.fileCache.has(usagePath)).toBe(false);
+    expect(heldSources(ctx).has(usagePath)).toBe(false);
 
     // A delete fires exactly one watcher event, so an entry a failed
     // analysis restores stays in the cache for good.
     probe.failNextAnalysis();
     unlinkSync(badFile);
-    await dispatch(ctx, 'delete', badFile, 24);
-    expect(ctx.fileCache.has(badPath)).toBe(false);
+    await dispatch(ctx, 'delete', badFile, 24).catch(() => {});
+    expect(heldSources(ctx).has(badPath)).toBe(false);
   });
 
   test('a system reload evicts exactly the source modules whose replacement plans changed', async () => {
@@ -628,7 +642,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     events.length = 0;
 
     replacement = 'createClassResolver(["b"])';
-    await ctx.performSystemReload();
+    await reloadSystem(ctx, 31);
     expect(events).toEqual([
       `client:${definitionAbs}`,
       `client:${definitionAbs}?v=1`,
@@ -638,17 +652,17 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     ]);
 
     events.length = 0;
-    await ctx.performSystemReload();
+    await reloadSystem(ctx, 32);
     expect(events).toEqual(['hot:full-reload']);
 
     // A failed reset publishes nothing and keeps serving the last good
     // manifest, so the recovered equal-plan reset still evicts nothing.
     events.length = 0;
     failNext = true;
-    await ctx.performSystemReload();
+    await reloadSystem(ctx, 33);
     expect(events).toEqual(['hot:full-reload']);
     events.length = 0;
-    await ctx.performSystemReload();
+    await reloadSystem(ctx, 34);
     expect(events).toEqual(['hot:full-reload']);
   });
 });

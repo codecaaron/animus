@@ -1,55 +1,92 @@
-import {
-  contentHash,
-  createExcludeMatcher,
-  createSourceCorpus,
-} from '@animus-ui/extract/pipeline';
+import { createExcludeMatcher } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
 
 import { PluginContext } from '../src/context';
 import { makeManifest } from './manifest-fixture';
 
+import type { ObservedOutcome } from '../src/context';
 import type {
-  RawSourceEntry,
-  SourceIngestor,
+  ProjectManifest,
+  SourceEntryOwnership,
 } from '@animus-ui/extract/pipeline';
+import type { WatchChanges } from '@animus-ui/extract/session';
 import type { DevEnvironment } from 'vite';
 
-function identityIngestor(): SourceIngestor {
-  return {
-    async ingest(entries) {
-      const originalEntries = entries.map((entry) => ({
-        ...entry,
-        hash: entry.hash ?? contentHash(entry.source),
-      }));
-      return {
-        originalEntries,
-        analysisEntries: originalEntries,
-        ownership: Object.fromEntries(
-          originalEntries.map((entry) => [
-            entry.path,
-            {
-              originalPath: entry.path,
-              originalHash: entry.hash,
-              analysisPaths: [entry.path],
-            },
-          ])
-        ),
-        diagnostics: [],
-      };
-    },
-    surfaceDiagnostics: () => new Set<string>(),
-    markPublished() {},
+/** What the probe's Session holds: its sources by root-relative path, and
+ *  the published corpus's analysis entries and ownership. */
+export interface ProbeSession {
+  publishedSources: Map<string, { hash: string; source: string }>;
+  corpus: {
+    published: {
+      analysisEntries: Map<string, { path: string; source: string }>;
+      ownership: Record<string, SourceEntryOwnership>;
+    };
   };
 }
 
+/** The Session's answer to one submission. */
+export type ProbeResponder = (
+  changes: WatchChanges
+) => ObservedOutcome[] | Promise<ObservedOutcome[]>;
+
 /** `vi.mock` is a no-op in this runner, so a hook runs against a plain object
- *  carrying the state it touches, extended through `extras`. */
+ *  carrying the state it touches, extended through `extras`. The Session is
+ *  scripted: `submitChanges` records each change set and returns what
+ *  `respond` answers, by default an unchanged republication. */
 export interface ContextProbe {
   ctx: PluginContext;
-  analyses: number;
+  session: ProbeSession;
+  /** Every change set submitted to the Session, in order. */
+  submissions: WatchChanges[];
   extractedInvalidations: number;
   infoLines: string[];
   verboseLines: string[];
+  warnings: string[];
+  respond(responder: ProbeResponder): void;
+}
+
+/** A published outcome: `manifest` becomes the served manifest, as the
+ *  context's adoption does. */
+export function published(
+  probe: ContextProbe,
+  options: {
+    manifest?: ProjectManifest;
+    pass?: 'full' | 'incremental';
+    planChanged?: string[];
+    endedHold?: boolean;
+    redeliver?: string[];
+    systemPropsChanged?: boolean;
+  } = {}
+): ObservedOutcome {
+  if (options.manifest) probe.ctx.storedManifest = options.manifest;
+  return {
+    outcome: {
+      kind: 'published',
+      // SAFETY: the Vite half reads no field of the publication itself.
+      publication: {} as Extract<
+        ObservedOutcome['outcome'],
+        { kind: 'published' }
+      >['publication'],
+      pass: options.pass ?? 'incremental',
+      planChanged: options.planChanged ?? [],
+      endedHold: options.endedHold ?? false,
+      redeliver: options.redeliver ?? [],
+    },
+    systemPropsChanged: options.systemPropsChanged ?? false,
+  };
+}
+
+/** A held outcome over the given aborted originals (path → hash). */
+export function held(
+  abortedOriginals: Record<string, string>
+): ObservedOutcome {
+  return {
+    outcome: {
+      kind: 'held',
+      abortedOriginals: new Map(Object.entries(abortedOriginals)),
+    },
+    systemPropsChanged: false,
+  };
 }
 
 interface ProbeModuleNode {
@@ -99,83 +136,77 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
   extras?: Overrides
 ): ContextProbe {
   let probe: ContextProbe;
-  const externalPackageDirs: string[] = [];
-  const fileCache: ReadonlyMap<string, { hash: string; source: string }> =
-    new Map();
-  const externalFileOwners: Record<string, string> = {};
-  const reverseProvenance: Record<string, string[]> = {};
-  const corpus = createSourceCorpus(
-    {
-      engineApi: () => ({}),
-      prefix: '[animus-probe]',
-      strict: () => false,
-      warn() {},
-    },
-    identityIngestor()
-  );
-  const ctx = {
-    isProd: false,
-    verbose: false,
-    tracing: false,
-    rootDir,
-    options: {},
-    externalPackageDirs,
-    externalFileOwners,
-    externalDirOwners: {},
-    excludeMatcher: createExcludeMatcher(undefined),
-    outputExclude: null,
-    assetCopyDir: null,
-    fileCache,
-    fileCacheGeneration: 0,
-    ingestionFailureDiagnostics: [],
-    mutateFileCache: PluginContext.prototype.mutateFileCache,
-    corpus,
-    rawExtensionFallbacks: new Set<string>(),
-    abortedParseHashes: new Map<string, string>(),
-    reverseProvenance,
-    storedManifest: makeManifest(),
-    storedSystemPropMapJson: '{}',
-    storedDynamicPropsJson: '{}',
-    storedAdmittedTransformsJson: '{}',
-    storedTypedSystemPropsJson: '[]',
-    system: { groupRegistryJson: '{}', sourceThemeManifestsJson: null },
-    transformOutputHashes: new Map<string, string>(),
-    recordTransformOutput(relativePath: string, code: string) {
-      this.transformOutputHashes.set(relativePath, `probe:${code.length}`);
-    },
-    recordFallbackState: PluginContext.prototype.recordFallbackState,
-    runAnalysis(_entries?: RawSourceEntry[]): boolean | undefined {
-      probe.analyses++;
-      return undefined;
-    },
-    analyzeIngested: PluginContext.prototype.analyzeIngested,
-    publishSourceIngestion: PluginContext.prototype.publishSourceIngestion,
-    enforceExternalTokenContracts:
-      PluginContext.prototype.enforceExternalTokenContracts,
-    reportErrors: PluginContext.prototype.reportErrors,
-    invalidateExtractedModules() {
-      probe.extractedInvalidations++;
-    },
-    log(msg: string) {
-      probe.verboseLines.push(msg);
-    },
-    trace(msg: string) {
-      probe.verboseLines.push(msg);
-    },
-    info(msg: string) {
-      probe.infoLines.push(msg);
-    },
-    warn() {},
-    ...extras,
+  let responder: ProbeResponder = () => [published(probe)];
+  const session: ProbeSession = {
+    publishedSources: new Map(),
+    corpus: { published: { analysisEntries: new Map(), ownership: {} } },
   };
+  const externalPackageDirs: string[] = [];
+  const reverseProvenance: Record<string, string[]> = {};
+  // A context instance whose own fields shadow every member the Vite hooks
+  // read, the Session reduced to the sources and corpus they consult;
+  // owner-typed extras are spread last for each exact hook consumer.
+  const ctx: PluginContext = Object.assign(
+    Object.create(PluginContext.prototype),
+    {
+      isProd: false,
+      verbose: false,
+      tracing: false,
+      rootDir,
+      options: {},
+      externalPackageDirs,
+      excludeMatcher: createExcludeMatcher(undefined),
+      outputExclude: null,
+      assetCopyDir: null,
+      session,
+      rawExtensionFallbacks: new Set<string>(),
+      abortedParseHashes: new Map<string, string>(),
+      reverseProvenance,
+      storedManifest: makeManifest(),
+      storedSystemPropMapJson: '{}',
+      storedDynamicPropsJson: '{}',
+      storedAdmittedTransformsJson: '{}',
+      storedTypedSystemPropsJson: '[]',
+      system: { groupRegistryJson: '{}', sourceThemeManifestsJson: null },
+      transformOutputHashes: new Map<string, string>(),
+      recordTransformOutput(relativePath: string, code: string) {
+        this.transformOutputHashes.set(relativePath, `probe:${code.length}`);
+      },
+      recordFallbackState: PluginContext.prototype.recordFallbackState,
+      async submitChanges(changes: WatchChanges) {
+        probe.submissions.push(changes);
+        return responder(changes);
+      },
+      invalidateExtractedModules() {
+        probe.extractedInvalidations++;
+      },
+      invalidateSystemReloadModules() {},
+      log(msg: string) {
+        probe.verboseLines.push(msg);
+      },
+      trace(msg: string) {
+        probe.verboseLines.push(msg);
+      },
+      info(msg: string) {
+        probe.infoLines.push(msg);
+      },
+      warn(msg: string) {
+        probe.warnings.push(msg);
+      },
+      ...extras,
+    }
+  );
   probe = {
-    // SAFETY: The modeled base uses owner ingestion and context types, and
-    // owner-typed extras are spread last for each exact hook consumer.
-    ctx: ctx as PluginContext,
-    analyses: 0,
+    ctx,
+    session,
+    submissions: [],
     extractedInvalidations: 0,
     infoLines: [],
     verboseLines: [],
+    warnings: [],
+    respond(next) {
+      responder = next;
+    },
   };
   return probe;
 }
