@@ -724,7 +724,7 @@ impl ExtractEngine {
                 || !namespace_imports.is_empty()
                 || imports.iter().any(|import| object_exports.contains(import.imported.as_str()))
             {
-                crate::usage_facts::style_object_uses(program, statics)
+                crate::usage_facts::style_object_uses(program, &lowered_by_file[&ast.path].scoping, statics)
             } else {
                 crate::usage_facts::StyleObjectFacts::default()
             };
@@ -751,7 +751,9 @@ impl ExtractEngine {
                 std::rc::Rc::new(
                     programs
                         .get(file)
-                        .map(|program| crate::usage_facts::function_param_readings(program))
+                        .map(|program| {
+                            crate::usage_facts::function_param_readings(program, &lowered_by_file[file].scoping)
+                        })
                         .unwrap_or_default(),
                 )
             }))
