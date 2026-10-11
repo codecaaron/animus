@@ -1,4 +1,5 @@
-import { isAbsolute, posix, relative, sep } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
 import { ALIAS_MISMATCH, severityFor } from './manifest-diagnostics';
 import { hostCandidate } from './probe-evidence';
@@ -37,80 +38,167 @@ function expandAlias(
   return undefined;
 }
 
-/** A host's module id as a rootDir-relative file, its query dropped; a
- *  virtual id as written. */
-function hostFile(rootDir: string, id: string): string {
-  if (id.startsWith('\0') || !isAbsolute(id)) return id;
-  const file = id.split('?')[0]!;
-  return relative(rootDir, file).split(sep).join(posix.sep);
+/** A file's identity on disk: its real path, which follows links and
+ *  takes the case the filesystem lists; the path itself where it is not
+ *  there. */
+function physical(file: string): string {
+  try {
+    return realpathSync.native(file);
+  } catch {
+    return resolve(file);
+  }
+}
+
+/** What a host's module id names: a file on disk, its query dropped and a
+ *  dev server's `/@fs/` prefix removed; a virtual id as written; or no
+ *  file, where the id names a path nothing is at (an alias applied to a
+ *  missing module). */
+function hostTarget(id: string): { file: string } | { virtual: string } | null {
+  const path = id.split('?')[0]!;
+  const file = path.startsWith('/@fs/') ? path.slice('/@fs'.length) : path;
+  if (id.startsWith('\0') || !isAbsolute(file)) return { virtual: id };
+  return existsSync(file) ? { file } : null;
+}
+
+/** One file's comparison: its import findings, and the requests the host's
+ *  resolver could not answer. */
+interface FileAgreement {
+  hash: string;
+  findings: ManifestDiagnostic[];
+  unavailable: number;
+}
+
+/** What a session's comparisons keep between analyses (spec §2.2 A7):
+ *  each file's result by its content hash, while the aliases and the file
+ *  set are the same. A new alias set, or a file added or removed, compares
+ *  every file again. */
+export class AliasAgreementCache {
+  scope = '';
+  byFile = new Map<string, FileAgreement>();
+}
+
+/** What one comparison found: the mismatches, and how many requests the
+ *  host's resolver could not answer, which are never agreement. */
+export interface AliasAgreement {
+  findings: ManifestDiagnostic[];
+  unavailable: number;
 }
 
 /**
  * Where the analysis and the host disagree on a path alias (spec §2.2 A7,
  * report only: resolution never changes). Each analysed import whose
- * specifier an alias the analysis reads names (tsconfig paths, or the
- * host's own aliases) is resolved as the analysis resolves it (the alias's
- * expansion through the host's extension order) and by the host's own
- * resolver; a different file, or a file only one of them finds, is
- * `animus.discovery.alias-mismatch`.
+ * specifier, as the parser decodes it, an alias the analysis reads names
+ * (tsconfig paths, or the host's own aliases) is resolved as the analysis
+ * resolves it (the alias's expansion through the host's extension order)
+ * and by the host's own resolver. A different physical file, or a file
+ * only one of them finds, is `animus.discovery.alias-mismatch`. A request
+ * the host's resolver fails on is unavailable for that request alone.
  */
 export async function compareAliases(input: {
   rootDir: string;
-  fileEntries: ReadonlyArray<{ path: string; source: string }>;
+  fileEntries: ReadonlyArray<{ path: string; source: string; hash: string }>;
   pathAliasesJson: string | null;
   order: ExtensionOrder | undefined;
   readings: HostReadings;
   moduleSpecifiers: (fileEntriesJson: string) => string;
   resolve: HostResolve;
-}): Promise<ManifestDiagnostic[]> {
-  if (input.pathAliasesJson === null) return [];
+  cache: AliasAgreementCache;
+}): Promise<AliasAgreement> {
+  const { cache } = input;
+  const scope = JSON.stringify([
+    input.pathAliasesJson,
+    input.fileEntries.map((entry) => entry.path).sort(),
+  ]);
+  if (cache.scope !== scope) {
+    cache.scope = scope;
+    cache.byFile.clear();
+  }
+  if (input.pathAliasesJson === null) return { findings: [], unavailable: 0 };
   const { aliases }: { aliases: AliasEntry[] } = JSON.parse(
     input.pathAliasesJson
   );
-  // Only a file that spells an alias can import through one.
-  const spelling = input.fileEntries.filter((entry) =>
-    aliases.some((alias) => entry.source.includes(alias.pattern))
+  const changed = input.fileEntries.filter(
+    (entry) => cache.byFile.get(entry.path)?.hash !== entry.hash
   );
-  if (spelling.length === 0) return [];
-  const { files }: { files: Record<string, string[]> } = JSON.parse(
-    input.moduleSpecifiers(JSON.stringify(spelling))
-  );
+  const { files }: { files: Record<string, string[]> } =
+    changed.length === 0
+      ? { files: {} }
+      : JSON.parse(
+          input.moduleSpecifiers(
+            JSON.stringify(
+              changed.map(({ path, source }) => ({ path, source }))
+            )
+          )
+        );
   const analysed = new Set(input.fileEntries.map((entry) => entry.path));
-  const checks = Object.entries(files).flatMap(([importer, specifiers]) =>
-    specifiers.flatMap((specifier) => {
-      const base = expandAlias(specifier, aliases);
-      return base === undefined ? [] : [{ importer, specifier, base }];
+  const compare = async (
+    importer: string,
+    specifier: string,
+    base: string
+  ): Promise<ManifestDiagnostic | null | 'unavailable'> => {
+    const candidate = hostCandidate(
+      input.rootDir,
+      base,
+      analysed,
+      input.order,
+      input.readings
+    );
+    const analysis =
+      candidate === null
+        ? null
+        : (candidate.analysedAs ?? candidate.candidate.split('?')[0]!);
+    let id: string | null;
+    try {
+      id = await input.resolve(specifier, join(input.rootDir, importer));
+    } catch {
+      return 'unavailable';
+    }
+    const host = id === null ? null : hostTarget(id);
+    const same =
+      analysis === null || host === null
+        ? analysis === host
+        : 'file' in host &&
+          physical(join(input.rootDir, analysis)) === physical(host.file);
+    if (same) return null;
+    const shown =
+      host === null
+        ? 'no file'
+        : 'virtual' in host
+          ? host.virtual
+          : relative(input.rootDir, host.file).split(sep).join(posix.sep);
+    return {
+      file: importer,
+      component: `alias '${specifier}'`,
+      kind: 'warn',
+      message: `'${specifier}' in ${importer} resolves to ${analysis ?? 'no file'} through the path aliases analysis reads, but the host bundler resolves it to ${shown}, so the analysis may read another module than the one the bundle renders — make the bundler's resolution and the aliases (tsconfig paths) agree`,
+      code: ALIAS_MISMATCH,
+      severity: severityFor(ALIAS_MISMATCH),
+    };
+  };
+  await Promise.all(
+    changed.map(async ({ path, hash }) => {
+      const results = await Promise.all(
+        (files[path] ?? []).flatMap((specifier) => {
+          const base = expandAlias(specifier, aliases);
+          return base === undefined ? [] : [compare(path, specifier, base)];
+        })
+      );
+      cache.byFile.set(path, {
+        hash,
+        findings: results.filter(
+          (result): result is ManifestDiagnostic =>
+            result !== null && result !== 'unavailable'
+        ),
+        unavailable: results.filter((result) => result === 'unavailable')
+          .length,
+      });
     })
   );
-  const findings = await Promise.all(
-    checks.map(async ({ importer, specifier, base }) => {
-      const candidate = hostCandidate(
-        input.rootDir,
-        base,
-        analysed,
-        input.order,
-        input.readings
-      );
-      const analysis =
-        candidate === null
-          ? null
-          : (candidate.analysedAs ?? candidate.candidate.split('?')[0]!);
-      const id = await input.resolve(
-        specifier,
-        posix.join(input.rootDir, importer)
-      );
-      const host = id === null ? null : hostFile(input.rootDir, id);
-      if (analysis === host) return null;
-      const diagnostic: ManifestDiagnostic = {
-        file: importer,
-        component: `alias '${specifier}'`,
-        kind: 'warn',
-        message: `'${specifier}' in ${importer} resolves to ${analysis ?? 'no file'} through the path aliases analysis reads, but the host bundler resolves it to ${host ?? 'no file'}, so the analysis may read another module than the one the bundle renders — make the bundler's resolution and the aliases (tsconfig paths) agree`,
-        code: ALIAS_MISMATCH,
-        severity: severityFor(ALIAS_MISMATCH),
-      };
-      return diagnostic;
-    })
+  const kept = input.fileEntries.flatMap(
+    (entry) => cache.byFile.get(entry.path) ?? []
   );
-  return findings.filter((finding) => finding !== null);
+  return {
+    findings: kept.flatMap((file) => file.findings),
+    unavailable: kept.reduce((total, file) => total + file.unavailable, 0),
+  };
 }
