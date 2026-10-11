@@ -678,33 +678,46 @@ fn write_condition_block(
     if declarations.is_empty() {
         return;
     }
-    let mut preludes: Vec<String> = Vec::with_capacity(group.conditions.len());
-    for condition in &group.conditions {
-        let prelude = match condition {
-            crate::theme::Condition::Breakpoint(bp) => breakpoints.media_query(bp),
-            other => other.prelude().map(str::to_string),
+    // A scope's start names each rule's own selector, so each inner selector
+    // takes a wrapper of its own, and within it the rule is the scope root.
+    let subjects: Vec<Option<&String>> = if group.conditions.iter().any(crate::theme::Condition::is_scope) {
+        inner_selectors.iter().map(Some).collect()
+    } else {
+        vec![None]
+    };
+    for subject in subjects {
+        let preludes = match subject {
+            Some(subject) => crate::theme::condition_preludes(&group.conditions, subject, |bp| breakpoints.media_query(bp)),
+            None => group
+                .conditions
+                .iter()
+                .map(|condition| match condition {
+                    crate::theme::Condition::Breakpoint(bp) => breakpoints.media_query(bp),
+                    other => other.prelude().map(str::to_string),
+                })
+                .collect(),
         };
-        match prelude {
-            Some(prelude) => preludes.push(prelude),
-            None => return,
+        let Some(preludes) = preludes.filter(|preludes| !preludes.is_empty()) else {
+            return;
+        };
+        for (depth, prelude) in preludes.iter().enumerate() {
+            writeln!(output, "{}{} {{", "  ".repeat(depth + 1), prelude).unwrap();
         }
-    }
-    if preludes.is_empty() {
-        return;
-    }
-    for (depth, prelude) in preludes.iter().enumerate() {
-        writeln!(output, "{}{} {{", "  ".repeat(depth + 1), prelude).unwrap();
-    }
-    let decl_indent = 2 * (preludes.len() + 1);
-    for inner in inner_selectors {
-        let sel = match &group.selector {
-            Some(s) => format_composed_pseudo(inner, s),
-            None => inner.clone(),
+        let decl_indent = 2 * (preludes.len() + 1);
+        let inners: Vec<String> = match subject {
+            Some(_) => vec![crate::theme::SCOPE_ROOT.to_string()],
+            None => inner_selectors.to_vec(),
         };
-        write_declarations_indented(output, &sel, declarations, decl_indent);
-    }
-    for depth in (0..preludes.len()).rev() {
-        writeln!(output, "{}}}", "  ".repeat(depth + 1)).unwrap();
+        for inner in &inners {
+            let sel = match &group.selector {
+                Some(s) => format_composed_pseudo(inner, s),
+                None => inner.clone(),
+            };
+            write_declarations_indented(output, &sel, declarations, decl_indent);
+        }
+        for depth in (0..preludes.len()).rev() {
+            writeln!(output, "{}}}", "  ".repeat(depth + 1)).unwrap();
+        }
     }
 }
 

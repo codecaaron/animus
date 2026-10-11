@@ -133,7 +133,7 @@ fn fold_system_input(hash: u64, json: Option<&str>) -> u64 {
 }
 
 /// Each keyframes collection's export and key, and the name its CSS takes.
-fn keyframe_names(blocks: Option<&Value>) -> Vec<(&str, &str, Option<&str>)> {
+pub(crate) fn keyframe_names(blocks: Option<&Value>) -> Vec<(&str, &str, Option<&str>)> {
     let collections = blocks.and_then(Value::as_object).into_iter().flatten();
     collections
         .flat_map(|(export, collection)| {
@@ -560,6 +560,7 @@ const INVALID_OPACITY_MODIFIER: &str = "animus.style.invalid-opacity-modifier";
 pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::eval::SELECTOR_UNSUPPORTED_SUBJECT, "error"),
     (crate::eval::KEYFRAMES_UNREGISTERED_REFERENCE, "warn"),
+    (crate::keyframe_aliases::RAW_ALIAS_STRING, "warn"),
     (COMPOSE_UNRESOLVABLE_SLOT, "error"),
     (UNSUPPORTED_MEMBER_PARENT, "error"),
     (EXTENSION_CYCLE, "error"),
@@ -602,6 +603,8 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::theme::UNITLESS_CUSTOM_PROPERTY, "warn"),
     (crate::theme::NON_BLOCK_VALUE, "error"),
     (crate::theme::AT_RULE_SELECTOR_NESTING, "error"),
+    (crate::theme::AT_RULE_PLACEMENT, "error"),
+    (crate::theme::FONT_FACE_DROPPED, "error"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -1253,6 +1256,7 @@ fn drain_dropped_style_keys(
         // known, else as JSON.
         let held = match &dropped.dropped {
             DroppedStyleKey::UnsupportedAtRule { block: held, .. }
+            | DroppedStyleKey::AtRulePlacement { block: held, .. }
             | DroppedStyleKey::NonBlockValue { value: held, .. }
             | DroppedStyleKey::AtRuleSelectorNesting { block: held, .. } => held,
             _ => {
@@ -1319,10 +1323,17 @@ fn dropped_style_key(
         DroppedStyleKey::UnsupportedAtRule { key, .. } => {
             let message = format!(
                 "style key '{key}' is an at-rule extraction does not support, {not_emitted} — \
-                 extraction supports @media, @container and @supports; fix the at-rule's name, or \
-                 write the block in a stylesheet of its own"
+                 extraction supports @media, @container, @supports, @scope and @starting-style; fix the \
+                 at-rule's name, or write the block in a stylesheet of its own"
             );
             return diagnostic(file, component, "warn", message, Some(crate::theme::UNSUPPORTED_AT_RULE));
+        }
+        DroppedStyleKey::AtRulePlacement { key, within, lost, .. } => {
+            let message = format!(
+                "'{key}' wraps a rule, and {within} holds none, so {lost} is not emitted — write '{key}' \
+                 as a key of a style block, beside the declarations it applies to"
+            );
+            return diagnostic(file, component, "warn", message, Some(crate::theme::AT_RULE_PLACEMENT));
         }
         DroppedStyleKey::NonBlockValue { key, value } => {
             let message = format!(
@@ -1337,6 +1348,17 @@ fn dropped_style_key(
                  under it is not emitted — write the block under a selector of its own"
             );
             return diagnostic(file, component, "warn", message, Some(crate::theme::AT_RULE_SELECTOR_NESTING));
+        }
+        DroppedStyleKey::FontFace { face, part, reason } => {
+            let dropped = match part {
+                Some(part) => format!("{part} of the font face {face}"),
+                None => format!("the font face {face}"),
+            };
+            let message = format!(
+                "{dropped} is not emitted: {reason} — give each face a `family` and at least one `src` \
+                 entry of `{{ local }}` or `{{ url }}`, and each descriptor a string"
+            );
+            return diagnostic(file, component, "warn", message, Some(crate::theme::FONT_FACE_DROPPED));
         }
         DroppedStyleKey::SharedProperty { overridden, winner, property, rule } => {
             return keys_share_property(file, component, (overridden, winner, property, *rule), inheritors);
@@ -1649,6 +1671,33 @@ fn unresolved_alias_findings(
         );
     }
     findings
+}
+
+/// A raw animation name that is a registered keyframes key, not the
+/// generated name its `@keyframes` rule carries.
+fn raw_keyframe_alias(
+    file: &str,
+    component: &str,
+    declaration: &CssDeclaration,
+    alias: &crate::keyframe_aliases::RawAlias,
+) -> CssDiagnostic {
+    let registered: Vec<String> =
+        alias.candidates.iter().map(|(path, name)| format!("{path} (`@keyframes {name}`)")).collect();
+    diagnostic(
+        file,
+        component,
+        "warn",
+        format!(
+            "'{}: {}' names '{}' as written, and no @keyframes rule has that name: the keyframes registered under it are {}. \
+             Reference the registered object, such as `{}`, so the generated name is emitted; the value is left unchanged",
+            declaration.property,
+            declaration.value,
+            alias.key,
+            registered.join(", "),
+            alias.candidates[0].0,
+        ),
+        Some(crate::keyframe_aliases::RAW_ALIAS_STRING),
+    )
 }
 
 /// Properties whose values legitimately carry dotted bare identifiers, so a
@@ -5581,6 +5630,16 @@ fn run_with_system_floor(
         numeric_properties: Some(&inputs.numeric_properties),
         numbers_take_px: false,
     };
+    // Raw animation names that are registered keyframes keys, read without
+    // reporting or evaluating anything a second time.
+    let keyframe_keys = crate::keyframe_aliases::KeyframeKeys::from_blocks(inputs.keyframes_blocks.as_ref());
+    let quiet_ctx = ResolveContext {
+        transform_evaluator: None,
+        transform_failures: None,
+        token_misses: None,
+        dropped_keys: None,
+        ..resolve_ctx
+    };
 
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
     let mut unresolvable_extensions: FxHashSet<String> = FxHashSet::default();
@@ -5808,6 +5867,9 @@ fn run_with_system_floor(
             &chain.descriptor.binding,
             &mut diagnostics,
         );
+        for (declaration, alias) in keyframe_keys.in_chain(chain, &quiet_ctx) {
+            diagnostics.push(raw_keyframe_alias(file_path, &chain.descriptor.binding, &declaration, &alias));
+        }
         if merged_chain.is_some() {
             // A parent option's dropped key was reported at the parent's
             // declaration, naming this chain among its inheritors.
@@ -6397,6 +6459,16 @@ fn run_with_system_floor(
         }
         if prop_config.is_some_and(|prop_config| !extracts_configured_value(prop_config, value, &resolve_ctx)) {
             return None;
+        }
+        // A raw keyframes key is reported at each use that writes it.
+        let usage_quiet = ResolveContext { config, ..quiet_ctx };
+        for (declaration, alias) in keyframe_keys.in_styles(&serde_json::json!({ prop_name: value }), &usage_quiet) {
+            match uses {
+                [] => diagnostics.push(raw_keyframe_alias(file, component, &declaration, &alias)),
+                uses => diagnostics.extend(
+                    uses.iter().map(|&(at, renders)| raw_keyframe_alias(file, renders, &declaration, &alias).at(at)),
+                ),
+            }
         }
         if let Some(prop_config) = prop_config {
             let usage_ctx = ResolveContext { config, ..resolve_ctx };
@@ -7949,6 +8021,16 @@ fn run_with_system_floor(
         }
     }
 
+    if let Some(blocks) = inputs.global_style_blocks.as_ref().and_then(Value::as_object) {
+        for (name, block) in blocks {
+            let block = crate::theme::GlobalBlock::of(block);
+            let file = block.source.unwrap_or("system");
+            let component = format!("global '{name}'");
+            for (declaration, alias) in keyframe_keys.in_styles(block.styles, &quiet_ctx) {
+                diagnostics.push(raw_keyframe_alias(file, &component, &declaration, &alias));
+            }
+        }
+    }
     let (global_css_raw, unlayered_global_css) = if let Some(blocks) = &inputs.global_style_blocks {
         // Each block's reports name its registration key and the module that
         // declares it; without one, the loaded system stands in.
@@ -9131,6 +9213,195 @@ mod tests {
             out.sheets.system.contains("animus-u-"),
             "{}",
             out.sheets.system
+        );
+    }
+
+    #[test]
+    fn a_raw_keyframes_key_warns_once_where_written_and_leaves_the_css() {
+        let mut inputs = test_inputs();
+        inputs.config.insert("animation".into(), serde_json::from_str(r#"{"property":"animation"}"#).unwrap());
+        inputs.group_registry.insert("motion".into(), vec!["animation".into()]);
+        inputs.condition_aliases.insert(
+            "_motion".into(),
+            crate::theme::ConditionAliasEntry { value: "@media (prefers-reduced-motion: no-preference)".into(), order: 500, kind: "media".into() },
+        );
+        // `ease` is registered as a key, and `fadeOut` is one key's name and
+        // another's generated name.
+        let frames = serde_json::json!({ "to": { "opacity": 1 } });
+        inputs.keyframes_blocks = Some(serde_json::json!({
+            "motion": {
+                "fadeIn": { "name": "animus-kf-honfj9", "frames": frames },
+                "ease": { "name": "animus-kf-ease", "frames": frames },
+                "fadeOut": { "name": "animus-kf-out", "frames": frames },
+                "glow": { "name": "fadeOut", "frames": frames },
+                "infinite": { "name": "animus-kf-infinite", "frames": frames }
+            }
+        }));
+        let source = "export const Card = ds.styles({ animation: 'fadeIn 1s ease' }).asElement('div');\n\
+                      export const Pill = ds.styles({ animationName: 'animus-kf-honfj9' }).asElement('span');\n\
+                      export const Spin = ds.styles({ animationName: 'spin' }).asElement('i');\n\
+                      export const Note = ds.styles({ animation: 'external 1s /* fadeIn */' }).asElement('i');\n\
+                      export const Joined = ds.styles({ animation: 'fadeIn/**/1s' }).asElement('i');\n\
+                      export const Escaped = ds.styles({ animationName: 'fade\\\\49 n' }).asElement('i');\n\
+                      export const Loud = ds.styles({ animation: 'fadeIn 1s!important' }).asElement('i');\n\
+                      export const Named = ds.styles({ animationName: 'fadeOut' }).asElement('i');\n\
+                      export const Calm = ds.styles({ _motion: { animation: 'fadeIn 2s' } }).asElement('i');\n\
+                      export const Bogus = ds.styles({ '@bogus x': { animation: 'fadeIn 2s' } }).asElement('i');\n\
+                      export const Stepped = ds.styles({ animation: '1s steps(2) ease' }).asElement('i');\n\
+                      export const Shouty = ds.styles({ animation: '1s EASE ease' }).asElement('i');\n\
+                      export const Counted = ds.styles({ animation: '1s 3 infinite' }).asElement('i');\n\
+                      export const Varied = ds.styles({ animation: 'var(--motion) fadeIn 1s' }).asElement('i');\n\
+                      export const Box = ds.system({ motion: true }).asElement('div');\n\
+                      export const App = () => <><Card /><Pill /><Spin /><Note /><Joined /><Escaped /><Loud /><Named /><Calm /><Bogus />\
+                      <Stepped /><Shouty /><Counted /><Varied />\
+                      <Box animation=\"fadeIn 2s\" /><Box animation={{ _: 'fadeIn 3s' }} /></>;\n";
+        let out = analyze(&[("a.tsx", source)], &inputs);
+        let mut warned: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some("animus.keyframes.raw-alias-string"))
+            .map(|d| (d.component.as_str(), d.offset, d.message.split('\'').nth(3).unwrap_or_default()))
+            .collect();
+        warned.sort();
+        // A definition is located at its chain, a use at the attribute. Only
+        // an animation's name is read: a comment, a function, a keyword, a
+        // timing function or a number that fills another longhand, and a
+        // generated name are not, and a shorthand holding `var()` names none.
+        let at = |written: &str| source.find(written).map(|at| at as u32);
+        let mut expected = vec![
+            ("Box", at("animation=\"fadeIn 2s\""), "fadeIn"),
+            ("Box", at("animation={{"), "fadeIn"),
+            ("Calm", at("ds.styles({ _motion"), "fadeIn"),
+            ("Card", at("ds.styles({ animation: 'fadeIn 1s ease'"), "fadeIn"),
+            ("Counted", at("ds.styles({ animation: '1s 3"), "infinite"),
+            ("Escaped", at("ds.styles({ animationName: 'fade"), "fadeIn"),
+            ("Joined", at("ds.styles({ animation: 'fadeIn/**/"), "fadeIn"),
+            ("Loud", at("ds.styles({ animation: 'fadeIn 1s!"), "fadeIn"),
+            ("Shouty", at("ds.styles({ animation: '1s EASE"), "ease"),
+            ("Stepped", at("ds.styles({ animation: '1s steps"), "ease"),
+        ];
+        expected.sort();
+        assert_eq!(warned, expected, "{:#?}", out.diagnostics);
+        assert!(out.css.contains("animation: fadeIn 1s ease;"), "{}", out.css);
+        assert!(out.css.contains("animation: fadeIn 2s;"), "{}", out.css);
+    }
+
+    #[test]
+    fn scope_and_starting_style_blocks_wrap_their_rules_and_report_where_none_can_be_wrapped() {
+        let mut inputs = test_inputs();
+        inputs.condition_aliases.insert(
+            "_starting".into(),
+            crate::theme::ConditionAliasEntry { value: "@starting-style".into(), order: 500, kind: "starting-style".into() },
+        );
+        inputs.keyframes_blocks = Some(serde_json::json!({
+            "motion": { "rise": { "name": "animus-kf-rise", "frames": { "to": { "opacity": 1, "@starting-style": { "opacity": 0 } } } } }
+        }));
+        inputs.global_style_blocks = Some(serde_json::json!({
+            "lists": { ".a, .b": { "@scope (& > p)": { "& em": { "color": "red" } } }, "@starting-style": { "opacity": 0 } }
+        }));
+        let source = "export const Prose = ds.styles({ display: 'block', '@scope (.zz-prose) to ([data-prose-ignore])': { '& li': { cursor: 'pointer' } } }).asElement('div');\n\
+                      export const Toast = ds.styles({ opacity: 1, '@starting-style': { opacity: 0 }, '&:hover': { '@starting-style': { opacity: 0.5 } }, _starting: { color: 'red' } }).asElement('div');\n\
+                      export const Card = ds.styles({ '@scope (&) to (.not-card)': { '& p': { margin: 0 } } }).asElement('div');\n\
+                      export const Bad = ds.styles({ opacity: { _: 1, '@starting-style': 0 } }).asElement('div');\n\
+                      export const Alias = ds.styles({ opacity: { _: 1, _starting: 0 } }).asElement('div');\n\
+                      export const Bare = ds.styles({ '@scope': { color: 'red', '& em': { color: 'green' } }, '@scope ([data-label=\"R&D\"])': { color: 'blue' } }).asElement('div');\n\
+                      export const Donut = ds.styles({ '@scope (&) to (& > .stop)': { '& p': { color: 'red' } } }).asElement('div');\n\
+                      export const Nest = ds.styles({ '&:hover': { '@scope (&)': { '@scope (& > .inner)': { '& p': { color: 'red' } } } } }).asElement('div');\n\
+                      export const App = () => <><Prose /><Toast /><Card /><Bad /><Alias /><Bare /><Donut /><Nest /></>;\n";
+        let out = analyze(&[("a.tsx", source)], &inputs);
+        let class = |binding: &str| out.replacement_configs[&format!("a.tsx::{binding}")].class_name.clone().unwrap_or_default();
+        let base = out.css.split("@layer anm-base {").nth(1).and_then(|rest| rest.split("\n}\n").next()).unwrap_or_default();
+        // Within a scope the rule is the scope root, `:scope`; only the
+        // outermost start's `&` is the component, and a start without `&` is
+        // relative to it, as nested CSS reads it (CSS Cascade 6 §3.5).
+        for wrapped in [
+            format!("@scope (.{} .zz-prose) to ([data-prose-ignore]) {{\n    :where(:scope) li {{\n      cursor: pointer;", class("Prose")),
+            format!("@starting-style {{\n    .{} {{\n      opacity: 0;", class("Toast")),
+            format!("@starting-style {{\n    .{}:hover {{\n      opacity: 0.5;", class("Toast")),
+            format!("@starting-style {{\n    .{} {{\n      color: red;", class("Toast")),
+            format!("@scope (.{}) to (.not-card) {{\n    :where(:scope) p {{\n      margin: 0;", class("Card")),
+            format!("@scope (.{}) {{\n    :where(:scope) {{\n      color: red;", class("Bare")),
+            format!("@scope (.{}) {{\n    :where(:scope) em {{\n      color: green;", class("Bare")),
+            format!("@scope (.{} [data-label=\"R&D\"]) {{\n    :where(:scope) {{\n      color: blue;", class("Bare")),
+            format!("@scope (.{}) to (:scope > .stop) {{\n    :where(:scope) p {{\n      color: red;", class("Donut")),
+            format!("@scope (.{}:hover) {{\n    @scope (:scope > .inner) {{\n      :where(:scope) p {{\n        color: red;", class("Nest")),
+        ] {
+            assert!(base.contains(&wrapped), "{wrapped}\nmissing from anm-base:\n{}", out.css);
+        }
+        assert!(out.sheets.global.contains("@scope (:is(.a, .b) > p) {\n  :where(:scope) em {"), "{}", out.sheets.global);
+        let codes: Vec<_> = out.diagnostics.iter().filter_map(|d| Some((d.code.as_deref()?, d.component.as_str()))).collect();
+        assert_eq!(
+            codes,
+            [
+                ("animus.style.at-rule-placement", "Alias"),
+                ("animus.style.at-rule-placement", "Bad"),
+                ("animus.style.at-rule-placement", "global 'lists'"),
+                ("animus.style.at-rule-placement", "keyframes 'animus-kf-rise'"),
+            ],
+            "{:#?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn typed_font_faces_print_their_sources_and_descriptors_and_report_what_they_leave_out() {
+        let mut inputs = test_inputs();
+        inputs.global_style_blocks = Some(serde_json::json!({
+            "fonts": {
+                "styles": {},
+                "fontFaces": [
+                    {
+                        "family": "MonaFallback",
+                        "src": [{ "local": "Arial" }],
+                        "sizeAdjust": "104%",
+                        "ascentOverride": "90%",
+                        "fontFeatureSettings": "\"ss01\""
+                    },
+                    {
+                        "family": "Mona",
+                        "src": [
+                            { "local": "Mona Sans" },
+                            { "local": "Font Awesome 6" },
+                            { "local": "inherit" },
+                            { "url": "animus-asset:./mona.woff2", "format": "woff2", "tech": "variations" },
+                            { "url": "./it's.woff" },
+                            { "url": "./line\rbreak.woff" },
+                            { "local": "Arial", "url": "./both.woff" },
+                            { "url": "./tech.woff", "tech": "variations;}" }
+                        ],
+                        "weight": 400
+                    },
+                    { "src": [{ "local": "Arial" }] },
+                    { "family": "Empty", "src": [{ "format": "woff2" }] }
+                ]
+            }
+        }));
+        let out = analyze(&[("a.tsx", "export const x = 1;\n")], &inputs);
+        for face in [
+            "@font-face { font-family: MonaFallback; src: local(Arial); size-adjust: 104%; ascent-override: 90%; font-feature-settings: \"ss01\"; }",
+            "@font-face { font-family: Mona; src: local(Mona Sans), local('Font Awesome 6'), local('inherit'), url('animus-asset:./mona.woff2') format('woff2') tech(variations), url('./it\\'s.woff'), url('./line\\d break.woff'); }",
+        ] {
+            assert!(out.sheets.global.contains(face), "{face}\nmissing from:\n{}", out.sheets.global);
+        }
+        assert_eq!(out.sheets.global.matches("@font-face").count(), 2, "{}", out.sheets.global);
+        let dropped: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some("animus.style.font-face-dropped"))
+            .map(|d| (d.component.as_str(), d.message.split(" is not emitted").next().unwrap_or_default(), d.severity.as_deref()))
+            .collect();
+        assert_eq!(
+            dropped,
+            [
+                ("global 'fonts'", "source 7 of the font face 'Mona'", Some("error")),
+                ("global 'fonts'", "source 8 of the font face 'Mona'", Some("error")),
+                ("global 'fonts'", "`weight` of the font face 'Mona'", Some("error")),
+                ("global 'fonts'", "the font face #3", Some("error")),
+                ("global 'fonts'", "source 1 of the font face 'Empty'", Some("error")),
+                ("global 'fonts'", "the font face 'Empty'", Some("error")),
+            ],
+            "{:#?}",
+            out.diagnostics
         );
     }
 

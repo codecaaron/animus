@@ -54,7 +54,7 @@ fn prop_cascade_tier(prop_name: &str, config: &PropConfigMap) -> (usize, usize) 
 
 /// The CSS properties a style-object entry sets: a registered prop's, or the
 /// property a raw key names; none for a selector or condition key.
-fn entry_properties(key: &str, config: &PropConfigMap) -> Vec<String> {
+pub(crate) fn entry_properties(key: &str, config: &PropConfigMap) -> Vec<String> {
     match config.get(key) {
         Some(pc) => match pc.declaration_binding() {
             Some(binding) => binding.members.iter().map(|member| member.css_property.clone()).collect(),
@@ -265,6 +265,8 @@ impl ConditionAliasEntry {
         match self.kind.as_str() {
             "container" => Condition::Container(self.value.clone()),
             "supports" => Condition::Supports(self.value.clone()),
+            // Read as the raw key reads it, so a bare `@scope` scopes to `&`.
+            "scope" | "starting-style" => condition_from_raw_key(&self.value).unwrap_or_else(|| Condition::Media(self.value.clone())),
             _ => Condition::Media(self.value.clone()),
         }
     }
@@ -288,9 +290,28 @@ pub fn condition_from_raw_key(key: &str) -> Option<Condition> {
         Some(Condition::Container(key.to_string()))
     } else if key.starts_with("@supports") {
         Some(Condition::Supports(key.to_string()))
+    } else if key == "@scope" || key.starts_with("@scope ") || key.starts_with("@scope(") {
+        // No scope root: nested CSS would scope to the parent rule's element,
+        // which is the rule's own subject here.
+        let tail = key["@scope".len()..].trim_start();
+        if tail.is_empty() || tail.starts_with("to") {
+            Some(Condition::Scope(format!("@scope (&) {tail}").trim_end().to_string()))
+        } else {
+            Some(Condition::Scope(key.to_string()))
+        }
+    } else if key == "@starting-style" {
+        Some(Condition::StartingStyle(key.to_string()))
     } else {
         None
     }
+}
+
+/// Whether `key`, raw or an alias, is `@scope` or `@starting-style`: an
+/// at-rule whose block only wraps a style rule, so it has no place inside a
+/// keyframe frame or a prop's value.
+pub(crate) fn only_wraps_rules(key: &str, ctx: &ResolveContext) -> bool {
+    let condition = condition_from_raw_key(key).or_else(|| ctx.condition_aliases.get(key).map(ConditionAliasEntry::to_condition));
+    matches!(condition, Some(Condition::Scope(_) | Condition::StartingStyle(_)))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -324,8 +345,8 @@ pub const UNRECOGNIZED_STYLE_KEY: &str = "animus.style.unrecognized-key";
 /// Two keys of one style block that set one CSS property at one condition.
 pub const KEYS_SHARE_PROPERTY: &str = "animus.style.keys-share-property";
 
-/// A style-object at-rule key other than `@media`, `@container` and
-/// `@supports`, whose block is not emitted.
+/// A style-object at-rule key other than `@media`, `@container`,
+/// `@supports`, `@scope` and `@starting-style`, whose block is not emitted.
 pub const UNSUPPORTED_AT_RULE: &str = "animus.style.unsupported-at-rule";
 /// A number on a prop that writes only custom properties and binds no
 /// transform: a custom property has no unit context, so it stays unitless.
@@ -339,6 +360,15 @@ pub const NON_BLOCK_VALUE: &str = "animus.style.non-block-value";
 /// holds declarations only.
 pub const AT_RULE_SELECTOR_NESTING: &str = "animus.style.at-rule-selector-nesting";
 
+/// `@scope` or `@starting-style` where no rule can be wrapped: inside a
+/// keyframe frame, or among a prop's values.
+pub const AT_RULE_PLACEMENT: &str = "animus.style.at-rule-placement";
+
+/// A typed font face, or a source or descriptor of one, that is left out:
+/// one with no family or no source, a source that names neither a `local`
+/// font nor a `url`, or a descriptor whose value is not a string.
+pub const FONT_FACE_DROPPED: &str = "animus.style.font-face-dropped";
+
 /// A style-object key given an object that resolves to nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DroppedStyleKey {
@@ -348,9 +378,15 @@ pub enum DroppedStyleKey {
     NonResponsiveObject(String),
     /// Any other key, such as an HTML element name written without `&`.
     UnrecognizedKey(String),
-    /// An at-rule other than `@media`, `@container` and `@supports`, with
-    /// the block it holds.
+    /// An at-rule extraction does not support, with the block it holds.
     UnsupportedAtRule { key: String, block: Value },
+    /// `@scope` or `@starting-style` placed where no rule can be wrapped
+    /// (`within`: a keyframe frame, or a prop's value), with its block and
+    /// what is not emitted for it (`lost`).
+    AtRulePlacement { key: String, within: String, lost: String, block: Value },
+    /// The typed font face named `face`, or a part of it (`part`: a source
+    /// or a descriptor), that is left out, and why.
+    FontFace { face: String, part: Option<String>, reason: String },
     /// A prop that writes only the custom `properties` was given the number
     /// `value`, which no unit or transform establishes: it is written
     /// unitless.
@@ -389,10 +425,12 @@ impl DroppedStyleKey {
             | Self::NonResponsiveObject(key)
             | Self::UnrecognizedKey(key)
             | Self::UnsupportedAtRule { key, .. }
+            | Self::AtRulePlacement { key, .. }
             | Self::UnitlessCustomProperty { prop: key, .. }
             | Self::NonBlockValue { key, .. }
             | Self::AtRuleSelectorNesting { key, .. } => key,
             Self::SharedProperty { winner, .. } => winner,
+            Self::FontFace { face, .. } => face,
         }
     }
 }
@@ -442,15 +480,113 @@ pub enum Condition {
     Media(String),
     Container(String),
     Supports(String),
+    /// `@scope (<start>) [to (<end>)]`; an `&` in the prelude stands for the
+    /// rule's own subject, which emission substitutes.
+    Scope(String),
+    StartingStyle(String),
 }
 
 impl Condition {
     pub fn prelude(&self) -> Option<&str> {
         match self {
             Condition::Breakpoint(_) => None,
-            Condition::Media(q) | Condition::Container(q) | Condition::Supports(q) => Some(q),
+            Condition::Media(q)
+            | Condition::Container(q)
+            | Condition::Supports(q)
+            | Condition::Scope(q)
+            | Condition::StartingStyle(q) => Some(q),
         }
     }
+
+    pub fn is_scope(&self) -> bool {
+        matches!(self, Condition::Scope(_))
+    }
+}
+
+/// A scoped rule's own element, the scope root, as nested CSS reads `&`
+/// inside `@scope` (CSS Cascade 6 §3.5.3): with no specificity of its own.
+pub(crate) const SCOPE_ROOT: &str = ":where(:scope)";
+
+/// The preludes wrapping a rule whose own selector is `subject`, outermost
+/// first; `None` when one cannot be written. Within a scope (CSS Cascade 6
+/// §3.5), only the outermost scope's start says `&` for `subject`: a limit,
+/// and a scope nested in another, say it for the enclosing scope root,
+/// `:scope`.
+pub(crate) fn condition_preludes(
+    conditions: &[Condition],
+    subject: &str,
+    media_query: impl Fn(&str) -> Option<String>,
+) -> Option<Vec<String>> {
+    let mut scoped = false;
+    conditions
+        .iter()
+        .map(|condition| match condition {
+            Condition::Breakpoint(bp) => media_query(bp),
+            Condition::Scope(prelude) => {
+                let (start, limit) = scope_parts(prelude);
+                let start_subject = if scoped { ":scope" } else { subject };
+                scoped = true;
+                let start = crate::selector_subject::substitute_subjects(&start, start_subject);
+                let limit = limit.map(|limit| crate::selector_subject::substitute_subjects(&limit, ":scope"));
+                Some(scope_prelude(&start, limit.as_deref()))
+            }
+            other => other.prelude().map(str::to_string),
+        })
+        .collect()
+}
+
+/// `@scope (<start>) [to (<limit>)]` as (start, limit); a missing start is
+/// `&`, the rule the scope is written in.
+fn scope_parts(prelude: &str) -> (String, Option<String>) {
+    let rest = prelude.strip_prefix("@scope").unwrap_or(prelude).trim_start();
+    let (start, rest) = match parenthesized(rest) {
+        Some((inner, after)) => (inner.trim().to_string(), after.trim_start()),
+        None => ("&".to_string(), rest),
+    };
+    let limit = rest.strip_prefix("to").map(|limit| {
+        let limit = limit.trim_start();
+        parenthesized(limit).map_or_else(|| limit.trim().to_string(), |(inner, _)| inner.trim().to_string())
+    });
+    (start, limit)
+}
+
+fn scope_prelude(start: &str, limit: Option<&str>) -> String {
+    match limit {
+        Some(limit) => format!("@scope ({start}) to ({limit})"),
+        None => format!("@scope ({start})"),
+    }
+}
+
+/// The text inside a leading `(…)`, and what follows it; quotes and nested
+/// parentheses are skipped.
+fn parenthesized(text: &str) -> Option<(&str, &str)> {
+    if !text.starts_with('(') {
+        return None;
+    }
+    let mut depth = 0;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (at, c) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match (quote, c) {
+            (_, '\\') => escaped = true,
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(') => depth += 1,
+            (None, ')') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&text[1..at], &text[at + 1..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -592,9 +728,35 @@ impl NestFrame {
 
     fn with_condition(&self, condition: Condition, order: ConditionEmitOrder, key: &str, slot: usize) -> Self {
         let mut conditions = self.conditions.clone();
+        // A scope's start takes in the selector the scope is written under,
+        // and a start without `&` is relative to it, as nested CSS reads it.
+        // Inside, nesting starts again from the scope root.
+        let scope = condition.is_scope();
+        let condition = match condition {
+            Condition::Scope(prelude) => {
+                let (start, limit) = scope_parts(&prelude);
+                let anchor = self.selector.clone().unwrap_or_else(|| "&".to_string());
+                let anchors = split_top_level_commas(&anchor);
+                let start: Vec<String> = split_top_level_commas(&start)
+                    .iter()
+                    .flat_map(|branch| {
+                        let branch = branch.trim();
+                        anchors.iter().map(move |anchor| {
+                            if crate::selector_subject::has_subject(branch) {
+                                crate::selector_subject::substitute_subjects(branch, anchor.trim())
+                            } else {
+                                format!("{} {branch}", anchor.trim())
+                            }
+                        })
+                    })
+                    .collect();
+                Condition::Scope(scope_prelude(&start.join(", "), limit.as_deref()))
+            }
+            other => other,
+        };
         conditions.push(condition);
         Self {
-            selector: self.selector.clone(),
+            selector: if scope { None } else { self.selector.clone() },
             conditions,
             emit_order: Some(self.emit_order.clone().unwrap_or(order)),
             block: self.block,
@@ -1013,6 +1175,12 @@ fn resolve_entry(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDecla
     let failures_before = failures();
     let declarations = resolve_prop(key, value, ctx);
     if declarations.is_empty() && value.is_object() && failures() == failures_before {
+        if let Some((at_rule, block)) = value.as_object().into_iter().flatten().find(|(entry, _)| only_wraps_rules(entry, ctx)) {
+            let within = format!("the value of '{key}'");
+            let lost = format!("'{key}'");
+            record_dropped_key(ctx, DroppedStyleKey::AtRulePlacement { key: at_rule.clone(), within, lost, block: block.clone() });
+            return declarations;
+        }
         let key = key.to_string();
         record_dropped_key(
             ctx,
@@ -1164,6 +1332,16 @@ fn resolve_flat_styles(obj: &Map<String, Value>, ctx: &ResolveContext, nesting_u
 /// `path`, that emitted nothing, and failed no transform (which reports
 /// itself).
 fn record_nesting(ctx: &ResolveContext, path: &[String], key: &str, value: &Value, emitted_nothing: bool) {
+    if emitted_nothing && value.is_object() && only_wraps_rules(key, ctx) {
+        if let [selector, frame] = path {
+            if selector.starts_with("@keyframes") {
+                let within = format!("the keyframe frame '{frame}' of '{selector}'");
+                let lost = "its block".to_string();
+                record_dropped_key_at(ctx, path, DroppedStyleKey::AtRulePlacement { key: key.to_string(), within, lost, block: value.clone() });
+                return;
+            }
+        }
+    }
     if emitted_nothing && value.is_object() {
         let selector = path.first().cloned().unwrap_or_default();
         record_dropped_key_at(
@@ -1267,8 +1445,8 @@ fn without_priority(value: &Value, custom_only: bool) -> Cow<'_, Value> {
     bare.map_or(value, Cow::Owned)
 }
 
-/// A prop's declarations under `ctx`.
-fn resolve_prop(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDeclaration> {
+/// A prop's declarations under `ctx`; it reports only through `ctx`'s sinks.
+pub(crate) fn resolve_prop(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDeclaration> {
     let mut declarations = resolve_single_prop(
         key,
         value,
@@ -2268,6 +2446,17 @@ pub fn resolve_global_block(
         // only, as before; a block nested under one is reported.
         if selector.starts_with('@') {
             let path = std::slice::from_ref(selector);
+            // Declarations straight under `@starting-style` style nothing.
+            if matches!(condition_from_raw_key(selector), Some(Condition::StartingStyle(_))) {
+                let dropped = DroppedStyleKey::AtRulePlacement {
+                    key: selector.clone(),
+                    within: "a global block's top level".to_string(),
+                    lost: "its block".to_string(),
+                    block: style_obj.clone(),
+                };
+                record_dropped_key_at(ctx, &[], dropped);
+                continue;
+            }
             let decls = if selector.starts_with("@font-face") {
                 resolve_descriptors(style_map, ctx, path)
             } else {
@@ -2384,21 +2573,23 @@ fn push_global_rules(
             }
         }
     }
+    // A scope's `&` is the global's selector, a list kept whole.
+    let scope_subject =
+        if split_top_level_commas(selector).len() > 1 { format!(":is({branches})") } else { branches.clone() };
     for group in resolved.conditioned_emission_order() {
-        let preludes: Option<Vec<String>> = group
-            .conditions
-            .iter()
-            .map(|condition| match condition {
-                Condition::Breakpoint(bp) => breakpoints.media_query(bp),
-                other => other.prelude().map(str::to_string),
-            })
-            .collect();
+        let preludes = condition_preludes(&group.conditions, &scope_subject, |bp| breakpoints.media_query(bp));
         let Some(preludes) = preludes.filter(|p| !p.is_empty()) else {
             continue;
         };
+        // Within a scope the rule is the scope root.
+        let rule = if group.conditions.iter().any(Condition::is_scope) {
+            group.selector.as_deref().map_or_else(|| SCOPE_ROOT.to_string(), |nested| compose_selectors(SCOPE_ROOT, nested))
+        } else {
+            subject(&group.selector)
+        };
         for (part, origin) in crate::css::supplied_parts(&group.declarations, &group.suppliers) {
             if !part.is_empty() {
-                placed.push((global_conditioned_rule(&preludes, &subject(&group.selector), &part), origin));
+                placed.push((global_conditioned_rule(&preludes, &rule, &part), origin));
             }
         }
     }
@@ -2426,6 +2617,39 @@ pub fn resolve_unlayered_global_blocks(blocks: &Value, ctx: &ResolveContext) -> 
 /// declaring binding once the block has resolved.
 pub type AfterGlobalBlock<'a> = dyn FnMut(&str, Option<&str>, Option<&str>) + 'a;
 
+/// A registered global block: its styles, font faces, layering, and the
+/// module and declaration that declare it. A block written as bare styles
+/// has none of the rest.
+pub(crate) struct GlobalBlock<'a> {
+    pub styles: &'a Value,
+    pub faces: Option<&'a Value>,
+    pub unlayered: bool,
+    pub source: Option<&'a str>,
+    pub declared_by: Option<&'a str>,
+}
+
+impl<'a> GlobalBlock<'a> {
+    pub fn of(block: &'a Value) -> Self {
+        match block.as_object() {
+            Some(obj)
+                if obj.get("styles").map(|s| s.is_object()).unwrap_or(false)
+                    && obj.keys().all(|k| {
+                        k == "styles" || k == "fontFaces" || k == "unlayered" || k == "source" || k == "sourceExport"
+                    }) =>
+            {
+                GlobalBlock {
+                    styles: obj.get("styles").unwrap(),
+                    faces: obj.get("fontFaces"),
+                    unlayered: obj.get("unlayered") == Some(&Value::Bool(true)),
+                    source: obj.get("source").and_then(Value::as_str),
+                    declared_by: obj.get("sourceExport").and_then(Value::as_str),
+                }
+            }
+            _ => GlobalBlock { styles: block, faces: None, unlayered: false, source: None, declared_by: None },
+        }
+    }
+}
+
 /// Resolves the layered (`unlayered: false`) or unlayered blocks, calling
 /// `after_block` after each, so what its resolution reported can be
 /// attributed to it.
@@ -2445,23 +2669,7 @@ pub fn resolve_global_blocks(
         // `sourceExport` names the declaration in `source` that declares the
         // block; the registration name is no binding, so without it the block
         // has no declaration.
-        let (styles, faces, block_unlayered, source, declared_by) = match block.as_object() {
-            Some(obj)
-                if obj.get("styles").map(|s| s.is_object()).unwrap_or(false)
-                    && obj.keys().all(|k| {
-                        k == "styles" || k == "fontFaces" || k == "unlayered" || k == "source" || k == "sourceExport"
-                    }) =>
-            {
-                (
-                    obj.get("styles").unwrap(),
-                    obj.get("fontFaces"),
-                    obj.get("unlayered") == Some(&Value::Bool(true)),
-                    obj.get("source").and_then(Value::as_str),
-                    obj.get("sourceExport").and_then(Value::as_str),
-                )
-            }
-            _ => (block, None, false, None, None),
-        };
+        let GlobalBlock { styles, faces, unlayered: block_unlayered, source, declared_by } = GlobalBlock::of(block);
         if block_unlayered != unlayered {
             continue;
         }
@@ -2481,69 +2689,128 @@ pub fn resolve_global_blocks(
     parts.join("\n\n")
 }
 
+/// The typed font-face descriptors, in the order they print, as (key, CSS
+/// descriptor).
+const FONT_FACE_DESCRIPTORS: [(&str, &str); 11] = [
+    ("style", "font-style"),
+    ("weight", "font-weight"),
+    ("stretch", "font-stretch"),
+    ("display", "font-display"),
+    ("unicodeRange", "unicode-range"),
+    ("sizeAdjust", "size-adjust"),
+    ("ascentOverride", "ascent-override"),
+    ("descentOverride", "descent-override"),
+    ("lineGapOverride", "line-gap-override"),
+    ("fontFeatureSettings", "font-feature-settings"),
+    ("fontVariationSettings", "font-variation-settings"),
+];
+
+/// A global block's typed font faces, each a `@font-face` rule: the family,
+/// the sources in order, then the descriptors. A face with no family or no
+/// source, a source that is neither a `local` name nor a `url`, and a
+/// descriptor that is not a string are reported and left out.
 fn render_font_faces(faces: &Value, ctx: &ResolveContext) -> String {
     let list = match faces.as_array() {
         Some(l) => l,
         None => return String::new(),
     };
     let mut blocks: Vec<String> = Vec::new();
-    for face in list {
-        let obj = match face.as_object() {
-            Some(o) => o,
-            None => continue,
+    for (index, face) in list.iter().enumerate() {
+        let obj = face.as_object();
+        let family = obj.and_then(|obj| obj.get("family")).and_then(Value::as_str);
+        let name = family.map_or_else(|| format!("#{}", index + 1), |family| format!("'{family}'"));
+        let drop = |part: Option<String>, reason: String| {
+            record_dropped_key_at(ctx, &[], DroppedStyleKey::FontFace { face: name.clone(), part, reason });
         };
-        let family = match obj.get("family").and_then(|v| v.as_str()) {
-            Some(f) => f,
-            None => continue,
+        let Some(obj) = obj else {
+            drop(None, format!("it is {face}, not an object"));
+            continue;
         };
-        let srcs = match obj.get("src").and_then(|v| v.as_array()) {
-            Some(s) if !s.is_empty() => s,
-            _ => continue,
+        let sources: Vec<String> = obj
+            .get("src")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter_map(|(at, entry)| {
+                font_face_source(entry).map_err(|reason| drop(Some(format!("source {}", at + 1)), reason)).ok()
+            })
+            .collect();
+        let Some(family) = family else {
+            drop(None, "it has no `family`".into());
+            continue;
         };
-        let family = resolve_token_aliases(
-            family,
-            ctx.theme,
-            ctx.variable_map,
-            ctx.contextual_vars,
-        );
-        let mut src_parts: Vec<String> = Vec::new();
-        for entry in srcs {
-            let entry = match entry.as_object() {
-                Some(e) => e,
-                None => continue,
-            };
-            let url = match entry.get("url").and_then(|v| v.as_str()) {
-                Some(u) => u,
-                None => continue,
-            };
-            match entry.get("format").and_then(|v| v.as_str()) {
-                Some(fmt) => {
-                    src_parts.push(format!("url('{url}') format('{fmt}')"))
-                }
-                None => src_parts.push(format!("url('{url}')")),
-            }
-        }
-        if src_parts.is_empty() {
+        if sources.is_empty() {
+            drop(None, "it has no source in `src`".into());
             continue;
         }
-        let mut decls = vec![
-            format!("font-family: {family};"),
-            format!("src: {};", src_parts.join(", ")),
-        ];
-        for (key, css_name) in [
-            ("style", "font-style"),
-            ("weight", "font-weight"),
-            ("stretch", "font-stretch"),
-            ("display", "font-display"),
-            ("unicodeRange", "unicode-range"),
-        ] {
-            if let Some(v) = obj.get(key).and_then(|v| v.as_str()) {
-                decls.push(format!("{css_name}: {v};"));
+        let family = resolve_token_aliases(family, ctx.theme, ctx.variable_map, ctx.contextual_vars);
+        let mut decls = vec![format!("font-family: {family};"), format!("src: {};", sources.join(", "))];
+        for (key, descriptor) in FONT_FACE_DESCRIPTORS {
+            match obj.get(key) {
+                Some(Value::String(value)) => decls.push(format!("{descriptor}: {value};")),
+                Some(other) => drop(Some(format!("`{key}`")), format!("its value {other} is not a string")),
+                None => {}
             }
         }
         blocks.push(format!("@font-face {{ {} }}", decls.join(" ")));
     }
     blocks.join("\n")
+}
+
+/// One `src` entry: `local(…)` for an installed font, else `url('…')` with
+/// its `format('…')` and `tech(…)` hints; why not, for an entry naming
+/// neither or both, or a `tech` that is not a list of identifiers.
+fn font_face_source(entry: &Value) -> Result<String, String> {
+    let url = match (entry.get("local").and_then(Value::as_str), entry.get("url").and_then(Value::as_str)) {
+        (Some(name), None) => return Ok(format!("local({})", font_name(name))),
+        (None, Some(url)) => url,
+        (Some(_), Some(_)) => return Err(format!("{entry} names both a `local` font and a `url`")),
+        (None, None) => return Err(format!("{entry} names neither a `local` font nor a `url`")),
+    };
+    let mut source = vec![format!("url({})", css_string(url))];
+    if let Some(format) = entry.get("format").and_then(Value::as_str) {
+        source.push(format!("format({})", css_string(format)));
+    }
+    if let Some(tech) = entry.get("tech").and_then(Value::as_str) {
+        let keywords: Vec<&str> = tech.split(',').map(str::trim).collect();
+        if !keywords.iter().all(|keyword| crate::css_tokens::is_plain_identifier(keyword)) {
+            return Err(format!("its `tech` {tech:?} is not a list of identifiers"));
+        }
+        source.push(format!("tech({})", keywords.join(", ")));
+    }
+    Ok(source.join(" "))
+}
+
+/// A font's full name as `local()` takes it: bare when every word is a
+/// plain identifier other than a CSS-wide keyword (`Arial`, `Helvetica
+/// Neue`), else quoted.
+fn font_name(name: &str) -> String {
+    let bare = |word: &str| {
+        crate::css_tokens::is_plain_identifier(word)
+            && !matches!(word.to_ascii_lowercase().as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer" | "default")
+    };
+    if !name.is_empty() && name.split(' ').all(bare) { name.to_string() } else { css_string(name) }
+}
+
+/// `text` as a single-quoted CSS string: a quote and a backslash are
+/// escaped, and every control character as its code point.
+fn css_string(text: &str) -> String {
+    use std::fmt::Write;
+    let mut quoted = String::with_capacity(text.len() + 2);
+    quoted.push('\'');
+    for c in text.chars() {
+        match c {
+            '\\' | '\'' => {
+                quoted.push('\\');
+                quoted.push(c);
+            }
+            c if c.is_ascii_control() => write!(quoted, "\\{:x} ", c as u32).unwrap(),
+            _ => quoted.push(c),
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 /// A registered keyframes block's rule. Each frame holds declarations only,
