@@ -239,29 +239,56 @@ fn replacement_import_needs(
 
 /// A file entry's analysis identity: its path with `\\` read as `/`, and
 /// empty and `.` segments dropped and `..` taken back lexically, so every
-/// spelling of one path sorts and coalesces as one. Case and Unicode stay
-/// as written, no symlink is followed, and a `?query` suffix stays part of
-/// the identity.
+/// spelling of one path sorts as one. A root (`/`, a drive `C:` or `C:/`,
+/// a share `//host/share/`) is kept whole and never climbed past; a `..`
+/// that would climb past an absolute root is dropped, as Node's
+/// `path.win32.normalize` does. Case and Unicode stay as written, no
+/// symlink is followed, and a `?query` suffix stays part of the identity.
 fn canonical_analysis_id(path: &str) -> String {
     let (path, query) = path.split_at(path.find('?').unwrap_or(path.len()));
     let path = path.replace('\\', "/");
-    let rooted = path.starts_with('/');
+    let (root, rest, absolute) = path_root(&path);
     let mut segments: Vec<&str> = Vec::new();
-    for segment in path.split('/') {
+    for segment in rest.split('/') {
         match segment {
             "" | "." => {}
             ".." => match segments.last() {
                 Some(&last) if last != ".." => {
                     segments.pop();
                 }
-                // Above the root there is nothing to take back.
-                _ if rooted => {}
+                _ if absolute => {}
                 _ => segments.push(".."),
             },
             segment => segments.push(segment),
         }
     }
-    format!("{}{}{query}", if rooted { "/" } else { "" }, segments.join("/"))
+    format!("{root}{}{query}", segments.join("/"))
+}
+
+/// A `/`-separated path's root, the rest after it, and whether the root is
+/// absolute: a drive with its top (`C:/`) or without (`C:`, relative to
+/// that drive's current directory), a share (`//host/share/`), or `/`.
+fn path_root(path: &str) -> (String, &str, bool) {
+    let bytes = path.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        let (drive, rest) = path.split_at(2);
+        return match rest.strip_prefix('/') {
+            Some(rest) => (format!("{drive}/"), rest, true),
+            None => (drive.to_string(), rest, false),
+        };
+    }
+    if let Some(share) = path.strip_prefix("//") {
+        let mut parts = share.splitn(3, '/');
+        if let (Some(host), Some(name)) = (parts.next(), parts.next()) {
+            if !host.is_empty() && !name.is_empty() {
+                return (format!("//{host}/{name}/"), parts.next().unwrap_or(""), true);
+            }
+        }
+    }
+    match path.strip_prefix('/') {
+        Some(rest) => ("/".to_string(), rest, true),
+        None => (String::new(), path, false),
+    }
 }
 
 #[napi]
@@ -2413,8 +2440,9 @@ export const App = () => <Box tone="red" />;
         assert!(code.contains("export const shared = ds.styles"), "{code}");
     }
 
-    /// Every spelling of one path is one analysis identity; case, a query and
-    /// a parent above the start stay distinct.
+    /// Every spelling of one path is one analysis identity; case, a query, a
+    /// parent above a relative start and each kind of root stay distinct,
+    /// and no `..` climbs past a root (Node's `path.win32.normalize` cases).
     #[test]
     fn spellings_of_one_path_share_an_analysis_id() {
         for (path, id) in [
@@ -2426,9 +2454,21 @@ export const App = () => <Box tone="red" />;
             ("../../packages/ui/x.tsx", "../../packages/ui/x.tsx"),
             ("/root/../x.tsx", "/x.tsx"),
             ("/../x.tsx", "/x.tsx"),
+            ("\\..\\x.tsx", "/x.tsx"),
             ("A.tsx", "A.tsx"),
             ("a.svelte?type=script&lang=../x", "a.svelte?type=script&lang=../x"),
             ("./a.svelte?raw", "a.svelte?raw"),
+            ("C:/../a.tsx", "C:/a.tsx"),
+            ("C:\\..\\a.tsx", "C:/a.tsx"),
+            ("C:\\x\\..\\..\\y.tsx", "C:/y.tsx"),
+            ("C:..\\a.tsx", "C:../a.tsx"),
+            ("C:x\\..\\..\\y.tsx", "C:../y.tsx"),
+            ("C:", "C:"),
+            ("C:/", "C:/"),
+            ("//host/share/../../a.tsx", "//host/share/a.tsx"),
+            ("\\\\host\\share\\..\\..\\a.tsx", "//host/share/a.tsx"),
+            ("//host/share/a.tsx", "//host/share/a.tsx"),
+            ("/host/share/a.tsx", "/host/share/a.tsx"),
         ] {
             assert_eq!(canonical_analysis_id(path), id, "{path}");
         }
