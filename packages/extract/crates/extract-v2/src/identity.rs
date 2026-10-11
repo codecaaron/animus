@@ -259,6 +259,15 @@ impl BindingTable {
         &self.bindings[local.0 as usize]
     }
 
+    /// The binding whose value `local` holds: for `export default X`'s
+    /// cell, X, whose object the cell shares; otherwise `local` itself.
+    pub fn held(&self, local: LocalId) -> LocalId {
+        match self.default_export {
+            Some(DefaultExport::Snapshot { cell, of: Some(of) }) if cell == local => of,
+            _ => local,
+        }
+    }
+
     /// The module-scope binding `name` declares, if any.
     pub fn module_binding(&self, name: &str) -> Option<LocalId> {
         self.module_names.get(name).copied()
