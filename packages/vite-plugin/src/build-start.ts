@@ -24,7 +24,9 @@ import {
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
-import { basename, relative, resolve } from 'path';
+import { basename, dirname, relative, resolve } from 'path';
+
+import { sweepAbandonedCopyDirs } from './asset-copy-dirs';
 
 import type { DiscoveredSources, PluginContext } from './context';
 import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
@@ -99,6 +101,9 @@ export async function runBuildStart(
   // Vite's CSS pipeline resolves `__VITE_ASSET__` markers to hashed names
   // before the stylesheet is hashed, so the CSS hash reflects the final URL.
   const assetSpecifiers = ctx.sheetAssetSpecifiers();
+  ctx.assetSourceBySpecifier.clear();
+  if (ctx.assetCopyDir !== null)
+    sweepAbandonedCopyDirs(dirname(ctx.assetCopyDir));
   for (const specifier of assetSpecifiers) {
     const resolvedPath = await resolveSpecifier(specifier);
     if (!resolvedPath) {
@@ -126,10 +131,20 @@ export async function runBuildStart(
         );
       }
     } else {
-      ctx.assetUrlBySpecifier.set(specifier, ctx.devFsUrl(resolvedPath));
+      try {
+        ctx.assetUrlBySpecifier.set(
+          specifier,
+          ctx.devAssetUrl(specifier, resolvedPath)
+        );
+      } catch (err) {
+        ctx.assetFallback(
+          specifier,
+          `[animus-extract] failed to copy asset() specifier ${specifier}: ${String(err)}`,
+          err
+        );
+      }
     }
   }
-  ctx.substituteSheets();
   // From here on, runAnalysis owns late-appearing specifiers (dev resets).
   ctx.assetPassComplete = true;
 

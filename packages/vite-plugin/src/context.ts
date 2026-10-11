@@ -28,6 +28,7 @@ import {
   snapshotFilePlans,
   staleDistIncludesMessage,
   substituteSheetAssets,
+  writeAssetCopy,
   toWatchKeys,
   unresolvableIncludesMessage,
 } from '@animus-ui/extract/pipeline';
@@ -39,8 +40,8 @@ import {
   releaseEngineHandle,
   sessionKey,
 } from '@animus-ui/extract/session';
-import { statSync } from 'fs';
-import { isAbsolute, relative, resolve } from 'path';
+import { rmSync, statSync } from 'fs';
+import { isAbsolute, join, relative, resolve } from 'path';
 
 import {
   RESOLVED_COMPONENTS_ID,
@@ -225,8 +226,40 @@ export class PluginContext {
   storedManifest: ProjectManifest | null = null;
   storedManifestJson = '';
 
-  globalCss = '';
-  resolvedComponentCss = '';
+  /** The analysis sheets with their asset() placeholders. They are read
+   *  through `globalCss` and `resolvedComponentCss`, which substitute the
+   *  current asset URLs, so an edited asset changes its URL without
+   *  re-analysis. */
+  private analysisGlobalCss = '';
+  private analysisComponentCss = '';
+
+  get globalCss(): string {
+    return this.substitutedSheets().globalCss;
+  }
+
+  set globalCss(css: string) {
+    this.analysisGlobalCss = css;
+  }
+
+  get resolvedComponentCss(): string {
+    return this.substitutedSheets().componentCss;
+  }
+
+  set resolvedComponentCss(css: string) {
+    this.analysisComponentCss = css;
+  }
+
+  private substitutedSheets(): ReturnType<typeof substituteSheetAssets> {
+    return substituteSheetAssets(
+      {
+        ...NO_SHEETS,
+        globalCss: this.analysisGlobalCss,
+        componentCss: this.analysisComponentCss,
+      },
+      this.assetUrlBySpecifier
+    );
+  }
+
   storedSheets: ManifestSheets | null = null;
 
   layerDeclaration = '';
@@ -317,6 +350,20 @@ export class PluginContext {
   // specifier → dev /@fs URL, or the `__VITE_ASSET__<referenceId>__` marker
   // Vite rewrites to the hashed file name before hashing the stylesheet.
   assetUrlBySpecifier = new Map<string, string>();
+
+  /** Where dev asset() copies live, immutable and content-named; null in a
+   *  build, or when the dev server does not serve the directory, which
+   *  serves the live files instead. Set in `configResolved`. */
+  assetCopyDir: string | null = null;
+  /** specifier → the source file its dev copy was made from. */
+  assetSourceBySpecifier = new Map<string, string>();
+  /** source → its copies, oldest first: the current and the previous. */
+  private assetCopyHistory = new Map<string, string[]>();
+  /** Specifiers whose copy the dev server does not serve, warned once. */
+  private unservedAssetCopies = new Set<string>();
+  /** Whether the dev server serves `path`, by Vite's `server.fs` rule;
+   *  set in `configResolved`. */
+  servesFile: (path: string) => boolean = () => true;
 
   assetResolutionFailures = new Set<string>();
 
@@ -779,6 +826,77 @@ export class PluginContext {
     return `${base}/@fs${absPath}`;
   }
 
+  /** A dev asset() URL: an immutable content-named copy of `absPath`, so an
+   *  edit gets a new URL, or the live file where copies are not served. */
+  devAssetUrl(specifier: string, absPath: string): string {
+    if (this.assetCopyDir === null) return this.devFsUrl(absPath);
+    const { fileName } = writeAssetCopy(absPath, this.assetCopyDir);
+    const copyPath = join(this.assetCopyDir, fileName);
+    if (!this.servesFile(copyPath)) {
+      if (!this.unservedAssetCopies.has(specifier)) {
+        this.unservedAssetCopies.add(specifier);
+        this.warn(
+          `[animus-extract] the copy of asset() ${specifier} is not served under server.fs; serving the live file instead, so an edit keeps its URL`
+        );
+      }
+      return this.devFsUrl(absPath);
+    }
+    // Watched once its copy exists, wherever it lives: an edit makes the
+    // next copy.
+    if (this.assetSourceBySpecifier.get(specifier) !== absPath) {
+      this.devServer?.watcher?.add(absPath);
+    }
+    this.assetSourceBySpecifier.set(specifier, absPath);
+    this.retainAssetCopy(absPath, fileName);
+    return this.devFsUrl(copyPath);
+  }
+
+  /** Keeps each source's current copy and the one before it; an asset
+   *  edit reloads the page, so an older URL is never fetched again. A copy
+   *  another source still keeps is never removed. */
+  private retainAssetCopy(source: string, fileName: string): void {
+    const history = this.assetCopyHistory.get(source) ?? [];
+    if (history[history.length - 1] !== fileName) history.push(fileName);
+    this.assetCopyHistory.set(source, history);
+    while (history.length > 2) {
+      const oldest = history.shift()!;
+      const kept = [...this.assetCopyHistory.values()].some((copies) =>
+        copies.includes(oldest)
+      );
+      if (!kept && this.assetCopyDir !== null) {
+        rmSync(join(this.assetCopyDir, oldest), { force: true });
+      }
+    }
+  }
+
+  /** Whether `absFile` is the source of a dev asset copy. */
+  isAssetSource(absFile: string): boolean {
+    const keys = new Set(toWatchKeys(absFile));
+    return [...this.assetSourceBySpecifier.values()].some((source) =>
+      toWatchKeys(source).some((key) => keys.has(key))
+    );
+  }
+
+  /** Copies an edited asset under its new content name and redelivers the
+   *  stylesheet that names it. */
+  refreshAssetCopies(absFile: string): void {
+    const keys = new Set(toWatchKeys(absFile));
+    for (const [specifier, source] of this.assetSourceBySpecifier) {
+      if (!toWatchKeys(source).some((key) => keys.has(key))) continue;
+      try {
+        this.assetUrlBySpecifier.set(
+          specifier,
+          this.devAssetUrl(specifier, source)
+        );
+      } catch (err) {
+        this.warn(
+          `[animus-extract] could not copy edited asset ${source}: ${String(err)}`
+        );
+      }
+    }
+    this.invalidateSystemReloadModules(true);
+  }
+
   assetFallback(specifier: string, message: string, cause?: unknown): void {
     if (this.options.strict) this.strictFailure(message, cause);
     else this.warn(message);
@@ -790,8 +908,8 @@ export class PluginContext {
   sheetAssetSpecifiers(): string[] {
     return findSheetAssetSpecifiers({
       variableCss: this.system.variableCss,
-      globalCss: this.globalCss,
-      componentCss: this.resolvedComponentCss,
+      globalCss: this.analysisGlobalCss,
+      componentCss: this.analysisComponentCss,
     });
   }
 
@@ -804,22 +922,6 @@ export class PluginContext {
       { ...NO_SHEETS, variableCss: this.system.variableCss },
       this.assetUrlBySpecifier
     ).variableCss;
-  }
-
-  /** Substitutes the analysis sheets in place, through the same step as the
-   *  session; the theme's variable CSS is substituted on read
-   *  (`variableCss`). */
-  substituteSheets(): void {
-    const substituted = substituteSheetAssets(
-      {
-        ...NO_SHEETS,
-        globalCss: this.globalCss,
-        componentCss: this.resolvedComponentCss,
-      },
-      this.assetUrlBySpecifier
-    );
-    this.globalCss = substituted.globalCss;
-    this.resolvedComponentCss = substituted.componentCss;
   }
 
   /** Resolves asset specifiers a system reload introduced. Node-side only —
@@ -837,7 +939,10 @@ export class PluginContext {
           this.pathAliasesJson
         );
         if (resolved) {
-          this.assetUrlBySpecifier.set(specifier, this.devFsUrl(resolved));
+          this.assetUrlBySpecifier.set(
+            specifier,
+            this.devAssetUrl(specifier, resolved)
+          );
         } else {
           this.assetFallback(
             specifier,
@@ -846,7 +951,6 @@ export class PluginContext {
         }
       }
     }
-    this.substituteSheets();
   }
 
   private resetCoalescer: ResetCoalescer | null = null;
@@ -887,7 +991,7 @@ export class PluginContext {
     );
   }
 
-  private invalidateSystemReloadModules(reloadClient: boolean): void {
+  invalidateSystemReloadModules(reloadClient: boolean): void {
     const server = this.devServer;
     if (!server) return;
     for (const moduleId of [
