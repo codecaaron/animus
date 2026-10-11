@@ -11,7 +11,12 @@ import {
 
 import { globToRegExp } from './core-options';
 import { discoverFiles } from './discover-files';
-import { policyCandidates } from './extension-policy';
+import {
+  caseMismatchReason,
+  policyCandidates,
+  probeOnDisk,
+  seeOnDisk,
+} from './extension-policy';
 import { parseInternalWire } from './internal-wire';
 import { readKitDescriptor } from './kit-descriptor';
 import {
@@ -29,6 +34,7 @@ import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 
 import type { EngineApi } from './engine-adapter';
+import type { ProbedFile } from './extension-policy';
 import type { KitDescriptorRecord } from './kit-descriptor';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type {
@@ -85,23 +91,17 @@ export interface ExternalPackageOutcome {
   reason?: string;
 }
 
-const isFile = (path: string): boolean => {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-};
-
-export function resolveAbsolutePathSpecifier(
+/** The file an absolute path specifier names, through the extension
+ *  policy, spelled exactly below the directory it shares with `within`
+ *  when given; a file differing only in case is a mismatch. */
+export function probeAbsolutePathSpecifier(
   absSpecifier: string,
-  extensionsSet?: ReadonlySet<string>
-): string | null {
-  return (
-    policyCandidates(absSpecifier, {
-      sources: extensionsSet,
-      index: join,
-    }).find(isFile) ?? null
+  extensionsSet?: ReadonlySet<string>,
+  within?: string
+): ProbedFile {
+  return probeOnDisk(
+    policyCandidates(absSpecifier, { sources: extensionsSet, index: join }),
+    within
   );
 }
 
@@ -118,15 +118,17 @@ function sourceEntryForSpecifier(
   srcDir: string,
   extensionsSet: ReadonlySet<string>
 ): string | null {
+  // A guess, not a resolution: a file differing only in case is no guess.
   if (isAbsolute(specifier)) {
-    const resolved = resolveAbsolutePathSpecifier(specifier, extensionsSet);
-    if (!resolved) return null;
-    return isPathWithinRoot(srcDir, resolved) ? resolved : null;
+    const probed = probeAbsolutePathSpecifier(specifier, extensionsSet);
+    if (probed.kind !== 'found') return null;
+    return isPathWithinRoot(srcDir, probed.path) ? probed.path : null;
   }
   const packageName = bareSpecifierPackageName(specifier);
   const subpath = specifier.slice(packageName.length + 1);
   const sourceStem = join(srcDir, subpath || 'index');
-  return resolveAbsolutePathSpecifier(sourceStem, extensionsSet);
+  const probed = probeAbsolutePathSpecifier(sourceStem, extensionsSet);
+  return probed.kind === 'found' ? probed.path : null;
 }
 
 /** The package's parsed `package.json`, or null when it cannot be read. */
@@ -166,8 +168,9 @@ export interface KitSourceCondition {
   /** Each exact entry that declares the condition: its subpath and its
    *  absolute source file. */
   entries: Array<[subpath: string, target: string]>;
-  /** Entries whose target is missing or outside the package. */
-  invalid: Array<[subpath: string, target: string]>;
+  /** Entries whose target is missing, differs from its file only in case,
+   *  or is outside the package, and which of those. */
+  invalid: Array<[subpath: string, target: string, why: string]>;
   /** The deepest directory holding every source entry: what discovery walks.
    *  Null when no entry is valid. */
   root: string | null;
@@ -190,10 +193,19 @@ export function readKitSourceCondition(
     const target = value[KIT_SOURCE_CONDITION];
     if (!isJsonString(target)) continue;
     const file = resolve(pkgRoot, target);
-    if (isPathWithinRoot(pkgRoot, file) && isFile(file)) {
+    const seen = isPathWithinRoot(pkgRoot, file)
+      ? seeOnDisk(file, pkgRoot)
+      : null;
+    if (seen?.kind === 'file') {
       condition.entries.push([subpath, file]);
     } else {
-      condition.invalid.push([subpath, target]);
+      condition.invalid.push([
+        subpath,
+        target,
+        seen?.kind === 'case-only'
+          ? `differs from ${seen.actual} only in case (a case-sensitive filesystem does not load it)`
+          : 'is missing or outside the package',
+      ]);
     }
   }
   if (condition.entries.length === 0 && condition.invalid.length === 0)
@@ -231,7 +243,7 @@ function sourceExportsCondition(pkgRoot: string): KitSourceCondition | null {
       file === null ||
       !TS_SOURCE.test(file) ||
       !isPathWithinRoot(pkgRoot, file) ||
-      !isFile(file)
+      seeOnDisk(file, pkgRoot).kind !== 'file'
     )
       return null;
     entries.push([subpath, file]);
@@ -612,8 +624,17 @@ export async function collectExternalPackageSources(opts: {
     }
     // Node's resolver refuses extensionless TS paths, so an absolute specifier
     // it declines is probed on the filesystem before giving up.
+    let caseMismatch: string | undefined;
     if (!absEntry && isAbsolute(specifier)) {
-      absEntry = resolveAbsolutePathSpecifier(specifier, extensionsSet);
+      const probed = probeAbsolutePathSpecifier(specifier, extensionsSet);
+      if (probed.kind === 'found') absEntry = probed.path;
+      if (probed.kind === 'case-mismatch') {
+        caseMismatch = caseMismatchReason(
+          `'${specifier}'`,
+          probed,
+          'spell the include as the file is spelled'
+        );
+      }
     }
     const packageName = isAbsolute(specifier)
       ? null
@@ -645,7 +666,7 @@ export async function collectExternalPackageSources(opts: {
         outcome: 'unresolvable',
         fileCount: 0,
       };
-      const reason = unresolvedReason?.(specifier);
+      const reason = caseMismatch ?? unresolvedReason?.(specifier);
       if (reason !== undefined) record.reason = reason;
       outcomes.push(record);
       continue;
@@ -937,11 +958,11 @@ function sourceConditionDiagnostics(
       },
     ];
   }
-  return condition.invalid.map(([subpath, target]) => ({
+  return condition.invalid.map(([subpath, target, why]) => ({
     file: packageName,
     component: 'kit',
     kind: 'warn',
-    message: `exports["${subpath}"].${KIT_SOURCE_CONDITION} names ${target}, which is missing or outside the package, so that entry is read from its runtime target instead of source`,
+    message: `exports["${subpath}"].${KIT_SOURCE_CONDITION} names ${target}, which ${why}, so that entry is read from its runtime target instead of source`,
     code: INVALID_KIT_SOURCE_CONDITION,
     severity: severityFor(INVALID_KIT_SOURCE_CONDITION),
   }));
@@ -1126,20 +1147,36 @@ interface RootFollowing {
   report: ((diagnostic: ManifestDiagnostic) => void) | undefined;
 }
 
-/** The file a specifier names from `importer`: a relative one by the
- *  ingestion's probe order, a bare one by the host's package resolution. */
+/** The file a specifier names from `importer`, or why it names none: a
+ *  relative one by the ingestion's probe order, spelled exactly, a bare one
+ *  by the host's package resolution. */
 async function resolveModuleFile(
   importer: string,
   specifier: string,
   resolvePackage: PackageResolver | undefined
-): Promise<string | null> {
+): Promise<{ file: string } | { why: string }> {
+  const unresolved = { why: `'${specifier}' could not be resolved` };
   if (specifier.startsWith('.')) {
-    return relativeSourceCandidates(importer, specifier).find(isFile) ?? null;
+    const probed = probeOnDisk(
+      relativeSourceCandidates(importer, specifier),
+      dirname(importer)
+    );
+    if (probed.kind === 'found') return { file: probed.path };
+    return probed.kind === 'case-mismatch'
+      ? {
+          why: caseMismatchReason(
+            `'${specifier}'`,
+            probed,
+            'spell the import as the file is spelled'
+          ),
+        }
+      : unresolved;
   }
   try {
-    return (await resolvePackage?.(specifier)) ?? null;
+    const file = await resolvePackage?.(specifier);
+    return file ? { file } : unresolved;
   } catch {
-    return null;
+    return unresolved;
   }
 }
 
@@ -1171,14 +1208,13 @@ async function exportIdentity(
       ? { kind: 'animus' }
       : { kind: 'other', what: `'${name}' of ${specifier}` };
   }
-  const file = await resolveModuleFile(
+  const resolved = await resolveModuleFile(
     importer,
     specifier,
     following.resolvePackage
   );
-  if (file === null) {
-    return { kind: 'unknown', why: `'${specifier}' could not be resolved` };
-  }
+  if ('why' in resolved) return { kind: 'unknown', why: resolved.why };
+  const { file } = resolved;
   const key = `${file}#${name}`;
   if (seen.has(key)) {
     return { kind: 'unknown', why: `'${specifier}' re-exports it in a cycle` };

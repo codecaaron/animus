@@ -153,13 +153,23 @@ fn select_package_entry(
 
     if let Some(exports) = pkg_json.get("exports") {
         let export_key = if subpath.is_empty() { "." } else { subpath };
-        // A missing source target, which discovery reports, falls back to
-        // the runtime entry.
+        // A source target that is missing or differs from its file only in
+        // case, which discovery reports, falls back to the runtime entry; a
+        // runtime target differing only in case names no file.
         for source in [true, false] {
             if let Some(resolved) = resolve_exports_entry(exports, export_key, source, conditions) {
-                let abs_path = pkg_dir.join(&resolved);
-                if abs_path.is_file() {
-                    return Ok((abs_path.to_string_lossy().to_string(), pkg_json_path));
+                let abs_path = pkg_dir.join(&resolved).to_string_lossy().to_string();
+                match resolution::see_within(pkg_dir, &abs_path) {
+                    resolution::Seen::File => return Ok((abs_path, pkg_json_path)),
+                    resolution::Seen::CaseOnly(actual) if !source => {
+                        return Err(resolution::case_mismatch_reason(
+                            &format!("'{specifier}', through the exports of {pkg_json_path:?},"),
+                            &abs_path,
+                            &actual,
+                            "spell the export target as the file is spelled",
+                        ));
+                    }
+                    resolution::Seen::CaseOnly(_) | resolution::Seen::Missing => {}
                 }
             }
         }
@@ -175,28 +185,34 @@ fn select_package_entry(
     // a directory's index through the extension policy, then an `index` at
     // its root, as Node's legacy resolution reads them; a subpath names a
     // file or directory in the package.
+    // The first entry the filesystem answers, even under another case, ends
+    // the selection.
     let probe = |entry: &str| {
         resolution::extension_policy()
-            .probe(&pkg_dir.join(entry).to_string_lossy(), |candidate| match Path::new(candidate).is_file() {
-                true => resolution::Seen::File,
-                false => resolution::Seen::Missing,
-            })
-            .found()
+            .probe(&pkg_dir.join(entry).to_string_lossy(), |candidate| resolution::see_within(pkg_dir, candidate))
     };
     let legacy = match subpath.trim_start_matches('.').trim_start_matches('/') {
         "" => ["module", "main"]
             .iter()
             .filter_map(|field| pkg_json.get(*field).and_then(|value| value.as_str()))
-            .find_map(probe)
-            .or_else(|| probe("index")),
+            .map(probe)
+            .find(|probed| *probed != resolution::Probe::Absent)
+            .unwrap_or_else(|| probe("index")),
         subpath => probe(subpath),
     };
-    legacy.map(|path| (path, pkg_json_path.clone())).ok_or_else(|| {
-        format!(
+    match legacy {
+        resolution::Probe::Found(path) => Ok((path, pkg_json_path.clone())),
+        resolution::Probe::CaseMismatch { candidate, actual } => Err(resolution::case_mismatch_reason(
+            &format!("'{specifier}', through {pkg_json_path:?},"),
+            &candidate,
+            &actual,
+            "spell its module, main or import as the file is spelled",
+        )),
+        resolution::Probe::Absent => Err(format!(
             "could not resolve '{}': no module, main or index file in {:?}",
             specifier, pkg_dir
-        )
-    })
+        )),
+    }
 }
 
 fn split_specifier(specifier: &str) -> (&str, &str) {
@@ -421,11 +437,14 @@ fn resolve_relative(base_dir: &Path, specifier: &str) -> Result<String, Relative
     let target = resolution::lexical(&base_dir.join(specifier)).to_string_lossy().to_string();
     match resolution::extension_policy().probe(&target, |candidate| resolution::see_within(base_dir, candidate)) {
         resolution::Probe::Found(path) => Ok(path),
-        resolution::Probe::CaseMismatch { candidate, actual } => Err(RelativeMiss::CaseMismatch(format!(
-            "relative import '{specifier}' from {base_dir:?} names {candidate:?}, but the file on disk is \
-             {actual:?}, spelled differently: a case- or normalization-insensitive filesystem loads it and \
-             a sensitive one does not — spell the import as the file is spelled"
-        ))),
+        resolution::Probe::CaseMismatch { candidate, actual } => {
+            Err(RelativeMiss::CaseMismatch(resolution::case_mismatch_reason(
+                &format!("relative import '{specifier}' from {base_dir:?}"),
+                &candidate,
+                &actual,
+                "spell the import as the file is spelled",
+            )))
+        }
         resolution::Probe::Absent => Err(RelativeMiss::Absent),
     }
 }
@@ -2569,6 +2588,15 @@ export const ds = tokens;
             &["runtime.js"],
         );
         fs::write(dir.join("node_modules/escape.ts"), "export {};\n").expect("write escape");
+        // A target differing from its file only in case: a source target
+        // falls back to the runtime one, and a runtime target names no file.
+        package(
+            "case-source",
+            serde_json::json!({ "exports": { ".": { "animus": "./src/Index.ts", "import": "./runtime.js" } } }),
+            &["src/index.ts", "runtime.js"],
+        );
+        package("case-runtime", serde_json::json!({ "exports": { ".": "./dist/Index.js" } }), &["dist/index.js"]);
+        package("case-main", serde_json::json!({ "main": "./Main.js" }), &["main.js"]);
         let from = dir.to_string_lossy().to_string();
         let resolved = |specifier: &str, conditions: &[&str]| {
             let conditions: Vec<String> = conditions.iter().map(|condition| condition.to_string()).collect();
@@ -2585,6 +2613,14 @@ export const ds = tokens;
         assert_eq!(resolved("conditions", &[]).as_deref(), Ok("conditions/import.js"));
         assert_eq!(resolved("import-first", &["browser"]).as_deref(), Ok("import-first/import.js"));
         assert_eq!(resolved("escaping-source", &[]).as_deref(), Ok("escaping-source/runtime.js"));
+        assert_eq!(resolved("case-source", &[]).as_deref(), Ok("case-source/runtime.js"));
+        // Where the filesystem opens the misspelled entry, the selection
+        // fails naming the file it opens; elsewhere it names no file.
+        for (specifier, spelled, actual) in [("case-runtime", "dist/Index.js", "dist/index.js"), ("case-main", "Main.js", "main.js")] {
+            let opens = dir.join("node_modules").join(specifier).join(spelled).is_file();
+            let error = resolved(specifier, &[]).expect_err("a misspelled entry names no file");
+            assert!(!opens || (error.contains(actual) && error.contains("spelled differently")), "{error}");
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 
