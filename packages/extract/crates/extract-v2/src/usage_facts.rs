@@ -824,7 +824,7 @@ pub(crate) struct EnrichedUsage {
     /// See `FileFacts::object_handoffs`.
     pub object_handoffs: Vec<Handoff>,
     /// See `FileFacts::written_namespaces`.
-    pub written_namespaces: BTreeMap<String, (String, ObjectUse)>,
+    pub written_namespaces: WrittenNamespaces,
     /// See `FileFacts::ordinary_components`.
     pub ordinary_components: BTreeSet<String>,
     /// See `FileFacts::context_consts`.
@@ -1704,13 +1704,16 @@ struct ObjectBinding {
     targets: Vec<String>,
 }
 
+/// See `FileFacts::written_namespaces`.
+pub type WrittenNamespaces = BTreeMap<String, (String, ObjectUse)>;
+
 /// See `FileFacts::unsafe_object_uses`.
 fn unsafe_object_uses(
     program: &Program<'_>,
     scoping: &Scoping,
     object_consts: &BTreeMap<&str, bool>,
     assigned_targets: &BTreeSet<&str>,
-) -> (BTreeMap<String, ObjectUse>, Vec<Handoff>, BTreeMap<String, (String, ObjectUse)>) {
+) -> (BTreeMap<String, ObjectUse>, Vec<Handoff>, WrittenNamespaces) {
     let candidates = object_bindings(program, scoping, object_consts, assigned_targets);
     if candidates.is_empty() {
         return (BTreeMap::new(), Vec::new(), BTreeMap::new());
@@ -2520,7 +2523,7 @@ struct ObjectUseScan<'a, 's> {
     /// See `MemberConsts`; empty in style mode.
     member_consts: FxHashMap<SymbolId, String>,
     /// See `FileFacts::written_namespaces`.
-    written_namespaces: BTreeMap<String, (String, ObjectUse)>,
+    written_namespaces: WrittenNamespaces,
 }
 
 impl<'a> ObjectUseScan<'a, '_> {
@@ -2566,7 +2569,7 @@ impl<'a> ObjectUseScan<'a, '_> {
 
 /// Records `namespace`'s first use that may write through it.
 fn written_through(
-    written: &mut BTreeMap<String, (String, ObjectUse)>,
+    written: &mut WrittenNamespaces,
     namespace: &str,
     subject: String,
     used: ObjectUse,

@@ -478,7 +478,7 @@ pub struct FileFacts {
     /// `const` that is then written or handed on, or the namespace used
     /// whole. Reading, storing, rendering or calling a member writes nothing.
     #[serde(skip)]
-    pub(crate) written_namespaces: BTreeMap<String, (String, crate::usage_facts::ObjectUse)>,
+    pub(crate) written_namespaces: crate::usage_facts::WrittenNamespaces,
     /// How each of the module's functions treats an object passed to it.
     #[serde(skip)]
     pub(crate) param_readings: crate::usage_facts::ParamReadings,
