@@ -22,7 +22,7 @@ use crate::css::{
 };
 use crate::declarations::{bind_component_declarations, check_surface_overlap, DeclarationBinding, DeclarationScales};
 use crate::dynamic_meta::{share_slots, DynamicPropMeta};
-use crate::evaluator::{EvalError, TransformEvaluator};
+use crate::evaluator::{EvalError, TransformAdmission, TransformEvaluator};
 use crate::facts::FileFacts;
 use crate::identity::{BindingKind, ImportBinding};
 use animus_system_loader::module_table::{ExportLookup, Request, Terminal};
@@ -37,7 +37,7 @@ use crate::theme::{
     TransformFailure, TransformFailureSink, VariableMap, extracts_callback_value, extracts_configured_value, resolve_styles, skips_transforms, strict_token_miss_of,
     unresolved_alias, unresolved_alias_spans, writes_token_reference, UnresolvedAlias,
 };
-use crate::transforms::CallbackDefinition;
+
 use crate::usage_facts::{is_animus_system_specifier, TagFact, TagOrigin, UsageFact, UsageResidueRecord};
 
 type ComponentPropSetMap = FxHashMap<String, FxHashSet<String>>;
@@ -531,6 +531,10 @@ const STRICT_TOKEN_MISS: &str = "animus.props.strict-token-miss";
 /// host where no runtime slot exists (style blocks, variants, states,
 /// global styles): its declaration falls back to the raw value.
 const STATIC_EVALUATION_UNAVAILABLE: &str = "animus.transform.static-evaluation-unavailable";
+
+/// An error: a binding names a key the sealed transform registry lacks
+/// (spec §7.4 D10), an internal invariant failure; nothing is evaluated.
+const TRANSFORM_UNSEALED_BINDING: &str = "animus.transform.unsealed-binding";
 /// A warning: a chain built inside a function or render, or a builder a
 /// later declaration completes, is never extracted, so its styles reach no
 /// stylesheet and the system builder stays in the bundle. Valid runtime
@@ -626,6 +630,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (STYLING_NAME_COLLISION, "error"),
     (CONFIGURED_TRANSFORM_REJECTED, "error"),
     (STATIC_EVALUATION_UNAVAILABLE, "error"),
+    (TRANSFORM_UNSEALED_BINDING, "error"),
     (STRICT_TOKEN_MISS, "error"),
     (TRANSFORM_INVALID_RESULT, "error"),
     (UNATTRIBUTED_SYSTEM_PROPS, "warn"),
@@ -5749,23 +5754,6 @@ fn bound_props_clause(props: &[&str]) -> String {
     }
 }
 
-/// Whether `definition` is registered for evaluation, admitting it on first
-/// use; a callback that cannot be isolated keeps only its runtime delivery,
-/// which is no authoring failure.
-fn admit_callback(
-    definition: &CallbackDefinition,
-    evaluator: &TransformEvaluator,
-    attempted: &mut FxHashSet<String>,
-) -> bool {
-    if attempted.insert(definition.key.clone()) {
-        if let Some(source) = definition.isolated_source() {
-            // A source the engine cannot compile stays unregistered.
-            let _ = evaluator.register(&definition.key, &source);
-        }
-    }
-    evaluator.is_registered(&definition.key)
-}
-
 /// Whether extraction resolves `value` of a custom prop: a callback that
 /// cannot evaluate it applies it at runtime, and no callback sees a CSS-wide
 /// keyword.
@@ -5773,14 +5761,13 @@ fn extracts_custom_value(
     prop_config: &PropConfig,
     value: &Value,
     evaluator: &TransformEvaluator,
-    attempted: &mut FxHashSet<String>,
     ctx: &ResolveContext,
 ) -> bool {
     match &prop_config.callback {
         _ if prop_config.transform_fn_source.is_none() || skips_transforms(prop_config, value, ctx) => true,
         Some(callback) => {
             let definition = &callback.definition;
-            admit_callback(definition, evaluator, attempted)
+            evaluator.is_admitted(&definition.key)
                 && extracts_callback_value(prop_config, &definition.key, &definition.name, value, ctx)
         }
         None => false,
@@ -5839,6 +5826,18 @@ fn drain_transform_failures(
                 ),
                 Some(TRANSFORM_THREW),
             ),
+            EvalError::UnsealedBinding { key } => diagnostic(
+                file,
+                &component,
+                "error",
+                format!(
+                    "transform '{}' for prop '{}' binds '{key}', which the sealed transform registry \
+                     lacks; nothing is evaluated — an internal failure: Define admits every definition \
+                     before usage, so report it",
+                    failure.transform_name, failure.prop
+                ),
+                Some(TRANSFORM_UNSEALED_BINDING),
+            ),
         }
         .dropping(&failure.prop);
         // Only an error that names a component can be pruned by reconciliation.
@@ -5866,7 +5865,7 @@ fn run_with_system_floor(
     let links = &crate::link::ProjectLinks::link(files, inputs);
     let breakpoints = extract_breakpoints(&inputs.theme);
     let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
-    let evaluator = TransformEvaluator::new();
+    let mut admission = TransformAdmission::new();
     let transform_failures = TransformFailureSink::default();
     let token_misses = StrictTokenMissSink::default();
     let dropped_keys = crate::theme::DroppedStyleKeySink::default();
@@ -5947,7 +5946,7 @@ fn run_with_system_floor(
             ));
             continue;
         }
-        match evaluator.register(key, source) {
+        match admission.admit_configured(key, source) {
             Ok(()) => {
                 admitted_transforms.insert(key.clone(), source.clone());
             }
@@ -5983,6 +5982,21 @@ fn run_with_system_floor(
             }
         }
     }
+
+    // Every callback a definition names, its own or inherited (an inherited
+    // one is its parent's `.props()` capture), inline included, is admitted
+    // before the first usage pass, reading only the callback; then the
+    // registry is sealed (spec §7.4 D9).
+    for path in order {
+        let Some(ff) = files.get(path) else { continue };
+        for capture in ff.chains.iter().flat_map(|chain| &chain.stages).flat_map(|stage| &stage.captured) {
+            if let Some(callback) = &capture.callback {
+                let definition = &callback.definition;
+                admission.admit_callback(&definition.key, definition.isolated_source().as_deref());
+            }
+        }
+    }
+    let evaluator = admission.seal();
 
     let resolve_ctx = ResolveContext {
         config: &inputs.config,
@@ -6876,7 +6890,6 @@ fn run_with_system_floor(
 
     let mut all_utility_inputs: Vec<UtilityInput> = Vec::new();
     let mut all_custom_inputs: Vec<(String, UtilityInput)> = Vec::new();
-    let mut attempted_callbacks: FxHashSet<String> = FxHashSet::default();
     let mut all_custom_dynamic_usages: Vec<DynamicPropUsage> = Vec::new();
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
     let mut forwards: Vec<Forward> = Vec::new();
@@ -7151,13 +7164,7 @@ fn run_with_system_floor(
                         (&usage.prop_name, &usage.value, &uses),
                         &mut diagnostics,
                     );
-                    if extracts_custom_value(
-                        prop_config,
-                        &usage.value,
-                        &evaluator,
-                        &mut attempted_callbacks,
-                        &resolve_ctx,
-                    ) {
+                    if extracts_custom_value(prop_config, &usage.value, &evaluator, &resolve_ctx) {
                         all_custom_inputs.extend(input.map(|input| (owner.clone(), input)));
                     }
                 }
@@ -7809,11 +7816,10 @@ fn run_with_system_floor(
                     confined.covers(prop_name, |value| custom_classes.has_class(component_id, prop_name, value))
                 })
             };
-            let mut callback_admitted = || {
+            let callback_admitted = || {
                 config.callback.as_ref().is_none_or(|callback| {
                     delivery != Some(callback.definition.source.as_str())
-                        || (admit_callback(&callback.definition, &evaluator, &mut attempted_callbacks)
-                            && !reads_import(callback))
+                        || (evaluator.is_admitted(&callback.definition.key) && !reads_import(callback))
                 })
             };
             if !(covers(confined) && callback_admitted()) {

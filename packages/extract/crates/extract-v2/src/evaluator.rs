@@ -40,6 +40,10 @@ pub enum EvalError {
     /// The evaluation exhausted its budget or reached the host environment,
     /// so its result for this value is not known before runtime.
     Unevaluable,
+    /// A binding names `key`, which the sealed registry lacks: Define admits
+    /// every definition before usage, so this is an internal invariant
+    /// failure, and nothing is evaluated (spec §7.4 D10).
+    UnsealedBinding { key: String },
 }
 
 impl std::error::Error for EvalError {}
@@ -52,18 +56,73 @@ impl fmt::Display for EvalError {
             }
             EvalError::Throw { message } => write!(f, "{}", message),
             EvalError::Unevaluable => write!(f, "transform cannot be evaluated during extraction"),
+            EvalError::UnsealedBinding { key } => write!(f, "no definition is sealed for '{key}'"),
         }
     }
 }
 
 /// In-process JavaScript transform evaluator powered by rquickjs.
 ///
-/// Registered definitions live in a Rust-side registry keyed by definition
-/// identity, so no registration writes a property of a realm's global
-/// object: a transform named `Map` cannot replace another callback's `Map`.
+/// Admitted definitions live in a Rust-side registry keyed by definition
+/// identity, so no admission writes a property of a realm's global object:
+/// a transform named `Map` cannot replace another callback's `Map`. The
+/// registry is sealed (spec §7.4 D9): a `TransformAdmission` fills it, and
+/// `seal` hands over this evaluator, which only reads it.
 #[derive(Default)]
 pub struct TransformEvaluator {
     registry: RefCell<FxHashMap<String, Definition>>,
+    /// Project callbacks admission could not compile, with why: they keep
+    /// their runtime delivery, which is no authoring failure.
+    runtime_only: FxHashMap<String, String>,
+}
+
+/// How the sealed registry holds a key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission<'r> {
+    Admitted,
+    /// A project callback that keeps only its runtime delivery, and why.
+    RuntimeOnly(&'r str),
+    /// No definition was admitted under the key.
+    Unsealed,
+}
+
+/// Define's transform registry while it admits (spec §7.4 D9): every
+/// configured transform, and every callback a definition names, before the
+/// first usage pass. `seal` ends admission; nothing registers after it.
+#[derive(Default)]
+pub struct TransformAdmission {
+    evaluator: TransformEvaluator,
+}
+
+impl TransformAdmission {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Admits a configured transform's `source` as `key`, or why not.
+    pub fn admit_configured(&mut self, key: &str, source: &str) -> Result<(), String> {
+        self.evaluator.register(key, source)
+    }
+
+    /// Admits a project callback as `key` from its isolated `source`; one
+    /// with no isolated source, or that does not compile, is runtime-only.
+    pub fn admit_callback(&mut self, key: &str, source: Option<&str>) {
+        if self.evaluator.is_admitted(key) || self.evaluator.runtime_only.contains_key(key) {
+            return;
+        }
+        let refused = match source {
+            Some(source) => self.evaluator.register(key, source).err(),
+            None => Some("its source cannot be read in isolation".to_string()),
+        };
+        if let Some(reason) = refused {
+            self.evaluator.runtime_only.insert(key.to_string(), reason);
+        }
+    }
+
+    /// Ends admission: the registry the evaluator reads from now on.
+    pub fn seal(self) -> TransformEvaluator {
+        self.evaluator
+    }
 }
 
 /// Compiled afresh for each evaluation, in its own strict realm under a
@@ -239,8 +298,9 @@ impl TransformEvaluator {
     /// Register a JS function expression as the definition `key`: each
     /// evaluation compiles it in a fresh strict-mode realm under a budget, so
     /// its effects on intrinsics or the global object reach no other
-    /// evaluation. The key is only a registry entry.
-    pub fn register(&self, key: &str, source: &str) -> Result<(), String> {
+    /// evaluation. The key is only a registry entry. Only admission
+    /// registers: a sealed evaluator has no way to.
+    fn register(&self, key: &str, source: &str) -> Result<(), String> {
         let (_runtime, context) = new_realm();
         context.with(|ctx| {
             let callable = ctx
@@ -257,9 +317,20 @@ impl TransformEvaluator {
         Ok(())
     }
 
-    /// Whether a definition is registered as `key`.
-    pub fn is_registered(&self, key: &str) -> bool {
+    /// Whether a definition is admitted as `key`.
+    pub fn is_admitted(&self, key: &str) -> bool {
         self.registry.borrow().contains_key(key)
+    }
+
+    /// How the sealed registry holds `key`.
+    pub fn admission(&self, key: &str) -> Admission<'_> {
+        if self.is_admitted(key) {
+            return Admission::Admitted;
+        }
+        match self.runtime_only.get(key) {
+            Some(reason) => Admission::RuntimeOnly(reason),
+            None => Admission::Unsealed,
+        }
     }
 
     /// Evaluate the definition `key` for `value`, preserving the value's JS
