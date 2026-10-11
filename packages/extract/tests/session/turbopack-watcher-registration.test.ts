@@ -313,6 +313,59 @@ describe('startTurbopackWatcher OS registration', () => {
     }
   });
 
+  test('an outside dependency is watched from startup, as it appears, and no longer once dropped', async () => {
+    const restoreGlobals = resetAnimusGlobals();
+    try {
+      const root = createProject();
+      const systemPath = join(root, 'src', 'system.ts');
+      writeFileSync(systemPath, 'export const system = {};\n');
+      const sharedA = makeTempRoot('animus-outside-a-');
+      const sharedB = makeTempRoot('animus-outside-b-');
+      writeFileSync(join(sharedA, 'tokens.ts'), 'export const t = 1;\n');
+      writeFileSync(join(sharedB, 'tokens.ts'), 'export const t = 1;\n');
+      engine.loadSystemModule.mockReturnValue({
+        ...SYSTEM_CONFIG,
+        dependencies: [systemPath, join(sharedA, 'tokens.ts')],
+      });
+      const session = new ExtractionSession({ system: './src/system.ts' });
+      session.rootDir = root;
+      session.development = true;
+      const live = (dir: string) =>
+        watchers.some((w) => w.dir === dir && !w.closed);
+
+      // As the CLI starts: the watcher before discovery, then the first
+      // pass, then delivery with nothing held.
+      const handle = startedHandle(
+        startTurbopackWatcher(session, root, {
+          debounceMs: 5,
+          watchFn: fakeWatch,
+          holdEvents: true,
+        })
+      );
+      await session.runFullPipeline();
+      await handle.deliverHeldEvents();
+      expect(live(sharedA)).toBe(true);
+
+      // A reload whose system now reads the other file.
+      engine.loadSystemModule.mockReturnValue({
+        ...SYSTEM_CONFIG,
+        dependencies: [systemPath, join(sharedB, 'tokens.ts')],
+      });
+      writeFileSync(join(sharedA, 'tokens.ts'), 'export const t = 2;\n');
+      const loads = engine.loadSystemModule.mock.calls.length;
+      watchers.find((w) => w.dir === sharedA)!.listener!('change', 'tokens.ts');
+      await vi.waitFor(() => expect(live(sharedB)).toBe(true));
+
+      expect(engine.loadSystemModule.mock.calls.length).toBe(loads + 1);
+      expect(live(sharedA)).toBe(false);
+      handle.close();
+      await handle.settle();
+      session.close();
+    } finally {
+      restoreGlobals();
+    }
+  });
+
   test('a batch that arrives after close() never enters the session', async () => {
     const root = createProject();
     const entries: WatchChanges[] = [];
