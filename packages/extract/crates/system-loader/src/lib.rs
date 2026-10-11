@@ -123,33 +123,41 @@ pub fn resolve_bare_specifier(
         for source in [true, false] {
             if let Some(resolved) = resolve_exports_entry(exports, export_key, source, conditions) {
                 let abs_path = pkg_dir.join(&resolved);
-                if abs_path.exists() {
+                if abs_path.is_file() {
                     return Ok((abs_path.to_string_lossy().to_string(), pkg_json_path));
                 }
             }
         }
+        // `exports` answers alone, as Node reads it: a blocked or unmatched
+        // export never falls back to `module` or `main`.
+        return Err(format!(
+            "could not resolve '{}': {:?} exports no file for '{}' under the conditions {:?}",
+            specifier, pkg_json_path, export_key, conditions
+        ));
     }
 
-    if subpath.is_empty() || subpath == "." {
-        if let Some(module_field) = pkg_json.get("module").and_then(|v| v.as_str()) {
-            let abs_path = pkg_dir.join(module_field);
-            if abs_path.exists() {
-                return Ok((abs_path.to_string_lossy().to_string(), pkg_json_path));
-            }
-        }
-
-        if let Some(main_field) = pkg_json.get("main").and_then(|v| v.as_str()) {
-            let abs_path = pkg_dir.join(main_field);
-            if abs_path.exists() {
-                return Ok((abs_path.to_string_lossy().to_string(), pkg_json_path));
-            }
-        }
-    }
-
-    Err(format!(
-        "could not resolve '{}': no matching export, module, or main field in {:?}",
-        specifier, pkg_json_path
-    ))
+    // A package without `exports`: `module`, then `main`, each as a file or
+    // a directory's index through the extension policy, then an `index` at
+    // its root, as Node's legacy resolution reads them; a subpath names a
+    // file or directory in the package.
+    let probe = |entry: &str| {
+        resolution::SYSTEM_EVALUATION
+            .probe(&pkg_dir.join(entry).to_string_lossy(), |candidate| Path::new(candidate).is_file())
+    };
+    let legacy = match subpath.trim_start_matches('.').trim_start_matches('/') {
+        "" => ["module", "main"]
+            .iter()
+            .filter_map(|field| pkg_json.get(*field).and_then(|value| value.as_str()))
+            .find_map(probe)
+            .or_else(|| probe("index")),
+        subpath => probe(subpath),
+    };
+    legacy.map(|path| (path, pkg_json_path.clone())).ok_or_else(|| {
+        format!(
+            "could not resolve '{}': no module, main or index file in {:?}",
+            specifier, pkg_dir
+        )
+    })
 }
 
 fn split_specifier(specifier: &str) -> (&str, &str) {
@@ -290,23 +298,51 @@ enum Target {
 
 fn condition_target(value: &serde_json::Value, source: bool, conditions: &[String]) -> Target {
     match value {
-        serde_json::Value::String(s) => Target::Found(s.clone()),
-        serde_json::Value::Null => Target::Blocked,
+        serde_json::Value::String(target) if valid_package_target(target) => Target::Found(target.clone()),
+        // Node refuses a target that leaves the package.
+        serde_json::Value::String(_) | serde_json::Value::Null => Target::Blocked,
+        // Fallbacks: the first target that resolves.
+        serde_json::Value::Array(targets) => {
+            let mut blocked = false;
+            for target in targets {
+                match condition_target(target, source, conditions) {
+                    Target::Found(target) => return Target::Found(target),
+                    Target::Blocked => blocked = true,
+                    Target::Unmatched => {}
+                }
+            }
+            if blocked { Target::Blocked } else { Target::Unmatched }
+        }
         serde_json::Value::Object(obj) => {
-            let animus = obj.get("animus").filter(|_| source);
+            // A kit's source counts only where it is a valid target; otherwise
+            // its runtime conditions answer, and discovery reports the source.
+            let animus = obj
+                .get("animus")
+                .filter(|_| source)
+                .map(|value| condition_target(value, source, conditions))
+                .filter(|target| matches!(target, Target::Found(_)));
             let matched = obj.iter().filter(|(key, _)| {
                 matches!(key.as_str(), "import" | "default")
                     || conditions.iter().any(|condition| condition == *key)
             });
             animus
                 .into_iter()
-                .chain(matched.map(|(_, value)| value))
-                .map(|value| condition_target(value, source, conditions))
+                .chain(matched.map(|(_, value)| condition_target(value, source, conditions)))
                 .find(|target| !matches!(target, Target::Unmatched))
                 .unwrap_or(Target::Unmatched)
         }
         _ => Target::Unmatched,
     }
+}
+
+/// A package target Node accepts: relative to the package root (`./`), with
+/// no `..` or `node_modules` segment taking it out of the package.
+fn valid_package_target(target: &str) -> bool {
+    target.starts_with("./")
+        && !target
+            .split(['/', '\\'])
+            .skip(1)
+            .any(|segment| segment == ".." || segment.eq_ignore_ascii_case("node_modules"))
 }
 
 /// `specifier` resolved from `from_dir` as the system loader resolves its
@@ -2392,6 +2428,65 @@ export const ds = tokens;
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create scratch dir");
         dir
+    }
+
+    /// A package's entry is selected as Node's ESM resolver selects it, a
+    /// kit's `animus` source first: `exports` answers alone (arrays by their
+    /// first valid target, conditions in the object's order, an invalid
+    /// source target falling back to the runtime one); without `exports`,
+    /// `module`, `main` and a root `index` resolve as files or directories.
+    #[test]
+    fn package_entries_follow_node_esm_selection() {
+        let dir = scratch_dir("package-entries");
+        let package = |name: &str, manifest: serde_json::Value, files: &[&str]| {
+            let root = dir.join("node_modules").join(name);
+            fs::create_dir_all(&root).expect("create package");
+            fs::write(root.join("package.json"), manifest.to_string()).expect("write manifest");
+            for file in files {
+                let path = root.join(file);
+                fs::create_dir_all(path.parent().expect("file has a directory")).expect("create directory");
+                fs::write(path, "export {};\n").expect("write file");
+            }
+        };
+        package("legacy-main", serde_json::json!({ "main": "index" }), &["index.js"]);
+        package("default-index", serde_json::json!({ "name": "default-index" }), &["index.js"]);
+        package("legacy-subpath", serde_json::json!({ "main": "./main.js" }), &["main.js", "lib/part.js"]);
+        package("blocked", serde_json::json!({ "exports": { ".": null }, "module": "./esm.js" }), &["esm.js"]);
+        package("unexported", serde_json::json!({ "exports": { ".": "./index.js" }, "main": "./index.js" }), &["index.js", "other.js"]);
+        package("array", serde_json::json!({ "exports": { ".": ["./esm.js"] }, "main": "./cjs.js" }), &["esm.js", "cjs.js"]);
+        package(
+            "conditions",
+            serde_json::json!({ "exports": { ".": { "browser": "./browser.js", "import": "./import.js" } } }),
+            &["browser.js", "import.js"],
+        );
+        package(
+            "import-first",
+            serde_json::json!({ "exports": { ".": { "import": "./import.js", "browser": "./browser.js" } } }),
+            &["browser.js", "import.js"],
+        );
+        package(
+            "escaping-source",
+            serde_json::json!({ "exports": { ".": { "animus": "../escape.ts", "import": "./runtime.js" } } }),
+            &["runtime.js"],
+        );
+        fs::write(dir.join("node_modules/escape.ts"), "export {};\n").expect("write escape");
+        let from = dir.to_string_lossy().to_string();
+        let resolved = |specifier: &str, conditions: &[&str]| {
+            let conditions: Vec<String> = conditions.iter().map(|condition| condition.to_string()).collect();
+            resolve_bare_specifier(specifier, &from, &conditions)
+                .map(|(path, _)| path.rsplit("node_modules/").next().unwrap_or_default().replace("/./", "/"))
+        };
+        assert_eq!(resolved("legacy-main", &[]).as_deref(), Ok("legacy-main/index.js"));
+        assert_eq!(resolved("default-index", &[]).as_deref(), Ok("default-index/index.js"));
+        assert_eq!(resolved("legacy-subpath/lib/part", &[]).as_deref(), Ok("legacy-subpath/lib/part.js"));
+        assert!(resolved("blocked", &[]).is_err(), "a blocked export never falls back to module");
+        assert!(resolved("unexported/other.js", &[]).is_err(), "an unexported subpath never falls back");
+        assert_eq!(resolved("array", &[]).as_deref(), Ok("array/esm.js"));
+        assert_eq!(resolved("conditions", &["browser"]).as_deref(), Ok("conditions/browser.js"));
+        assert_eq!(resolved("conditions", &[]).as_deref(), Ok("conditions/import.js"));
+        assert_eq!(resolved("import-first", &["browser"]).as_deref(), Ok("import-first/import.js"));
+        assert_eq!(resolved("escaping-source", &[]).as_deref(), Ok("escaping-source/runtime.js"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Host-binding evidence follows each definition's own authored callable,

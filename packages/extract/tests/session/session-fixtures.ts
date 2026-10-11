@@ -5,6 +5,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'fs';
+import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -23,6 +24,25 @@ import type {
 } from '../../pipeline';
 import type { SessionOptions } from '../../session/extraction-session';
 import type { CliLockRecord } from '../../session/published-set';
+import type { ResolveSpecifier } from '../../session/resolve-packages';
+
+/** The engine-free tests' stand-in for the native `resolveSpecifier`: a
+ *  package as Node's `require.resolve` finds it. These tests exercise the
+ *  session, not package resolution, which the native resolver owns. */
+export const requireResolveSpecifier: ResolveSpecifier = (
+  specifier,
+  fromDir
+) => {
+  try {
+    return {
+      path: createRequire(import.meta.url).resolve(specifier, {
+        paths: [fromDir],
+      }),
+    };
+  } catch {
+    return {};
+  }
+};
 
 export const ANIMUS_GLOBAL_KEYS = SINGLETON_GLOBAL_KEYS;
 

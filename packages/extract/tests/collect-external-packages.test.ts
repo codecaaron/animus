@@ -353,6 +353,22 @@ describe('collectExternalPackageSources', () => {
         { specifier: '@x/empty', outcome: 'empty', fileCount: 0 },
       ])
     ).toBeNull();
+    // The resolver's reason, and the system file that includes the package.
+    expect(
+      unresolvableIncludesMessage(
+        [
+          {
+            specifier: '@x/blocked',
+            outcome: 'unresolvable',
+            fileCount: 0,
+            reason: "exports no file for '.'",
+          },
+        ],
+        'src/ds.ts'
+      )
+    ).toBe(
+      "[animus-extract] unresolvable include specifier(s) in src/ds.ts: @x/blocked (exports no file for '.')"
+    );
   });
 
   test('records an empty outcome when a resolved package contributes no sources', async () => {

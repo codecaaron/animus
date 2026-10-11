@@ -12,6 +12,7 @@ import { setEngineApiOverride } from '../../session/singleton';
 
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
+  resolveSpecifier: requireResolveSpecifier,
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,
@@ -24,6 +25,7 @@ import {
   disposeTempRoots,
   makeSession,
   PLAN_A,
+  requireResolveSpecifier,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './session-fixtures';

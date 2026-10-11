@@ -97,15 +97,39 @@ function resolveImportEntry(rootDir: string, name: string): string | null {
   }
 }
 
+/** A file a resolution names, by its real path, or why it names none. */
+export interface ResolvedFile {
+  path?: string | null;
+  unresolved?: string | null;
+}
+
+/** A specifier resolved as the system loader resolves it (the native
+ *  module's `resolveSpecifier`), under the host's export conditions. */
+export type ResolveSpecifier = (
+  specifier: string,
+  fromDir: string,
+  conditions: readonly string[]
+) => ResolvedFile;
+
+/** The packages a session includes: each entry, and for each package that
+ *  names no file, why. */
+export interface ResolvedPackages {
+  entries: ResolvedPackageMap;
+  unresolved: { [specifier: string]: string };
+}
+
 export function resolvePackagesByName(
   rootDir: string,
-  names: string[]
-): ResolvedPackageMap {
-  if (names.length === 0) return {};
+  names: string[],
+  resolveSpecifier: ResolveSpecifier,
+  conditions: readonly string[]
+): ResolvedPackages {
+  const packageMap: ResolvedPackageMap = {};
+  const unresolved: ResolvedPackages['unresolved'] = {};
+  if (names.length === 0) return { entries: packageMap, unresolved };
 
   const nameSet = new Set(names);
   const resolved = new Set<string>();
-  const packageMap: ResolvedPackageMap = {};
 
   try {
     const rootPkg = JSON.parse(
@@ -137,9 +161,9 @@ export function resolvePackagesByName(
     }
   } catch {}
 
-  // An ES import first, as the Vite host resolves it; `require.resolve`
-  // still answers for a package without `exports` or without an import or
-  // default target.
+  // An ES import first, as the Vite host resolves it. A package without an
+  // `exports` target for one resolves as the system loader resolves it:
+  // `module` before `main`, which serves only a CommonJS `require`.
   for (const name of nameSet) {
     if (resolved.has(name)) continue;
     const importEntry = resolveImportEntry(rootDir, name);
@@ -147,11 +171,10 @@ export function resolvePackagesByName(
       packageMap[name] = relative(rootDir, importEntry);
       continue;
     }
-    try {
-      const entryPath = require.resolve(name, { paths: [rootDir] });
-      packageMap[name] = relative(rootDir, entryPath);
-    } catch {}
+    const entry = resolveSpecifier(name, rootDir, conditions);
+    if (entry.path) packageMap[name] = relative(rootDir, entry.path);
+    else unresolved[name] = entry.unresolved ?? 'it names no file';
   }
 
-  return packageMap;
+  return { entries: packageMap, unresolved };
 }

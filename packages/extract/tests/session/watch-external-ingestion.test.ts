@@ -17,6 +17,7 @@ import {
   lastAnalyzedPaths as analyzedPaths,
   makeManifest,
   makeSession,
+  requireResolveSpecifier,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './session-fixtures';
@@ -35,6 +36,7 @@ import { setEngineApiOverride } from '../../session/singleton';
 // the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
+  resolveSpecifier: requireResolveSpecifier,
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,
   clearAnalysisCache: mocks.clearAnalysisCache,

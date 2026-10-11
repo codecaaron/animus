@@ -112,6 +112,7 @@ import type {
   ExternalPackageOutcome,
   KitDescriptorRecord,
 } from '../pipeline/index';
+import type { ResolveSpecifier } from './resolve-packages';
 
 export type SessionOptions = AnimusCoreOptions;
 
@@ -980,23 +981,47 @@ export class ExtractionSession {
 
     bt.fileRead = this.elapsed(t);
 
-    // Workspace walk + require.resolve stays local (the Node-resolution
-    // seam); the traversal and ingest below are the shared collector.
+    // Package resolution: the workspace walk and the exports reader stay
+    // local; anything else resolves as the system loader resolves it. The
+    // traversal and ingest below are the shared collector.
     t = this.now();
+    const resolveSpecifier: ResolveSpecifier = (
+      specifier,
+      fromDir,
+      conditions
+    ) => {
+      const native = engineApi().resolveSpecifier;
+      if (native === undefined) {
+        throw new Error(
+          'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
+        );
+      }
+      return native(specifier, fromDir, [...conditions]);
+    };
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
       engineModuleParser(engineApi()),
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
       (name) => {
-        const entry = resolvePackagesByName(rootDir, [name])[name];
+        const entry = resolvePackagesByName(
+          rootDir,
+          [name],
+          resolveSpecifier,
+          this.conditions
+        ).entries[name];
         return entry ? resolve(rootDir, entry) : null;
       }
     );
     discoveryDiagnostics.push(
       ...importedKitDiagnostics(rawEntries, engineApi(), rootDir, packageNames)
     );
-    const preResolved = resolvePackagesByName(rootDir, packageNames);
+    const preResolved = resolvePackagesByName(
+      rootDir,
+      packageNames,
+      resolveSpecifier,
+      this.conditions
+    );
 
     // Raw content hashes of every walked external file, keyed by absolute
     // path — recorded before MDX preprocessing so the diff sees raw bytes.
@@ -1005,7 +1030,10 @@ export class ExtractionSession {
     const collected = await collectExternalPackageSources({
       specifiers: packageNames,
       resolveSpecifier: (name) =>
-        preResolved[name] ? resolve(rootDir, preResolved[name]) : null,
+        preResolved.entries[name]
+          ? resolve(rootDir, preResolved.entries[name])
+          : null,
+      unresolvedReason: (name) => preResolved.unresolved[name],
       rootDir,
       extensionsSet,
       hasEntry: (relPath) => rawEntries.some((e) => e.path === relPath),
@@ -1047,7 +1075,10 @@ export class ExtractionSession {
         reportErrors: this.reportErrors(),
       }
     );
-    const unresolvableMessage = unresolvableIncludesMessage(collected.outcomes);
+    const unresolvableMessage = unresolvableIncludesMessage(
+      collected.outcomes,
+      relative(rootDir, resolvedSystemPath)
+    );
     if (unresolvableMessage !== null) {
       if (this.options.strict) this.strictFailure(unresolvableMessage);
       else this.warn(unresolvableMessage);

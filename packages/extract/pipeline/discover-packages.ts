@@ -80,6 +80,8 @@ export interface ExternalPackageOutcome {
   specifier: string;
   outcome: 'resolved' | 'unresolvable' | 'empty' | 'stale-dist';
   fileCount: number;
+  /** For an unresolvable specifier, why the resolver found no file. */
+  reason?: string;
 }
 
 const isFile = (path: string): boolean => {
@@ -489,6 +491,8 @@ export async function collectExternalPackageSources(opts: {
   resolveSpecifier: (
     specifier: string
   ) => string | null | Promise<string | null>;
+  /** Why `resolveSpecifier` found no file for a specifier, when it knows. */
+  unresolvedReason?: (specifier: string) => string | undefined;
   rootDir: string;
   extensionsSet: ReadonlySet<string>;
   hasEntry: (relPath: string) => boolean;
@@ -501,6 +505,7 @@ export async function collectExternalPackageSources(opts: {
   const {
     specifiers,
     resolveSpecifier,
+    unresolvedReason,
     rootDir,
     extensionsSet,
     hasEntry,
@@ -634,7 +639,14 @@ export async function collectExternalPackageSources(opts: {
     absEntry ??=
       condition?.entries.find(([entry]) => entry === entryKey)?.[1] ?? null;
     if (!absEntry || !pkgRoot) {
-      outcomes.push({ specifier, outcome: 'unresolvable', fileCount: 0 });
+      const record: ExternalPackageOutcome = {
+        specifier,
+        outcome: 'unresolvable',
+        fileCount: 0,
+      };
+      const reason = unresolvedReason?.(specifier);
+      if (reason !== undefined) record.reason = reason;
+      outcomes.push(record);
       continue;
     }
 
@@ -928,7 +940,7 @@ function sourceConditionDiagnostics(
     file: packageName,
     component: 'kit',
     kind: 'warn',
-    message: `exports["${subpath}"].${KIT_SOURCE_CONDITION} names ${target}, which is missing or outside the package, so that entry is not read from source`,
+    message: `exports["${subpath}"].${KIT_SOURCE_CONDITION} names ${target}, which is missing or outside the package, so that entry is read from its runtime target instead of source`,
     code: INVALID_KIT_SOURCE_CONDITION,
     severity: severityFor(INVALID_KIT_SOURCE_CONDITION),
   }));
@@ -1025,14 +1037,22 @@ export function excludeCollectedPackages(
   };
 }
 
+/** Every unresolvable include, with why where the resolver said, and the
+ *  system file that includes them when the caller knows it. */
 export function unresolvableIncludesMessage(
-  outcomes: ExternalPackageOutcome[]
+  outcomes: ExternalPackageOutcome[],
+  importer?: string
 ): string | null {
   const unresolvable = outcomes
     .filter((record) => record.outcome === 'unresolvable')
-    .map((record) => record.specifier);
+    .map((record) =>
+      record.reason === undefined
+        ? record.specifier
+        : `${record.specifier} (${record.reason})`
+    );
   if (unresolvable.length === 0) return null;
-  return `[animus-extract] unresolvable include specifier(s): ${unresolvable.join(', ')}`;
+  const from = importer === undefined ? '' : ` in ${importer}`;
+  return `[animus-extract] unresolvable include specifier(s)${from}: ${unresolvable.join(', ')}`;
 }
 
 /** A stale dist silently skews merged registry content while discovery
