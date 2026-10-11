@@ -150,6 +150,13 @@ function systemLoad(system: SystemConfig): SystemLoad {
   };
 }
 
+/** What an attempt takes from the build's queue: every untaken
+ *  observation, and whether a full rescan is requested. */
+interface TakenObservations {
+  taken: Map<string, string>;
+  rescan: boolean;
+}
+
 /** What the hosting bundler does, which the user does not configure. */
 export interface SessionHost {
   /** The build this session takes part in, created once by the owning host
@@ -652,7 +659,7 @@ export class ExtractionSession {
   /** Starts one attempt over every untaken observation of the build. */
   startObservedAttempt(): boolean {
     if (!this.system || this.detached) return false;
-    const taken = this.takeObservations();
+    const { taken, rescan } = this.takeObservations();
     const modifiedFiles = new Set<string>();
     const removedFiles = new Set<string>();
     for (const [path, state] of taken) {
@@ -660,18 +667,20 @@ export class ExtractionSession {
     }
     this.settleTaken(
       taken,
-      this.runWatchAttempt({ modifiedFiles, removedFiles })
+      this.runWatchAttempt({ modifiedFiles, removedFiles }, rescan)
     );
     return true;
   }
 
-  /** Every untaken observation of the build, which the caller's attempt
-   *  now covers. */
-  private takeObservations(): Map<string, string> {
+  /** Every untaken observation of the build, and whether a full rescan is
+   *  requested, which the caller's attempt now covers. */
+  private takeObservations(): TakenObservations {
     const queue = observationQueue(this.key);
     const taken = new Map(queue.untaken);
+    const rescan = queue.rescan;
     queue.untaken.clear();
-    return taken;
+    queue.rescan = false;
+    return { taken, rescan };
   }
 
   /** `transaction` settles every waiting revision, and is the active
@@ -694,9 +703,13 @@ export class ExtractionSession {
   /** Registers one attempt in the build's single-flight slot before it
    *  processes, so a nested full system reload inherits the gate rather
    *  than clear it, and clears the slot when it settles either way. */
-  private runWatchAttempt(changes: WatchChanges): Promise<void> {
+  private runWatchAttempt(
+    changes: WatchChanges,
+    rescan = false
+  ): Promise<void> {
+    // A rescan is a full read, nested in this attempt's slot.
     const transaction = Promise.resolve().then(() =>
-      this.processWatchUpdate(changes)
+      rescan ? this.runFullPipeline() : this.processWatchUpdate(changes)
     );
     setWatchTransaction(this.key, transaction);
     const settle = () => {
@@ -1053,7 +1066,7 @@ export class ExtractionSession {
     const nested = getWatchTransaction(this.key) !== null;
     // A top-level full read covers every observation queued before it, so
     // it settles them; one queued after it runs next.
-    const taken = nested ? null : this.takeObservations();
+    const taken = nested ? null : this.takeObservations().taken;
     const transaction = this.runPipelineTransaction(pending);
     if (taken !== null) {
       setWatchTransaction(this.key, transaction);
@@ -1561,25 +1574,25 @@ export class ExtractionSession {
     this.joinedKey = null;
   }
 
-  /** Brings a reattached participant up to date. A live build answers
-   *  through its current publisher, which probes every file for what
-   *  changed meanwhile, or this participant takes it over with a full read;
-   *  true then. A retired build is false: the host starts it as at first. */
+  /** Brings a reattached participant up to date with a full rescan of a
+   *  live build, which reconciles deletions too; true then. A retired build
+   *  is false: the host starts it as at first. */
   async catchUp(): Promise<boolean> {
     if (getManifestJson(this.key) === null) return false;
-    const owner = getOwningWatchSession(this.key);
-    if (owner !== null && owner !== this) await owner.probe();
-    else await this.runFullPipeline();
+    // One full-rescan observation, awaited like any other: the queue joins
+    // an attempt in flight, routes to the current publisher, or takes over.
+    await this.awaitObservation(this.recordRescan());
     return true;
   }
 
-  async probe(): Promise<void> {
-    for (;;) {
-      const inflight = getWatchTransaction(this.key);
-      if (!inflight) break;
-      await inflight.catch(() => undefined);
-    }
-    if (this.system && !this.detached) await this.runWatchAttempt({});
+  /** Queues a full rescan under a new revision. It is never equivalent to
+   *  an active attempt: only a full read covers it. */
+  private recordRescan(): number {
+    const queue = observationQueue(this.key);
+    queue.rescan = true;
+    const revision = ++queue.revision;
+    queue.revisions.set(revision, null);
+    return revision;
   }
 
   /** Reset analysis state for a system reload: write guards go back to null
