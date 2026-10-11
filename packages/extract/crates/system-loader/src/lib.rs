@@ -352,7 +352,15 @@ fn resolve_exports_pattern(
     if refused_pattern_match(matched) {
         return None;
     }
-    Some(resolve_condition_value(value, source, conditions)?.replace('*', matched))
+    // As Node reads the substituted target: a URL, so a raw backslash is a
+    // `/`, and one holding an encoded separator (`%2F`, `%5C`) is refused
+    // (`ERR_INVALID_MODULE_SPECIFIER`).
+    let target = resolve_condition_value(value, source, conditions)?.replace('*', matched);
+    let lowered = target.to_ascii_lowercase();
+    if lowered.contains("%2f") || lowered.contains("%5c") {
+        return None;
+    }
+    Some(target.replace('\\', "/"))
 }
 
 /// Whether Node refuses a pattern's match (`ERR_INVALID_MODULE_SPECIFIER`):
@@ -2217,7 +2225,9 @@ export const ds = tokens;
         // link's parent holds.
         package("linked-main", serde_json::json!({ "main": "./link/../token.ts" }), &["token.ts", "other/Token.ts", "other/sub/x.ts"]);
         // A pattern's match may not hold `..`, as Node refuses it.
-        package("wild", serde_json::json!({ "exports": { "./*": "./src/*.ts" } }), &["src/token.ts", "src/a/b.ts"]);
+        package("wild", serde_json::json!({ "exports": { "./*": "./src/*.ts" } }), &["src/token.ts", "src/a/b.ts", "src/a%2fb.ts"]);
+        #[cfg(unix)]
+        fs::write(dir.join("node_modules/wild/src/a\\b.ts"), "export {};\n").expect("write backslash name");
         #[cfg(unix)]
         std::os::unix::fs::symlink(
             dir.join("node_modules/linked-main/other/sub"),
@@ -2248,6 +2258,13 @@ export const ds = tokens;
         assert!(resolved("wild/link/../token", &[]).is_err(), "a `..` in a pattern's match is refused");
         // An empty segment is not refused, as Node 24 loads it.
         assert_eq!(resolved("wild/a//b", &[]).as_deref(), Ok("wild/src/a/b.ts"));
+        // The substituted target is read as Node reads a URL: an encoded
+        // separator is refused, though a file is spelled so, and a raw
+        // backslash is a `/`, though a file holds one in its name.
+        assert!(resolved("wild/a%2fb", &[]).is_err(), "an encoded `/` is refused");
+        assert!(resolved("wild/a%5Cb", &[]).is_err(), "an encoded `\\` is refused");
+        #[cfg(unix)]
+        assert_eq!(resolved("wild/a\\b", &[]).as_deref(), Ok("wild/src/a/b.ts"));
         // Where the filesystem opens the misspelled entry, the selection
         // fails naming the file it opens; elsewhere it names no file.
         for (specifier, spelled, actual) in [("case-runtime", "dist/Index.js", "dist/index.js"), ("case-main", "Main.js", "main.js")] {
