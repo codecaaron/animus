@@ -1,6 +1,5 @@
-//! Module graphs with an import cycle, which the topological bundle cannot
-//! order, evaluate as Node evaluates them. Every module's export object
-//! exists first. Each module is then linked: its exports become getters over
+//! A system's modules evaluate as Node evaluates them. Every module's
+//! export object exists first. Each module is then linked: its exports become getters over
 //! its own bindings, so a function declaration is readable at once and a
 //! `let`, `const` or `class` binding throws until it is initialized, and each
 //! name `export *` brings in is resolved now, as Node resolves it. Modules
@@ -20,7 +19,7 @@ use oxc::parser::{Parser, ParserReturn};
 use oxc::semantic::SemanticBuilder;
 use oxc::span::{GetSpan, SourceType};
 
-use super::{collect_declaration_export_names, js_quoted, module_export_name, stub_key};
+use super::{js_quoted, module_export_name, stub_key};
 
 fn source_type(path: &str) -> SourceType {
     SourceType::from_path(Path::new(path))
@@ -94,6 +93,7 @@ pub(crate) fn evaluation_order(
 }
 
 /// What one of a module's own export names reads.
+#[derive(Clone)]
 pub(crate) enum ExportTarget {
     /// A binding the module declares.
     Local(String),
@@ -104,8 +104,28 @@ pub(crate) enum ExportTarget {
     Namespace { from: String },
 }
 
+/// Bundle code that runs before any module: `__modules['#import'](read).value`
+/// is an imported binding as an assignment target. Reading it reads the
+/// binding, so a compound or logical assignment, an update and a
+/// destructuring read and short-circuit as Node does, and only the write
+/// itself throws. The key names no module, and it is not enumerable, so
+/// scans over `__modules` skip it.
+pub(crate) const PRELUDE: &str = "Object.defineProperty(__modules, '#import', { value: (read) => ({ get value() { return read(); }, \
+     set value(_) { throw new TypeError('Assignment to constant variable.'); } }) });\n";
+
+/// A name for the module's own binding of its default export that the
+/// module neither declares nor reads: a name it uses may not be taken.
+fn default_binding_name(scoping: &oxc::semantic::Scoping) -> String {
+    let taken: HashSet<&str> =
+        scoping.symbol_names().chain(scoping.root_unresolved_references().keys().map(|name| name.as_str())).collect();
+    std::iter::once("__default".to_string())
+        .chain((1..).map(|n| format!("__default{n}")))
+        .find(|name| !taken.contains(name.as_str()))
+        .expect("an unbounded sequence holds a free name")
+}
+
 /// A module rewritten for linking: its exports, stars and imports link every
-/// graph; its link code and body make a cyclic graph's bundle.
+/// graph; its link code and body make the bundle.
 pub(crate) struct LinkedModule {
     /// Its own export names, in source order.
     pub exports: Vec<(String, ExportTarget)>,
@@ -113,12 +133,15 @@ pub(crate) struct LinkedModule {
     pub stars: Vec<String>,
     /// Each named or default import: its module and the name.
     pub imports: Vec<(String, String)>,
-    /// Statements that run at link time, before the export getters: each
-    /// namespace import's binding, and an anonymous default function's name.
+    /// Statements that run at link time, before the export getters: an
+    /// anonymous default function's name.
     pub link: String,
     /// Its code with imports and export syntax removed and each read of an
     /// imported binding reading the exporting module.
     pub body: String,
+    /// The range in `body` of each reference to an imported binding, and the
+    /// local name the module refers to it by.
+    pub import_refs: Vec<(usize, usize, String)>,
 }
 
 struct Edit {
@@ -141,17 +164,20 @@ pub(crate) fn rewrite_module_for_linking(
 
     let mut edits: Vec<Edit> = Vec::new();
     let mut removed: Vec<(usize, usize)> = Vec::new();
-    // Each imported binding, by symbol, as the read of its module's export.
+    // Each imported binding, by symbol, as the module export it reads, and
+    // by local name, as what exporting it exports.
     let mut imported = HashMap::new();
-    let mut imported_by_name: HashMap<String, (String, String)> = HashMap::new();
+    let mut import_targets: HashMap<String, ExportTarget> = HashMap::new();
     let mut module = LinkedModule {
         exports: Vec::new(),
         stars: Vec::new(),
         imports: Vec::new(),
         link: String::new(),
         body: String::new(),
+        import_refs: Vec::new(),
     };
     let mut local_exports: Vec<(String, String)> = Vec::new();
+    let default_name = default_binding_name(scoping);
     let mut remove = |edits: &mut Vec<Edit>, start: u32, end: u32| {
         removed.push((start as usize, end as usize));
         edits.push(Edit { start: start as usize, end: end as usize, text: String::new() });
@@ -165,22 +191,22 @@ pub(crate) fn rewrite_module_for_linking(
                     let name = match specifier {
                         ImportDeclarationSpecifier::ImportSpecifier(named) => module_export_name(&named.imported),
                         ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => "default".to_string(),
+                        // The namespace object is the module's export object;
+                        // a call through it keeps it as `this`.
                         ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
-                            let _ = writeln!(
-                                module.link,
-                                "const {} = __modules['{}'];",
-                                namespace.local.name,
-                                js_quoted(&from)
-                            );
+                            let local = &namespace.local;
+                            import_targets.insert(local.name.to_string(), ExportTarget::Namespace { from: from.clone() });
+                            imported.insert(local.symbol_id(), format!("__modules['{}']", js_quoted(&from)));
                             continue;
                         }
                     };
                     let local = specifier.local();
                     module.imports.push((from.clone(), name.clone()));
-                    imported_by_name.insert(local.name.to_string(), (from.clone(), name.clone()));
-                    // `(0, …)`: a read in any expression position, and a call
-                    // through it gets no `this`, as an imported function's does.
-                    imported.insert(local.symbol_id(), format!("(0, {})", export_read(&from, &name)));
+                    import_targets.insert(
+                        local.name.to_string(),
+                        ExportTarget::Indirect { from: from.clone(), name: name.clone() },
+                    );
+                    imported.insert(local.symbol_id(), export_read(&from, &name));
                 }
                 remove(&mut edits, decl.span.start, decl.span.end);
             }
@@ -219,12 +245,13 @@ pub(crate) fn rewrite_module_for_linking(
                             edits.push(Edit {
                                 start: function.params.span.start as usize,
                                 end: function.params.span.start as usize,
-                                text: " __default".to_string(),
+                                text: format!(" {default_name}"),
                             });
-                            module.link.push_str(
-                                "Object.defineProperty(__default, 'name', { value: 'default', configurable: true });\n",
+                            let _ = writeln!(
+                                module.link,
+                                "Object.defineProperty({default_name}, 'name', {{ value: 'default', configurable: true }});"
                             );
-                            local_exports.push(("default".to_string(), "__default".to_string()));
+                            local_exports.push(("default".to_string(), default_name.clone()));
                         }
                     },
                     ExportDefaultDeclarationKind::ClassDeclaration(class) if class.id.is_some() => {
@@ -232,7 +259,7 @@ pub(crate) fn rewrite_module_for_linking(
                         local_exports.push(("default".to_string(), id));
                     }
                     kind => {
-                        edits.push(Edit { text: "const __default = ".to_string(), ..prefix });
+                        edits.push(Edit { text: format!("const {default_name} = "), ..prefix });
                         if matches!(kind, ExportDefaultDeclarationKind::ClassDeclaration(_)) {
                             edits.push(Edit {
                                 start: decl.span.end as usize,
@@ -240,7 +267,7 @@ pub(crate) fn rewrite_module_for_linking(
                                 text: ";".to_string(),
                             });
                         }
-                        local_exports.push(("default".to_string(), "__default".to_string()));
+                        local_exports.push(("default".to_string(), default_name.clone()));
                         continue;
                     }
                 }
@@ -259,16 +286,16 @@ pub(crate) fn rewrite_module_for_linking(
             _ => {}
         }
     }
-    // An export of an imported binding re-exports that module's export.
+    // An export of an imported binding re-exports that module's export, or
+    // its namespace.
     for (exported, local) in local_exports {
-        let target = match imported_by_name.get(&local) {
-            Some((from, name)) => ExportTarget::Indirect { from: from.clone(), name: name.clone() },
-            None => ExportTarget::Local(local),
-        };
+        let target = import_targets.get(&local).cloned().unwrap_or(ExportTarget::Local(local));
         module.exports.push((exported, target));
     }
 
-    for (&symbol, read) in &imported {
+    // Each import reference's edit, and the local name it refers to.
+    let mut refs: HashMap<(usize, usize), &str> = HashMap::new();
+    for (&symbol, cell) in &imported {
         for reference in scoping.get_resolved_references(symbol) {
             let node = reference.node_id();
             let span = semantic.nodes().get_node(node).span();
@@ -276,27 +303,93 @@ pub(crate) fn rewrite_module_for_linking(
             if removed.iter().any(|&(s, e)| s <= start && end <= e) {
                 continue;
             }
-            let edit = match semantic.nodes().parent_kind(node) {
-                AstKind::ObjectProperty(property) if property.shorthand => Edit {
-                    start: property.span.start as usize,
-                    end: property.span.end as usize,
-                    text: format!("{}: {}", &source[start..end], read),
-                },
-                _ => Edit { start, end, text: read.clone() },
+            // An imported binding is read-only: writing it throws when the
+            // write runs, as Node throws, and the module still loads.
+            // `(0, …)`: a read in any expression position, and a call through
+            // it gets no `this`, as an imported function's does.
+            let read = if reference.is_write() {
+                format!("__modules['#import'](() => {cell}).value")
+            } else {
+                format!("(0, {cell})")
             };
+            // A shorthand property's span is its name's.
+            let text = match semantic.nodes().parent_kind(node) {
+                AstKind::ObjectProperty(property) if property.shorthand => format!("{}: {}", &source[start..end], read),
+                AstKind::AssignmentTargetPropertyIdentifier(_) => format!("{}: {}", &source[start..end], read),
+                _ => read,
+            };
+            let edit = Edit { start, end, text };
+            refs.insert((start, end), scoping.symbol_name(symbol));
             edits.push(edit);
         }
     }
 
-    // Reverse order keeps pending offsets valid; at one offset a replacement
-    // runs before an insertion there.
-    edits.sort_by_key(|edit| std::cmp::Reverse((edit.start, edit.end)));
-    let mut body = source.to_string();
+    // Edits never overlap; at one offset an insertion lands ahead of a
+    // replacement there.
+    edits.sort_by_key(|edit| (edit.start, edit.end));
+    let mut at = 0;
     for edit in &edits {
-        body.replace_range(edit.start..edit.end, &edit.text);
+        module.body.push_str(&source[at..edit.start]);
+        let start = module.body.len();
+        module.body.push_str(&edit.text);
+        if let Some(local) = refs.get(&(edit.start, edit.end)) {
+            module.import_refs.push((start, module.body.len(), (*local).to_string()));
+        }
+        at = edit.end;
     }
-    module.body = body;
+    module.body.push_str(&source[at..]);
     Ok(module)
+}
+
+fn collect_declaration_export_names(
+    declaration: &oxc::ast::ast::Declaration<'_>,
+    exports: &mut Vec<(String, String)>,
+) {
+    match declaration {
+        oxc::ast::ast::Declaration::VariableDeclaration(var_decl) => {
+            for declarator in &var_decl.declarations {
+                collect_binding_names(&declarator.id, exports);
+            }
+        }
+        oxc::ast::ast::Declaration::FunctionDeclaration(fn_decl) => {
+            if let Some(id) = &fn_decl.id {
+                let name = id.name.to_string();
+                exports.push((name.clone(), name));
+            }
+        }
+        oxc::ast::ast::Declaration::ClassDeclaration(class_decl) => {
+            if let Some(id) = &class_decl.id {
+                let name = id.name.to_string();
+                exports.push((name.clone(), name));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_binding_names(
+    pattern: &oxc::ast::ast::BindingPattern<'_>,
+    exports: &mut Vec<(String, String)>,
+) {
+    match pattern {
+        oxc::ast::ast::BindingPattern::BindingIdentifier(id) => {
+            let name = id.name.to_string();
+            exports.push((name.clone(), name));
+        }
+        oxc::ast::ast::BindingPattern::ObjectPattern(obj) => {
+            for prop in &obj.properties {
+                collect_binding_names(&prop.value, exports);
+            }
+        }
+        oxc::ast::ast::BindingPattern::ArrayPattern(arr) => {
+            for elem in arr.elements.iter().flatten() {
+                collect_binding_names(elem, exports);
+            }
+        }
+        oxc::ast::ast::BindingPattern::AssignmentPattern(assign) => {
+            collect_binding_names(&assign.left, exports);
+        }
+    }
 }
 
 /// The export relation of a system's modules, cyclic or not, answered by the shared
@@ -461,16 +554,6 @@ impl<'a> Linker<'a> {
         // lists them.
         getters.sort_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));
         getters
-    }
-
-    /// The getters of `module`'s names that do not read one of its own
-    /// bindings: what it re-exports, and what `export *` brings in.
-    pub fn forwarded(&self, module: &str) -> Vec<(String, String)> {
-        let record = self.table.record(self.index[module]);
-        self.getters(module)
-            .into_iter()
-            .filter(|(name, _)| !record.local_exports.iter().any(|(exported, _)| exported == name))
-            .collect()
     }
 
     /// Fails as Node fails to link: an import of a name its module does not
