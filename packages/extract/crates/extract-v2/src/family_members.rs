@@ -13,7 +13,8 @@ use crate::analyze_css::{
     declared_export, loaded_modules, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
 };
 use crate::facts::{FacadeEntry, FileFacts};
-use animus_system_loader::module_table::{ExportLookup, ImportName, Request, Terminal};
+use crate::flow::{AbsenceQuery, ChangeKind, Coverage, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom, ValueEffects};
+use animus_system_loader::module_table::{ExportLookup, ImportName, OpeningReason, Request, Terminal};
 
 /// Every compose family, keyed by the names its module gives it.
 pub(crate) struct FamilyIndex {
@@ -156,6 +157,50 @@ impl FamilyIndex {
     }
 }
 
+/// The objects a use reaches, and the openings through which it may reach
+/// more.
+#[derive(Default)]
+struct Reach {
+    objects: Vec<Object>,
+    openings: Vec<(ReasonId, Region)>,
+}
+
+impl Reach {
+    fn of(objects: Vec<Object>) -> Self {
+        Self { objects, openings: Vec::new() }
+    }
+
+    /// Every exported object, through an opening for `reason`.
+    fn anywhere(reason: ReasonId) -> Self {
+        Self { objects: Vec::new(), openings: vec![(reason, Region::of(RegionAtom::AllExports))] }
+    }
+
+    fn extend(&mut self, more: Reach) {
+        self.objects.extend(more.objects);
+        self.openings.extend(more.openings);
+    }
+
+    /// Records the use as a change to each object it reaches and to the
+    /// facades built on it, then each of its openings, said as `reason`.
+    fn record(self, flow: &mut FlowBuilder, facades: Vec<Object>, reason: &str) {
+        for object in self.objects.into_iter().chain(facades) {
+            flow.change(object_id(&object), Vec::new(), ChangeKind::Escape, reason.to_string());
+        }
+        for (why, region) in self.openings {
+            flow.open(why, region, reason.to_string());
+        }
+    }
+}
+
+/// An object as the changed relation names it: a facade by its module and
+/// binding, a family by its position, under a module no path names.
+fn object_id(object: &Object) -> ObjectId {
+    match object {
+        Object::Facade(module, binding) => ObjectId::new(module, binding),
+        Object::Family(index) => ObjectId::new("<family>", &index.to_string()),
+    }
+}
+
 /// A namespace import of a module the analysis does not read.
 enum UnreadNamespace {
     Missing,
@@ -226,10 +271,9 @@ pub(crate) struct ObjectMembers<'f> {
     objects: FxHashMap<(String, String), Option<Object>>,
     tables: FxHashMap<Object, Rc<MemberTable>>,
     building: FxHashSet<Object>,
-    exported: FxHashMap<String, Rc<[Object]>>,
-    /// Each object a use in the analysed modules may change, with the
-    /// first such use; swept once, on the first question.
-    unstable: Option<FxHashMap<Object, String>>,
+    /// What the uses in the analysed modules may change, closed once, on
+    /// the first question.
+    changed: Option<ValueEffects>,
 }
 
 impl<'f> ObjectMembers<'f> {
@@ -249,8 +293,7 @@ impl<'f> ObjectMembers<'f> {
             objects: FxHashMap::default(),
             tables: FxHashMap::default(),
             building: FxHashSet::default(),
-            exported: FxHashMap::default(),
-            unstable: None,
+            changed: None,
         }
     }
 
@@ -500,19 +543,6 @@ impl<'f> ObjectMembers<'f> {
         self.local_object(&declaring, &declared)
     }
 
-    /// Every object `module` exports, through `export *` too.
-    fn exported_objects(&mut self, module: &str) -> Rc<[Object]> {
-        if let Some(objects) = self.exported.get(module) {
-            return Rc::clone(objects);
-        }
-        let mut names = module_export_names(module, self.links);
-        // `export default compose(…)` binds no name to list.
-        names.insert("default".to_string());
-        let objects: Rc<[Object]> = names.iter().filter_map(|name| self.exported_object(module, name)).collect();
-        self.exported.insert(module.to_string(), Rc::clone(&objects));
-        objects
-    }
-
     fn table(&mut self, object: &Object) -> Rc<MemberTable> {
         if let Some(table) = self.tables.get(object) {
             return Rc::clone(table);
@@ -621,12 +651,13 @@ impl<'f> ObjectMembers<'f> {
     /// The first use in the analysed modules that may change `object`, said
     /// as a clause, or `None` when there is none.
     fn instability(&mut self, object: &Object) -> Option<String> {
-        if self.unstable.is_none() {
-            let swept = self.sweep();
-            self.unstable = Some(swept);
+        if self.changed.is_none() {
+            let changed = self.changed();
+            self.changed = Some(changed);
         }
-        if let Some(reason) = self.unstable.as_ref().and_then(|found| found.get(object)) {
-            return Some(reason.clone());
+        let query = AbsenceQuery::SlotsNotWritten(object_id(object));
+        if let Some(Coverage::Exposed(exposures)) = self.changed.as_ref().map(|changed| changed.covers(&query)) {
+            return Some(exposures[0].cause().to_string());
         }
         let Object::Facade(module, binding) = object else { return None };
         // A facade built onto an object (`Object.assign(Root, …)`) is that
@@ -649,67 +680,81 @@ impl<'f> ObjectMembers<'f> {
         })
     }
 
-    /// Every object a use in the analysed modules may change, each with the
-    /// first such use in module and source order: a use of a binding that
-    /// holds it, a namespace re-export of a module exporting it, or a
-    /// runtime load of one.
-    fn sweep(&mut self) -> FxHashMap<Object, String> {
+    /// The changes a use in the analysed modules may make to an object, in
+    /// module and source order: a use of a binding that holds it, a use that
+    /// may write through a package's namespace, a namespace re-export of a
+    /// module exporting it, a runtime load of one, or code run from a
+    /// string. Every such use may rebind any member.
+    fn changed(&mut self) -> ValueEffects {
         let files = self.files;
         let inputs = self.inputs;
-        let mut found: FxHashMap<Object, String> = FxHashMap::default();
+        let mut flow = FlowBuilder::new();
+        // Each object a module exports, under each name it exports it as.
+        let modules: Vec<String> = files.keys().cloned().collect();
+        for module in &modules {
+            let mut names = module_export_names(module, self.links);
+            // `export default compose(…)` binds no name to list.
+            names.insert("default".to_string());
+            for name in &names {
+                if let Some(object) = self.exported_object(module, name) {
+                    flow.export(object_id(&object), module, name);
+                }
+            }
+        }
         let mut by_name: Option<FxHashMap<String, Vec<Object>>> = None;
         for (module, ff) in files {
             for (name, used) in &ff.unsafe_object_uses {
                 let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
                 let reason = format!("{name} {} in {module}{line}", used.what);
-                let held: Vec<Object> = match name.split_once('.') {
+                let reach: Reach = match name.split_once('.') {
                     // A member of a namespace import.
                     // A module the analysis cannot find may re-export any
                     // object under any name: a write through a member of its
                     // namespace may reach any of them. A package's namespace
                     // is followed below.
                     Some((namespace, member)) => match self.unread_namespace(module, ff, namespace) {
-                        Some(UnreadNamespace::Missing) => self.every_exported_object(),
-                        Some(UnreadNamespace::Package) => Vec::new(),
+                        Some(UnreadNamespace::Missing) => Reach::anywhere(ReasonId::UnresolvedSpecifier),
+                        Some(UnreadNamespace::Package) => Reach::default(),
                         None => match ff
                             .namespace_imports
                             .get(namespace)
                             .and_then(|spec| resolve_import_source(module, spec, files, inputs))
                         {
                             Some(target) => match self.exported_object(&target, member) {
-                                Some(object) => vec![object],
+                                Some(object) => Reach::of(vec![object]),
                                 None => self.opened_export(&target, member),
                             },
-                            None => Vec::new(),
+                            None => Reach::default(),
                         },
                     },
                     None => match ff.namespace_imports.get(name) {
                         Some(spec) => match self.unread_namespace(module, ff, name) {
-                            Some(UnreadNamespace::Package) => Vec::new(),
-                            Some(UnreadNamespace::Missing) => self.every_exported_object(),
+                            Some(UnreadNamespace::Package) => Reach::default(),
+                            Some(UnreadNamespace::Missing) => Reach::anywhere(ReasonId::UnresolvedSpecifier),
                             None => resolve_import_source(module, spec, files, inputs)
-                                .map(|target| self.namespace_objects(&target))
+                                .map(|target| self.namespace_reach(&target))
                                 .unwrap_or_default(),
                         },
                         None => match self.unresolved_import(module, ff, name) {
                             // An import the analysis cannot follow may be any
                             // object its name names.
-                            Some(imported) => by_name
-                                .get_or_insert_with(|| self.objects_by_name())
-                                .get(imported)
-                                .cloned()
-                                .unwrap_or_default(),
+                            Some(imported) => Reach::of(
+                                by_name
+                                    .get_or_insert_with(|| self.objects_by_name())
+                                    .get(imported)
+                                    .cloned()
+                                    .unwrap_or_default(),
+                            ),
                             None => match self.local_object(module, name) {
-                                Some(object) => vec![object],
+                                Some(object) => Reach::of(vec![object]),
                                 None => self.opened_import(module, ff, name),
                             },
                         },
                     },
                 };
                 // A write to an assigned facade's target changes the facade.
-                for object in held.into_iter().chain(self.facades_on(module, ff, name)) {
-                    found.entry(object).or_insert_with(|| reason.clone());
-                }
+                let facades = self.facades_on(module, ff, name);
+                reach.record(&mut flow, facades, &reason);
             }
             // A package may re-export our objects (a linked workspace
             // package) under any name: a use that may write through its
@@ -720,88 +765,83 @@ impl<'f> ObjectMembers<'f> {
                 }
                 let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
                 let reason = format!("{subject} {} in {module}{line}", used.what);
-                for object in self.every_exported_object() {
-                    found.entry(object).or_insert_with(|| reason.clone());
-                }
+                flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
             }
             for (name, spec) in &ff.namespace_exports {
                 let Some(target) = resolve_import_source(module, spec, files, inputs) else {
                     continue;
                 };
                 let reason = format!("{module} re-exports {target} as the namespace {name}");
-                for object in self.namespace_objects(&target) {
-                    found.entry(object.clone()).or_insert_with(|| reason.clone());
-                }
+                self.namespace_reach(&target).record(&mut flow, Vec::new(), &reason);
             }
             for load in &ff.module_loads {
                 for target in loaded_modules(module, load, files, inputs) {
                     let reason = format!("{module} loads {target} at runtime on line {}", load.line);
-                    for object in self.namespace_objects(target) {
-                        found.entry(object.clone()).or_insert_with(|| reason.clone());
-                    }
+                    self.namespace_reach(target).record(&mut flow, Vec::new(), &reason);
                 }
             }
             // Code from a string can `import()` any module and change what
             // it exports.
             if let Some(how) = ff.dynamic_code {
                 let reason = format!("{module} {how}, so code from a string can load and change any module");
-                for target in files.keys() {
-                    for object in self.exported_objects(target).iter() {
-                        found.entry(object.clone()).or_insert_with(|| reason.clone());
-                    }
-                }
+                flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), reason);
             }
         }
-        found
+        flow.close()
     }
 
-    /// Every object `module`'s namespace may hold: each export's and, where
-    /// an open route leaves an export or the module's names incomplete,
-    /// every object that route may reach.
-    fn namespace_objects(&mut self, module: &str) -> Vec<Object> {
-        let mut objects = self.exported_objects(module).to_vec();
-        let Some(index) = self.links.module(module) else { return objects };
+    /// What `module`'s namespace may hold: each object it exports and,
+    /// where an open route leaves an export or the module's names
+    /// incomplete, every exported object.
+    fn namespace_reach(&mut self, module: &str) -> Reach {
+        let mut reach = Reach::default();
+        let Some(index) = self.links.module(module) else { return reach };
+        reach.openings.push((ReasonId::OpaqueEffect, Region::of(RegionAtom::ExportsOf(module.to_string()))));
         let names = self.links.table.exported_names(index);
         for name in &names.names {
-            objects.extend(self.opened_export(module, name));
+            reach.extend(self.opened_export(module, name));
         }
         if !names.complete() {
-            objects.extend(self.every_exported_object());
+            reach.openings.push((ReasonId::OpaqueStar, Region::of(RegionAtom::AllExports)));
         }
-        objects
+        reach
     }
 
-    /// The objects an import binding of `module` may hold when an open route
+    /// What an import binding of `module` may hold when an open route
     /// leaves the export it imports incomplete.
-    fn opened_import(&mut self, module: &str, ff: &FileFacts, local: &str) -> Vec<Object> {
-        let Some(import) = ff.imports.iter().find(|import| import.local == local) else { return Vec::new() };
+    fn opened_import(&mut self, module: &str, ff: &FileFacts, local: &str) -> Reach {
+        let Some(import) = ff.imports.iter().find(|import| import.local == local) else { return Reach::default() };
         let Some(source) = resolve_import_source(module, &import.source, self.files, self.inputs) else {
-            return Vec::new();
+            return Reach::default();
         };
         self.opened_export(&source, &import.imported)
     }
 
-    /// The objects `module`'s export `name` may hold when an open route
-    /// leaves the answer incomplete: each object the answer knows, and every
-    /// exported object, since the module the route passes is one the
-    /// analysis does not read and may re-export any object under any name.
-    /// Nothing for a complete answer.
-    fn opened_export(&mut self, module: &str, name: &str) -> Vec<Object> {
-        let Some(index) = self.links.module(module) else { return Vec::new() };
+    /// What `module`'s export `name` may hold when an open route leaves the
+    /// answer incomplete: each object the answer knows, and every exported
+    /// object, since the module the route passes is one the analysis does
+    /// not read and may re-export any object under any name. Nothing for a
+    /// complete answer.
+    fn opened_export(&mut self, module: &str, name: &str) -> Reach {
+        let mut reach = Reach::default();
+        let Some(index) = self.links.module(module) else { return reach };
         let ExportLookup::Incomplete { known, openings } = self.links.table.resolve_export(index, name) else {
-            return Vec::new();
+            return reach;
         };
-        let mut objects = Vec::new();
         for terminal in known {
             if let Terminal::Local { module: declaring, binding } = terminal {
                 let (path, local) = crate::analyze_css::binding_name(self.links, self.files, declaring, binding);
-                objects.extend(self.local_object(&path, &local));
+                reach.objects.extend(self.local_object(&path, &local));
             }
         }
-        if !openings.is_empty() {
-            objects.extend(self.every_exported_object());
+        for opening in openings {
+            let reason = match opening.reason {
+                OpeningReason::OutsideStar(_) => ReasonId::OpaqueStar,
+                OpeningReason::UnresolvedRequest(_) => ReasonId::UnresolvedSpecifier,
+            };
+            reach.openings.push((reason, Region::of(RegionAtom::AllExports)));
         }
-        objects
+        reach
     }
 
     /// Whether `module` imports `local` as the namespace of a module the
@@ -818,16 +858,6 @@ impl<'f> ObjectMembers<'f> {
             Request::Outside(_) => Some(UnreadNamespace::Package),
             Request::Module(_) => None,
         }
-    }
-
-    /// Every object any module exports.
-    fn every_exported_object(&mut self) -> Vec<Object> {
-        let modules: Vec<String> = self.files.keys().cloned().collect();
-        let mut objects = Vec::new();
-        for module in &modules {
-            objects.extend(self.exported_objects(module).iter().cloned());
-        }
-        objects
     }
 
     /// The name an import binding of `module` imports, when its source is
