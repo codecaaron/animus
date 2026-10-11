@@ -245,6 +245,7 @@ pub struct ForwardRoute {
 /// `const X = { key: … }` holds is keyed `X.key`, a name no binding has.
 pub fn collect_props_forwarding(
     program: &Program<'_>,
+    scoping: &Scoping,
 ) -> std::collections::BTreeMap<String, PropsForwarding> {
     use oxc::ast::ast::ExportDefaultDeclarationKind;
     let mut components: Vec<(&str, Option<ComponentFunction<'_, '_>>)> = Vec::new();
@@ -279,7 +280,7 @@ pub fn collect_props_forwarding(
         .into_iter()
         .filter_map(|(name, function)| Some((name.to_string(), function?)))
         .chain(held)
-        .filter_map(|(name, function)| Some((name, props_forwarding(function)?)))
+        .filter_map(|(name, function)| Some((name, props_forwarding(function, scoping)?)))
         .collect()
 }
 
@@ -375,17 +376,20 @@ impl<'b, 'a> ComponentFunction<'b, 'a> {
     }
 }
 
-fn props_forwarding(function: ComponentFunction<'_, '_>) -> Option<PropsForwarding> {
+fn props_forwarding(function: ComponentFunction<'_, '_>, scoping: &Scoping) -> Option<PropsForwarding> {
     use oxc::ast::ast::BindingPattern;
     let mut pattern = &function.props?.pattern;
     while let BindingPattern::AssignmentPattern(assignment) = pattern {
         pattern = &assignment.left;
     }
-    let (named, spread) = match pattern {
-        BindingPattern::BindingIdentifier(id) => (Vec::new(), id.name.to_string()),
+    let (named, binding) = match pattern {
+        BindingPattern::BindingIdentifier(id) => (Vec::new(), id.as_ref()),
         BindingPattern::ObjectPattern(object) => object_rest(object)?,
         _ => return None,
     };
+    let spread = binding.name.to_string();
+    // The props, by binding: a name a nested scope declares again is not it.
+    let props = Props { scoping, symbol: binding.symbol_id.get()? };
     let mut routes = Vec::new();
     let mut route = |named: Vec<String>, spread: &str, derived: bool| {
         let mut scan = SpreadTargets {
@@ -403,39 +407,125 @@ fn props_forwarding(function: ComponentFunction<'_, '_>) -> Option<PropsForwardi
     // tags `rest` is spread into.
     // `const [styling, behavior] = splitProps(props, KEYS)` or `const
     // styling = pick(props)`: what a call the props are passed to returns
-    // may carry any of them.
+    // may carry any of them, and so may a conditional with it as one
+    // alternative. `const rest = visible ? props : {}` spreads the props or
+    // nothing.
     for statement in &function.body.statements {
-        for (body_named, rest) in destructured_rests(statement, &spread) {
+        for (body_named, rest) in destructured_rests(statement, &props) {
             route(named.iter().cloned().chain(body_named).collect(), &rest, false);
         }
-        for derived in call_results(statement, &spread) {
-            route(named.clone(), &derived, true);
+        for (bound, derived) in props_values(statement, &props) {
+            route(named.clone(), &bound, derived);
         }
     }
     (!routes.is_empty()).then_some(PropsForwarding { routes })
 }
 
-/// The names a statement binds to what a call taking `props` as an argument
-/// returns: every name its pattern binds, through defaults and nesting.
-fn call_results(statement: &Statement<'_>, props: &str) -> Vec<String> {
+/// A component's props parameter, or its rest element, by binding.
+struct Props<'s> {
+    scoping: &'s Scoping,
+    symbol: SymbolId,
+}
+
+impl Props<'_> {
+    fn is(&self, expr: &Expression<'_>) -> bool {
+        matches!(crate::chain_walk::unwrap_type_assertions(expr), Expression::Identifier(id)
+            if id.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id()) == Some(self.symbol))
+    }
+
+    /// What `expr` may evaluate to, alternative by alternative, through
+    /// conditionals and logical operators: a falsy left of `&&` spreads
+    /// nothing.
+    fn alternatives(&self, expr: &Expression<'_>, kinds: &mut Alternatives) {
+        use oxc::ast::ast::{ArrayExpressionElement, LogicalOperator, ObjectPropertyKind};
+        let holds_props = |expr: &Expression<'_>| self.is(expr);
+        // A literal or a call holding the props may carry any of them.
+        match crate::chain_walk::unwrap_type_assertions(expr) {
+            Expression::ConditionalExpression(conditional) => {
+                self.alternatives(&conditional.consequent, kinds);
+                self.alternatives(&conditional.alternate, kinds);
+            }
+            Expression::LogicalExpression(logical) => {
+                if logical.operator == LogicalOperator::And {
+                    kinds.omits = true;
+                } else {
+                    self.alternatives(&logical.left, kinds);
+                }
+                self.alternatives(&logical.right, kinds);
+            }
+            expr if self.is(expr) => kinds.props = true,
+            Expression::CallExpression(call)
+                if call.arguments.iter().any(|argument| argument.as_expression().is_some_and(holds_props)) =>
+            {
+                kinds.derived = true;
+            }
+            Expression::ObjectExpression(object) if object.properties.is_empty() => kinds.omits = true,
+            Expression::ObjectExpression(object)
+                if object.properties.iter().any(|property| match property {
+                    ObjectPropertyKind::ObjectProperty(property) => holds_props(&property.value),
+                    ObjectPropertyKind::SpreadProperty(spread) => holds_props(&spread.argument),
+                }) =>
+            {
+                kinds.derived = true;
+            }
+            Expression::ArrayExpression(array)
+                if array.elements.iter().any(|element| match element {
+                    ArrayExpressionElement::SpreadElement(spread) => holds_props(&spread.argument),
+                    element => element.as_expression().is_some_and(holds_props),
+                }) =>
+            {
+                kinds.derived = true;
+            }
+            Expression::NullLiteral(_) => kinds.omits = true,
+            Expression::BooleanLiteral(literal) if !literal.value => kinds.omits = true,
+            Expression::Identifier(id)
+                if id.name == "undefined"
+                    && id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).symbol_id().is_none()) =>
+            {
+                kinds.omits = true;
+            }
+            _ => kinds.other = true,
+        }
+    }
+}
+
+/// The kinds of a value's alternatives: the props themselves, what may
+/// carry any of them, nothing, or anything else.
+#[derive(Default)]
+struct Alternatives {
+    props: bool,
+    derived: bool,
+    omits: bool,
+    other: bool,
+}
+
+/// Each name a statement binds to a value whose every alternative is the
+/// props, may carry any of them, or spreads nothing, and whether it may
+/// carry what the props do not (a call's result, a destructured part): the
+/// names through defaults and nesting. `const { a, ...rest } = props` is
+/// `destructured_rests`'.
+fn props_values(statement: &Statement<'_>, props: &Props<'_>) -> Vec<(String, bool)> {
+    use oxc::ast::ast::BindingPattern;
     let Statement::VariableDeclaration(declaration) = statement else { return Vec::new() };
-    let mut names = Vec::new();
+    let mut values = Vec::new();
     for declarator in &declaration.declarations {
-        let Some(Expression::CallExpression(call)) =
-            declarator.init.as_ref().map(crate::chain_walk::unwrap_type_assertions)
-        else {
-            continue;
-        };
-        let takes_props = call.arguments.iter().any(|argument| {
-            argument.as_expression().map(crate::chain_walk::unwrap_type_assertions)
-                .is_some_and(|argument| matches!(argument, Expression::Identifier(id) if id.name == props))
-        });
-        if !takes_props {
+        let Some(init) = &declarator.init else { continue };
+        let mut kinds = Alternatives::default();
+        props.alternatives(init, &mut kinds);
+        if kinds.other || !(kinds.props || kinds.derived) {
             continue;
         }
-        bound_names(&declarator.id, &mut names);
+        match &declarator.id {
+            BindingPattern::BindingIdentifier(id) => values.push((id.name.to_string(), kinds.derived)),
+            _ if !kinds.derived && !kinds.omits => continue,
+            pattern => {
+                let mut names = Vec::new();
+                bound_names(pattern, &mut names);
+                values.extend(names.into_iter().map(|name| (name, true)));
+            }
+        }
     }
-    names
+    values
 }
 
 /// Every name a binding pattern binds, through defaults, nesting and rests.
@@ -464,7 +554,9 @@ fn bound_names(pattern: &oxc::ast::ast::BindingPattern<'_>, names: &mut Vec<Stri
 }
 
 /// `{ a, b, ...rest }`: the keys it names and its rest binding.
-fn object_rest(object: &oxc::ast::ast::ObjectPattern<'_>) -> Option<(Vec<String>, String)> {
+fn object_rest<'b, 'a>(
+    object: &'b oxc::ast::ast::ObjectPattern<'a>,
+) -> Option<(Vec<String>, &'b oxc::ast::ast::BindingIdentifier<'a>)> {
     let oxc::ast::ast::BindingPattern::BindingIdentifier(rest) = &object.rest.as_ref()?.argument else {
         return None;
     };
@@ -473,24 +565,23 @@ fn object_rest(object: &oxc::ast::ast::ObjectPattern<'_>) -> Option<(Vec<String>
         .iter()
         .filter_map(|property| property.key.static_name().map(|key| key.to_string()))
         .collect();
-    Some((named, rest.name.to_string()))
+    Some((named, rest.as_ref()))
 }
 
 /// Each `const { a, b, ...rest } = props` of a statement: the keys it names
 /// and its rest binding, when it destructures `props` itself.
-fn destructured_rests(statement: &Statement<'_>, props: &str) -> Vec<(Vec<String>, String)> {
+fn destructured_rests(statement: &Statement<'_>, props: &Props<'_>) -> Vec<(Vec<String>, String)> {
     use oxc::ast::ast::BindingPattern;
     let Statement::VariableDeclaration(declaration) = statement else { return Vec::new() };
     declaration
         .declarations
         .iter()
         .filter_map(|declarator| {
-            let init = crate::chain_walk::unwrap_type_assertions(declarator.init.as_ref()?);
-            if !matches!(init, Expression::Identifier(id) if id.name == props) {
+            if !props.is(declarator.init.as_ref()?) {
                 return None;
             }
             let BindingPattern::ObjectPattern(object) = &declarator.id else { return None };
-            object_rest(object)
+            object_rest(object).map(|(named, rest)| (named, rest.name.to_string()))
         })
         .collect()
 }

@@ -1245,7 +1245,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let walked = chain_walk::walk_program_facts(program);
     let member_parent_extensions = walked.member_parents;
     let walked_chains = walked.chains;
-    let props_forwarding = crate::usage_facts::collect_props_forwarding(program);
+    let props_forwarding = crate::usage_facts::collect_props_forwarding(program, &scoping);
     let const_initializers = collect_const_initializers(program, &props_forwarding);
     let imports = collect_import_facts(ast.module_record());
     let create_transform_locals: rustc_hash::FxHashSet<String> = imports

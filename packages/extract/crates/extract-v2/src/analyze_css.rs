@@ -13177,14 +13177,19 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
         // A spread of what a call returns warns that it may forward, for
         // every name the call's result binds; a spread of the props says
-        // it forwards them.
-        let routes: [(&str, &str); 6] = [
+        // it forwards them. Contract: a conditional props split is
+        // attributed like a rest spread, alternative by alternative.
+        let routes: [(&str, &str); 7] = [
             ("const [styling = {}] = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
             ("const { styling = {} } = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
             ("const { part: { styling } } = splitProps(props, KEYS); return <Box {...styling} />;", "may forward"),
             ("const styling = pick(props); return <Box {...styling} />;", "may forward"),
             ("let styling = pick(props); styling = {}; return <Box {...styling} />;", "may forward"),
             ("return <Box {...props} />;", "forwards them by spread"),
+            (
+                "const [legend, styling] = visible ? splitProps(props, KEYS) : [{}, props]; return <Box {...styling} />;",
+                "may forward",
+            ),
         ];
         for (body, how) in routes {
             let wrapper = format!(
