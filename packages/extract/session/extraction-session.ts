@@ -159,7 +159,6 @@ import {
 } from './singleton';
 import { logBuildTimings } from './timing';
 
-import type { AliasComparison } from '../pipeline/alias-agreement';
 import type {
   AnimusCoreOptions,
   ExternalPackageOutcome,
@@ -447,9 +446,6 @@ export class ExtractionSession {
    *  discovery asks it first, the loader only for a declared workspace it
    *  cannot resolve. Null resolves through the loader alone. */
   hostResolve: HostResolve | null = null;
-  /** How the last analysis compared the path aliases it reads with the
-   *  host's resolver (spec §2.2 A7); `unavailable` is never agreement. */
-  aliasComparison: AliasComparison = 'unavailable';
   /** Each file's alias comparison, kept by content hash across analyses. */
   private readonly aliasCache = new AliasAgreementCache();
   /** Serialized path aliases, harvested by the adapter from bundler config. */
@@ -2725,12 +2721,12 @@ export class ExtractionSession {
     fileEntries: FileEntry[]
   ): Promise<ManifestDiagnostic[]> {
     const { moduleSpecifiers } = this.engine();
-    if (this.host.noBundler) {
-      this.aliasComparison = 'not-applicable';
-      return [];
-    }
+    // No finding is agreement only where a comparison ran (spec §2.2 A7);
+    // its state belongs to the acquisition certificate, so until that
+    // exists an unavailable comparison is logged, never recorded as one.
+    if (this.host.noBundler) return [];
     if (this.hostResolve === null || moduleSpecifiers === undefined) {
-      this.aliasComparison = 'unavailable';
+      this.log('path aliases: no host resolver, comparison unavailable');
       return [];
     }
     let analysedReal: Set<string> | null = null;
@@ -2759,7 +2755,6 @@ export class ExtractionSession {
           redirected: new Set(this.externalSourceEntries.keys()),
         },
       });
-      this.aliasComparison = 'compared';
       for (const finding of findings) {
         this.reportedInstances.add(`${finding.file}\0${finding.component}`);
       }
@@ -2770,7 +2765,6 @@ export class ExtractionSession {
       }
       return findings;
     } catch (error) {
-      this.aliasComparison = 'unavailable';
       this.log(`path aliases: comparison unavailable (${String(error)})`);
       return [];
     }

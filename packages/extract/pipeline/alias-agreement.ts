@@ -19,12 +19,6 @@ import type { HostResolve } from './host-package-resolver';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type { HostReadings } from './probe-evidence';
 
-/** How a session compared its tsconfig aliases with the host (spec §2.2
- *  A7): `compared` against the host's resolver; `unavailable` where the
- *  host's resolver cannot be reached, which is never agreement;
- *  `not-applicable` where no bundler resolves the output (the CLI). */
-export type AliasComparison = 'compared' | 'unavailable' | 'not-applicable';
-
 interface AliasEntry {
   pattern: string;
   replacement: string;
