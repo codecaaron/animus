@@ -906,23 +906,19 @@ impl ExtractEngine {
 
         // A static that some use may change before a style reads it stands
         // as a marker naming that use, so every reader refuses it.
-        // A function's parameter readings, scanned only for the modules a
-        // handed-on object's callee resolves to.
         let programs: BTreeMap<&str, &oxc::ast::ast::Program<'_>> =
             store.iter().map(|ast| (ast.path.as_str(), ast.program())).collect();
-        let mut readings_cache: BTreeMap<String, FunctionReadings> = BTreeMap::new();
-        let mut readings_of = |file: &str| {
-            std::rc::Rc::clone(readings_cache.entry(file.to_string()).or_insert_with(|| {
-                std::rc::Rc::new(
-                    programs
-                        .get(file)
-                        .map(|program| {
-                            crate::usage_facts::function_param_readings(program, &lowered_by_file[file].scoping)
-                        })
-                        .unwrap_or_default(),
-                )
-            }))
-        };
+        // Each module's functions, with how their parameters treat an
+        // object, read while the module's scopes are at hand.
+        let readings_by_file: BTreeMap<String, FunctionReadings> = store
+            .iter()
+            .map(|ast| {
+                let readings =
+                    crate::usage_facts::function_param_readings(ast.program(), &lowered_by_file[&ast.path].scoping);
+                (ast.path.clone(), std::rc::Rc::new(readings))
+            })
+            .collect();
+        let mut readings_of = |file: &str| readings_by_file.get(file).cloned().unwrap_or_default();
         for ((file, local), reason) in unstable_style_statics(
             &style_modules,
             &imports_by_file,
