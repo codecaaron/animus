@@ -13110,6 +13110,37 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// Code a module runs from a string can `import()` any module and
+    /// rebind what an exported object holds, so a member tag of one
+    /// rendered elsewhere is not proven; a module running none leaves it.
+    #[test]
+    fn code_run_from_a_string_may_rebind_any_exported_object() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        for (runner, reason) in [
+            ("export const run = (source) => eval(source);\n", Some("runner.ts reads eval")),
+            ("export const run = (source) => new Function(source)();\n", Some("runner.ts reads Function")),
+            ("export const run = (source) => source.length;\n", None),
+        ] {
+            let out = analyze_with_logical_space(&[
+                ("recipe.tsx", recipe),
+                ("fam.tsx", fam),
+                ("runner.ts", runner),
+                ("app.tsx", app),
+            ]);
+            let warned: Vec<&str> = unattributed(&out).iter().map(|d| d.message.as_str()).collect();
+            match reason {
+                Some(reason) => assert!(
+                    warned.len() == 1
+                        && warned[0].contains(&format!("({reason}, so code from a string can load and change any module)")),
+                    "{runner}: {warned:?}"
+                ),
+                None => assert!(warned.is_empty(), "{runner}: {warned:?}"),
+            }
+        }
+    }
+
     fn unattributed(out: &CssOutput) -> Vec<&CssDiagnostic> {
         out.diagnostics
             .iter()
