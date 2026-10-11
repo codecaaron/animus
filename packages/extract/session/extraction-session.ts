@@ -13,6 +13,7 @@ import {
 } from 'fs';
 import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
 
+import { compareAliases } from '../pipeline/alias-agreement';
 import {
   adaptedOriginals,
   assembleStylesheet,
@@ -140,6 +141,7 @@ import {
 } from './singleton';
 import { logBuildTimings } from './timing';
 
+import type { AliasComparison } from '../pipeline/alias-agreement';
 import type {
   AnimusCoreOptions,
   ExternalPackageOutcome,
@@ -196,6 +198,9 @@ export interface SessionHost {
   /** Where the session's lines go; omitted, the console. Each line already
    *  carries its `[animus]` mark. */
   logger?: SessionLogger;
+  /** The session's output feeds no bundler (the CLI), so its path aliases
+   *  have no host answer to agree with (spec §2.2 A7). */
+  noBundler?: boolean;
 }
 
 /** A host's sink for the session's human-facing lines. */
@@ -386,6 +391,9 @@ export class ExtractionSession {
    *  discovery asks it first, the loader only for a declared workspace it
    *  cannot resolve. Null resolves through the loader alone. */
   hostResolve: HostResolve | null = null;
+  /** How the last analysis compared the path aliases it reads with the
+   *  host's resolver (spec §2.2 A7); `unavailable` is never agreement. */
+  aliasComparison: AliasComparison = 'unavailable';
   /** Serialized path aliases, harvested by the adapter from bundler config. */
   pathAliasesJson: string | null = null;
   /** The host's aliases are the project's tsconfig `paths`: each full pass
@@ -2426,7 +2434,10 @@ export class ExtractionSession {
       strict: this.options.strict,
       diagnostics: this.options.diagnostics,
       reportErrors: this.reportErrors(),
-      extraDiagnostics: this.ingestionFailureDiagnostics,
+      extraDiagnostics: [
+        ...this.ingestionFailureDiagnostics,
+        ...(await this.compareAliasesWithHost(fileEntries)),
+      ],
       kitDescriptors: this.kitDescriptors,
     });
     if (result.manifest) {
@@ -2624,6 +2635,35 @@ export class ExtractionSession {
 
   /** Write the session's analysis-status artifact. Terminal states
    *  (idle/failed) close the attempt. */
+  /** Where the host resolves a path alias the analysis reads to another
+   *  file (spec §2.2 A7, report only), and how the two were compared. */
+  private async compareAliasesWithHost(
+    fileEntries: FileEntry[]
+  ): Promise<ManifestDiagnostic[]> {
+    const { moduleSpecifiers } = this.engine();
+    if (this.host.noBundler) {
+      this.aliasComparison = 'not-applicable';
+      return [];
+    }
+    if (this.hostResolve === null || moduleSpecifiers === undefined) {
+      this.aliasComparison = 'unavailable';
+      return [];
+    }
+    this.aliasComparison = 'compared';
+    return compareAliases({
+      rootDir: this.rootDir!,
+      fileEntries,
+      pathAliasesJson: this.pathAliasesJson,
+      order: this.extensionPolicy,
+      readings: {
+        isAsset: this.assetClassification.isAsset,
+        adapted: this.ingestionAdapted,
+      },
+      moduleSpecifiers,
+      resolve: this.hostResolve,
+    });
+  }
+
   private writeAnalysisStatus(
     state: AnalysisStatus['state'],
     pending: Array<[string, string]>,
