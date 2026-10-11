@@ -310,10 +310,17 @@ pub(crate) struct Linker<'a> {
     keys: Vec<String>,
     index: HashMap<String, crate::module_table::ModuleIndex>,
     stubs: &'a HashMap<String, HashSet<String>>,
+    /// Each TypeScript module's type-only export names, which its stripped
+    /// record no longer holds.
+    type_exports: &'a HashMap<String, HashSet<String>>,
 }
 
 impl<'a> Linker<'a> {
-    pub fn new(modules: &HashMap<String, LinkedModule>, stubs: &'a HashMap<String, HashSet<String>>) -> Self {
+    pub fn new(
+        modules: &HashMap<String, LinkedModule>,
+        stubs: &'a HashMap<String, HashSet<String>>,
+        type_exports: &'a HashMap<String, HashSet<String>>,
+    ) -> Self {
         use crate::module_table::{Import, ImportName, ModuleRecord, ModuleTable, Request};
         let mut keys: Vec<String> = modules.keys().cloned().collect();
         keys.sort();
@@ -360,7 +367,7 @@ impl<'a> Linker<'a> {
             record.requests = requests;
             records.push(record);
         }
-        Self { table: ModuleTable::new(records), keys, index, stubs }
+        Self { table: ModuleTable::new(records), keys, index, stubs, type_exports }
     }
 
     /// Export `name` of `module`, with each open star of a stub closed: the
@@ -487,8 +494,14 @@ impl<'a> Linker<'a> {
                 Request::Outside(_) => continue,
                 Request::Unresolved(key) => (key.clone(), ExportLookup::Absent),
             };
+            // A type a TypeScript module exports, imported or re-exported
+            // without `type`: the strip erased it, and a bundler without
+            // isolated modules erases the import too, so it links to nothing
+            // and fails nothing.
+            let erased_type = || self.type_exports.get(&from).is_some_and(|types| types.contains(name));
             let (code, problem) = match lookup {
                 ExportLookup::Resolved(_) => continue,
+                ExportLookup::Absent if erased_type() => continue,
                 ExportLookup::Ambiguous(_) => (LINK_AMBIGUOUS_IMPORT, "which resolves it ambiguously through `export *`"),
                 _ if verb == "re-exports" => (LINK_ABSENT_IMPORT, "which resolves to no binding"),
                 _ => (LINK_ABSENT_IMPORT, "which does not export it"),
