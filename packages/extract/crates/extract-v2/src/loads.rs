@@ -218,7 +218,7 @@ pub enum LoadTarget {
 }
 
 /// The modules a specifier expression can name.
-fn load_of(specifier: &Expression<'_>) -> LoadTarget {
+pub(crate) fn load_of(specifier: &Expression<'_>) -> LoadTarget {
     match specifier.get_inner_expression() {
         Expression::StringLiteral(literal) => LoadTarget::Specifier(literal.value.to_string()),
         Expression::TemplateLiteral(template) => {

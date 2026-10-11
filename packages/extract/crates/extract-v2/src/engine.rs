@@ -2341,6 +2341,21 @@ export const App = () => <Box tone="red" />;
             ),
             ("a computed member of module", "const name = './tokens.js';\nconst k = 'require';\nmodule[k](name).pad.padding = 9;", "{ ...pad }"),
             (
+                "a computed member of the builtin imported by a template",
+                "const name = './tokens.js';\nconst m = await import(`node:module`), k = 'createRequire';\nm[k](__filename)(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
+                "a computed member of the builtin required by a template",
+                "const name = './tokens.js';\nconst m = require(`node:module`), k = 'createRequire';\nm[k](__filename)(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
+                "a computed member of the builtin required with an extra argument",
+                "const name = './tokens.js';\nconst m = require('node:module', null), k = 'createRequire';\nm[k](__filename)(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
                 "a computed member of the required builtin",
                 "const name = './tokens.js';\nconst m = require('node:module'), k = 'createRequire';\nm[k](__filename)(name).pad.padding = 9;",
                 "{ ...pad }",
@@ -2429,6 +2444,25 @@ export const App = () => <Box tone="red" />;
             let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
+        // A hot update's data can hold a loader its disposed version stored:
+        // the replacement changes `pad` through it, then loads the reader,
+        // which the bundle keeps reachable through an unused load.
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let files = serde_json::json!([
+            { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
+            { "path": "entry.js", "source": "export const later = () => require('./reader.js');\n" },
+            {
+                "path": "replacement.js",
+                "source": "module.hot.data.load('./tokens.js').pad.padding = 9;\nrequire('./reader.js');\n",
+            },
+            {
+                "path": "reader.js",
+                "source": "import { pad } from './tokens.js';\nexport const C = ds.styles({ ...pad }).asElement('div');\n\
+                           export const App = () => <C />;\n",
+            },
+        ]);
+        let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+        assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "a loader held in hot data: {}", out["css"]);
         // A type query of eval, or a schema builder's own `Function` member
         // (TypeBox's `Type.Function`), runs nothing, a type query of a
         // function's `arguments` reads none of them, and a direct `require`

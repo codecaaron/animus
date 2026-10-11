@@ -13771,6 +13771,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
         let handed = Some("hands on require other than as a direct call");
         let module = Some("reads module other than through a member that loads nothing");
+        let builtin = Some("reads node:module other than through a member that loads nothing");
         for (path, loader, reason) in [
             ("loader.ts", "export const open = (name) => (0, require)(name);\n", handed),
             ("loader.ts", "const r = require;\nexport const open = (name) => r(name);\n", handed),
@@ -13793,8 +13794,12 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             (
                 "loader.ts",
                 "const m = require('node:module'), k = 'createRequire';\nexport const open = (name) => m[k](__filename)(name);\n",
-                Some("reads node:module other than through a member that loads nothing"),
+                builtin,
             ),
+            ("loader.ts", "const m = await import(`node:module`), k = 'createRequire';\nexport const open = (name) => m[k](__filename)(name);\n", builtin),
+            ("loader.ts", "const m = require(`node:module`), k = 'createRequire';\nexport const open = (name) => m[k](__filename)(name);\n", builtin),
+            ("loader.ts", "const m = require('node:module', null), k = 'createRequire';\nexport const open = (name) => m[k](__filename)(name);\n", builtin),
+            ("loader.ts", "export const open = (name) => module.hot.data.load(name);\n", module),
             ("loader.ts", "export const x = require('./x');\n", None),
             ("loader.ts", "module.exports = { loaded: module.loaded };\n", None),
         ] {

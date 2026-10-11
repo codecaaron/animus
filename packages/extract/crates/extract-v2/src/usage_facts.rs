@@ -2306,7 +2306,7 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
     const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "self", "global"];
     const BUILTINS: [&str; 2] = ["module", "node:module"];
     /// Members of the unbound `module` that load nothing.
-    const MODULE_MEMBERS: [&str; 7] = ["exports", "id", "filename", "loaded", "path", "paths", "hot"];
+    const MODULE_MEMBERS: [&str; 6] = ["exports", "id", "filename", "loaded", "path", "paths"];
     /// Exports of the `module` builtin that load nothing.
     const BUILTIN_MEMBERS: [&str; 5] = ["builtinModules", "isBuiltin", "findSourceMap", "SourceMap", "findPackageJSON"];
     const REQUIRE: &str = "hands on require other than as a direct call";
@@ -2318,9 +2318,11 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
     }
     /// `require('module')` or `require('node:module')`.
     fn requires_builtin(call: &CallExpression<'_>) -> bool {
-        is_require(&call.callee)
-            && matches!(call.arguments.as_slice(),
-                [Argument::StringLiteral(name)] if BUILTINS.contains(&name.value.as_str()))
+        is_require(&call.callee) && call.arguments.first().and_then(Argument::as_expression).is_some_and(builtin_specifier)
+    }
+    /// A constant specifier of the builtin, read as a load reads it.
+    fn builtin_specifier(specifier: &Expression<'_>) -> bool {
+        matches!(crate::loads::load_of(specifier), crate::loads::LoadTarget::Specifier(name) if BUILTINS.contains(&name.as_str()))
     }
     /// A declarator that binds the required builtin to one name, whose reads
     /// are then judged as the builtin's.
@@ -2452,7 +2454,7 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
             }
         }
         fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
-            if matches!(&import.source, Expression::StringLiteral(name) if BUILTINS.contains(&name.value.as_str())) {
+            if builtin_specifier(&import.source) {
                 self.found.get_or_insert(BUILTIN);
             }
             oxc::ast_visit::walk::walk_import_expression(self, import);
