@@ -96,6 +96,9 @@ export interface CliLockRecord {
   pid: number;
   startedAt?: string;
   heartbeatAt?: string;
+  /** The build whose session holds the directory: one process can hold
+   *  several builds' directories at once. */
+  build?: string;
 }
 
 export const CLI_LOCK_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -147,9 +150,11 @@ export function readCliLockRecord(dir: string): CliLockRead {
   }
   const startedAt = candidate.startedAt;
   const heartbeatAt = candidate.heartbeatAt;
+  const build = candidate.build;
   const record: CliLockRecord = { pid: candidate.pid };
   if (isPublishedSetString(startedAt)) record.startedAt = startedAt;
   if (isPublishedSetString(heartbeatAt)) record.heartbeatAt = heartbeatAt;
+  if (isPublishedSetString(build)) record.build = build;
   return { kind: 'held', record };
 }
 
@@ -193,12 +198,14 @@ export function checkLockLiveness(record: CliLockRecord): CliLockLiveness {
   };
 }
 
-export function lockRecordBytes(startedAt: string): string {
-  return JSON.stringify({
+export function lockRecordBytes(startedAt: string, build?: string): string {
+  const record: CliLockRecord = {
     pid: process.pid,
     startedAt,
     heartbeatAt: new Date().toISOString(),
-  } satisfies CliLockRecord);
+  };
+  if (build !== undefined) record.build = build;
+  return JSON.stringify(record);
 }
 
 const HEARTBEAT_TEMP_PREFIX = '.lock-heartbeat-';
@@ -208,6 +215,8 @@ export interface DirectoryClaimOptions {
    *  every interval starts phantom rebuilds; `rename` avoids torn reads. */
   write?: 'in-place' | 'rename';
   startedAt?: string;
+  /** The build whose session holds the directory. */
+  build?: string;
 }
 
 export function holdDirectoryClaim(
@@ -228,10 +237,10 @@ export function holdDirectoryClaim(
   const stamp = (): void => {
     try {
       if (rename) {
-        writeFileSync(tempPath, lockRecordBytes(startedAt));
+        writeFileSync(tempPath, lockRecordBytes(startedAt, options.build));
         renameSync(tempPath, path);
       } else {
-        writeFileSync(path, lockRecordBytes(startedAt));
+        writeFileSync(path, lockRecordBytes(startedAt, options.build));
       }
     } catch (error) {
       stop();

@@ -77,7 +77,7 @@ function publishedSet(session: ExtractionSession) {
       join(session.sessionDir, 'system-props.js'),
       'utf-8'
     ),
-    manifest: getManifestJson(),
+    manifest: getManifestJson(session.key),
   };
 }
 
@@ -229,6 +229,6 @@ describe('an aborted parse in the first pipeline', () => {
     expect(existsSync(join(session.sessionDir, ANALYSIS_COMMIT_ARTIFACT))).toBe(
       false
     );
-    expect(getManifestJson() ?? null).toBeNull();
+    expect(getManifestJson(session.key) ?? null).toBeNull();
   });
 });

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 import { setEngineApiOverride } from '../../../extract/session/singleton';
+import { latestSessionKey } from '../../../extract/tests/session/session-fixtures';
 
 setEngineApiOverride(() => ({
   extractFacts: () => '{"files":{},"parseCount":0}',
@@ -132,7 +133,7 @@ function epochArtifact(path: string): EpochArtifact {
 }
 
 function lastSessionEpochPath(): string {
-  const dir = getSessionArtifactDir();
+  const dir = getSessionArtifactDir(latestSessionKey());
   expect(dir).not.toBeNull();
   return replacementEpochPath(dir!);
 }

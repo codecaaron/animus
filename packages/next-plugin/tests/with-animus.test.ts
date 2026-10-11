@@ -211,6 +211,9 @@ describe('withAnimus', () => {
       strict: true,
       development: false,
       cssImportTarget: 'src/app/[locale]/layout.tsx',
+      // The build the wrapper created, and the root its plugin analyses.
+      build: plugin.sessionId,
+      root: process.cwd(),
     });
   });
 

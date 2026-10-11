@@ -17,6 +17,7 @@ export async function runSessionPipeline(
   await session.runFullPipeline();
 }
 
+/** Each build's watched root: another build of the root watches it too. */
 const activeWatcherRoots = new Set<string>();
 
 const IGNORED_SEGMENTS = new Set([
@@ -67,8 +68,9 @@ export function startTurbopackWatcher(
     watchFn = watch,
     holdEvents = false,
   } = options;
-  if (activeWatcherRoots.has(rootDir)) return { kind: 'already-watched' };
-  activeWatcherRoots.add(rootDir);
+  const watched = JSON.stringify([session.sessionId, rootDir]);
+  if (activeWatcherRoots.has(watched)) return { kind: 'already-watched' };
+  activeWatcherRoots.add(watched);
 
   // The ceiling must be published BEFORE the first deadline is computed, so
   // it is announced unconditionally.
@@ -159,7 +161,7 @@ export function startTurbopackWatcher(
     rollbackPendingExternal();
     session.onExternalRootResolved = null;
     session.onExternalRootsCommitted = null;
-    activeWatcherRoots.delete(rootDir);
+    activeWatcherRoots.delete(watched);
   };
 
   // Async FSWatcher errors are fatal to the process when unhandled, so the

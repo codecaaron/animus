@@ -188,6 +188,41 @@ afterEach(() => {
 });
 
 describe('withAnimus Turbopack wiring', () => {
+  /** Contract: two builds of one root never share state. Two config
+   *  wrappers of one root are two builds, each analysed with its own
+   *  options. */
+  test('two wrappers of one root publish separate CSS', async () => {
+    const root = createProject();
+    process.chdir(root);
+    mocks.loadSystemModule.mockReturnValue({
+      ...SYSTEM_CONFIG,
+      scalesJson: '{"space.1":"var(--anm-space-1)"}',
+      variableMapJson: '{"space.1":"--anm-space-1"}',
+    });
+    const loads = ['first', 'second'].map((prefix) =>
+      withAnimus({
+        system: './src/system.ts',
+        prefix,
+        turbopack: { mode: 'on' },
+      })({})
+    );
+    const configs = [];
+    for (const load of loads) configs.push(await loadBuildConfig(load));
+    const [first, second] = configs.map((config) =>
+      animusLoaderOptions(turbopackOptions(config))
+    );
+
+    expect(first.sessionId).not.toBe(second.sessionId);
+    expect(first.sessionDir).not.toBe(second.sessionDir);
+    expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
+    const css = (options: { sessionDir: string }) =>
+      readFileSync(join(options.sessionDir, 'styles.css'), 'utf-8');
+    expect(css(first)).toContain('--first-anm-space-1');
+    expect(css(first)).not.toContain('--second-');
+    expect(css(second)).toContain('--second-anm-space-1');
+    expect(css(second)).not.toContain('--first-');
+  });
+
   test('inactive mode returns synchronously with no turbopack keys', () => {
     const root = createProject();
     process.chdir(root);
@@ -212,7 +247,8 @@ describe('withAnimus Turbopack wiring', () => {
     const options = animusLoaderOptions(turbopack);
     // process.cwd() resolves the macOS /var → /private/var symlink
     expect(options).toMatchObject({ rootDir: realpathSync(root) });
-    expect(options.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    // The wrapper's build, qualified by the phase it loaded in.
+    expect(options.sessionId).toMatch(/^[0-9a-f-]{36}-phase-production-build$/);
     const sessionDir = options.sessionDir;
     expect(sessionDir).toBe(
       join(realpathSync(root), '.animus', 'sessions', options.sessionId)
@@ -397,11 +433,12 @@ describe('withAnimus Turbopack wiring', () => {
       system: './src/system.ts',
       turbopack: { mode: 'on' as const },
     };
-    const asyncUserConfig = async () =>
-      withAnimus(options)({ reactStrictMode: true });
+    // One wrapper, one build: both shapes of its config share an analysis.
+    const wrap = withAnimus(options);
+    const asyncUserConfig = async () => wrap({ reactStrictMode: true });
 
     const spread = {
-      ...(await withAnimus(options)({ reactStrictMode: true })),
+      ...(await wrap({ reactStrictMode: true })),
     };
     const awaited = await asyncUserConfig();
 

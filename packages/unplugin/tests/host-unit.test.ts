@@ -4,7 +4,9 @@ import { sep } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import {
-  claimExclusiveSessionOwner as claimProcessHost,
+  claimExclusiveSessionOwner,
+  joinSession,
+  sessionKey,
   setSessionArtifactDir,
 } from '../../extract/session/singleton';
 import {
@@ -211,21 +213,21 @@ describe('session-dir cleanup', () => {
   test('a failed pipeline disposes the session dir before rethrowing — REAL ordering: the dir is NOT yet recorded on state at throw time', async () => {
     const state = createHostState();
     const removed: string[] = [];
-    setSessionArtifactDir('/tmp/animus-session-from-singleton');
-    try {
-      await expect(
-        drivePipeline(
-          state,
-          async () => {
-            throw new Error('analysis failed');
-          },
-          (dir) => removed.push(dir)
-        )
-      ).rejects.toThrow('analysis failed');
-    } finally {
-      setSessionArtifactDir('');
-    }
-    expect(removed).toEqual(['/tmp/animus-session-from-singleton']);
+    // The run's session joined its build and recorded the build's directory.
+    const key = sessionKey(`cleanup-${process.pid}`, '/tmp');
+    joinSession(key, 'animus-host', { system: './src/system.ts' });
+    setSessionArtifactDir(key, '/tmp/animus-session-from-the-build');
+    state.key = key;
+    await expect(
+      drivePipeline(
+        state,
+        async () => {
+          throw new Error('analysis failed');
+        },
+        (dir) => removed.push(dir)
+      )
+    ).rejects.toThrow('analysis failed');
+    expect(removed).toEqual(['/tmp/animus-session-from-the-build']);
     expect(state.sessionDir).toBeNull();
   });
 
@@ -299,35 +301,52 @@ describe('transform claim (node_modules skip)', () => {
   });
 });
 
-describe('process publication claim (one live publisher per process)', () => {
+describe('publication claim (one live publisher per build)', () => {
+  const build = (name: string) => {
+    const key = sessionKey(`${name}-${process.pid}`, '/app');
+    joinSession(key, 'animus-host', { system: './src/system.ts' });
+    return key;
+  };
+
   test('sequential claim/release cycles are legal', () => {
-    const releaseA = claimProcessHost('animus-host:/app');
+    const key = build('sequential');
+    const releaseA = claimExclusiveSessionOwner(key, 'animus-host:/app');
     releaseA();
-    const releaseB = claimProcessHost('animus-host:/app');
+    const releaseB = claimExclusiveSessionOwner(key, 'animus-host:/app');
     releaseB();
   });
 
-  test('a concurrent second host fails loud naming both hosts and the remedy', () => {
-    const release = claimProcessHost('animus-host:/app-client');
+  test("a concurrent second publisher of one build fails loud naming the build's publisher", () => {
+    const key = build('concurrent');
+    const release = claimExclusiveSessionOwner(key, 'animus-host:/app-client');
     try {
-      expect(() => claimProcessHost('animus-host:/app-server')).toThrow(
-        /app-client.*process-global|process-global.*app-client/s
-      );
-      expect(() => claimProcessHost('animus-host:/app-server')).toThrow(
-        /sequential/i
-      );
+      expect(() =>
+        claimExclusiveSessionOwner(key, 'animus-host:/app-server')
+      ).toThrow(/which "animus-host:\/app-client" publishes/);
     } finally {
       release();
     }
-    claimProcessHost('animus-host:/app-server')();
+    claimExclusiveSessionOwner(key, 'animus-host:/app-server')();
+  });
+
+  test('another build of the same root claims its own publication', () => {
+    const one = build('one');
+    const other = build('other');
+    const releaseOne = claimExclusiveSessionOwner(one, 'animus-host:/app');
+    const releaseOther = claimExclusiveSessionOwner(other, 'animus-host:/app');
+    releaseOne();
+    releaseOther();
   });
 
   test('release is scoped to its own claim (a stale release cannot free a successor)', () => {
-    const releaseA = claimProcessHost('animus-host:/a');
+    const key = build('scoped');
+    const releaseA = claimExclusiveSessionOwner(key, 'animus-host:/a');
     releaseA();
-    const releaseB = claimProcessHost('animus-host:/b');
+    const releaseB = claimExclusiveSessionOwner(key, 'animus-host:/b');
     releaseA();
-    expect(() => claimProcessHost('animus-host:/c')).toThrow(/still active/);
+    expect(() => claimExclusiveSessionOwner(key, 'animus-host:/c')).toThrow(
+      /publishes/
+    );
     releaseB();
   });
 });

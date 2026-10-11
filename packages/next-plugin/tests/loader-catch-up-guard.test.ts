@@ -7,37 +7,22 @@ import {
   replacementEpochPath,
   sessionArtifactDir,
 } from '../../extract/session/session-paths';
+import { joinSession, sessionKey } from '../../extract/session/singleton';
 import {
   disposeTempRoots,
   makeTempRoot,
+  resetAnimusGlobals,
 } from '../../extract/tests/session/session-fixtures';
 import animusLoader from '../src/loader';
 
-import type { AnimusEngine } from '../../extract/session/singleton';
+import type { SessionState } from '../../extract/session/singleton';
 import type { V2ExtractEngine } from '@animus-ui/extract/pipeline';
-
-const MANIFEST_KEY = '__animus_manifest_json__';
-const ENGINE_KEY = '__animus_engine__';
-const V2_ENGINE_KEY = '__animus_v2_engine__';
-const V2_SENT_SOURCES_KEY = '__animus_v2_sent_sources__';
-const ANALYZED_HASHES_KEY = '__animus_analyzed_hashes__';
-const SESSION_DIR_KEY = '__animus_session_artifact_dir__';
 
 const SESSION_ID = 'loader-epoch-session';
 
-interface LoaderSingletonSlots {
-  [MANIFEST_KEY]: string | null | undefined;
-  [ENGINE_KEY]: AnimusEngine | undefined;
-  [V2_ENGINE_KEY]: V2ExtractEngine | null | undefined;
-  [V2_SENT_SOURCES_KEY]: Map<string, string> | null | undefined;
-  [ANALYZED_HASHES_KEY]: Map<string, string> | null | undefined;
-  [SESSION_DIR_KEY]: string | null | undefined;
-}
-
-// SAFETY: singleton.ts owns these globalThis keys with exactly these value
-// types; its setters cannot clear a slot and the engine slots have none.
-const g = globalThis as typeof globalThis & LoaderSingletonSlots;
-let saved: LoaderSingletonSlots;
+let restoreGlobals: () => void;
+/** The build of the test's root, which `createRoot` joins. */
+let state: SessionState;
 
 const unreachableEngine: V2ExtractEngine = {
   analyze: () => {
@@ -56,31 +41,24 @@ const NEW_SOURCE =
   "export const C = animus.styles({ margin: 8 }).asElement('div');\n";
 
 beforeEach(() => {
-  saved = {
-    [MANIFEST_KEY]: g[MANIFEST_KEY],
-    [ENGINE_KEY]: g[ENGINE_KEY],
-    [V2_ENGINE_KEY]: g[V2_ENGINE_KEY],
-    [V2_SENT_SOURCES_KEY]: g[V2_SENT_SOURCES_KEY],
-    [ANALYZED_HASHES_KEY]: g[ANALYZED_HASHES_KEY],
-    [SESSION_DIR_KEY]: g[SESSION_DIR_KEY],
-  };
-  g[MANIFEST_KEY] = JSON.stringify({ components: {} });
-  g[ENGINE_KEY] = 'v2';
-  g[V2_ENGINE_KEY] = unreachableEngine;
-  g[V2_SENT_SOURCES_KEY] = new Map<string, string>();
-  g[ANALYZED_HASHES_KEY] = undefined;
-  g[SESSION_DIR_KEY] = undefined;
+  restoreGlobals = resetAnimusGlobals();
 });
 
 afterEach(() => {
-  Object.assign(g, saved);
+  restoreGlobals();
   disposeTempRoots();
 });
 
 function createRoot(withArtifact: boolean) {
   const root = makeTempRoot('animus-loader-epoch-');
   const sessionDir = sessionArtifactDir(root, SESSION_ID);
-  g[SESSION_DIR_KEY] = sessionDir;
+  state = joinSession(sessionKey(SESSION_ID, root), 'animus-next', {
+    system: './src/ds.ts',
+  });
+  state.manifestJson = JSON.stringify({ components: {} });
+  state.engine = unreachableEngine;
+  state.sentSources = new Map<string, string>();
+  state.artifactDir = sessionDir;
   const epochPath = replacementEpochPath(sessionDir);
   if (withArtifact) {
     mkdirSync(sessionDir, { recursive: true });
@@ -102,7 +80,7 @@ function runLoader(args: {
   const ctx = {
     resourcePath: join(args.root, args.relPath ?? 'src/C.tsx'),
     rootContext: args.root,
-    getOptions: () => ({}),
+    getOptions: () => ({ build: SESSION_ID, root: args.root }),
     addDependency: (file: string) => {
       dependencies.push(file);
     },
@@ -120,7 +98,7 @@ describe('replacements-epoch artifact registered as a file dependency (design D2
       epochPath,
     ]);
 
-    g[MANIFEST_KEY] = undefined;
+    state.manifestJson = null;
     const absent = runLoader({ root, source: OLD_SOURCE });
     expect(absent.output).toBe(OLD_SOURCE);
     expect(absent.dependencies).toEqual([epochPath]);
@@ -133,7 +111,7 @@ describe('replacements-epoch artifact registered as a file dependency (design D2
 
   test('no dependency when no owning session published a session dir', () => {
     const { root } = createRoot(true);
-    g[SESSION_DIR_KEY] = undefined;
+    state.artifactDir = null;
     expect(runLoader({ root, source: OLD_SOURCE }).dependencies).toEqual([]);
   });
 
@@ -152,7 +130,7 @@ describe('replacements-epoch artifact registered as a file dependency (design D2
 describe('unconditional analyzed-content-hash guard (design D4)', () => {
   test('an analyzed file whose source hash moved fails with ANIMUS_ANALYSIS_CATCHING_UP', () => {
     const { root } = createRoot(true);
-    g[ANALYZED_HASHES_KEY] = new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]);
+    state.analyzedHashes = new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]);
     expect(() => runLoader({ root, source: NEW_SOURCE })).toThrow(
       /ANIMUS_ANALYSIS_CATCHING_UP: src\/C\.tsx/
     );
@@ -160,8 +138,8 @@ describe('unconditional analyzed-content-hash guard (design D4)', () => {
 
   test('zero-entries→first-chain: a file analyzed with no animus entries is never published raw after gaining its first chain', () => {
     const { root } = createRoot(true);
-    g[MANIFEST_KEY] = JSON.stringify({ components: {} });
-    g[ANALYZED_HASHES_KEY] = new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]);
+    state.manifestJson = JSON.stringify({ components: {} });
+    state.analyzedHashes = new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]);
     expect(() => runLoader({ root, source: NEW_SOURCE })).toThrow(
       /ANIMUS_ANALYSIS_CATCHING_UP/
     );
@@ -169,13 +147,13 @@ describe('unconditional analyzed-content-hash guard (design D4)', () => {
 
   test('a matching analyzed hash transforms/passes through normally', () => {
     const { root } = createRoot(true);
-    g[ANALYZED_HASHES_KEY] = new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]);
+    state.analyzedHashes = new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]);
     expect(runLoader({ root, source: OLD_SOURCE }).output).toBe(OLD_SOURCE);
   });
 
   test('files with no analyzed identity keep the raw passthrough', () => {
     const { root } = createRoot(true);
-    g[ANALYZED_HASHES_KEY] = new Map([
+    state.analyzedHashes = new Map([
       ['src/Other.tsx', contentHash(OLD_SOURCE)],
     ]);
     expect(runLoader({ root, source: NEW_SOURCE }).output).toBe(NEW_SOURCE);
@@ -186,20 +164,13 @@ describe('unconditional analyzed-content-hash guard (design D4)', () => {
     const stale = new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]);
     const fresh = new Map([['src/C.tsx', contentHash(NEW_SOURCE)]]);
     let reads = 0;
-    Object.defineProperty(g, ANALYZED_HASHES_KEY, {
+    // The build's entry is reset after every test.
+    Object.defineProperty(state, 'analyzedHashes', {
       configurable: true,
       get: () => (reads++ === 0 ? stale : fresh),
       set: () => {},
     });
-    try {
-      expect(runLoader({ root, source: NEW_SOURCE }).output).toBe(NEW_SOURCE);
-      expect(reads).toBeGreaterThanOrEqual(2);
-    } finally {
-      Object.defineProperty(g, ANALYZED_HASHES_KEY, {
-        configurable: true,
-        writable: true,
-        value: undefined,
-      });
-    }
+    expect(runLoader({ root, source: NEW_SOURCE }).output).toBe(NEW_SOURCE);
+    expect(reads).toBeGreaterThanOrEqual(2);
   });
 });
