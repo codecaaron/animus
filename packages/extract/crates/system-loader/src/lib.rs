@@ -2570,7 +2570,7 @@ export const ds = tokens;
         /// A case's name, its modules, and the loaded propConfig or a part
         /// of the load's error.
         type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], Result<&'a str, &'a str>);
-        let cases: [Case; 12] = [
+        let cases: [Case; 13] = [
             (
                 "hoisted-live",
                 &[
@@ -2651,6 +2651,16 @@ export const ds = tokens;
                     ("b", "export const x = 'b';\n"),
                 ],
                 Ok(r#"{"x":"b","keys":["x"]}"#),
+            ),
+            (
+                // React has `useState` and React DOM does not, so Node takes
+                // React's.
+                "stub-star-yields-to-stub",
+                &[
+                    ("entry", "import { useState } from './a.js';\nimport { useState as direct } from 'react';\nconst data = { same: useState === direct };\n"),
+                    ("a", "import './entry.js';\nexport * from 'react';\nexport * from 'react-dom';\n"),
+                ],
+                Ok(r#"{"same":true}"#),
             ),
             (
                 "missing-import",

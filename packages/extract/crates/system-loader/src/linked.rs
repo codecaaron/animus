@@ -303,7 +303,7 @@ pub(crate) fn rewrite_module_for_linking(
 /// its export without proving it, and `export *` of it is open. The loader
 /// builds each stub's object, so it closes that opening itself: a star of a
 /// stub brings in the stub's own names, each reading the stub's property, and
-/// supplies any other name only when no analysed branch does.
+/// supplies any other name only when no analysed branch or other stub does.
 pub(crate) struct Linker<'a> {
     table: crate::module_table::ModuleTable<String>,
     keys: Vec<String>,
@@ -363,16 +363,19 @@ impl<'a> Linker<'a> {
     }
 
     /// Export `name` of `module`, with each open star of a stub closed: the
-    /// stub supplies `name` when it has that name, or when no analysed branch
-    /// gives one. One terminal resolves, two are ambiguous.
+    /// stub supplies `name` when it has that name, or when neither an analysed
+    /// branch nor another stub has it. One terminal resolves, two are
+    /// ambiguous.
     fn resolve(&self, module: usize, name: &str) -> crate::module_table::ExportLookup<String> {
         use crate::module_table::{ExportLookup, OpeningReason, Terminal};
         match self.table.resolve_export(module, name) {
             ExportLookup::Incomplete { mut known, openings } => {
-                let analysed = !known.is_empty();
+                let has = |stub: &String| self.stubs[stub].contains(name);
+                let provided = !known.is_empty()
+                    || openings.iter().any(|opening| matches!(&opening.reason, OpeningReason::OutsideStar(stub) if has(stub)));
                 for opening in openings {
                     match opening.reason {
-                        OpeningReason::OutsideStar(stub) if analysed && !self.stubs[&stub].contains(name) => {}
+                        OpeningReason::OutsideStar(stub) if provided && !has(&stub) => {}
                         OpeningReason::OutsideStar(stub) => {
                             let terminal = Terminal::External { module: stub, export: Some(name.to_string()) };
                             if !known.contains(&terminal) {
