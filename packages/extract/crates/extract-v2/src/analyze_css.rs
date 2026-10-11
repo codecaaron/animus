@@ -12742,6 +12742,20 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 vec!["sm", "md"],
                 vec!["active"],
             ),
+            // A type query is no read of the alias, before its declaration
+            // or after.
+            (
+                "const Button = (props) => { const rest = visible ? props : {}; type Rest = typeof rest; return <R {...rest} />; };\n\
+                 export const App = () => <Button size=\"sm\" active />;",
+                vec!["sm", "md"],
+                vec!["active"],
+            ),
+            (
+                "const Button = (props) => { type Rest = typeof rest; const rest = visible ? props : {}; return <R {...rest} />; };\n\
+                 export const App = () => <Button size=\"sm\" active />;",
+                vec!["sm", "md"],
+                vec!["active"],
+            ),
         ] {
             let (kept_sizes, kept_states, _) = wrapper_kept(app);
             assert_eq!((kept_sizes, kept_states), (sizes, states), "{app}");

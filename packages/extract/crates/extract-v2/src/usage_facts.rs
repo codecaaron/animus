@@ -3435,6 +3435,10 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
             }
             return;
         }
+        // A type query (`typeof rest`) reads no value at run time.
+        if !reference.is_value() {
+            return;
+        }
         // An alias of the props is only ever spread whole into an element.
         if let Some(&(index, omits)) = self.aliases.get(&symbol) {
             match self.spread_into(ident.span, index) {
@@ -3450,9 +3454,6 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
             self.referenced.insert(symbol);
             return;
         };
-        if !reference.is_value() {
-            return;
-        }
         if let Some((alias, omits)) = self.alias_initialized_by(ident.span, symbol) {
             // Read or written before here, the alias is not what the spread
             // carries.
