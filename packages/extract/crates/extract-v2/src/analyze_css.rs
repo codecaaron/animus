@@ -5509,6 +5509,7 @@ fn run_with_system_floor(
         token_misses: Some(&token_misses),
         dropped_keys: Some(&dropped_keys),
         numeric_properties: Some(&inputs.numeric_properties),
+        numbers_take_px: false,
     };
 
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();

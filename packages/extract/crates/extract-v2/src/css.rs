@@ -2054,6 +2054,7 @@ mod tests {
                 token_misses: None,
                 dropped_keys: None,
                 numeric_properties: None,
+                numbers_take_px: false,
             }
         }
     }
