@@ -22,6 +22,8 @@ export type ListedArgs =
       /** The specifier's static text between its substitutions: one more
        *  than the substitutions. */
       quasis: string[];
+      /** Whether the specifier is a template literal. */
+      template: boolean;
       /** The comments inside the call, delimiters included. */
       comments: string[];
     }
