@@ -53,7 +53,6 @@ import {
 } from './constants';
 import { HotUpdateEvents } from './hot-update-events';
 import { invalidateFileModules } from './module-invalidation';
-import { ResetCoalescer } from './reset-coalescer';
 
 import type { LightningTargets } from './css';
 import type { AnimusExtractOptions } from './index';
@@ -180,13 +179,6 @@ const NO_SHEETS: AssetSheets = {
   componentCss: '',
 };
 
-/** A discovery's analysis input: its entries, and the file-cache seeding
- *  that follows their ingestion. */
-export type DiscoveredSources = {
-  rawEntries: readonly RawSourceEntry[];
-  afterIngestion: (accepted: SourceIngestionResult) => void;
-};
-
 export class PluginContext {
   readonly options: AnimusExtractOptions;
   readonly verbose: boolean;
@@ -220,9 +212,6 @@ export class PluginContext {
   /** Vite's asset classification, captured at `configResolved`. */
   assetClassification: HostAssetClassification =
     builtInAssetClassification('noHost');
-
-  /** Development's repeat of buildStart's discovery, with its resolver. */
-  rediscoverSources: (() => Promise<DiscoveredSources>) | null = null;
 
   extensionsSet: ReadonlySet<string>;
 
@@ -1123,44 +1112,6 @@ export class PluginContext {
         }
       }
     }
-  }
-
-  private resetCoalescer: ResetCoalescer | null = null;
-
-  requestSystemReload(trigger: string): void {
-    this.log(`HMR system reload scheduled: ${trigger}`);
-    this.resetCoalescer ??= new ResetCoalescer(
-      async () => this.performSystemReload(),
-      /** The coalescer fires from a bare timer, outside Vite's error
-       *  handling, so an unhandled strict throw would exit the process. */
-      (err) => {
-        const display = String(err);
-        this.warn(`[animus-extract] system reload failed: ${display}`);
-        const message = err instanceof Error ? err.message : String(err);
-        const stack = err instanceof Error ? (err.stack ?? '') : '';
-        this.devServer?.hot?.send({
-          type: 'error',
-          err: { message, stack, plugin: 'animus-extract' },
-        });
-      }
-    );
-    this.resetCoalescer.request();
-  }
-
-  async performSystemReload(): Promise<void> {
-    return runExclusiveAnalysis(this, () =>
-      this.performSystemReloadExclusive()
-    );
-  }
-
-  private async performSystemReloadExclusive(): Promise<void> {
-    const resetStart = performance.now();
-    this.systemReloadOwed = true;
-    const { ok } = await this.analyzeIngested(await this.rediscoverSources?.());
-    if (!ok) return;
-    this.log(
-      `HMR system reload complete: ${Math.round(performance.now() - resetStart)}ms`
-    );
   }
 
   invalidateSystemReloadModules(reloadClient: boolean): void {
