@@ -165,10 +165,19 @@ describe('runtime import selection', () => {
     return String(emitterConfig.runtime_import);
   }
 
-  it('keeps the existing system barrel as the default', () => {
+  it('emits the shared /runtime entry by default, as every adapter does', () => {
     expect(emittedRuntimeImport({ system: './ds.ts' })).toBe(
-      '@animus-ui/system'
+      '@animus-ui/system/runtime'
     );
+  });
+
+  it('keeps the system barrel when the caller selects it', () => {
+    expect(
+      emittedRuntimeImport({
+        system: './ds.ts',
+        runtimeImport: '@animus-ui/system',
+      })
+    ).toBe('@animus-ui/system');
   });
 
   it('emits the caller-selected resolver-only runtime', () => {
@@ -221,6 +230,16 @@ describe('runtimeImport override guards its terminal contract', () => {
   it('never fires for the default runtime', () => {
     const ctx = contextWithReplacement("createComponent('div', {...})");
     expect(ctx.runAnalysis([])).toBe(true);
+  });
+
+  it('never fires for either full runtime, /runtime or the system barrel', () => {
+    for (const runtime of ['@animus-ui/system/runtime', '@animus-ui/system']) {
+      const ctx = contextWithReplacement(
+        "createComponent('div', {...})",
+        runtime
+      );
+      expect(ctx.runAnalysis([])).toBe(true);
+    }
   });
 });
 

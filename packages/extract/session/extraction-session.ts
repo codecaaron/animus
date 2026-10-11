@@ -267,8 +267,8 @@ export class ExtractionSession {
     string,
     {
       sourcePath: string;
-      mtimeMs: number;
-      size: number;
+      /** The content hash the copy was made from. */
+      digest: string;
       fileName: string;
       url: string;
     }
@@ -338,8 +338,9 @@ export class ExtractionSession {
   private readonly options: SessionOptions;
   private readonly staticCssJson: string | null;
   private system: SystemConfig | null = null;
-  /** Configured external files that could not be read. Incremental passes
-   *  re-collect nothing, so they replay these instead of passing strict. */
+  /** Configured files that could not be read. Incremental passes replay
+   *  these instead of passing strict, and add a watched change they cannot
+   *  read. */
   private ingestionFailureDiagnostics: ManifestDiagnostic[] = [];
   /** Whether the corpus being analyzed left a file out, whose renders the
    *  analysis cannot see. */
@@ -449,11 +450,14 @@ export class ExtractionSession {
   }
 
   /** Forgets that `relPath` could not be read once an incremental pass reads
-   *  or deletes it, so its cost stops holding pruning off. */
-  private clearIngestionFailure(relPath: string): void {
+   *  or deletes it, so its cost stops holding pruning off. Whether one was
+   *  recorded. */
+  private clearIngestionFailure(relPath: string): boolean {
+    const before = this.ingestionFailureDiagnostics.length;
     this.ingestionFailureDiagnostics = this.ingestionFailureDiagnostics.filter(
       (diagnostic) => diagnostic.file !== relPath
     );
+    return this.ingestionFailureDiagnostics.length !== before;
   }
 
   get sessionDir(): string {
@@ -910,19 +914,32 @@ export class ExtractionSession {
     }
 
     const changedPaths: string[] = [];
+    // A read that fails or recovers changes the report, even with no source
+    // change.
+    let readFailuresChanged = false;
 
     for (const target of targets) {
       const relPath = target.key;
       let source: string;
       try {
         source = readFileSync(target.abs, 'utf-8');
-      } catch {
+      } catch (err) {
         // Benign race: the file vanished between the watch event and this
         // read — it will surface in removedFiles on the next watch cycle.
+        if (isDeletedSource(err)) continue;
+        // Reported with its cause, and held as unseen so nothing is pruned.
+        // The analysis keeps its last readable source, so no live CSS is
+        // lost; the next readable event replaces it.
+        this.clearIngestionFailure(relPath);
+        this.ingestionFailureDiagnostics = [
+          ...this.ingestionFailureDiagnostics,
+          unreadableSourceDiagnostic(relPath, err),
+        ];
+        readFailuresChanged = true;
         continue;
       }
       // A file read now no longer costs the analysis its renders.
-      this.clearIngestionFailure(relPath);
+      if (this.clearIngestionFailure(relPath)) readFailuresChanged = true;
       // Raw bytes hash — the inventory's diff basis for external files.
       const rawHash = contentHash(source);
 
@@ -953,7 +970,12 @@ export class ExtractionSession {
       }
     }
 
-    if (changedPaths.length > 0 || removedAny || assetChanged) {
+    if (
+      changedPaths.length > 0 ||
+      removedAny ||
+      readFailuresChanged ||
+      assetChanged
+    ) {
       const pending: Array<[string, string]> = changedPaths.map((rel) => [
         rel,
         this.fileCache.get(rel)!.hash,
@@ -1714,7 +1736,14 @@ export class ExtractionSession {
         } catch {
           continue;
         }
-        if (previous.get(resolved.sourceKey)?.hash !== rawHash) {
+        // A file read again after a failed read re-queues even unchanged,
+        // so the read clears its report.
+        if (
+          previous.get(resolved.sourceKey)?.hash !== rawHash ||
+          this.ingestionFailureDiagnostics.some(
+            (diagnostic) => diagnostic.file === resolved.sourceKey
+          )
+        ) {
           modified.add(abs);
         }
       }
@@ -2446,16 +2475,13 @@ export class ExtractionSession {
 
     const urlBySpecifier = new Map<string, string>();
     for (const specifier of specifiers) {
-      // The memo reduces a steady-state pass to one existsSync; a missing
-      // copy (concurrent prune) falls through and self-heals.
+      // The memo saves resolution and the copy, never the hash: bytes can
+      // change with mtime and size unchanged (SE-5). A missing copy
+      // (concurrent prune) falls through and self-heals.
       const cached = this.assetCopyCache.get(specifier);
       if (cached && existsSync(join(assetsDir, cached.fileName))) {
         try {
-          const current = statSync(cached.sourcePath);
-          if (
-            current.mtimeMs === cached.mtimeMs &&
-            current.size === cached.size
-          ) {
+          if (contentHash(readFileSync(cached.sourcePath)) === cached.digest) {
             this.trackAssetDependency(cached.sourcePath);
             expected.add(cached.fileName);
             urlBySpecifier.set(specifier, cached.url);
@@ -2477,11 +2503,11 @@ export class ExtractionSession {
         continue;
       }
       const bytes = readFileSync(resolvedPath);
-      const sourceStat = statSync(resolvedPath);
+      const digest = contentHash(bytes);
       this.trackAssetDependency(resolvedPath);
       const ext = extname(resolvedPath);
       const stem = basename(resolvedPath, ext);
-      const fileName = `${stem}.${contentHash(bytes).slice(0, 8)}${ext}`;
+      const fileName = `${stem}.${digest.slice(0, 8)}${ext}`;
       expected.add(fileName);
       if (!existsSync(assetsDir)) {
         mkdirSync(assetsDir, { recursive: true });
@@ -2494,8 +2520,7 @@ export class ExtractionSession {
       urlBySpecifier.set(specifier, url);
       this.assetCopyCache.set(specifier, {
         sourcePath: resolvedPath,
-        mtimeMs: sourceStat.mtimeMs,
-        size: sourceStat.size,
+        digest,
         fileName,
         url,
       });

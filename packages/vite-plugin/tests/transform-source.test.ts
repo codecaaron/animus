@@ -329,31 +329,33 @@ describe('transform: new-file invalidation is unconditional', () => {
     expect(probe.extractedInvalidations).toBe(1);
   });
 
-  it('leaves an undetected file retryable after a failed analysis', async () => {
-    // A failed detection must not register the file, or the next transform
-    // skips detection forever.
+  it('fails a new file whose detection failed, and leaves it retryable', async () => {
+    // A failed detection is the transform's error, never a raw serve (SA1),
+    // and must not register the file, or the next transform skips detection
+    // forever.
     const probe = makeProbe();
     probe.ctx.runAnalysis = () => {
       probe.analyses++;
       return false;
     };
 
-    const first = await transformSource(
-      probe.ctx,
-      'export const New = 1;',
-      join(ROOT, 'src/New.tsx')
-    );
-
-    expect(first).toBeNull();
+    await expect(
+      transformSource(
+        probe.ctx,
+        'export const New = 1;',
+        join(ROOT, 'src/New.tsx')
+      )
+    ).rejects.toThrow(/analysis of the new file src\/New\.tsx failed/);
     expect(probe.ctx.fileCache.has('src/New.tsx')).toBe(false);
     expect(probe.extractedInvalidations).toBe(0);
 
-    await transformSource(
-      probe.ctx,
-      'export const New = 1;',
-      join(ROOT, 'src/New.tsx')
-    );
-
+    await expect(
+      transformSource(
+        probe.ctx,
+        'export const New = 1;',
+        join(ROOT, 'src/New.tsx')
+      )
+    ).rejects.toThrow();
     expect(probe.analyses).toBe(2);
   });
 
