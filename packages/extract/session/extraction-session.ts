@@ -408,9 +408,10 @@ export class ExtractionSession {
    *  the cache keeps every observed source so the repair publishes them in
    *  one generation; a successful publication clears it. */
   private heldRejection: string | null = null;
-  /** A system reload an aborted parse rejected. Its dependency hashes already
-   *  advanced, so the first batch that passes the parse check publishes
-   *  through the full pipeline, which loads the latest system. */
+  /** Reload debt: a development system reload that failed, owed until one
+   *  succeeds. While it stands, every batch retries the full reload and
+   *  nothing publishes against the stale system. Under an aborted parse's
+   *  hold, the first batch that passes the parse check pays it instead. */
   private systemReloadOwed = false;
   /** Monotonic readiness witness: flips true on the first complete
    *  publication and never regresses; every later status write carries it. */
@@ -783,9 +784,12 @@ export class ExtractionSession {
       this.warn(`HMR system-reload check failed: ${String(err)}`);
     }
 
-    if (systemHit) {
+    const debtRetry = this.systemReloadOwed && this.heldRejection === null;
+    if (systemHit || debtRetry) {
       this.log(
-        `system reload: system dependency changed (${relative(rootDir, systemHit)})`
+        systemHit
+          ? `system reload: system dependency changed (${relative(rootDir, systemHit)})`
+          : 'system reload: retrying the reload a failure left owed'
       );
       this.resetForHmr();
       try {
@@ -794,7 +798,7 @@ export class ExtractionSession {
         await promise;
         this.systemReloadOwed = false;
       } catch (err) {
-        if (err instanceof AbortedParseRejection) this.systemReloadOwed = true;
+        this.systemReloadOwed = true;
         // A failed reset re-run is a failed cycle, not a fallback: swallowing
         // it would republish against the stale system. The status write is not
         // redundant: the system load throws before the analyze-and-emit status
@@ -1097,6 +1101,7 @@ export class ExtractionSession {
     // Ownership is decided by whether `system` is set, so a failed pass must
     // restore it — otherwise this session answers as owner with empty caches.
     const priorSystem = this.system;
+    const priorRegistration = this.snapshotWatchRegistration();
 
     const nested = getWatchTransaction(this.key) !== null;
     // A top-level full read covers every observation queued before it, so
@@ -1112,11 +1117,51 @@ export class ExtractionSession {
     } catch (error) {
       // The authority stays the committed system's, with its proofs.
       this.system = priorSystem;
+      this.restoreWatchRegistration(priorRegistration);
       throw error;
     } finally {
       if (!nested) setWatchTransaction(this.key, null);
     }
     this.commitSystemAuthority();
+  }
+
+  /** What hosts watch, and what the last-good generation reported about its
+   *  kits and packages, which a failed full pass must leave in place. */
+  private snapshotWatchRegistration() {
+    return {
+      systemDependencyKeys: this.systemDependencyKeys,
+      systemDependencyPaths: this.systemDependencyPaths,
+      systemDependencyHashes: this.systemDependencyHashes,
+      assetDependencyPaths: new Set(this.assetDependencyPaths),
+      assetDependencyKeys: new Set(this.assetDependencyKeys),
+      kitDescriptors: this.kitDescriptors,
+      lastExternalOutcomes: this.lastExternalOutcomes,
+    };
+  }
+
+  /** Restores the last-good registration. The failed attempt's system
+   *  dependencies, when its load got that far, stay watched beside it: a fix
+   *  to any of them must reach the owed reload. */
+  private restoreWatchRegistration(
+    prior: ReturnType<ExtractionSession['snapshotWatchRegistration']>
+  ): void {
+    const attempted = {
+      keys: this.systemDependencyKeys,
+      paths: this.systemDependencyPaths,
+      hashes: this.systemDependencyHashes,
+    };
+    Object.assign(this, prior);
+    this.systemDependencyKeys = new Set([
+      ...prior.systemDependencyKeys,
+      ...attempted.keys,
+    ]);
+    this.systemDependencyPaths = [
+      ...new Set([...prior.systemDependencyPaths, ...attempted.paths]),
+    ];
+    this.systemDependencyHashes = new Map([
+      ...attempted.hashes,
+      ...prior.systemDependencyHashes,
+    ]);
   }
 
   /** The build's authority becomes the system this session committed, with
