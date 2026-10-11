@@ -13247,6 +13247,57 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// An object reached through a star the analysis cannot open is still
+    /// the object a write through that route changes: a named import, a
+    /// namespace member and a whole namespace through such a barrel all
+    /// leave its member table unproven, and so do a namespace of a missing
+    /// module, a name an unread module may rename the object to, and a
+    /// write or whole use of a package's namespace, which may re-export our
+    /// objects (a linked workspace package), including a member, named or
+    /// keyed, handed on or bound and then written or handed on; a read
+    /// leaves it, and so does a read or call of a package namespace's
+    /// member, or a keyed member used only as a value.
+    #[test]
+    fn a_write_through_an_open_star_reaches_the_object_it_names() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
+        let barrel = "export * from './fam';\nexport * from 'some-package';\n";
+        // `./bridge` is outside the analysis and may `export { Fam as X }`.
+        let bridged = "export * from './bridge';\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        for (mutate, warns) in [
+            ("import { Fam } from './barrel';\nFam.Box = () => null;\n", true),
+            ("import * as ui from './barrel';\nui.Fam.Box = () => null;\n", true),
+            ("import * as ui from './barrel';\nregister(ui);\n", true),
+            ("import { Fam } from './barrel';\nexport const has = Fam.Box ? 1 : 0;\n", false),
+            ("import * as ui from './missing';\nui.Fam.Box = () => null;\n", true),
+            ("import * as ui from './missing';\nregister(ui);\n", true),
+            ("import { X } from './bridged';\nX.Box = () => null;\n", true),
+            ("import * as ui from 'some-package';\nui.Fam.Box = () => null;\n", true),
+            ("import * as ui from '@local/proxy';\nregister(ui);\n", true),
+            ("import * as ui from 'some-package';\nexport const has = ui.Fam.Box ? 1 : 0;\n", false),
+            ("import * as ui from 'some-package';\nui.render();\n", false),
+            ("import * as ui from 'some-package';\nregister(ui.Fam);\n", true),
+            ("import * as ui from 'some-package';\nconst C = ui.Fam;\nC.Box = () => null;\n", true),
+            ("import * as ui from 'some-package';\nconst name = 'Fam';\nui[name].Box = () => null;\n", true),
+            ("import * as ui from 'some-package';\nconst name = 'Fam';\nconst C = ui[name];\nC.Box = () => null;\n", true),
+            ("import * as ui from 'some-package';\nconst name = 'Fam';\nconst C = ui[name];\nregister(C);\n", true),
+            ("import * as ui from 'some-package';\nexport const icon = (name: string) => ({ name, Icon: ui[name] as any });\n", false),
+            ("import * as ui from 'some-package';\nexport const Show = ({ name }) => { const Icon = ui[name]; return <Icon label={ui[name]} />; };\n", false),
+        ] {
+            let out = analyze_with_logical_space(&[
+                ("recipe.tsx", recipe),
+                ("fam.tsx", fam),
+                ("barrel.ts", barrel),
+                ("bridged.ts", bridged),
+                ("mutate.tsx", mutate),
+                ("app.tsx", app),
+            ]);
+            let warned = unattributed(&out).len();
+            assert_eq!(warned, usize::from(warns), "{mutate}: {:?}", out.diagnostics);
+        }
+    }
+
     /// Code a module runs from a string can `import()` any module and
     /// rebind what an exported object holds, so a member tag of one
     /// rendered elsewhere is not proven; a module running none leaves it.

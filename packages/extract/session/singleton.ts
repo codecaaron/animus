@@ -5,7 +5,7 @@ import { resolve } from 'path';
 import { createV2EngineApi, stableStringify } from '../pipeline/index';
 
 import type { AnimusCoreOptions } from '../pipeline/core-options';
-import type { V2ExtractEngine } from '../pipeline/index';
+import type { EngineApi, V2ExtractEngine } from '../pipeline/index';
 
 /**
  * A build's shared state lives in one registry on `globalThis`, keyed by its
@@ -295,39 +295,118 @@ export function setEngineApiOverride(api: (() => any) | null): void {
   overrideGlobal[ENGINE_API_OVERRIDE_KEY] = api ?? undefined;
 }
 
+/** The native engine module could not be loaded: an environment failure,
+ *  never answered by another engine. */
+export class EnvironmentFailure extends Error {
+  readonly code = 'EnvironmentFailure';
+
+  constructor(cause: Error | string) {
+    super(
+      `[animus] EnvironmentFailure: the native extraction engine could not be loaded: ${String(cause)}`,
+      { cause }
+    );
+    this.name = 'EnvironmentFailure';
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let loadEngineFactory: () => any = requireEngine;
+
+/** Test seam: the loader of the native factory; null restores the real one. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function setEngineFactoryLoaderForTests(load: (() => any) | null): void {
+  loadEngineFactory = load ?? requireEngine;
+}
+
+/** The native factory, loaded once for every build in the process. A load
+ *  failure is an EnvironmentFailure, and is not cached: the next use tries
+ *  the load again. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function engineFactory(): any {
+  const registry = sessionRegistry();
+  if (registry.factory === null) {
+    try {
+      registry.factory = loadEngineFactory();
+    } catch (error) {
+      throw new EnvironmentFailure(
+        error instanceof Error ? error : String(error)
+      );
+    }
+  }
+  return registry.factory;
+}
+
+/** How a host's engine API reads: its log label, and the host-specific
+ *  adapter options. */
+export interface EngineHandleOptions {
+  label: string;
+  passThroughUnknownPaths?: boolean;
+  rehydrateFilesJson?(filesJsonRaw: string): string;
+}
+
 /**
- * The build's engine API: the native factory loads once per process, and
- * each build holds its own engine instance, analyze-time sources and drift
- * flag in its registry entry.
+ * One engine-handle store (SA18): the engine API over `key`'s own engine
+ * state, made once per key in the registry every module copy joins. The
+ * native factory is shared; each key's engine instance, analyze-time
+ * sources and drift flag are its own, and its build's retirement releases
+ * them. A key need not be a joined build's: a Vite context or a Turbopack
+ * worker keys its own.
+ */
+export function engineHandle(
+  key: SessionKey,
+  options: EngineHandleOptions
+): () => EngineApi {
+  const engines = sessionRegistry().engines;
+  const id = sessionKeyId(key);
+  let api = engines.get(id);
+  if (api === undefined) {
+    let engine: V2ExtractEngine | null = null;
+    let sentSources: Map<string, string> | null = null;
+    let driftWarned = false;
+    api = createV2EngineApi({
+      ...options,
+      isV2: () => true,
+      loadNativeEngine: engineFactory,
+      store: {
+        getEngine: () => engine,
+        setEngine: (next) => {
+          engine = next;
+        },
+        getSentSources: () => sentSources,
+        setSentSources: (sources) => {
+          sentSources = sources;
+        },
+        getDriftWarned: () => driftWarned,
+        setDriftWarned: (value) => {
+          driftWarned = value;
+        },
+      },
+    });
+    engines.set(id, api);
+  }
+  return api;
+}
+
+/** Releases a standalone handle, one no joined build retires: its host
+ *  calls this when it closes. */
+export function releaseEngineHandle(key: SessionKey): void {
+  sessionRegistry().engines.delete(sessionKeyId(key));
+}
+
+/**
+ * The build's engine API, from the one engine-handle store.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function engineApi(key: SessionKey): any {
   const override = overrideGlobal[ENGINE_API_OVERRIDE_KEY];
   if (override) return override();
-  const state = joined(key);
-  state.api ??= createV2EngineApi({
-    // Driver-neutral: every participant of the build reaches this one
-    // instance, so a host-branded label misattributes drift warnings.
+  joined(key);
+  // Driver-neutral: every participant of the build reaches this one
+  // instance, so a host-branded label misattributes drift warnings.
+  return engineHandle(key, {
     label: 'animus',
-    isV2: () => true,
-    loadNativeEngine: requireEngine,
     passThroughUnknownPaths: true,
-    store: {
-      getEngine: () => state.engine,
-      setEngine: (engine) => {
-        state.engine = engine;
-      },
-      getSentSources: () => state.sentSources,
-      setSentSources: (sources) => {
-        state.sentSources = sources;
-      },
-      getDriftWarned: () => state.driftWarned,
-      setDriftWarned: (value) => {
-        state.driftWarned = value;
-      },
-    },
-  });
-  return state.api();
+  })();
 }
 
 /** The participant protocol a `SessionKey` was made under; a participant
@@ -482,19 +561,17 @@ export interface SessionState {
   replacementEpoch: string | null;
   /** The artifact directory of the session's last publication. */
   artifactDir: string | null;
-  /** The session's own engine, its analyze-time sources and drift flag. */
-  engine: V2ExtractEngine | null;
-  sentSources: Map<string, string> | null;
-  driftWarned: boolean;
-  /** The build's engine API over the fields above, made on first use. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  api: (() => any) | null;
 }
 
 const SESSION_REGISTRY = Symbol.for('animus.session-registry.v1');
 
 interface SessionRegistry {
   readonly sessions: Map<string, SessionState>;
+  /** The one engine-handle store: each key's engine API. */
+  readonly engines: Map<string, () => EngineApi>;
+  /** The native factory, once loaded. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  factory: any;
 }
 
 // SAFETY: the symbol is this module's own, and every copy of this module,
@@ -504,7 +581,11 @@ const registryGlobal = globalThis as typeof globalThis & {
 };
 
 function sessionRegistry(): SessionRegistry {
-  return (registryGlobal[SESSION_REGISTRY] ??= { sessions: new Map() });
+  return (registryGlobal[SESSION_REGISTRY] ??= {
+    sessions: new Map(),
+    engines: new Map(),
+    factory: null,
+  });
 }
 
 /**
@@ -548,10 +629,6 @@ export function joinSession(
       analyzedHashes: null,
       replacementEpoch: null,
       artifactDir: null,
-      engine: null,
-      sentSources: null,
-      driftWarned: false,
-      api: null,
     };
     sessions.set(id, state);
     return state;
@@ -609,6 +686,7 @@ function retireIfUnused(id: string, state: SessionState): void {
   const sessions = sessionRegistry().sessions;
   if (sessions.get(id) !== state) return;
   sessions.delete(id);
+  sessionRegistry().engines.delete(id);
   state.claimRecord?.();
   state.claimRecord = null;
 }
