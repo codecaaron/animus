@@ -231,10 +231,13 @@ export function readKitSourceCondition(
     if (subpath.includes('*') || !isJsonBlock(value)) continue;
     const target = value[KIT_SOURCE_CONDITION];
     if (!isJsonString(target)) continue;
-    // A target the system loader refuses is no source: it evaluates the
-    // runtime entry, so analysis reads that entry too.
-    const file = resolve(pkgRoot, target);
-    const seen = isPackageTarget(target) ? seeOnDisk(file, pkgRoot) : null;
+    // Read as the system loader reads a target: a raw backslash is a `/`,
+    // and a percent-escape is refused. A target it refuses is no source: it
+    // evaluates the runtime entry, so analysis reads that entry too.
+    const file = resolve(pkgRoot, target.replaceAll('\\', '/'));
+    const escaped = target.includes('%');
+    const seen =
+      isPackageTarget(target) && !escaped ? seeOnDisk(file, pkgRoot) : null;
     if (seen?.kind === 'file') {
       condition.entries.push([subpath, file]);
     } else {
@@ -243,9 +246,11 @@ export function readKitSourceCondition(
         target,
         seen?.kind === 'case-only'
           ? `is spelled otherwise on disk (${seen.actual}), which a case- or normalization-sensitive filesystem does not load`
-          : seen === null
-            ? "is no package target Node accepts (one starts with './' and has no '.', '..' or 'node_modules' segment)"
-            : 'is missing',
+          : escaped
+            ? "holds a percent-escape, which the system loader refuses (percent-escape unsupported) — spell the target without '%'"
+            : seen === null
+              ? "is no package target Node accepts (one starts with './' and has no '.', '..' or 'node_modules' segment)"
+              : 'is missing',
       ]);
     }
   }
