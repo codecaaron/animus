@@ -1050,6 +1050,10 @@ export class ExtractionSession {
     // Owner records for deleted files, deferred the same way: a rolled-back
     // cache entry with no owner loses its token diagnostics for the session.
     const ownerRemovals: string[] = [];
+    // Removed project files: no later event re-reports a deletion, so a
+    // rollback that restored one would keep it in the corpus for good.
+    // External deletions re-derive from the inventory diff instead.
+    const removedProjectFiles = new Map<string, string>();
 
     // Prune deleted/renamed files so their last source stops riding along.
     // Out-of-root deletions resolve through cached identity only.
@@ -1071,6 +1075,7 @@ export class ExtractionSession {
         this.clearIngestionFailure(key);
         if (this.fileCache.delete(key)) {
           removedAny = true;
+          if (!owningRoot) removedProjectFiles.set(key, removedPath);
           if (owningRoot) {
             inventoryUpdates.push({
               root: owningRoot,
@@ -1234,6 +1239,8 @@ export class ExtractionSession {
           // Roll the cache back: the failed attempt published nothing, so
           // the same content must analyze again on the next observation.
           for (const [key, prior] of priorCacheEntries) {
+            const removed = removedProjectFiles.get(key);
+            if (removed !== undefined && !existsSync(removed)) continue;
             if (prior === null) this.fileCache.delete(key);
             else this.fileCache.set(key, prior);
           }
@@ -1245,7 +1252,7 @@ export class ExtractionSession {
         }
         throw err;
       }
-      this.publishSourceIngestion(ingested, 'incremental');
+      this.publishSourceIngestion(ingested, 'incremental', this.fileCache);
       commitObservedBatch();
     } else if (this.statusAttemptOpen) {
       // A debounced burst produced nothing analyzable — close the attempt so
@@ -1268,19 +1275,34 @@ export class ExtractionSession {
     throw new AbortedParseRejection(rejection.message);
   }
 
+  /** `raw` is the attempt's input by original path, from which a
+   *  quarantined original stays held: every later pass re-ingests it, so it
+   *  keeps counting as skipped (nothing it renders is pruned) and its fix
+   *  edit compares against its bytes. */
   private publishSourceIngestion(
     result: SourceIngestionResult,
-    pass: 'full' | 'incremental'
+    pass: 'full' | 'incremental',
+    raw: ReadonlyMap<string, { hash?: string; source: string }>
   ): void {
     const endedHold = this.heldRejection !== null;
     const previousOwnership = this.corpus.published.ownership;
     this.heldRejection = null;
-    this.fileCache = new Map(
+    const held = new Map(
       result.originalEntries.map((entry) => [
         entry.path,
         { hash: entry.hash, source: entry.source },
       ])
     );
+    for (const path of result.skippedOriginals ?? []) {
+      const entry = raw.get(path);
+      if (entry) {
+        held.set(path, {
+          hash: entry.hash ?? contentHash(entry.source),
+          source: entry.source,
+        });
+      }
+    }
+    this.fileCache = held;
     this.corpus.publish(result);
     const staged = this.stagedPublication;
     if (staged === null) return;
@@ -1834,7 +1856,11 @@ export class ExtractionSession {
         pipelineStart,
         pending
       );
-      this.publishSourceIngestion(accepted, 'full');
+      this.publishSourceIngestion(
+        accepted,
+        'full',
+        new Map(rawEntries.map((entry) => [entry.path, entry]))
+      );
 
       // External package state publishes in the same successful generation
       // as the source projection.
