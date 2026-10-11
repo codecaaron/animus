@@ -489,6 +489,23 @@ export class PluginContext {
     this.applyAssetSubstitutions();
   }
 
+  /** Environments whose build started and has not closed. A custom
+   *  `buildApp` builds a shared plugin's environments in parallel, so the
+   *  context's build retires with the last of them, not the first. */
+  private readonly openBuilds = new Set<string>();
+
+  openBuild(environment: string): void {
+    this.openBuilds.add(environment);
+  }
+
+  /** Whether `environment` was the last open build. Vite can close one
+   *  environment twice (a failed build) or close one that never started
+   *  (dev), so the set, not a count, decides. */
+  closeBuild(environment: string): boolean {
+    this.openBuilds.delete(environment);
+    return this.openBuilds.size === 0;
+  }
+
   /** Retires this context's build when Vite closes it: the Session leaves
    *  the registry (with its manifest and watch state) and the engine handle
    *  is released, injected engine or not. The next build start rejoins. */

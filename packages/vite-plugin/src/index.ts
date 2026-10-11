@@ -209,11 +209,14 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     // The end of a build, and of a dev server, which Vite closes the same
     // way: the context's Session and engine are retired with it.
     closeBundle() {
+      // The last open environment build retires the context's build.
+      if (!ctx.closeBuild(this.environment?.name ?? 'build')) return;
       cancelSystemReload(ctx);
       ctx.close();
     },
 
     async buildStart() {
+      ctx.openBuild(this.environment?.name ?? 'build');
       await runBuildStart(
         ctx,
         async (specifier) => {
