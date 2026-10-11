@@ -205,13 +205,6 @@ const barrenWalkMemos = new WeakMap<
  *  condition warns once; cleared when the drops disappear. */
 const warnedVerdicts = new WeakMap<object, Set<string>>();
 
-const PARENT_PROBE_EXTENSIONS: ReadonlySet<string> = new Set([
-  '.tsx',
-  '.ts',
-  '.jsx',
-  '.js',
-]);
-
 /**
  * Warns for parents that resolve on disk but cannot be admitted. Resolution
  * is a best-effort scan of the consumer's own relative import specifiers.
@@ -239,8 +232,7 @@ function warnInadmissibleParents(
     if (!specifier || !specifier.startsWith('.')) continue;
 
     const resolved = resolveAbsolutePathSpecifier(
-      resolve(ctx.rootDir, dirname(drop.file), specifier),
-      PARENT_PROBE_EXTENSIONS
+      resolve(ctx.rootDir, dirname(drop.file), specifier)
     );
     if (!resolved) continue;
     const relPath = relative(ctx.rootDir, resolved);
