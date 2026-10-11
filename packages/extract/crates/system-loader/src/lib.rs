@@ -15,6 +15,7 @@ use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::{Context, Function, Object, Runtime};
 
 mod linked;
+pub mod module_table;
 pub mod resolution;
 use serde::{Deserialize, Serialize};
 
