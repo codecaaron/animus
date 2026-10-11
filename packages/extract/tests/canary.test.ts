@@ -1,4 +1,12 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, test } from 'vitest';
@@ -8,6 +16,8 @@ import {
   extensionPolicyJson,
   viteExtensionPolicy,
 } from '../pipeline/host-extensions';
+import { gatherProbeEvidence } from '../pipeline/probe-evidence';
+import { ingestSourceEntries } from '../pipeline/source-ingestion';
 
 const v2 = require('../index-v2.js');
 
@@ -241,4 +251,130 @@ test("a configured Vite extension list is unreadable, and './only' still finds o
     discovery: join(root, 'only.tsx'),
     native: expect.stringMatching(/only\.tsx$/),
   });
+});
+
+// Contract: analysis never opens a different file than a case-insensitive
+// host would (spec §2.2 A2, A8). `./x` beside `X.ts` (red) and `x.tsx`
+// (blue): where the filesystem opens `x.ts` as `X.ts`, the probe is
+// Incomplete, the finding names both spellings, and the child is never
+// linked to `x.tsx`; where it does not, the exact `x.tsx` is read, as the
+// host reads it. The same for an APFS-only pair, `ς` beside `Σ.ts` and an
+// exact `ς.tsx`.
+test.each([
+  ['x', 'X.ts', 'x.tsx'],
+  ['ς', 'Σ.ts', 'ς.tsx'],
+])(
+  "analysis reads './%s' beside %s and %s as the host does",
+  (name, variant, exact) => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'animus-case-probe-'))
+    );
+    const sources = {
+      [variant]:
+        "export const Parent = ds.styles({ color: 'red' }).asElement('div');\n",
+      [exact]:
+        "export const Parent = ds.styles({ color: 'blue' }).asElement('div');\n",
+      'app.tsx': `import { Parent } from './${name}';\nexport const Child = Parent.extend().styles({ margin: '1px' }).asElement('div');\nexport const App = () => <Child />;\n`,
+    } satisfies Record<string, string>;
+    for (const [path, source] of Object.entries(sources)) {
+      writeFileSync(join(root, path), source);
+    }
+    const candidate = `${name}.ts`;
+    const opensVariant =
+      existsSync(join(root, candidate)) &&
+      !readdirSync(root).includes(candidate);
+    const files = Object.entries(sources).map(([path, source]) => ({
+      path,
+      source,
+    }));
+    const filesJson = JSON.stringify(files);
+    const engine = new v2.ExtractEngine({});
+    const prepared = JSON.parse(engine.prepare(filesJson));
+    const evidence = gatherProbeEvidence(
+      root,
+      new Set(Object.keys(sources)),
+      undefined
+    )(prepared.bases, prepared.identity);
+    const manifest = JSON.parse(engine.analyze(filesJson, evidence));
+    rmSync(root, { recursive: true, force: true });
+
+    expect({
+      parent: manifest.components['app.tsx::Child']?.extends_from ?? null,
+      mismatch: manifest.diagnostics
+        .filter(
+          (d: { code?: string }) => d.code === 'animus.resolve.case-mismatch'
+        )
+        .map(
+          (d: { message: string }) =>
+            d.message.includes(candidate) && d.message.includes(variant)
+        ),
+    }).toEqual(
+      opensVariant
+        ? { parent: null, mismatch: [true] }
+        : { parent: `${exact}::Parent`, mismatch: [] }
+    );
+  }
+);
+
+// Contract: a Svelte resolver call whose import the host opens under another
+// spelling is an opening of the analysis (spec §2.2 A8), though it is
+// attributed to no module: the finding is reported and nothing is pruned,
+// so the variant it renders keeps its CSS. spike-codex's witness: Known
+// reads `./Definition` (quiet, the control that lets pruning run); Usage
+// reads `./definition` (loud), which a case-insensitive host opens as
+// `Definition.ts`, beside a `definition.tsx` exporting another badge.
+test('a mismatched Svelte resolver call keeps the variant it renders', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-svelte-open-')));
+  const sources = {
+    'src/Definition.ts':
+      "export const badge=ds.styles({color:'red'}).variant({prop:'tone',defaultVariant:'quiet',variants:{quiet:{backgroundColor:'pink'},loud:{backgroundColor:'crimson'}}}).asClass();\n",
+    'src/definition.tsx':
+      "export const later=ds.styles({color:'blue'}).variant({prop:'tone',defaultVariant:'quiet',variants:{quiet:{backgroundColor:'pink'},loud:{backgroundColor:'crimson'}}}).asClass();export{later as badge};\n",
+    'src/Usage.svelte':
+      "<script>import{badge}from'./definition';const attrs=badge.attrs({tone:'loud'});</script><div {...attrs}></div>\n",
+    'src/Known.svelte':
+      "<script>import{badge}from'./Definition';const attrs=badge.attrs({tone:'quiet'});</script><div {...attrs}></div>\n",
+  } satisfies Record<string, string>;
+  mkdirSync(join(root, 'src'));
+  for (const [path, source] of Object.entries(sources)) {
+    writeFileSync(join(root, path), source);
+  }
+  const opensVariant =
+    existsSync(join(root, 'src', 'definition.ts')) &&
+    !readdirSync(join(root, 'src')).includes('definition.ts');
+
+  const ingested = await ingestSourceEntries(
+    Object.entries(sources).map(([path, source]) => ({ path, source })),
+    { extractFacts: (filesJson) => v2.extractFacts(filesJson), rootDir: root }
+  );
+  const engine = new v2.ExtractEngine({
+    analysisContextJson: JSON.stringify({ openings: ingested.openings ?? [] }),
+  });
+  const filesJson = JSON.stringify(ingested.analysisEntries);
+  const prepared = JSON.parse(engine.prepare(filesJson));
+  const evidence = gatherProbeEvidence(
+    root,
+    new Set(ingested.analysisEntries.map((entry) => entry.path)),
+    undefined
+  )(prepared.bases, prepared.identity);
+  const manifest = JSON.parse(engine.analyze(filesJson, evidence));
+  rmSync(root, { recursive: true, force: true });
+  // The badge the loud call reaches: `Definition.ts`'s where the
+  // filesystem opens the variant, else the exact `definition.tsx`'s.
+  const components: Record<string, { file: string; class_name: string }> =
+    manifest.components;
+  const reached = Object.values(components).find(
+    (component) =>
+      component.file ===
+      (opensVariant ? 'src/Definition.ts' : 'src/definition.tsx')
+  );
+
+  expect({
+    loud:
+      reached !== undefined &&
+      manifest.css.includes(`.${reached.class_name}--tone-loud`),
+    mismatch: manifest.diagnostics.some(
+      (d: { code?: string }) => d.code === 'animus.resolve.case-mismatch'
+    ),
+  }).toEqual({ loud: true, mismatch: opensVariant });
 });

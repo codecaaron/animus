@@ -232,3 +232,4 @@ export {
 export { applyUnitFallback } from './unit-fallback';
 export { camelToKebab, stableStringify } from './utils';
 export { toWatchKeys } from './watch-keys';
+export type { IngestionOpening } from './source-ingestion';
