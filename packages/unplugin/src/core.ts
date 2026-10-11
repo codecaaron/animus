@@ -287,6 +287,61 @@ interface RspackLikeCompiler extends WebpackLikeCompiler {
   };
 }
 
+/** The experiments webpack's default rules are built from. */
+interface WebpackRuleExperiments {
+  css?: boolean;
+  asyncWebAssembly?: boolean;
+  syncWebAssembly?: boolean;
+}
+
+/** Normalized webpack options, as far as their default rules. */
+interface WebpackNormalizedOptions {
+  module?: { defaultRules?: ReadonlyArray<WebpackRuleEntry> };
+}
+
+/** Rules as comparable text: a RegExp by its source and flags, a function
+ *  by its text. */
+function ruleText(rules: ReadonlyArray<WebpackRuleEntry> | undefined): string {
+  return JSON.stringify(rules ?? null, (_key, value: WebpackRuleValue) =>
+    value instanceof RegExp
+      ? `/${value.source}/${value.flags}`
+      : value instanceof Function
+        ? String(value)
+        : value
+  );
+}
+
+/** A value inside a rule, as the comparison reads it. */
+type WebpackRuleValue =
+  | RegExp
+  | ((...args: never[]) => boolean)
+  | string
+  | number
+  | boolean
+  | null
+  | readonly WebpackRuleValue[]
+  | { [key: string]: WebpackRuleValue };
+
+/** Whether `module.defaultRules` is webpack's own default list: the list
+ *  webpack's defaults give the compiler's experiments, unchanged. Throws
+ *  where webpack's option API is not available. */
+function defaultRulesAreWebpacks(compiler: WebpackLikeCompiler): boolean {
+  const config = compiler.webpack?.config;
+  if (config === undefined) {
+    throw new Error("webpack's option defaults are not available");
+  }
+  const { css, asyncWebAssembly, syncWebAssembly } =
+    compiler.options.experiments ?? {};
+  const fresh = config.getNormalizedWebpackOptions({
+    experiments: { css, asyncWebAssembly, syncWebAssembly },
+  });
+  config.applyWebpackOptionsDefaults(fresh);
+  return (
+    ruleText(fresh.module?.defaultRules) ===
+    ruleText(compiler.options.module?.defaultRules)
+  );
+}
+
 /** A webpack parser's wrapped-context options, which build a template or
  *  concatenated request's context. */
 interface WrappedContextOptions {
@@ -300,7 +355,9 @@ interface WebpackLikeCompiler {
     module?: {
       parser?: Record<string, WrappedContextOptions | undefined>;
       rules?: ReadonlyArray<WebpackRuleEntry>;
+      defaultRules?: ReadonlyArray<WebpackRuleEntry>;
     };
+    experiments?: WebpackRuleExperiments;
     resolve?: {
       conditionNames?: string[];
       extensions?: string[];
@@ -338,6 +395,13 @@ interface WebpackLikeCompiler {
   webpack?: {
     version?: string;
     DefinePlugin?: new (defs: Record<string, string>) => WebpackLikeApplied;
+    /** webpack's own option normalization and defaults. */
+    config?: {
+      getNormalizedWebpackOptions(config: {
+        experiments: WebpackRuleExperiments;
+      }): WebpackNormalizedOptions;
+      applyWebpackOptionsDefaults(options: WebpackNormalizedOptions): void;
+    };
   };
   rspack?: {
     rspackVersion?: string;
@@ -996,10 +1060,14 @@ export const unpluginFactory: UnpluginFactory<
                 ),
               };
             },
-            wrappedDefaults: wrappedContextDefaults(
-              compiler.options.module?.parser
-            ),
-            rules: compiler.options.module?.rules ?? [],
+            // Read for every expansion: a plugin can add a rule later.
+            options: () => ({
+              rules: compiler.options.module?.rules ?? [],
+              defaultRulesAreWebpacks: defaultRulesAreWebpacks(compiler),
+              wrappedDefaults: wrappedContextDefaults(
+                compiler.options.module?.parser
+              ),
+            }),
           })
         : undefined;
     const DefinePlugin =

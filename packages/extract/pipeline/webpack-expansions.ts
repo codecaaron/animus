@@ -1,5 +1,5 @@
 import { readdirSync, realpathSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, posix, relative, resolve, sep } from 'node:path';
+import { dirname, posix, relative, resolve, sep } from 'node:path';
 
 import type {
   ExpandedPath,
@@ -18,8 +18,8 @@ export interface WebpackResolveReading {
   fullySpecified: boolean;
   enforceExtension: boolean;
   /** The names of the resolver's `alias` and `fallback` entries, for the
-   *  normal and the context resolver: one could redirect a context or one
-   *  of its requests. */
+   *  normal and the context resolver: any one could redirect a context or
+   *  one of its requests, so any one leaves the load unexpanded. */
   aliasNames: readonly string[];
 }
 
@@ -271,7 +271,7 @@ export function webpackLoadExpander(
       }
       if (context === undefined) return undefined;
       const reading = resolveReading(context.category);
-      if (reading === undefined || reading.aliasNames.some(redirectsRelative)) {
+      if (reading === undefined || reading.aliasNames.length > 0) {
         return undefined;
       }
       let files: string[];
@@ -289,13 +289,6 @@ export function webpackLoadExpander(
       }));
     },
   };
-}
-
-/** Whether a resolver alias or fallback named `name` could redirect a
- *  relative or absolute request, which the expander reads without the
- *  resolver. */
-function redirectsRelative(name: string): boolean {
-  return name.startsWith('.') || isAbsolute(name);
 }
 
 /** A `module.rules` entry, or a placeholder webpack skips (`'...'`, a
@@ -334,25 +327,46 @@ function everyRule(
     ]);
 }
 
+/** What a webpack compiler's options say about its rules, read again for
+ *  every expansion: a plugin can add a rule after the host installed. */
+export interface WebpackOptionsReading {
+  rules: ReadonlyArray<WebpackRuleEntry>;
+  /** `module.defaultRules` is webpack's own default list, unchanged. */
+  defaultRulesAreWebpacks: boolean;
+  /** No parser changes `wrappedContextRegExp` or `wrappedContextRecursive`. */
+  wrappedDefaults: boolean;
+}
+
 /**
- * The expander for a webpack 5 compiler: none where a rule carries its own
- * resolve options or context parser options, which the expander does not
- * read. `wrappedDefaults` is false where a parser changes the wrapped
- * context.
+ * The expander for a webpack 5 compiler. Each expansion reads the
+ * compiler's options again and lists nothing where a rule carries its own
+ * resolve options or context parser options, `module.defaultRules` is not
+ * webpack's own, or the options cannot be read.
  */
 export function webpackHostExpander(reading: {
   resolveReading: (
     category: 'esm' | 'commonjs'
   ) => WebpackResolveReading | undefined;
-  wrappedDefaults: boolean;
-  rules: ReadonlyArray<WebpackRuleEntry>;
-}): HostLoadExpander | undefined {
-  const rules = everyRule(reading.rules);
-  const unread = rules.some(
-    (rule) =>
-      rule.resolve !== undefined ||
-      Object.keys(rule.parser ?? {}).some((key) => key.includes('Context'))
-  );
-  if (unread) return undefined;
-  return webpackLoadExpander(reading.resolveReading, reading.wrappedDefaults);
+  options: () => WebpackOptionsReading;
+}): HostLoadExpander {
+  return {
+    expand(load, rootDir) {
+      let options: WebpackOptionsReading;
+      try {
+        options = reading.options();
+      } catch {
+        return undefined;
+      }
+      const unread = everyRule(options.rules).some(
+        (rule) =>
+          rule.resolve !== undefined ||
+          Object.keys(rule.parser ?? {}).some((key) => key.includes('Context'))
+      );
+      if (unread || !options.defaultRulesAreWebpacks) return undefined;
+      return webpackLoadExpander(
+        reading.resolveReading,
+        options.wrappedDefaults
+      ).expand(load, rootDir);
+    },
+  };
 }

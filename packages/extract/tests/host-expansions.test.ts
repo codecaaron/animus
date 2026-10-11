@@ -22,7 +22,10 @@ import {
 } from '../pipeline/webpack-expansions';
 
 import type { ListedArgs, ListedLoad } from '../pipeline/host-expansions';
-import type { WebpackRuleReading } from '../pipeline/webpack-expansions';
+import type {
+  WebpackOptionsReading,
+  WebpackRuleReading,
+} from '../pipeline/webpack-expansions';
 
 describe('hostExpansions', () => {
   // Contract: a query selects how the host loads a file, which can be other
@@ -329,44 +332,67 @@ describe('webpackLoadExpander', () => {
         exclude: null,
         mode: null,
       };
-      const ruled = (rule: WebpackRuleReading) =>
+      // The rules as the compiler holds them, read at each expansion.
+      const rules: WebpackRuleReading[] = [];
+      const host = (
+        options: Partial<WebpackOptionsReading> = {},
+        aliasNames: string[] = []
+      ) =>
         webpackHostExpander({
-          resolveReading: () => reading(),
-          wrappedDefaults: true,
-          rules: [rule],
+          resolveReading: () => reading(aliasNames),
+          options: () => ({
+            rules,
+            defaultRulesAreWebpacks: true,
+            wrappedDefaults: true,
+            ...options,
+          }),
         });
+      const viaHost = (hostExpander: ReturnType<typeof webpackHostExpander>) =>
+        expandWith(hostExpander, 'context', pages)?.length;
+      const later = host();
+      const before = viaHost(later);
+      // A rule a plugin adds after the host installed.
+      rules.push({ resolve: { extensions: ['.special'] } });
+      const after = viaHost(later);
+      rules.length = 0;
       expect({
-        relativeAlias: expandWith(
-          webpackLoadExpander(() => reading(['./pages']), true),
-          'context',
-          pages
+        before,
+        after,
+        // Any alias or fallback, a package's or a module directory's
+        // included, could redirect a context or a matched request.
+        relativeAlias: viaHost(host({}, ['./pages'])),
+        absoluteAlias: viaHost(host({}, [join(root, 'src/pages/a.js')])),
+        packageAlias: viaHost(host({}, ['pkg'])),
+        directoryAlias: viaHost(host({}, ['pages'])),
+        ruleResolve: viaHost(
+          host({ rules: [{ resolve: { extensions: ['.special'] } }] })
         ),
-        absoluteAlias: expandWith(
-          webpackLoadExpander(
-            () => reading([join(root, 'src/pages/a.js')]),
-            true
-          ),
-          'context',
-          pages
+        ruleParser: viaHost(
+          host({ rules: [{ parser: { wrappedContextRegExp: /[\s\S]*/ } }] })
         ),
-        packageAlias: expandWith(
-          webpackLoadExpander(() => reading(['lodash']), true),
-          'context',
-          pages
-        )?.length,
-        ruleResolve: ruled({ resolve: { extensions: ['.special'] } }),
-        ruleParser: ruled({
-          parser: { wrappedContextRegExp: /[\s\S]*/ },
-        }),
-        ruleOther: ruled({ parser: { javascript: {} } }) === undefined,
+        ruleOther: viaHost(host({ rules: [{ parser: { javascript: {} } }] })),
+        changedDefaultRules: viaHost(host({ defaultRulesAreWebpacks: false })),
+        unreadableOptions: viaHost(
+          webpackHostExpander({
+            resolveReading: () => reading(),
+            options: () => {
+              throw new Error('options unavailable');
+            },
+          })
+        ),
         unreadable: context('./locked'),
       }).toEqual({
+        before: 5,
+        after: undefined,
         relativeAlias: undefined,
         absoluteAlias: undefined,
-        packageAlias: 5,
+        packageAlias: undefined,
+        directoryAlias: undefined,
         ruleResolve: undefined,
         ruleParser: undefined,
-        ruleOther: false,
+        ruleOther: 5,
+        changedDefaultRules: undefined,
+        unreadableOptions: undefined,
         unreadable: undefined,
       });
     } finally {
