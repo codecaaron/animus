@@ -3171,14 +3171,7 @@ pub(crate) fn namespace_path_module(
 ) -> Option<String> {
     let mut segments = path.split('.');
     let local = segments.next()?;
-    let mut module = crate::family_members::local_namespace(
-        file,
-        ff,
-        local,
-        files,
-        inputs,
-        &mut FxHashSet::default(),
-    )?;
+    let mut module = crate::family_members::local_namespace(file, ff, local, files, inputs, links)?;
     for segment in segments {
         let segment = segment.to_string();
         module = crate::family_members::namespace_export(module, segment, links)?;
@@ -11322,6 +11315,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("both.ts", "export * from './a';\nexport * from './b';"),
             ("open.ts", "export * from './a';\nexport * from './missing';"),
             ("one.ts", "export * from './a';"),
+            ("app.ts", "import { ns } from './both';\nimport { ns as only } from './one';"),
         ]
         .into_iter()
         .map(|(path, source)| {
@@ -11329,11 +11323,18 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             (path.to_string(), crate::facts::extract_file_facts(&ast))
         })
         .collect();
-        let links = crate::link::ProjectLinks::link(&files, &test_inputs());
+        let inputs = test_inputs();
+        let links = crate::link::ProjectLinks::link(&files, &inputs);
         let namespace = |module: &str| crate::family_members::namespace_export(module.to_string(), "ns".to_string(), &links);
         assert_eq!(namespace("both.ts"), None);
         assert_eq!(namespace("open.ts"), None);
         assert_eq!(namespace("one.ts"), Some("x.ts".to_string()));
+        // A named import of such a namespace holds the same answer.
+        let held = |local: &str| {
+            crate::family_members::local_namespace("app.ts", &files["app.ts"], local, &files, &inputs, &links)
+        };
+        assert_eq!(held("ns"), None);
+        assert_eq!(held("only"), Some("x.ts".to_string()));
     }
 
     #[test]
