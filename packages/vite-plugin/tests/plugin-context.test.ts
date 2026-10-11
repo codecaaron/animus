@@ -1,6 +1,11 @@
 import { createLogger } from 'vite';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  engineHandleCount,
+  makeTempRoot,
+  resetAnimusGlobals,
+} from '../../extract/tests/session/session-fixtures';
 import {
   RESOLVED_COMPONENTS_ID,
   RESOLVED_SYSTEM_PROPS_ID,
@@ -10,6 +15,7 @@ import {
   runExclusiveAnalysis,
   systemPropsModuleSource,
 } from '../src/context';
+import { animusExtract } from '../src/index';
 import { makeComponent, makeManifest } from './manifest-fixture';
 
 import type { AnimusExtractOptions } from '../src/index';
@@ -303,5 +309,45 @@ describe('runExclusive: the analysis-transaction lock', () => {
     await expect(second).rejects.toThrow('planned transaction failure');
     await expect(third).resolves.toBe(42);
     expect(order).toEqual(['a-start', 'a-end', 'b', 'c']);
+  });
+});
+
+describe('engine handle lifetime', () => {
+  let restoreGlobals: (() => void) | null = null;
+  afterEach(() => {
+    restoreGlobals?.();
+    restoreGlobals = null;
+  });
+
+  /** Contract: a Vite context's engine handle lives as long as the context
+   *  (SA18). None is registered before the root resolves, and contexts
+   *  created and closed leave none behind. */
+  it('contexts created and closed leave no engine handle', () => {
+    restoreGlobals = resetAnimusGlobals();
+    const root = makeTempRoot('animus-vite-engine-');
+
+    // The config hook's kit lookup runs before the root resolves.
+    const config = animusExtract({ system: './ds.ts' }).config;
+    if (config === undefined || 'handler' in config) {
+      throw new Error('animusExtract declares its config hook as a method');
+    }
+    config.call(
+      // SAFETY: the hook reads only `root` from the user config and the
+      // command from the env; Vite's plugin context is unused.
+      {} as ThisParameterType<typeof config>,
+      { root },
+      { command: 'serve', mode: 'development' }
+    );
+    expect(engineHandleCount()).toBe(0);
+
+    const contexts = [0, 1, 2].map(() => {
+      const ctx = new PluginContext({ system: './ds.ts' });
+      ctx.rootDir = root;
+      ctx.engineApi();
+      return ctx;
+    });
+    expect(engineHandleCount()).toBe(3);
+    for (const ctx of contexts) ctx.releaseEngine();
+    expect(engineHandleCount()).toBe(0);
   });
 });

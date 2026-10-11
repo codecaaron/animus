@@ -12,8 +12,8 @@ import {
   readAllConcat,
   writeLaneReceipt,
 } from '@animus-ui/assertions';
-import { readdirSync, readFileSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,31 +29,43 @@ const STAGING = resolve(
 const VITE_DIST = resolve(STAGING, 'dist');
 const NEXT_DIR = resolve(STAGING, '.next');
 
+/** Each installed plugin's configuration entry, required from the staging
+ *  install as a consumer's config would load it. */
+const requireFromStaging = createRequire(resolve(STAGING, 'package.json'));
+
 /**
- * Either marker proves the guard shipped: an externalized bundle carries the
- * call identifier, an inlined one carries the message text.
+ * Proves the installed plugin's engine gate runs, not only that its text
+ * shipped: the retired v1 and an unknown v3 each fail at the entry as a
+ * configuration error, before anything loads the native module.
  */
-function assertRetirementGuard(pluginDir: string): void {
-  const dir = resolve(STAGING, pluginDir);
-  for (const entry of readdirSync(dir)) {
-    if (!/\.(?:cjs|mjs|js)$/.test(entry)) continue;
-    const source = readFileSync(resolve(dir, entry), 'utf8');
-    if (
-      source.includes('assertNoRetiredEngineSelection') ||
-      source.includes('extraction engine is no longer supported')
-    ) {
-      return;
+function assertEngineGate(
+  name: string,
+  entry: (options: { system: string; engine: string }) => void
+): void {
+  for (const engine of ['v1', 'v3']) {
+    let thrown: Error | null = null;
+    try {
+      entry({ system: './src/ds.ts', engine });
+    } catch (error) {
+      thrown = error instanceof Error ? error : new Error(String(error));
+    }
+    if (thrown?.name !== 'AnimusConfigError') {
+      throw new AssertionError(
+        `installed ${name} accepted engine '${engine}' at its entry: its ` +
+          `engine gate did not run`,
+        { name, engine, thrown: thrown?.message ?? null }
+      );
     }
   }
-  throw new AssertionError(
-    `installed plugin in ${pluginDir} lacks the v1 retirement guard — update the receipt probe`,
-    { pluginDir }
-  );
 }
 
 function emitLaneReceipts(): void {
-  assertRetirementGuard('node_modules/@animus-ui/vite-plugin/dist');
-  assertRetirementGuard('node_modules/@animus-ui/next-plugin/dist');
+  assertEngineGate('@animus-ui/vite-plugin', (options) => {
+    requireFromStaging('@animus-ui/vite-plugin').animusExtract(options);
+  });
+  assertEngineGate('@animus-ui/next-plugin', (options) => {
+    requireFromStaging('@animus-ui/next-plugin').withAnimus(options);
+  });
 
   const lanes: ReadonlyArray<{
     host: LaneHost;

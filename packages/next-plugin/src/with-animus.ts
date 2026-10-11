@@ -1,5 +1,7 @@
 import {
+  AnimusConfigError,
   assembleStylesheet,
+  assertSupportedEngine,
   assertKnownOptionKeys,
   buildPathAliasesJson,
   isEngineTransformExtension,
@@ -21,11 +23,12 @@ import {
   systemPropsPath,
 } from '@animus-ui/extract/session';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 import { resolveAnimusLoaderPath } from './loader-path';
 import { ANIMUS_CSS_MODULE_ID, AnimusWebpackPlugin } from './plugin';
+import { sameDirectory } from './same-directory';
 import {
   ANIMUS_TURBOPACK_RULE_GLOB,
   buildTurbopackConfig,
@@ -146,6 +149,8 @@ export function withAnimus(
 ): <Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>
 ) => WebpackNextConfig<Config> | TurbopackNextConfig<Config> {
+  // Before anything loads the native module (SA2).
+  assertSupportedEngine(options.engine);
   if (!options.system) {
     throw new Error(
       '[animus-extract] Missing required option `system`. ' +
@@ -154,9 +159,7 @@ export function withAnimus(
   }
 
   // Unknown top-level keys warn rather than throw, so a consumer upgrade
-  // cannot die at config load; invalid `mode` values still throw. `root` is
-  // refused rather than honored: each arm derives its own dir below, and a
-  // consumer root can only contradict it.
+  // cannot die at config load; invalid `mode` values still throw.
   assertKnownOptionKeys(
     { ...options },
     [
@@ -166,14 +169,7 @@ export function withAnimus(
       'loaderPath',
       'phase',
     ],
-    [
-      {
-        key: 'root',
-        reason:
-          "this driver derives its own root — Next's `dir` under webpack, " +
-          '`process.cwd()` under Turbopack (Next passes no dir to a config module)',
-      },
-    ],
+    [],
     {
       onUnknownKey: 'warn',
       warn: (message) => console.warn(`[animus-extract] ${message}`),
@@ -196,12 +192,19 @@ export function withAnimus(
   // same root is another build.
   const build = createBuildId();
 
+  // The app's root: the one authority for its source kits and both arms'
+  // sessions. Next passes no dir to a config module, so without `root` it
+  // is the cwd, which webpack checks against Next's dir below.
+  const appRoot =
+    options.root === undefined ? process.cwd() : resolve(options.root);
+
   return <Config extends NextOwnedConfig>(
     authoredConfig: NextConfigInput<Config>
   ): WebpackNextConfig<Config> | TurbopackNextConfig<Config> => {
-    const nextConfig = withSourceKits(authoredConfig, process.cwd());
+    const nextConfig = withSourceKits(authoredConfig, appRoot);
     if (resolveTurbopackMode(options)) {
-      return turbopackConfig(nextConfig, options, build);
+      warnTurbopackCwdRoot(options, appRoot);
+      return turbopackConfig(nextConfig, options, build, appRoot);
     }
 
     const existingWebpack = nextConfig.webpack;
@@ -213,7 +216,17 @@ export function withAnimus(
           config = existingWebpack(config, context);
         }
 
-        const rootDir = context.dir?.length ? context.dir : process.cwd();
+        // Next's dir is the app webpack builds: the kits were read from
+        // `appRoot`, so a disagreement fails rather than build with another
+        // app's kits.
+        if (context.dir?.length && !sameDirectory(context.dir, appRoot)) {
+          throw new AnimusConfigError(
+            `[animus-extract] Next builds ${context.dir}, but Animus read the ` +
+              `app's source kits from ${appRoot}. Run next from the app ` +
+              `directory, or pass withAnimus({ root }) naming it.`
+          );
+        }
+        const rootDir = appRoot;
 
         // The session takes the host's mode, so `next dev`'s first full pass
         // keeps unrendered CSS like every later dev pass.
@@ -426,6 +439,29 @@ export function bindTurbopackWatchDeathReport(
  *  source, but Next's server keeps an installed package external, and so
  *  loads its runtime entry, unless the package is transpiled; transpiling
  *  also compiles its TypeScript source. */
+let warnedTurbopackCwd = false;
+
+/** Turbopack's loaders get no app dir either, so a cwd that is not the app
+ *  cannot be detected later: warn at startup when the cwd holds no Next
+ *  config and no `root` names the app. */
+function warnTurbopackCwdRoot(
+  options: AnimusNextOptions,
+  appRoot: string
+): void {
+  if (options.root !== undefined || warnedTurbopackCwd) return;
+  const hasNextConfig = ['js', 'mjs', 'cjs', 'ts', 'mts'].some((ext) =>
+    existsSync(join(appRoot, `next.config.${ext}`))
+  );
+  if (hasNextConfig) return;
+  warnedTurbopackCwd = true;
+  console.warn(
+    `[animus-extract] the current directory (${appRoot}) holds no ` +
+      `next.config: under Turbopack, Animus reads the app from the current ` +
+      `directory. Run next from the app directory, or pass ` +
+      `withAnimus({ root }) naming it.`
+  );
+}
+
 function withSourceKits<Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>,
   rootDir: string
@@ -443,7 +479,8 @@ function withSourceKits<Config extends NextOwnedConfig>(
 function turbopackConfig<Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>,
   options: AnimusNextOptions,
-  build: string
+  build: string,
+  appRoot: string
 ): TurbopackNextConfig<Config> {
   // Turbopack's extension order as Next merges it: `turbopack`, else the
   // legacy `experimental.turbo`; its documented default without either.
@@ -456,7 +493,8 @@ function turbopackConfig<Config extends NextOwnedConfig>(
       phase,
       resolveExtensions,
       nextConfig.images?.disableStaticImages === true,
-      build
+      build,
+      appRoot
     ).then((fragment) => mergeTurbopackFragment(nextConfig, fragment));
   function then<Resolved = TurbopackNextConfigObject<Config>, Rejected = never>(
     onResolved?:
@@ -511,13 +549,9 @@ function loadTurbopackFragment(
   phase: string,
   resolveExtensions: readonly string[] | undefined,
   disableStaticImages: boolean,
-  build: string
+  build: string,
+  rootDir: string
 ): Promise<TurbopackConfigFragment> {
-  // `next dev <subdir>` under Turbopack is a known gap: no dir reaches a
-  // config module, so cwd is the only root signal. Next 16's `turbopack.root`
-  // is the workspace root, broader than the app dir, so adopting it widens
-  // the scan instead of closing the gap.
-  const rootDir = process.cwd();
   // The extension order is part of the analysis a load shares.
   const key = JSON.stringify([
     phase,

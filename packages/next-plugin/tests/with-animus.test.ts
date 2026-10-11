@@ -1,5 +1,5 @@
 import { ENGINE_TRANSFORM_EXTENSIONS } from '@animus-ui/extract/pipeline';
-import { mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -129,14 +129,15 @@ describe('withAnimus', () => {
     expect(ruleTest(join(root, 'src', 'legacy.cjs'))).toBe(false);
   });
 
-  test('a monorepo run keys every path off Next dir and the taps never re-key it', () => {
+  test('a monorepo run keys every path off the app root and the taps never re-key it', () => {
     const monorepoRoot = mkdtempSync(join(tmpdir(), 'animus-next-monorepo-'));
     temporaryRoots.push(monorepoRoot);
     const appDir = join(monorepoRoot, 'apps', 'web');
     mkdirSync(appDir, { recursive: true });
     vi.spyOn(process, 'cwd').mockReturnValue(monorepoRoot);
 
-    const wrapped = withAnimus({ system: './src/ds.ts' })({});
+    // From the monorepo root, the app is named by `root`.
+    const wrapped = withAnimus({ system: './src/ds.ts', root: appDir })({});
     if (!('webpack' in wrapped)) {
       throw new Error('withAnimus returned the Turbopack branch');
     }
@@ -149,7 +150,6 @@ describe('withAnimus', () => {
       join(sessionDir, 'styles.css')
     );
 
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const adopt = plugin['adoptCompilerContext'].bind(plugin);
     const compilerAt = (context: string): Parameters<typeof adopt>[0] => ({
       context,
@@ -160,14 +160,104 @@ describe('withAnimus', () => {
         thisCompilation: { tap: () => {} },
       },
     });
-    adopt(compilerAt(monorepoRoot));
-    adopt(compilerAt(monorepoRoot));
+    // A compiler context other than the configured root fails (SA2).
+    expect(() => adopt(compilerAt(monorepoRoot))).toThrow(
+      expect.objectContaining({
+        name: 'AnimusConfigError',
+        message: expect.stringContaining(
+          `compiler.context (${monorepoRoot}) differs from the configured project root (${appDir})`
+        ),
+      })
+    );
     expect(plugin.sessionDir).toBe(sessionDir);
-    expect(
-      warn.mock.calls.filter(([msg]) =>
-        String(msg).includes('differs from the configured project root')
-      )
-    ).toHaveLength(1);
+  });
+
+  /** Contract: an equivalent compiler context is the same root (SA2). */
+  test('an equivalent compiler context is accepted as the configured root', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'animus-next-equivalent-'));
+    temporaryRoots.push(parent);
+    const appDir = join(parent, 'app');
+    mkdirSync(appDir);
+    const linked = join(parent, 'linked');
+    symlinkSync(appDir, linked);
+    vi.spyOn(process, 'cwd').mockReturnValue(appDir);
+    const wrapped = withAnimus({ system: './src/ds.ts' })({});
+    if (!('webpack' in wrapped)) {
+      throw new Error('withAnimus returned the Turbopack branch');
+    }
+    const plugin = injectedAnimusPlugin(
+      wrapped.webpack?.({}, { dir: appDir })?.plugins
+    );
+    const adopt = plugin['adoptCompilerContext'].bind(plugin);
+    for (const context of [`${appDir}/`, linked]) {
+      expect(() =>
+        adopt({
+          context,
+          hooks: {
+            run: { tapPromise: () => {} },
+            watchRun: { tapPromise: () => {} },
+            compilation: { tap: () => {} },
+            thisCompilation: { tap: () => {} },
+          },
+        })
+      ).not.toThrow();
+    }
+  });
+
+  /** An app under a parent directory that declares one source kit; the
+   *  parent declares none. */
+  function appWithSourceKit() {
+    const parent = mkdtempSync(join(tmpdir(), 'animus-next-kit-root-'));
+    temporaryRoots.push(parent);
+    writeFileSync(join(parent, 'package.json'), '{"name":"parent"}');
+    const app = join(parent, 'apps', 'web');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(
+      join(app, 'package.json'),
+      JSON.stringify({ name: 'web', dependencies: { '@kits/ui': '*' } })
+    );
+    const kit = join(app, 'node_modules', '@kits', 'ui');
+    mkdirSync(join(kit, 'src'), { recursive: true });
+    writeFileSync(
+      join(kit, 'package.json'),
+      JSON.stringify({
+        name: '@kits/ui',
+        exports: {
+          '.': { animus: './src/index.ts', default: './dist/index.js' },
+        },
+      })
+    );
+    writeFileSync(join(kit, 'src', 'index.ts'), 'export {};\n');
+    return { parent, app };
+  }
+
+  test('an app built from its own directory or from a parent with root gets the same source kits', () => {
+    const { parent, app } = appWithSourceKit();
+    const cwd = vi.spyOn(process, 'cwd');
+    cwd.mockReturnValue(app);
+    const own = withAnimus({ system: './src/ds.ts' })({});
+    cwd.mockReturnValue(parent);
+    const fromParent = withAnimus({ system: './src/ds.ts', root: app })({});
+
+    expect(own.transpilePackages).toEqual(['@kits/ui']);
+    expect(fromParent.transpilePackages).toEqual(own.transpilePackages);
+  });
+
+  test('a webpack run from a parent without root fails, naming both roots', () => {
+    const { parent, app } = appWithSourceKit();
+    vi.spyOn(process, 'cwd').mockReturnValue(parent);
+    const wrapped = withAnimus({ system: './src/ds.ts' })({});
+    if (!('webpack' in wrapped)) {
+      throw new Error('withAnimus returned the Turbopack branch');
+    }
+    expect(() => wrapped.webpack?.({}, { dir: app })).toThrow(
+      expect.objectContaining({
+        name: 'AnimusConfigError',
+        message: expect.stringMatching(
+          new RegExp(`builds ${app}.*source kits from ${parent}`)
+        ),
+      })
+    );
   });
 
   test('forwards every configured option to the injected plugin', () => {

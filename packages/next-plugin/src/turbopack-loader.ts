@@ -1,17 +1,19 @@
 import {
+  assertSupportedEngine,
   buildAnalyzeProjectArgs,
   contentHash,
-  createV2EngineApi,
   parseFilesJson,
 } from '@animus-ui/extract/pipeline';
 import {
   analysisCommitPath,
   analysisInputsPath,
   analysisStatusPath,
+  engineHandle,
   manifestPath,
   readJsonEnvelope,
   replacementEpochPath,
   sessionArtifactDir,
+  sessionKey,
 } from '@animus-ui/extract/session';
 import * as nodeFs from 'fs';
 import { join, relative } from 'path';
@@ -27,11 +29,11 @@ import type { LoaderContextBase, LoaderPolicyOptions } from './loader-core';
 import type {
   AnalyzeProjectInputs,
   EngineApi,
-  V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
 import type {
   AnalysisCommit,
   AnalysisStatus,
+  SessionKey,
 } from '@animus-ui/extract/session';
 
 interface AnalysisInputsArtifact extends AnalyzeProjectInputs {
@@ -58,47 +60,35 @@ type LoaderContext = LoaderContextBase<TurbopackLoaderOptions> & {
   async?: () => LoaderCallback;
 };
 
-let engine: V2ExtractEngine | null = null;
-let sentSources: Map<string, string> | null = null;
-let driftWarned = false;
-let hydratedKey: string | null = null;
-let hydratedManifestJson: string | null = null;
-let hydratedFileHashes: Map<string, string> | null = null;
-
-// Indirect module id keeps the require dynamic under bundling.
-const engineModuleId = '@animus-ui/extract';
-const engineApi = createV2EngineApi({
-  label: 'animus-next-turbopack',
-  isV2: () => true,
-  loadNativeEngine: () => require(engineModuleId),
-  passThroughUnknownPaths: true,
-  store: {
-    getEngine: () => engine,
-    setEngine: (next) => {
-      engine = next;
-    },
-    getSentSources: () => sentSources,
-    setSentSources: (sources) => {
-      sentSources = sources;
-    },
-    getDriftWarned: () => driftWarned,
-    setDriftWarned: (value) => {
-      driftWarned = value;
-    },
-  },
-});
+/** Each build's last hydration in this worker, so a worker serving two
+ *  builds hydrates each once. */
+const hydrations = new Map<
+  string,
+  { commitKey: string; manifestJson: string; fileHashes: Map<string, string> }
+>();
 
 type LoaderEngineApi = () => Pick<
   EngineApi,
   'analyzeProject' | 'transformFile'
 >;
-let engineApiImpl: LoaderEngineApi = engineApi;
+let engineApiOverride: LoaderEngineApi | null = null;
 
 /** @internal test seam. */
 export function __setTurbopackLoaderEngineApiForTests(
   api: LoaderEngineApi | null
 ): void {
-  engineApiImpl = api ?? engineApi;
+  engineApiOverride = api;
+}
+
+/** The build's engine API, from the one engine-handle store. */
+function engineApiFor(key: SessionKey): LoaderEngineApi {
+  return (
+    engineApiOverride ??
+    engineHandle(key, {
+      label: 'animus-next-turbopack',
+      passThroughUnknownPaths: true,
+    })
+  );
 }
 
 type LoaderFs = Pick<typeof nodeFs, 'readFileSync' | 'existsSync'>;
@@ -111,11 +101,21 @@ export function __setTurbopackLoaderFsForTests(fs: LoaderFs | null): void {
 
 const epochSeenPaths = new Set<string>();
 
-/** @internal test seam. */
+/** The worker's startup inputs, captured once when it starts (SA2, SA3):
+ *  no later call reads `ANIMUS_ENGINE` or `NODE_ENV`. */
+function captureWorkerStartup() {
+  return {
+    engine: process.env.ANIMUS_ENGINE,
+    development: isTurbopackDevelopment(),
+  };
+}
+let workerStartup = captureWorkerStartup();
+
+/** @internal test seam: also captures the startup inputs again, as a new
+ *  worker would. */
 export function __resetTurbopackLoaderStateForTests(): void {
-  hydratedKey = null;
-  hydratedManifestJson = null;
-  hydratedFileHashes = null;
+  workerStartup = captureWorkerStartup();
+  hydrations.clear();
   epochSeenPaths.clear();
 }
 
@@ -141,7 +141,12 @@ type HydrateOutcome =
 
 const ARTIFACT_READ_RETRIES = 5;
 
-function hydrateSession(sessionDir: string, sessionId: string): HydrateOutcome {
+function hydrateSession(
+  key: SessionKey,
+  sessionDir: string,
+  sessionId: string
+): HydrateOutcome {
+  const buildId = JSON.stringify([key.build, key.root]);
   const commitPath = analysisCommitPath(sessionDir);
   for (let attempt = 0; attempt < ARTIFACT_READ_RETRIES; attempt++) {
     const c0raw = readFileOrNull(commitPath);
@@ -158,17 +163,14 @@ function hydrateSession(sessionDir: string, sessionId: string): HydrateOutcome {
       return { kind: 'foreign', artifactSessionId: String(c0.sessionId) };
     }
 
-    const key = `${commitPath}:${contentHash(c0raw)}`;
-    if (
-      key === hydratedKey &&
-      hydratedManifestJson !== null &&
-      hydratedFileHashes !== null
-    ) {
+    const commitKey = `${commitPath}:${contentHash(c0raw)}`;
+    const hydrated = hydrations.get(buildId);
+    if (hydrated?.commitKey === commitKey) {
       return {
         kind: 'ok',
         hydration: {
-          manifestJson: hydratedManifestJson,
-          fileHashes: hydratedFileHashes,
+          manifestJson: hydrated.manifestJson,
+          fileHashes: hydrated.fileHashes,
           commitRaw: c0raw,
         },
       };
@@ -207,14 +209,13 @@ function hydrateSession(sessionDir: string, sessionId: string): HydrateOutcome {
     } catch {
       return { kind: 'torn' };
     }
-    const { analyzeProject } = engineApiImpl();
-    hydratedManifestJson = analyzeProject(...buildAnalyzeProjectArgs(inputs));
-    hydratedFileHashes = fileHashes;
-    hydratedKey = key;
+    const { analyzeProject } = engineApiFor(key)();
+    const manifestJson = analyzeProject(...buildAnalyzeProjectArgs(inputs));
+    hydrations.set(buildId, { commitKey, manifestJson, fileHashes });
     return {
       kind: 'ok',
       hydration: {
-        manifestJson: hydratedManifestJson,
+        manifestJson,
         fileHashes,
         commitRaw: c0raw,
       },
@@ -292,9 +293,12 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
     (sessionId !== undefined
       ? sessionArtifactDir(rootDir, sessionId)
       : undefined);
+  // Before anything loads the native module (SA2).
+  assertSupportedEngine(undefined, workerStartup.engine);
   if (sessionId === undefined || sessionDir === undefined) {
     return source;
   }
+  const key = sessionKey(sessionId, rootDir);
 
   const commitPath = analysisCommitPath(sessionDir);
   const statusPath = analysisStatusPath(sessionDir);
@@ -327,11 +331,11 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
       source,
       filename,
       manifestJson,
-      engineApi: engineApiImpl,
+      engineApi: engineApiFor(key),
       opts,
     });
 
-  const development = opts.development ?? isTurbopackDevelopment();
+  const development = opts.development ?? workerStartup.development;
   const deliver = async (covering: Hydration): Promise<string> => {
     if (!development) {
       return transform(covering.manifestJson);
@@ -342,6 +346,7 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
       extended,
       filename,
       rootDir,
+      key,
       sessionDir,
       sessionId,
       awaitNextCommit,
@@ -357,7 +362,7 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
     );
   };
 
-  const outcome = hydrateSession(sessionDir, sessionId);
+  const outcome = hydrateSession(key, sessionDir, sessionId);
   if (outcome.kind === 'foreign') {
     throw coverageFailure(
       `ANIMUS_FOREIGN_SESSION: artifacts under ${sessionDir} belong to session ${outcome.artifactSessionId}, not ${sessionId} — refusing to transform from a foreign generation`
@@ -384,6 +389,7 @@ async function runLoader(ctx: LoaderContext, source: string): Promise<string> {
     source,
     sourceHash: sourceHash ?? contentHash(source),
     filename,
+    key,
     sessionId,
     sessionDir,
     coverageFailure,
@@ -395,6 +401,7 @@ async function awaitCoverage(args: {
   source: string;
   sourceHash: string;
   filename: string;
+  key: SessionKey;
   sessionId: string;
   sessionDir: string;
   coverageFailure: (message: string) => Error;
@@ -404,6 +411,7 @@ async function awaitCoverage(args: {
     source,
     sourceHash,
     filename,
+    key,
     sessionId,
     sessionDir,
     coverageFailure,
@@ -414,7 +422,7 @@ async function awaitCoverage(args: {
   let poll = CATCHUP_POLL_INITIAL_MS;
 
   for (;;) {
-    const outcome = hydrateSession(sessionDir, sessionId);
+    const outcome = hydrateSession(key, sessionDir, sessionId);
     if (outcome.kind === 'foreign') {
       throw coverageFailure(
         `ANIMUS_FOREIGN_SESSION: artifacts under ${sessionDir} belong to session ${outcome.artifactSessionId}, not ${sessionId}`
@@ -488,11 +496,13 @@ async function coverExtendedFiles(args: {
   extended: readonly string[];
   filename: string;
   rootDir: string;
+  key: SessionKey;
   sessionDir: string;
   sessionId: string;
   awaitNextCommit: () => void;
 }): Promise<Hydration> {
-  const { covering, extended, filename, rootDir, sessionDir, sessionId } = args;
+  const { covering, extended, filename, rootDir, key, sessionDir, sessionId } =
+    args;
   const current: Array<[string, string]> = [];
   for (const file of extended) {
     const text = readFileOrNull(join(rootDir, file));
@@ -508,7 +518,7 @@ async function coverExtendedFiles(args: {
     Date.now() + CATCHUP_NO_DEADLINE_CAP_MS + CATCHUP_WAIT_MARGIN_MS;
   let poll = CATCHUP_POLL_INITIAL_MS;
   for (;;) {
-    const outcome = hydrateSession(sessionDir, sessionId);
+    const outcome = hydrateSession(key, sessionDir, sessionId);
     const latest = outcome.kind === 'ok' ? outcome.hydration : covering;
     if (covers(latest)) return latest;
     const status = readStatus(sessionDir);

@@ -472,6 +472,13 @@ pub struct FileFacts {
     /// more than read joins `unsafe_object_uses`.
     #[serde(skip)]
     pub(crate) object_handoffs: Vec<crate::usage_facts::Handoff>,
+    /// Each namespace import some use may write through, with the first
+    /// such use and what it names: a member written or deleted, a member's
+    /// value (`ui.Fam`, `icons[name]`) handed on, exported, or bound to a
+    /// `const` that is then written or handed on, or the namespace used
+    /// whole. Reading, storing, rendering or calling a member writes nothing.
+    #[serde(skip)]
+    pub(crate) written_namespaces: crate::usage_facts::WrittenNamespaces,
     /// How each of the module's functions treats an object passed to it.
     #[serde(skip)]
     pub(crate) param_readings: crate::usage_facts::ParamReadings,
@@ -1516,6 +1523,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         spread_wrappers,
         unsafe_object_uses,
         object_handoffs,
+        written_namespaces,
         ordinary_components,
         context_consts,
         prop_tags,
@@ -1575,6 +1583,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         facades: const_initializers.facades,
         unsafe_object_uses,
         object_handoffs,
+        written_namespaces,
         param_readings,
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,

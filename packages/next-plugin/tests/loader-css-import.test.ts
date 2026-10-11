@@ -1,7 +1,12 @@
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { joinSession, sessionKey } from '../../extract/session/singleton';
+import {
+  engineApi,
+  joinSession,
+  sessionKey,
+  setEngineFactoryLoaderForTests,
+} from '../../extract/session/singleton';
 import { resetAnimusGlobals } from '../../extract/tests/session/session-fixtures';
 import animusLoader from '../src/loader';
 
@@ -13,15 +18,22 @@ let restoreGlobals: () => void;
 const ROOT = '/proj';
 const CSS_IMPORT = "import '.animus/styles.css';\n";
 
-const unreachableEngine: V2ExtractEngine = {
-  analyze: () => {
-    throw new Error('engine must not be called for unknown paths');
-  },
-  transformFile: () => {
-    throw new Error('engine must not be called for unknown paths');
-  },
-  clearCache: () => {
-    throw new Error('engine must not be called for unknown paths');
+/** A native module whose engine analyzed nothing and is never called for
+ *  a path outside that analysis. */
+const unreachableNative = {
+  ExtractEngine: class implements V2ExtractEngine {
+    prepare(): string {
+      throw new Error('engine must not be called for unknown paths');
+    }
+    analyze(): string {
+      return '{}';
+    }
+    transformFile(): string {
+      throw new Error('engine must not be called for unknown paths');
+    }
+    clearCache(): void {
+      throw new Error('engine must not be called for unknown paths');
+    }
   },
 };
 
@@ -33,11 +45,23 @@ beforeEach(() => {
     system: './src/ds.ts',
   });
   state.manifestJson = '{}';
-  state.engine = unreachableEngine;
-  state.sentSources = new Map<string, string>();
+  setEngineFactoryLoaderForTests(() => unreachableNative);
+  // An analysis of no files: every path the loader sees is outside it.
+  engineApi(sessionKey(BUILD, ROOT)).analyzeProject(
+    '[]',
+    '{}',
+    '{}',
+    null,
+    '{}',
+    '{}',
+    '{}',
+    false,
+    '{}'
+  );
 });
 
 afterEach(() => {
+  setEngineFactoryLoaderForTests(null);
   restoreGlobals();
 });
 
