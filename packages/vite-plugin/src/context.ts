@@ -254,6 +254,7 @@ export class PluginContext {
     strict: () => !!this.options.strict,
     warn: (message: string) => this.warn(message),
     reportErrors: () => this.reportErrors(),
+    extensions: () => this.extensionPolicy,
   });
 
   rawExtensionFallbacks = new Set<string>();
@@ -550,6 +551,7 @@ export class PluginContext {
           outputDirs: this.externalOutputDirs.map((dir) =>
             relative(this.rootDir, dir)
           ),
+          extensions: this.extensionPolicy,
         },
         warn: (m) => this.warn(m),
         info: (m) => this.log(m),

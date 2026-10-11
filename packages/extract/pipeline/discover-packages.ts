@@ -35,7 +35,7 @@ import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 
 import type { EngineApi } from './engine-adapter';
-import type { ProbedFile } from './extension-policy';
+import type { ExtensionOrder, ProbedFile } from './extension-policy';
 import type { KitDescriptorRecord } from './kit-descriptor';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type {
@@ -98,7 +98,8 @@ export interface ExternalPackageOutcome {
 export function probeAbsolutePathSpecifier(
   absSpecifier: string,
   extensionsSet?: ReadonlySet<string>,
-  within?: string
+  within?: string,
+  policy?: ExtensionOrder
 ): ProbedFile {
   // `..` is taken back lexically first, as Node resolves a specifier, so
   // the path a probe returns is the path it checked.
@@ -106,6 +107,7 @@ export function probeAbsolutePathSpecifier(
     policyCandidates(normalize(absSpecifier), {
       sources: extensionsSet,
       index: join,
+      policy,
     }),
     within
   );
@@ -123,7 +125,8 @@ function sourceEntryForSpecifier(
   specifier: string,
   srcDir: string,
   extensionsSet: ReadonlySet<string>,
-  rootDir: string
+  rootDir: string,
+  policy: ExtensionOrder | undefined
 ): string | null {
   // A guess, not a resolution: a file differing only in case is no guess.
   // Only the names below the root, or below `src/`, are checked.
@@ -131,7 +134,8 @@ function sourceEntryForSpecifier(
     const probed = probeAbsolutePathSpecifier(
       specifier,
       extensionsSet,
-      rootDir
+      rootDir,
+      policy
     );
     if (probed.kind !== 'found') return null;
     return isPathWithinRoot(srcDir, probed.path) ? probed.path : null;
@@ -139,7 +143,12 @@ function sourceEntryForSpecifier(
   const packageName = bareSpecifierPackageName(specifier);
   const subpath = specifier.slice(packageName.length + 1);
   const sourceStem = join(srcDir, subpath || 'index');
-  const probed = probeAbsolutePathSpecifier(sourceStem, extensionsSet, srcDir);
+  const probed = probeAbsolutePathSpecifier(
+    sourceStem,
+    extensionsSet,
+    srcDir,
+    policy
+  );
   return probed.kind === 'found' ? probed.path : null;
 }
 
@@ -545,6 +554,9 @@ export async function collectExternalPackageSources(opts: {
    *  a source entry redirects the host's import of it, since compiled output
    *  the host never opens is nothing it bundles. */
   requireSourceEntry?: (specifier: string) => boolean;
+  /** The host's extension order (spec §2.2 A2) for an absolute include or a
+   *  source-entry guess; the built-in policy without one. */
+  extensions?: ExtensionOrder;
 }): Promise<CollectedExternalPackages> {
   const {
     specifiers,
@@ -557,6 +569,7 @@ export async function collectExternalPackageSources(opts: {
     onUnreadable,
     onPackageResolved,
     requireSourceEntry,
+    extensions,
   } = opts;
 
   const entries: Array<{ path: string; source: string }> = [];
@@ -664,7 +677,12 @@ export async function collectExternalPackageSources(opts: {
     // the file's canonical spelling. The path used is the path checked.
     let caseMismatch: string | undefined;
     if (isAbsolute(specifier)) {
-      const own = probeAbsolutePathSpecifier(specifier, extensionsSet, rootDir);
+      const own = probeAbsolutePathSpecifier(
+        specifier,
+        extensionsSet,
+        rootDir,
+        extensions
+      );
       const hosted = absEntry === null ? null : normalize(absEntry);
       const seen = hosted === null ? null : seeOnDisk(hosted, rootDir);
       const probed: ProbedFile =
@@ -735,7 +753,8 @@ export async function collectExternalPackageSources(opts: {
               specifier,
               join(pkgRoot, 'src'),
               extensionsSet,
-              rootDir
+              rootDir,
+              extensions
             ) !== null;
       if (!redirected) {
         outcomes.push({
@@ -829,7 +848,8 @@ export async function collectExternalPackageSources(opts: {
         specifier,
         srcDir,
         extensionsSet,
-        rootDir
+        rootDir,
+        extensions
       );
       if (srcEntry) {
         packageMap[specifier] = relative(rootDir, srcEntry);
@@ -847,7 +867,8 @@ export async function collectExternalPackageSources(opts: {
             packageName,
             srcDir,
             extensionsSet,
-            rootDir
+            rootDir,
+            extensions
           );
           if (rootEntry) {
             packageMap[packageName] = relative(rootDir, rootEntry);
@@ -1232,6 +1253,8 @@ interface RootFollowing {
   parseModule: ModuleParser;
   resolvePackage: PackageResolver | undefined;
   report: ((diagnostic: ManifestDiagnostic) => void) | undefined;
+  /** The host's extension order for a relative module; built-in without. */
+  extensions: ExtensionOrder | undefined;
 }
 
 /** The file a specifier names from `importer`, or why it names none: a
@@ -1240,12 +1263,13 @@ interface RootFollowing {
 async function resolveModuleFile(
   importer: string,
   specifier: string,
-  resolvePackage: PackageResolver | undefined
+  resolvePackage: PackageResolver | undefined,
+  extensions: ExtensionOrder | undefined
 ): Promise<{ file: string } | { why: string; caseMismatch?: true }> {
   const unresolved = { why: `'${specifier}' could not be resolved` };
   if (specifier.startsWith('.')) {
     const probed = probeOnDisk(
-      relativeSourceCandidates(importer, specifier),
+      relativeSourceCandidates(importer, specifier, extensions),
       dirname(importer)
     );
     if (probed.kind === 'found') return { file: probed.path };
@@ -1301,7 +1325,8 @@ async function exportIdentity(
   const resolved = await resolveModuleFile(
     importer,
     specifier,
-    following.resolvePackage
+    following.resolvePackage,
+    following.extensions
   );
   if ('why' in resolved) return { kind: 'unknown', ...resolved };
   const { file } = resolved;
@@ -1597,7 +1622,8 @@ export async function extractSystemFilePackages(
   systemFilePath: string,
   parseModule?: ModuleParser,
   report?: (diagnostic: ManifestDiagnostic) => void,
-  resolvePackage?: PackageResolver
+  resolvePackage?: PackageResolver,
+  extensions?: ExtensionOrder
 ): Promise<string[]> {
   let source: string;
   try {
@@ -1616,6 +1642,7 @@ export async function extractSystemFilePackages(
         parseModule,
         resolvePackage,
         report,
+        extensions,
       })),
     ]);
   }

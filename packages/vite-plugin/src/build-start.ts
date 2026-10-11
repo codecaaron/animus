@@ -254,7 +254,8 @@ async function discoverSources(
     ctx.resolvedSystemPath!,
     engineModuleParser(ctx.engineApi()),
     (diagnostic) => discoveryDiagnostics.push(diagnostic),
-    resolveSpecifier
+    resolveSpecifier,
+    ctx.extensionPolicy
   );
   discoveryDiagnostics.push(
     ...importedKitDiagnostics(
@@ -272,6 +273,7 @@ async function discoverSources(
     specifiers: packageSpecifiers,
     resolveSpecifier,
     requireSourceEntry: (specifier) => loaderOnly.has(specifier),
+    extensions: ctx.extensionPolicy,
     rootDir: ctx.rootDir,
     extensionsSet: ctx.extensionsSet,
     hasEntry: (relPath) => rawEntries.some((entry) => entry.path === relPath),
