@@ -7,6 +7,7 @@ import {
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
+  nextImageAssetClassification,
   readTsconfigAliasPairs,
   resolveMode,
   sourceKitDependencies,
@@ -491,6 +492,7 @@ function turbopackConfig<Config extends NextOwnedConfig>(
       options,
       phase,
       resolveExtensions,
+      nextConfig.images?.disableStaticImages === true,
       build,
       appRoot
     ).then((fragment) => mergeTurbopackFragment(nextConfig, fragment));
@@ -546,11 +548,17 @@ function loadTurbopackFragment(
   options: AnimusNextOptions,
   phase: string,
   resolveExtensions: readonly string[] | undefined,
+  disableStaticImages: boolean,
   build: string,
   rootDir: string
 ): Promise<TurbopackConfigFragment> {
   // The extension order is part of the analysis a load shares.
-  const key = JSON.stringify([phase, rootDir, resolveExtensions ?? null]);
+  const key = JSON.stringify([
+    phase,
+    rootDir,
+    resolveExtensions ?? null,
+    disableStaticImages,
+  ]);
   const owner = turbopackOwner(build);
   if (owner.load?.key === key) return owner.load.fragment;
   const fragment = analyzeForTurbopack(
@@ -558,6 +566,7 @@ function loadTurbopackFragment(
     phase,
     rootDir,
     resolveExtensions,
+    disableStaticImages,
     build
   );
   const load = { key, fragment };
@@ -573,6 +582,7 @@ async function analyzeForTurbopack(
   phase: string,
   rootDir: string,
   resolveExtensions: readonly string[] | undefined,
+  disableStaticImages: boolean,
   build: string
 ): Promise<TurbopackConfigFragment> {
   const development = phase === PHASE_DEVELOPMENT_SERVER;
@@ -597,6 +607,10 @@ async function analyzeForTurbopack(
   session.development = development;
   session.rootDir = rootDir;
   session.extensionPolicy = turbopackExtensionPolicy(resolveExtensions);
+  session.assetClassification = nextImageAssetClassification(
+    rootDir,
+    disableStaticImages
+  );
   const aliasPairs = readTsconfigAliasPairs(rootDir);
   const builtAliases = buildPathAliasesJson(aliasPairs, rootDir);
   if (builtAliases) {

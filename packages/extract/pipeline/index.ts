@@ -233,3 +233,11 @@ export { applyUnitFallback } from './unit-fallback';
 export { camelToKebab, stableStringify } from './utils';
 export { toWatchKeys } from './watch-keys';
 export type { IngestionOpening } from './source-ingestion';
+export {
+  builtInAssetClassification,
+  esbuildAssetClassification,
+  nextImageAssetClassification,
+  viteAssetClassification,
+} from './host-assets';
+export type { HostAssetClassification } from './host-assets';
+export { adaptedOriginals } from './probe-evidence';
