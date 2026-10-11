@@ -297,10 +297,48 @@ function isDiskString<Value>(value: Value): value is Value & string {
 /** Rejection of an attempt whose corpus holds an aborted parse. */
 class AbortedParseRejection extends Error {}
 
-/** A system reload a parse hold deferred, refused because its full read
- *  would replace host-supplied bytes the Session holds with the disk's.
- *  Like a hold, it keeps the prior publication and the observed sources. */
+/** A reload refused because its full read would replace host-supplied
+ *  bytes with the disk's: a system reload a parse hold deferred, or a full
+ *  read that reaches a host-supplied file only under another spelling (a
+ *  case-insensitive volume). Like a hold, it keeps the prior publication
+ *  and the observed sources. */
 class DeferredReloadRefusal extends Error {}
+
+/** The file's canonical path, or null when it cannot be resolved. */
+function canonicalPath(path: string): string | null {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return null;
+  }
+}
+
+/** The host sources a full read reaches only under another spelling: a key
+ *  the read did not reach exactly, whose file is one the read reached by
+ *  another path (a case-insensitive volume, a symlinked alias). A key with
+ *  no such file is not read either way, and is left alone. */
+function misspelledHostSources(
+  hostSources: ReadonlyMap<string, string>,
+  readPaths: ReadonlySet<string>
+): Array<{ path: string; read: string[] }> {
+  const misses = [...hostSources.keys()].filter((path) => !readPaths.has(path));
+  if (misses.length === 0) return [];
+  const readByCanonical = new Map<string, string[]>();
+  for (const readPath of readPaths) {
+    const canonical = canonicalPath(readPath);
+    if (canonical === null) continue;
+    readByCanonical.set(canonical, [
+      ...(readByCanonical.get(canonical) ?? []),
+      readPath,
+    ]);
+  }
+  return misses.flatMap((path) => {
+    const canonical = canonicalPath(path);
+    const read =
+      canonical === null ? undefined : readByCanonical.get(canonical);
+    return read === undefined ? [] : [{ path, read }];
+  });
+}
 
 function isDiskNumber<Value>(value: Value): value is Value & number {
   return (
@@ -1682,8 +1720,12 @@ export class ExtractionSession {
     // be read is lost input, not degradation: error severity fails a strict
     // build.
     const ingestionFailures: ManifestDiagnostic[] = [];
+    // Every path the read reaches, to check that it reaches each host
+    // source under its own spelling.
+    const readPaths = new Set<string>();
     for (const filePath of files) {
       const relPath = relative(rootDir, filePath);
+      readPaths.add(filePath);
       let source: string;
       try {
         const supplied = hostSources.get(filePath);
@@ -1921,8 +1963,9 @@ export class ExtractionSession {
       this.externalSourceEntries = admitted.sourceEntries;
       this.externalSourceSideEffects = admitted.sourceEntrySideEffects;
       for (const entry of admitted.entries) {
-        const source =
-          hostSources.get(resolve(rootDir, entry.path)) ?? entry.source;
+        const entryPath = resolve(rootDir, entry.path);
+        readPaths.add(entryPath);
+        const source = hostSources.get(entryPath) ?? entry.source;
         rawEntries.push({
           path: entry.path,
           source,
@@ -1935,6 +1978,20 @@ export class ExtractionSession {
       this.externalOutputDirs = admitted.outputDirs;
 
       bt.packageResolve = this.elapsed(t);
+
+      // A host source the read reaches only under another spelling would be
+      // published from the disk instead: refuse loudly.
+      const misspelled = misspelledHostSources(hostSources, readPaths).map(
+        ({ path, read }) =>
+          `${relative(rootDir, path)} (read as ${read.map((readPath) => relative(rootDir, readPath)).join(', ')})`
+      );
+      if (misspelled.length > 0) {
+        throw new DeferredReloadRefusal(
+          `[${this.driverLabel}] reload not published: the host supplied ` +
+            `bytes for ${misspelled.join(', ')}, which the full read reaches ` +
+            `only under another spelling; the last generation stays served`
+        );
+      }
 
       this.beginStatusAttempt();
       let accepted: SourceIngestionResult;
