@@ -870,7 +870,7 @@ fn mark_lost_value(
         }
     }
     let kind = if capture { UnevaluatedKind::CapturedTransform } else { UnevaluatedKind::Expression };
-    current.insert(key, StaticValue::Unevaluated(Unevaluated { kind, clause }));
+    current.insert(key, StaticValue::Unevaluated(Unevaluated { kind, clause, written: None }));
 }
 
 /// A static binding some use may change before a style reads it: every
@@ -938,21 +938,25 @@ pub(crate) fn static_value<'s>(statics: Statics<'s>, name: &str, path: &[&str]) 
 
 /// A static value as statics leave evaluation: JSON, with a lost-value
 /// marker for an unevaluated node and an asset marker for the `asset`
-/// function, which every reader outside evaluation reads.
+/// function, which every reader outside evaluation reads. A node read from
+/// an authored object that spells a marker is written back as written.
 pub(crate) fn marked(value: &StaticValue) -> Value {
+    let object = |entries: &[(String, StaticValue)]| {
+        Value::Object(entries.iter().map(|(key, value)| (key.clone(), marked(value))).collect())
+    };
     match value {
         StaticValue::Null => Value::Null,
         StaticValue::Bool(flag) => Value::Bool(*flag),
         StaticValue::Number(StaticNumber(number)) => Value::Number(number.clone()),
         StaticValue::String(text) => Value::String(text.clone()),
         StaticValue::Array(items) => Value::Array(items.iter().map(marked).collect()),
-        StaticValue::Object(entries) => {
-            Value::Object(entries.iter().map(|(key, value)| (key.clone(), marked(value))).collect())
-        }
-        StaticValue::AssetFunction { in_project } => {
+        StaticValue::Object(entries) => object(entries),
+        StaticValue::AssetFunction { written: Some(entries), .. } => object(entries),
+        StaticValue::AssetFunction { in_project, written: None } => {
             serde_json::json!({ ASSET_FUNCTION: if *in_project { ASSET_IN_PROJECT } else { ASSET_IN_PACKAGE } })
         }
-        StaticValue::Unevaluated(Unevaluated { kind, clause }) => {
+        StaticValue::Unevaluated(Unevaluated { written: Some(entries), .. }) => object(entries),
+        StaticValue::Unevaluated(Unevaluated { kind, clause, written: None }) => {
             let mut marker = Map::new();
             marker.insert(LOST_VALUE.to_string(), Value::String(clause.clone()));
             if *kind == UnevaluatedKind::CapturedTransform {
@@ -963,9 +967,12 @@ pub(crate) fn marked(value: &StaticValue) -> Value {
     }
 }
 
-/// A static value read back from JSON as `marked` writes it. Only a marker
-/// as `marked` writes it reads as one: an authored object with other keys
-/// is data.
+/// A static value read back from JSON as `marked` writes it. Any object
+/// whose `$animus.lost` key holds a string reads as an unevaluated node, a
+/// captured `transform` where it has a `$animus.capture` key; any whose
+/// `$animus.asset` key holds a string reads as the `asset` function, in the
+/// project only for `project`. One that holds more than `marked` would write
+/// keeps what it holds, as written.
 pub(crate) fn typed(value: &Value) -> StaticValue {
     match value {
         Value::Null => StaticValue::Null,
@@ -974,17 +981,24 @@ pub(crate) fn typed(value: &Value) -> StaticValue {
         Value::String(text) => StaticValue::String(text.clone()),
         Value::Array(items) => StaticValue::Array(items.iter().map(typed).collect()),
         Value::Object(entries) => {
-            let capture = entries.get(LOST_CAPTURE) == Some(&Value::Bool(true));
-            match (entries.get(LOST_VALUE), entries.get(ASSET_FUNCTION)) {
-                (Some(Value::String(clause)), None) if entries.len() == 1 + usize::from(capture) => {
-                    let kind = if capture { UnevaluatedKind::CapturedTransform } else { UnevaluatedKind::Expression };
-                    StaticValue::Unevaluated(Unevaluated { kind, clause: clause.clone() })
-                }
-                (None, Some(Value::String(scope))) if entries.len() == 1 => {
-                    StaticValue::AssetFunction { in_project: scope == ASSET_IN_PROJECT }
-                }
-                _ => StaticValue::Object(entries.iter().map(|(key, value)| (key.clone(), typed(value))).collect()),
+            let keys: Vec<&str> = entries.keys().map(String::as_str).collect();
+            let written = |canonical: bool| {
+                (!canonical).then(|| entries.iter().map(|(key, value)| (key.clone(), typed(value))).collect())
+            };
+            if let Some(Value::String(clause)) = entries.get(LOST_VALUE) {
+                let capture = entries.contains_key(LOST_CAPTURE);
+                let canonical = match capture {
+                    false => keys == [LOST_VALUE],
+                    true => keys == [LOST_VALUE, LOST_CAPTURE] && entries[LOST_CAPTURE] == Value::Bool(true),
+                };
+                let kind = if capture { UnevaluatedKind::CapturedTransform } else { UnevaluatedKind::Expression };
+                return StaticValue::Unevaluated(Unevaluated { kind, clause: clause.clone(), written: written(canonical) });
             }
+            if let Some(Value::String(scope)) = entries.get(ASSET_FUNCTION) {
+                let canonical = keys == [ASSET_FUNCTION] && (scope == ASSET_IN_PROJECT || scope == ASSET_IN_PACKAGE);
+                return StaticValue::AssetFunction { in_project: scope == ASSET_IN_PROJECT, written: written(canonical) };
+            }
+            StaticValue::Object(entries.iter().map(|(key, value)| (key.clone(), typed(value))).collect())
         }
     }
 }
@@ -1025,7 +1039,7 @@ fn eval_asset_call(
     let Expression::Identifier(callee) = &call.callee else {
         return None;
     };
-    let StaticAnswer::Exact(&StaticValue::AssetFunction { in_project: relative_allowed }) =
+    let StaticAnswer::Exact(&StaticValue::AssetFunction { in_project: relative_allowed, .. }) =
         static_value(static_values?, callee.name.as_str(), &[])?
     else {
         return None;
@@ -1099,7 +1113,10 @@ fn asset_bindings(program: &Program<'_>, in_package: bool) -> FxHashMap<String, 
         for specifier in import.specifiers.iter().flatten() {
             if let oxc::ast::ast::ImportDeclarationSpecifier::ImportSpecifier(named) = specifier {
                 if named.imported.name() == "asset" {
-                    bindings.insert(named.local.name.to_string(), StaticValue::AssetFunction { in_project: !in_package });
+                    bindings.insert(
+                        named.local.name.to_string(),
+                        StaticValue::AssetFunction { in_project: !in_package, written: None },
+                    );
                 }
             }
         }
