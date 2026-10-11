@@ -541,7 +541,7 @@ fn unstable_style_statics(
         let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
         format!("{name} {} in {file}{line}", used.what)
     };
-    use crate::flow::{AbsenceQuery, Coverage, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom};
+    use crate::flow::{AbsenceQuery, ChangeKind, Coverage, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom};
     let object = |(file, local): (String, String)| ObjectId { module: file, binding: local };
     let mut flow = FlowBuilder::new();
     // Each object a module exports, under each name it exports it as.
@@ -617,19 +617,19 @@ fn unstable_style_statics(
                         reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
                     });
                 if !read {
-                    flow.change(object(target), Vec::new(), said(file, &handoff.binding, &handoff.used));
+                    flow.change(object(target), Vec::new(), ChangeKind::Escape, said(file, &handoff.binding, &handoff.used));
                 }
             }
         }
         for (name, used) in &module.facts.uses {
             for target in targets_of(name) {
-                flow.change(object(target), Vec::new(), said(file, name, used));
+                flow.change(object(target), Vec::new(), ChangeKind::Escape, said(file, name, used));
             }
         }
         for (name, used) in &module.facts.flat_reads {
             for target in targets_of(name).into_iter().filter(|target| nested(target)) {
                 let reason = format!("{}, and it holds a nested object", said(file, name, used));
-                flow.change(object(target), Vec::new(), reason);
+                flow.change(object(target), Vec::new(), ChangeKind::Escape, reason);
             }
         }
         let reexports = module
