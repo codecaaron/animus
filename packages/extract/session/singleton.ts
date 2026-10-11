@@ -110,9 +110,6 @@ export interface WatchBatchTarget {
   /** Starts one attempt over the build's untaken observations; false when
    *  this session cannot analyze. */
   startObservedAttempt(): boolean;
-  /** Probes every file for a change no observation reported, after any
-   *  attempt in flight. */
-  probe(): Promise<void>;
 }
 
 /**
@@ -215,6 +212,9 @@ export function getWatchTransaction(key: SessionKey): Promise<void> | null {
 export interface ObservationQueue {
   /** The latest revision handed to a recording caller. */
   revision: number;
+  /** A full rescan is requested: the attempt that takes it reads every
+   *  file, so deletions nobody reported reconcile too. */
+  rescan: boolean;
   /** Each path no attempt has taken yet, with its latest state. */
   readonly untaken: Map<string, string>;
   /** Each waiting caller's revision, and the attempt that took it once one
@@ -607,6 +607,7 @@ export function joinSession(
       watchTransaction: null,
       observations: {
         revision: 0,
+        rescan: false,
         untaken: new Map(),
         revisions: new Map(),
         active: null,
