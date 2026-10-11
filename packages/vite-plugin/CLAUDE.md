@@ -6,10 +6,13 @@ Vite plugin that bridges the Rust extraction crate with the build pipeline. Runs
 
 ### `buildStart` (runs once on server start / build start)
 
-1. **Load system** — NAPI `loadSystemModule()` reads the system file, strips TS types via OXC, resolves workspace package deps, evaluates with rquickjs, returns propConfig + groupRegistry + tokens + selectorAliases + globalStyles
-2. **Discover files** — recursive directory walk for .ts/.tsx/.js/.jsx
-3. **Resolve packages** — reads system file imports, resolves external DS packages
-4. **Run analysis** — calls `analyzeProject()` from the Rust crate, produces manifest + CSS + per-component fragments
+The context owns one `ExtractionSession` (created at `configResolved`, kept in
+memory: `persistArtifacts = false`). `buildStart` runs
+`session.runFullPipeline()` — system load, discovery, package collection and
+analysis — and the context adopts each publication as the Session makes it
+(`onOutcome` → `adoptPublication`). Vite keeps its own asset pass
+(`hostSubstitutesAssets`), the elimination report and the self-verify. A dev
+server starts through an aborted parse with a warning; a build fails on it.
 
 ### `resolveId` / `load` (virtual stylesheet)
 
@@ -28,15 +31,22 @@ Vite plugin that bridges the Rust extraction crate with the build pipeline. Runs
 ### `hotUpdate` (dev HMR)
 
 - Handles every dev file event: `update`, `create` and `delete`
-- Content-hash check skips unchanged files
-- **System reload:** system dependency event → reload (coalesced)
-- **Delete:** the file's cache entry is pruned so its CSS stops being re-emitted
-- **Create:** ingested through the same analysis path as an edit (watcher creation ingestion); transform-time new-file detection stays the backstop for creations the watcher never reports
+- The dispatch that claims an event submits it to the Session
+  (`ctx.submitChanges` → `session.handleWatchUpdate`), which reads, hashes,
+  analyzes and publishes; Vite acts on the outcomes it collects
+- **Unchanged:** a submission that publishes nothing suppresses the update
+- **System reload:** a system dependency event reloads through the Session; a
+  failure warns and keeps the last good system (the overlay too under `strict`)
+- **Hold:** an aborted parse holds publication; its bytes go to Vite's own
+  parser (`abortedParseHashes`), and the repair re-delivers what changed
+- **Create:** the Session ingests it like an edit; transform-time detection
+  submits a file the Session does not hold, as the backstop for creations the
+  watcher never reports
 - CSS module invalidated alongside changed JS modules
 - **Extensions:** a published, non-presentation-only edit also re-delivers every
   module defining a transitive extension of its components (`extendingFiles`),
   since an extension reads inherited callbacks from its parent when it runs
-- Vite calls the hook once per environment; the analysis runs for one dispatch
+- Vite calls the hook once per environment; the submission runs for one dispatch
   (client first), module invalidation runs against each environment's graph
 
 ## NAPI Integration
