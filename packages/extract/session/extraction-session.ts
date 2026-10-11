@@ -2014,10 +2014,18 @@ export class ExtractionSession {
   }
 
   /** The pid of `siblingDir`'s live owner, or null when nothing proves one.
-   *  Our own pid owns it only while its claim's build is joined. A missing,
-   *  undecodable or unreadable claim all mean no owner: the opposite default
-   *  from the CLI lock check on purpose, so do not unify the two. */
+   *  A tree whose build is registered in this process is ours and live,
+   *  claim or no claim: a publisher's close() releases the claim while the
+   *  build's other participants still serve from it. Otherwise a missing,
+   *  undecodable or unreadable claim, or one naming our own pid, means no
+   *  owner: the opposite default from the CLI lock check on purpose, so do
+   *  not unify the two. */
   private liveSiblingOwnerPid(siblingDir: string): number | null {
+    // A session directory is named by its build.
+    const build = basename(siblingDir);
+    if (findSession(sessionKey(build, this.rootDir!)) !== undefined) {
+      return process.pid;
+    }
     let claim: ReturnType<typeof readCliLockRecord>;
     try {
       claim = readCliLockRecord(siblingDir);
@@ -2026,15 +2034,8 @@ export class ExtractionSession {
       return null;
     }
     if (claim.kind !== 'held') return null;
-    // This process can hold several builds' trees at once: one of ours is
-    // live while its build is still joined.
-    if (claim.record.pid === process.pid) {
-      const build = claim.record.build;
-      const joined =
-        build !== undefined &&
-        findSession(sessionKey(build, this.rootDir!)) !== undefined;
-      return joined ? process.pid : null;
-    }
+    // Our own pid on an unregistered build is a tree this process left.
+    if (claim.record.pid === process.pid) return null;
     return checkLockLiveness(claim.record).live ? claim.record.pid : null;
   }
 
