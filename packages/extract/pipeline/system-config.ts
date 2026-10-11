@@ -52,6 +52,9 @@ export interface SystemConfig {
   /** Canonical absolute paths of every module the loader evaluated (sorted;
    *  runtime stubs excluded) — the system-reload membership set. */
   dependencies?: string[];
+  /** Paths the loader looked for and found absent, ahead of the file it
+   *  chose: creating one changes what the system loads. */
+  missing?: string[];
   /** `{ modulePath: { exportName: [token paths] } }` — the source-token
    *  witness for correlation. Null when no module exports a built theme. */
   sourceThemeManifestsJson?: string | null;
@@ -64,6 +67,34 @@ export interface SystemConfig {
   /** Under a prefix, each name the theme generates and its final name,
    *  without `--`: the extractor renames those names in authored styles. */
   generatedNamesJson?: string;
+}
+
+/** What a failed system load read and looked for: the engine carries them
+ *  on its error, here or on a wrapping error's cause. Empty when it carries
+ *  none. */
+export interface SystemLoadReads {
+  dependencies: string[];
+  missing: string[];
+}
+
+/** What the engine's load error carries, directly or as a wrapping
+ *  error's cause. */
+interface EngineLoadError {
+  dependencies?: string[];
+  missing?: string[];
+  cause?: EngineLoadError;
+}
+
+export function systemLoadReads<Thrown>(error: Thrown): SystemLoadReads {
+  // SAFETY: a failed load throws the engine's `Error`, whose `dependencies`
+  // and `missing` are string lists (the loadSystemModule binding), or an
+  // error wrapping it as `cause`; any other throw carries neither.
+  const thrown = error as EngineLoadError | null | undefined;
+  const carrier = thrown?.dependencies ? thrown : thrown?.cause;
+  return {
+    dependencies: carrier?.dependencies ?? [],
+    missing: carrier?.missing ?? [],
+  };
 }
 
 /** The loader's evaluation of the system file. A failure on a file that
@@ -201,6 +232,7 @@ export function loadSystemConfig(
     keyframesJson: config.keyframesBlocks || null,
     vocabularyWitnessesJson: config.vocabularyWitnesses || null,
     dependencies: config.dependencies ?? [],
+    missing: config.missing ?? [],
     sourceThemeManifestsJson: config.sourceThemeManifests || null,
   };
   if (declarationScalesJson)
