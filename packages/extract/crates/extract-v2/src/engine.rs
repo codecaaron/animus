@@ -361,11 +361,18 @@ fn canonical_entries(file_entries_json: &str) -> napi::Result<Vec<InputEntry>> {
 }
 
 /// The identity of an analysis input: its files, by path and source, in
-/// canonical order. Evidence gathered for one input is never read for
-/// another, even one with as many files.
-fn input_identity(entries: &[InputEntry]) -> String {
+/// canonical order, and the extension order its probes walk (appended,
+/// NodeNext substitutions, aliases). Evidence gathered for one input is
+/// never read for another, even one with as many files, or the same files
+/// under another host's order.
+fn input_identity(entries: &[InputEntry], inputs: &analyze_css::CssInputs) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let policy = match &inputs.analysis_context.extensions {
+        Some(policy) => policy,
+        None => animus_system_loader::resolution::extension_policy(),
+    };
+    format!("{policy:?}").hash(&mut hasher);
     for entry in entries {
         entry.path.hash(&mut hasher);
         entry.source.hash(&mut hasher);
@@ -812,7 +819,7 @@ impl ExtractEngine {
     #[napi]
     pub fn prepare(&mut self, file_entries_json: String) -> napi::Result<String> {
         let entries = canonical_entries(&file_entries_json)?;
-        let identity = input_identity(&entries);
+        let identity = input_identity(&entries, &self.opts.css_inputs);
         let kept: Vec<(String, String)> = entries.iter().map(|e| (e.path.clone(), e.source.clone())).collect();
         let store = ast_store::AstStore::build(
             entries.into_iter().map(|e| ast_store::FileEntry { path: e.path, source: e.source }).collect(),
@@ -840,7 +847,7 @@ impl ExtractEngine {
         let entries = canonical_entries(&file_entries_json)?;
         // Evidence gathered for other files (a same-count edit since the
         // `prepare`) is not this input's, so the probes ask the file set.
-        let identity = input_identity(&entries);
+        let identity = input_identity(&entries, &self.opts.css_inputs);
         self.opts.css_inputs.probe_evidence = match probe_evidence_json {
             Some(json) => Some(
                 serde_json::from_str::<analyze_css::ProbeEvidence>(&json)
@@ -1555,6 +1562,45 @@ mod tests {
         let plain = parent_of(ExtractEngine::new(None).unwrap().analyze(after, None).unwrap());
         assert_eq!(plain, serde_json::json!("x.ts::Parent"));
         assert_eq!(stale, plain);
+    }
+
+    /// Contract: evidence gathered under one host's extension order is never
+    /// read under another's, though the files are the same: gathered where
+    /// `./x` opens `x.ts`, it leaves an engine whose order opens `x.tsx`
+    /// first to its own probe.
+    #[test]
+    fn evidence_for_another_extension_order_is_never_read() {
+        let files = serde_json::json!([
+            { "path": "app.tsx", "source": "import { Parent } from './x';\nexport const Child = Parent.extend().styles({ m: 1 }).asElement('div');\nexport const App = () => <Child />;" },
+            { "path": "x.ts", "source": "export const Parent = ds.styles({ p: 1 }).asElement('div');" },
+            { "path": "x.tsx", "source": "export const Parent = ds.styles({ p: 2 }).asElement('div');" },
+        ])
+        .to_string();
+        let ordered = |appended: [&str; 2]| {
+            ExtractEngine::new(Some(EngineOptions {
+                analysis_context_json: Some(
+                    serde_json::json!({ "extensions": { "appended": appended, "nodeNext": [], "alias": [] } }).to_string(),
+                ),
+                ..Default::default()
+            }))
+            .unwrap()
+        };
+        let prepared: serde_json::Value =
+            serde_json::from_str(&ordered([".ts", ".tsx"]).prepare(files.clone()).unwrap()).unwrap();
+        let evidence = serde_json::json!({
+            "generation": 1,
+            "identity": prepared["identity"],
+            "bases": { "x": { "candidate": "x.ts", "actual": null, "analysedAs": "x.ts" } },
+        })
+        .to_string();
+        let parent_of = |manifest: String| {
+            let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+            manifest["components"]["app.tsx::Child"]["extends_from"].clone()
+        };
+        let replayed = parent_of(ordered([".tsx", ".ts"]).analyze(files.clone(), Some(evidence)).unwrap());
+        let plain = parent_of(ordered([".tsx", ".ts"]).analyze(files, None).unwrap());
+        assert_eq!(plain, serde_json::json!("x.tsx::Parent"));
+        assert_eq!(replayed, plain);
     }
 
     /// Contract: `prepare` names every base analysis probes, so a session
