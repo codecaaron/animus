@@ -709,6 +709,10 @@ pub(crate) struct EnrichedUsage {
     pub element_consts: BTreeMap<String, ElementConst>,
     /// See `FileFacts::opaque_tags`.
     pub opaque_tags: Vec<OpaqueTag>,
+    /// See `FileFacts::builder_import_references`.
+    pub builder_import_references: Vec<BuilderImportReferences>,
+    /// See `FileFacts::bindings`.
+    pub bindings: crate::identity::BindingTable,
 }
 
 /// A component element that hands its children and props to its receiver,
@@ -941,7 +945,9 @@ fn call_loads(call: &CallExpression<'_>) -> Vec<LoadTarget> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_enriched_usage(
+    module_id: crate::identity::ModuleId,
     program: &Program<'_>,
     module: &ModuleRecord<'_>,
     static_values: &FxHashMap<String, Value>,
@@ -963,20 +969,24 @@ pub(crate) fn collect_enriched_usage(
     let may_escape = !chains.is_empty()
         || program.body.iter().any(|stmt| matches!(stmt, Statement::ImportDeclaration(_)));
     let wrapper_candidates = spread_wrapper_candidates(program);
-    let scoping = (!static_values.is_empty()
+    let needs_scoping = !static_values.is_empty()
         || !candidates.is_empty()
         || may_escape
-        || !wrapper_candidates.is_empty())
-    .then(|| SemanticBuilder::new().build(program).semantic.into_scoping());
+        || !wrapper_candidates.is_empty();
+    // Tag origins and ordinary components read the same scopes, so a module
+    // that needs none of the above still builds them, and so does the
+    // binding table.
+    let built = SemanticBuilder::new().build(program).semantic.into_scoping();
+    let bindings = crate::identity::BindingTable::prepare(crate::identity::IdentityInput {
+        module: module_id,
+        program,
+        module_record: module,
+        scoping: &built,
+    });
+    let (scoping, tag_scoping) = if needs_scoping { (Some(built), None) } else { (None, Some(built)) };
     let react = match &scoping {
         Some(scoping) => ReactNames::from_imports(program, scoping),
         None => ReactNames::by_name(),
-    };
-    // Tag origins and ordinary components read the same scopes, built here
-    // when nothing above needed them.
-    let tag_scoping = match &scoping {
-        Some(_) => None,
-        None => Some(SemanticBuilder::new().build(program).semantic.into_scoping()),
     };
     let origins = scoping.as_ref().or(tag_scoping.as_ref());
     // Only TypeScript annotates parameters.
@@ -1084,6 +1094,8 @@ pub(crate) fn collect_enriched_usage(
         origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
     let (prop_tags, name_uses, namespace_member_uses) =
         origins.map(|scoping| prop_tags_and_uses(program, scoping, &react)).unwrap_or_default();
+    let builder_import_references =
+        origins.map(|scoping| builder_import_references(program, module, scoping)).unwrap_or_default();
     EnrichedUsage {
         usage,
         confined,
@@ -1100,7 +1112,64 @@ pub(crate) fn collect_enriched_usage(
         opaque_calls,
         element_consts,
         opaque_tags,
+        builder_import_references,
+        bindings,
     }
+}
+
+/// One builder import's value references, by imported name and source.
+#[derive(Debug, Clone)]
+pub struct BuilderImportReferences {
+    pub imported: String,
+    pub source: String,
+    pub spans: Vec<(u32, u32)>,
+}
+
+/// The value references of every `animus`, `compose` or `composeWithContext`
+/// import, through any local name (`compose as c`). References resolve
+/// through the file's scopes, so a parameter that shadows the import, or a
+/// `typeof` type query, is no use of it.
+fn builder_import_references(
+    program: &Program<'_>,
+    module: &ModuleRecord<'_>,
+    scoping: &Scoping,
+) -> Vec<BuilderImportReferences> {
+    struct Scan<'s> {
+        scoping: &'s Scoping,
+        imports: FxHashMap<SymbolId, usize>,
+        found: Vec<BuilderImportReferences>,
+    }
+    impl<'a> Visit<'a> for Scan<'_> {
+        fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+            let Some(reference) = ident.reference_id.get().map(|id| self.scoping.get_reference(id)) else {
+                return;
+            };
+            if !reference.is_value() {
+                return;
+            }
+            if let Some(&index) = reference.symbol_id().and_then(|symbol| self.imports.get(&symbol)) {
+                self.found[index].spans.push((ident.span.start, ident.span.end));
+            }
+        }
+    }
+    let mut scan = Scan { scoping, imports: FxHashMap::default(), found: Vec::new() };
+    for import in collect_import_facts(module) {
+        if !matches!(import.imported.as_str(), "animus" | "compose" | "composeWithContext") {
+            continue;
+        }
+        if let Some(symbol) = scoping.get_root_binding(import.local.as_str().into()) {
+            scan.imports.insert(symbol, scan.found.len());
+            scan.found.push(BuilderImportReferences {
+                imported: import.imported,
+                source: import.source,
+                spans: Vec::new(),
+            });
+        }
+    }
+    if !scan.found.is_empty() {
+        scan.visit_program(program);
+    }
+    scan.found
 }
 
 /// React's own modules: their functions render or clone elements only as
@@ -4965,7 +5034,9 @@ pub fn collect_usage_facts_with_statics(
     module: &ModuleRecord<'_>,
     static_values: &FxHashMap<String, Value>,
 ) -> Vec<UsageFact> {
-    collect_enriched_usage(program, module, static_values, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
+    // Only the usage facts are read, so no module path names the table.
+    let module_id = crate::identity::ModuleId::new("");
+    collect_enriched_usage(module_id, program, module, static_values, &[], &[], &BTreeMap::new(), &BTreeSet::new()).usage
 }
 
 fn attribute_expression<'a, 'b>(

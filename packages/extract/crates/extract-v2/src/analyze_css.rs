@@ -24,6 +24,7 @@ use crate::declarations::{bind_component_declarations, check_surface_overlap, De
 use crate::dynamic_meta::{share_slots, DynamicPropMeta};
 use crate::evaluator::{EvalError, TransformEvaluator};
 use crate::facts::FileFacts;
+use crate::identity::ImportBinding;
 use crate::jsx_scan::{
     ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult,
 };
@@ -33,7 +34,7 @@ use crate::theme::{
     ConditionAliasesMap, ContextualVarsMap, CssDeclaration, FlatTheme, PropConfig, PropConfigMap,
     ResolveContext, ResolvedStyles, SelectorAliasesMap, StrictTokenMiss, StrictTokenMissSink,
     TransformFailure, TransformFailureSink, VariableMap, extracts_callback_value, extracts_configured_value, resolve_styles, skips_transforms, strict_token_miss_of,
-    unresolved_alias_spans, writes_token_reference,
+    unresolved_alias, unresolved_alias_spans, writes_token_reference, UnresolvedAlias,
 };
 use crate::transforms::CallbackDefinition;
 use crate::usage_facts::{is_animus_system_specifier, TagFact, TagOrigin, UsageFact, UsageResidueRecord};
@@ -529,6 +530,13 @@ const SKIPPED_VALUE: &str = "animus.chain.skipped-value";
 const UNRESOLVED_PARENT: &str = "animus.extension.unresolved-parent";
 const UNBOUND_TRANSFORM_NAME: &str = "animus.props.unbound-transform-name";
 const UNRESOLVED_TOKEN_ALIAS: &str = "animus.style.unresolved-token-alias";
+/// A token alias whose expansion reaches a cycle of theme aliases: its
+/// declaration is dropped, and the finding names the cycle, so it is never
+/// read as a missing token.
+const TOKEN_ALIAS_CYCLE: &str = "animus.style.token-alias-cycle";
+/// A token alias whose expansion grows past the size bound, as theme
+/// literals that repeat an alias do: its declaration is dropped.
+const TOKEN_ALIAS_TOO_LARGE: &str = "animus.style.token-alias-too-large";
 const TOKEN_SHAPED_VALUE: &str = "animus.style.unresolved-token-value";
 const EXTERNAL_TOKEN_CANDIDATE: &str = "animus.theme.external-token-candidate";
 const TRANSFORM_THREW: &str = "animus.transform.threw";
@@ -580,6 +588,8 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (UNRESOLVED_PARENT, "warn"),
     (UNBOUND_TRANSFORM_NAME, "warn"),
     (UNRESOLVED_TOKEN_ALIAS, "warn"),
+    (TOKEN_ALIAS_CYCLE, "warn"),
+    (TOKEN_ALIAS_TOO_LARGE, "warn"),
     (TOKEN_SHAPED_VALUE, "warn"),
     (EXTERNAL_TOKEN_CANDIDATE, "warn"),
     (TRANSFORM_THREW, "warn"),
@@ -592,6 +602,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::theme::UNITLESS_CUSTOM_PROPERTY, "warn"),
     (crate::theme::NON_BLOCK_VALUE, "error"),
     (crate::theme::AT_RULE_SELECTOR_NESTING, "error"),
+    (crate::theme::AT_RULE_PLACEMENT, "error"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -728,48 +739,9 @@ pub fn resolve_import_source<T>(
     probe_files(&base, files)
 }
 
-/// NodeNext specifiers name the emitted file (`./x.js` for `x.ts`). Mirrors
-/// `NODE_NEXT_EXTENSION_MAP` in `packages/extract/pipeline/source-ingestion.ts`.
-const NODE_NEXT_SOURCES: [(&str, &[&str]); 4] = [
-    (".js", &[".ts", ".tsx", ".jsx"]),
-    (".jsx", &[".tsx"]),
-    (".mjs", &[".mts"]),
-    (".cjs", &[".cts"]),
-];
-
-/// Candidate order decides which file wins when several extensions exist; the
-/// literal spelling is probed before a NodeNext source, so a real `.js`
-/// neighbor still wins. Mirrors `resolveRelativeSource` in
-/// `packages/extract/pipeline/source-ingestion.ts`.
+/// The analyzed file `base` names, through the extractor's extension policy.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>) -> Option<String> {
-    let candidates = [
-        base.to_string(),
-        format!("{base}.ts"),
-        format!("{base}.tsx"),
-        format!("{base}.js"),
-        format!("{base}.jsx"),
-        format!("{base}/index.ts"),
-        format!("{base}/index.tsx"),
-        format!("{base}/index.js"),
-        format!("{base}/index.jsx"),
-    ];
-    candidates
-        .into_iter()
-        .find(|c| files.contains_key(c))
-        .or_else(|| {
-            NODE_NEXT_SOURCES.iter().find_map(|(emitted, sources)| {
-                let split = base.len().checked_sub(emitted.len())?;
-                let suffix = base.get(split..)?;
-                if !suffix.eq_ignore_ascii_case(emitted) {
-                    return None;
-                }
-                let stem = &base[..split];
-                sources
-                    .iter()
-                    .map(|source| format!("{stem}{source}"))
-                    .find(|c| files.contains_key(c))
-            })
-        })
+    animus_system_loader::resolution::ANALYSIS_SOURCE.probe(base, |candidate| files.contains_key(candidate))
 }
 
 /// Follow `export { X as Y } from '...'` hops, and local exports of an
@@ -865,6 +837,8 @@ fn classify_parent(
 /// Where a name visible in `file_path` is declared: the landing file, the
 /// declarator binding there, and whether that file declares it itself.
 /// None when the name's import source is outside the analyzed set.
+/// A namespace import, and a name the module does not bind, read as declared
+/// here.
 pub(crate) fn resolve_declaration(
     file_path: &str,
     ff: &FileFacts,
@@ -872,10 +846,12 @@ pub(crate) fn resolve_declaration(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
 ) -> Option<(String, String, bool)> {
-    let Some(imp) = ff.imports.iter().find(|i| i.local == name) else {
-        return Some((file_path.to_string(), name.to_string(), true));
+    let (specifier, imported) = match ff.bindings.module_import(name) {
+        Some(ImportBinding::Named { specifier, imported }) => (specifier, imported.as_str()),
+        Some(ImportBinding::Default { specifier }) => (specifier, "default"),
+        Some(ImportBinding::Namespace { .. }) | None => return Some((file_path.to_string(), name.to_string(), true)),
     };
-    resolve_export(file_path, &imp.source, &imp.imported, files, inputs)
+    resolve_export(file_path, specifier, imported, files, inputs)
 }
 
 /// The declaration `imported` from `specifier` lands on, through analyzed
@@ -1253,6 +1229,7 @@ fn drain_dropped_style_keys(
         // known, else as JSON.
         let held = match &dropped.dropped {
             DroppedStyleKey::UnsupportedAtRule { block: held, .. }
+            | DroppedStyleKey::AtRulePlacement { block: held, .. }
             | DroppedStyleKey::NonBlockValue { value: held, .. }
             | DroppedStyleKey::AtRuleSelectorNesting { block: held, .. } => held,
             _ => {
@@ -1319,10 +1296,17 @@ fn dropped_style_key(
         DroppedStyleKey::UnsupportedAtRule { key, .. } => {
             let message = format!(
                 "style key '{key}' is an at-rule extraction does not support, {not_emitted} — \
-                 extraction supports @media, @container and @supports; fix the at-rule's name, or \
-                 write the block in a stylesheet of its own"
+                 extraction supports @media, @container, @supports, @scope and @starting-style; fix the \
+                 at-rule's name, or write the block in a stylesheet of its own"
             );
             return diagnostic(file, component, "warn", message, Some(crate::theme::UNSUPPORTED_AT_RULE));
+        }
+        DroppedStyleKey::AtRulePlacement { key, within, lost, .. } => {
+            let message = format!(
+                "'{key}' wraps a rule, and {within} holds none, so {lost} is not emitted — write '{key}' \
+                 as a key of a style block, beside the declarations it applies to"
+            );
+            return diagnostic(file, component, "warn", message, Some(crate::theme::AT_RULE_PLACEMENT));
         }
         DroppedStyleKey::NonBlockValue { key, value } => {
             let message = format!(
@@ -1574,22 +1558,78 @@ fn shed_unresolved_alias_decls(
             warn_token_shaped_value(d, scale_check, file, component, diagnostics);
             return true;
         }
-        diagnostics.push(unresolved_token_alias(file, component, d, &spans));
+        diagnostics.extend(unresolved_alias_findings(file, component, d, spans, scale_check.theme, scale_check.variable_map));
         false
     });
 }
 
-/// A declaration dropped for the token aliases in it that name no token.
-fn unresolved_token_alias(file: &str, component: &str, declaration: &CssDeclaration, spans: &[String]) -> CssDiagnostic {
-    let aliases = spans.join(", ");
-    diagnostic(
-        file,
-        component,
-        "warn",
-        format!("unresolvable token alias {aliases} in '{}' — declaration dropped", declaration.property),
-        Some(UNRESOLVED_TOKEN_ALIAS),
-    )
-    .dropping(&aliases)
+/// The findings for a declaration dropped for the token aliases left in it:
+/// one for the aliases that name no token, and one for each alias whose
+/// expansion reaches a cycle, naming it, or grows past the size bound.
+fn unresolved_alias_findings(
+    file: &str,
+    component: &str,
+    declaration: &CssDeclaration,
+    spans: Vec<String>,
+    theme: &FlatTheme,
+    variable_map: &VariableMap,
+) -> Vec<CssDiagnostic> {
+    let mut missing = Vec::new();
+    let mut findings = Vec::new();
+    for span in spans {
+        match unresolved_alias(&span, theme, variable_map) {
+            UnresolvedAlias::Cycle(cycle) => findings.push(
+                diagnostic(
+                    file,
+                    component,
+                    "warn",
+                    format!(
+                        "token alias {span} in '{}' reaches an alias cycle ({}) — declaration \
+                         dropped; end the chain at a value",
+                        declaration.property,
+                        // A long path into the cycle keeps its ends: where
+                        // it starts, and the token it meets twice.
+                        match cycle.len() {
+                            0..=8 => cycle.join(" → "),
+                            n => format!("{} → … → {}", cycle[..4].join(" → "), cycle[n - 2..].join(" → ")),
+                        }
+                    ),
+                    Some(TOKEN_ALIAS_CYCLE),
+                )
+                .dropping(&span),
+            ),
+            UnresolvedAlias::TooLarge => findings.push(
+                diagnostic(
+                    file,
+                    component,
+                    "warn",
+                    format!(
+                        "token alias {span} in '{}' expands past 1 MiB, as theme values that repeat an \
+                         alias can — declaration dropped",
+                        declaration.property
+                    ),
+                    Some(TOKEN_ALIAS_TOO_LARGE),
+                )
+                .dropping(&span),
+            ),
+            UnresolvedAlias::Missing => missing.push(span),
+        }
+    }
+    if !missing.is_empty() {
+        let aliases = missing.join(", ");
+        findings.insert(
+            0,
+            diagnostic(
+                file,
+                component,
+                "warn",
+                format!("unresolvable token alias {aliases} in '{}' — declaration dropped", declaration.property),
+                Some(UNRESOLVED_TOKEN_ALIAS),
+            )
+            .dropping(&aliases),
+        );
+    }
+    findings
 }
 
 /// A raw animation name that is a registered keyframes key, not the
@@ -1650,6 +1690,7 @@ struct ScaleCheck<'a> {
     family: &'a ScaleFamily,
     tokens: &'a FxHashMap<String, Vec<String>>,
     theme: &'a crate::theme::FlatTheme,
+    variable_map: &'a VariableMap,
     external: bool,
 }
 
@@ -2050,6 +2091,10 @@ fn record_external_candidates_in_decls(
                     // the alpha suffix.
                     content.split('/').next().unwrap_or(content).to_string()
                 })
+                // A consumer token left unresolved reached an alias cycle or
+                // the size bound, which the shed reports; it is no external
+                // token.
+                .filter(|token| !theme.contains_key(token))
                 .collect()
         };
         for token in tokens {
@@ -5948,6 +5993,7 @@ fn run_with_system_floor(
                         family: &scale_family_props,
                         tokens: &theme_tokens,
                         theme: &inputs.theme,
+                        variable_map: &inputs.variable_map,
                         external: is_external_file(file_path, &inputs.external_dirs),
                     },
                     file_path,
@@ -6397,9 +6443,14 @@ fn run_with_system_floor(
             let resolved = resolve_styles(&serde_json::json!({ prop_name: value }), &quiet, true);
             for declaration in resolved.all_declarations() {
                 let spans = unresolved_alias_spans(&declaration.value);
-                if !spans.is_empty() {
-                    diagnostics.push(unresolved_token_alias(file, component, declaration, &spans));
-                }
+                diagnostics.extend(unresolved_alias_findings(
+                    file,
+                    component,
+                    declaration,
+                    spans,
+                    resolve_ctx.theme,
+                    resolve_ctx.variable_map,
+                ));
             }
         }
         Some(UtilityInput {
@@ -8222,6 +8273,43 @@ mod tests {
         inputs
     }
 
+    /// Contract: a finite token alias chain of any length resolves, and a
+    /// cycle is reported with its own code and drops only its declaration,
+    /// never shed as though the token were missing.
+    #[test]
+    fn token_alias_chains_resolve_at_any_length_and_cycles_are_reported() {
+        let run = |links: &[(String, String)]| {
+            let mut inputs = test_inputs();
+            for (key, value) in links {
+                inputs.theme.insert(key.clone(), value.clone());
+            }
+            let source = "export const C = ds.styles({ color: '{colors.t0}', display: 'flex' }).asElement('div');\n\
+                          export const App = () => <C />;\n";
+            analyze(&[("app.tsx", source)], &inputs)
+        };
+        let codes = |out: &CssOutput| out.diagnostics.iter().filter_map(|d| d.code.clone()).collect::<Vec<_>>();
+        let link = |from: usize, to: &str| (format!("colors.t{from}"), to.to_string());
+        for length in [17, 40] {
+            let mut links: Vec<_> = (0..length).map(|i| link(i, &format!("{{colors.t{}}}", i + 1))).collect();
+            links.push(link(length, "red"));
+            let out = run(&links);
+            assert!(out.css.contains("color: red"), "{length} links: {}", out.css);
+            assert!(codes(&out).is_empty(), "{length} links: {:?}", out.diagnostics);
+        }
+        let out = run(&[link(0, "{colors.t1}"), link(1, "{colors.t0}")]);
+        assert!(!out.css.contains("color:") && out.css.contains("display: flex"), "{}", out.css);
+        assert_eq!(codes(&out), [TOKEN_ALIAS_CYCLE], "{:?}", out.diagnostics);
+        assert!(out.diagnostics[0].message.contains("colors.t0 → colors.t1 → colors.t0"), "{}", out.diagnostics[0].message);
+        let out = run(&[link(0, "{colors.missing}")]);
+        assert!(!out.css.contains("color:"), "{}", out.css);
+        assert_eq!(codes(&out), [UNRESOLVED_TOKEN_ALIAS], "{:?}", out.diagnostics);
+        // Text after the last alias counts toward the size bound.
+        let past_bound = format!("\"{{colors.leaf}}{}\"", "x".repeat(1 << 20));
+        let out = run(&[link(0, &past_bound), ("colors.leaf".to_string(), "a".to_string())]);
+        assert!(!out.css.contains("color:"), "the declaration is dropped");
+        assert_eq!(codes(&out), [TOKEN_ALIAS_TOO_LARGE], "{:?}", out.diagnostics);
+    }
+
     fn assert_uncertain_identity_widens_and_retains(out: &CssOutput) {
         assert!(
             out.dynamic_props.contains_key("p"),
@@ -9150,6 +9238,63 @@ mod tests {
         assert_eq!(warned, expected, "{:#?}", out.diagnostics);
         assert!(out.css.contains("animation: fadeIn 1s ease;"), "{}", out.css);
         assert!(out.css.contains("animation: fadeIn 2s;"), "{}", out.css);
+    }
+
+    #[test]
+    fn scope_and_starting_style_blocks_wrap_their_rules_and_report_where_none_can_be_wrapped() {
+        let mut inputs = test_inputs();
+        inputs.condition_aliases.insert(
+            "_starting".into(),
+            crate::theme::ConditionAliasEntry { value: "@starting-style".into(), order: 500, kind: "starting-style".into() },
+        );
+        inputs.keyframes_blocks = Some(serde_json::json!({
+            "motion": { "rise": { "name": "animus-kf-rise", "frames": { "to": { "opacity": 1, "@starting-style": { "opacity": 0 } } } } }
+        }));
+        inputs.global_style_blocks = Some(serde_json::json!({
+            "lists": { ".a, .b": { "@scope (& > p)": { "& em": { "color": "red" } } }, "@starting-style": { "opacity": 0 } }
+        }));
+        let source = "export const Prose = ds.styles({ display: 'block', '@scope (.zz-prose) to ([data-prose-ignore])': { '& li': { cursor: 'pointer' } } }).asElement('div');\n\
+                      export const Toast = ds.styles({ opacity: 1, '@starting-style': { opacity: 0 }, '&:hover': { '@starting-style': { opacity: 0.5 } }, _starting: { color: 'red' } }).asElement('div');\n\
+                      export const Card = ds.styles({ '@scope (&) to (.not-card)': { '& p': { margin: 0 } } }).asElement('div');\n\
+                      export const Bad = ds.styles({ opacity: { _: 1, '@starting-style': 0 } }).asElement('div');\n\
+                      export const Alias = ds.styles({ opacity: { _: 1, _starting: 0 } }).asElement('div');\n\
+                      export const Bare = ds.styles({ '@scope': { color: 'red', '& em': { color: 'green' } }, '@scope ([data-label=\"R&D\"])': { color: 'blue' } }).asElement('div');\n\
+                      export const Donut = ds.styles({ '@scope (&) to (& > .stop)': { '& p': { color: 'red' } } }).asElement('div');\n\
+                      export const Nest = ds.styles({ '&:hover': { '@scope (&)': { '@scope (& > .inner)': { '& p': { color: 'red' } } } } }).asElement('div');\n\
+                      export const App = () => <><Prose /><Toast /><Card /><Bad /><Alias /><Bare /><Donut /><Nest /></>;\n";
+        let out = analyze(&[("a.tsx", source)], &inputs);
+        let class = |binding: &str| out.replacement_configs[&format!("a.tsx::{binding}")].class_name.clone().unwrap_or_default();
+        let base = out.css.split("@layer anm-base {").nth(1).and_then(|rest| rest.split("\n}\n").next()).unwrap_or_default();
+        // Within a scope the rule is the scope root, `:scope`; only the
+        // outermost start's `&` is the component, and a start without `&` is
+        // relative to it, as nested CSS reads it (CSS Cascade 6 §3.5).
+        for wrapped in [
+            format!("@scope (.{} .zz-prose) to ([data-prose-ignore]) {{\n    :where(:scope) li {{\n      cursor: pointer;", class("Prose")),
+            format!("@starting-style {{\n    .{} {{\n      opacity: 0;", class("Toast")),
+            format!("@starting-style {{\n    .{}:hover {{\n      opacity: 0.5;", class("Toast")),
+            format!("@starting-style {{\n    .{} {{\n      color: red;", class("Toast")),
+            format!("@scope (.{}) to (.not-card) {{\n    :where(:scope) p {{\n      margin: 0;", class("Card")),
+            format!("@scope (.{}) {{\n    :where(:scope) {{\n      color: red;", class("Bare")),
+            format!("@scope (.{}) {{\n    :where(:scope) em {{\n      color: green;", class("Bare")),
+            format!("@scope (.{} [data-label=\"R&D\"]) {{\n    :where(:scope) {{\n      color: blue;", class("Bare")),
+            format!("@scope (.{}) to (:scope > .stop) {{\n    :where(:scope) p {{\n      color: red;", class("Donut")),
+            format!("@scope (.{}:hover) {{\n    @scope (:scope > .inner) {{\n      :where(:scope) p {{\n        color: red;", class("Nest")),
+        ] {
+            assert!(base.contains(&wrapped), "{wrapped}\nmissing from anm-base:\n{}", out.css);
+        }
+        assert!(out.sheets.global.contains("@scope (:is(.a, .b) > p) {\n  :where(:scope) em {"), "{}", out.sheets.global);
+        let codes: Vec<_> = out.diagnostics.iter().filter_map(|d| Some((d.code.as_deref()?, d.component.as_str()))).collect();
+        assert_eq!(
+            codes,
+            [
+                ("animus.style.at-rule-placement", "Alias"),
+                ("animus.style.at-rule-placement", "Bad"),
+                ("animus.style.at-rule-placement", "global 'lists'"),
+                ("animus.style.at-rule-placement", "keyframes 'animus-kf-rise'"),
+            ],
+            "{:#?}",
+            out.diagnostics
+        );
     }
 
     #[test]

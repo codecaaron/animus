@@ -2,6 +2,7 @@
 //! over one stored AST, producing owned facts and adding no parse.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use oxc::ast::ast::{CommentKind, Expression, ObjectExpression, ObjectPropertyKind, Program, PropertyKey};
 use oxc::span::GetSpan;
@@ -10,7 +11,7 @@ use serde_json::Value;
 
 use crate::chain_walk::{self, ChainDescriptor};
 use crate::eval;
-use crate::jsx_scan::{compose_callees_referenced_outside, scan_compose_calls, ComposeFamilyInfo};
+use crate::jsx_scan::{scan_compose_calls, ComposeFamilyInfo};
 use crate::owned_ast::OwnedAst;
 use crate::transforms::{CallbackBinding, CallbackDefinition, TransformReferences};
 use crate::usage_facts::{collect_import_facts, ImportFact, UsageFact};
@@ -398,6 +399,10 @@ pub struct FileFacts {
     /// above stays the raw syntax classification.
     #[serde(skip)]
     pub(crate) usage_enriched: Option<Vec<UsageFact>>,
+    /// The identity of every binding and reference, from the semantic build
+    /// the enriched usage reads.
+    #[serde(skip)]
+    pub bindings: Arc<crate::identity::BindingTable>,
     /// compose() families found in this file.
     pub compose: Vec<ComposeFamilyInfo>,
     /// Sources of `export * from '…'`.
@@ -410,11 +415,11 @@ pub struct FileFacts {
     /// The identifier `export default X;` names.
     #[serde(skip)]
     pub default_export_binding: Option<String>,
-    /// `compose` / `composeWithContext` imports still referenced outside those
-    /// families, such as a call inside a function, as (imported name, source)
-    /// pairs: the transform keeps those it would otherwise strip.
+    /// The value references of each builder import the transform may strip
+    /// (`animus`, `compose`, `composeWithContext`): it keeps an import while
+    /// any reference lies outside the spans it replaces.
     #[serde(skip)]
-    pub compose_callees_in_use: Vec<(String, String)>,
+    pub builder_import_references: Vec<crate::usage_facts::BuilderImportReferences>,
     /// Top-level `const X = Y;` bare-identifier aliases, assertion-peeled
     /// and `const` only.
     #[serde(skip)]
@@ -1499,7 +1504,10 @@ pub(crate) fn extract_file_facts_from_static_maps(
         opaque_calls,
         element_consts,
         opaque_tags,
+        builder_import_references,
+        bindings,
     } = crate::usage_facts::collect_enriched_usage(
+        crate::identity::ModuleId::new(&ast.path),
         program,
         ast.module_record(),
         &usage_statics_fx,
@@ -1508,8 +1516,6 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &object_consts,
         &assigned_targets,
     );
-
-    let compose_callees_in_use = compose_callees_referenced_outside(program, &compose);
 
     FileFacts {
         path: ast.path.clone(),
@@ -1526,11 +1532,12 @@ pub(crate) fn extract_file_facts_from_static_maps(
             .collect(),
         usage,
         usage_enriched: Some(usage_enriched),
+        bindings: Arc::new(bindings),
         compose,
         star_exports: crate::usage_facts::collect_star_exports(ast.module_record()),
         namespace_exports: crate::usage_facts::collect_namespace_exports(ast.module_record()),
         default_export_binding: crate::usage_facts::collect_default_export_binding(program),
-        compose_callees_in_use,
+        builder_import_references,
         aliases: const_initializers.aliases,
         assigned_aliases: const_initializers.assigned,
         assigned_targets: const_initializers.targets,

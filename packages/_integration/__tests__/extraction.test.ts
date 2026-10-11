@@ -698,8 +698,8 @@ export const Card = ds
     display: 'block',
     '@media (min-width: 1px)': { cursor: 'help' },
     '@mdia (min-width: 1px)': { cursor: 'pointer' },
-    '@starting-style': { opacity: 0 } as any,
-    '&:hover': { '@scope (&)': { cursor: 'wait' } },
+    '@layer x': { opacity: 0 } as any,
+    '&:hover': { '@bogus (&)': { cursor: 'wait' } },
   } as any)
   .asElement('div');
 export const App = () => <Card />;
@@ -708,14 +708,14 @@ export const App = () => <Card />;
       {
         path: 'at-rules.jsx',
         source: `import { ds } from '../setup';
-export const Note = ds.styles({ display: 'block', '@scope (.x)': { cursor: 'pointer' } }).asElement('p');
+export const Note = ds.styles({ display: 'block', '@bogus (.x)': { cursor: 'pointer' } }).asElement('p');
 export const UseNote = () => <Note />;
 `,
       },
       {
         path: 'globals.ts',
-        source: `const unrelated = { '@scope (.x)': { opacity: 1 } };
-export const reset = { __brand: 'GlobalStyleBlock', styles: { html: { '@scope (.x)': { opacity: 0 } } } };
+        source: `const unrelated = { '@bogus (.x)': { opacity: 1 } };
+export const reset = { __brand: 'GlobalStyleBlock', styles: { html: { '@bogus (.x)': { opacity: 0 } } } };
 `,
       },
     ],
@@ -725,13 +725,13 @@ export const reset = { __brand: 'GlobalStyleBlock', styles: { html: { '@scope (.
           reset: {
             source: 'globals.ts',
             sourceExport: 'reset',
-            styles: { html: { '@scope (.x)': { opacity: 0 } } },
+            styles: { html: { '@bogus (.x)': { opacity: 0 } } },
           },
           // No exporting binding names its declaration, so it is not located,
           // though a declaration in its module shares its registration name.
           unrelated: {
             source: 'globals.ts',
-            styles: { body: { '@scope (.x)': { opacity: 1 } } },
+            styles: { body: { '@bogus (.x)': { opacity: 1 } } },
           },
         }),
       },
@@ -760,7 +760,7 @@ export const reset = { __brand: 'GlobalStyleBlock', styles: { html: { '@scope (.
       51,
       'warn',
       'error',
-      "'@scope (.x)': { cursor: 'pointer' }",
+      "'@bogus (.x)': { cursor: 'pointer' }",
     ],
     [
       'at-rules.tsx',
@@ -776,7 +776,7 @@ export const reset = { __brand: 'GlobalStyleBlock', styles: { html: { '@scope (.
       5,
       'warn',
       'error',
-      "'@starting-style': { opacity: 0 } as any",
+      "'@layer x': { opacity: 0 } as any",
     ],
     [
       'at-rules.tsx',
@@ -784,7 +784,7 @@ export const reset = { __brand: 'GlobalStyleBlock', styles: { html: { '@scope (.
       18,
       'warn',
       'error',
-      "'@scope (&)': { cursor: 'wait' }",
+      "'@bogus (&)': { cursor: 'wait' }",
     ],
     [
       'globals.ts',
@@ -792,9 +792,9 @@ export const reset = { __brand: 'GlobalStyleBlock', styles: { html: { '@scope (.
       undefined,
       'warn',
       'error',
-      '"@scope (.x)": {"opacity":1}',
+      '"@bogus (.x)": {"opacity":1}',
     ],
-    ['globals.ts', 2, 71, 'warn', 'error', "'@scope (.x)': { opacity: 0 }"],
+    ['globals.ts', 2, 71, 'warn', 'error', "'@bogus (.x)': { opacity: 0 }"],
   ]);
   expect(() => surfaceManifestDiagnostics(manifest, () => {})).not.toThrow();
   expect(() =>

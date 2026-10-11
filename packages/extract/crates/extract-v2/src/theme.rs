@@ -265,6 +265,8 @@ impl ConditionAliasEntry {
         match self.kind.as_str() {
             "container" => Condition::Container(self.value.clone()),
             "supports" => Condition::Supports(self.value.clone()),
+            // Read as the raw key reads it, so a bare `@scope` scopes to `&`.
+            "scope" | "starting-style" => condition_from_raw_key(&self.value).unwrap_or_else(|| Condition::Media(self.value.clone())),
             _ => Condition::Media(self.value.clone()),
         }
     }
@@ -288,9 +290,28 @@ pub fn condition_from_raw_key(key: &str) -> Option<Condition> {
         Some(Condition::Container(key.to_string()))
     } else if key.starts_with("@supports") {
         Some(Condition::Supports(key.to_string()))
+    } else if key == "@scope" || key.starts_with("@scope ") || key.starts_with("@scope(") {
+        // No scope root: nested CSS would scope to the parent rule's element,
+        // which is the rule's own subject here.
+        let tail = key["@scope".len()..].trim_start();
+        if tail.is_empty() || tail.starts_with("to") {
+            Some(Condition::Scope(format!("@scope (&) {tail}").trim_end().to_string()))
+        } else {
+            Some(Condition::Scope(key.to_string()))
+        }
+    } else if key == "@starting-style" {
+        Some(Condition::StartingStyle(key.to_string()))
     } else {
         None
     }
+}
+
+/// Whether `key`, raw or an alias, is `@scope` or `@starting-style`: an
+/// at-rule whose block only wraps a style rule, so it has no place inside a
+/// keyframe frame or a prop's value.
+pub(crate) fn only_wraps_rules(key: &str, ctx: &ResolveContext) -> bool {
+    let condition = condition_from_raw_key(key).or_else(|| ctx.condition_aliases.get(key).map(ConditionAliasEntry::to_condition));
+    matches!(condition, Some(Condition::Scope(_) | Condition::StartingStyle(_)))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -324,8 +345,8 @@ pub const UNRECOGNIZED_STYLE_KEY: &str = "animus.style.unrecognized-key";
 /// Two keys of one style block that set one CSS property at one condition.
 pub const KEYS_SHARE_PROPERTY: &str = "animus.style.keys-share-property";
 
-/// A style-object at-rule key other than `@media`, `@container` and
-/// `@supports`, whose block is not emitted.
+/// A style-object at-rule key other than `@media`, `@container`,
+/// `@supports`, `@scope` and `@starting-style`, whose block is not emitted.
 pub const UNSUPPORTED_AT_RULE: &str = "animus.style.unsupported-at-rule";
 /// A number on a prop that writes only custom properties and binds no
 /// transform: a custom property has no unit context, so it stays unitless.
@@ -339,6 +360,10 @@ pub const NON_BLOCK_VALUE: &str = "animus.style.non-block-value";
 /// holds declarations only.
 pub const AT_RULE_SELECTOR_NESTING: &str = "animus.style.at-rule-selector-nesting";
 
+/// `@scope` or `@starting-style` where no rule can be wrapped: inside a
+/// keyframe frame, or among a prop's values.
+pub const AT_RULE_PLACEMENT: &str = "animus.style.at-rule-placement";
+
 /// A style-object key given an object that resolves to nothing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DroppedStyleKey {
@@ -348,9 +373,12 @@ pub enum DroppedStyleKey {
     NonResponsiveObject(String),
     /// Any other key, such as an HTML element name written without `&`.
     UnrecognizedKey(String),
-    /// An at-rule other than `@media`, `@container` and `@supports`, with
-    /// the block it holds.
+    /// An at-rule extraction does not support, with the block it holds.
     UnsupportedAtRule { key: String, block: Value },
+    /// `@scope` or `@starting-style` placed where no rule can be wrapped
+    /// (`within`: a keyframe frame, or a prop's value), with its block and
+    /// what is not emitted for it (`lost`).
+    AtRulePlacement { key: String, within: String, lost: String, block: Value },
     /// A prop that writes only the custom `properties` was given the number
     /// `value`, which no unit or transform establishes: it is written
     /// unitless.
@@ -389,6 +417,7 @@ impl DroppedStyleKey {
             | Self::NonResponsiveObject(key)
             | Self::UnrecognizedKey(key)
             | Self::UnsupportedAtRule { key, .. }
+            | Self::AtRulePlacement { key, .. }
             | Self::UnitlessCustomProperty { prop: key, .. }
             | Self::NonBlockValue { key, .. }
             | Self::AtRuleSelectorNesting { key, .. } => key,
@@ -442,15 +471,113 @@ pub enum Condition {
     Media(String),
     Container(String),
     Supports(String),
+    /// `@scope (<start>) [to (<end>)]`; an `&` in the prelude stands for the
+    /// rule's own subject, which emission substitutes.
+    Scope(String),
+    StartingStyle(String),
 }
 
 impl Condition {
     pub fn prelude(&self) -> Option<&str> {
         match self {
             Condition::Breakpoint(_) => None,
-            Condition::Media(q) | Condition::Container(q) | Condition::Supports(q) => Some(q),
+            Condition::Media(q)
+            | Condition::Container(q)
+            | Condition::Supports(q)
+            | Condition::Scope(q)
+            | Condition::StartingStyle(q) => Some(q),
         }
     }
+
+    pub fn is_scope(&self) -> bool {
+        matches!(self, Condition::Scope(_))
+    }
+}
+
+/// A scoped rule's own element, the scope root, as nested CSS reads `&`
+/// inside `@scope` (CSS Cascade 6 §3.5.3): with no specificity of its own.
+pub(crate) const SCOPE_ROOT: &str = ":where(:scope)";
+
+/// The preludes wrapping a rule whose own selector is `subject`, outermost
+/// first; `None` when one cannot be written. Within a scope (CSS Cascade 6
+/// §3.5), only the outermost scope's start says `&` for `subject`: a limit,
+/// and a scope nested in another, say it for the enclosing scope root,
+/// `:scope`.
+pub(crate) fn condition_preludes(
+    conditions: &[Condition],
+    subject: &str,
+    media_query: impl Fn(&str) -> Option<String>,
+) -> Option<Vec<String>> {
+    let mut scoped = false;
+    conditions
+        .iter()
+        .map(|condition| match condition {
+            Condition::Breakpoint(bp) => media_query(bp),
+            Condition::Scope(prelude) => {
+                let (start, limit) = scope_parts(prelude);
+                let start_subject = if scoped { ":scope" } else { subject };
+                scoped = true;
+                let start = crate::selector_subject::substitute_subjects(&start, start_subject);
+                let limit = limit.map(|limit| crate::selector_subject::substitute_subjects(&limit, ":scope"));
+                Some(scope_prelude(&start, limit.as_deref()))
+            }
+            other => other.prelude().map(str::to_string),
+        })
+        .collect()
+}
+
+/// `@scope (<start>) [to (<limit>)]` as (start, limit); a missing start is
+/// `&`, the rule the scope is written in.
+fn scope_parts(prelude: &str) -> (String, Option<String>) {
+    let rest = prelude.strip_prefix("@scope").unwrap_or(prelude).trim_start();
+    let (start, rest) = match parenthesized(rest) {
+        Some((inner, after)) => (inner.trim().to_string(), after.trim_start()),
+        None => ("&".to_string(), rest),
+    };
+    let limit = rest.strip_prefix("to").map(|limit| {
+        let limit = limit.trim_start();
+        parenthesized(limit).map_or_else(|| limit.trim().to_string(), |(inner, _)| inner.trim().to_string())
+    });
+    (start, limit)
+}
+
+fn scope_prelude(start: &str, limit: Option<&str>) -> String {
+    match limit {
+        Some(limit) => format!("@scope ({start}) to ({limit})"),
+        None => format!("@scope ({start})"),
+    }
+}
+
+/// The text inside a leading `(…)`, and what follows it; quotes and nested
+/// parentheses are skipped.
+fn parenthesized(text: &str) -> Option<(&str, &str)> {
+    if !text.starts_with('(') {
+        return None;
+    }
+    let mut depth = 0;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (at, c) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match (quote, c) {
+            (_, '\\') => escaped = true,
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(') => depth += 1,
+            (None, ')') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&text[1..at], &text[at + 1..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -592,9 +719,35 @@ impl NestFrame {
 
     fn with_condition(&self, condition: Condition, order: ConditionEmitOrder, key: &str, slot: usize) -> Self {
         let mut conditions = self.conditions.clone();
+        // A scope's start takes in the selector the scope is written under,
+        // and a start without `&` is relative to it, as nested CSS reads it.
+        // Inside, nesting starts again from the scope root.
+        let scope = condition.is_scope();
+        let condition = match condition {
+            Condition::Scope(prelude) => {
+                let (start, limit) = scope_parts(&prelude);
+                let anchor = self.selector.clone().unwrap_or_else(|| "&".to_string());
+                let anchors = split_top_level_commas(&anchor);
+                let start: Vec<String> = split_top_level_commas(&start)
+                    .iter()
+                    .flat_map(|branch| {
+                        let branch = branch.trim();
+                        anchors.iter().map(move |anchor| {
+                            if crate::selector_subject::has_subject(branch) {
+                                crate::selector_subject::substitute_subjects(branch, anchor.trim())
+                            } else {
+                                format!("{} {branch}", anchor.trim())
+                            }
+                        })
+                    })
+                    .collect();
+                Condition::Scope(scope_prelude(&start.join(", "), limit.as_deref()))
+            }
+            other => other,
+        };
         conditions.push(condition);
         Self {
-            selector: self.selector.clone(),
+            selector: if scope { None } else { self.selector.clone() },
             conditions,
             emit_order: Some(self.emit_order.clone().unwrap_or(order)),
             block: self.block,
@@ -1013,6 +1166,12 @@ fn resolve_entry(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDecla
     let failures_before = failures();
     let declarations = resolve_prop(key, value, ctx);
     if declarations.is_empty() && value.is_object() && failures() == failures_before {
+        if let Some((at_rule, block)) = value.as_object().into_iter().flatten().find(|(entry, _)| only_wraps_rules(entry, ctx)) {
+            let within = format!("the value of '{key}'");
+            let lost = format!("'{key}'");
+            record_dropped_key(ctx, DroppedStyleKey::AtRulePlacement { key: at_rule.clone(), within, lost, block: block.clone() });
+            return declarations;
+        }
         let key = key.to_string();
         record_dropped_key(
             ctx,
@@ -1164,6 +1323,16 @@ fn resolve_flat_styles(obj: &Map<String, Value>, ctx: &ResolveContext, nesting_u
 /// `path`, that emitted nothing, and failed no transform (which reports
 /// itself).
 fn record_nesting(ctx: &ResolveContext, path: &[String], key: &str, value: &Value, emitted_nothing: bool) {
+    if emitted_nothing && value.is_object() && only_wraps_rules(key, ctx) {
+        if let [selector, frame] = path {
+            if selector.starts_with("@keyframes") {
+                let within = format!("the keyframe frame '{frame}' of '{selector}'");
+                let lost = "its block".to_string();
+                record_dropped_key_at(ctx, path, DroppedStyleKey::AtRulePlacement { key: key.to_string(), within, lost, block: value.clone() });
+                return;
+            }
+        }
+    }
     if emitted_nothing && value.is_object() {
         let selector = path.first().cloned().unwrap_or_default();
         record_dropped_key_at(
@@ -1864,29 +2033,159 @@ pub fn unresolved_alias_spans(value: &str) -> Vec<String> {
     spans
 }
 
+/// The token path a brace alias's content names: `colors.primary/40`
+/// names `colors.primary`.
+fn alias_token_path(content: &str) -> String {
+    dot_path_to_flat_key(content.split_once('/').map_or(content, |(path, _)| path))
+}
+
+/// The theme tokens a literal's aliases expand through: those no variable
+/// stands for whose own literal holds aliases.
+fn expanded_tokens(literal: &str, theme: &FlatTheme, variable_map: &VariableMap) -> Vec<String> {
+    unresolved_alias_spans(literal)
+        .iter()
+        .map(|span| alias_token_path(&span[1..span.len() - 1]))
+        .filter(|key| !variable_map.contains_key(key) && theme.get(key).is_some_and(|literal| literal.contains('{')))
+        .collect()
+}
+
+/// The most bytes resolution expands one theme literal's aliases to. A
+/// chain of any length resolves, but a literal that repeats an alias can
+/// double at every link; past this bound the alias stays unresolved.
+const ALIAS_EXPANSION_LIMIT: usize = 1 << 20;
+
+/// Why a brace alias stayed unresolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnresolvedAlias {
+    /// It names no token.
+    Missing,
+    /// Its expansion reaches an alias cycle: the token paths from its own
+    /// to the first one met twice (`a → b → c → b`).
+    Cycle(Vec<String>),
+    /// Its expansion grows past `ALIAS_EXPANSION_LIMIT` bytes.
+    TooLarge,
+}
+
+/// Why `span`, a brace alias resolution left in a value, stayed unresolved.
+/// Resolution leaves an alias of a theme token whose literal holds aliases
+/// unresolved only when its expansion reaches a cycle or the size bound.
+pub fn unresolved_alias(span: &str, theme: &FlatTheme, variable_map: &VariableMap) -> UnresolvedAlias {
+    let content = span.strip_prefix('{').and_then(|rest| rest.strip_suffix('}')).unwrap_or(span);
+    let start = alias_token_path(content);
+    if variable_map.contains_key(&start) || !theme.get(&start).is_some_and(|literal| literal.contains('{')) {
+        return UnresolvedAlias::Missing;
+    }
+    // Depth first without recursion, so a chain of any length is walked:
+    // each token on the path, with the tokens its literal expands through
+    // still to visit.
+    let next_of = |token: &str| {
+        let mut next = expanded_tokens(&theme[token], theme, variable_map);
+        next.reverse();
+        next
+    };
+    let mut path = vec![(start.clone(), next_of(&start))];
+    let mut on_path: FxHashSet<String> = FxHashSet::from_iter([start]);
+    let mut done: FxHashSet<String> = FxHashSet::default();
+    while let Some((_, pending)) = path.last_mut() {
+        match pending.pop() {
+            Some(next) if on_path.contains(&next) => {
+                let mut cycle: Vec<String> = path.into_iter().map(|(token, _)| token).collect();
+                cycle.push(next);
+                return UnresolvedAlias::Cycle(cycle);
+            }
+            Some(next) if done.contains(&next) => {}
+            Some(next) => {
+                on_path.insert(next.clone());
+                let pending = next_of(&next);
+                path.push((next, pending));
+            }
+            None => {
+                if let Some((token, _)) = path.pop() {
+                    on_path.remove(&token);
+                    done.insert(token);
+                }
+            }
+        }
+    }
+    UnresolvedAlias::TooLarge
+}
+
 fn resolve_token_aliases(
     value: &str,
     theme: &FlatTheme,
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
 ) -> String {
-    resolve_aliases_within(value, theme, variable_map, contextual_vars, 0)
+    let mut literals = ResolvedLiterals::default();
+    substitute_aliases(value, usize::MAX, &mut |content| {
+        resolve_single_alias(content, theme, variable_map, contextual_vars, &mut literals)
+    })
+    .expect("a substitution without a size bound completes")
 }
 
-/// How deep a theme literal's own aliases expand. The theme build already
-/// rejects a reference cycle; past this depth an alias stays unresolved and
-/// is reported as one.
-const ALIAS_DEPTH_LIMIT: usize = 16;
+/// Theme literals that hold aliases, each resolved once per resolution:
+/// `None` for one whose expansion reaches an alias cycle or grows past
+/// `ALIAS_EXPANSION_LIMIT`, which stays unresolved.
+#[derive(Default)]
+struct ResolvedLiterals(FxHashMap<String, Option<String>>);
 
-fn resolve_aliases_within(
-    value: &str,
-    theme: &FlatTheme,
-    variable_map: &VariableMap,
-    contextual_vars: &ContextualVarsMap,
-    depth: usize,
-) -> String {
+impl ResolvedLiterals {
+    /// `key`'s literal, which holds aliases, with them resolved. A chain of
+    /// any length resolves without recursion: a literal resolves once every
+    /// literal it expands through has.
+    fn resolve(
+        &mut self,
+        key: &str,
+        theme: &FlatTheme,
+        variable_map: &VariableMap,
+        contextual_vars: &ContextualVarsMap,
+    ) -> Option<String> {
+        if let Some(resolved) = self.0.get(key) {
+            return resolved.clone();
+        }
+        let mut chain = vec![key.to_string()];
+        let mut on_chain: FxHashSet<String> = FxHashSet::from_iter([key.to_string()]);
+        while let Some(token) = chain.last().cloned() {
+            let literal = &theme[&token];
+            let pending = expanded_tokens(literal, theme, variable_map)
+                .into_iter()
+                .find(|next| !self.0.contains_key(next));
+            match pending {
+                Some(next) if !on_chain.contains(&next) => {
+                    on_chain.insert(next.clone());
+                    chain.push(next);
+                    continue;
+                }
+                Some(_) => {
+                    self.0.insert(token.clone(), None);
+                }
+                None => {
+                    // One unresolved literal it expands through leaves it unresolved too.
+                    let blocked =
+                        expanded_tokens(literal, theme, variable_map).iter().any(|next| self.0[next].is_none());
+                    let resolved = (!blocked)
+                        .then(|| {
+                            substitute_aliases(literal, ALIAS_EXPANSION_LIMIT, &mut |content| {
+                                resolve_single_alias(content, theme, variable_map, contextual_vars, self)
+                            })
+                        })
+                        .flatten();
+                    self.0.insert(token.clone(), resolved);
+                }
+            }
+            chain.pop();
+            on_chain.remove(&token);
+        }
+        self.0.get(key).cloned().flatten()
+    }
+}
+
+/// `value` with each `{…}` alias replaced by what `alias` makes of its
+/// content; an unclosed `{` keeps the rest of the value as written. `None`
+/// once the result grows past `limit` bytes.
+fn substitute_aliases(value: &str, limit: usize, alias: &mut dyn FnMut(&str) -> String) -> Option<String> {
     if !value.contains('{') {
-        return value.to_string();
+        return (value.len() <= limit).then(|| value.to_string());
     }
 
     let mut result = String::with_capacity(value.len());
@@ -1894,7 +2193,6 @@ fn resolve_aliases_within(
 
     while let Some((i, ch)) = chars.next() {
         if ch == '{' {
-            let _start = i;
             let mut end = None;
             let content_start = i + 1;
             while let Some(&(j, c)) = chars.peek() {
@@ -1906,9 +2204,10 @@ fn resolve_aliases_within(
             }
 
             if let Some(end_idx) = end {
-                let alias_content = &value[content_start..end_idx];
-                let resolved = resolve_single_alias(alias_content, theme, variable_map, contextual_vars, depth);
-                result.push_str(&resolved);
+                result.push_str(&alias(&value[content_start..end_idx]));
+                if result.len() > limit {
+                    return None;
+                }
             } else {
                 result.push('{');
                 result.push_str(&value[content_start..]);
@@ -1919,7 +2218,8 @@ fn resolve_aliases_within(
         }
     }
 
-    result
+    // Text after the last alias counts toward the bound too.
+    (result.len() <= limit).then_some(result)
 }
 
 /// A colour token's opacity modifier: a percentage from 0 to 100, decimals
@@ -1939,7 +2239,7 @@ fn resolve_single_alias(
     theme: &FlatTheme,
     variable_map: &VariableMap,
     contextual_vars: &ContextualVarsMap,
-    depth: usize,
+    literals: &mut ResolvedLiterals,
 ) -> String {
     // A malformed modifier keeps its old reading: an integer, or none.
     let (token_path, alpha) = match content.split_once('/') {
@@ -1956,11 +2256,15 @@ fn resolve_single_alias(
         format!("var({})", var_name)
     } else if let Some(literal) = theme.get(&flat_key) {
         // A literal can itself hold aliases, a contextual variable among
-        // them, when the theme was built before they resolved there.
-        if literal.contains('{') && depth < ALIAS_DEPTH_LIMIT {
-            resolve_aliases_within(literal, theme, variable_map, contextual_vars, depth + 1)
-        } else {
+        // them, when the theme was built before they resolved there. One
+        // whose expansion reaches an alias cycle or the size bound stays
+        // unresolved (`unresolved_alias`).
+        if !literal.contains('{') {
             literal.clone()
+        } else if let Some(resolved) = literals.resolve(&flat_key, theme, variable_map, contextual_vars) {
+            resolved
+        } else {
+            return format!("{{{}}}", content);
         }
     } else if let Some(dot_idx) = token_path.find('.') {
         let scale_name = &token_path[..dot_idx];
@@ -2133,6 +2437,17 @@ pub fn resolve_global_block(
         // only, as before; a block nested under one is reported.
         if selector.starts_with('@') {
             let path = std::slice::from_ref(selector);
+            // Declarations straight under `@starting-style` style nothing.
+            if matches!(condition_from_raw_key(selector), Some(Condition::StartingStyle(_))) {
+                let dropped = DroppedStyleKey::AtRulePlacement {
+                    key: selector.clone(),
+                    within: "a global block's top level".to_string(),
+                    lost: "its block".to_string(),
+                    block: style_obj.clone(),
+                };
+                record_dropped_key_at(ctx, &[], dropped);
+                continue;
+            }
             let decls = if selector.starts_with("@font-face") {
                 resolve_descriptors(style_map, ctx, path)
             } else {
@@ -2249,21 +2564,23 @@ fn push_global_rules(
             }
         }
     }
+    // A scope's `&` is the global's selector, a list kept whole.
+    let scope_subject =
+        if split_top_level_commas(selector).len() > 1 { format!(":is({branches})") } else { branches.clone() };
     for group in resolved.conditioned_emission_order() {
-        let preludes: Option<Vec<String>> = group
-            .conditions
-            .iter()
-            .map(|condition| match condition {
-                Condition::Breakpoint(bp) => breakpoints.media_query(bp),
-                other => other.prelude().map(str::to_string),
-            })
-            .collect();
+        let preludes = condition_preludes(&group.conditions, &scope_subject, |bp| breakpoints.media_query(bp));
         let Some(preludes) = preludes.filter(|p| !p.is_empty()) else {
             continue;
         };
+        // Within a scope the rule is the scope root.
+        let rule = if group.conditions.iter().any(Condition::is_scope) {
+            group.selector.as_deref().map_or_else(|| SCOPE_ROOT.to_string(), |nested| compose_selectors(SCOPE_ROOT, nested))
+        } else {
+            subject(&group.selector)
+        };
         for (part, origin) in crate::css::supplied_parts(&group.declarations, &group.suppliers) {
             if !part.is_empty() {
-                placed.push((global_conditioned_rule(&preludes, &subject(&group.selector), &part), origin));
+                placed.push((global_conditioned_rule(&preludes, &rule, &part), origin));
             }
         }
     }
