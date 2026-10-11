@@ -1326,14 +1326,15 @@ pub(crate) fn extract_file_facts_from_static_maps(
                     match object_index.get(key) {
                         Some(obj) => match eval::parse_variant_arg(obj, Some(statics)) {
                             Ok((cfg, skips)) => {
-                                let mut value = serde_json::json!({
+                                let value = serde_json::json!({
                                     "prop": cfg.prop,
                                     "defaultVariant": cfg.default_variant,
                                     "base": cfg.base,
                                     "variants": Value::Object(cfg.variants),
                                 });
-                                let lost = eval::take_lost_values(&mut value);
-                                facts.value = Some(value);
+                                let mut typed = eval::typed(&value);
+                                let lost = eval::take_unevaluated(&mut typed);
+                                facts.value = Some(eval::marked(&typed));
                                 for skip in skips {
                                     facts.record_skip(skip, source);
                                 }
@@ -1448,14 +1449,16 @@ pub(crate) fn extract_file_facts_from_static_maps(
                             }
                             facts.value = value;
                             if let Some(value) = facts.value.as_mut() {
+                                let mut typed = eval::typed(value);
                                 if props {
-                                    let lost = eval::take_lost_custom_props(value);
+                                    let lost = eval::take_unevaluated_custom_props(&mut typed);
                                     facts.dropped_transforms.extend(lost.transforms);
                                     facts.dropped_configs.extend(lost.configs);
                                     facts.skipped.extend(lost.skipped);
                                 } else {
-                                    facts.skipped.extend(eval::take_lost_values(value));
+                                    facts.skipped.extend(eval::take_unevaluated(&mut typed));
                                 }
+                                *value = eval::marked(&typed);
                             }
                         }
                         Err(e) => {
@@ -1481,9 +1484,10 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                     obj,
                                     Some(statics),
                                 ) {
-                                    Ok((mut v, skips, _captures)) => {
-                                        let lost = eval::take_lost_values(&mut v);
-                                        facts.second_value = Some(v);
+                                    Ok((v, skips, _captures)) => {
+                                        let mut typed = eval::typed(&v);
+                                        let lost = eval::take_unevaluated(&mut typed);
+                                        facts.second_value = Some(eval::marked(&typed));
                                         for skip in skips {
                                             facts.record_skip(skip, source);
                                         }
@@ -1799,6 +1803,55 @@ mod tests {
             let stage = &facts.chains[0].stages[0];
             let seen = serde_json::json!({ "value": stage.value, "skipped": stage.skipped, "eval_error": stage.eval_error });
             assert_eq!(seen, serde_json::from_str::<Value>(expected).unwrap(), "{chain}");
+        }
+    }
+
+    /// Contract: a stage takes an authored marker key that a spread copies
+    /// in, nested, as main did: a `$animus.lost` key is a skip, one with a
+    /// `$animus.capture` key is taken without one. A `.props()` config's
+    /// lost `transform` is removed as JSON's map removed it, the last entry
+    /// taking its place, which the config's class reads. An object that
+    /// spells the asset marker with more fields is read through those
+    /// fields, as its JSON was.
+    #[test]
+    fn a_stage_takes_copied_marker_keys_as_main_did() {
+        let rows: [(&str, &str); 5] = [
+            (
+                "const nested = { ':hover': { '$animus.lost': 'authored', padding: 4 }, color: 'red' };\n\
+                 export const A = ds.styles({ ...nested }).asElement('div');",
+                r#"{"value": {"color": "red"}, "skipped": [[":hover", "authored"]], "dropped_transforms": []}"#,
+            ),
+            (
+                "const nested = { ':hover': { '$animus.lost': 'authored', '$animus.capture': false, padding: 4 }, color: 'red' };\n\
+                 export const A = ds.styles({ ...nested }).asElement('div');",
+                r#"{"value": {"color": "red"}, "skipped": [], "dropped_transforms": []}"#,
+            ),
+            (
+                "const cfg = { tone: { transform: { '$animus.lost': 'authored' }, property: 'color', scale: 'colors' }, gap: { property: 'gap' } };\n\
+                 export const A = ds.props(cfg).asElement('div');",
+                r#"{"value": {"tone": {"scale": "colors", "property": "color"}, "gap": {"property": "gap"}}, "skipped": [], "dropped_transforms": [["tone", "authored"]]}"#,
+            ),
+            (
+                "const preset = { '$animus.asset': 'package', extra: { '$animus.lost': 'nested' }, padding: 4 };\n\
+                 export const A = ds.styles(preset).asElement('div');",
+                r#"{"value": {"$animus.asset": "package", "padding": 4}, "skipped": [["extra", "nested"]], "dropped_transforms": []}"#,
+            ),
+            (
+                "const box = { a: { '$animus.asset': 'package', extra: { '$animus.lost': 'nested' }, padding: 4 } };\n\
+                 export const A = ds.styles({ p: box.a.padding }).asElement('div');",
+                r#"{"value": {"p": 4}, "skipped": [], "dropped_transforms": []}"#,
+            ),
+        ];
+        for (source, expected) in rows {
+            let facts = facts_for(source);
+            let stage = &facts.chains[0].stages[0];
+            let seen = serde_json::json!({
+                "value": stage.value,
+                "skipped": stage.skipped,
+                "dropped_transforms": stage.dropped_transforms,
+            });
+            // Compared as text, so the order of a config's keys counts.
+            assert_eq!(seen.to_string(), serde_json::from_str::<Value>(expected).unwrap().to_string(), "{source}");
         }
     }
 
