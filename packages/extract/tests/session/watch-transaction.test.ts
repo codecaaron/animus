@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
-  analyzeProject: vi.fn(),
+  analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
   clearAnalysisCache: vi.fn(),
 }));
 
@@ -26,9 +26,12 @@ import {
   BUTTON_STYLE_EDIT as BUTTON_SOURCE_CHANGED,
   createProject as createFixtureProject,
   disposeTempRoots,
+  lastAnalyzedFiles,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from './session-fixtures';
+
+import type { AnalyzeProjectArgs } from '../../pipeline';
 
 let restoreGlobals: () => void;
 
@@ -151,6 +154,48 @@ describe('single-flight watch transaction', () => {
     await Promise.all([pipeline, joiner]);
     expect(mocks.analyzeProject.mock.calls.length).toBe(1);
     expect(getWatchTransaction(session.key)).toBeNull();
+  });
+
+  /** Contract: an observation that arrives during a failing attempt is
+   *  never lost. It runs next; the failure is the failing attempt's own. */
+  test('an observation that arrives during a failing attempt is never lost', async () => {
+    const root = createProject();
+    const owner = await startOwner(root);
+    // A participant of the owner's build, whose compiler sees another file.
+    const follower = new ExtractionSession(
+      { system: './src/system.ts' },
+      { build: owner.sessionId }
+    );
+    follower.rootDir = root;
+
+    const failing = makeSuspendingBatch(root);
+    const published = buildManifest('.later{margin:4px;}');
+    mocks.analyzeProject
+      .mockImplementationOnce(() => {
+        throw new Error('attempt boom');
+      })
+      .mockImplementation(() => published);
+
+    const first = owner.handleWatchUpdate({
+      modifiedFiles: failing,
+      removedFiles: new Set(),
+    });
+    const laterPath = join(root, 'src', 'Later.tsx');
+    const laterSource = 'export const later = 1;\n';
+    writeFileSync(laterPath, laterSource);
+    const later = follower.handleWatchUpdate({
+      modifiedFiles: new Set([laterPath]),
+      removedFiles: new Set(),
+    });
+
+    await expect(first).rejects.toThrow('attempt boom');
+    await later;
+    const analyzed = lastAnalyzedFiles(mocks.analyzeProject);
+    expect(
+      analyzed.find((entry) => entry.path === 'src/Later.tsx')?.source
+    ).toBe(laterSource);
+    expect(getManifestJson(owner.key)).toBe(published);
+    expect(getWatchTransaction(owner.key)).toBeNull();
   });
 
   test('a failed transaction rejects every joiner and clears the gate', async () => {
