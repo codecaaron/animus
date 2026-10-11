@@ -932,10 +932,11 @@ test('an imported kit the system does not include is an error', () => {
   };
 
   const found = importedKitDiagnostics(
-    [{ path: 'src/App.tsx', source: '' }],
+    [{ path: 'src/App.tsx', source: '', hash: '' }],
     engine,
     root,
-    ['@acme/included', '@acme/legacy']
+    ['@acme/included', '@acme/legacy'],
+    () => JSON.parse(engine.extractFacts())
   );
   rmSync(root, { recursive: true, force: true });
 

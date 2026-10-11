@@ -90,6 +90,19 @@ const NO_SHEETS: AssetSheets = {
   componentCss: '',
 };
 
+/** One environment's build, as Vite hands it to a hook: the object is its
+ *  identity, the name its key. */
+export interface BuildingEnvironment {
+  readonly name: string;
+}
+
+/** An environment's open build, and the promise its end settles. */
+interface OpenBuild {
+  environment: BuildingEnvironment;
+  ended: Promise<void>;
+  end(): void;
+}
+
 export class PluginContext {
   readonly options: AnimusExtractOptions;
   readonly verbose: boolean;
@@ -437,6 +450,43 @@ export class PluginContext {
     this.externalSourceSideEffects = session.externalSourceSideEffects;
     this.externalPackageOutcomes = session.lastExternalOutcomes;
     this.applyAssetSubstitutions();
+  }
+
+  /** The environment a host without environments builds as. */
+  readonly singleEnvironment: BuildingEnvironment = { name: 'build' };
+
+  /** Each environment build that started and has not ended, by name. A
+   *  custom `buildApp` builds a shared plugin's environments in parallel, so
+   *  the context's build retires with the last of them, not the first. */
+  private readonly openBuilds = new Map<string, OpenBuild>();
+
+  /** Opens `environment`'s build, after any open build under its name has
+   *  ended: a builder reused while an earlier build still runs, or a second
+   *  environment under one name, builds after it rather than beside it.
+   *  Each build then ends its own generation once, in `buildEnd`. */
+  async openBuild(environment: BuildingEnvironment): Promise<void> {
+    for (;;) {
+      const open = this.openBuilds.get(environment.name);
+      if (open === undefined) break;
+      await open.ended;
+    }
+    let end = () => {};
+    const ended = new Promise<void>((settle) => {
+      end = settle;
+    });
+    this.openBuilds.set(environment.name, { environment, ended, end });
+  }
+
+  /** Ends `environment`'s open build; whether that left none open. Vite
+   *  ends each build once, in `buildEnd`, and a dev server ends only the
+   *  environments that started, so only the build that opened an entry
+   *  ends it. */
+  endBuild(environment: BuildingEnvironment): boolean {
+    const open = this.openBuilds.get(environment.name);
+    if (open === undefined || open.environment !== environment) return false;
+    this.openBuilds.delete(environment.name);
+    open.end();
+    return this.openBuilds.size === 0;
   }
 
   /** Retires this context's build when Vite closes it: the Session leaves

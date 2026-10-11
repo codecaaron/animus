@@ -206,14 +206,18 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       applyResolvedConfig(ctx, config);
     },
 
-    // The end of a build, and of a dev server, which Vite closes the same
-    // way: the context's Session and engine are retired with it.
-    closeBundle() {
+    // The end of a build, and of a dev server, which Vite ends the same way:
+    // the last open environment build retires the context's Session and
+    // engine. buildEnd runs once per build, failed ones included; closeBundle
+    // can run twice for a failed one.
+    buildEnd() {
+      if (!ctx.endBuild(this.environment ?? ctx.singleEnvironment)) return;
       cancelSystemReload(ctx);
       ctx.close();
     },
 
     async buildStart() {
+      await ctx.openBuild(this.environment ?? ctx.singleEnvironment);
       await runBuildStart(
         ctx,
         async (specifier, importer) => {
