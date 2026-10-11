@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveConfig } from 'vite';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -26,11 +26,21 @@ afterEach(() => {
 
 /** A dev server's first pass over an app whose global sheet names one
  *  asset(): the context, the asset's source file and its specifier. */
-async function serveWithAsset(cacheDir?: string) {
-  const { app } = createKitWorkspace();
-  const logo = join(app, 'logo.svg');
-  writeFileSync(logo, '<svg id="v1"/>');
-  const specifier = './logo.svg';
+interface ServeOptions {
+  cacheDir?: string;
+  /** The asset lives outside the app root. */
+  outsideRoot?: boolean;
+  fs?: { strict?: boolean; deny?: string[] };
+  /** Paths the dev server's watcher is asked to add. */
+  watched?: string[];
+  logoBytes?: string;
+}
+
+async function serveWithAsset(options: ServeOptions = {}) {
+  const { app, parent } = createKitWorkspace();
+  const logo = join(options.outsideRoot ? parent : app, 'logo.svg');
+  writeFileSync(logo, options.logoBytes ?? '<svg id="v1"/>');
+  const specifier = options.outsideRoot ? '../logo.svg' : './logo.svg';
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   const ctx = new PluginContext({ system: './src/system.ts' }, () => ({
     loadSystemModule: () => ({
@@ -56,10 +66,20 @@ async function serveWithAsset(cacheDir?: string) {
   applyResolvedConfig(
     ctx,
     await resolveConfig(
-      { configFile: false, root: app, logLevel: 'silent', cacheDir },
+      {
+        configFile: false,
+        root: app,
+        logLevel: 'silent',
+        cacheDir: options.cacheDir,
+        server: { fs: options.fs },
+      },
       'serve'
     )
   );
+  if (options.watched) {
+    const watched = options.watched;
+    ctx.devServer = { watcher: { add: (path: string) => watched.push(path) } };
+  }
   await runBuildStart(ctx, async (asked) =>
     asked === specifier ? logo : resolve(app, 'src', asked)
   );
@@ -88,9 +108,46 @@ describe('a Vite dev asset URL names an immutable copy', () => {
 
   test('a cacheDir the dev server does not serve keeps the live file', async () => {
     const outside = makeTempRoot('animus-outside-cache-');
-    const { ctx, logo, specifier } = await serveWithAsset(outside);
+    const { ctx, logo, specifier } = await serveWithAsset({
+      cacheDir: outside,
+    });
 
     expect(ctx.assetCopyDir).toBeNull();
     expect(servedFile(ctx.assetUrlBySpecifier.get(specifier)!)).toBe(logo);
+  });
+});
+
+describe('a Vite dev asset copy is served and kept', () => {
+  test('an asset outside the root is watched once its copy exists', async () => {
+    const watched: string[] = [];
+    const { logo } = await serveWithAsset({ outsideRoot: true, watched });
+
+    expect(watched).toContain(logo);
+  });
+
+  test('a copy directory server.fs.deny refuses keeps the live file', async () => {
+    const { ctx, logo, specifier } = await serveWithAsset({
+      fs: { deny: ['**/animus-assets/**'] },
+    });
+
+    expect(ctx.assetCopyDir).toBeNull();
+    expect(servedFile(ctx.assetUrlBySpecifier.get(specifier)!)).toBe(logo);
+  });
+
+  test("a second server sharing the cacheDir keeps the first's copies, and a dead process's go", async () => {
+    const cacheDir = makeTempRoot('animus-shared-cache-');
+    const deadCopies = join(cacheDir, 'animus-assets', '2147483646');
+    mkdirSync(deadCopies, { recursive: true });
+    writeFileSync(join(deadCopies, 'old.abcd1234.svg'), '<svg/>');
+    const fs = { strict: false };
+    const first = await serveWithAsset({ cacheDir, fs });
+    const firstCopy = servedFile(
+      first.ctx.assetUrlBySpecifier.get(first.specifier)!
+    );
+
+    await serveWithAsset({ cacheDir, fs, logoBytes: '<svg id="other"/>' });
+
+    expect(existsSync(firstCopy)).toBe(true);
+    expect(existsSync(deadCopies)).toBe(false);
   });
 });
