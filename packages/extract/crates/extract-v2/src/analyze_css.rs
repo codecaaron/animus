@@ -13517,6 +13517,32 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// A path that names no analysed file may still be a module at run time
+    /// (excluded, generated, or in a language the analysis does not read),
+    /// which may re-export any analysed object: re-exporting its namespace,
+    /// or loading it with `import()` or `require()`, leaves every member
+    /// table unproven. A data or asset file imports nothing.
+    #[test]
+    fn a_write_through_a_module_the_analysis_cannot_find_reaches_any_exported_object() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        let rows: [(&[(&str, &str)], bool); 6] = [
+            (&[("mutate.ts", "export * as ns from './generated';\n")], true),
+            (&[("mutate.ts", "import('./generated').then((m) => { m.Fam.Box = () => null; });\n")], true),
+            (&[("mutate.ts", "require('./generated.js').Fam.Box = () => null;\n")], true),
+            (&[("mutate.ts", "import('./data.json').then((data) => { data.Fam = null; });\n")], false),
+            (&[("mutate.ts", "import('./icon.svg?url').then((icon) => { icon.Fam = null; });\n")], false),
+            (&[("mutate.ts", "require('./styles.css');\n")], false),
+        ];
+        for (more, warns) in rows {
+            let mut files = vec![("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app)];
+            files.extend_from_slice(more);
+            let out = analyze_with_logical_space(&files);
+            assert_eq!(unattributed(&out).len(), usize::from(warns), "{more:?}: {:?}", out.diagnostics);
+        }
+    }
+
     /// Code a module runs from a string can `import()` any module and
     /// rebind what an exported object holds, so a member tag of one
     /// rendered elsewhere is not proven; a module running none leaves it.
