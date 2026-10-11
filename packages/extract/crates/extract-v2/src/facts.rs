@@ -472,11 +472,13 @@ pub struct FileFacts {
     /// more than read joins `unsafe_object_uses`.
     #[serde(skip)]
     pub(crate) object_handoffs: Vec<crate::usage_facts::Handoff>,
-    /// Namespace imports whose every whole use is a computed member read
-    /// (`icons[name]`) whose value no use writes through, hands on or
-    /// exports: such a read only reads a member.
+    /// Each namespace import some use may write through, with the first
+    /// such use and what it names: a member written or deleted, a member's
+    /// value (`ui.Fam`, `icons[name]`) handed on, exported, or bound to a
+    /// `const` that is then written or handed on, or the namespace used
+    /// whole. Reading, storing, rendering or calling a member writes nothing.
     #[serde(skip)]
-    pub(crate) namespace_member_reads: BTreeSet<String>,
+    pub(crate) written_namespaces: BTreeMap<String, (String, crate::usage_facts::ObjectUse)>,
     /// How each of the module's functions treats an object passed to it.
     #[serde(skip)]
     pub(crate) param_readings: crate::usage_facts::ParamReadings,
@@ -1521,7 +1523,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         spread_wrappers,
         unsafe_object_uses,
         object_handoffs,
-        namespace_member_reads,
+        written_namespaces,
         ordinary_components,
         context_consts,
         prop_tags,
@@ -1581,7 +1583,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         facades: const_initializers.facades,
         unsafe_object_uses,
         object_handoffs,
-        namespace_member_reads,
+        written_namespaces,
         param_readings,
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,

@@ -162,12 +162,6 @@ enum UnreadNamespace {
     Package,
 }
 
-/// Whether a use, as the scan says it, writes or deletes a member below the
-/// binding (`has its member Box assigned`).
-fn writes_member(what: &str) -> bool {
-    what.starts_with("has ") && (what.ends_with(" assigned") || what.ends_with(" deleted"))
-}
-
 /// An object whose members a member tag reads.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Object {
@@ -670,12 +664,12 @@ impl<'f> ObjectMembers<'f> {
                 let reason = format!("{name} {} in {module}{line}", used.what);
                 let held: Vec<Object> = match name.split_once('.') {
                     // A member of a namespace import.
-                    // A module the analysis cannot find, or a package, may
-                    // re-export any object under any name: a write through a
-                    // member of its namespace may reach any of them.
+                    // A module the analysis cannot find may re-export any
+                    // object under any name: a write through a member of its
+                    // namespace may reach any of them. A package's namespace
+                    // is followed below.
                     Some((namespace, member)) => match self.unread_namespace(module, ff, namespace) {
                         Some(UnreadNamespace::Missing) => self.every_exported_object(),
-                        Some(UnreadNamespace::Package) if writes_member(&used.what) => self.every_exported_object(),
                         Some(UnreadNamespace::Package) => Vec::new(),
                         None => match ff
                             .namespace_imports
@@ -691,10 +685,8 @@ impl<'f> ObjectMembers<'f> {
                     },
                     None => match ff.namespace_imports.get(name) {
                         Some(spec) => match self.unread_namespace(module, ff, name) {
-                            // Reading a member a key names reaches none of a
-                            // package's objects.
-                            Some(UnreadNamespace::Package) if ff.namespace_member_reads.contains(name) => Vec::new(),
-                            Some(_) => self.every_exported_object(),
+                            Some(UnreadNamespace::Package) => Vec::new(),
+                            Some(UnreadNamespace::Missing) => self.every_exported_object(),
                             None => resolve_import_source(module, spec, files, inputs)
                                 .map(|target| self.namespace_objects(&target))
                                 .unwrap_or_default(),
@@ -716,6 +708,19 @@ impl<'f> ObjectMembers<'f> {
                 };
                 // A write to an assigned facade's target changes the facade.
                 for object in held.into_iter().chain(self.facades_on(module, ff, name)) {
+                    found.entry(object).or_insert_with(|| reason.clone());
+                }
+            }
+            // A package may re-export our objects (a linked workspace
+            // package) under any name: a use that may write through its
+            // namespace may reach any of them.
+            for (namespace, (subject, used)) in &ff.written_namespaces {
+                if !matches!(self.unread_namespace(module, ff, namespace), Some(UnreadNamespace::Package)) {
+                    continue;
+                }
+                let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
+                let reason = format!("{subject} {} in {module}{line}", used.what);
+                for object in self.every_exported_object() {
                     found.entry(object).or_insert_with(|| reason.clone());
                 }
             }

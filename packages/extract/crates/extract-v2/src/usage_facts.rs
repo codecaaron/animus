@@ -823,8 +823,8 @@ pub(crate) struct EnrichedUsage {
     pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::object_handoffs`.
     pub object_handoffs: Vec<Handoff>,
-    /// See `FileFacts::namespace_member_reads`.
-    pub namespace_member_reads: BTreeSet<String>,
+    /// See `FileFacts::written_namespaces`.
+    pub written_namespaces: BTreeMap<String, (String, ObjectUse)>,
     /// See `FileFacts::ordinary_components`.
     pub ordinary_components: BTreeSet<String>,
     /// See `FileFacts::context_consts`.
@@ -1038,9 +1038,9 @@ pub(crate) fn collect_enriched_usage(
     }
     // Read through the scopes every module builds, so a module with no
     // import or chain still records what may change its objects.
-    let (unsafe_object_uses, object_handoffs, namespace_member_reads) = match origins {
+    let (unsafe_object_uses, object_handoffs, written_namespaces) = match origins {
         Some(scoping) => unsafe_object_uses(program, scoping, &watched, assigned_targets),
-        None => (BTreeMap::new(), Vec::new(), BTreeSet::new()),
+        None => (BTreeMap::new(), Vec::new(), BTreeMap::new()),
     };
     let (opaque_calls, opaque_tags, element_consts) =
         origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
@@ -1055,7 +1055,7 @@ pub(crate) fn collect_enriched_usage(
         spread_wrappers,
         unsafe_object_uses,
         object_handoffs,
-        namespace_member_reads,
+        written_namespaces,
         ordinary_components,
         context_consts,
         prop_tags,
@@ -1710,18 +1710,23 @@ fn unsafe_object_uses(
     scoping: &Scoping,
     object_consts: &BTreeMap<&str, bool>,
     assigned_targets: &BTreeSet<&str>,
-) -> (BTreeMap<String, ObjectUse>, Vec<Handoff>, BTreeSet<String>) {
+) -> (BTreeMap<String, ObjectUse>, Vec<Handoff>, BTreeMap<String, (String, ObjectUse)>) {
     let candidates = object_bindings(program, scoping, object_consts, assigned_targets);
     if candidates.is_empty() {
-        return (BTreeMap::new(), Vec::new(), BTreeSet::new());
+        return (BTreeMap::new(), Vec::new(), BTreeMap::new());
     }
     if scoping.root_unresolved_references().contains_key("eval") {
         // Direct eval can reach any binding by name.
         let what = ObjectUse { line: None, what: "can be changed by a direct eval".to_string() };
+        let written = candidates
+            .values()
+            .filter(|binding| binding.namespace)
+            .map(|binding| (binding.name.clone(), (binding.name.clone(), what.clone())))
+            .collect();
         return (
             candidates.into_values().map(|binding| (binding.name, what.clone())).collect(),
             Vec::new(),
-            BTreeSet::new(),
+            written,
         );
     }
     let mut member_consts = MemberConsts {
@@ -1753,16 +1758,14 @@ fn unsafe_object_uses(
         handoffs: Vec::new(),
         flat_reads: Vec::new(),
         member_consts: member_consts.consts,
-        member_reads: BTreeSet::new(),
-        whole_uses: BTreeSet::new(),
+        written_namespaces: BTreeMap::new(),
     };
     scan.visit_program(program);
-    let member_reads = scan.member_reads.difference(&scan.whole_uses).cloned().collect();
-    (scan.uses, scan.handoffs, member_reads)
+    (scan.uses, scan.handoffs, scan.written_namespaces)
 }
 
-/// Each `const` a computed member of a namespace import initializes
-/// (`const Icon = icons[name]`), with the namespace, unless the module
+/// Each `const` a member of a namespace import initializes (`const Icon =
+/// icons[name]`, `const C = ui.Fam`), with the namespace, unless the module
 /// exports it.
 struct MemberConsts<'s> {
     scoping: &'s Scoping,
@@ -1788,8 +1791,13 @@ impl<'a> Visit<'a> for MemberConsts<'_> {
         if let (VariableDeclarationKind::Const, BindingPattern::BindingIdentifier(id), Some(init)) =
             (declarator.kind, &declarator.id, &declarator.init)
         {
-            if let Expression::ComputedMemberExpression(member) = crate::chain_walk::unwrap_type_assertions(init) {
-                if let Expression::Identifier(object) = crate::chain_walk::unwrap_type_assertions(&member.object) {
+            let object = match crate::chain_walk::unwrap_type_assertions(init) {
+                Expression::ComputedMemberExpression(member) => Some(&member.object),
+                Expression::StaticMemberExpression(member) => Some(&member.object),
+                _ => None,
+            };
+            if let Some(object) = object {
+                if let Expression::Identifier(object) = crate::chain_walk::unwrap_type_assertions(object) {
                     let namespace = object
                         .reference_id
                         .get()
@@ -1848,8 +1856,7 @@ pub(crate) fn style_object_uses(
         handoffs: Vec::new(),
         flat_reads: Vec::new(),
         member_consts: FxHashMap::default(),
-        member_reads: BTreeSet::new(),
-        whole_uses: BTreeSet::new(),
+        written_namespaces: BTreeMap::new(),
     };
     scan.visit_program(program);
     StyleObjectFacts {
@@ -2512,10 +2519,8 @@ struct ObjectUseScan<'a, 's> {
     flat_reads: Vec<(String, ObjectUse)>,
     /// See `MemberConsts`; empty in style mode.
     member_consts: FxHashMap<SymbolId, String>,
-    /// Namespaces with a computed member read whose value no use may write.
-    member_reads: BTreeSet<String>,
-    /// Namespaces with any other whole use.
-    whole_uses: BTreeSet<String>,
+    /// See `FileFacts::written_namespaces`.
+    written_namespaces: BTreeMap<String, (String, ObjectUse)>,
 }
 
 impl<'a> ObjectUseScan<'a, '_> {
@@ -2525,32 +2530,48 @@ impl<'a> ObjectUseScan<'a, '_> {
         self.source[..start].matches('\n').count() + 1
     }
 
-    /// Whether a use may write the member value at `span`, read through a
-    /// computed member of a namespace import or a `const` it initializes:
-    /// writing through it, handing it on or exporting it. Initializing a
-    /// `const` in `member_consts` leaves the answer to that `const`'s uses;
-    /// storing it, passing it as a prop and calling it only read it.
-    fn writes_member_value<'b>(&self, span: Span, ancestors: impl Iterator<Item = &'b AstKind<'a>> + Clone) -> bool
+    /// How a use may write the member value at `span`, read through a
+    /// member of a namespace import or a `const` it initializes: writing
+    /// through it, handing it on or exporting it. Initializing a `const` in
+    /// `member_consts` leaves the answer to that `const`'s uses; storing it,
+    /// passing it as a prop and calling it only read it.
+    fn member_value_write<'b>(
+        &self,
+        span: Span,
+        ancestors: impl Iterator<Item = &'b AstKind<'a>> + Clone,
+    ) -> Option<String>
     where
         'a: 'b,
     {
         let (current, parent) = peel_wrappers(span, &mut ancestors.clone());
         match parent {
-            Some(AstKind::ExportSpecifier(_) | AstKind::ExportDefaultDeclaration(_)) => return true,
+            Some(AstKind::ExportSpecifier(_) | AstKind::ExportDefaultDeclaration(_)) => {
+                return Some("is exported".to_string());
+            }
             Some(AstKind::VariableDeclarator(declarator))
                 if declarator.init.as_ref().map(GetSpan::span) == Some(current)
                     && matches!(&declarator.id, oxc::ast::ast::BindingPattern::BindingIdentifier(id)
                         if id.symbol_id.get().is_some_and(|symbol| self.member_consts.contains_key(&symbol))) =>
             {
-                return false;
+                return None;
             }
             _ => {}
         }
-        object_use(span, ancestors, false, self.global_object, false).is_some_and(|what| {
+        object_use(span, ancestors, false, self.global_object, false).filter(|what| {
             !matches!(what.as_str(), "is called" | "is stored in an object" | "is stored in an array" | "is passed as a prop")
                 && !what.ends_with(" called as a method")
         })
     }
+}
+
+/// Records `namespace`'s first use that may write through it.
+fn written_through(
+    written: &mut BTreeMap<String, (String, ObjectUse)>,
+    namespace: &str,
+    subject: String,
+    used: ObjectUse,
+) {
+    written.entry(namespace.to_string()).or_insert((subject, used));
 }
 
 impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
@@ -2567,9 +2588,11 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
             return;
         };
         let Some(symbol) = reference.symbol_id() else { return };
-        if let Some(namespace) = self.member_consts.get(&symbol) {
-            if reference.is_value() && self.writes_member_value(ident.span, self.ancestors.iter().rev()) {
-                self.whole_uses.insert(namespace.clone());
+        if let Some(namespace) = self.member_consts.get(&symbol).cloned() {
+            let write = reference.is_value().then(|| self.member_value_write(ident.span, self.ancestors.iter().rev()));
+            if let Some(what) = write.flatten() {
+                let used = ObjectUse { line: Some(self.line(ident.span)), what };
+                written_through(&mut self.written_namespaces, &namespace, ident.name.to_string(), used);
             }
         }
         let Some(binding) = self.candidates.get(&symbol) else { return };
@@ -2692,29 +2715,35 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
         let assigned_target = binding.targets.iter().any(String::is_empty);
         let mut ancestors = self.ancestors.iter().rev();
         let (key, what) = if binding.namespace {
+            let namespace = binding.name.clone();
             let (span, parent) = peel_wrappers(ident.span, &mut ancestors);
             match parent {
                 Some(AstKind::JSXMemberExpression(_)) => return,
                 Some(AstKind::StaticMemberExpression(member)) if member.object.span() == span => {
-                    let key = format!("{}.{}", binding.name, member.property.name);
+                    let key = format!("{namespace}.{}", member.property.name);
+                    if let Some(what) = self.member_value_write(member.span, ancestors.clone()) {
+                        let used = ObjectUse { line: Some(self.line(ident.span)), what };
+                        written_through(&mut self.written_namespaces, &namespace, key.clone(), used);
+                    }
                     if self.uses.contains_key(&key) {
                         return;
                     }
                     let what = object_use(member.span, ancestors, false, self.global_object, false);
                     (key, what)
                 }
-                // Some member a key names at runtime, which a use may write.
+                // Some member a key names at runtime.
                 Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == span => {
-                    if self.writes_member_value(member.span, ancestors) {
-                        self.whole_uses.insert(binding.name.clone());
-                    } else {
-                        self.member_reads.insert(binding.name.clone());
+                    if let Some(what) = self.member_value_write(member.span, ancestors) {
+                        let used = ObjectUse { line: Some(self.line(ident.span)), what };
+                        written_through(&mut self.written_namespaces, &namespace, format!("a member of {namespace}"), used);
                     }
-                    (binding.name.clone(), Some("is used as a whole namespace".to_string()))
+                    (namespace, Some("is used as a whole namespace".to_string()))
                 }
                 _ => {
-                    self.whole_uses.insert(binding.name.clone());
-                    (binding.name.clone(), Some("is used as a whole namespace".to_string()))
+                    let what = "is used as a whole namespace".to_string();
+                    let used = ObjectUse { line: Some(self.line(ident.span)), what: what.clone() };
+                    written_through(&mut self.written_namespaces, &namespace, namespace.clone(), used);
+                    (namespace, Some(what))
                 }
             }
         } else {

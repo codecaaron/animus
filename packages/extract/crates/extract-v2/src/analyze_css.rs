@@ -13116,10 +13116,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// leave its member table unproven, and so do a namespace of a missing
     /// module, a name an unread module may rename the object to, and a
     /// write or whole use of a package's namespace, which may re-export our
-    /// objects (a linked workspace package), including a member a key names
-    /// that is written through or bound and then written or handed on; a
-    /// read leaves it, and so does a read or call of a package namespace's
-    /// member, or a member a key names used only as a value.
+    /// objects (a linked workspace package), including a member, named or
+    /// keyed, handed on or bound and then written or handed on; a read
+    /// leaves it, and so does a read or call of a package namespace's
+    /// member, or a keyed member used only as a value.
     #[test]
     fn a_write_through_an_open_star_reaches_the_object_it_names() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
@@ -13140,6 +13140,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("import * as ui from '@local/proxy';\nregister(ui);\n", true),
             ("import * as ui from 'some-package';\nexport const has = ui.Fam.Box ? 1 : 0;\n", false),
             ("import * as ui from 'some-package';\nui.render();\n", false),
+            ("import * as ui from 'some-package';\nregister(ui.Fam);\n", true),
+            ("import * as ui from 'some-package';\nconst C = ui.Fam;\nC.Box = () => null;\n", true),
             ("import * as ui from 'some-package';\nconst name = 'Fam';\nui[name].Box = () => null;\n", true),
             ("import * as ui from 'some-package';\nconst name = 'Fam';\nconst C = ui[name];\nC.Box = () => null;\n", true),
             ("import * as ui from 'some-package';\nconst name = 'Fam';\nconst C = ui[name];\nregister(C);\n", true),
