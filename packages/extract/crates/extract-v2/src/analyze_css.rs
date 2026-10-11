@@ -9132,6 +9132,7 @@ mod tests {
             ]
             .into_iter()
             .collect(),
+            expansions: Vec::new(),
         });
         let entries: Vec<(&str, &str)> = files.iter().map(|(path, source)| (*path, source.as_str())).collect();
         let out = analyze(&entries, &inputs);
