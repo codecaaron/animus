@@ -60,6 +60,7 @@ import {
   engineModuleParser,
   surfaceManifestDiagnostics,
 } from '../pipeline/index';
+import { COALESCING_WINDOW_MS } from './coalescing-window';
 import {
   checkLockLiveness,
   holdDirectoryClaim,
@@ -160,10 +161,6 @@ import type {
 const SESSION_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 const STATUS_WATCHDOG_MS = 2000;
-
-/** Default watcher debounce and the session's status-deadline ceiling.
- *  The watcher entry point defaults its debounce from this — one definition. */
-export const DEFAULT_WATCH_DEBOUNCE_MS = 75;
 
 const LEGACY_FLAT_ARTIFACTS = [
   MANIFEST_ARTIFACT,
@@ -358,7 +355,7 @@ export class ExtractionSession {
    *  same-session restart with unchanged plans rewrites no bytes. */
   private lastEpochValue: string | null = null;
   /** Watcher debounce ceiling feeding status deadlines. */
-  debounceCeilingMs = DEFAULT_WATCH_DEBOUNCE_MS;
+  debounceCeilingMs = COALESCING_WINDOW_MS;
   /** Test seam: observes every session-artifact write (name, content)
    *  post-rename — write ORDER is part of the transaction contract. */
   onArtifactWrite: ((name: string, content: string) => void) | null = null;
