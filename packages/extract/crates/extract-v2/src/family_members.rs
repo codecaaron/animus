@@ -13,6 +13,7 @@ use crate::analyze_css::{
     declared_export, loaded_modules, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
 };
 use crate::facts::{FacadeEntry, FileFacts};
+use crate::loads::LoadTarget;
 use crate::flow::{AbsenceQuery, ChangeKind, Coverage, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom, ValueEffects};
 use animus_system_loader::module_table::{ExportLookup, ImportName, OpeningReason, Request, Terminal};
 
@@ -768,6 +769,13 @@ impl<'f> ObjectMembers<'f> {
                 flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
             }
             for (name, spec) in &ff.namespace_exports {
+                if crate::link::unread_package(module, spec, files, inputs).is_some() {
+                    let reason = format!(
+                        "{module} re-exports {spec} as the namespace {name}, and a package the analysis does not read may re-export any module"
+                    );
+                    flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
+                    continue;
+                }
                 let Some(target) = resolve_import_source(module, spec, files, inputs) else {
                     continue;
                 };
@@ -775,6 +783,15 @@ impl<'f> ObjectMembers<'f> {
                 self.namespace_reach(&target).record(&mut flow, Vec::new(), &reason);
             }
             for load in &ff.module_loads {
+                if let LoadTarget::Specifier(spec) = &load.target {
+                    if crate::link::unread_package(module, spec, files, inputs).is_some() {
+                        let reason = format!(
+                            "{module} loads {spec} at runtime on line {}, and a package the analysis does not read may re-export any module",
+                            load.line
+                        );
+                        flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
+                    }
+                }
                 for target in loaded_modules(module, load, files, inputs) {
                     let reason = format!("{module} loads {target} at runtime on line {}", load.line);
                     self.namespace_reach(target).record(&mut flow, Vec::new(), &reason);
@@ -853,8 +870,9 @@ impl<'f> ObjectMembers<'f> {
             .imports
             .iter()
             .find(|import| import.local == binding && import.name == ImportName::Namespace)?;
-        match record.requests[import.request] {
+        match &record.requests[import.request] {
             Request::Unresolved(_) => Some(UnreadNamespace::Missing),
+            Request::Outside(identity) if crate::link::is_node_builtin(identity) => None,
             Request::Outside(_) => Some(UnreadNamespace::Package),
             Request::Module(_) => None,
         }

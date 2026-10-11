@@ -203,6 +203,61 @@ fn export_name(name: &ExportExportName<'_>) -> Option<String> {
     }
 }
 
+/// What a specifier names, as the analysis resolves it.
+pub(crate) enum Named {
+    /// A module the analysis holds.
+    Module(String),
+    /// A package the analysis does not hold: its entry's path, or the
+    /// specifier when it resolves to no file.
+    Package(String),
+    /// A path, written or through an alias, that names no file the
+    /// analysis holds.
+    Nothing,
+}
+
+/// What `specifier`, written in `path`, names.
+pub(crate) fn named<T>(path: &str, specifier: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> Named {
+    match resolve_import_source(path, specifier, files, inputs) {
+        Some(target) if files.contains_key(&target) => Named::Module(target),
+        Some(target) => Named::Package(target),
+        None if specifier.starts_with('.') || expand_alias(specifier, &inputs.path_aliases).is_some() => Named::Nothing,
+        None => Named::Package(specifier.to_string()),
+    }
+}
+
+/// The modules built into Node 24 that a bare specifier names; `node:`
+/// names one too. None imports a module the analysis holds.
+const NODE_BUILTINS: [&str; 54] = [
+    "assert", "assert/strict", "async_hooks", "buffer", "child_process", "cluster", "console", "constants",
+    "crypto", "dgram", "diagnostics_channel", "dns", "dns/promises", "domain", "events", "fs", "fs/promises",
+    "http", "http2", "https", "inspector", "inspector/promises", "module", "net", "os", "path", "path/posix",
+    "path/win32", "perf_hooks", "process", "punycode", "querystring", "readline", "readline/promises", "repl",
+    "stream", "stream/consumers", "stream/promises", "stream/web", "string_decoder", "sys", "timers",
+    "timers/promises", "tls", "trace_events", "tty", "url", "util", "util/types", "v8", "vm", "wasi",
+    "worker_threads", "zlib",
+];
+
+/// Whether `identity`, a package `Named` names, is a module built into
+/// Node.
+pub(crate) fn is_node_builtin(identity: &str) -> bool {
+    identity.starts_with("node:") || NODE_BUILTINS.contains(&identity)
+}
+
+/// The package `specifier`, written in `path`, names when the analysis
+/// does not read it and it may import modules the analysis holds, and so
+/// re-export any of their objects: any package but one built into Node.
+pub(crate) fn unread_package<T>(
+    path: &str,
+    specifier: &str,
+    files: &BTreeMap<String, T>,
+    inputs: &CssInputs,
+) -> Option<String> {
+    match named(path, specifier, files, inputs) {
+        Named::Package(identity) if !is_node_builtin(&identity) => Some(identity),
+        _ => None,
+    }
+}
+
 /// Every analysed module's record, linked: modules in path order, each
 /// request resolved as the analysis resolves specifiers.
 pub struct ProjectLinks {
@@ -229,21 +284,10 @@ impl ProjectLinks {
         let records = files
             .iter()
             .map(|(path, file)| {
-                record(file).resolved(|specifier| {
-                    match resolve_import_source(path, specifier, files, inputs) {
-                        Some(target) => match index.get(&target) {
-                            Some(&module) => Request::Module(module),
-                            // A package entry the analysis does not hold.
-                            None => Request::Outside(target),
-                        },
-                        // A path, written or through an alias, that names no
-                        // file the analysis holds resolved to nothing.
-                        None if specifier.starts_with('.') || expand_alias(specifier, &inputs.path_aliases).is_some() => {
-                            Request::Unresolved(format!("{path}::{specifier}"))
-                        }
-                        // A package the analysis does not hold.
-                        None => Request::Outside(specifier.clone()),
-                    }
+                record(file).resolved(|specifier| match named(path, specifier, files, inputs) {
+                    Named::Module(target) => Request::Module(index[&target]),
+                    Named::Package(identity) => Request::Outside(identity),
+                    Named::Nothing => Request::Unresolved(format!("{path}::{specifier}")),
                 })
             })
             .collect();

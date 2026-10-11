@@ -641,6 +641,11 @@ fn unstable_style_statics(
             .map(|(name, spec)| (spec, format!("as the namespace {name}")));
         let loads = module.loads.iter().map(|spec| (spec, "at runtime".to_string()));
         for (spec, how) in reexports.chain(loads) {
+            if crate::link::unread_package(file, spec, files, inputs).is_some() {
+                let reason = format!("{file} hands on {spec} {how}, and a package the analysis does not read may re-export any module");
+                flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
+                continue;
+            }
             let Some(target) = analyze_css::resolve_import_source(file, spec, files, inputs) else {
                 continue;
             };
