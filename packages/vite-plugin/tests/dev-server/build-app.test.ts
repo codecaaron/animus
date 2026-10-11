@@ -111,27 +111,42 @@ describe('environments built in parallel', () => {
     }
   });
 
-  it('a second build of a running environment is refused, naming it', async () => {
+  it('a builder reused while an earlier build still runs builds after it', async () => {
     const fixture = createDevFixture();
     try {
-      const builder = await parallelBuilder(fixture.root);
-      // The client fails at once; the slow SSR build is still running.
+      // Every environment build either app starts, in order.
+      const builds: Array<Promise<object | void>> = [];
+      const builder = await parallelBuilder(fixture.root, async (app) => {
+        const started = [
+          app.build(app.environments.client),
+          app.build(app.environments.ssr),
+        ];
+        builds.push(...started);
+        await Promise.all(started);
+      });
+      // The client fails at once; the slow SSR build is still running when
+      // the builder is reused.
       failing.client = true;
       await expect(builder.buildApp()).rejects.toThrow(
         'planned client failure'
       );
       failing.client = false;
+      await builder.buildApp();
 
-      await expect(builder.buildApp()).rejects.toThrow(
-        'a previous build of environment ssr is still running on this plugin instance'
-      );
+      const outcomes = await Promise.allSettled(builds);
+      expect(outcomes.map((outcome) => outcome.status)).toEqual([
+        'rejected',
+        'fulfilled',
+        'fulfilled',
+        'fulfilled',
+      ]);
     } finally {
       failing.client = false;
       fixture.dispose();
     }
   });
 
-  it('two environments under one name are refused, naming it', async () => {
+  it('two environments under one name build one after the other', async () => {
     const fixture = createDevFixture();
     try {
       // A second, distinct environment object under the client's name.
@@ -144,9 +159,7 @@ describe('environments built in parallel', () => {
         ]);
       });
 
-      await expect(builder.buildApp()).rejects.toThrow(
-        'two environments named client build on this plugin instance at once'
-      );
+      await expect(builder.buildApp()).resolves.toBeUndefined();
     } finally {
       fixture.dispose();
     }
