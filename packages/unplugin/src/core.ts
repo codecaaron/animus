@@ -651,8 +651,7 @@ export const unpluginFactory: UnpluginFactory<
         hostExtensions = rollupExtensionPolicy(
           (inputOptions?.plugins ?? []).some(
             (plugin) => plugin?.name === 'node-resolve'
-          ),
-          this.meta?.rollupVersion
+          )
         );
         modeOracle = this.meta?.watchMode ? 'development' : 'production';
         await startPipeline();

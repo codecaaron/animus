@@ -16,9 +16,11 @@ export interface HostExtensionPolicy {
   >;
   /** Where the order came from: `<host>[@version] captured` when read from
    *  the host's resolved configuration, `<host>[@version] default` when the
-   *  host has one the adapter cannot read and its documented default
-   *  stands in, or `built-in` where no host resolves (the CLI, direct engine
-   *  calls). */
+   *  host sets none and runs its documented default, or `built-in` where no
+   *  host resolves (the CLI, direct engine calls) or, with the reason
+   *  `hostOptionUnreadable` (spec §2.2 A2), where the host has an order the
+   *  adapter cannot read (`built-in (hostOptionUnreadable:
+   *  rollup-node-resolve)`). */
   readonly resolverVersion: string;
 }
 
@@ -54,7 +56,6 @@ export const HOST_DEFAULT_EXTENSIONS = {
   webpack: ['.js', '.json', '.wasm'],
   turbopack: ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.json'],
   esbuild: ['.tsx', '.ts', '.jsx', '.js', '.css', '.json'],
-  rollupNodeResolve: ['.mjs', '.js', '.json', '.node'],
 } as const;
 
 function label(
@@ -148,24 +149,19 @@ export function esbuildExtensionPolicy(
   };
 }
 
-/** Rollup appends no extension of its own; `@rollup/plugin-node-resolve`
- *  does, and keeps its options private, so its documented default stands
- *  in when the build uses it. Neither substitutes a source. */
+/** Rollup leaves the extension order to its resolver plugins, which keep
+ *  their options private: a TypeScript build sets `@rollup/plugin-node-resolve`'s
+ *  `extensions`, which no documented default matches. The built-in policy
+ *  answers, with the reason. */
 export function rollupExtensionPolicy(
-  usesNodeResolve: boolean,
-  version?: string
+  usesNodeResolve: boolean
 ): HostExtensionPolicy {
-  return usesNodeResolve
-    ? {
-        appended: [...HOST_DEFAULT_EXTENSIONS.rollupNodeResolve],
-        nodeNext: [],
-        resolverVersion: label('rollup-node-resolve', version, 'default'),
-      }
-    : {
-        appended: [],
-        nodeNext: [],
-        resolverVersion: label('rollup', version, 'captured'),
-      };
+  return {
+    ...BUILT_IN_EXTENSION_POLICY,
+    resolverVersion: usesNodeResolve
+      ? 'built-in (hostOptionUnreadable: rollup-node-resolve)'
+      : 'built-in (hostOptionUnreadable: rollup resolver plugins)',
+  };
 }
 
 /** The policy as the system loader reads it (`ExtensionPolicy`). */
