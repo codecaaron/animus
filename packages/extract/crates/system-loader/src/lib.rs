@@ -300,13 +300,14 @@ fn resolve_exports_entry(
     if !has_subpaths {
         return (lookup_key == ".")
             .then(|| resolve_condition_value(exports, source, conditions))
-            .flatten();
+            .flatten()
+            .and_then(|target| target_path(&target));
     }
 
     // An exact key answers alone: a declared key whose target resolves to
     // nothing is a blocked subpath, not an invitation to try the patterns.
     if let Some(entry) = exports.get(&lookup_key) {
-        return resolve_condition_value(entry, source, conditions);
+        return resolve_condition_value(entry, source, conditions).and_then(|target| target_path(&target));
     }
 
     resolve_exports_pattern(exports.as_object()?, &lookup_key, source, conditions)
@@ -352,12 +353,15 @@ fn resolve_exports_pattern(
     if refused_pattern_match(matched) {
         return None;
     }
-    // As Node reads the substituted target: a URL, so a raw backslash is a
-    // `/`, and one holding an encoded separator (`%2F`, `%5C`) is refused
-    // (`ERR_INVALID_MODULE_SPECIFIER`). The rest is decoded as
-    // `fileURLToPath` decodes it: `a%20b` names `a b`, and a malformed escape
-    // or one that is not UTF-8 names nothing (`URIError`).
-    let target = resolve_condition_value(value, source, conditions)?.replace('*', matched);
+    target_path(&resolve_condition_value(value, source, conditions)?.replace('*', matched))
+}
+
+/// The path an `exports` target names, read as Node reads it: a URL, so a
+/// raw backslash is a `/`, and one holding an encoded separator (`%2F`,
+/// `%5C`) is refused (`ERR_INVALID_MODULE_SPECIFIER`). The rest is decoded
+/// as `fileURLToPath` decodes it: `a%20b` names `a b`, and a malformed
+/// escape or one that is not UTF-8 names nothing (`URIError`).
+fn target_path(target: &str) -> Option<String> {
     let lowered = target.to_ascii_lowercase();
     if lowered.contains("%2f") || lowered.contains("%5c") {
         return None;
@@ -2236,6 +2240,9 @@ export const ds = tokens;
             serde_json::json!({ "exports": { "./*": "./src/*.ts" } }),
             &["src/token.ts", "src/a/b.ts", "src/a%2fb.ts", "src/a b.ts", "src/a%20b.ts"],
         );
+        // An exact target is read as a URL too; `main` stays literal, as
+        // Node reads it.
+        package("exact-escape", serde_json::json!({ "exports": { ".": "./src/a%20b.ts" } }), &["src/a b.ts", "src/a%20b.ts"]);
         #[cfg(unix)]
         fs::write(dir.join("node_modules/wild/src/a\\b.ts"), "export {};\n").expect("write backslash name");
         #[cfg(unix)]
@@ -2280,6 +2287,7 @@ export const ds = tokens;
         assert_eq!(resolved("wild/%74oken", &[]).as_deref(), Ok("wild/src/token.ts"));
         assert!(resolved("wild/a%zzb", &[]).is_err(), "a malformed escape is refused");
         assert!(resolved("wild/%ff", &[]).is_err(), "an escape that is not UTF-8 is refused");
+        assert_eq!(resolved("exact-escape", &[]).as_deref(), Ok("exact-escape/src/a b.ts"));
         #[cfg(unix)]
         assert_eq!(resolved("wild/a\\b", &[]).as_deref(), Ok("wild/src/a/b.ts"));
         // Where the filesystem opens the misspelled entry, the selection
