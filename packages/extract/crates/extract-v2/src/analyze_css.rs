@@ -873,9 +873,13 @@ pub fn probe_base(from_file: &str, spec: &str, inputs: &CssInputs) -> Option<Str
     for seg in spec.split('/') {
         match seg {
             "." | "" => {}
-            ".." => {
-                parts.pop();
-            }
+            // Above the root the step stays: the base is outside the root.
+            ".." => match parts.last() {
+                Some(&last) if last != ".." => {
+                    parts.pop();
+                }
+                _ => parts.push(".."),
+            },
             s => parts.push(s),
         }
     }
@@ -1079,6 +1083,9 @@ pub enum MissingParent {
     Incomplete,
     /// The host opens an opaque file there.
     Opaque,
+    /// The host opens an adapted original there (`.mdx`, `.svelte`) whose
+    /// analysis holds no module the probe names.
+    Adapted,
     /// A package the package map does not answer.
     Package,
     /// The import resolves, but the parent is not reached past it.
@@ -1139,7 +1146,17 @@ fn missing_parent_input(
         return record(Some(specifier), None, MissingParent::Package);
     };
     let outcome = match probe_files(&base, files, inputs) {
-        ProbeOutcome::Absent => MissingParent::Absent,
+        // The probe names no module, but the host opens a file there.
+        ProbeOutcome::Absent => match inputs
+            .probe_evidence
+            .as_ref()
+            .and_then(|evidence| evidence.bases.get(&base))
+            .and_then(|host| host.reading)
+        {
+            Some(HostReading::Asset) => MissingParent::Opaque,
+            Some(HostReading::Adapted) => MissingParent::Adapted,
+            _ => MissingParent::Absent,
+        },
         ProbeOutcome::Incomplete { .. } => MissingParent::Incomplete,
         ProbeOutcome::Shadowing { .. } => MissingParent::Opaque,
         ProbeOutcome::Found(_) => MissingParent::Unreached,
@@ -8978,9 +8995,30 @@ mod tests {
             ("plain.tsx", child("Plain", "./plain")),
             ("plain.ts", "export const Plain = 1;\n".to_string()),
             ("local.tsx", "const Local = makeIt();\nexport const ChildLocal = Local.extend().styles({ m: 1 }).asElement('div');\n".to_string()),
+            ("src/asset.tsx", child("Data", "./parent.json")),
+            ("src/adapted.tsx", child("Doc", "./doc.mdx")),
+            ("src/above.tsx", child("Gen", "../../generated")),
         ];
+        // The host opens a file at these bases that no analysed module is.
+        let mut inputs = test_inputs();
+        let opens = |candidate: &str, reading| HostCandidate {
+            candidate: candidate.into(),
+            actual: None,
+            analysed_as: None,
+            reading: Some(reading),
+        };
+        inputs.probe_evidence = Some(ProbeEvidence {
+            generation: 1,
+            identity: String::new(),
+            bases: [
+                ("src/parent.json".to_string(), opens("src/parent.json", HostReading::Asset)),
+                ("src/doc.mdx".to_string(), opens("src/doc.mdx", HostReading::Adapted)),
+            ]
+            .into_iter()
+            .collect(),
+        });
         let entries: Vec<(&str, &str)> = files.iter().map(|(path, source)| (*path, source.as_str())).collect();
-        let out = analyze(&entries, &test_inputs());
+        let out = analyze(&entries, &inputs);
         let records: Vec<(String, Option<String>, Option<String>, MissingParent)> = out
             .missing_inputs
             .iter()
@@ -8993,10 +9031,24 @@ mod tests {
                 ("ChildLocal".to_string(), None, None, MissingParent::NotAChain),
                 ("ChildKit".to_string(), Some("some-kit".to_string()), None, MissingParent::Package),
                 ("ChildPlain".to_string(), Some("./plain".to_string()), None, MissingParent::NotAChain),
+                // A base above the root keeps its step out of the root.
+                (
+                    "ChildGen".to_string(),
+                    Some("../../generated".to_string()),
+                    Some("../generated".to_string()),
+                    MissingParent::Absent
+                ),
+                ("ChildDoc".to_string(), Some("./doc.mdx".to_string()), Some("src/doc.mdx".to_string()), MissingParent::Adapted),
+                ("ChildData".to_string(), Some("./parent.json".to_string()), Some("src/parent.json".to_string()), MissingParent::Opaque),
             ],
             "{:?}",
             out.diagnostics
         );
+        // The file above the root answers that base: nothing is dropped.
+        let generated = "export const Gen = ds.styles({ m: 2 }).asElement('div');\n";
+        let above = child("Gen", "../../generated");
+        let out = analyze(&[("src/above.tsx", above.as_str()), ("../generated.tsx", generated)], &test_inputs());
+        assert_eq!(out.missing_inputs, [], "{:?}", out.diagnostics);
     }
 
     #[test]

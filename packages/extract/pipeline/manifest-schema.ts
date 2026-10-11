@@ -164,6 +164,7 @@ export interface ManifestMissingInput {
     | 'absent'
     | 'incomplete'
     | 'opaque'
+    | 'adapted'
     | 'package'
     | 'unreached'
     | 'not-a-chain'
