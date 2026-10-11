@@ -252,6 +252,26 @@ interface SystemDependencies {
   hashes: Map<string, string>;
 }
 
+/** A file's content hash, or '' when it cannot be read. */
+function fileHashOrEmpty(path: string): string {
+  try {
+    return contentHash(readFileSync(path, 'utf-8'));
+  } catch {
+    return '';
+  }
+}
+
+/** The first file whose content no longer has its recorded hash: an
+ *  unreadable or deleted file reads as '', which mismatches a real one. */
+function firstChangedFile(
+  hashes: ReadonlyMap<string, string>
+): string | undefined {
+  for (const [path, hash] of hashes) {
+    if (fileHashOrEmpty(path) !== hash) return path;
+  }
+  return undefined;
+}
+
 /** Bundler-agnostic extraction pipeline: system load, source ingestion,
  *  analysis, emission, and watch-cycle diffing. Carries no bundler types. */
 export class ExtractionSession {
@@ -266,6 +286,9 @@ export class ExtractionSession {
    *  a change to any is a configuration change, which runs the full pass. */
   configInputPaths: string[] = [];
   private configInputKeys = new Set<string>();
+  /** Each configuration input's content hash at the last full pass, ''
+   *  for an absent one: the probe's basis when the host reports nothing. */
+  private configInputHashes = new Map<string, string>();
   /** The host's export conditions, in its order, for the system loader. */
   conditions: readonly string[] = [];
   /** The host's extension order, as its adapter captured it; the built-in
@@ -787,21 +810,15 @@ export class ExtractionSession {
     // module set. Keys are lexical and canonical, so symlinked paths match.
     let assetChanged = false;
     let systemHit: string | undefined;
+    let configHit: string | undefined;
     try {
       if (changed.length === 0) {
         // No changes from the host (webpack's first watchRun, or empty
-        // sets): probe the dependency files by content hash.
-        for (const [dep, hash] of this.systemDependencyHashes) {
-          let current = '';
-          try {
-            current = contentHash(readFileSync(dep, 'utf-8'));
-          } catch {
-            // unreadable/deleted → hash stays '' and mismatches a real one
-          }
-          if (current !== hash) {
-            systemHit = dep;
-            break;
-          }
+        // sets): probe the dependency and configuration files by content
+        // hash.
+        systemHit = firstChangedFile(this.systemDependencyHashes);
+        if (systemHit === undefined) {
+          configHit = firstChangedFile(this.configInputHashes);
         }
       } else {
         systemHit = changed.find((path) =>
@@ -813,7 +830,7 @@ export class ExtractionSession {
       this.warn(`HMR system-reload check failed: ${String(err)}`);
     }
 
-    const configHit = changed.find((path) =>
+    configHit ??= changed.find((path) =>
       toWatchKeys(path).some((key) => this.configInputKeys.has(key))
     );
     const debtRetry = this.systemReloadOwed && this.heldRejection === null;
@@ -1181,6 +1198,9 @@ export class ExtractionSession {
     ];
     this.configInputKeys = new Set(
       this.configInputPaths.flatMap((path) => toWatchKeys(path))
+    );
+    this.configInputHashes = new Map(
+      this.configInputPaths.map((path) => [path, fileHashOrEmpty(path)])
     );
     if (this.aliasesFromTsconfig) {
       this.pathAliasesJson =

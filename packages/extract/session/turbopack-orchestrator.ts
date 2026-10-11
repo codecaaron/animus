@@ -395,6 +395,9 @@ export function startTurbopackWatcher(
     onDied: null,
     deliverHeldEvents: () => {
       holdingEvents = false;
+      // A watcher started before discovery learns the dependencies only
+      // now, whether or not anything is pending.
+      syncDependencyWatchers();
       // Startup bypasses the window.
       if (pendingPaths.size > 0) coalescing.flush();
       return updateChain;
