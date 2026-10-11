@@ -206,6 +206,14 @@ pub fn resolve_specifier(
     )
 }
 
+/// Whether the package at `package_dir` declares the kit source condition:
+/// an `animus` key anywhere in its `exports`, valid or not, read from the
+/// manifest alone.
+#[napi]
+pub fn declares_kit_source(package_dir: String) -> bool {
+    animus_system_loader::declares_kit_source(std::path::Path::new(&package_dir))
+}
+
 /// A kit's source root (spec §2.2 A5), as JSON: the package located from
 /// `from_dir` as the system loader locates it, the rule that chose the root
 /// (`animus`, `source-exports`, `src` or `compiled`), its entries, its

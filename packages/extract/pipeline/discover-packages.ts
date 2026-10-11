@@ -226,7 +226,7 @@ export function nativeKitSourceRoot(
   fromDir: string,
   conditions: readonly string[],
   workspaces: WorkspacePackages,
-  extensionPolicyJson: string
+  policyJson: string
 ): KitSourceRootResolver {
   const native = engine.resolveKitSourceRoot;
   return (specifier, packageDir, hostEntry) => {
@@ -241,7 +241,7 @@ export function nativeKitSourceRoot(
         fromDir,
         [...conditions],
         workspaces,
-        extensionPolicyJson,
+        policyJson,
         hostEntry ?? undefined,
         packageDir
       ),
@@ -256,85 +256,6 @@ export function nativeKitSourceRoot(
       unresolved: answer.unresolved ?? null,
     };
   };
-}
-
-/** A package target Node accepts, as the system loader reads it
- *  (`valid_package_target`): relative to the package root (`./`), with no
- *  `.`, `..` or `node_modules` segment after it. An empty segment loads. */
-function isPackageTarget(target: string): boolean {
-  return (
-    target.startsWith('./') &&
-    !target
-      .split(/[/\\]/)
-      .slice(1)
-      .some(
-        (segment) =>
-          segment === '.' ||
-          segment === '..' ||
-          segment.toLowerCase() === 'node_modules'
-      )
-  );
-}
-
-/** The package's kit source condition, or null when no exact `exports`
- *  entry declares it: the package is no source kit. */
-export function readKitSourceCondition(
-  pkgRoot: string
-): KitSourceCondition | null {
-  const condition: KitSourceCondition = {
-    entries: [],
-    invalid: [],
-    root: null,
-  };
-  for (const [subpath, value] of exportsSubpaths(
-    readPackageManifest(pkgRoot)
-  )) {
-    if (subpath.includes('*') || !isJsonBlock(value)) continue;
-    const target = value[KIT_SOURCE_CONDITION];
-    if (!isJsonString(target)) continue;
-    // Read as the system loader reads a target: a raw backslash is a `/`.
-    // A target it does not read as source is no source: for most it
-    // evaluates the runtime entry instead, while a percent-escaped one fails
-    // the load (percent-escape unsupported).
-    const file = resolve(pkgRoot, target.replaceAll('\\', '/'));
-    const escaped = target.includes('%');
-    const seen =
-      isPackageTarget(target) && !escaped ? seeOnDisk(file, pkgRoot) : null;
-    if (seen?.kind === 'file') {
-      condition.entries.push([subpath, file]);
-    } else {
-      condition.invalid.push([
-        subpath,
-        target,
-        seen?.kind === 'case-only'
-          ? `is spelled otherwise on disk (${seen.actual}), which a case- or normalization-sensitive filesystem does not load`
-          : escaped
-            ? "holds a percent-escape, which the system loader refuses (percent-escape unsupported) — spell the target without '%'"
-            : seen === null
-              ? "is no package target Node accepts (one starts with './' and has no '.', '..' or 'node_modules' segment)"
-              : 'is missing',
-      ]);
-    }
-  }
-  if (condition.entries.length === 0 && condition.invalid.length === 0)
-    return null;
-  condition.root = sourceRoot(condition.entries);
-  return condition;
-}
-
-/** The deepest directory holding every entry's file. */
-function sourceRoot(entries: Array<[string, string]>): string | null {
-  return entries.reduce<string | null>(
-    (root, [, file]) =>
-      root === null ? dirname(file) : commonDirectory(root, dirname(file)),
-    null
-  );
-}
-
-function commonDirectory(a: string, b: string): string {
-  let dir = a;
-  while (!isPathWithinRoot(dir, b)) dir = dirname(dir);
-  return dir;
 }
 
 /** Whether the manifest at `dir` names the package `name`. */
@@ -1042,18 +963,36 @@ function dependencyNames(
   return [...names];
 }
 
+/** Whether the package at `pkgRoot` declares the kit source condition, as
+ *  the system loader's table reads its manifest: an `animus` key anywhere in
+ *  its `exports`, on any entry, subpath or pattern, valid or not. */
+function declaresKitSource(
+  engine: Pick<EngineApi, 'declaresKitSource'>,
+  pkgRoot: string
+): boolean {
+  if (engine.declaresKitSource === undefined) {
+    throw new Error(
+      'the native engine does not expose declaresKitSource, which kit discovery needs — rebuild @animus-ui/extract'
+    );
+  }
+  return engine.declaresKitSource(pkgRoot);
+}
+
 /** The source kits the application at `rootDir` declares as dependencies.
  *  A bundler serves an installed one as compiled code unless told
  *  otherwise: Next keeps it external on the server unless it is in
  *  `transpilePackages`, and Vite's optimizer prebundles it. */
-export function sourceKitDependencies(rootDir: string): SourceKitDependency[] {
+export function sourceKitDependencies(
+  rootDir: string,
+  engine: Pick<EngineApi, 'declaresKitSource'>
+): SourceKitDependency[] {
   const declared = dependencyNames(readPackageManifest(rootDir), [
     'dependencies',
     'devDependencies',
   ]);
   return declared.flatMap((name) => {
     const pkgRoot = locatePackageRoot(name, rootDir);
-    if (pkgRoot === null || readKitSourceCondition(pkgRoot) === null) return [];
+    if (pkgRoot === null || !declaresKitSource(engine, pkgRoot)) return [];
     return [
       {
         name,
@@ -1084,7 +1023,7 @@ function isPackageSpecifier(specifier: string): boolean {
  */
 export function importedKitDiagnostics(
   files: ReadonlyArray<{ path: string; source: string }>,
-  engine: Pick<EngineApi, 'extractFacts'>,
+  engine: Pick<EngineApi, 'extractFacts' | 'declaresKitSource'>,
   rootDir: string,
   systemKits: readonly string[]
 ): ManifestDiagnostic[] {
@@ -1122,7 +1061,7 @@ export function importedKitDiagnostics(
       if (seen.has(name)) continue;
       seen.add(name);
       const pkgRoot = locatePackageRoot(name, dirname(resolve(rootDir, path)));
-      if (pkgRoot && readKitSourceCondition(pkgRoot)) {
+      if (pkgRoot && declaresKitSource(engine, pkgRoot)) {
         diagnostics.push({
           file: path,
           component: name,

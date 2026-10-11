@@ -10,6 +10,13 @@ export declare class ExtractEngine {
 }
 
 /**
+ * Whether the package at `package_dir` declares the kit source condition:
+ * an `animus` key anywhere in its `exports`, valid or not, read from the
+ * manifest alone.
+ */
+export declare function declaresKitSource(packageDir: string): boolean
+
+/**
  * Every diagnostic code the engine emits, with the severity it carries, as
  * JSON: `{ "animus.chain.unextractable": "warn", … }`. Hosts check codes
  * against it instead of keeping a table of their own.

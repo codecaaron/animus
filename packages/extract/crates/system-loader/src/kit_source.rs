@@ -239,6 +239,24 @@ pub fn resolve_kit_source_root(
     Ok(found)
 }
 
+/// Whether the package at `package_dir` declares the kit source condition:
+/// an `animus` key anywhere in its `exports`, on any entry, subpath or
+/// pattern, under any other condition, valid or not. Read from the manifest
+/// alone, so a kit whose entry names no file is still a kit.
+pub fn declares_kit_source(package_dir: &Path) -> bool {
+    fn declares(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(obj) => obj.contains_key(KIT_SOURCE_CONDITION) || obj.values().any(declares),
+            serde_json::Value::Array(values) => values.iter().any(declares),
+            _ => false,
+        }
+    }
+    fs::read_to_string(package_dir.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .is_some_and(|manifest| manifest.get("exports").is_some_and(declares))
+}
+
 /// The loader's source-facet walk over an entry's conditions, as
 /// `condition_target` takes it: the target it stops at, and whether that
 /// target came through an `animus` key. The first matching array element or

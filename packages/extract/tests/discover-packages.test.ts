@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -929,6 +935,9 @@ test('an imported kit the system does not include is an error', () => {
   pkg('@acme/stray', source);
   const imports = ['@acme/included', '@acme/legacy', '@acme/stray', 'react'];
   const engine = {
+    // The stand-in table: a kit declares `animus` in its `exports`.
+    declaresKitSource: (dir: string) =>
+      readFileSync(join(dir, 'package.json'), 'utf-8').includes('"animus"'),
     extractFacts: () =>
       JSON.stringify({
         parseCount: 1,

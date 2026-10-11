@@ -15,7 +15,9 @@ import { afterEach, describe, expect, test } from 'vitest';
 import {
   collectExternalPackageSources,
   firstOwners,
+  importedKitDiagnostics,
   nativeKitSourceRoot,
+  sourceKitDependencies,
   staleDistIncludesMessage,
 } from '../pipeline/discover-packages';
 import {
@@ -24,6 +26,7 @@ import {
 } from '../pipeline/host-extensions';
 import {
   INVALID_KIT_SOURCE_CONDITION,
+  KIT_SYSTEM_NOT_INCLUDED,
   KIT_WITHOUT_SOURCE_CONDITION,
 } from '../pipeline/manifest-diagnostics';
 
@@ -1030,6 +1033,46 @@ test.skipIf(process.platform === 'win32').each([
     'src/browser.ts',
   ],
   [
+    'dot-slash',
+    conditional('./src/index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'src/index.ts',
+  ],
+  [
+    'empty-segment',
+    conditional('./src//index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'src/index.ts',
+  ],
+  [
+    'no-dot-slash',
+    conditional('src/index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'dist/index.js',
+  ],
+  [
+    'parent-segment',
+    conditional('./src/../src/index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'dist/index.js',
+  ],
+  [
+    'dot-segment',
+    conditional('./src/./index.ts'),
+    TS_FILES,
+    'dist/index.js',
+    [],
+    'dist/index.js',
+  ],
+  [
     'array-runtime-first',
     [
       './src/first.js',
@@ -1109,7 +1152,7 @@ test.skipIf(process.platform === 'win32').each([
             loader: expect.stringContaining(REFUSED),
             reported: true,
           }
-        : { discovery: read, loader: read, reported: false }
+        : { discovery: read, loader: read, reported: read === 'dist/index.js' }
     );
   }
 );
@@ -1193,4 +1236,67 @@ test('a wildcard entry is read through its animus target', async () => {
     discovery: relative(pkg, result.sourceEntries.get('wild-kit/foo') ?? ''),
     loader: relative(pkg, loaded.path ?? ''),
   }).toEqual({ discovery: 'src/entries/foo.ts', loader: 'src/entries/foo.ts' });
+});
+
+// Contract: a package is a kit when its manifest declares an `animus`
+// condition anywhere in its `exports` (any entry, subpath or pattern, under
+// any condition, valid or not), as the loader's table reads it. The app's
+// declared source kits and the imported-kit check both read it so, whether
+// or not the package's root entry resolves.
+test.each([
+  ['array', { '.': { animus: ['./src/index.ts'], import: './dist/index.js' } }],
+  [
+    'subpath-only',
+    { './button': { animus: './src/index.ts', import: './dist/index.js' } },
+  ],
+  ['invalid-without-runtime', { '.': { animus: '../outside.ts' } }],
+  [
+    'nested-under-browser',
+    {
+      '.': {
+        browser: { animus: './src/index.ts', default: './dist/index.js' },
+      },
+    },
+  ],
+  ['pattern-only', { './*': { animus: './src/*.ts', import: './dist/*.js' } }],
+])('a %s kit is a kit to both checks', (declaration, exports) => {
+  const name = `${declaration}-kit`;
+  const root = realpathSync(makeRoot());
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({ name: 'app', dependencies: { [name]: '1.0.0' } })
+  );
+  const pkg = join(root, 'node_modules', name);
+  for (const file of ['src/index.ts', 'dist/index.js']) {
+    mkdirSync(join(pkg, file, '..'), { recursive: true });
+    writeFileSync(join(pkg, file), 'export const t = 1;\n');
+  }
+  writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name, exports }));
+  const engine = {
+    declaresKitSource: native.declaresKitSource,
+    extractFacts: () =>
+      JSON.stringify({
+        parseCount: 1,
+        files: {
+          'src/App.tsx': {
+            parsePanicked: false,
+            imports: [{ local: 'x', imported: 'x', source: name }],
+            exports: [],
+          },
+        },
+      }),
+  };
+
+  expect({
+    declared: sourceKitDependencies(root, engine).map((kit) => kit.name),
+    imported: importedKitDiagnostics(
+      [{ path: 'src/App.tsx', source: '' }],
+      engine,
+      root,
+      []
+    ).map((d) => [d.component, d.code]),
+  }).toEqual({
+    declared: [name],
+    imported: [[name, KIT_SYSTEM_NOT_INCLUDED]],
+  });
 });
