@@ -22,7 +22,7 @@ pub struct ExtensionPolicy {
     pub node_next: Vec<(String, Vec<String>)>,
     /// A host's configured alias of an emitted extension (webpack's
     /// `extensionAlias`): its sequence replaces the literal try, in order
-    /// (spec §2.2 A2). Captured only; no probe reads it yet.
+    /// (spec §2.2 A2).
     #[serde(default)]
     pub alias: Vec<(String, Vec<String>)>,
 }
@@ -76,7 +76,19 @@ impl ExtensionPolicy {
     /// literal spelling comes first, so a real `.js` neighbour wins over the
     /// `.ts` it could stand for.
     pub fn candidates(&self, base: &str) -> Vec<String> {
-        let mut candidates: Vec<String> = std::iter::once(base.to_string())
+        // A configured alias of the emitted extension replaces the literal
+        // try, in its order (spec §2.2 A2): `'.js': ['.ts']` never finds an
+        // existing `x.js`.
+        let literal: Vec<String> = self
+            .alias
+            .iter()
+            .find_map(|(emitted, sequence)| {
+                let stem = base.strip_suffix(emitted.as_str())?;
+                Some(sequence.iter().map(|extension| format!("{stem}{extension}")).collect())
+            })
+            .unwrap_or_else(|| vec![base.to_string()]);
+        let mut candidates: Vec<String> = literal
+            .into_iter()
             .chain(self.appended.iter().map(|extension| format!("{base}{extension}")))
             .chain(self.appended.iter().map(|extension| format!("{base}/index{extension}")))
             .collect();

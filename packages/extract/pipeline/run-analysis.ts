@@ -11,6 +11,7 @@ import { checkCustomProperties } from './property-diagnostics';
 import { applyUnitFallback } from './unit-fallback';
 
 import type { AnalyzeProjectInputs } from './analyze-project-args';
+import type { ExtensionOrder } from './extension-policy';
 import type { KitDescriptorRecord } from './kit-descriptor';
 import type {
   DiagnosticLevels,
@@ -79,6 +80,9 @@ export interface AnalysisContext {
   /** Those of them read from their package's compiled output, where an
    *  unregistered keyframe reference names the kit's source condition. */
   outputDirs?: string[];
+  /** The host's extension order (spec §2.2 A2), through which analysis
+   *  resolves a relative import; the built-in policy without one. */
+  extensions?: ExtensionOrder;
 }
 
 /**
@@ -146,7 +150,8 @@ export function buildAnalysisInputs(
   if (
     context?.skippedSources?.length ||
     context?.unbundledComputedImports ||
-    context?.packageDirs?.length
+    context?.packageDirs?.length ||
+    context?.extensions
   ) {
     inputs.analysisContextJson = JSON.stringify({
       skippedSources: context.skippedSources ?? [],
@@ -154,6 +159,13 @@ export function buildAnalysisInputs(
       packageDirs: context.packageDirs ?? [],
       linkedDirs: context.linkedDirs ?? [],
       outputDirs: context.outputDirs ?? [],
+      ...(context.extensions && {
+        extensions: {
+          appended: context.extensions.appended,
+          nodeNext: context.extensions.nodeNext,
+          alias: context.extensions.alias,
+        },
+      }),
     });
   }
   return inputs;

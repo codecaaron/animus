@@ -24,10 +24,27 @@ export const EXTENSION_POLICY = {
   ],
 } as const;
 
-const NODE_NEXT_SOURCES: { readonly [emitted: string]: readonly string[] } =
-  Object.fromEntries(EXTENSION_POLICY.nodeNext);
+/** An extension order: what a specifier's base is tried with, in order. */
+export interface ExtensionOrder {
+  /** Appended to the base, then to `{base}/index`. */
+  readonly appended: readonly string[];
+  /** An emitted extension, and the source extensions it names, in order,
+   *  tried after the literal spelling. */
+  readonly nodeNext: ReadonlyArray<
+    readonly [emitted: string, sources: readonly string[]]
+  >;
+  /** A configured alias of an emitted extension: its sequence replaces the
+   *  literal try, in order. */
+  readonly alias: ReadonlyArray<
+    readonly [emitted: string, sequence: readonly string[]]
+  >;
+}
 
-const POLICY_EXTENSIONS: readonly string[] = EXTENSION_POLICY.appended;
+const BUILT_IN_ORDER: ExtensionOrder = {
+  appended: EXTENSION_POLICY.appended,
+  nodeNext: EXTENSION_POLICY.nodeNext,
+  alias: [],
+};
 
 /** The files `base` can name, in policy order: itself, with each appended
  *  extension, as a directory's index with each, then the sources its
@@ -40,15 +57,21 @@ export function policyCandidates(
   options: {
     readonly sources?: ReadonlySet<string>;
     readonly index?: (directory: string, file: string) => string;
+    /** A host's extension order (spec §2.2 A2); the built-in policy
+     *  without one. */
+    readonly policy?: ExtensionOrder;
   } = {}
 ): string[] {
-  const { sources, index = (directory, file) => `${directory}/${file}` } =
-    options;
+  const {
+    sources,
+    index = (directory, file) => `${directory}/${file}`,
+    policy = BUILT_IN_ORDER,
+  } = options;
   const admitted = (extension: string) => !sources || sources.has(extension);
   const appended = [
-    ...POLICY_EXTENSIONS.filter(admitted),
+    ...policy.appended.filter(admitted),
     ...(sources
-      ? [...sources].filter((s) => !POLICY_EXTENSIONS.includes(s))
+      ? [...sources].filter((s) => !policy.appended.includes(s))
       : []),
   ];
   const name = base.slice(
@@ -57,14 +80,18 @@ export function policyCandidates(
   const dot = name.lastIndexOf('.');
   const emitted = dot === -1 ? '' : name.slice(dot);
   // Exact case, as Node, TypeScript and the hosts read it.
-  const nodeNext = (NODE_NEXT_SOURCES[emitted] ?? []).filter(admitted);
+  const stem = base.slice(0, base.length - emitted.length);
+  const nodeNext = (
+    policy.nodeNext.find(([from]) => from === emitted)?.[1] ?? []
+  ).filter(admitted);
+  // A configured alias of the emitted extension replaces the literal try,
+  // in its order, as the system loader reads it.
+  const alias = policy.alias.find(([from]) => from === emitted)?.[1];
   return [
-    base,
+    ...(alias === undefined ? [base] : alias.map((to) => `${stem}${to}`)),
     ...appended.map((extension) => `${base}${extension}`),
     ...appended.map((extension) => index(base, `index${extension}`)),
-    ...nodeNext.map(
-      (source) => `${base.slice(0, base.length - emitted.length)}${source}`
-    ),
+    ...nodeNext.map((source) => `${stem}${source}`),
   ];
 }
 

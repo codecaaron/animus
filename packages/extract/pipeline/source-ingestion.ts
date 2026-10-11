@@ -13,6 +13,8 @@ import {
   type SvelteResolverAttributionRequest,
 } from './svelte-source-adapter';
 
+import type { ExtensionOrder } from './extension-policy';
+
 export interface RawSourceEntry {
   path: string;
   source: string;
@@ -216,6 +218,10 @@ export interface SourceIngestionOptions {
     filename: string
   ) => Promise<PreprocessMdxResult>;
   adaptSvelte?: typeof adaptSvelteSource;
+  /** The host's extension order (spec §2.2 A2), through which a Svelte
+   *  resolver's relative import is attributed; the built-in policy
+   *  without one. */
+  extensions?: ExtensionOrder;
 }
 
 function extension(path: string): string {
@@ -232,22 +238,29 @@ function canonicalResolverPath(path: string): string {
  *  extension policy's probe order. Empty for a non-relative specifier. */
 export function relativeSourceCandidates(
   importerPath: string,
-  specifier: string
+  specifier: string,
+  policy?: ExtensionOrder
 ): string[] {
   if (!specifier.startsWith('.')) return [];
   return policyCandidates(
     posix.normalize(
       posix.join(posix.dirname(canonicalResolverPath(importerPath)), specifier)
-    )
+    ),
+    { policy }
   );
 }
 
 function resolveRelativeSource(
   importerPath: string,
   specifier: string,
-  files: ReadonlyMap<string, string>
+  files: ReadonlyMap<string, string>,
+  policy: ExtensionOrder | undefined
 ): string | null {
-  for (const candidate of relativeSourceCandidates(importerPath, specifier)) {
+  for (const candidate of relativeSourceCandidates(
+    importerPath,
+    specifier,
+    policy
+  )) {
     const actualPath = files.get(candidate);
     if (actualPath !== undefined) return actualPath;
   }
@@ -272,7 +285,8 @@ class ResolverExportIndex {
 
   constructor(
     private readonly facts: ExtractFactsResult,
-    analysisPaths: readonly string[]
+    analysisPaths: readonly string[],
+    private readonly extensions: ExtensionOrder | undefined
   ) {
     const pathsByCanonical = new Map<string, string[]>();
     for (const path of analysisPaths) {
@@ -357,7 +371,12 @@ class ResolverExportIndex {
     const key = `${importerPath}\0${specifier}`;
     let resolved = this.resolveMemo.get(key);
     if (resolved === undefined) {
-      resolved = resolveRelativeSource(importerPath, specifier, this.files);
+      resolved = resolveRelativeSource(
+        importerPath,
+        specifier,
+        this.files,
+        this.extensions
+      );
       this.resolveMemo.set(key, resolved);
     }
     return resolved;
@@ -528,7 +547,8 @@ export async function ingestSourceEntries(
 
   const resolvers = new ResolverExportIndex(
     facts,
-    analysisEntries.map((entry) => entry.path)
+    analysisEntries.map((entry) => entry.path),
+    options.extensions
   );
   for (const { canonicalPath, paths } of resolvers.collisions) {
     for (let index = 0; index < paths.length; index += 1) {
@@ -689,6 +709,9 @@ export interface SourceIngestorHost {
   /** Development's error sink: under `strict`, a fatal diagnostic is
    *  reported here instead of thrown, and its original is quarantined. */
   reportErrors?(): ((message: string) => void) | undefined;
+  /** The host's extension order (spec §2.2 A2); the built-in policy
+   *  without one. */
+  extensions?(): ExtensionOrder;
 }
 
 export interface SourceIngestor {
@@ -721,7 +744,11 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
           `${host.prefix} native engine does not expose extractFacts required for source adaptation`
         );
       }
-      return ingestSourceEntries(entries, { extractFacts, factsCache });
+      return ingestSourceEntries(entries, {
+        extractFacts,
+        factsCache,
+        extensions: host.extensions?.(),
+      });
     },
     surfaceDiagnostics(diagnostics) {
       const fatal = diagnostics.filter(
