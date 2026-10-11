@@ -2,6 +2,8 @@ import {
   contentHash,
   diffFilePlans,
   isPathWithinRoot,
+  outputSourceGuard,
+  outputSourceMessage,
   snapshotFilePlans,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
@@ -58,6 +60,11 @@ async function handleHotUpdateExclusive(
       await reconcileSourceEntry(ctx, absFile, type, read);
       ctx.requestSystemReload(relative(ctx.rootDir, absFile));
     }
+    return [];
+  }
+
+  if (ctx.assetCopyDir !== null && ctx.isAssetSource(absFile)) {
+    if (ownsEvent && type !== 'delete') ctx.refreshAssetCopies(absFile);
     return [];
   }
 
@@ -158,6 +165,14 @@ async function analyzeChangedFile(
   }
 
   const relPath = relative(ctx.rootDir, absFile);
+  const outputDir = outputSourceGuard(
+    ctx.rootDir,
+    ctx.outputExclude === null ? [] : [ctx.outputExclude]
+  )(absFile);
+  if (outputDir !== null) {
+    ctx.warn(outputSourceMessage(relPath, outputDir));
+    return { kind: 'ignored' };
+  }
 
   let source: string;
   try {

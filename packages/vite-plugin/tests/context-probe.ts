@@ -123,6 +123,8 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
     externalFileOwners,
     externalDirOwners: {},
     excludeMatcher: createExcludeMatcher(undefined),
+    outputExclude: null,
+    assetCopyDir: null,
     fileCache,
     fileCacheGeneration: 0,
     ingestionFailureDiagnostics: [],

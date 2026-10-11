@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { pruneStaleAssets } from '../../session/extraction-session';
+import { pruneStaleAssets } from '../../pipeline/asset-copies';
 
 let scratch: string | null = null;
 
