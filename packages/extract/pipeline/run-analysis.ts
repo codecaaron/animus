@@ -19,6 +19,7 @@ import type {
   ManifestDiagnostic,
 } from './manifest-diagnostics';
 import type { ProjectManifest } from './manifest-schema';
+import type { PackageEntryProofs } from './self-contained-packages';
 import type { IngestionOpening } from './source-ingestion';
 import type { SystemConfig } from './system-config';
 
@@ -92,9 +93,9 @@ export interface AnalysisContext {
   /** Resolver calls ingestion ended under another spelling (spec §2.2
    *  A8): openings analysis reports and never prunes past. */
   openings?: IngestionOpening[];
-  /** Packages, by name, that import no module the analysis holds (see
-   *  `disjointPackages`): a load of one re-exports no analysed object. */
-  disjointPackages?: readonly string[];
+  /** The package entries proven self-contained, and why each other one the
+   *  host checked is not (see `provePackageEntries`). */
+  packageEntries?: PackageEntryProofs;
 }
 
 /**
@@ -164,7 +165,9 @@ export function buildAnalysisInputs(
     context?.unbundledComputedImports ||
     context?.packageDirs?.length ||
     context?.extensions ||
-    context?.disjointPackages?.length
+    context?.packageEntries?.selfContained.length ||
+    (context?.packageEntries &&
+      Object.keys(context.packageEntries.unproven).length)
   ) {
     inputs.analysisContextJson = JSON.stringify({
       skippedSources: context.skippedSources ?? [],
@@ -172,7 +175,8 @@ export function buildAnalysisInputs(
       packageDirs: context.packageDirs ?? [],
       linkedDirs: context.linkedDirs ?? [],
       outputDirs: context.outputDirs ?? [],
-      disjointPackages: context.disjointPackages ?? [],
+      selfContained: context.packageEntries?.selfContained ?? [],
+      unproven: context.packageEntries?.unproven ?? {},
       ...(context.extensions && {
         extensions: {
           appended: context.extensions.appended,

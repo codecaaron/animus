@@ -172,6 +172,16 @@ export interface NapiSystemConfig {
 }
 
 /**
+ * Proves each requested package entry self-contained, resolving as the
+ * system loader does under the host's conditions, workspaces and extension
+ * order, with the host's path aliases (`pathAliasesJson`'s shape): JSON
+ * `[{ specifier, fromDir, unproven }]`, `unproven` null for a proven
+ * entry. A file's reading is kept while its size and modification time
+ * hold, so a repeated proof re-reads only what changed.
+ */
+export declare function proveSelfContained(requestsJson: string, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null, pathAliasesJson?: string | undefined | null): string
+
+/**
  * A kit's source root (spec §2.2 A5), as JSON: the package located from
  * `from_dir` as the system loader locates it, the rule that chose the root
  * (`animus`, `source-exports`, `src` or `compiled`), its entries, its

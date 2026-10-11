@@ -235,28 +235,27 @@ fn node_builtins() -> &'static FxHashSet<String> {
     })
 }
 
-/// Whether the package `identity`, as `Named` names it, imports no module
-/// the analysis holds: a module built into Node, or a package the host
-/// found disjoint.
-pub(crate) fn imports_nothing_analysed(identity: &str, inputs: &CssInputs) -> bool {
-    identity.starts_with("node:")
-        || node_builtins().contains(identity)
-        || package_name(identity).is_some_and(|name| inputs.analysis_context.disjoint_packages.contains(name))
+/// Whether `specifier` names a module built into Node.
+pub(crate) fn is_node_builtin(specifier: &str) -> bool {
+    specifier.starts_with("node:") || node_builtins().contains(specifier)
 }
 
-/// The package a bare specifier names (`@scope/name`, `name`); `None` for a
-/// path.
-fn package_name(specifier: &str) -> Option<&str> {
-    if specifier.starts_with('.') || specifier.starts_with('/') {
-        return None;
+/// Whether the package `identity`, as `Named` names it, imports no module
+/// the analysis holds: a module built into Node, or an entry the host
+/// proved self-contained.
+pub(crate) fn imports_nothing_analysed(identity: &str, inputs: &CssInputs) -> bool {
+    is_node_builtin(identity) || inputs.analysis_context.self_contained.contains(identity)
+}
+
+/// Why a package the analysis does not read may change any exported
+/// object, said as a clause: with the host's reason, where it checked the
+/// entry and could not prove it self-contained.
+pub(crate) fn unread_clause(specifier: &str, inputs: &CssInputs) -> String {
+    let clause = "a package the analysis does not read may re-export any module";
+    match inputs.analysis_context.unproven.get(specifier) {
+        Some(why) => format!("{clause} ({why})"),
+        None => clause.to_string(),
     }
-    let mut segments = specifier.splitn(3, '/');
-    let first = segments.next()?;
-    if !first.starts_with('@') {
-        return Some(first);
-    }
-    let second = segments.next()?;
-    Some(&specifier[..first.len() + 1 + second.len()])
 }
 
 /// The package `specifier`, written in `path`, names when the analysis

@@ -179,11 +179,13 @@ pub struct AnalysisContext {
     /// call whose import the host opens as another file, spec §2.2 A8):
     /// each is an opening of this analysis, as one of its own probes is.
     pub openings: Vec<CaseOpening>,
-    /// Packages that import no module the analysis holds, by name: every
-    /// package their installed dependency closure reaches is installed,
-    /// readable and none of the analysed ones. A load of one re-exports no
-    /// analysed object.
-    pub disjoint_packages: BTreeSet<String>,
+    /// The package entries, by specifier, the host proved self-contained:
+    /// every module they reach is installed under `node_modules`. A load of
+    /// one re-exports no analysed object.
+    pub self_contained: BTreeSet<String>,
+    /// Why the host could not prove each other package entry it checked
+    /// self-contained, said as a clause naming the file that defeats it.
+    pub unproven: BTreeMap<String, String>,
 }
 
 /// A probe ingestion ended because the host opens its candidate under
@@ -13361,30 +13363,37 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
-    /// A package whose installed dependencies reach no analysed module, as
-    /// the host lists it, re-exports no analysed object: loading it, a
-    /// subpath of it or its namespace leaves the member tables. A package
-    /// the host does not list still reaches every exported object.
+    /// A package entry the host proved self-contained (every module it
+    /// reaches is installed) re-exports no analysed object: loading it,
+    /// re-exporting its namespace or writing through it leaves the member
+    /// tables. Another entry of the same package, and an entry the host
+    /// could not prove, still reach every exported object, the warning
+    /// naming why the proof failed.
     #[test]
-    fn a_package_the_host_finds_disjoint_changes_no_member_table() {
+    fn a_package_entry_the_host_proves_self_contained_changes_no_member_table() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
         let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
         let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
         let mut inputs = logical_space_inputs();
-        inputs.analysis_context.disjoint_packages = ["@local/lib".to_string(), "lib".to_string()].into();
-        for (mutate, warns) in [
-            ("import('@local/lib').then((ui) => { ui.Fam.Box = () => null; });\n", false),
-            ("require('@local/lib/sub').Fam.Box = () => null;\n", false),
-            ("import * as ui from 'lib';\nui.Fam.Box = () => null;\n", false),
-            ("export * as ns from '@local/lib';\n", false),
-            ("import('@local/proxy').then((ui) => { ui.Fam.Box = () => null; });\n", true),
-            ("import * as ui from 'lib-other';\nui.Fam.Box = () => null;\n", true),
+        inputs.analysis_context.self_contained = ["@local/lib".to_string(), "lib".to_string()].into();
+        let why = "node_modules/proxy/esm/worker.js line 3: loads a module no literal names";
+        inputs.analysis_context.unproven = [("@local/proxy".to_string(), why.to_string())].into();
+        for (mutate, warning) in [
+            ("import('@local/lib').then((ui) => { ui.Fam.Box = () => null; });\n", None),
+            ("import * as ui from 'lib';\nui.Fam.Box = () => null;\n", None),
+            ("export * as ns from '@local/lib';\n", None),
+            ("require('@local/lib/sub').Fam.Box = () => null;\n", Some("a package the analysis does not read may re-export any module")),
+            ("import('@local/proxy').then((ui) => { ui.Fam.Box = () => null; });\n", Some(why)),
         ] {
             let out = analyze(
                 &[("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("mutate.ts", mutate)],
                 &inputs,
             );
-            assert_eq!(unattributed(&out).len(), usize::from(warns), "{mutate}: {:?}", out.diagnostics);
+            let warned: Vec<&str> = unattributed(&out).iter().map(|d| d.message.as_str()).collect();
+            match warning {
+                None => assert!(warned.is_empty(), "{mutate}: {warned:?}"),
+                Some(clause) => assert!(warned.len() == 1 && warned[0].contains(clause), "{mutate}: {warned:?}"),
+            }
         }
     }
 

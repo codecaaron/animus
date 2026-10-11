@@ -30,9 +30,6 @@ import {
   extractSystemFilePackages,
   nativeKitSourceRoot,
   importedKitDiagnostics,
-  declaredPackageNames,
-  disjointPackages,
-  disjointPackagesKey,
   findPackageRoot,
   findSheetAssetSpecifiers,
   firstOwners,
@@ -63,6 +60,7 @@ import {
   walkPackageSources,
   engineModuleParser,
   surfaceManifestDiagnostics,
+  provePackageEntries,
 } from '../pipeline/index';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
 import {
@@ -289,8 +287,6 @@ export class ExtractionSession {
   externalLinkedDirs: string[] = [];
   /** Those read from their package's compiled output. */
   externalOutputDirs: string[] = [];
-  /** The disjoint packages, with what they were computed from. */
-  private disjointPackageMemo: { key: string; names: string[] } | undefined;
   /** Absolute package dir → owning specifier (cross-source correlation). */
   private externalDirOwners: Record<string, string> = {};
   /** rootDir-relative external file → owning specifier (correlation join). */
@@ -479,27 +475,6 @@ export class ExtractionSession {
 
   get verbose(): boolean {
     return this.verbosity !== 'quiet';
-  }
-
-  /** The packages that import no module the analysis holds, from the
-   *  root's dependency graph and each analysed package's; recomputed when
-   *  a root's manifest or a lockfile changes, as an install does. */
-  private disjointPackageNames(): string[] {
-    const roots = [
-      ...new Set(
-        [this.rootDir!, ...this.externalPackageDirs].map((dir) =>
-          findPackageRoot(join(dir, 'package.json'))
-        )
-      ),
-    ];
-    const key = disjointPackagesKey(roots);
-    if (this.disjointPackageMemo?.key !== key) {
-      this.disjointPackageMemo = {
-        key,
-        names: disjointPackages(roots, declaredPackageNames(roots)),
-      };
-    }
-    return this.disjointPackageMemo.names;
   }
 
   private log(msg: string): void {
@@ -1923,7 +1898,18 @@ export class ExtractionSession {
           relative(this.rootDir!, dir)
         ),
         extensions: this.extensionPolicy,
-        disjointPackages: this.disjointPackageNames(),
+        packageEntries: provePackageEntries(
+          fileEntries,
+          this.rootDir!,
+          packageMap,
+          engineApi(this.key),
+          {
+            conditions: this.conditions,
+            workspaces: declaredWorkspacePackages(this.rootDir!),
+            extensionPolicyJson: extensionPolicyJson(this.extensionPolicy),
+            pathAliasesJson: this.pathAliasesJson,
+          }
+        ),
       },
     };
 

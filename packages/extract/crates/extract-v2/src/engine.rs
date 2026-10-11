@@ -652,7 +652,7 @@ fn unstable_style_statics(
         let loads = module.loads.iter().map(|spec| (spec, "at runtime".to_string()));
         for (spec, how) in reexports.chain(loads) {
             if crate::link::unread_package(file, spec, files, inputs).is_some() {
-                let reason = format!("{file} hands on {spec} {how}, and a package the analysis does not read may re-export any module");
+                let reason = format!("{file} hands on {spec} {how}, and {}", crate::link::unread_clause(spec, inputs));
                 flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
                 continue;
             }

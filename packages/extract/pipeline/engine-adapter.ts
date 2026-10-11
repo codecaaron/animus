@@ -65,6 +65,16 @@ export interface EngineApi {
     hostEntry?: string,
     packageDir?: string
   ) => string;
+  /** Proves each requested package entry self-contained under the host's
+   *  resolution (see `provePackageEntries`), as JSON
+   *  `[{ specifier, fromDir, unproven }]`. */
+  proveSelfContained?: (
+    requestsJson: string,
+    conditions?: readonly string[],
+    workspaces?: WorkspacePackages,
+    extensionPolicyJson?: string,
+    pathAliasesJson?: string
+  ) => string;
   analyzeProject: (
     filesJson: string,
     scalesJson: string,
@@ -221,6 +231,23 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
                 extensionPolicyJson,
                 hostEntry,
                 packageDir
+              ),
+      proveSelfContained:
+        native.proveSelfContained === undefined
+          ? undefined
+          : (
+              requestsJson,
+              conditions,
+              workspaces,
+              extensionPolicyJson,
+              pathAliasesJson
+            ) =>
+              native.proveSelfContained(
+                requestsJson,
+                conditions,
+                workspaces,
+                extensionPolicyJson,
+                pathAliasesJson
               ),
       analyzeProject: (
         filesJsonRaw,

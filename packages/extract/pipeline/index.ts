@@ -75,11 +75,8 @@ export {
   unresolvableIncludesMessage,
   walkPackageSources,
 } from './discover-packages';
-export {
-  disjointPackages,
-  disjointPackagesKey,
-  declaredPackageNames,
-} from './disjoint-packages';
+export { provePackageEntries } from './self-contained-packages';
+export type { PackageEntryProofs } from './self-contained-packages';
 export { caseMismatchReason } from './extension-policy';
 export type { KitDescriptor, KitDescriptorRecord } from './kit-descriptor';
 export {

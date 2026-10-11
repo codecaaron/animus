@@ -47,6 +47,7 @@ pub mod ids;
 pub mod jsx_scan;
 pub(crate) mod keyframe_aliases;
 pub mod link;
+pub(crate) mod self_contained;
 pub mod loads;
 pub mod module_specifiers;
 pub mod usage_facts;
@@ -204,6 +205,52 @@ pub fn resolve_specifier(
         resolution_context(conditions, workspaces, extension_policy_json)
             .and_then(|context| animus_system_loader::resolve_specifier(&specifier, &from_dir, &context)),
     )
+}
+
+/// A package entry the host asks to prove self-contained: `specifier` as a
+/// module in `from_dir` loads it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EntryRequest {
+    specifier: String,
+    from_dir: String,
+}
+
+/// Proves each requested package entry self-contained, resolving as the
+/// system loader does under the host's conditions, workspaces and extension
+/// order, with the host's path aliases (`pathAliasesJson`'s shape): JSON
+/// `[{ specifier, fromDir, unproven }]`, `unproven` null for a proven
+/// entry. A file's reading is kept while its size and modification time
+/// hold, so a repeated proof re-reads only what changed.
+#[napi]
+pub fn prove_self_contained(
+    requests_json: String,
+    conditions: Option<Vec<String>>,
+    workspaces: Option<std::collections::HashMap<String, String>>,
+    extension_policy_json: Option<String>,
+    path_aliases_json: Option<String>,
+) -> napi::Result<String> {
+    let requests: Vec<EntryRequest> =
+        serde_json::from_str(&requests_json).map_err(|error| napi::Error::from_reason(format!("invalid requests: {error}")))?;
+    let context = resolution_context(conditions, workspaces, extension_policy_json).map_err(napi::Error::from_reason)?;
+    #[derive(Deserialize)]
+    struct Aliases {
+        aliases: Vec<analyze_css::AliasEntry>,
+    }
+    let aliases = match path_aliases_json.as_deref().map(str::trim) {
+        None | Some("" | "null") => Vec::new(),
+        Some(json) => serde_json::from_str::<Aliases>(json)
+            .map_err(|error| napi::Error::from_reason(format!("invalid pathAliasesJson: {error}")))?
+            .aliases,
+    };
+    let proofs: Vec<serde_json::Value> = requests
+        .iter()
+        .map(|request| {
+            let unproven = self_contained::prove(&request.specifier, &request.from_dir, &context, &aliases).err();
+            serde_json::json!({ "specifier": request.specifier, "fromDir": request.from_dir, "unproven": unproven })
+        })
+        .collect();
+    Ok(serde_json::Value::Array(proofs).to_string())
 }
 
 /// Whether the package at `package_dir` declares the kit source condition:

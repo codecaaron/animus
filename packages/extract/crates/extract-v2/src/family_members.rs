@@ -771,7 +771,8 @@ impl<'f> ObjectMembers<'f> {
             for (name, spec) in &ff.namespace_exports {
                 if crate::link::unread_package(module, spec, files, inputs).is_some() {
                     let reason = format!(
-                        "{module} re-exports {spec} as the namespace {name}, and a package the analysis does not read may re-export any module"
+                        "{module} re-exports {spec} as the namespace {name}, and {}",
+                        crate::link::unread_clause(spec, inputs)
                     );
                     flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
                     continue;
@@ -786,8 +787,9 @@ impl<'f> ObjectMembers<'f> {
                 if let LoadTarget::Specifier(spec) = &load.target {
                     if crate::link::unread_package(module, spec, files, inputs).is_some() {
                         let reason = format!(
-                            "{module} loads {spec} at runtime on line {}, and a package the analysis does not read may re-export any module",
-                            load.line
+                            "{module} loads {spec} at runtime on line {}, and {}",
+                            load.line,
+                            crate::link::unread_clause(spec, inputs)
                         );
                         flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
                     }
