@@ -21,12 +21,10 @@ pub enum LoadKind {
     Reexport { runtime: bool },
     /// `import(…)`.
     DynamicImport,
-    /// A load call; `require` for `require(…)` itself.
+    /// A load call; `require` for `require(…)` itself, through parentheses,
+    /// a type assertion or an optional call too (`(require)(x)`,
+    /// `require!(x)`, `require?.(x)`).
     Call { require: bool },
-    /// `require` reached through parentheses or a type assertion
-    /// (`(require)('./x')`, `require!('./x')`) with a literal specifier;
-    /// the load calls match the bare name.
-    WrappedRequire,
 }
 
 /// How a load's specifier is written.
@@ -80,7 +78,7 @@ impl Load {
     pub fn module_load(&self, source: &str) -> Option<ModuleLoad> {
         let dynamic_import = match self.kind {
             LoadKind::DynamicImport => true,
-            LoadKind::Call { .. } | LoadKind::WrappedRequire => false,
+            LoadKind::Call { .. } => false,
             LoadKind::Import { .. } | LoadKind::Reexport { .. } => return None,
         };
         Some(self.recorded(source, dynamic_import))
@@ -161,7 +159,7 @@ impl<'a> Visit<'a> for Calls {
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-        let require = call.callee.is_specific_id("require");
+        let require = matches!(loader(&call.callee), Loader::Require);
         // The specifier as written: a string, or a template with no
         // substitution.
         let first = call.arguments.first().and_then(Argument::as_expression);
@@ -170,20 +168,9 @@ impl<'a> Visit<'a> for Calls {
             (Spelling::String | Spelling::Template, Some(LoadTarget::Specifier(specifier))) => Some(specifier),
             _ => None,
         };
-        let targets = call_loads(call);
-        match (targets.is_empty(), require, literal) {
-            (true, true, Some(specifier)) => self.0.push(Load {
-                kind: LoadKind::WrappedRequire,
-                target: LoadTarget::Specifier(specifier),
-                spelling: written,
-                span: call.span,
-            }),
-            (_, _, literal) => {
-                for target in targets {
-                    let spelling = if require && literal.is_some() { written } else { Spelling::Other };
-                    self.0.push(Load { kind: LoadKind::Call { require }, target, spelling, span: call.span });
-                }
-            }
+        for target in call_loads(call) {
+            let spelling = if require && literal.is_some() { written } else { Spelling::Other };
+            self.0.push(Load { kind: LoadKind::Call { require }, target, spelling, span: call.span });
         }
         oxc::ast_visit::walk::walk_call_expression(self, call);
     }
@@ -338,27 +325,51 @@ fn glob_loads(argument: Option<&Argument<'_>>) -> Vec<LoadTarget> {
 /// older `globEager`). `require.resolve` loads nothing.
 fn call_loads(call: &CallExpression<'_>) -> Vec<LoadTarget> {
     let argument = |index: usize| call.arguments.get(index).and_then(Argument::as_expression);
-    match &call.callee {
-        Expression::Identifier(id) if id.name == "require" => {
-            vec![argument(0).map_or(LoadTarget::Unknown, load_of)]
-        }
-        Expression::StaticMemberExpression(member) => {
-            match (&member.object, member.property.name.as_str()) {
-                (Expression::Identifier(object), "context") if object.name == "require" => {
-                    vec![context_of(argument(0), argument(1), argument(2))]
-                }
-                (Expression::MetaProperty(meta), property)
-                    if meta.meta.name == "import" && meta.property.name == "meta" =>
-                {
-                    match property {
-                        "webpackContext" => vec![webpack_context_of(call)],
-                        "glob" | "globEager" => glob_loads(call.arguments.first()),
-                        _ => Vec::new(),
-                    }
-                }
-                _ => Vec::new(),
-            }
-        }
+    match loader(&call.callee) {
+        Loader::Require => vec![argument(0).map_or(LoadTarget::Unknown, load_of)],
+        Loader::RequireMember(member) if member == "context" => vec![context_of(argument(0), argument(1), argument(2))],
+        Loader::ImportMetaMember(member) => match member.as_str() {
+            "webpackContext" => vec![webpack_context_of(call)],
+            "glob" | "globEager" => glob_loads(call.arguments.first()),
+            _ => Vec::new(),
+        },
         _ => Vec::new(),
+    }
+}
+
+/// What a call's callee names, read through parentheses and type
+/// assertions (`(require)`, `require!`), with a constant computed member
+/// (`require['context']`) as the member it names.
+enum Loader {
+    Require,
+    RequireMember(String),
+    ImportMetaMember(String),
+    Other,
+}
+
+fn loader(callee: &Expression<'_>) -> Loader {
+    let member = |object: &Expression<'_>, name: String| match object.get_inner_expression() {
+        Expression::Identifier(id) if id.name == "require" => Loader::RequireMember(name),
+        Expression::MetaProperty(meta) if meta.meta.name == "import" && meta.property.name == "meta" => {
+            Loader::ImportMetaMember(name)
+        }
+        _ => Loader::Other,
+    };
+    match callee.get_inner_expression() {
+        Expression::Identifier(id) if id.name == "require" => Loader::Require,
+        Expression::StaticMemberExpression(static_member) => {
+            member(&static_member.object, static_member.property.name.to_string())
+        }
+        Expression::ComputedMemberExpression(computed) => match computed.expression.get_inner_expression() {
+            Expression::StringLiteral(name) => member(&computed.object, name.value.to_string()),
+            Expression::TemplateLiteral(template) if template.expressions.is_empty() => {
+                match template.quasis.first().and_then(|quasi| quasi.value.cooked.as_ref()) {
+                    Some(name) => member(&computed.object, name.to_string()),
+                    None => Loader::Other,
+                }
+            }
+            _ => Loader::Other,
+        },
+        _ => Loader::Other,
     }
 }

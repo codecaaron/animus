@@ -2301,6 +2301,16 @@ export const App = () => <Box tone="red" />;
                 "{ ...pad }",
             ),
             (
+                "wrapped require of a computed specifier",
+                "const name = './tokens.js';\n(require)(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
+                "optional wrapped require of a computed specifier",
+                "const name = './tokens.js';\nconst loaded = (require)?.(name);\nloaded.pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
                 "eager glob that loads the module",
                 "const modules = import.meta.glob('./*.js', { eager: true });\nmodules['./tokens.js'].pad.padding = 9;",
                 "{ ...pad }",

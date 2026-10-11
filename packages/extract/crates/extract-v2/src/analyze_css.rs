@@ -13683,6 +13683,13 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "export const open = (name) => require('./excluded/' + name);\n",
             "export const pages = require.context('./excluded', true, /\\.js$/);\n",
             "export const pages = import.meta.glob(['./excluded/*.js', './other/*.js']);\n",
+            // A recognised loader through parentheses, an optional call or a
+            // constant computed member is the same loader.
+            "export const open = (name) => (require)(name);\n",
+            "export const open = (name) => (require)?.(name);\n",
+            "export const pages = (require.context)('./excluded', true, /\\.js$/);\n",
+            "export const pages = require['context']('./excluded', true, /\\.js$/);\n",
+            "export const pages = (import.meta.glob)('./excluded/*.js', { eager: true });\n",
         ] {
             let warned = warned(loader, 0, None);
             assert!(
