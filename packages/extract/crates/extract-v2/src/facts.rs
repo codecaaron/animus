@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::chain_walk::{self, ChainDescriptor};
 use crate::eval;
+use crate::flow::Known;
 use crate::static_value::StaticValue;
 use crate::jsx_scan::{scan_compose_calls, ComposeFamilyInfo};
 use crate::owned_ast::OwnedAst;
@@ -725,17 +726,26 @@ fn expression_root(expr: &Expression<'_>) -> Option<String> {
     }
 }
 
-/// Statics as JSON, without a binding whose whole value is unevaluated.
+/// Statics as JSON, data only: no binding, member or item is the `asset`
+/// function or a node evaluation could not settle.
 fn serialize_statics<S: serde::Serializer>(
     statics: &BTreeMap<String, StaticValue>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    serializer.collect_map(
-        statics
-            .iter()
-            .filter(|(_, value)| !matches!(value, StaticValue::Unevaluated(_)))
-            .map(|(name, value)| (name, eval::plain(value))),
-    )
+    serializer.collect_map(statics.iter().filter_map(|(name, value)| Some((name, serialized(value)?))))
+}
+
+/// A static value as serialized facts carry it; `None` for the `asset`
+/// function or an unevaluated node, which no JSON value stands for.
+fn serialized(value: &StaticValue) -> Option<Value> {
+    Some(match value {
+        StaticValue::AssetFunction { .. } | StaticValue::Unevaluated(_) => return None,
+        StaticValue::Array(items) => Value::Array(items.iter().filter_map(serialized).collect()),
+        StaticValue::Object(entries) => Value::Object(
+            entries.iter().filter_map(|(key, value)| Some((key.clone(), serialized(value)?))).collect(),
+        ),
+        scalar => eval::plain(scalar),
+    })
 }
 
 #[derive(Default)]
@@ -1213,8 +1223,8 @@ pub fn extract_file_facts_enriched_with_usage_statics(
     extra_usage_statics: &rustc_hash::FxHashMap<String, StaticValue>,
 ) -> FileFacts {
     let program = ast.program();
-    let local_statics = eval::collect_static_values(program);
-    let local_usage_statics = eval::collect_complete_static_values(program);
+    let local_statics = eval::collect_static_values(program, &ast.path);
+    let local_usage_statics = eval::collect_complete_static_values(program, &ast.path);
     let imports = collect_import_facts(ast.module_record());
     let exports = crate::usage_facts::collect_export_facts(program);
     let inputs = crate::analyze_css::CssInputs::default();
@@ -1277,7 +1287,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         unsettled_fx.insert(k.clone(), unsettled.clone());
         statics_fx.remove(k);
     }
-    let statics = eval::Statics::new(&statics_fx, &unsettled_fx);
+    let statics = eval::Statics::new(&statics_fx, &unsettled_fx, &ast.path);
     let mut usage_statics_fx = local_usage_statics.clone();
     for (k, v) in extra_usage_statics {
         usage_statics_fx.insert(k.clone(), v.clone());
@@ -1379,13 +1389,12 @@ pub(crate) fn extract_file_facts_from_static_maps(
                                 let binding = segments.next().unwrap_or_default();
                                 let path: Vec<&str> = segments.collect();
                                 match eval::static_value(statics, binding, &path) {
-                                    Some(eval::StaticAnswer::Unsettled(unsettled)) => Err(unsettled.reason.clone()),
-                                    Some(eval::StaticAnswer::Unevaluated(unevaluated)) => {
-                                        Err(unevaluated.clause.clone())
-                                    }
-                                    Some(eval::StaticAnswer::Exact(value)) => {
-                                        Ok((Some(value.clone()), Vec::new(), Vec::new()))
-                                    }
+                                    Some(Known::Finite(_) | Known::Uncertain(_)) => Err(eval::uncertain_clause(
+                                        statics, binding, &path,
+                                    )
+                                    .unwrap_or_default()
+                                    .to_string()),
+                                    Some(Known::Exact(value)) => Ok((Some(value.clone()), Vec::new(), Vec::new())),
                                     None => Err(format!(
                                         "identifier '{}' not resolvable to static object",
                                         name
@@ -1576,6 +1585,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         program,
         ast.module_record(),
         &usage_statics_fx,
+        &ast.path,
         &descriptors,
         &exports,
         &object_consts,
@@ -1798,6 +1808,21 @@ mod tests {
             // Compared as text, so key order counts.
             assert_eq!(seen.to_string(), serde_json::from_str::<Value>(expected).unwrap().to_string(), "{source}");
         }
+    }
+
+    /// Contract: serialized statics carry data only, so the `asset` function
+    /// a module imports is no serialized static.
+    #[test]
+    fn serialized_statics_carry_no_asset_function() {
+        let facts = facts_for(
+            r#"
+            import { asset } from '@animus-ui/system';
+            const GAP = 16;
+            export const Box = ds.styles({ gap: GAP }).asElement('div');
+            "#,
+        );
+        let serialized = serde_json::to_value(&facts).unwrap();
+        assert_eq!(serialized["statics"], serde_json::json!({ "GAP": 16 }));
     }
 
     #[test]
