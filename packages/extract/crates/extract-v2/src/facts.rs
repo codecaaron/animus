@@ -390,6 +390,7 @@ pub struct FileFacts {
     pub directive_prologue: Option<DirectivePrologueFact>,
     pub chains: Vec<ChainFacts>,
     /// Same-file static const values (feeds identifier resolution).
+    #[serde(serialize_with = "serialize_statics")]
     pub statics: BTreeMap<String, Value>,
     /// Raw JSX/createElement usage facts, component-agnostic; cross-file
     /// filtering happens later.
@@ -716,6 +717,12 @@ fn expression_root(expr: &Expression<'_>) -> Option<String> {
         Expression::StaticMemberExpression(member) => expression_root(&member.object),
         _ => None,
     }
+}
+
+/// Statics without a binding whose whole value reads as a lost-value
+/// marker: serialized facts carry no marker.
+fn serialize_statics<S: serde::Serializer>(statics: &BTreeMap<String, Value>, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_map(statics.iter().filter(|(_, value)| eval::lost_value_reason(value).is_none()))
 }
 
 #[derive(Default)]
@@ -1716,6 +1723,21 @@ mod tests {
         assert_eq!(stage.skipped.len(), 1);
         assert_eq!(stage.skipped[0].0, "color");
         assert_eq!(&facts.statics["GAP"], &Value::from(16));
+    }
+
+    /// A static whose own key spells the lost-value marker reads as one, so
+    /// serialized facts leave it out.
+    #[test]
+    fn serialized_statics_leave_out_a_value_that_reads_as_a_lost_marker() {
+        let facts = facts_for(
+            r#"
+            const pad = { '$animus.lost': 'authored', padding: 4 };
+            const GAP = 16;
+            export const Box = ds.styles({ gap: GAP }).asElement('div');
+            "#,
+        );
+        let serialized = serde_json::to_value(&facts).unwrap();
+        assert_eq!(serialized["statics"], serde_json::json!({ "GAP": 16 }));
     }
 
     #[test]
