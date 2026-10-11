@@ -17,6 +17,11 @@ export function servedFiles(
 ): ServedFiles {
   const dropped = new Map<string, ManifestMissingInput>();
   for (const input of manifest.missing_inputs ?? []) {
+    // SA1 is decided by cause: a parent that resolves but is unextractable
+    // is a refusal the analysis completed (PF1), so its extension is
+    // delivered with the chain in place and the finding reported, as the
+    // parent is.
+    if (input.outcome === 'failed-parent') continue;
     if (!dropped.has(input.file)) dropped.set(input.file, input);
   }
   return {
