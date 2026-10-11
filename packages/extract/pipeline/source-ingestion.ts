@@ -5,6 +5,7 @@ import { policyCandidates } from './extension-policy';
 import { parseInternalWire } from './internal-wire';
 import { SKIPPED_SOURCE_COST } from './manifest-diagnostics';
 import { preprocessMdx, type PreprocessMdxResult } from './mdx-preprocessor';
+import { hostCandidate } from './probe-evidence';
 import {
   adaptSvelteSource,
   type AdaptSvelteSourceResult,
@@ -193,6 +194,19 @@ export interface SourceIngestionResult {
   /** Originals a fatal diagnostic left out. Their renders are unseen, so an
    *  analysis without them must not prune. Absent when none was left out. */
   skippedOriginals?: string[];
+  /** Resolver calls whose import the host opens under another spelling
+   *  (spec §2.2 A8): openings the analysis reports and never prunes past.
+   *  Absent when none. */
+  openings?: IngestionOpening[];
+}
+
+/** A probe ingestion ended because the host opens its candidate under
+ *  another spelling. */
+export interface IngestionOpening {
+  importer: string;
+  specifier: string;
+  candidate: string;
+  opened: string;
 }
 
 export interface AbortedParse {
@@ -222,6 +236,11 @@ export interface SourceIngestionOptions {
    *  resolver's relative import is attributed; the built-in policy
    *  without one. */
   extensions?: ExtensionOrder;
+  /** The session root the source paths are relative to. Given, a Svelte
+   *  resolver's relative import is attributed to the module its host's
+   *  filesystem opens first (spec §2.2 A8): one it opens under another
+   *  spelling is attributed to none. */
+  rootDir?: string;
 }
 
 function extension(path: string): string {
@@ -254,8 +273,32 @@ function resolveRelativeSource(
   importerPath: string,
   specifier: string,
   files: ReadonlyMap<string, string>,
-  policy: ExtensionOrder | undefined
+  analysed: ReadonlySet<string>,
+  opened: (candidate: string, actual: string) => void,
+  policy: ExtensionOrder | undefined,
+  host: { rootDir: string } | undefined
 ): string | null {
+  if (host !== undefined && specifier.startsWith('.')) {
+    const first = hostCandidate(
+      host.rootDir,
+      posix.normalize(
+        posix.join(
+          posix.dirname(canonicalResolverPath(importerPath)),
+          specifier
+        )
+      ),
+      analysed,
+      policy
+    );
+    // The host opens another spelling: no module, and an opening the
+    // analysis reports and never prunes past.
+    if (first?.actual) {
+      opened(first.candidate, first.actual);
+      return null;
+    }
+    const named = first?.analysedAs && files.get(first.analysedAs);
+    if (named) return named;
+  }
   for (const candidate of relativeSourceCandidates(
     importerPath,
     specifier,
@@ -274,6 +317,9 @@ class ResolverExportIndex {
   }>;
 
   private readonly files: ReadonlyMap<string, string>;
+  private readonly analysed: ReadonlySet<string>;
+  /** Each resolver call the host opens under another spelling, once. */
+  readonly openings = new Map<string, IngestionOpening>();
   private readonly resolverBindings = new Map<string, ReadonlySet<string>>();
   /** Both memos live for one ingest only — the index is rebuilt per call,
    *  so neither needs invalidation. */
@@ -286,7 +332,8 @@ class ResolverExportIndex {
   constructor(
     private readonly facts: ExtractFactsResult,
     analysisPaths: readonly string[],
-    private readonly extensions: ExtensionOrder | undefined
+    private readonly extensions: ExtensionOrder | undefined,
+    private readonly host: { rootDir: string } | undefined
   ) {
     const pathsByCanonical = new Map<string, string[]>();
     for (const path of analysisPaths) {
@@ -314,6 +361,7 @@ class ResolverExportIndex {
       }
     }
     this.files = files;
+    this.analysed = new Set(files.keys());
 
     for (const [path, file] of Object.entries(facts.files)) {
       this.resolverBindings.set(
@@ -375,7 +423,16 @@ class ResolverExportIndex {
         importerPath,
         specifier,
         this.files,
-        this.extensions
+        this.analysed,
+        (candidate, opened) =>
+          this.openings.set(key, {
+            importer: importerPath,
+            specifier,
+            candidate,
+            opened,
+          }),
+        this.extensions,
+        this.host
       );
       this.resolveMemo.set(key, resolved);
     }
@@ -548,7 +605,8 @@ export async function ingestSourceEntries(
   const resolvers = new ResolverExportIndex(
     facts,
     analysisEntries.map((entry) => entry.path),
-    options.extensions
+    options.extensions,
+    options.rootDir === undefined ? undefined : { rootDir: options.rootDir }
   );
   for (const { canonicalPath, paths } of resolvers.collisions) {
     for (let index = 0; index < paths.length; index += 1) {
@@ -596,6 +654,9 @@ export async function ingestSourceEntries(
     diagnostics,
   };
   if (abortedParses.length > 0) result.abortedParses = abortedParses;
+  if (resolvers.openings.size > 0) {
+    result.openings = [...resolvers.openings.values()];
+  }
   return result;
 }
 
@@ -712,6 +773,8 @@ export interface SourceIngestorHost {
   /** The host's extension order (spec §2.2 A2); the built-in policy
    *  without one. */
   extensions?(): ExtensionOrder;
+  /** The session root the source paths are relative to. */
+  rootDir?(): string;
 }
 
 export interface SourceIngestor {
@@ -748,6 +811,7 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
         extractFacts,
         factsCache,
         extensions: host.extensions?.(),
+        rootDir: host.rootDir?.(),
       });
     },
     surfaceDiagnostics(diagnostics) {
