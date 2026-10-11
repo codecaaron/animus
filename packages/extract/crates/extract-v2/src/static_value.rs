@@ -38,17 +38,31 @@ impl PartialOrd for StaticNumber {
 pub struct Unevaluated {
     pub kind: UnevaluatedKind,
     pub clause: String,
-    /// The object as written, where an authored object spells the marker
-    /// that stands for this node with more than the marker holds.
-    pub written: Option<Vec<(String, StaticValue)>>,
 }
 
-/// Why a node is unevaluated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// Why a node is unevaluated (spec §6.2, `Unevaluated(kind)`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum UnevaluatedKind {
-    /// An expression evaluation skipped: a computed key, a call, a spread,
-    /// a reference to no static value.
-    Expression,
+    /// A computed or non-static property key.
+    ComputedKey,
+    /// A call: a function, or `asset()` of what it cannot resolve.
+    Call,
+    /// A spread of what is no static object.
+    Spread,
+    /// A reference, by name or member path, to no static value.
+    Reference,
+    /// A function or arrow function as a value.
+    Function,
+    /// A template literal or tagged template with expressions.
+    Template,
+    /// An operator applied to what is no literal.
+    Operator,
+    /// A getter or setter.
+    Accessor,
+    /// A selector key with no substitutable subject.
+    Selector,
+    /// An expression evaluation does not model.
+    Unsupported,
     /// An inline `transform` callback, which a stage captures as its own
     /// definition but a `.props()` config read through a const loses.
     CapturedTransform,
@@ -67,46 +81,40 @@ pub enum StaticValue {
     /// A local bound to `@animus-ui/system`'s `asset`: evaluation calls it,
     /// and no read takes it as a value. `in_project` says whether a relative
     /// specifier may evaluate: in a package file it would resolve from the
-    /// wrong origin. `written` is the object as written, where an authored
-    /// object spells the asset marker with more than the marker holds.
-    AssetFunction { in_project: bool, written: Option<Vec<(String, StaticValue)>> },
+    /// wrong origin.
+    AssetFunction { in_project: bool },
     Unevaluated(Unevaluated),
 }
 
 impl StaticValue {
-    /// The entries a traversal reads: an object's, or those a marker node
-    /// holds as written, as a reader of its JSON saw them.
+    /// An object's entries.
     pub fn entries(&self) -> Option<&Vec<(String, StaticValue)>> {
         match self {
-            StaticValue::Object(entries)
-            | StaticValue::AssetFunction { written: Some(entries), .. }
-            | StaticValue::Unevaluated(Unevaluated { written: Some(entries), .. }) => Some(entries),
+            StaticValue::Object(entries) => Some(entries),
             _ => None,
         }
     }
 
-    /// `entries`, to change.
+    /// An object's entries, to change.
     pub fn entries_mut(&mut self) -> Option<&mut Vec<(String, StaticValue)>> {
         match self {
-            StaticValue::Object(entries)
-            | StaticValue::AssetFunction { written: Some(entries), .. }
-            | StaticValue::Unevaluated(Unevaluated { written: Some(entries), .. }) => Some(entries),
+            StaticValue::Object(entries) => Some(entries),
             _ => None,
         }
     }
 
-    /// The member `key` among `entries`.
+    /// The member `key` of an object.
     pub fn get(&self, key: &str) -> Option<&StaticValue> {
         self.entries()?.iter().find(|(name, _)| name == key).map(|(_, value)| value)
     }
 
-    /// The member `key` among `entries`, to change.
+    /// The member `key` of an object, to change.
     pub fn get_mut(&mut self, key: &str) -> Option<&mut StaticValue> {
         self.entries_mut()?.iter_mut().find(|(name, _)| name == key).map(|(_, value)| value)
     }
 
-    /// Sets the member `key` among `entries`: in place where it has one, as
-    /// a JavaScript object keeps a key's first position, else last.
+    /// Sets the member `key` of an object: in place where it has one, as a
+    /// JavaScript object keeps a key's first position, else last.
     pub fn insert(&mut self, key: &str, value: StaticValue) {
         if let Some(entries) = self.entries_mut() {
             match entries.iter_mut().find(|(name, _)| name == key) {

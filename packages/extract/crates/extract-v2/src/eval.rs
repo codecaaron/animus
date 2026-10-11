@@ -7,18 +7,20 @@ use oxc::ast::ast::{
 };
 use oxc::span::{GetSpan, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::static_value::{StaticNumber, StaticValue, Unevaluated, UnevaluatedKind};
 
 #[derive(Debug)]
 pub struct BailError {
+    pub kind: UnevaluatedKind,
     pub reason: String,
 }
 
 impl BailError {
-    fn new(reason: impl Into<String>) -> Self {
+    fn new(kind: UnevaluatedKind, reason: impl Into<String>) -> Self {
         Self {
+            kind,
             reason: reason.into(),
         }
     }
@@ -27,6 +29,8 @@ impl BailError {
 #[derive(Debug, Clone)]
 pub struct SkippedProperty {
     pub key: String,
+    /// What evaluation could not settle there.
+    pub kind: UnevaluatedKind,
     pub reason: String,
     /// Key path of the nested object holding `key`, relative to the
     /// evaluated object; `None` at its top level.
@@ -53,6 +57,7 @@ pub(crate) fn unsupported_selector_key(key: &str) -> bool {
 fn unsupported_selector_skip(key: &str, span: Span) -> SkippedProperty {
     SkippedProperty {
         key: key.to_string(),
+        kind: UnevaluatedKind::Selector,
         reason: format!(
             "selector '{key}' has no substitutable '&' subject outside quoted text ({SELECTOR_UNSUPPORTED_SUBJECT})"
         ),
@@ -69,14 +74,14 @@ pub struct CapturedTransform {
 
 pub fn eval_object_expr(
     obj: &ObjectExpression<'_>,
-) -> Result<(Value, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
+) -> Result<(StaticValue, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
     eval_object_expr_with_statics(obj, None)
 }
 
 pub fn eval_object_expr_with_statics(
     obj: &ObjectExpression<'_>,
     static_values: Option<Statics<'_>>,
-) -> Result<(Value, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
+) -> Result<(StaticValue, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
     eval_object_expr_scoped(obj, static_values, false)
 }
 
@@ -84,11 +89,11 @@ fn eval_object_expr_scoped(
     obj: &ObjectExpression<'_>,
     static_values: Option<Statics<'_>>,
     keyframes_eligible: bool,
-) -> Result<(Value, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
-    let mut map = Map::new();
+) -> Result<(StaticValue, Vec<SkippedProperty>, Vec<CapturedTransform>), BailError> {
+    let mut map = StaticValue::Object(Vec::new());
     let mut skipped = Vec::new();
     let mut captured = Vec::new();
-    // Keys a spread overwrote with a lost value: each keeps its position
+    // Keys a spread overwrote with an unevaluated node: each keeps its position
     // until a later known write fills it, and is dropped if none does.
     let mut tombstones = FxHashSet::default();
 
@@ -96,7 +101,7 @@ fn eval_object_expr_scoped(
         match prop_kind {
             ObjectPropertyKind::ObjectProperty(prop) => {
                 if prop.kind != PropertyKind::Init {
-                    return Err(BailError::new("getter/setter in style object"));
+                    return Err(BailError::new(UnevaluatedKind::Accessor, "getter/setter in style object"));
                 }
                 let key = if prop.computed {
                     computed_key(&prop.key, static_values)?
@@ -153,11 +158,12 @@ fn eval_object_expr_scoped(
                                 captured.push(cap);
                             }
                             tombstones.remove(&key);
-                            map.insert(key, value);
+                            map.insert(&key, value);
                         }
                         Err(bail) => {
                             skipped.push(SkippedProperty {
                                 key,
+                                kind: bail.kind,
                                 reason: bail.reason,
                                 parent: None,
                                 span: span_of(inner_obj.span),
@@ -175,11 +181,12 @@ fn eval_object_expr_scoped(
                 ) {
                     Ok(value) => {
                         tombstones.remove(&key);
-                        map.insert(key, value);
+                        map.insert(&key, value);
                     }
                     Err(bail) => {
                         skipped.push(SkippedProperty {
                             key,
+                            kind: bail.kind,
                             reason: bail.reason,
                             parent: None,
                             span: span_of(prop.value.span()),
@@ -192,41 +199,44 @@ fn eval_object_expr_scoped(
                 // key overrides an earlier one and keeps its first position.
                 // A lost key overrides too, so no earlier value stands for it.
                 let mut spread_value = static_object_at(&spread.argument, static_values)?;
-                for (mut path, reason) in take_unevaluated_segments(&mut spread_value) {
+                for (mut path, unevaluated) in take_unevaluated_segments(&mut spread_value) {
                     let key = path.pop().unwrap_or_default();
                     if path.is_empty() {
-                        map.insert(key.clone(), Value::Null);
+                        map.insert(&key, StaticValue::Null);
                         tombstones.insert(key.clone());
                     }
                     skipped.push(SkippedProperty {
                         key,
-                        reason,
+                        kind: unevaluated.kind,
+                        reason: unevaluated.clause,
                         parent: (!path.is_empty()).then(|| path.join(".")),
                         span: span_of(spread.span),
                     });
                 }
-                if let Value::Object(entries) = marked(&spread_value) {
+                if let StaticValue::Object(entries) = spread_value {
                     for (key, value) in entries {
                         tombstones.remove(&key);
-                        map.insert(key, value);
+                        map.insert(&key, value);
                     }
                 }
             }
         }
     }
 
-    map.retain(|key, _| !tombstones.contains(key));
-    Ok((Value::Object(map), skipped, captured))
+    if let StaticValue::Object(entries) = &mut map {
+        entries.retain(|(key, _)| !tombstones.contains(key));
+    }
+    Ok((map, skipped, captured))
 }
 
 /// A computed key whose value is a constant string: a string or an
 /// expression-free template literal, or a static binding or member that
-/// holds a string. A key read from a lost value bails with its reason.
+/// holds a string. A key read from an unevaluated node bails with its reason.
 fn computed_key(
     key: &PropertyKey<'_>,
     static_values: Option<Statics<'_>>,
 ) -> Result<String, BailError> {
-    let unsupported = || BailError::new("computed property key in style object");
+    let unsupported = || BailError::new(UnevaluatedKind::ComputedKey, "computed property key in style object");
     let expr = key.as_expression().ok_or_else(unsupported)?;
     match crate::chain_walk::unwrap_type_assertions(expr) {
         Expression::StringLiteral(lit) => Ok(lit.value.to_string()),
@@ -239,7 +249,7 @@ fn computed_key(
         other => {
             let statics = static_values.ok_or_else(unsupported)?;
             if let Some(reason) = uncertain_clause(other, statics) {
-                return Err(BailError::new(format!("computed property key in style object — {reason}")));
+                return Err(BailError::new(UnevaluatedKind::ComputedKey, format!("computed property key in style object — {reason}")));
             }
             match static_path_value(other, statics) {
                 Some(StaticValue::String(text)) => Ok(text.clone()),
@@ -307,13 +317,12 @@ fn static_object_at(
     static_values: Option<Statics<'_>>,
 ) -> Result<StaticValue, BailError> {
     if let Some(reason) = static_values.and_then(|sv| uncertain_clause(expr, sv)) {
-        return Err(BailError::new(format!("spread of {reason}")));
+        return Err(BailError::new(UnevaluatedKind::Spread, format!("spread of {reason}")));
     }
     match static_values.and_then(|sv| static_path_value(expr, sv)) {
-        // The `asset` function spreads as the object its marker is.
-        Some(value @ (StaticValue::Object(_) | StaticValue::AssetFunction { .. })) => Ok(value.clone()),
-        Some(_) => Err(BailError::new("spread of a static value that is no object")),
-        None => Err(BailError::new("spread element in style object")),
+        Some(value @ StaticValue::Object(_)) => Ok(value.clone()),
+        Some(_) => Err(BailError::new(UnevaluatedKind::Spread, "spread of a static value that is no object")),
+        None => Err(BailError::new(UnevaluatedKind::Spread, "spread element in style object")),
     }
 }
 
@@ -322,14 +331,14 @@ fn eval_property_key(key: &PropertyKey<'_>) -> Result<String, BailError> {
         PropertyKey::StaticIdentifier(id) => Ok(id.name.to_string()),
         PropertyKey::StringLiteral(lit) => Ok(lit.value.to_string()),
         PropertyKey::NumericLiteral(lit) => Ok(lit.value.to_string()),
-        _ => Err(BailError::new("non-static property key")),
+        _ => Err(BailError::new(UnevaluatedKind::ComputedKey, "non-static property key")),
     }
 }
 
 fn eval_expression(
     expr: &Expression<'_>,
     skips: &mut Vec<SkippedProperty>,
-) -> Result<Value, BailError> {
+) -> Result<StaticValue, BailError> {
     eval_expression_with_statics(expr, skips, None)
 }
 
@@ -337,8 +346,19 @@ pub(crate) fn eval_expression_with_statics(
     expr: &Expression<'_>,
     skips: &mut Vec<SkippedProperty>,
     static_values: Option<Statics<'_>>,
-) -> Result<Value, BailError> {
+) -> Result<StaticValue, BailError> {
     eval_expression_scoped(expr, skips, static_values, false)
+}
+
+/// A numeric literal's value, as JSON spells it: an integer where it is
+/// one, else a float.
+fn number(value: f64) -> StaticValue {
+    let number = if value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
+        serde_json::Number::from(value as i64)
+    } else {
+        serde_json::Number::from_f64(value).unwrap_or_else(|| serde_json::Number::from(0))
+    };
+    StaticValue::Number(StaticNumber(number))
 }
 
 fn eval_expression_scoped(
@@ -346,43 +366,24 @@ fn eval_expression_scoped(
     skips: &mut Vec<SkippedProperty>,
     static_values: Option<Statics<'_>>,
     keyframes_eligible: bool,
-) -> Result<Value, BailError> {
+) -> Result<StaticValue, BailError> {
     let expr = crate::chain_walk::unwrap_type_assertions(expr);
     match expr {
-        Expression::StringLiteral(lit) => Ok(Value::String(lit.value.to_string())),
+        Expression::StringLiteral(lit) => Ok(StaticValue::String(lit.value.to_string())),
 
-        Expression::NumericLiteral(lit) => {
-            if lit.value.fract() == 0.0 && lit.value.abs() < (i64::MAX as f64) {
-                Ok(Value::Number(
-                    serde_json::Number::from(lit.value as i64),
-                ))
-            } else {
-                Ok(Value::Number(
-                    serde_json::Number::from_f64(lit.value)
-                        .unwrap_or_else(|| serde_json::Number::from(0)),
-                ))
-            }
-        }
+        Expression::NumericLiteral(lit) => Ok(number(lit.value)),
 
-        Expression::BooleanLiteral(lit) => Ok(Value::Bool(lit.value)),
+        Expression::BooleanLiteral(lit) => Ok(StaticValue::Bool(lit.value)),
 
-        Expression::NullLiteral(_) => Ok(Value::Null),
+        Expression::NullLiteral(_) => Ok(StaticValue::Null),
 
         Expression::UnaryExpression(unary) => {
             if unary.operator == oxc::syntax::operator::UnaryOperator::UnaryNegation {
                 if let Expression::NumericLiteral(lit) = &unary.argument {
-                    let val = -lit.value;
-                    if val.fract() == 0.0 && val.abs() < (i64::MAX as f64) {
-                        return Ok(Value::Number(serde_json::Number::from(val as i64)));
-                    } else {
-                        return Ok(Value::Number(
-                            serde_json::Number::from_f64(val)
-                                .unwrap_or_else(|| serde_json::Number::from(0)),
-                        ));
-                    }
+                    return Ok(number(-lit.value));
                 }
             }
-            Err(BailError::new("non-static unary expression"))
+            Err(BailError::new(UnevaluatedKind::Operator, "non-static unary expression"))
         }
 
         Expression::ObjectExpression(obj) => {
@@ -400,17 +401,17 @@ fn eval_expression_scoped(
             for elem in &arr.elements {
                 values.push(eval_array_element(elem)?);
             }
-            Ok(Value::Array(values))
+            Ok(StaticValue::Array(values))
         }
 
         Expression::TemplateLiteral(tpl) => {
             if tpl.expressions.is_empty() {
                 if let Some(quasi) = tpl.quasis.first() {
-                    return Ok(Value::String(quasi.value.raw.to_string()));
+                    return Ok(StaticValue::String(quasi.value.raw.to_string()));
                 }
             }
             eval_asset_template(tpl, static_values, keyframes_eligible).ok_or_else(|| {
-                BailError::new("template literal with expressions (non-static)")
+                BailError::new(UnevaluatedKind::Template, "template literal with expressions (non-static)")
             })
         }
 
@@ -420,34 +421,34 @@ fn eval_expression_scoped(
                     // A static something may change before the read is no
                     // value: the runtime reads whatever it holds then.
                     Some(StaticAnswer::Unsettled(unsettled)) => {
-                        return Err(BailError::new(format!("variable reference (non-static) — {}", unsettled.reason)));
+                        return Err(BailError::new(UnevaluatedKind::Reference, format!("variable reference (non-static) — {}", unsettled.reason)));
                     }
                     Some(StaticAnswer::Unevaluated(unevaluated)) => {
-                        return Err(BailError::new(format!("variable reference (non-static) — {}", unevaluated.clause)));
+                        return Err(BailError::new(UnevaluatedKind::Reference, format!("variable reference (non-static) — {}", unevaluated.clause)));
                     }
                     Some(StaticAnswer::Exact(StaticValue::AssetFunction { .. })) | None => {}
-                    Some(StaticAnswer::Exact(value)) => return Ok(marked(value)),
+                    Some(StaticAnswer::Exact(value)) => return Ok(value.clone()),
                 }
             }
-            Err(BailError::new("variable reference (non-static)"))
+            Err(BailError::new(UnevaluatedKind::Reference, "variable reference (non-static)"))
         }
         Expression::CallExpression(call) => eval_asset_call(call, static_values)
-            .unwrap_or_else(|| Err(BailError::new("function call (non-static)"))),
+            .unwrap_or_else(|| Err(BailError::new(UnevaluatedKind::Call, "function call (non-static)"))),
         Expression::ArrowFunctionExpression(_) => {
-            Err(BailError::new("arrow function (non-static)"))
+            Err(BailError::new(UnevaluatedKind::Function, "arrow function (non-static)"))
         }
-        Expression::FunctionExpression(_) => Err(BailError::new("function (non-static)")),
+        Expression::FunctionExpression(_) => Err(BailError::new(UnevaluatedKind::Function, "function (non-static)")),
         Expression::TaggedTemplateExpression(_) => {
-            Err(BailError::new("tagged template (non-static)"))
+            Err(BailError::new(UnevaluatedKind::Template, "tagged template (non-static)"))
         }
         Expression::StaticMemberExpression(member) => {
             if let Some(value) = static_values.and_then(|sv| static_path_value(expr, sv)) {
-                return Ok(marked(value));
+                return Ok(value.clone());
             }
             if let Some(reason) = static_values.and_then(|sv| uncertain_clause(expr, sv)) {
-                return Err(BailError::new(format!("member expression (non-static) — {reason}")));
+                return Err(BailError::new(UnevaluatedKind::Reference, format!("member expression (non-static) — {reason}")));
             }
-            Err(BailError::new(member_expression_skip_reason(
+            Err(BailError::new(UnevaluatedKind::Reference, member_expression_skip_reason(
                 &member.object,
                 member.property.name.as_str(),
                 static_values,
@@ -456,13 +457,41 @@ fn eval_expression_scoped(
         }
         Expression::ComputedMemberExpression(_) => static_values
             .and_then(|sv| static_path_value(expr, sv))
-            .map(marked)
+            .cloned()
             .ok_or_else(|| match static_values.and_then(|sv| uncertain_clause(expr, sv)) {
-                Some(reason) => BailError::new(format!("member expression (non-static) — {reason}")),
-                None => BailError::new("member expression (non-static)"),
+                Some(reason) => BailError::new(UnevaluatedKind::Reference, format!("member expression (non-static) — {reason}")),
+                None => BailError::new(UnevaluatedKind::Reference, "member expression (non-static)"),
             }),
 
-        _ => Err(BailError::new("unsupported expression type")),
+        _ => Err(BailError::new(expression_kind(expr), "unsupported expression type")),
+    }
+}
+
+/// What kind of expression evaluation could not settle, by its form;
+/// `Unsupported` only where no specific kind applies.
+fn expression_kind(expr: &Expression<'_>) -> UnevaluatedKind {
+    match crate::chain_walk::unwrap_type_assertions(expr) {
+        Expression::BinaryExpression(_)
+        | Expression::LogicalExpression(_)
+        | Expression::ConditionalExpression(_)
+        | Expression::UnaryExpression(_)
+        | Expression::UpdateExpression(_)
+        | Expression::AssignmentExpression(_)
+        | Expression::SequenceExpression(_)
+        | Expression::AwaitExpression(_) => UnevaluatedKind::Operator,
+        Expression::CallExpression(_) | Expression::NewExpression(_) | Expression::ChainExpression(_) => {
+            UnevaluatedKind::Call
+        }
+        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) | Expression::ClassExpression(_) => {
+            UnevaluatedKind::Function
+        }
+        Expression::TemplateLiteral(_) | Expression::TaggedTemplateExpression(_) => UnevaluatedKind::Template,
+        Expression::Identifier(_)
+        | Expression::StaticMemberExpression(_)
+        | Expression::ComputedMemberExpression(_)
+        | Expression::PrivateFieldExpression(_)
+        | Expression::ThisExpression(_) => UnevaluatedKind::Reference,
+        _ => UnevaluatedKind::Unsupported,
     }
 }
 
@@ -489,8 +518,7 @@ fn member_expression_skip_reason(
         None => None,
     };
     match value {
-        // The `asset` function reads as the object its marker is.
-        Some(StaticValue::Object(_) | StaticValue::AssetFunction { .. }) => format!(
+        Some(StaticValue::Object(_)) => format!(
             "{named} — '{base}' is a registered collection with no '{property}' member"
         ),
         Some(_) => format!("{named} — '{base}' is not an object binding"),
@@ -501,21 +529,12 @@ fn member_expression_skip_reason(
     }
 }
 
-fn eval_array_element(elem: &ArrayExpressionElement<'_>) -> Result<Value, BailError> {
+fn eval_array_element(elem: &ArrayExpressionElement<'_>) -> Result<StaticValue, BailError> {
     match elem {
-        ArrayExpressionElement::StringLiteral(lit) => Ok(Value::String(lit.value.to_string())),
-        ArrayExpressionElement::NumericLiteral(lit) => {
-            if lit.value.fract() == 0.0 && lit.value.abs() < (i64::MAX as f64) {
-                Ok(Value::Number(serde_json::Number::from(lit.value as i64)))
-            } else {
-                Ok(Value::Number(
-                    serde_json::Number::from_f64(lit.value)
-                        .unwrap_or_else(|| serde_json::Number::from(0)),
-                ))
-            }
-        }
-        ArrayExpressionElement::BooleanLiteral(lit) => Ok(Value::Bool(lit.value)),
-        ArrayExpressionElement::NullLiteral(_) => Ok(Value::Null),
+        ArrayExpressionElement::StringLiteral(lit) => Ok(StaticValue::String(lit.value.to_string())),
+        ArrayExpressionElement::NumericLiteral(lit) => Ok(number(lit.value)),
+        ArrayExpressionElement::BooleanLiteral(lit) => Ok(StaticValue::Bool(lit.value)),
+        ArrayExpressionElement::NullLiteral(_) => Ok(StaticValue::Null),
         ArrayExpressionElement::ObjectExpression(obj) => {
             eval_object_expr(obj).map(|(val, _skips, _captures)| val)
         }
@@ -523,24 +542,27 @@ fn eval_array_element(elem: &ArrayExpressionElement<'_>) -> Result<Value, BailEr
             let mut values = Vec::new();
             for inner in &arr.elements {
                 match inner {
-                    ArrayExpressionElement::Elision(_) => values.push(Value::Null),
+                    ArrayExpressionElement::Elision(_) => values.push(StaticValue::Null),
                     ArrayExpressionElement::SpreadElement(_) => {
-                        return Err(BailError::new("spread in nested array"))
+                        return Err(BailError::new(UnevaluatedKind::Spread, "spread in nested array"))
                     }
                     other => values.push(eval_array_element(other)?),
                 }
             }
-            Ok(Value::Array(values))
+            Ok(StaticValue::Array(values))
         }
         ArrayExpressionElement::Identifier(_) => {
-            Err(BailError::new("variable reference in array (non-static)"))
+            Err(BailError::new(UnevaluatedKind::Reference, "variable reference in array (non-static)"))
         }
         ArrayExpressionElement::CallExpression(_) => {
-            Err(BailError::new("function call in array (non-static)"))
+            Err(BailError::new(UnevaluatedKind::Call, "function call in array (non-static)"))
         }
-        ArrayExpressionElement::SpreadElement(_) => Err(BailError::new("spread in array")),
-        ArrayExpressionElement::Elision(_) => Ok(Value::Null),
-        _ => Err(BailError::new("unsupported array element")),
+        ArrayExpressionElement::SpreadElement(_) => Err(BailError::new(UnevaluatedKind::Spread, "spread in array")),
+        ArrayExpressionElement::Elision(_) => Ok(StaticValue::Null),
+        other => Err(BailError::new(
+            other.as_expression().map_or(UnevaluatedKind::Unsupported, expression_kind),
+            "unsupported array element",
+        )),
     }
 }
 
@@ -548,8 +570,9 @@ fn eval_array_element(elem: &ArrayExpressionElement<'_>) -> Result<Value, BailEr
 pub struct VariantStageConfig {
     pub prop: String,
     pub default_variant: Option<String>,
-    pub base: Option<Value>,
-    pub variants: Map<String, Value>,
+    pub base: Option<StaticValue>,
+    /// The variants by name, in authored order.
+    pub variants: StaticValue,
 }
 
 pub fn parse_variant_arg(
@@ -559,10 +582,11 @@ pub fn parse_variant_arg(
     let mut prop = "variant".to_string();
     let mut default_variant = None;
     let mut base = None;
-    let mut variants = Map::new();
+    let mut variants = StaticValue::Object(Vec::new());
     let mut all_skips = Vec::new();
-    let skip = |key: &str, reason: &str, span: Span| SkippedProperty {
+    let skip = |key: &str, kind: UnevaluatedKind, reason: &str, span: Span| SkippedProperty {
         key: key.to_string(),
+        kind,
         reason: reason.to_string(),
         parent: None,
         span: span_of(span),
@@ -576,7 +600,7 @@ pub fn parse_variant_arg(
                     if let Expression::StringLiteral(lit) = &p.value {
                         prop = lit.value.to_string();
                     } else {
-                        all_skips.push(skip("prop", "variant prop name (non-static)", p.value.span()));
+                        all_skips.push(skip("prop", expression_kind(&p.value), "variant prop name (non-static)", p.value.span()));
                     }
                 }
                 "defaultVariant" => {
@@ -585,6 +609,7 @@ pub fn parse_variant_arg(
                     } else {
                         all_skips.push(skip(
                             "defaultVariant",
+                            expression_kind(&p.value),
                             "default variant name (non-static)",
                             p.value.span(),
                         ));
@@ -596,14 +621,16 @@ pub fn parse_variant_arg(
                             eval_object_expr_with_statics(obj, static_values)?;
                         all_skips.extend(skips);
                         base = Some(val);
-                    } else if let Ok(Value::Object(map)) = eval_expression_with_statics(
-                        &p.value,
-                        &mut Vec::new(),
-                        static_values,
-                    ) {
-                        base = Some(Value::Object(map));
                     } else {
-                        all_skips.push(skip("base", "variant base styles (non-static)", p.value.span()));
+                        // A value that evaluates is no object; one that does
+                        // not keeps the kind evaluation gave it.
+                        match eval_expression_with_statics(&p.value, &mut Vec::new(), static_values) {
+                            Ok(object @ StaticValue::Object(_)) => base = Some(object),
+                            evaluated => {
+                                let kind = evaluated.err().map_or(UnevaluatedKind::Unsupported, |bail| bail.kind);
+                                all_skips.push(skip("base", kind, "variant base styles (non-static)", p.value.span()));
+                            }
+                        }
                     }
                 }
                 "variants" => {
@@ -619,27 +646,30 @@ pub fn parse_variant_arg(
                                         static_values,
                                     )?;
                                     all_skips.extend(skips);
-                                    variants.insert(vkey, vstyles);
+                                    variants.insert(&vkey, vstyles);
                                 }
                                 ObjectPropertyKind::SpreadProperty(spread) => {
                                     all_skips.push(skip(
                                         "variants",
+                                        UnevaluatedKind::Spread,
                                         "variant map spread (non-static)",
                                         spread.span,
                                     ));
                                 }
                             }
                         }
-                    } else if let Ok(Value::Object(map)) = eval_expression_with_statics(
-                        &p.value,
-                        &mut Vec::new(),
-                        static_values,
-                    ) {
-                        for (vkey, vstyles) in map {
-                            variants.insert(vkey, vstyles);
-                        }
                     } else {
-                        all_skips.push(skip("variants", "variant map (non-static)", p.value.span()));
+                        match eval_expression_with_statics(&p.value, &mut Vec::new(), static_values) {
+                            Ok(StaticValue::Object(entries)) => {
+                                for (vkey, vstyles) in entries {
+                                    variants.insert(&vkey, vstyles);
+                                }
+                            }
+                            evaluated => {
+                                let kind = evaluated.err().map_or(UnevaluatedKind::Unsupported, |bail| bail.kind);
+                                all_skips.push(skip("variants", kind, "variant map (non-static)", p.value.span()));
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -647,6 +677,7 @@ pub fn parse_variant_arg(
         } else {
             all_skips.push(skip(
                 "variant config",
+                UnevaluatedKind::Spread,
                 "variant config spread (non-static)",
                 prop_kind.span(),
             ));
@@ -667,8 +698,8 @@ pub fn parse_variant_arg(
 #[allow(dead_code)]
 pub fn parse_states_arg(
     obj: &ObjectExpression<'_>,
-) -> Result<(Map<String, Value>, Vec<SkippedProperty>), BailError> {
-    let mut states = Map::new();
+) -> Result<(StaticValue, Vec<SkippedProperty>), BailError> {
+    let mut states = StaticValue::Object(Vec::new());
     let mut all_skips = Vec::new();
 
     for prop_kind in &obj.properties {
@@ -678,10 +709,10 @@ pub fn parse_states_arg(
                 let mut skips = Vec::new();
                 let styles = eval_expression(&p.value, &mut skips)?;
                 all_skips.extend(skips);
-                states.insert(key, styles);
+                states.insert(&key, styles);
             }
             ObjectPropertyKind::SpreadProperty(_) => {
-                return Err(BailError::new("spread in states config"));
+                return Err(BailError::new(UnevaluatedKind::Spread, "spread in states config"));
             }
         }
     }
@@ -689,19 +720,19 @@ pub fn parse_states_arg(
     Ok((states, all_skips))
 }
 
-pub fn collect_static_values(program: &Program<'_>) -> FxHashMap<String, Value> {
+pub fn collect_static_values(program: &Program<'_>) -> FxHashMap<String, StaticValue> {
     collect_static_values_impl(program, false, false)
 }
 
 /// The static values of a file in an installed or external package, where a
 /// relative `asset()` specifier would resolve from the wrong origin.
-pub fn collect_package_static_values(program: &Program<'_>) -> FxHashMap<String, Value> {
+pub fn collect_package_static_values(program: &Program<'_>) -> FxHashMap<String, StaticValue> {
     collect_static_values_impl(program, false, true)
 }
 
 /// Rejects partially evaluated objects, so an inferred JSX value set can
 /// never omit a runtime-reachable member.
-pub fn collect_complete_static_values(program: &Program<'_>) -> FxHashMap<String, Value> {
+pub fn collect_complete_static_values(program: &Program<'_>) -> FxHashMap<String, StaticValue> {
     collect_static_values_impl(program, true, false)
 }
 
@@ -709,7 +740,7 @@ fn collect_static_values_impl(
     program: &Program<'_>,
     require_complete: bool,
     in_package: bool,
-) -> FxHashMap<String, Value> {
+) -> FxHashMap<String, StaticValue> {
     // Style values may call `asset()`; JSX usage values never read it.
     let assets = if require_complete { FxHashMap::default() } else { asset_bindings(program, in_package) };
     let mut values: FxHashMap<String, StaticValue> = assets.clone();
@@ -753,7 +784,7 @@ fn collect_static_values_impl(
         }
     }
 
-    values.iter().map(|(name, value)| (name.clone(), marked(value))).collect()
+    values
 }
 
 /// A const initializer's static value, reading `scope`.
@@ -766,8 +797,7 @@ fn const_value(
 ) -> Option<StaticValue> {
     match crate::chain_walk::unwrap_type_assertions(init) {
         Expression::ObjectExpression(obj) => {
-            let (val, skips, captures) = eval_object_expr_scoped(obj, Some(Statics::from(scope)), false).ok()?;
-            let mut val = typed(&val);
+            let (mut val, skips, captures) = eval_object_expr_scoped(obj, Some(Statics::from(scope)), false).ok()?;
             if !require_complete {
                 mark_lost_values(&mut val, &LostValueSource { obj, name, undefined_bound }, &skips, &captures);
                 Some(val)
@@ -778,7 +808,7 @@ fn const_value(
         init => {
             let mut skips = Vec::new();
             let val = eval_expression_with_statics(init, &mut skips, Some(Statics::from(scope))).ok()?;
-            (!require_complete || skips.is_empty()).then(|| typed(&val))
+            (!require_complete || skips.is_empty()).then_some(val)
         }
     }
 }
@@ -787,7 +817,7 @@ fn const_value(
 /// no other const, as every style value was read before const initializers
 /// read earlier consts. `None` when that initializer has no static value
 /// then: a spread, member or computed key of another const.
-pub(crate) fn pre_read_static(program: &Program<'_>, name: &str, in_package: bool) -> Option<Value> {
+pub(crate) fn pre_read_static(program: &Program<'_>, name: &str, in_package: bool) -> Option<StaticValue> {
     let declarator = program.body.iter().find_map(|stmt| {
         let decl = match stmt {
             Statement::VariableDeclaration(decl) => decl,
@@ -803,19 +833,8 @@ pub(crate) fn pre_read_static(program: &Program<'_>, name: &str, in_package: boo
         })
     })?;
     let assets = asset_bindings(program, in_package);
-    const_value(declarator.init.as_ref()?, name, &assets, false, module_binds(program, "undefined")).as_ref().map(marked)
+    const_value(declarator.init.as_ref()?, name, &assets, false, module_binds(program, "undefined"))
 }
-
-/// Marks a value a const object cannot carry statically — a skipped key or
-/// a captured `transform` callback — so whichever stage reads the const can
-/// report what it lost. Stage readers take markers with `take_lost_values`
-/// or `take_lost_custom_props`; only serialized statics strip them silently.
-/// A member read of a marked key is a miss.
-const LOST_VALUE: &str = "$animus.lost";
-
-/// Set on a marker for a captured inline `transform` callback, which only a
-/// `.props()` config can lose: other stages capture it, as inline.
-const LOST_CAPTURE: &str = "$animus.capture";
 
 struct LostValueSource<'s, 'a> {
     obj: &'s ObjectExpression<'a>,
@@ -823,6 +842,12 @@ struct LostValueSource<'s, 'a> {
     undefined_bound: bool,
 }
 
+/// Puts an unevaluated node where a const object holds what evaluation
+/// could not carry statically (a skipped key, or a captured `transform`
+/// callback, which only a `.props()` config loses), so whichever stage reads
+/// the const can report it. Stage readers take the nodes with
+/// `take_unevaluated` or `take_unevaluated_custom_props`; only serialized
+/// statics strip them silently. A member read of one is a miss.
 fn mark_lost_values(
     value: &mut StaticValue,
     source: &LostValueSource<'_, '_>,
@@ -835,8 +860,8 @@ fn mark_lost_values(
             value,
             parent,
             "transform",
+            UnevaluatedKind::CapturedTransform,
             format!("an inline function in const '{}'", source.name),
-            true,
         );
     }
     for skip in skips {
@@ -848,8 +873,8 @@ fn mark_lost_values(
                 value,
                 skip.parent.as_deref(),
                 &skip.key,
+                skip.kind,
                 format!("{} in const '{}'", skip.reason, source.name),
-                false,
             );
         }
     }
@@ -859,8 +884,8 @@ fn mark_lost_value(
     value: &mut StaticValue,
     parent: Option<&str>,
     key: &str,
+    kind: UnevaluatedKind,
     clause: String,
-    capture: bool,
 ) {
     let mut current = value;
     for segment in parent.into_iter().flat_map(|path| path.split('.')) {
@@ -869,8 +894,7 @@ fn mark_lost_value(
             None => return,
         }
     }
-    let kind = if capture { UnevaluatedKind::CapturedTransform } else { UnevaluatedKind::Expression };
-    current.insert(key, StaticValue::Unevaluated(Unevaluated { kind, clause, written: None }));
+    current.insert(key, StaticValue::Unevaluated(Unevaluated { kind, clause }));
 }
 
 /// A static binding some use may change before a style reads it: every
@@ -879,7 +903,7 @@ fn mark_lost_value(
 #[derive(Debug, Clone)]
 pub(crate) struct Unsettled {
     pub(crate) reason: String,
-    pub(crate) held: Option<Value>,
+    pub(crate) held: Option<StaticValue>,
 }
 
 /// What a read of a binding's static value at a member path yields: the
@@ -936,88 +960,30 @@ pub(crate) fn static_value<'s>(statics: Statics<'s>, name: &str, path: &[&str]) 
     })
 }
 
-/// A static value as statics leave evaluation: JSON, with a lost-value
-/// marker for an unevaluated node and an asset marker for the `asset`
-/// function, which every reader outside evaluation reads. A node read from
-/// an authored object that spells a marker is written back as written.
-pub(crate) fn marked(value: &StaticValue) -> Value {
-    let object = |entries: &[(String, StaticValue)]| {
-        Value::Object(entries.iter().map(|(key, value)| (key.clone(), marked(value))).collect())
-    };
+/// A static value as JSON, for a stage's config and serialized facts. The
+/// `asset` function is spelled as the object `{ "$animus.asset": scope }`,
+/// as those outputs carry it; no unevaluated node remains where JSON is
+/// written, since every reader takes them first.
+pub(crate) fn plain(value: &StaticValue) -> Value {
     match value {
-        StaticValue::Null => Value::Null,
+        StaticValue::Null | StaticValue::Unevaluated(_) => Value::Null,
         StaticValue::Bool(flag) => Value::Bool(*flag),
         StaticValue::Number(StaticNumber(number)) => Value::Number(number.clone()),
         StaticValue::String(text) => Value::String(text.clone()),
-        StaticValue::Array(items) => Value::Array(items.iter().map(marked).collect()),
-        StaticValue::Object(entries) => object(entries),
-        StaticValue::AssetFunction { written: Some(entries), .. } => object(entries),
-        StaticValue::AssetFunction { in_project, written: None } => {
+        StaticValue::Array(items) => Value::Array(items.iter().map(plain).collect()),
+        StaticValue::Object(entries) => {
+            Value::Object(entries.iter().map(|(key, value)| (key.clone(), plain(value))).collect())
+        }
+        StaticValue::AssetFunction { in_project } => {
             serde_json::json!({ ASSET_FUNCTION: if *in_project { ASSET_IN_PROJECT } else { ASSET_IN_PACKAGE } })
         }
-        StaticValue::Unevaluated(Unevaluated { written: Some(entries), .. }) => object(entries),
-        StaticValue::Unevaluated(Unevaluated { kind, clause, written: None }) => {
-            let mut marker = Map::new();
-            marker.insert(LOST_VALUE.to_string(), Value::String(clause.clone()));
-            if *kind == UnevaluatedKind::CapturedTransform {
-                marker.insert(LOST_CAPTURE.to_string(), Value::Bool(true));
-            }
-            Value::Object(marker)
-        }
     }
 }
 
-/// A static value read back from JSON as `marked` writes it. Any object
-/// whose `$animus.lost` key holds a string reads as an unevaluated node, a
-/// captured `transform` where it has a `$animus.capture` key; any whose
-/// `$animus.asset` key holds a string reads as the `asset` function, in the
-/// project only for `project`. One that holds more than `marked` would write
-/// keeps what it holds, as written.
-pub(crate) fn typed(value: &Value) -> StaticValue {
-    match value {
-        Value::Null => StaticValue::Null,
-        Value::Bool(flag) => StaticValue::Bool(*flag),
-        Value::Number(number) => StaticValue::Number(StaticNumber(number.clone())),
-        Value::String(text) => StaticValue::String(text.clone()),
-        Value::Array(items) => StaticValue::Array(items.iter().map(typed).collect()),
-        Value::Object(entries) => {
-            let keys: Vec<&str> = entries.keys().map(String::as_str).collect();
-            let written = |canonical: bool| {
-                (!canonical).then(|| entries.iter().map(|(key, value)| (key.clone(), typed(value))).collect())
-            };
-            if let Some(Value::String(clause)) = entries.get(LOST_VALUE) {
-                let capture = entries.contains_key(LOST_CAPTURE);
-                let canonical = match capture {
-                    false => keys == [LOST_VALUE],
-                    true => keys == [LOST_VALUE, LOST_CAPTURE] && entries[LOST_CAPTURE] == Value::Bool(true),
-                };
-                let kind = if capture { UnevaluatedKind::CapturedTransform } else { UnevaluatedKind::Expression };
-                return StaticValue::Unevaluated(Unevaluated { kind, clause: clause.clone(), written: written(canonical) });
-            }
-            if let Some(Value::String(scope)) = entries.get(ASSET_FUNCTION) {
-                let canonical = keys == [ASSET_FUNCTION] && (scope == ASSET_IN_PROJECT || scope == ASSET_IN_PACKAGE);
-                return StaticValue::AssetFunction { in_project: scope == ASSET_IN_PROJECT, written: written(canonical) };
-            }
-            StaticValue::Object(entries.iter().map(|(key, value)| (key.clone(), typed(value))).collect())
-        }
-    }
-}
-
-/// A file's statics, as evaluation reads them.
-pub(crate) fn typed_statics(values: &FxHashMap<String, Value>) -> FxHashMap<String, StaticValue> {
-    values.iter().map(|(name, value)| (name.clone(), typed(value))).collect()
-}
-
-/// Why a static value is no usable value, when a marker stands in for it.
-pub(crate) fn lost_value_reason(value: &Value) -> Option<&str> {
-    value.as_object()?.get(LOST_VALUE)?.as_str()
-}
-
-/// Among a file's static values, a local bound to `@animus-ui/system`'s
-/// `asset`: evaluation calls it, and no read takes it as a value. Its scope
-/// says whether a relative specifier may evaluate: in a project file the
-/// host resolves it as every relative `asset()` is resolved, from the
-/// project root; in a package file that would be the wrong origin.
+/// How JSON spells the `asset` function, a local bound to
+/// `@animus-ui/system`'s `asset`, by its scope: in a project file the host
+/// resolves a relative specifier as every relative `asset()` is resolved,
+/// from the project root; in a package file that would be the wrong origin.
 const ASSET_FUNCTION: &str = "$animus.asset";
 const ASSET_IN_PROJECT: &str = "project";
 const ASSET_IN_PACKAGE: &str = "package";
@@ -1035,7 +1001,7 @@ fn is_relative_specifier(specifier: &str) -> bool {
 fn eval_asset_call(
     call: &oxc::ast::ast::CallExpression<'_>,
     static_values: Option<Statics<'_>>,
-) -> Option<Result<Value, BailError>> {
+) -> Option<Result<StaticValue, BailError>> {
     let Expression::Identifier(callee) = &call.callee else {
         return None;
     };
@@ -1045,14 +1011,14 @@ fn eval_asset_call(
         return None;
     };
     let [Argument::StringLiteral(specifier)] = call.arguments.as_slice() else {
-        return Some(Err(BailError::new("asset() of a non-literal specifier (non-static)")));
+        return Some(Err(BailError::new(UnevaluatedKind::Call, "asset() of a non-literal specifier (non-static)")));
     };
     if is_relative_specifier(&specifier.value) && !relative_allowed {
-        return Some(Err(BailError::new(
+        return Some(Err(BailError::new(UnevaluatedKind::Call, 
             "asset() of a relative specifier in a package file, which would resolve from the wrong origin (non-static)",
         )));
     }
-    Some(Ok(Value::String(format!("{ASSET_PLACEHOLDER_PREFIX}{}", specifier.value))))
+    Some(Ok(StaticValue::String(format!("{ASSET_PLACEHOLDER_PREFIX}{}", specifier.value))))
 }
 
 /// A template whose every expression is a static string or number and which
@@ -1062,13 +1028,13 @@ fn eval_asset_template(
     tpl: &oxc::ast::ast::TemplateLiteral<'_>,
     static_values: Option<Statics<'_>>,
     keyframes_eligible: bool,
-) -> Option<Value> {
+) -> Option<StaticValue> {
     let mut parts = Vec::with_capacity(tpl.expressions.len());
     for expression in &tpl.expressions {
         let mut skips = Vec::new();
         let part = match eval_expression_scoped(expression, &mut skips, static_values, keyframes_eligible).ok()? {
-            Value::String(text) => text,
-            Value::Number(number) => number.to_string(),
+            StaticValue::String(text) => text,
+            StaticValue::Number(StaticNumber(number)) => number.to_string(),
             _ => return None,
         };
         parts.push(part);
@@ -1083,18 +1049,18 @@ fn eval_asset_template(
             text.push_str(part);
         }
     }
-    Some(Value::String(text))
+    Some(StaticValue::String(text))
 }
 
 /// Whether a value holds an `asset()` placeholder with a relative
 /// specifier, which only its own file may use.
-pub(crate) fn carries_relative_asset(value: &Value) -> bool {
+pub(crate) fn carries_relative_asset(value: &StaticValue) -> bool {
     match value {
-        Value::String(text) => text
+        StaticValue::String(text) => text
             .match_indices(ASSET_PLACEHOLDER_PREFIX)
             .any(|(at, prefix)| is_relative_specifier(&text[at + prefix.len()..])),
-        Value::Array(items) => items.iter().any(carries_relative_asset),
-        Value::Object(entries) => entries.values().any(carries_relative_asset),
+        StaticValue::Array(items) => items.iter().any(carries_relative_asset),
+        StaticValue::Object(entries) => entries.iter().any(|(_, value)| carries_relative_asset(value)),
         _ => false,
     }
 }
@@ -1115,7 +1081,7 @@ fn asset_bindings(program: &Program<'_>, in_package: bool) -> FxHashMap<String, 
                 if named.imported.name() == "asset" {
                     bindings.insert(
                         named.local.name.to_string(),
-                        StaticValue::AssetFunction { in_project: !in_package, written: None },
+                        StaticValue::AssetFunction { in_project: !in_package },
                     );
                 }
             }
@@ -1170,12 +1136,15 @@ pub(crate) fn take_unevaluated_custom_props(value: &mut StaticValue) -> LostCust
 /// returning each, as a dotted path, with its clause. A captured inline
 /// `transform` is removed without a skip.
 pub(crate) fn take_unevaluated(value: &mut StaticValue) -> Vec<(String, String)> {
-    take_unevaluated_segments(value).into_iter().map(|(path, clause)| (path.join("."), clause)).collect()
+    take_unevaluated_segments(value)
+        .into_iter()
+        .map(|(path, unevaluated)| (path.join("."), unevaluated.clause))
+        .collect()
 }
 
 /// `take_unevaluated` with each path as its key segments, since a selector
 /// key can itself contain a dot.
-fn take_unevaluated_segments(value: &mut StaticValue) -> Vec<(Vec<String>, String)> {
+fn take_unevaluated_segments(value: &mut StaticValue) -> Vec<(Vec<String>, Unevaluated)> {
     let mut lost = Vec::new();
     collect_unevaluated(value, &[], &mut lost);
     lost
@@ -1183,18 +1152,17 @@ fn take_unevaluated_segments(value: &mut StaticValue) -> Vec<(Vec<String>, Strin
 
 /// Each unevaluated node an object entry holds, with its key segments; an
 /// array's items are read at the array's own path.
-fn collect_unevaluated(value: &mut StaticValue, path: &[String], lost: &mut Vec<(Vec<String>, String)>) {
+fn collect_unevaluated(value: &mut StaticValue, path: &[String], lost: &mut Vec<(Vec<String>, Unevaluated)>) {
     match value {
         StaticValue::Array(items) => items.iter_mut().for_each(|item| collect_unevaluated(item, path, lost)),
         value => {
-            // A marker node's written fields are traversed, as its JSON was.
             let Some(entries) = value.entries_mut() else { return };
             entries.retain_mut(|(key, child)| {
                 let at = [path, std::slice::from_ref(key)].concat();
                 match child {
                     StaticValue::Unevaluated(unevaluated) => {
                         if unevaluated.kind != UnevaluatedKind::CapturedTransform {
-                            lost.push((at, unevaluated.clause.clone()));
+                            lost.push((at, unevaluated.clone()));
                         }
                         false
                     }
@@ -1208,37 +1176,10 @@ fn collect_unevaluated(value: &mut StaticValue, path: &[String], lost: &mut Vec<
     }
 }
 
-fn collect_lost_values(value: &mut Value, path: &[String], lost: &mut Vec<(Vec<String>, String)>) {
-    match value {
-        Value::Object(map) => {
-            let keys: Vec<String> = map.keys().cloned().collect();
-            for key in keys {
-                let at = [path, std::slice::from_ref(&key)].concat();
-                let Some(child) = map.get_mut(&key) else {
-                    continue;
-                };
-                match lost_value_reason(child).map(str::to_string) {
-                    Some(reason) => {
-                        if child.get(LOST_CAPTURE).is_none() {
-                            lost.push((at, reason));
-                        }
-                        map.shift_remove(&key);
-                    }
-                    None => collect_lost_values(child, &at, lost),
-                }
-            }
-        }
-        Value::Array(items) => items
-            .iter_mut()
-            .for_each(|v| collect_lost_values(v, path, lost)),
-        _ => {}
-    }
-}
-
-/// Removes every marker without reporting: serialized statics are not a
-/// stage reader, so the stage that later reads one reports its losses.
-pub(crate) fn strip_lost_values(value: &mut Value) {
-    collect_lost_values(value, &[], &mut Vec::new());
+/// Removes every unevaluated node without reporting: serialized statics are
+/// not a stage reader, so the stage that later reads one reports its losses.
+pub(crate) fn strip_unevaluated(value: &mut StaticValue) {
+    take_unevaluated_segments(value);
 }
 
 /// Whether a module-scope declaration or import binds `name`; chain and
@@ -1335,7 +1276,31 @@ pub fn collect_static_exports(
 
 #[cfg(test)]
 mod tests {
+
+    /// A statics map as JSON, for assertions.
+    fn plain_map(values: FxHashMap<String, StaticValue>) -> FxHashMap<String, Value> {
+        values.iter().map(|(name, value)| (name.clone(), plain(value))).collect()
+    }
+
+    /// JSON test data as a static value.
+    fn from_json(value: &Value) -> StaticValue {
+        match value {
+            Value::Null => StaticValue::Null,
+            Value::Bool(flag) => StaticValue::Bool(*flag),
+            Value::Number(number) => StaticValue::Number(StaticNumber(number.clone())),
+            Value::String(text) => StaticValue::String(text.clone()),
+            Value::Array(items) => StaticValue::Array(items.iter().map(from_json).collect()),
+            Value::Object(entries) => {
+                StaticValue::Object(entries.iter().map(|(key, value)| (key.clone(), from_json(value))).collect())
+            }
+        }
+    }
+
+    fn statics_of(values: &FxHashMap<String, Value>) -> FxHashMap<String, StaticValue> {
+        values.iter().map(|(name, value)| (name.clone(), from_json(value))).collect()
+    }
     use super::*;
+    use serde_json::Map;
     use crate::owned_ast::{OwnedAst, ParseCounter};
 
     fn parse_ts(full: String) -> OwnedAst {
@@ -1350,7 +1315,8 @@ mod tests {
         if let Some(oxc::ast::ast::Statement::VariableDeclaration(decl)) = program.body.first() {
             if let Some(declarator) = decl.declarations.first() {
                 if let Some(Expression::ObjectExpression(obj)) = &declarator.init {
-                    return eval_object_expr(obj).unwrap();
+                    let (value, skips, captures) = eval_object_expr(obj).unwrap();
+                    return (plain(&value), skips, captures);
                 }
             }
         }
@@ -1394,7 +1360,7 @@ mod tests {
         if let Some(oxc::ast::ast::Statement::VariableDeclaration(decl)) = program.body.first() {
             if let Some(declarator) = decl.declarations.first() {
                 if let Some(Expression::ObjectExpression(obj)) = &declarator.init {
-                    let typed = sv.map(typed_statics);
+                    let typed = sv.map(statics_of);
                     return parse_variant_arg(obj, typed.as_ref().map(Statics::from)).unwrap();
                 }
             }
@@ -1402,11 +1368,33 @@ mod tests {
         panic!("failed to parse variant config object");
     }
 
+    /// Contract: a skip carries the kind of what evaluation could not
+    /// settle, from its own site (spec §6.2, `Unevaluated(kind)`).
+    #[test]
+    fn a_skip_carries_the_kind_of_what_evaluation_could_not_settle() {
+        let object_kind = |source: &str| {
+            let (_, skips, _) = parse_obj_all(source);
+            skips.iter().map(|skip| skip.kind).collect::<Vec<_>>()
+        };
+        let variant_kind = |source: &str| {
+            let (_, skips) = parse_variant(source);
+            skips.iter().map(|skip| skip.kind).collect::<Vec<_>>()
+        };
+        assert_eq!(object_kind("{ a: unknown + 1 }"), [UnevaluatedKind::Operator]);
+        assert_eq!(object_kind("{ a: [() => 1] }"), [UnevaluatedKind::Function]);
+        assert_eq!(object_kind("{ a: [`x${unknown}`] }"), [UnevaluatedKind::Template]);
+        assert_eq!(object_kind("{ a: [!unknown] }"), [UnevaluatedKind::Operator]);
+        assert_eq!(object_kind("{ a: [unknown.x] }"), [UnevaluatedKind::Reference]);
+        assert_eq!(variant_kind("{ prop: 'size', variants: { sm: {}, ...rest } }"), [UnevaluatedKind::Spread]);
+        assert_eq!(variant_kind("{ prop: 'size', variants: selectSizes }"), [UnevaluatedKind::Reference]);
+        assert_eq!(variant_kind("{ prop: name, variants: {} }"), [UnevaluatedKind::Reference]);
+    }
+
     #[test]
     fn variant_identifier_map_records_skip_instead_of_silent_empty() {
         let (cfg, skips) =
             parse_variant("{ prop: 'size', defaultVariant: 'lg', variants: selectSizes }");
-        assert!(cfg.variants.is_empty(), "{:?}", cfg.variants);
+        assert!(plain(&cfg.variants).as_object().is_some_and(Map::is_empty), "{:?}", cfg.variants);
         assert_eq!(cfg.default_variant.as_deref(), Some("lg"));
         assert_eq!(cfg.prop, "size");
         assert_eq!(skips.len(), 1, "{:?}", skips);
@@ -1422,7 +1410,7 @@ mod tests {
     fn variant_spread_map_records_skip_instead_of_silent_empty() {
         let (cfg, skips) =
             parse_variant("{ prop: 'size', defaultVariant: 'lg', variants: { ...sizes } }");
-        assert!(cfg.variants.is_empty(), "{:?}", cfg.variants);
+        assert!(plain(&cfg.variants).as_object().is_some_and(Map::is_empty), "{:?}", cfg.variants);
         assert_eq!(cfg.default_variant.as_deref(), Some("lg"));
         assert_eq!(skips.len(), 1, "{:?}", skips);
         assert_eq!(skips[0].key, "variants");
@@ -1436,7 +1424,7 @@ mod tests {
     #[test]
     fn variant_config_spread_records_skip_instead_of_silent_absence() {
         let (cfg, skips) = parse_variant("{ ...cfg }");
-        assert!(cfg.variants.is_empty(), "{:?}", cfg.variants);
+        assert!(plain(&cfg.variants).as_object().is_some_and(Map::is_empty), "{:?}", cfg.variants);
         assert_eq!(cfg.default_variant, None);
         assert_eq!(skips.len(), 1, "{:?}", skips);
         assert_eq!(skips[0].key, "variant config");
@@ -1451,7 +1439,7 @@ mod tests {
     fn variant_spread_alongside_literal_options_still_records_the_spread() {
         let (cfg, skips) =
             parse_variant("{ prop: 'size', variants: { sm: { p: 8 }, ...rest } }");
-        assert_eq!(cfg.variants.len(), 1);
+        assert_eq!(plain(&cfg.variants).as_object().map_or(0, Map::len), 1);
         assert_eq!(skips.len(), 1, "{:?}", skips);
         assert!(
             skips[0].reason.contains("variant map spread (non-static)"),
@@ -1465,7 +1453,7 @@ mod tests {
         let (cfg, skips) = parse_variant(
             "{ prop: 'size', defaultVariant: 'lg', base: { p: 4 }, variants: { sm: { p: 8 }, lg: { p: 16 } } }",
         );
-        assert_eq!(cfg.variants.len(), 2);
+        assert_eq!(plain(&cfg.variants).as_object().map_or(0, Map::len), 2);
         assert!(cfg.base.is_some());
         assert!(skips.is_empty(), "{:?}", skips);
     }
@@ -1716,7 +1704,7 @@ mod tests {
 const Component = { gap: GAP };"#;
         let ast = parse_ts(source.to_string());
         let result_program = ast.program();
-        let values = collect_static_values(result_program);
+        let values = plain_map(collect_static_values(result_program));
         assert_eq!(values.get("GAP"), Some(&Value::Number(16.into())));
     }
 
@@ -1725,7 +1713,7 @@ const Component = { gap: GAP };"#;
         let source = r#"const COLOR = 'red';"#;
         let ast = parse_ts(source.to_string());
         let result_program = ast.program();
-        let values = collect_static_values(result_program);
+        let values = plain_map(collect_static_values(result_program));
         assert_eq!(values.get("COLOR"), Some(&Value::String("red".to_string())));
     }
 
@@ -1734,7 +1722,7 @@ const Component = { gap: GAP };"#;
         let source = r#"const val = getSpacing();"#;
         let ast = parse_ts(source.to_string());
         let result_program = ast.program();
-        let values = collect_static_values(result_program);
+        let values = plain_map(collect_static_values(result_program));
         assert!(!values.contains_key("val"));
     }
 
@@ -1743,7 +1731,7 @@ const Component = { gap: GAP };"#;
         let source = r#"let gap = 16;"#;
         let ast = parse_ts(source.to_string());
         let result_program = ast.program();
-        let values = collect_static_values(result_program);
+        let values = plain_map(collect_static_values(result_program));
         assert!(!values.contains_key("gap"));
     }
 
@@ -1752,7 +1740,7 @@ const Component = { gap: GAP };"#;
         let source = r#"const config = { gap: 16, display: 'flex' };"#;
         let ast = parse_ts(source.to_string());
         let result_program = ast.program();
-        let values = collect_static_values(result_program);
+        let values = plain_map(collect_static_values(result_program));
         let config = &values["config"];
         assert_eq!(config["gap"], 16);
         assert_eq!(config["display"], "flex");
@@ -1782,7 +1770,7 @@ const Component = { gap: GAP };"#;
         let source = r#"export const SPACING = 8;"#;
         let ast = parse_ts(source.to_string());
         let result_program = ast.program();
-        let values = collect_static_values(result_program);
+        let values = plain_map(collect_static_values(result_program));
         assert_eq!(values.get("SPACING"), Some(&Value::Number(8.into())));
     }
 
@@ -2003,8 +1991,10 @@ const Component = { gap: GAP };"#;
         if let Some(Statement::VariableDeclaration(decl)) = program.body.first() {
             if let Some(declarator) = decl.declarations.first() {
                 if let Some(Expression::ObjectExpression(obj)) = &declarator.init {
-                    let typed = sv.map(typed_statics);
-                    return eval_object_expr_with_statics(obj, typed.as_ref().map(Statics::from)).unwrap();
+                    let typed = sv.map(statics_of);
+                    let (value, skips, captures) =
+                        eval_object_expr_with_statics(obj, typed.as_ref().map(Statics::from)).unwrap();
+                    return (plain(&value), skips, captures);
                 }
             }
         }
@@ -2026,14 +2016,14 @@ const Component = { gap: GAP };"#;
         assert!(skips.is_empty(), "{:?}", skips);
         assert_eq!(cfg.prop, "size");
         assert_eq!(cfg.default_variant.as_deref(), Some("md"));
-        assert_eq!(cfg.base, Some(serde_json::json!({ "fontWeight": 700 })));
-        assert_eq!(cfg.variants.len(), 2);
-        assert_eq!(cfg.variants["sm"], serde_json::json!({ "height": 32 }));
+        assert_eq!(cfg.base.as_ref().map(plain), Some(serde_json::json!({ "fontWeight": 700 })));
+        assert_eq!(plain(&cfg.variants).as_object().map_or(0, Map::len), 2);
+        assert_eq!(plain(&cfg.variants)["sm"], serde_json::json!({ "height": 32 }));
 
         let (cfg2, skips2) = parse_variant(
             "{ prop: 'size', defaultVariant: 'md', variants: sizes }",
         );
-        assert!(cfg2.variants.is_empty());
+        assert!(plain(&cfg2.variants).as_object().is_some_and(Map::is_empty));
         assert_eq!(skips2.len(), 1);
         assert!(skips2[0].reason.contains("variant map (non-static)"));
     }
@@ -2043,7 +2033,7 @@ const Component = { gap: GAP };"#;
         let ast = parse_ts(
             "const sizes = { sm: { height: 32 } } as const;\nconst gap = 16 as const;\nconst theme = { gap: 8 } satisfies Record<string, number>;\n".to_string(),
         );
-        let statics = collect_static_values(ast.program());
+        let statics = plain_map(collect_static_values(ast.program()));
         assert_eq!(
             statics.get("sizes"),
             Some(&serde_json::json!({ "sm": { "height": 32 } }))

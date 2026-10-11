@@ -469,7 +469,7 @@ fn unstable_style_statics(
     modules: &ModuleFacts,
     links: &ProjectLinks,
     lowered: &BTreeMap<String, crate::link::Lowered>,
-    files: &BTreeMap<String, rustc_hash::FxHashMap<String, serde_json::Value>>,
+    files: &BTreeMap<String, rustc_hash::FxHashMap<String, crate::static_value::StaticValue>>,
     inputs: &analyze_css::CssInputs,
     readings_of: &mut ReadingsOf<'_>,
 ) -> BTreeMap<(String, String), String> {
@@ -526,19 +526,23 @@ fn unstable_style_statics(
         found.dedup();
         found.into_iter().map(declaration).collect()
     };
-    // Whether a declaration's static is an object or array: no use can
-    // change a primitive.
+    // Whether a static may be an object: an object or array, the `asset`
+    // function, or what evaluation could not settle. No use can change a
+    // primitive.
+    let object_like = |value: &crate::static_value::StaticValue| {
+        use crate::static_value::StaticValue;
+        matches!(
+            value,
+            StaticValue::Object(_) | StaticValue::Array(_) | StaticValue::AssetFunction { .. } | StaticValue::Unevaluated(_)
+        )
+    };
     let mutable = |(file, local): &(String, String)| {
-        files
-            .get(file)
-            .and_then(|statics| statics.get(local))
-            .is_some_and(|value| value.is_object() || value.is_array())
+        files.get(file).and_then(|statics| statics.get(local)).is_some_and(object_like)
     };
     // Whether a declaration's static holds an object among its values.
-    let nested = |(file, local): &(String, String)| {
-        files.get(file).and_then(|statics| statics.get(local)).and_then(serde_json::Value::as_object).is_some_and(
-            |object| object.values().any(|value| value.is_object() || value.is_array()),
-        )
+    let nested = |(file, local): &(String, String)| match files.get(file).and_then(|statics| statics.get(local)) {
+        Some(crate::static_value::StaticValue::Object(entries)) => entries.iter().any(|(_, value)| object_like(value)),
+        _ => false,
     };
     let said = |file: &str, name: &str, used: &crate::usage_facts::ObjectUse| {
         let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
@@ -837,11 +841,11 @@ impl ExtractEngine {
         use crate::usage_facts::{collect_export_facts, collect_import_facts};
         let mut statics_by_file: std::collections::BTreeMap<
             String,
-            rustc_hash::FxHashMap<String, serde_json::Value>,
+            rustc_hash::FxHashMap<String, crate::static_value::StaticValue>,
         > = std::collections::BTreeMap::new();
         let mut complete_statics_by_file: std::collections::BTreeMap<
             String,
-            rustc_hash::FxHashMap<String, serde_json::Value>,
+            rustc_hash::FxHashMap<String, crate::static_value::StaticValue>,
         > = std::collections::BTreeMap::new();
         let mut imports_by_file: ModuleFacts = std::collections::BTreeMap::new();
         let mut style_modules: BTreeMap<String, StyleModule> = BTreeMap::new();
@@ -884,7 +888,7 @@ impl ExtractEngine {
                 exports.iter().filter(move |export| {
                     export.source.is_some()
                         || export.local.as_ref().is_some_and(|local| {
-                            statics.get(local).is_some_and(serde_json::Value::is_object)
+                            matches!(statics.get(local), Some(crate::static_value::StaticValue::Object(_)))
                         })
                 })
             })
@@ -896,7 +900,7 @@ impl ExtractEngine {
             let statics = &statics_by_file[&ast.path];
             let (imports, _) = &imports_by_file[&ast.path];
             let namespace_imports = crate::usage_facts::collect_namespace_imports(module);
-            let facts = if statics.values().any(serde_json::Value::is_object)
+            let facts = if statics.values().any(|value| matches!(value, crate::static_value::StaticValue::Object(_)))
                 || !namespace_imports.is_empty()
                 || imports.iter().any(|import| object_exports.contains(import.imported.as_str()))
             {
@@ -954,7 +958,7 @@ impl ExtractEngine {
             }
         }
 
-        let keyframes_registry: rustc_hash::FxHashMap<String, serde_json::Value> = self
+        let keyframes_registry: rustc_hash::FxHashMap<String, crate::static_value::StaticValue> = self
             .opts
             .css_inputs
             .keyframes_blocks
@@ -964,16 +968,13 @@ impl ExtractEngine {
                 obj.iter()
                     .filter_map(|(export_name, collection)| {
                         let coll_obj = collection.as_object()?;
-                        let mut map = serde_json::Map::new();
+                        let mut map = crate::static_value::StaticValue::Object(Vec::new());
                         for (key_name, block) in coll_obj {
                             if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
-                                map.insert(
-                                    key_name.clone(),
-                                    serde_json::Value::String(name.to_string()),
-                                );
+                                map.insert(key_name, crate::static_value::StaticValue::String(name.to_string()));
                             }
                         }
-                        Some((export_name.clone(), serde_json::Value::Object(map)))
+                        Some((export_name.clone(), map))
                     })
                     .collect()
             })
@@ -981,11 +982,11 @@ impl ExtractEngine {
 
         let mut enriched_by_file: std::collections::BTreeMap<
             String,
-            rustc_hash::FxHashMap<String, serde_json::Value>,
+            rustc_hash::FxHashMap<String, crate::static_value::StaticValue>,
         > = std::collections::BTreeMap::new();
         let mut usage_enriched_by_file: std::collections::BTreeMap<
             String,
-            rustc_hash::FxHashMap<String, serde_json::Value>,
+            rustc_hash::FxHashMap<String, crate::static_value::StaticValue>,
         > = std::collections::BTreeMap::new();
         let mut unsettled_imports_by_file: BTreeMap<String, rustc_hash::FxHashMap<String, crate::eval::Unsettled>> =
             BTreeMap::new();
