@@ -2558,15 +2558,6 @@ export const ds = tokens;
         );
     }
 
-    /// Contract: a system whose module graph has an import cycle loads as
-    /// Node loads it. Each module evaluates once, after the modules it imports
-    /// outside its cycle. A hoisted function, an anonymous default function,
-    /// a namespace import and a name `export *` brings in are all readable
-    /// before their module evaluates, and every import, including one from
-    /// outside the cycle, reads the exporting binding live, `export *`
-    /// included when star exports form a cycle. An import of a name the
-    /// module does not export, or a re-export that resolves to no binding or
-    /// ambiguously, fails the load, naming the module.
     #[test]
     fn an_acyclic_namespace_lists_its_names_in_code_unit_order() {
         // Node lists a module namespace's names in code-unit order, whatever
@@ -2594,6 +2585,15 @@ export const ds = tokens;
         );
     }
 
+    /// Contract: a system whose module graph has an import cycle loads as
+    /// Node loads it. Each module evaluates once, after the modules it imports
+    /// outside its cycle. A hoisted function, an anonymous default function,
+    /// a namespace import and a name `export *` brings in are all readable
+    /// before their module evaluates, and every import, including one from
+    /// outside the cycle, reads the exporting binding live, `export *`
+    /// included when star exports form a cycle. An import of a name the
+    /// module does not export, or a re-export that resolves to no binding or
+    /// ambiguously, fails the load, naming the module.
     #[test]
     fn cyclic_module_graph_evaluates_with_node_semantics() {
         const PROTOCOL: &str = "export const ds = { toConfig: () => ({ propConfig: JSON.stringify(data), groupRegistry: '{}' }), \
