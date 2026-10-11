@@ -314,6 +314,9 @@ interface WebpackLikeCompiler {
   hooks: {
     done: { tap: (name: string, fn: () => void) => void };
     failed?: { tap: (name: string, fn: () => void) => void };
+    /** `close()` of a watch, which webpack fires in place of `done` when it
+     *  closes mid-compile. */
+    watchClose?: { tap: (name: string, fn: () => void) => void };
     normalModuleFactory: {
       tap: (
         name: string,
@@ -434,6 +437,18 @@ export const unpluginFactory: UnpluginFactory<
 
   async function startPipeline(): Promise<void> {
     signalPipelineStarted();
+    // A webpack compile that ended without done or failed (it restarts one
+    // an edit invalidated, and skips both) left its Session joined and its
+    // claim held: retire it before this run claims the build again. A
+    // webpack compiler runs one compile at a time; the Rollup family can
+    // start environments in parallel, so they keep theirs.
+    if (
+      activeSession !== null &&
+      (meta.framework === 'webpack' || meta.framework === 'rspack')
+    ) {
+      disposeSessionDir(state);
+      releaseClaim();
+    }
     try {
       await runClaimedPipeline();
     } catch (error) {
@@ -964,6 +979,11 @@ export const unpluginFactory: UnpluginFactory<
       releaseClaim();
     });
     compiler.hooks.failed?.tap(PLUGIN_NAME, () => {
+      disposeSessionDir(state);
+      releaseClaim();
+    });
+    // A watch closed mid-compile fires neither: the build retires here.
+    compiler.hooks.watchClose?.tap(PLUGIN_NAME, () => {
       disposeSessionDir(state);
       releaseClaim();
     });

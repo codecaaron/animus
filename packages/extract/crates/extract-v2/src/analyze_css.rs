@@ -741,6 +741,9 @@ pub struct CssOutput {
     /// Consuming file → member tag as written there (`Panel.Body`,
     /// `ui.Card.Body`) → the component its slot renders.
     pub member_bindings: BTreeMap<String, BTreeMap<String, String>>,
+    /// Each extension dropped over a parent that is no analysed chain, with
+    /// why (spec §12.2 row 11).
+    pub missing_inputs: Vec<MissingInput>,
 }
 
 pub fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
@@ -870,9 +873,13 @@ pub fn probe_base(from_file: &str, spec: &str, inputs: &CssInputs) -> Option<Str
     for seg in spec.split('/') {
         match seg {
             "." | "" => {}
-            ".." => {
-                parts.pop();
-            }
+            // Above the root the step stays: the base is outside the root.
+            ".." => match parts.last() {
+                Some(&last) if last != ".." => {
+                    parts.pop();
+                }
+                _ => parts.push(".."),
+            },
             s => parts.push(s),
         }
     }
@@ -1063,6 +1070,98 @@ fn parent_failed_reason(named: &str) -> String {
         "chain dropped: parent chain '{}' failed evaluation before extension",
         named
     )
+}
+
+/// Why an extension's parent is no analysed chain: the typed evidence a
+/// host's fold reads (spec §12.2 row 11), in place of the drop's message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MissingParent {
+    /// The parent's import names a path no analysed module answers.
+    Absent,
+    /// The host opens a file the analysis does not read (spec §2.2 A8).
+    Incomplete,
+    /// The host opens an opaque file there.
+    Opaque,
+    /// The host opens an adapted original there (`.mdx`, `.svelte`) whose
+    /// analysis holds no module the probe names.
+    Adapted,
+    /// A package the package map does not answer.
+    Package,
+    /// The import resolves, but the parent is not reached past it.
+    Unreached,
+    /// The parent is declared in an analysed module, but not as a chain.
+    NotAChain,
+    /// The parent chain failed its own evaluation.
+    FailedParent,
+}
+
+/// One extension dropped over its parent: the file and component, the
+/// parent as written, the specifier it is imported by and the path that
+/// probes, where known.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingInput {
+    pub file: String,
+    pub component: String,
+    pub parent: String,
+    pub specifier: Option<String>,
+    pub base: Option<String>,
+    pub outcome: MissingParent,
+}
+
+/// Why `component`'s parent `extends_binding` is no analysed chain.
+fn missing_parent_input(
+    file_path: &str,
+    ff: &FileFacts,
+    component: &str,
+    extends_binding: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> MissingInput {
+    let record = |specifier: Option<&str>, base: Option<String>, outcome| MissingInput {
+        file: file_path.to_string(),
+        component: component.to_string(),
+        parent: extends_binding.to_string(),
+        specifier: specifier.map(str::to_string),
+        base,
+        outcome,
+    };
+    let specifier = match ff.bindings.module_import(extends_binding) {
+        Some(ImportBinding::Named { specifier, .. } | ImportBinding::Default { specifier }) => Some(specifier.as_str()),
+        _ => None,
+    };
+    if let Some((file, binding, true)) = resolve_declaration(file_path, ff, extends_binding, files, inputs, links) {
+        let outcome = match chain_extractable(files, &file, &binding) {
+            Some(false) => MissingParent::FailedParent,
+            _ => MissingParent::NotAChain,
+        };
+        return record(specifier, None, outcome);
+    }
+    let Some(specifier) = specifier else {
+        return record(None, None, MissingParent::NotAChain);
+    };
+    let Some(base) = probe_base(file_path, specifier, inputs) else {
+        return record(Some(specifier), None, MissingParent::Package);
+    };
+    let outcome = match probe_files(&base, files, inputs) {
+        // The probe names no module, but the host opens a file there.
+        ProbeOutcome::Absent => match inputs
+            .probe_evidence
+            .as_ref()
+            .and_then(|evidence| evidence.bases.get(&base))
+            .and_then(|host| host.reading)
+        {
+            Some(HostReading::Asset) => MissingParent::Opaque,
+            Some(HostReading::Adapted) => MissingParent::Adapted,
+            _ => MissingParent::Absent,
+        },
+        ProbeOutcome::Incomplete { .. } => MissingParent::Incomplete,
+        ProbeOutcome::Shadowing { .. } => MissingParent::Opaque,
+        ProbeOutcome::Found(_) => MissingParent::Unreached,
+    };
+    record(Some(specifier), Some(base), outcome)
 }
 
 fn classify_parent(
@@ -4547,6 +4646,7 @@ fn bounded_prop_tags(
 /// component, a relative or aliased import extraction cannot read (an
 /// excluded file may render our components) or any other declaration may
 /// be one of our components, so it blocks every component.
+#[allow(clippy::too_many_arguments)]
 fn uncertainty_leaves_usage_proven(
     sites: &[(&String, UncertainIdentity)],
     files: &BTreeMap<String, FileFacts>,
@@ -4554,8 +4654,8 @@ fn uncertainty_leaves_usage_proven(
     links: &crate::link::ProjectLinks,
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
     package_members: &FxHashSet<(String, String)>,
-    bounded_tags: &FxHashSet<(String, u32)>) -> bool {
-    let contexts = &context_changes(files, inputs, links);
+    bounded_tags: &FxHashSet<(String, u32)>,
+    contexts: &crate::flow::ValueEffects) -> bool {
     // Each element of an ordinary component is a site; classify each tag once.
     let mut classified: FxHashSet<(&str, &str, Option<TagOrigin>)> = FxHashSet::default();
     sites.iter().all(|(file, site)| {
@@ -4663,27 +4763,6 @@ pub(crate) fn judge_object_handoffs(
             }
         }
     }
-}
-
-/// What a use in any analysed module may change of the contexts React's
-/// `createContext` builds: a member write or delete, a hand-off to code
-/// other than React's context readers. A changed context's `Provider` is
-/// not proven to be React's.
-fn context_changes(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs, links: &crate::link::ProjectLinks) -> crate::flow::ValueEffects {
-    let mut flow = crate::flow::FlowBuilder::new();
-    for (path, ff) in files {
-        for (name, used) in &ff.unsafe_object_uses {
-            let root = name.split('.').next().unwrap_or(name);
-            let Some((declaring, binding, _)) = resolve_declaration(path, ff, root, files, inputs, links) else { continue };
-            if files.get(&declaring).is_some_and(|declared| declared.context_consts.contains(&binding)) {
-                let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
-                let cause = format!("{name} {} in {path}{line}", used.what);
-                let context = crate::flow::ObjectId::new(&declaring, &binding);
-                flow.change(context, Vec::new(), crate::flow::ChangeKind::Escape, cause);
-            }
-        }
-    }
-    flow.close()
 }
 
 /// Whether `tag`, or the binding it is a member of, is imported from a
@@ -5054,8 +5133,8 @@ fn opaque_delivery(
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
     receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
     renders_in_place: impl Fn(&str) -> bool,
+    contexts: &crate::flow::ValueEffects,
 ) -> (std::collections::BTreeSet<String>, Vec<(String, String)>) {
-    let contexts = context_changes(files, inputs, links);
     // The declaration `name` (`lib.enhance` for a namespace import's
     // member) names from `file`, or `None` outside the analysis.
     let declaration = |file: &str, ff: &FileFacts, name: &str| {
@@ -5082,7 +5161,7 @@ fn opaque_delivery(
         if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
             return true;
         }
-        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, links, &contexts) {
+        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, links, contexts) {
             return false;
         }
         let ids = receiver_ids(file, ff, &tag.tag);
@@ -6052,6 +6131,7 @@ fn run_with_system_floor(
 
     let mut parent_map: FxHashMap<String, String> = FxHashMap::default();
     let mut unresolvable_extensions: FxHashSet<String> = FxHashSet::default();
+    let mut missing_inputs: Vec<MissingInput> = Vec::new();
     for (file_path, ff) in files {
         for chain in &ff.chains {
             let d = &chain.descriptor;
@@ -6084,6 +6164,15 @@ fn run_with_system_floor(
                             diagnostic(file_path, &d.binding, "bail", reason, Some(UNRESOLVED_PARENT))
                                 .dropping(&parent),
                         );
+                        missing_inputs.push(missing_parent_input(
+                            file_path,
+                            ff,
+                            &d.binding,
+                            extends_binding,
+                            files,
+                            inputs,
+                            links,
+                        ));
                         unresolvable_extensions.insert(component_id);
                     }
                 }
@@ -7407,7 +7496,8 @@ fn run_with_system_floor(
         |id| {
             !changed_ids.contains(id)
                 && evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement)
-        },);
+        },
+        object_members.changes(),);
     escaped_ids.extend(delivered_ids);
     // A held wrapper some render of which no member tag shows renders with
     // props no analysed use shows.
@@ -7609,7 +7699,16 @@ fn run_with_system_floor(
     let usage_complete = !analysis_incomplete(files, inputs)
         && !files.values().any(|ff| ff.direct_eval)
         && (!identity_policy.uncertain
-            || uncertainty_leaves_usage_proven(&uncertain_identities, files, inputs, links, &ordinary_members, &package_members, &bounded_tags));
+            || uncertainty_leaves_usage_proven(
+                &uncertain_identities,
+                files,
+                inputs,
+                links,
+                &ordinary_members,
+                &package_members,
+                &bounded_tags,
+                object_members.changes(),
+            ));
     let project_uses = usage_complete
         .then(|| {
             let unproven: std::collections::BTreeSet<String> =
@@ -8740,6 +8839,7 @@ fn run_with_system_floor(
             .into_iter()
             .map(|(path, members)| (path, members.into_iter().collect()))
             .collect(),
+        missing_inputs,
     }
 }
 
@@ -8869,6 +8969,76 @@ mod tests {
              {render}\n"
         );
         analyze(&[("a.tsx", source.as_str())], &test_inputs())
+    }
+
+    /// Contract: an extension dropped over its parent carries typed
+    /// evidence of why (spec §12.2 row 11), which a host's rediscovery
+    /// reads in place of the drop's message.
+    #[test]
+    fn a_dropped_extension_names_its_missing_input() {
+        let child = |name: &str, import: &str| {
+            format!("import {{ {name} }} from '{import}';\nexport const Child{name} = {name}.extend().styles({{ m: 1 }}).asElement('div');\n")
+        };
+        let files = [
+            ("absent.tsx", child("Gone", "./gone")),
+            ("package.tsx", child("Kit", "some-kit")),
+            ("plain.tsx", child("Plain", "./plain")),
+            ("plain.ts", "export const Plain = 1;\n".to_string()),
+            ("local.tsx", "const Local = makeIt();\nexport const ChildLocal = Local.extend().styles({ m: 1 }).asElement('div');\n".to_string()),
+            ("src/asset.tsx", child("Data", "./parent.json")),
+            ("src/adapted.tsx", child("Doc", "./doc.mdx")),
+            ("src/above.tsx", child("Gen", "../../generated")),
+        ];
+        // The host opens a file at these bases that no analysed module is.
+        let mut inputs = test_inputs();
+        let opens = |candidate: &str, reading| HostCandidate {
+            candidate: candidate.into(),
+            actual: None,
+            analysed_as: None,
+            reading: Some(reading),
+        };
+        inputs.probe_evidence = Some(ProbeEvidence {
+            generation: 1,
+            identity: String::new(),
+            bases: [
+                ("src/parent.json".to_string(), opens("src/parent.json", HostReading::Asset)),
+                ("src/doc.mdx".to_string(), opens("src/doc.mdx", HostReading::Adapted)),
+            ]
+            .into_iter()
+            .collect(),
+        });
+        let entries: Vec<(&str, &str)> = files.iter().map(|(path, source)| (*path, source.as_str())).collect();
+        let out = analyze(&entries, &inputs);
+        let records: Vec<(String, Option<String>, Option<String>, MissingParent)> = out
+            .missing_inputs
+            .iter()
+            .map(|r| (r.component.clone(), r.specifier.clone(), r.base.clone(), r.outcome))
+            .collect();
+        assert_eq!(
+            records,
+            [
+                ("ChildGone".to_string(), Some("./gone".to_string()), Some("gone".to_string()), MissingParent::Absent),
+                ("ChildLocal".to_string(), None, None, MissingParent::NotAChain),
+                ("ChildKit".to_string(), Some("some-kit".to_string()), None, MissingParent::Package),
+                ("ChildPlain".to_string(), Some("./plain".to_string()), None, MissingParent::NotAChain),
+                // A base above the root keeps its step out of the root.
+                (
+                    "ChildGen".to_string(),
+                    Some("../../generated".to_string()),
+                    Some("../generated".to_string()),
+                    MissingParent::Absent
+                ),
+                ("ChildDoc".to_string(), Some("./doc.mdx".to_string()), Some("src/doc.mdx".to_string()), MissingParent::Adapted),
+                ("ChildData".to_string(), Some("./parent.json".to_string()), Some("src/parent.json".to_string()), MissingParent::Opaque),
+            ],
+            "{:?}",
+            out.diagnostics
+        );
+        // The file above the root answers that base: nothing is dropped.
+        let generated = "export const Gen = ds.styles({ m: 2 }).asElement('div');\n";
+        let above = child("Gen", "../../generated");
+        let out = analyze(&[("src/above.tsx", above.as_str()), ("../generated.tsx", generated)], &test_inputs());
+        assert_eq!(out.missing_inputs, [], "{:?}", out.diagnostics);
     }
 
     #[test]
@@ -10889,6 +11059,55 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let files = [("kit.tsx", kit), ("contexts.tsx", contexts.as_str()), ("read.tsx", read), ("app.tsx", app)];
             assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{more}");
         }
+        // Nor is one an opening may reach: code run from a string, a hand-on
+        // of its module's namespace, a runtime load of it, or a write through
+        // the namespace of a module the analysis cannot find or does not read,
+        // which may re-export it.
+        let app = "import { Box } from './kit';\nimport { Shared } from './contexts';\n\
+                   export const App = () => <Shared.Provider value={1}><Box p={8} /></Shared.Provider>;\n";
+        for (other, want) in [
+            ("export const make = (source) => new Function(source);\n", &["p"][..]),
+            ("import * as contexts from './contexts';\nconsume(contexts);\n", &["p"][..]),
+            ("export * as contexts from './contexts';\n", &["p"][..]),
+            ("import('./contexts').then(consume);\n", &["p"][..]),
+            ("import * as lib from './missing';\nlib.Shared.Provider = pick();\n", &["p"][..]),
+            ("import * as ui from '@local/proxy';\nui.Shared.Provider = pick();\n", &["p"][..]),
+            ("export const other = 1;\n", &[][..]),
+        ] {
+            let files = [("kit.tsx", kit), ("contexts.tsx", contexts), ("other.ts", other), ("app.tsx", app)];
+            assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), want, "{other}");
+        }
+        // A use reaches the context however it is named: through a namespace
+        // member path, a renamed re-export, a star, a default that holds it or
+        // a local alias.
+        let renamed = "export { Shared as Renamed } from './contexts';\n";
+        let star = "export * from './contexts';\n";
+        let default = "import { Shared } from './contexts';\nexport default Shared;\n";
+        for (barrel, other) in [
+            ("", "import * as contexts from './contexts';\ncontexts.Shared.Provider = pick();\n"),
+            ("", "import * as contexts from './contexts';\ndelete contexts.Shared.Provider;\n"),
+            ("", "import * as contexts from './contexts';\nconsume(contexts.Shared);\n"),
+            (renamed, "import * as b from './barrel';\nb.Renamed.Provider = pick();\n"),
+            (star, "import * as b from './barrel';\nb.Shared.Provider = pick();\n"),
+            (default, "import D from './barrel';\nD.Provider = pick();\n"),
+            (default, "import * as b from './barrel';\nb.default.Provider = pick();\n"),
+            ("", "import { Shared } from './contexts';\nconst Alias = Shared;\nAlias.Provider = pick();\n"),
+        ] {
+            let files =
+                [("kit.tsx", kit), ("contexts.tsx", contexts), ("barrel.ts", barrel), ("other.ts", other), ("app.tsx", app)];
+            assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), ["p"], "{barrel}{other}");
+        }
+        // A context's members are not known, so a facade that spreads one
+        // may hold any member: `<Parts.Root>` stays uncertain.
+        let parts = "import { createContext } from 'react';\nexport const Shared = createContext(null);\n\
+                     export const Root = ds.styles({ padding: 4 })\n\
+                       .variant({ prop: 'size', defaultVariant: 'sm', variants: { sm: { margin: 1 }, lg: { margin: 9 } } })\n\
+                       .asElement('div');\n\
+                     export const Parts = { Root, ...Shared };\n";
+        let app = "import { Box } from './kit';\nimport { Parts, Shared } from './parts';\n\
+                   export const App = () => <Shared.Provider value={1}><Parts.Root size='sm' /><Box p={8} /></Shared.Provider>;\n";
+        let files = [("kit.tsx", kit), ("contexts.tsx", contexts), ("parts.tsx", parts), ("app.tsx", app)];
+        assert_eq!(analyze(&files, &test_inputs()).dynamic_props.keys().collect::<Vec<_>>(), ["p"]);
     }
 
     /// A tag whose type a function's own prop chooses (`createElement(as ??
