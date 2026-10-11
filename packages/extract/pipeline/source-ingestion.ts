@@ -194,6 +194,19 @@ export interface SourceIngestionResult {
   /** Originals a fatal diagnostic left out. Their renders are unseen, so an
    *  analysis without them must not prune. Absent when none was left out. */
   skippedOriginals?: string[];
+  /** Resolver calls whose import the host opens under another spelling
+   *  (spec §2.2 A8): openings the analysis reports and never prunes past.
+   *  Absent when none. */
+  openings?: IngestionOpening[];
+}
+
+/** A probe ingestion ended because the host opens its candidate under
+ *  another spelling. */
+export interface IngestionOpening {
+  importer: string;
+  specifier: string;
+  candidate: string;
+  opened: string;
 }
 
 export interface AbortedParse {
@@ -260,6 +273,8 @@ function resolveRelativeSource(
   importerPath: string,
   specifier: string,
   files: ReadonlyMap<string, string>,
+  analysed: ReadonlySet<string>,
+  opened: (candidate: string, actual: string) => void,
   policy: ExtensionOrder | undefined,
   host: { rootDir: string } | undefined
 ): string | null {
@@ -272,13 +287,17 @@ function resolveRelativeSource(
           specifier
         )
       ),
-      new Set(files.keys()),
+      analysed,
       policy
     );
-    // The host opens another spelling: no module (analysis reports it).
-    if (first?.actual) return null;
-    const analysed = first?.analysedAs && files.get(first.analysedAs);
-    if (analysed) return analysed;
+    // The host opens another spelling: no module, and an opening the
+    // analysis reports and never prunes past.
+    if (first?.actual) {
+      opened(first.candidate, first.actual);
+      return null;
+    }
+    const named = first?.analysedAs && files.get(first.analysedAs);
+    if (named) return named;
   }
   for (const candidate of relativeSourceCandidates(
     importerPath,
@@ -298,6 +317,9 @@ class ResolverExportIndex {
   }>;
 
   private readonly files: ReadonlyMap<string, string>;
+  private readonly analysed: ReadonlySet<string>;
+  /** Each resolver call the host opens under another spelling, once. */
+  readonly openings = new Map<string, IngestionOpening>();
   private readonly resolverBindings = new Map<string, ReadonlySet<string>>();
   /** Both memos live for one ingest only — the index is rebuilt per call,
    *  so neither needs invalidation. */
@@ -339,6 +361,7 @@ class ResolverExportIndex {
       }
     }
     this.files = files;
+    this.analysed = new Set(files.keys());
 
     for (const [path, file] of Object.entries(facts.files)) {
       this.resolverBindings.set(
@@ -400,6 +423,14 @@ class ResolverExportIndex {
         importerPath,
         specifier,
         this.files,
+        this.analysed,
+        (candidate, opened) =>
+          this.openings.set(key, {
+            importer: importerPath,
+            specifier,
+            candidate,
+            opened,
+          }),
         this.extensions,
         this.host
       );
@@ -623,6 +654,9 @@ export async function ingestSourceEntries(
     diagnostics,
   };
   if (abortedParses.length > 0) result.abortedParses = abortedParses;
+  if (resolvers.openings.size > 0) {
+    result.openings = [...resolvers.openings.values()];
+  }
   return result;
 }
 

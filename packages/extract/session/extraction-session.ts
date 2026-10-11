@@ -174,6 +174,7 @@ export interface SessionHost {
 import type { ExcludeMatcher } from '../pipeline/index';
 import type {
   AssetSheets,
+  IngestionOpening,
   LightningTargets,
   ManifestDiagnostic,
   SourceCorpus,
@@ -336,6 +337,8 @@ export class ExtractionSession {
   /** Whether the corpus being analyzed left a file out, whose renders the
    *  analysis cannot see. */
   private skippedSources: readonly string[] = [];
+  /** Resolver calls ingestion ended under another spelling. */
+  private ingestionOpenings: readonly IngestionOpening[] = [];
   /** Full package-resolution map from the last full pipeline — replayed by
    *  incremental passes (sourceEntries alone omits dist-resolved packages). */
   private lastPackageMap: Record<string, string> = {};
@@ -964,6 +967,7 @@ export class ExtractionSession {
         });
         this.throwOnAbortedParse(ingested);
         this.skippedSources = ingested.skippedOriginals ?? [];
+        this.ingestionOpenings = ingested.openings ?? [];
         if (this.systemReloadOwed) {
           this.log(
             'system reload: publishing the reload a parse hold deferred'
@@ -1401,6 +1405,7 @@ export class ExtractionSession {
         accepted = await this.corpus.prepare(rawEntries);
         this.throwOnAbortedParse(accepted);
         this.skippedSources = accepted.skippedOriginals ?? [];
+        this.ingestionOpenings = accepted.openings ?? [];
       } catch (err) {
         this.debouncePending.clear();
         this.writeAnalysisStatus('failed', pending, String(err));
@@ -1841,6 +1846,7 @@ export class ExtractionSession {
           isAbsolute(file) ? relative(this.rootDir!, file) : file
         ),
         unbundledComputedImports: this.host.unbundledComputedImports,
+        openings: [...this.ingestionOpenings],
         packageDirs: this.externalPackageDirs.map((dir) =>
           relative(this.rootDir!, dir)
         ),

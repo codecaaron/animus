@@ -175,6 +175,21 @@ pub struct AnalysisContext {
     /// The host's extension order (spec §2.2 A2), as the session captured
     /// it; the built-in policy where no host resolves.
     pub extensions: Option<animus_system_loader::resolution::ExtensionPolicy>,
+    /// Probes ingestion ended under another spelling (a Svelte resolver
+    /// call whose import the host opens as another file, spec §2.2 A8):
+    /// each is an opening of this analysis, as one of its own probes is.
+    pub openings: Vec<CaseOpening>,
+}
+
+/// A probe ingestion ended because the host opens its candidate under
+/// another spelling.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaseOpening {
+    pub importer: String,
+    pub specifier: String,
+    pub candidate: String,
+    pub opened: String,
 }
 
 impl CssInputs {

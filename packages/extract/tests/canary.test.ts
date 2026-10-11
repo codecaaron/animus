@@ -1,5 +1,6 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   realpathSync,
@@ -16,6 +17,7 @@ import {
   viteExtensionPolicy,
 } from '../pipeline/host-extensions';
 import { gatherProbeEvidence } from '../pipeline/probe-evidence';
+import { ingestSourceEntries } from '../pipeline/source-ingestion';
 
 const v2 = require('../index-v2.js');
 
@@ -313,3 +315,56 @@ test.each([
     );
   }
 );
+
+// Contract: a Svelte resolver call whose import the host opens under another
+// spelling is an opening of the analysis (spec §2.2 A8), though it is
+// attributed to no module: the finding is reported and nothing is pruned,
+// so the variant it renders keeps its CSS. spike-codex's witness: Known
+// reads `./Definition` (quiet, the control that lets pruning run); Usage
+// reads `./definition` (loud), which a case-insensitive host opens as
+// `Definition.ts`, beside a `definition.tsx` exporting another badge.
+test('a mismatched Svelte resolver call keeps the variant it renders', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-svelte-open-')));
+  const sources = {
+    'src/Definition.ts':
+      "export const badge=ds.styles({color:'red'}).variant({prop:'tone',defaultVariant:'quiet',variants:{quiet:{backgroundColor:'pink'},loud:{backgroundColor:'crimson'}}}).asClass();\n",
+    'src/definition.tsx':
+      "export const later=ds.styles({color:'blue'}).variant({prop:'tone',defaultVariant:'quiet',variants:{quiet:{backgroundColor:'pink'},loud:{backgroundColor:'crimson'}}}).asClass();export{later as badge};\n",
+    'src/Usage.svelte':
+      "<script>import{badge}from'./definition';const attrs=badge.attrs({tone:'loud'});</script><div {...attrs}></div>\n",
+    'src/Known.svelte':
+      "<script>import{badge}from'./Definition';const attrs=badge.attrs({tone:'quiet'});</script><div {...attrs}></div>\n",
+  } satisfies Record<string, string>;
+  mkdirSync(join(root, 'src'));
+  for (const [path, source] of Object.entries(sources)) {
+    writeFileSync(join(root, path), source);
+  }
+  const opensVariant =
+    existsSync(join(root, 'src', 'definition.ts')) &&
+    !readdirSync(join(root, 'src')).includes('definition.ts');
+
+  const ingested = await ingestSourceEntries(
+    Object.entries(sources).map(([path, source]) => ({ path, source })),
+    { extractFacts: (filesJson) => v2.extractFacts(filesJson), rootDir: root }
+  );
+  const engine = new v2.ExtractEngine({
+    analysisContextJson: JSON.stringify({ openings: ingested.openings ?? [] }),
+  });
+  const filesJson = JSON.stringify(ingested.analysisEntries);
+  const prepared = JSON.parse(engine.prepare(filesJson));
+  const evidence = gatherProbeEvidence(
+    root,
+    new Set(ingested.analysisEntries.map((entry) => entry.path)),
+    undefined
+  )(prepared.bases, prepared.identity);
+  const manifest = JSON.parse(engine.analyze(filesJson, evidence));
+  rmSync(root, { recursive: true, force: true });
+  const badge = manifest.components['src/Definition.ts::badge'].class_name;
+
+  expect({
+    loud: manifest.css.includes(`.${badge}--tone-loud`),
+    mismatch: manifest.diagnostics.some(
+      (d: { code?: string }) => d.code === 'animus.resolve.case-mismatch'
+    ),
+  }).toEqual({ loud: true, mismatch: opensVariant });
+});

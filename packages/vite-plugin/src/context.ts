@@ -53,6 +53,7 @@ import type {
   KitDescriptorRecord,
   ManifestDiagnostic,
   ManifestSheets,
+  IngestionOpening,
   ProjectAnalysisResult,
   ProjectManifest,
   RawSourceEntry,
@@ -519,7 +520,8 @@ export class PluginContext {
    *  nothing is pruned. */
   runAnalysis(
     fileEntries: Array<{ path: string; source: string; hash?: string }>,
-    skippedOriginals: readonly string[] = []
+    skippedOriginals: readonly string[] = [],
+    openings: readonly IngestionOpening[] = []
   ): boolean {
     const ingestionFailures = this.unsettledIngestionFailures();
     let result: ProjectAnalysisResult;
@@ -548,6 +550,7 @@ export class PluginContext {
             isAbsolute(file) ? relative(this.rootDir, file) : file
           ),
           unbundledComputedImports: true,
+          openings: [...openings],
           packageDirs: this.externalPackageDirs.map((dir) =>
             relative(this.rootDir, dir)
           ),
@@ -717,7 +720,8 @@ export class PluginContext {
       const ok =
         this.runAnalysis(
           accepted.analysisEntries,
-          accepted.skippedOriginals
+          accepted.skippedOriginals,
+          accepted.openings
         ) !== false;
       if (!ok) return { ok, accepted, endedHold: false, redeliver: [] };
       this.publishSourceIngestion(accepted);
