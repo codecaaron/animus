@@ -184,8 +184,11 @@ async function discoverSources(
   const t0 = performance.now();
   // A declared workspace nothing links into node_modules is no package to
   // Vite, though the system loader resolves it: where the host finds
-  // nothing, discovery asks the loader, as the session does.
+  // nothing, discovery asks the loader, as the session does. Vite resolves
+  // such a package's imports only through a source-entry redirect, so the
+  // collector admits a loader answer only where one exists.
   const workspaces = declaredWorkspacePackages(ctx.rootDir);
+  const loaderOnly = new Set<string>();
   const resolveSpecifier = async (
     specifier: string
   ): Promise<string | null> => {
@@ -204,6 +207,7 @@ async function discoverSources(
         ctx.resolveConditions,
         workspaces
       );
+    if (loaded?.path) loaderOnly.add(specifier);
     return loaded?.path ?? null;
   };
   // Refresh in case `options` was mutated between server lifecycles.
@@ -265,6 +269,7 @@ async function discoverSources(
   const collected = await collectExternalPackageSources({
     specifiers: packageSpecifiers,
     resolveSpecifier,
+    requireSourceEntry: (specifier) => loaderOnly.has(specifier),
     rootDir: ctx.rootDir,
     extensionsSet: ctx.extensionsSet,
     hasEntry: (relPath) => rawEntries.some((entry) => entry.path === relPath),
