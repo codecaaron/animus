@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use crate::identity::LocalId;
 use crate::link::ProjectLinks;
 use crate::loads::{LoadKind, Spelling};
+use crate::usage_facts::{reads_only, ReadingsOf};
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
 use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, Request, Terminal};
 
@@ -445,13 +446,6 @@ fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::S
     reads.found
 }
 
-/// One module's functions, each with how its parameters treat an object.
-type FunctionReadings = std::rc::Rc<BTreeMap<String, Vec<crate::usage_facts::ParamReading>>>;
-/// A module's function readings, scanned on first request.
-type ReadingsOf<'r> = dyn FnMut(&str) -> FunctionReadings + 'r;
-/// The declaring module and local name a module's binding names.
-type Declared<'d> = dyn Fn(&str, &str) -> Option<(String, String)> + 'd;
-
 /// One module's inputs to `unstable_style_statics`.
 struct StyleModule {
     facts: crate::usage_facts::StyleObjectFacts,
@@ -529,32 +523,6 @@ fn unstable_style_statics(
         found.dedup();
         found.into_iter().map(declaration).collect()
     };
-    // Whether the function `function` of `file` only reads the object passed
-    // as its parameter `index`, through the read-only callees it passes the
-    // object to, at most four calls deep.
-    fn reads_only(
-        file: &str,
-        function: &str,
-        index: usize,
-        depth: usize,
-        declared: &Declared<'_>,
-        readings_of: &mut ReadingsOf<'_>,
-    ) -> bool {
-        use crate::usage_facts::ParamReading;
-        if depth > 4 {
-            return false;
-        }
-        let readings = readings_of(file);
-        let Some(ParamReading::ReadOnly(passes)) = readings.get(function).and_then(|params| params.get(index)) else {
-            return false;
-        };
-        passes.iter().all(|(callee, at)| match declared(file, callee) {
-            Some((callee_file, callee_name)) => {
-                reads_only(&callee_file, &callee_name, *at, depth + 1, declared, readings_of)
-            }
-            None => false,
-        })
-    }
     // Whether a declaration's static is an object or array: no use can
     // change a primitive.
     let mutable = |(file, local): &(String, String)| {
@@ -892,16 +860,8 @@ impl ExtractEngine {
         // as a marker naming that use, so every reader refuses it.
         let programs: BTreeMap<&str, &oxc::ast::ast::Program<'_>> =
             store.iter().map(|ast| (ast.path.as_str(), ast.program())).collect();
-        // Each module's functions, with how their parameters treat an
-        // object, read while the module's scopes are at hand.
-        let readings_by_file: BTreeMap<String, FunctionReadings> = store
-            .iter()
-            .map(|ast| {
-                let readings =
-                    crate::usage_facts::function_param_readings(ast.program(), &lowered_by_file[&ast.path].scoping);
-                (ast.path.clone(), std::rc::Rc::new(readings))
-            })
-            .collect();
+        let readings_by_file: BTreeMap<String, crate::usage_facts::ParamReadings> =
+            lowered_by_file.iter().map(|(path, lowered)| (path.clone(), std::sync::Arc::clone(&lowered.readings))).collect();
         let mut readings_of = |file: &str| readings_by_file.get(file).cloned().unwrap_or_default();
         for ((file, local), reason) in unstable_style_statics(
             &style_modules,
@@ -1072,6 +1032,7 @@ impl ExtractEngine {
 
         // Facts own every resolved reference; release the modules' scopings.
         drop(references);
+        analyze_css::judge_object_handoffs(&mut self.facts, &self.opts.css_inputs, &links);
         let mut css = analyze_css::run(
             &self.facts,
             &self.order,
@@ -2124,10 +2085,15 @@ export const App = () => <Box tone="red" />;
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
         // A type query of eval, or a schema builder's own `Function` member
-        // (TypeBox's `Type.Function`), runs nothing: the static still
+        // (TypeBox's `Type.Function`), runs nothing, and a type query of a
+        // function's `arguments` reads none of them: the static still
         // extracts.
         for (row, module) in [
             ("type query", "export type Evaluate = typeof eval;\n"),
+            (
+                "a type query of arguments in a read-only callee",
+                "import { pad } from './tokens';\nfunction read(o) { type Args = typeof arguments; return o.padding; }\nread(pad);\n",
+            ),
             (
                 "a namespace's Function member",
                 "import * as Type from './typebox';\nexport const schema = Type.Function([], Type.String());\n",
