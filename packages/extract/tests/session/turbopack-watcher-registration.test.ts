@@ -7,9 +7,35 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
+const engine = vi.hoisted(() => ({
+  loadSystemModule: vi.fn(),
+  analyzeProject: vi.fn(),
+  clearAnalysisCache: vi.fn(),
+}));
+
+import {
+  observationQueue,
+  setEngineApiOverride,
+  setWatchTransaction,
+} from '../../session/singleton';
+
+// Only the phase-replacement row runs real cycles; the rest stub them.
+setEngineApiOverride(() => ({
+  extractFacts: () => '{"files":{},"parseCount":0}',
+  loadSystemModule: engine.loadSystemModule,
+  analyzeProject: engine.analyzeProject,
+  clearAnalysisCache: engine.clearAnalysisCache,
+}));
+
 import { ExtractionSession } from '../../session/extraction-session';
 import { startTurbopackWatcher } from '../../session/turbopack-orchestrator';
-import { disposeTempRoots, makeTempRoot } from './session-fixtures';
+import {
+  buildManifest,
+  disposeTempRoots,
+  makeTempRoot,
+  resetAnimusGlobals,
+  SYSTEM_CONFIG,
+} from './session-fixtures';
 
 import type { WatchChanges } from '../../session/extraction-session';
 import type {
@@ -96,6 +122,9 @@ function makeSession(
 beforeEach(() => {
   calls.length = 0;
   watchers.length = 0;
+  engine.loadSystemModule.mockReset().mockReturnValue({ ...SYSTEM_CONFIG });
+  engine.analyzeProject.mockReset().mockImplementation(() => buildManifest({}));
+  engine.clearAnalysisCache.mockReset();
 });
 
 afterEach(() => {
@@ -227,40 +256,146 @@ describe('startTurbopackWatcher OS registration', () => {
     expect(events).toEqual(['cycle-start', 'cycle-end']);
   });
 
-  test('a cycle queued before close() never enters the session', async () => {
+  test('an observation is recorded before the previous cycle settles', async () => {
+    const restoreGlobals = resetAnimusGlobals();
+    try {
+      const root = createProject();
+      writeFileSync(
+        join(root, 'src', 'system.ts'),
+        'export const system = {};\n'
+      );
+      const session = new ExtractionSession({ system: './src/system.ts' });
+      session.rootDir = root;
+      session.development = true;
+      await session.runFullPipeline();
+
+      // The first cycle stays in flight, as the watcher sees it, until
+      // released.
+      let release = (): void => {};
+      const received: WatchChanges[] = [];
+      const original = session.handleWatchUpdate.bind(session);
+      vi.spyOn(session, 'handleWatchUpdate').mockImplementation((changes) => {
+        received.push(changes);
+        const settled = original(changes);
+        if (received.length > 1) return settled;
+        return settled.then(
+          () =>
+            new Promise<void>((resolve) => {
+              release = resolve;
+            })
+        );
+      });
+
+      const handle = startedHandle(
+        startTurbopackWatcher(session, root, {
+          debounceMs: 5,
+          watchFn: fakeWatch,
+          holdEvents: true,
+        })
+      );
+      const src = join(root, 'src');
+      const srcWatcher = watchers.find((w) => w.dir === src)!;
+      writeFileSync(join(src, 'a.tsx'), 'export {};');
+      srcWatcher.listener!('change', 'a.tsx');
+      void handle.deliverHeldEvents();
+      writeFileSync(join(src, 'b.tsx'), 'export {};');
+      srcWatcher.listener!('change', 'b.tsx');
+
+      await vi.waitFor(() => expect(received).toHaveLength(2));
+      expect(received[1].modifiedFiles).toEqual(new Set([join(src, 'b.tsx')]));
+
+      release();
+      handle.close();
+      await handle.settle();
+      session.close();
+    } finally {
+      restoreGlobals();
+    }
+  });
+
+  test('a batch that arrives after close() never enters the session', async () => {
     const root = createProject();
-    let releaseCycle!: () => void;
-    const cycleGate = new Promise<void>((res) => {
-      releaseCycle = res;
+    const entries: WatchChanges[] = [];
+    const session = makeSession(root, async (changes) => {
+      entries.push(changes);
     });
-    const entries: string[] = [];
-    const session = makeSession(root, async () => {
-      entries.push('cycle');
-      await cycleGate;
-    });
-    const outcome = startTurbopackWatcher(session, root, {
-      debounceMs: 5,
-      watchFn: fakeWatch,
-    });
-    expect(outcome.kind).toBe('started');
-    const handle = startedHandle(outcome);
+    const handle = startedHandle(
+      startTurbopackWatcher(session, root, {
+        debounceMs: 5,
+        watchFn: fakeWatch,
+      })
+    );
     const srcWatcher = watchers.find((w) => w.dir === join(root, 'src'))!;
 
+    // One event still in the window when close() cancels it, one after.
     writeFileSync(join(root, 'src', 'a.tsx'), 'export {};');
     srcWatcher.listener!('change', 'a.tsx');
-    await vi.waitFor(() => expect(entries).toEqual(['cycle']));
-
-    // The wait lets the debounce fire, so close() finds no timer but a
-    // thunk already queued behind the blocked cycle.
+    handle.close();
     writeFileSync(join(root, 'src', 'b.tsx'), 'export {};');
     srcWatcher.listener!('change', 'b.tsx');
     await new Promise((res) => setTimeout(res, 60));
-
-    handle.close();
-    releaseCycle();
     await handle.settle();
 
-    expect(entries).toEqual(['cycle']);
+    expect(entries).toEqual([]);
+  });
+
+  // A replaced watcher must never feed a later session: phase replacement
+  // closes the watcher and its session, and a detached session starts no
+  // attempt, even for a batch it recorded before close.
+  test('under a phase replacement, a batch recorded before close never starts an attempt, and the replacement never sees it', async () => {
+    const restoreGlobals = resetAnimusGlobals();
+    try {
+      engine.analyzeProject.mockClear();
+      const root = createProject();
+      writeFileSync(
+        join(root, 'src', 'system.ts'),
+        'export const system = {};\n'
+      );
+      const dev = new ExtractionSession(
+        { system: './src/system.ts' },
+        { build: 'phase-replacement-dev' }
+      );
+      dev.rootDir = root;
+      dev.development = true;
+      await dev.runFullPipeline();
+      const handle = startedHandle(
+        startTurbopackWatcher(dev, root, { debounceMs: 5, watchFn: fakeWatch })
+      );
+      const srcWatcher = watchers.find((w) => w.dir === join(root, 'src'))!;
+
+      // An attempt in flight, so the next batch is recorded and waits.
+      let releaseInflight!: () => void;
+      const inflight = new Promise<void>((res) => {
+        releaseInflight = res;
+      });
+      setWatchTransaction(dev.key, inflight);
+      const handed = vi.spyOn(dev, 'handleWatchUpdate');
+      writeFileSync(join(root, 'src', 'b.tsx'), 'export {};');
+      srcWatcher.listener!('change', 'b.tsx');
+      await vi.waitFor(() => expect(handed).toHaveBeenCalledTimes(1));
+      const analysesBeforeReplacement = engine.analyzeProject.mock.calls.length;
+
+      // The replacement, as with-animus does for another phase.
+      dev.close();
+      handle.close();
+      const production = new ExtractionSession(
+        { system: './src/system.ts' },
+        { build: 'phase-replacement-production' }
+      );
+      production.rootDir = root;
+      await production.runFullPipeline();
+      setWatchTransaction(dev.key, null);
+      releaseInflight();
+      await handle.settle();
+
+      expect(engine.analyzeProject.mock.calls.length).toBe(
+        analysesBeforeReplacement + 1
+      );
+      expect(observationQueue(production.key).untaken.size).toBe(0);
+      production.close();
+    } finally {
+      restoreGlobals();
+    }
   });
 });
 
