@@ -5559,22 +5559,33 @@ fn run_with_system_floor(
                  standard globals, btoa and atob",
             )
         };
+        const CAPTURED_ADVICE: &str = "declare what it reads inside the callback or read the standard global \
+             itself; a configured source is evaluated and delivered as its own text, so it cannot carry its \
+             module's bindings";
         let hosts = match crate::transforms::admit_configured_host_reads(name, source) {
             Ok(hosts) => hosts,
             Err(rejections) => {
-                diagnostics.extend(rejections.into_iter().map(rejected));
+                // A callable reading an import is captured from the loader's
+                // bundle, where the import reads the loader's module cell;
+                // the loader's evidence names the import instead. Every
+                // other reason stands.
+                let cell = crate::transforms::module_cell_rejection(name);
+                let captured = inputs.transform_provenance.captured_rejection(key, name);
+                for reason in rejections {
+                    match &captured {
+                        Some(captured) if reason == cell => {
+                            diagnostics.push(rejected_with(captured.clone(), CAPTURED_ADVICE))
+                        }
+                        _ => diagnostics.push(rejected(reason)),
+                    }
+                }
                 continue;
             }
         };
         // Equal text cannot show which binding of a standard-global name a
         // callable closes over; the loader's evidence for its own function can.
         if let Some(reason) = inputs.transform_provenance.captured_rejection(key, name).filter(|_| hosts.is_empty()) {
-            diagnostics.push(rejected_with(
-                reason,
-                "declare what it reads inside the callback or read the standard global itself; \
-                 a configured source is evaluated and delivered as its own text, so it cannot \
-                 carry its module's bindings",
-            ));
+            diagnostics.push(rejected_with(reason, CAPTURED_ADVICE));
             continue;
         }
         // Its text alone cannot show which `btoa` or `atob` it captured.
@@ -13904,6 +13915,31 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(out.admitted_transforms.keys().collect::<Vec<_>>(), ["enc@a", "enc@b"]);
         assert!(out.diagnostics.iter().any(|d| d.code.as_deref() == Some(CONFIGURED_TRANSFORM_REJECTED)
             && d.message.contains("'plain'") && d.message.contains("its callable reads 'String' declared in /m.ts outside the callback")));
+        // A callable reading an import is captured from the loader's bundle,
+        // where the import reads the loader's module cell. Its rejection
+        // names the import, not the cell, and keeps every other reason.
+        let captured = "reads 'btoa' declared in /m.ts outside the callback";
+        let cell = "(0, __modules['/enc.ts']['btoa'])(String(v))";
+        for (source, kept) in [
+            (format!("(v) => {cell}"), None),
+            (format!("(v) => this.bias + {cell}"), Some("reads 'this' of the callback")),
+            (format!("(v) => unknown(v) + {cell}"), Some("external symbol 'unknown'")),
+        ] {
+            let config = r#"{"a": {"property": "width", "transform": "enc", "transformId": "enc@a"}}"#;
+            let sources = serde_json::json!({ "enc@a": source }).to_string();
+            let mut inputs = configured_inputs(config, r#"["a"]"#, Some(&sources), false);
+            inputs.transform_provenance = crate::transforms::TransformProvenance::from_json(Some(&format!(
+                r#"{{"enc@a": {{"rejection": "{captured}"}}}}"#
+            )));
+            let out = analyze(&[("use.tsx", "export const Box = ds.styles({ a: 'x' }).asElement('div');\nexport const App = () => <Box />;\n")], &inputs);
+            let rejected: Vec<&String> = out.diagnostics.iter()
+                .filter(|d| d.code.as_deref() == Some(CONFIGURED_TRANSFORM_REJECTED)).map(|d| &d.message).collect();
+            assert!(rejected.iter().any(|m| m.contains(captured)), "{source}: {rejected:#?}");
+            assert!(rejected.iter().all(|m| !m.contains("__modules")), "{source}: {rejected:#?}");
+            if let Some(kept) = kept {
+                assert!(rejected.iter().any(|m| m.contains(kept)), "{source}: {rejected:#?}");
+            }
+        }
     }
 
     fn failing_transform_variant_inputs(dev_mode: bool) -> CssInputs {
