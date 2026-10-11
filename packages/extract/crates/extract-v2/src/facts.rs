@@ -995,6 +995,84 @@ pub(crate) fn object_facts(program: &Program<'_>, scoping: &oxc::semantic::Scopi
     ObjectFacts { props_forwarding, const_initializers, compose, uses }
 }
 
+/// The facts a module's parse and semantic build give alone, before any
+/// static value is evaluated: its binding table and record, imports,
+/// exports and loads, and the object facts the member tables follow. Fact
+/// extraction completes them; until then every other field is empty, and
+/// only the member tables' change relation may read them.
+pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, objects: ObjectFacts) -> FileFacts {
+    let source = ast.source();
+    let ObjectFacts { props_forwarding, const_initializers, compose, uses } = objects;
+    let crate::usage_facts::ObjectUses { context_consts, unsafe_object_uses, object_handoffs, written_namespaces } = uses;
+    let bindings = &lowered.bindings;
+    // `export default X` of a module binding X names X.
+    let default_export_binding = match bindings.default_export {
+        Some(crate::identity::DefaultExport::Snapshot { of: Some(of), .. }) => Some(bindings.binding(of).name.clone()),
+        _ => None,
+    };
+    FileFacts {
+        path: ast.path.clone(),
+        directive_prologue: None,
+        chains: Vec::new(),
+        statics: BTreeMap::new(),
+        usage: Vec::new(),
+        usage_enriched: None,
+        bindings: Arc::clone(&lowered.bindings),
+        module_record: Arc::clone(&lowered.record),
+        compose,
+        star_exports: crate::usage_facts::collect_star_exports(ast.module_record()),
+        namespace_exports: crate::usage_facts::collect_namespace_exports(ast.module_record()),
+        default_export_binding,
+        builder_import_references: Vec::new(),
+        aliases: const_initializers.aliases,
+        assigned_aliases: const_initializers.assigned,
+        assigned_targets: const_initializers.targets,
+        props_forwarding,
+        declaration_roots: const_initializers.roots,
+        global_keys: BTreeMap::new(),
+        object_members: const_initializers.objects,
+        facades: const_initializers.facades,
+        unsafe_object_uses,
+        object_handoffs,
+        written_namespaces,
+        param_readings: Arc::clone(&lowered.readings),
+        dynamic_code: lowered.dynamic_code,
+        member_parent_extensions: Vec::new(),
+        member_rooted_chains: Vec::new(),
+        object_member_chains: const_initializers.chains,
+        namespace_imports: crate::usage_facts::collect_namespace_imports(ast.module_record()),
+        default_export_chain: None,
+        unwalked_chains: Vec::new(),
+        staged_builders: Vec::new(),
+        imports: collect_import_facts(ast.module_record()),
+        exports: crate::usage_facts::collect_export_facts(ast.program()),
+        confined_components: BTreeSet::new(),
+        value_escapes: BTreeSet::new(),
+        spread_wrappers: BTreeMap::new(),
+        module_loads: lowered.loads.iter().filter_map(|load| load.module_load(source)).collect(),
+        bindingless_imports: lowered
+            .loads
+            .iter()
+            .filter(|load| load.kind == crate::loads::LoadKind::Import { runtime: true, bindingless: true })
+            .filter_map(|load| load.specifier().map(str::to_string))
+            .collect(),
+        ordinary_components: BTreeSet::new(),
+        context_consts,
+        prop_tags: Vec::new(),
+        name_uses: BTreeMap::new(),
+        namespace_member_uses: BTreeMap::new(),
+        direct_eval: false,
+        opaque_calls: Vec::new(),
+        element_consts: BTreeMap::new(),
+        opaque_tags: Vec::new(),
+        transforms: Vec::new(),
+        captured_transform_bindings: BTreeSet::new(),
+        parse_diagnostics: ast.diagnostics.clone(),
+        unbound_create_system_calls: Vec::new(),
+        parse_panicked: ast.panicked,
+    }
+}
+
 /// Top-level `const` initializer facts: bare-identifier aliases, each
 /// declaration's root identifier, and object literals' identifier members.
 /// `let`/`var` are excluded: a mutable binding carries no static guarantee.
@@ -1297,13 +1375,15 @@ pub(crate) fn extract_file_facts_from_static_maps(
     extra_unsettled: &rustc_hash::FxHashMap<String, eval::Unsettled>,
     references: &TransformReferences<'_>,
     lowered: Option<crate::link::Lowered>,
-    objects: Option<ObjectFacts>,
+    structural: Option<FileFacts>,
 ) -> FileFacts {
     let program = ast.program();
     // The engine lowers every file before static enrichment; any other
     // caller lowers this one here.
-    let crate::link::Lowered { scoping, bindings, record: module_record, loads, readings: param_readings, dynamic_code } =
-        lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
+    let lowered = lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
+    let structural =
+        structural.unwrap_or_else(|| structural_facts(ast, &lowered, object_facts(program, &lowered.scoping)));
+    let scoping = lowered.scoping;
     let source = ast.source();
     let directive_prologue = program.directives.last().map(|last| {
         let end = extend_directive_trailing_trivia(source, last.span.end);
@@ -1341,10 +1421,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let walked = chain_walk::walk_program_facts(program);
     let member_parent_extensions = walked.member_parents;
     let walked_chains = walked.chains;
-    let ObjectFacts { props_forwarding, const_initializers, compose, uses: object_uses } =
-        objects.unwrap_or_else(|| object_facts(program, &scoping));
-    let imports = collect_import_facts(ast.module_record());
-    let create_transform_locals: rustc_hash::FxHashSet<String> = imports
+    let create_transform_locals: rustc_hash::FxHashSet<String> = structural
+        .imports
         .iter()
         .filter(|imp| imp.imported == "createTransform")
         .map(|imp| imp.local.clone())
@@ -1588,7 +1666,6 @@ pub(crate) fn extract_file_facts_from_static_maps(
 
     let transforms =
         crate::transforms::extract_transforms(program, source, &ast.path, &create_transform_locals);
-    let exports = crate::usage_facts::collect_export_facts(program);
     let descriptors: Vec<&ChainDescriptor> = chains.iter().map(|chain| &chain.descriptor).collect();
     let usage = crate::usage_facts::collect_usage_facts(program);
     let crate::usage_facts::EnrichedUsage {
@@ -1612,19 +1689,10 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &usage_statics_fx,
         &ast.path,
         &descriptors,
-        &exports,
+        &structural.exports,
     );
-    let crate::usage_facts::ObjectUses { context_consts, unsafe_object_uses, object_handoffs, written_namespaces } =
-        object_uses;
-
-    // `export default X` of a module binding X names X.
-    let default_export_binding = match bindings.default_export {
-        Some(crate::identity::DefaultExport::Snapshot { of: Some(of), .. }) => Some(bindings.binding(of).name.clone()),
-        _ => None,
-    };
 
     FileFacts {
-        path: ast.path.clone(),
         directive_prologue,
         chains,
         // Serialized facts carry no unevaluated node, and an unsettled
@@ -1639,29 +1707,9 @@ pub(crate) fn extract_file_facts_from_static_maps(
             .collect(),
         usage,
         usage_enriched: Some(usage_enriched),
-        bindings: Arc::new(bindings),
-        module_record: Arc::new(module_record),
-        compose,
-        star_exports: crate::usage_facts::collect_star_exports(ast.module_record()),
-        namespace_exports: crate::usage_facts::collect_namespace_exports(ast.module_record()),
-        default_export_binding,
         builder_import_references,
-        aliases: const_initializers.aliases,
-        assigned_aliases: const_initializers.assigned,
-        assigned_targets: const_initializers.targets,
-        props_forwarding,
-        declaration_roots: const_initializers.roots,
-        global_keys: BTreeMap::new(),
-        object_members: const_initializers.objects,
-        facades: const_initializers.facades,
-        unsafe_object_uses,
-        object_handoffs,
-        written_namespaces,
-        param_readings,
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,
-        object_member_chains: const_initializers.chains,
-        namespace_imports: crate::usage_facts::collect_namespace_imports(ast.module_record()),
         default_export_chain: walked
             .default_export
             .map(|start| default_export_chain(program, source, start)),
@@ -1674,22 +1722,12 @@ pub(crate) fn extract_file_facts_from_static_maps(
             })
             .collect(),
         staged_builders: walked.staged_builders,
-        imports,
-        exports,
         transforms,
         captured_transform_bindings,
         confined_components,
         value_escapes,
         spread_wrappers,
-        module_loads: loads.iter().filter_map(|load| load.module_load(source)).collect(),
-        bindingless_imports: loads
-            .iter()
-            .filter(|load| load.kind == crate::loads::LoadKind::Import { runtime: true, bindingless: true })
-            .filter_map(|load| load.specifier().map(str::to_string))
-            .collect(),
-        dynamic_code,
         ordinary_components,
-        context_consts,
         prop_tags,
         name_uses,
         namespace_member_uses,
@@ -1697,12 +1735,11 @@ pub(crate) fn extract_file_facts_from_static_maps(
         opaque_calls,
         element_consts,
         opaque_tags,
-        parse_diagnostics: ast.diagnostics.clone(),
         unbound_create_system_calls: crate::usage_facts::unbound_create_system_calls(program)
             .into_iter()
             .map(|span| line_column(source, span.start))
             .collect(),
-        parse_panicked: ast.panicked,
+        ..structural
     }
 }
 
