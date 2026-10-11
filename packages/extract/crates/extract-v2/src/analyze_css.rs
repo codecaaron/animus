@@ -2603,17 +2603,13 @@ fn resolve_declared_identity(
             .map(|source| (source, member.to_string())),
         Some(_) => None,
     };
-    let Some((declaring_file, exported)) = imported.and_then(|(source, name)| {
+    // The binding the module table resolves the export to.
+    let Some((declaring_file, _, declared)) = imported.and_then(|(source, name)| {
         let module = resolve_import_source(file, source, files, inputs)?;
-        crate::family_members::follow_exports(module, name, files, inputs)
+        declared_export(&module, name, files, links)
     }) else {
         return ids;
     };
-    let declared = files
-        .get(&declaring_file)
-        .and_then(|ff| ff.exports.iter().find(|e| e.exported == exported && e.source.is_none()))
-        .and_then(|e| e.local.clone())
-        .unwrap_or(exported);
     resolve_identity(&declaring_file, &declared, files, inputs, links, evaluated_ids, None)
 }
 
