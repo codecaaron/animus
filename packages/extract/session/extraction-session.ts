@@ -15,6 +15,7 @@ import { basename, extname, isAbsolute, join, relative, resolve } from 'path';
 import {
   assembleStylesheet,
   buildSystemPropsModule,
+  BUILT_IN_EXTENSION_POLICY,
   clearEngineCache,
   collectExternalPackageSources,
   contentHash,
@@ -34,6 +35,7 @@ import {
   isExcludedPackageRelativePath,
   isPathWithinRoot,
   declaredWorkspacePackages,
+  extensionPolicyJson,
   loadSystemConfig,
   postProcessCss,
   projectExternalFileOwners,
@@ -111,9 +113,13 @@ import { logBuildTimings } from './timing';
 import type {
   AnimusCoreOptions,
   ExternalPackageOutcome,
+  HostExtensionPolicy,
   KitDescriptorRecord,
 } from '../pipeline/index';
-import type { PackageResolution } from './resolve-packages';
+import type {
+  PackageResolution,
+  SessionResolutionContext,
+} from './resolve-packages';
 
 export type SessionOptions = AnimusCoreOptions;
 
@@ -208,6 +214,9 @@ export class ExtractionSession {
   pathAliasesJson: string | null = null;
   /** The host's export conditions, in its order, for the system loader. */
   conditions: readonly string[] = [];
+  /** The host's extension order, as its adapter captured it; the built-in
+   *  policy where no host resolves. */
+  extensionPolicy: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
 
   // Per-specifier asset resolve/copy memo — stable per loaded system, so
   // loading a system clears it.
@@ -911,17 +920,24 @@ export class ExtractionSession {
     const priorSourceState = this.snapshotSourceState();
     const resolvedSystemPath = resolve(rootDir, this.options.system);
 
-    // The session root's declared workspaces: one capture, which system
-    // loading and package resolution both read.
-    const workspaces = declaredWorkspacePackages(rootDir);
+    // One resolution context, which system loading and package resolution
+    // both read: the host's conditions and extension order, and the session
+    // root's declared workspaces.
+    const context: SessionResolutionContext = {
+      conditions: this.conditions,
+      workspaces: declaredWorkspacePackages(rootDir),
+      extensions: this.extensionPolicy,
+    };
+    this.log(`extension order: ${context.extensions.resolverVersion}`);
     let t = this.now();
     this.system = loadSystemConfig(engineApi, {
       systemPath: resolvedSystemPath,
       rootDir,
       prefix: this.options.prefix,
       prefixContextualVars: this.options.prefixContextualVars,
-      conditions: this.conditions,
-      workspaces,
+      conditions: context.conditions,
+      workspaces: context.workspaces,
+      extensions: context.extensions,
     });
     this.assetCopyCache.clear();
     this.assetDependencyPaths.clear();
@@ -986,19 +1002,29 @@ export class ExtractionSession {
 
     bt.fileRead = this.elapsed(t);
 
-    // Package resolution, as system loading resolves: under the host's
-    // conditions and the same workspaces, every answer the loader's. The
-    // traversal and ingest below are the shared collector.
+    // Package resolution, as system loading resolves: under the same
+    // context, every answer the loader's. The traversal and ingest below
+    // are the shared collector.
     t = this.now();
     const packageResolution: PackageResolution = {
-      resolveSpecifier: (specifier, fromDir, conditions, declared) => {
+      resolveSpecifier: (
+        specifier,
+        fromDir,
+        { conditions, workspaces, extensions }
+      ) => {
         const native = engineApi().resolveSpecifier;
         if (native === undefined) {
           throw new Error(
             'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
           );
         }
-        return native(specifier, fromDir, [...conditions], declared);
+        return native(
+          specifier,
+          fromDir,
+          [...conditions],
+          workspaces,
+          extensionPolicyJson(extensions)
+        );
       },
     };
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
@@ -1011,8 +1037,7 @@ export class ExtractionSession {
           rootDir,
           [name],
           packageResolution,
-          this.conditions,
-          workspaces
+          context
         ).entries[name];
         return entry ? resolve(rootDir, entry) : null;
       }
@@ -1024,8 +1049,7 @@ export class ExtractionSession {
       rootDir,
       packageNames,
       packageResolution,
-      this.conditions,
-      workspaces
+      context
     );
 
     // Raw content hashes of every walked external file, keyed by absolute

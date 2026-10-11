@@ -1,5 +1,6 @@
 import { relative } from 'path';
 
+import type { HostExtensionPolicy } from '../pipeline/host-extensions';
 import type { WorkspacePackages } from '../pipeline/workspace-packages';
 
 /** Package specifier → rootDir-relative entry path. An unresolved specifier
@@ -14,16 +15,22 @@ export interface ResolvedFile {
   unresolved?: string | null;
 }
 
-/** Package resolution as the system loader resolves (the native module),
- *  under the host's export conditions and the session root's declared
- *  workspaces. */
+/** What a session resolves under, as system loading does: the host's
+ *  export conditions, the session root's declared workspaces, and the
+ *  host's extension order. */
+export interface SessionResolutionContext {
+  readonly conditions: readonly string[];
+  readonly workspaces: WorkspacePackages;
+  readonly extensions: HostExtensionPolicy;
+}
+
+/** Package resolution as the system loader resolves (the native module). */
 export interface PackageResolution {
   /** A specifier, resolved from a directory. */
   resolveSpecifier(
     specifier: string,
     fromDir: string,
-    conditions: readonly string[],
-    workspaces: WorkspacePackages
+    context: SessionResolutionContext
   ): ResolvedFile;
 }
 
@@ -42,18 +49,12 @@ export function resolvePackagesByName(
   rootDir: string,
   names: string[],
   resolution: PackageResolution,
-  conditions: readonly string[],
-  workspaces: WorkspacePackages
+  context: SessionResolutionContext
 ): ResolvedPackages {
   const packageMap: ResolvedPackageMap = {};
   const unresolved: ResolvedPackages['unresolved'] = {};
   for (const name of new Set(names)) {
-    const entry = resolution.resolveSpecifier(
-      name,
-      rootDir,
-      conditions,
-      workspaces
-    );
+    const entry = resolution.resolveSpecifier(name, rootDir, context);
     if (entry.path) packageMap[name] = relative(rootDir, entry.path);
     else unresolved[name] = entry.unresolved ?? 'it names no file';
   }

@@ -4,12 +4,14 @@ import {
   engineModuleParser,
   unimportedCreateSystemCall,
 } from './discover-packages';
+import { extensionPolicyJson } from './host-extensions';
 import { parseInternalWire } from './internal-wire';
 import { warnLine } from './manifest-diagnostics';
 import { applyPrefix, applyPropertyNames } from './prefix';
 import { splitInvalidPropertyRegistrations } from './property-registrations';
 
 import type { EngineApi } from './engine-adapter';
+import type { HostExtensionPolicy } from './host-extensions';
 import type { PrefixNameConflict } from './prefix';
 import type { InvalidPropertyRegistration } from './property-registrations';
 import type { WorkspacePackages } from './workspace-packages';
@@ -72,7 +74,8 @@ function evaluateSystemModule(
   systemPath: string,
   rootDir: string,
   conditions: readonly string[] | undefined,
-  workspaces: WorkspacePackages | undefined
+  workspaces: WorkspacePackages | undefined,
+  extensions: HostExtensionPolicy | undefined
 ) {
   try {
     return engine.loadSystemModule(
@@ -80,7 +83,8 @@ function evaluateSystemModule(
       rootDir,
       undefined,
       conditions,
-      workspaces
+      workspaces,
+      extensions && extensionPolicyJson(extensions)
     );
   } catch (error) {
     let source: string;
@@ -114,6 +118,8 @@ export function loadSystemConfig(
     /** The session root's declared workspaces, which the loader consults
      *  after a `node_modules` lookup misses. */
     workspaces?: WorkspacePackages;
+    /** The host's extension order; the built-in policy when absent. */
+    extensions?: HostExtensionPolicy;
   }
 ): SystemConfig {
   const config = evaluateSystemModule(
@@ -121,7 +127,8 @@ export function loadSystemConfig(
     opts.systemPath,
     opts.rootDir,
     opts.conditions,
-    opts.workspaces
+    opts.workspaces,
+    opts.extensions
   );
 
   let scalesJson: string = config.scalesJson;

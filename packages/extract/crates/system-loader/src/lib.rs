@@ -96,12 +96,25 @@ pub fn strip_typescript_module(source: &str, file_path: &str) -> Result<String, 
 }
 
 /// What a resolution resolves under (pipeline spec §2.2): the host's export
-/// conditions, in its order, and the session root's declared workspace
-/// packages, by name, at their canonical directories.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// conditions, in its order, the session root's declared workspace
+/// packages, by name, at their canonical directories, and the host's
+/// extension order (A2), which no probe reads yet: the built-in policy
+/// answers until each host's order is measured against it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolutionContext {
     pub conditions: Vec<String>,
     pub workspaces: BTreeMap<String, PathBuf>,
+    pub extensions: resolution::ExtensionPolicy,
+}
+
+impl Default for ResolutionContext {
+    fn default() -> Self {
+        Self {
+            conditions: Vec::new(),
+            workspaces: BTreeMap::new(),
+            extensions: resolution::extension_policy().clone(),
+        }
+    }
 }
 
 /// Resolve a bare specifier to an absolute file path and the `package.json`

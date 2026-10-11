@@ -360,7 +360,13 @@ describe('production run (full pipeline)', () => {
       root,
       undefined,
       ['source'],
-      {}
+      {},
+      // webpack's documented default: the fixture compiler sets none.
+      JSON.stringify({
+        appended: ['.js', '.json', '.wasm'],
+        nodeNext: [],
+        alias: [],
+      })
     );
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
 

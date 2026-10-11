@@ -34,13 +34,15 @@ export interface EngineApi {
   /** The engine's code-to-severity table, as JSON. */
   diagnosticCodes?: () => string;
   /** A specifier resolved as the system loader resolves it, a package from
-   *  `node_modules` then the declared `workspaces`: the real path of the
-   *  file it names, or why it names none. */
+   *  `node_modules` then the declared `workspaces`, under the host's
+   *  extension order (`extensionPolicyJson`): the real path of the file it
+   *  names, or why it names none. */
   resolveSpecifier?: (
     specifier: string,
     fromDir: string,
     conditions?: readonly string[],
-    workspaces?: WorkspacePackages
+    workspaces?: WorkspacePackages,
+    extensionPolicyJson?: string
   ) => { path?: string | null; unresolved?: string | null };
   analyzeProject: (
     filesJson: string,
@@ -162,12 +164,13 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
       resolveSpecifier:
         native.resolveSpecifier === undefined
           ? undefined
-          : (specifier, fromDir, conditions, workspaces) =>
+          : (specifier, fromDir, conditions, workspaces, extensionPolicyJson) =>
               native.resolveSpecifier(
                 specifier,
                 fromDir,
                 conditions,
-                workspaces
+                workspaces,
+                extensionPolicyJson
               ),
       analyzeProject: (
         filesJsonRaw,
