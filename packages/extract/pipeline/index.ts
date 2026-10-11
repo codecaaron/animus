@@ -26,6 +26,12 @@ export {
   RETIRED_ENGINE_MESSAGE,
 } from './engine-retirement';
 export { contentHash } from './content-hash';
+export {
+  assertRuntimeImportSuppliesTerminals,
+  DEFAULT_RUNTIME_IMPORT,
+} from './runtime-import';
+export type { HostFirstResolver, HostResolve } from './host-package-resolver';
+export { hostFirstPackageResolver } from './host-package-resolver';
 export type {
   AnimusCoreOptions,
   AnimusMode,
