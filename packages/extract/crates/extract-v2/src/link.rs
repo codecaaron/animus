@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use animus_system_loader::module_table::{
     ExportLookup, Import, ImportName, ModuleIndex, ModuleRecord, ModuleTable, Request, RequestId,
 };
+use oxc::ast::ast::{Program, Statement};
 use oxc::syntax::module_record::{
     ExportEntry, ExportExportName, ExportImportName, ExportLocalName, ImportImportName, ModuleRecord as ParsedRecord,
 };
@@ -14,6 +15,7 @@ use oxc::syntax::module_record::{
 use crate::analyze_css::{expand_alias, resolve_import_source, CssInputs};
 use crate::facts::FileFacts;
 use crate::identity::{BindingKind, BindingTable, LocalId};
+use rustc_hash::FxHashSet;
 
 /// A module's record with its requests as written.
 pub type OwnedModuleRecord = ModuleRecord<LocalId, String>;
@@ -25,6 +27,7 @@ pub(crate) fn copy_module_record(
     parsed: &ParsedRecord<'_>,
     bindings: &BindingTable,
     source: &str,
+    program: &Program<'_>,
 ) -> OwnedModuleRecord {
     let mut record = OwnedModuleRecord {
         requests: Vec::new(),
@@ -82,7 +85,12 @@ pub(crate) fn copy_module_record(
         }
     }
 
-    for entry in parsed.indirect_export_entries.iter().filter(|entry| !entry.is_type) {
+    // The parser marks an exported import with the import's type-only flag,
+    // not the export's: `import { d } …; export { type d }` and
+    // `export type { d }` are type-only exports all the same.
+    let type_only = type_only_export_specifiers(program);
+    let exported_as_type = |entry: &ExportEntry<'_>| type_only.contains(&(entry.span.start, entry.span.end));
+    for entry in parsed.indirect_export_entries.iter().filter(|entry| !entry.is_type && !exported_as_type(entry)) {
         let (Some(exported), Some(specifier)) = (export_name(&entry.export_name), &entry.module_request) else {
             continue;
         };
@@ -126,6 +134,24 @@ fn reexported_import(parsed: &ParsedRecord<'_>, entry: &ExportEntry<'_>, source:
         ImportImportName::Default(_) => Some("default".to_string()),
         ImportImportName::NamespaceObject => None,
     }
+}
+
+/// The spans of the export specifiers a local `export { … }` declares
+/// type-only: every specifier of `export type { … }`, and each `type x`.
+fn type_only_export_specifiers(program: &Program<'_>) -> FxHashSet<(u32, u32)> {
+    let mut spans = FxHashSet::default();
+    for statement in &program.body {
+        let Statement::ExportNamedDeclaration(export) = statement else { continue };
+        if export.source.is_some() {
+            continue;
+        }
+        for specifier in &export.specifiers {
+            if export.export_kind.is_type() || specifier.export_kind.is_type() {
+                spans.insert((specifier.span.start, specifier.span.end));
+            }
+        }
+    }
+    spans
 }
 
 /// The position of `specifier` in `requests`, added when new.
@@ -238,6 +264,15 @@ mod tests {
             ("dangling.js", "export { y } from './missing.js'; export * from './gone.js';"),
             ("thenable.js", "export const then = () => {};"),
             ("namespaces.ts", "export namespace Types { export type X = 1; } export namespace Values { export const v = 1; } type T = 1; export { T };"),
+            ("typed-reexports.ts", "import { v } from './types';\nexport { type v as tv };\nexport type { v as tv2 };\nexport { v as rv };"),
+            (
+                "ambient.ts",
+                "declare const q: number;\ndeclare function g(): void;\ndeclare class C {}\ndeclare enum E { A }\ndeclare namespace D { export const d: number; }\nexport { q, g, C, E, D };\nexport const real = 1;",
+            ),
+            (
+                "merged.ts",
+                "function f() {}\ndeclare namespace f { export type T = 1; }\ndeclare namespace N { export function fn(): void; }\nnamespace N { export const v = 1; }\nexport { f, N };",
+            ),
         ]);
         let module = |path: &str| links.module(path).unwrap();
         let local = |path: &str, name: &str| Terminal::Local {
@@ -278,6 +313,13 @@ mod tests {
         assert_eq!(resolve("types.ts", "w"), ExportLookup::Absent);
         assert_eq!(links.table.exported_names(module("types.ts")).names, ["v"]);
         assert_eq!(links.table.exported_names(module("namespaces.ts")).names, ["Values"]);
+        // An imported binding exported as a type, either way, exports
+        // nothing at runtime; nor does an ambient declaration.
+        assert_eq!(links.table.exported_names(module("typed-reexports.ts")).names, ["rv"]);
+        assert_eq!(resolve("typed-reexports.ts", "rv"), ExportLookup::Resolved(local("types.ts", "v")));
+        assert_eq!(links.table.exported_names(module("ambient.ts")).names, ["real"]);
+        // A runtime declaration merged with an ambient one is a value.
+        assert_eq!(links.table.exported_names(module("merged.ts")).names, ["f", "N"]);
         // A star of an unanalysed module is open, never absent.
         let ExportLookup::Incomplete { known, openings } = resolve("open.js", "x") else {
             panic!("an open star leaves the answer open");
