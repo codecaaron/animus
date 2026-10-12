@@ -174,6 +174,36 @@ describe('runtimeImport is a core option', () => {
   });
 });
 
+// Contract: `closedDynamicImports` is a core option every host accepts; an
+// entry must name its importer and enclosing function and the one target
+// kind, 'build-chunks', or the option fails.
+describe('closedDynamicImports is a core option', () => {
+  test('accepted by the shared gate, and a malformed site fails', () => {
+    const site = {
+      importer: './src/chunk.ts',
+      enclosingFunction: 'retryable',
+      targets: 'build-chunks',
+    };
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', closedDynamicImports: [site] })
+    ).not.toThrow();
+    for (const wrong of [
+      site,
+      [{ ...site, targets: 'any' }],
+      [{ ...site, enclosingFunction: '' }],
+      [{ importer: './src/chunk.ts', targets: 'build-chunks' }],
+      [{ ...site, extra: true }],
+    ]) {
+      expect(() =>
+        assertKnownOptionKeys({
+          system: './ds.ts',
+          closedDynamicImports: wrong,
+        })
+      ).toThrow(/Invalid value for "closedDynamicImports"/);
+    }
+  });
+});
+
 describe('a user exclude list never re-admits output', () => {
   test("an in-root output directory named '..build' is inside the root and excluded", () => {
     const dir = outputExclusion('/app', '/app/..build');

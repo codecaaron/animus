@@ -49,6 +49,7 @@ export {
 } from './output-targets';
 export type {
   AnimusCoreOptions,
+  ClosedDynamicImport,
   AnimusMode,
   DriverNamespace,
   ExcludeMatcher,

@@ -132,6 +132,7 @@ import {
   joinSession,
   sessionKey,
   getOwningWatchSession,
+  claimExtractionReport,
   claimUnmatchedExcludeReport,
   getManifestJson,
   getSystemAuthority,
@@ -899,6 +900,12 @@ export class ExtractionSession {
    *  excluded as literal path prefixes from discovery and from package
    *  collection, whatever the user's list. */
   structuralExclude: string[] = [];
+  /** The build configuration files the host loaded, absolute: config
+   *  roots, beside the well-known tool config names, whose unanalysed
+   *  imports open nothing the app renders. */
+  buildConfigFiles: readonly string[] = [];
+  /** How long the last full pass took to load the system, in ms. */
+  systemLoadMs = 0;
 
   private scanConfigMemo: {
     excludeMatcher: ExcludeMatcher;
@@ -1810,6 +1817,7 @@ export class ExtractionSession {
       this.system.missing ?? []
     );
     bt.systemLoad = this.elapsed(t);
+    this.systemLoadMs = bt.systemLoad;
 
     t = this.now();
     const { excludeMatcher, extensionsSet } = this.scanConfig;
@@ -1819,6 +1827,28 @@ export class ExtractionSession {
       excludeMatcher,
       extensionsSet
     );
+    // The system load's own modules outside the root (a system file in the
+    // app root's parent, and the files of its package it reads) are analysed
+    // too, so a write they make to the root's modules is seen as any
+    // module's is. A root with no modules has nothing for them to write.
+    const systemPackageRoot = findPackageRoot(resolvedSystemPath);
+    const discovered = new Set(files);
+    const outsideRoot =
+      files.length === 0
+        ? []
+        : [resolvedSystemPath, ...this.systemDependencyPaths];
+    for (const dependency of outsideRoot) {
+      if (
+        !discovered.has(dependency) &&
+        !isPathWithinRoot(rootDir, dependency) &&
+        !dependency.split(sep).includes('node_modules') &&
+        extensionsSet.has(extname(dependency)) &&
+        findPackageRoot(dependency) === systemPackageRoot
+      ) {
+        discovered.add(dependency);
+        files.push(dependency);
+      }
+    }
     // Once per build: its first full discovery, whether or not it publishes.
     if (claimUnmatchedExcludeReport(this.key)) {
       for (const line of unmatchedExcludeLines(excludeMatcher)) {
@@ -1875,7 +1905,6 @@ export class ExtractionSession {
       extensions: context.extensions,
     });
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
-    const systemPackageRoot = findPackageRoot(resolvedSystemPath);
     const kitMembers = new Map<string, string>();
     const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
@@ -2595,6 +2624,30 @@ export class ExtractionSession {
           relative(this.rootDir!, dir)
         ),
         extensions: this.extensionPolicy,
+        configFiles: this.buildConfigFiles.map((file) =>
+          relative(this.rootDir!, file).split(sep).join('/')
+        ),
+        // The system file and the modules its load read are known modules
+        // wherever they sit, the root's parent included.
+        systemModules: [
+          ...new Set(
+            [
+              resolve(this.rootDir!, this.options.system),
+              ...this.systemDependencyPaths,
+            ].map((file) => relative(this.rootDir!, file).split(sep).join('/'))
+          ),
+        ],
+        closedDynamicImports: (this.options.closedDynamicImports ?? []).map(
+          (site) => ({
+            ...site,
+            importer: relative(
+              this.rootDir!,
+              resolve(this.rootDir!, site.importer)
+            )
+              .split(sep)
+              .join('/'),
+          })
+        ),
       },
     };
 
@@ -2636,14 +2689,14 @@ export class ExtractionSession {
     const manifest = result.manifest;
     this.lastComponentCount = Object.keys(manifest?.components ?? {}).length;
 
-    if (!devMode) {
-      bt.analysis =
-        (bt.jsonSerialize ?? 0) + (bt.rustExtract ?? 0) + (bt.jsonParse ?? 0);
-      if (manifest?.report) {
-        this.log(
-          `Extracted ${manifest.report.components_extracted ?? '?'}/${manifest.report.components_total ?? '?'} components (${bt.analysis}ms)`
-        );
-      }
+    const analysisMs =
+      (bt.jsonSerialize ?? 0) + (bt.rustExtract ?? 0) + (bt.jsonParse ?? 0);
+    if (!devMode) bt.analysis = analysisMs;
+    // Once per build, whichever environment analyses first.
+    if (manifest?.report && claimExtractionReport(this.key)) {
+      this.log(
+        `Extracted ${manifest.report.components_extracted ?? '?'}/${manifest.report.components_total ?? '?'} components (${analysisMs}ms)`
+      );
     }
 
     // Substitution happens before assembly so every CSS consumer receives

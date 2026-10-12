@@ -18,6 +18,7 @@ import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
 
 import type {
+  ClosedDynamicImport,
   DiagnosticLevels,
   SourceKitDependency,
   StaticCssConfig,
@@ -78,6 +79,15 @@ export interface AnimusExtractOptions {
    * terminal used.
    */
   runtimeImport?: string;
+  /**
+   * Computed `import()`s declared closed, by site: each entry names the file
+   * (`importer`, relative to the root) and the function the `import()` is
+   * written in. `targets: 'build-chunks'` says it loads only what the
+   * build's own literal `import()`s load. The analysis records this as an
+   * assumption and does not check it; every other computed `import()` may
+   * still load any module.
+   */
+  closedDynamicImports?: ClosedDynamicImport[];
   /**
    * Substrings, or globs when `*`/`?` present. Replaces the defaults `dist`,
    * `.test.`, `.spec.`; `node_modules`, `.next`, `.animus` always apply.

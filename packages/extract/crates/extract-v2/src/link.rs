@@ -364,7 +364,16 @@ fn aliased_by_bare_specifier(file: &str, aliases: &[crate::analyze_css::AliasEnt
 /// original. Without the host's reading, a file is not opaque.
 fn host_reads_opaque(path: &str, specifier: &str, inputs: &CssInputs) -> bool {
     let base = crate::analyze_css::probe_base(path, specifier, inputs);
-    let host = base.and_then(|base| inputs.probe_evidence.as_ref()?.bases.get(&base).cloned());
+    let host = base.as_ref().and_then(|base| inputs.probe_evidence.as_ref()?.bases.get(base).cloned());
+    // One of the system's own modules, which the loader evaluated, is known:
+    // the file the host opens where it answers, the base where it does not.
+    let known = match &host {
+        Some(host) => crate::analyze_css::is_system_module(&host.candidate, inputs),
+        None => base.as_deref().is_some_and(|base| crate::analyze_css::is_system_module(base, inputs)),
+    };
+    if known {
+        return true;
+    }
     matches!(
         host.and_then(|host| host.reading),
         Some(crate::analyze_css::HostReading::Asset | crate::analyze_css::HostReading::Adapted)

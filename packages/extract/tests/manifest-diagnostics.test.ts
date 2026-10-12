@@ -59,6 +59,33 @@ describe('surfaceManifestDiagnostics strict policy', () => {
     expect(warned).toHaveLength(0);
   });
 
+  // Contract: an info-kind record, such as a declared closed import's
+  // assumption, prints at info level and never as a warning, whatever its
+  // code's severity.
+  it('prints an info-kind record at info level', () => {
+    const warned: string[] = [];
+    const informed: string[] = [];
+    surfaceManifestDiagnostics(
+      {
+        diagnostics: [
+          {
+            file: 'src/chunk.ts',
+            component: 'retryable',
+            kind: 'info',
+            message: 'import(`${failed}`) on line 3 is declared closed',
+            code: 'animus.load.declared-closed',
+          },
+        ],
+      },
+      (m) => warned.push(m),
+      { info: (m) => informed.push(m) }
+    );
+    expect(warned).toHaveLength(0);
+    expect(informed).toHaveLength(1);
+    expect(informed[0]).toContain('src/chunk.ts');
+    expect(informed[0]).toContain('declared closed');
+  });
+
   it('warns and proceeds without strict', () => {
     const warned: string[] = [];
     surfaceManifestDiagnostics({ diagnostics: [errorDiagnostic] }, (m) =>

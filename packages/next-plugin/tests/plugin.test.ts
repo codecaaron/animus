@@ -676,7 +676,7 @@ describe('production run (full pipeline)', () => {
           {
             file: 'src/Button.tsx',
             component: 'Button',
-            kind: 'info',
+            kind: 'note',
             message: 'not surfaced',
           },
         ],

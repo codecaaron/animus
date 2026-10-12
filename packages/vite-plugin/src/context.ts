@@ -133,6 +133,8 @@ export class PluginContext {
    *  as structural exclusions; none outside the root. Set in
    *  `configResolved`. */
   outputExcludes: string[] = [];
+  /** The Vite config file the build loaded, where it loaded one. */
+  configFiles: string[] = [];
 
   /** The Session publication this context serves, adopted whole as the
    *  Session commits it; null until one commits, and a failed analysis
@@ -350,6 +352,7 @@ export class PluginContext {
         layers: options.layers,
         engine: options.engine,
         runtimeImport: options.runtimeImport,
+        closedDynamicImports: options.closedDynamicImports,
         mode: this.emissionProd ? 'production' : 'development',
       },
       {
@@ -380,6 +383,7 @@ export class PluginContext {
       systemPropsModuleId: VIRTUAL_SYSTEM_PROPS_ID,
     };
     session.structuralExclude = this.outputExcludes;
+    session.buildConfigFiles = this.configFiles;
     this.session = session;
     return session;
   }

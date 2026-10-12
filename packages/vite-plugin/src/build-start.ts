@@ -25,8 +25,6 @@ export async function runBuildStart(
   ctx.assetUrlBySpecifier.clear();
   ctx.assetResolutionFailures.clear();
 
-  const t0 = performance.now();
-
   if (ctx.options.layers) {
     validateLayerOrder(ctx.options.layers);
     ctx.log(`Custom layers: [${ctx.options.layers.join(', ')}]`);
@@ -51,7 +49,7 @@ export async function runBuildStart(
       JSON.parse(ctx.system.groupRegistryJson)
     ).length;
     ctx.log(
-      `System loaded: ${propCount} props, ${groupCount} groups (${Math.round(performance.now() - t0)}ms)`
+      `System loaded: ${propCount} props, ${groupCount} groups (${Math.round(session.systemLoadMs)}ms)`
     );
   }
 
@@ -108,9 +106,6 @@ export async function runBuildStart(
 
   if (ctx.storedManifest) {
     const report = ctx.storedManifest.report;
-    ctx.log(
-      `Extracted ${report.components_extracted}/${report.components_total} components (${Math.round(performance.now() - t0)}ms)`
-    );
     ctx.log(
       `Reconciliation: ${report.components_extracted} kept, ${report.variants_eliminated} variants pruned, ${report.states_eliminated} states pruned`
     );

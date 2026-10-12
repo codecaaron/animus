@@ -227,10 +227,11 @@ pub fn resolve_specifier(
     workspaces: Option<std::collections::HashMap<String, String>>,
     extension_policy_json: Option<String>,
 ) -> NapiResolvedSpecifier {
-    NapiResolvedSpecifier::from(
+    // One call lists each directory it checks once, as a system load does.
+    NapiResolvedSpecifier::from(animus_system_loader::resolution::with_listing_cache(|| {
         resolution_context(conditions, workspaces, extension_policy_json)
-            .and_then(|context| animus_system_loader::resolve_specifier(&specifier, &from_dir, &context)),
-    )
+            .and_then(|context| animus_system_loader::resolve_specifier(&specifier, &from_dir, &context))
+    }))
 }
 
 /// The directory of the package `name` as the system loader locates it from
@@ -296,14 +297,17 @@ pub fn resolve_kit_source_root(
     host_entry: Option<String>,
     package_dir: Option<String>,
 ) -> String {
-    let found = resolution_context(conditions, workspaces, extension_policy_json).and_then(|context| {
-        animus_system_loader::resolve_kit_source_root(
-            &specifier,
-            &from_dir,
-            &context,
-            host_entry.as_deref(),
-            package_dir.as_deref(),
-        )
+    // One call lists each directory it checks once, as a system load does.
+    let found = animus_system_loader::resolution::with_listing_cache(|| {
+        resolution_context(conditions, workspaces, extension_policy_json).and_then(|context| {
+            animus_system_loader::resolve_kit_source_root(
+                &specifier,
+                &from_dir,
+                &context,
+                host_entry.as_deref(),
+                package_dir.as_deref(),
+            )
+        })
     });
     match found {
         Ok(root) => serde_json::to_string(&root).unwrap_or_else(|e| serde_json::json!({ "unresolved": e.to_string() }).to_string()),

@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { animusExtract } from '../../src/index';
 import { createDevFixture } from './fixture';
 
-import type { ViteBuilder } from 'vite-plus';
+import type { Logger, ViteBuilder } from 'vite-plus';
 
 /** Fails the client build while `failing.client` is set. */
 const failing = { client: false };
@@ -106,6 +106,73 @@ describe('environments built in parallel', () => {
         .join('\n');
       expect(ssrCode).toContain('createComponent');
       expect(ssrCode).not.toContain('.styles(');
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  // Contract: a build reports what it extracted once, whichever
+  // environment analyses first, and 'System loaded' prints the system
+  // load's own time, not the whole pipeline's.
+  it('reports its extraction once, and the system load by its own time', async () => {
+    const fixture = createDevFixture();
+    try {
+      const lines: string[] = [];
+      const record = (message: string) => lines.push(message);
+      const input = join(fixture.root, 'src', 'main.ts');
+      // SAFETY: vite-plus runs Vite's builder and consumes the same plugin
+      // hooks; only the nominal declarations differ, and tsc overflows on them.
+      const startLoggedBuild = createBuilder as (
+        config: Omit<ParallelBuildConfig, 'logLevel'> & {
+          customLogger: Logger;
+        }
+      ) => Promise<{ buildApp(): Promise<void> }>;
+      const builder = await startLoggedBuild({
+        root: fixture.root,
+        configFile: false,
+        customLogger: {
+          info: record,
+          warn: record,
+          warnOnce: record,
+          error: record,
+          clearScreen: () => {},
+          hasErrorLogged: () => false,
+          hasWarned: false,
+        },
+        plugins: [
+          slowSsr,
+          animusExtract({ system: './src/ds.ts', verbose: true }),
+        ],
+        environments: {
+          client: {
+            build: { outDir: 'dist/client', rollupOptions: { input } },
+          },
+          ssr: {
+            build: { outDir: 'dist/ssr', ssr: true, rollupOptions: { input } },
+          },
+        },
+        builder: {
+          async buildApp(app) {
+            await Promise.all([
+              app.build(app.environments.client),
+              app.build(app.environments.ssr),
+            ]);
+          },
+        },
+      });
+      await builder.buildApp();
+
+      expect(lines.filter((line) => line.includes('Extracted '))).toHaveLength(
+        1
+      );
+      const loads = lines
+        .map((line) => /System loaded: .*\((\d+)ms\)/.exec(line)?.[1])
+        .filter((ms) => ms !== undefined);
+      const systemLoads = new Set(
+        lines.map((line) => /system-load\s+(\d+)ms/.exec(line)?.[1])
+      );
+      expect(loads.length).toBeGreaterThan(0);
+      for (const ms of loads) expect(systemLoads).toContain(ms);
     } finally {
       fixture.dispose();
     }

@@ -250,6 +250,9 @@ function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
       runtimeImport: isConfigString(raw.runtimeImport)
         ? raw.runtimeImport
         : undefined,
+      closedDynamicImports: Array.isArray(raw.closedDynamicImports)
+        ? raw.closedDynamicImports
+        : undefined,
       mode:
         raw.mode === 'development' || raw.mode === 'production'
           ? raw.mode
@@ -419,6 +422,7 @@ export async function resolveCliConfig(
     staticCss: pick('staticCss', undefined),
     layers: pick('layers', undefined),
     runtimeImport: pick('runtimeImport', undefined),
+    closedDynamicImports: pick('closedDynamicImports', undefined),
     mode: resolvedMode.mode,
   };
 
@@ -470,6 +474,7 @@ export function projectResolvedConfig(config: ResolvedCliConfig) {
     extensions: config.options.extensions ?? null,
     staticCss: config.options.staticCss ?? null,
     runtimeImport: config.options.runtimeImport ?? null,
+    closedDynamicImports: config.options.closedDynamicImports ?? null,
     exclude: config.excludePatterns,
     provenance: config.provenance,
   };

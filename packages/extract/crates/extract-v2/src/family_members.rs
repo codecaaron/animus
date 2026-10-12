@@ -823,6 +823,11 @@ impl<'f> ObjectMembers<'f> {
                     flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
                 }
             }
+            crate::analyze_css::note_build_chunks(
+                files.iter().flat_map(|(path, facts)| facts.module_loads.iter().map(move |load| (path.as_str(), load))),
+                files,
+                inputs,
+            );
             // A glob of several patterns is one call: judged once.
             let mut calls = std::collections::BTreeSet::new();
             for load in &ff.module_loads {

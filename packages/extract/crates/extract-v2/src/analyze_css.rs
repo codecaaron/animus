@@ -125,6 +125,12 @@ pub struct CssInputs {
     /// Probes whose host opens an opaque file before a later analysed
     /// candidate: resolved, but reported.
     pub shadowing_probes: std::sync::Mutex<BTreeSet<ShadowingProbe>>,
+    /// The analysed modules this build's literal `import()`s name: what a
+    /// declared closed site (`closedDynamicImports`) may load. Filled once,
+    /// by the first reader with every module's loads.
+    pub build_chunks: std::sync::OnceLock<Vec<String>>,
+    /// The config-only modules ([`config_only`]), found once.
+    pub config_only: std::sync::OnceLock<BTreeSet<String>>,
     /// `{ definitionKey: sourceText }` for the loaded system's configured
     /// transforms, keyed as its props' `transformId` (or, for a system that
     /// predates identities, their name).
@@ -201,6 +207,47 @@ pub struct AnalysisContext {
     /// analysis never reads, spec §2.2 A8): each is an opening of this
     /// analysis, as one of its own probes is.
     pub openings: Vec<IngestionOpening>,
+    /// Computed `import()`s the configuration declares closed
+    /// (`closedDynamicImports`): each may load only what it names.
+    pub closed_dynamic_imports: Vec<ClosedDynamicImport>,
+    /// The build configuration files the host analysed, keyed as analysis
+    /// keys them: config roots, beside the well-known tool config names.
+    pub config_files: Vec<String>,
+    /// The configured system file and every module its load read, keyed as
+    /// analysis keys them, wherever they sit: known modules, whose import
+    /// opens nothing, whether or not analysis reads them.
+    pub system_modules: Vec<String>,
+}
+
+/// Whether the probe base or candidate `path` names one of the system's
+/// modules: exactly, by its extension dropped, or as a directory's index.
+pub(crate) fn is_system_module(path: &str, inputs: &CssInputs) -> bool {
+    inputs.analysis_context.system_modules.iter().any(|module| {
+        module == path
+            || module.rsplit_once('.').is_some_and(|(stem, _)| stem == path)
+            || module.strip_prefix(path).is_some_and(|rest| rest.starts_with("/index."))
+    })
+}
+
+/// A computed `import()` declared closed: written in `importer` (keyed as
+/// the analysis keys it), inside the function named `enclosing_function`,
+/// loading only `targets`. A caller's assertion the analysis records, not
+/// one it proves.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClosedDynamicImport {
+    pub importer: String,
+    pub enclosing_function: String,
+    pub targets: ClosedTargets,
+}
+
+/// What a declared closed `import()` may load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClosedTargets {
+    /// The chunks the build's own literal `import()`s produce: the modules
+    /// they name.
+    BuildChunks,
 }
 
 /// One computed load's expansion under the host's own semantics: every
@@ -355,6 +402,8 @@ impl CssInputs {
             probe_evidence: None,
             incomplete_probes: Default::default(),
             shadowing_probes: Default::default(),
+            build_chunks: Default::default(),
+            config_only: Default::default(),
             dev_mode,
             numeric_properties: FxHashSet::default(),
             system_hash,
@@ -606,6 +655,11 @@ const RESOLVE_SKIPPED_SOURCE: &str = "animus.resolve.skipped-source";
 /// Any other probe the host ends at a file analysis never reads (spec §2.2
 /// A8): no opening stops pruning silently.
 const RESOLVE_UNANALYSED_IMPORT: &str = "animus.resolve.unanalysed-import";
+/// A computed `import()` the configuration declares closed
+/// (`closedDynamicImports`): the assumption the analysis takes, recorded.
+const LOAD_DECLARED_CLOSED: &str = "animus.load.declared-closed";
+/// A `closedDynamicImports` entry that names no computed `import()`.
+const LOAD_DECLARED_CLOSED_UNMATCHED: &str = "animus.load.declared-closed-unmatched";
 const WIDE_MODULE_LOAD_LIMIT: usize = 20;
 /// A warning, once per production analysis: tags usage cannot match to an
 /// Animus component stop whole-component removal, so every extracted
@@ -682,6 +736,8 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (RESOLVE_CASE_MISMATCH, "warn"),
     (RESOLVE_SKIPPED_SOURCE, "warn"),
     (RESOLVE_UNANALYSED_IMPORT, "warn"),
+    (LOAD_DECLARED_CLOSED, "info"),
+    (LOAD_DECLARED_CLOSED_UNMATCHED, "warn"),
     (IDENTITY_UNCERTAIN, "warn"),
     (IDENTITY_UNCERTAIN_TAG, "info"),
     (UNEXTRACTABLE_CHAIN, "warn"),
@@ -1005,8 +1061,85 @@ fn analysis_incomplete(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) 
             resolve_import_source(file, spec, files, inputs);
         }
     }
+    let config_only = config_only(files, inputs);
     !inputs.analysis_context.skipped_sources.is_empty()
-        || inputs.incomplete_probes.lock().map(|incomplete| !incomplete.is_empty()).unwrap_or(true)
+        || inputs
+            .incomplete_probes
+            .lock()
+            .map(|incomplete| incomplete.iter().any(|probe| !config_only.contains(&probe.importer)))
+            .unwrap_or(true)
+}
+
+/// Tools whose `{name}.config.{ext}` in the analysis root is build or
+/// tooling configuration, run by the tool and never bundled into the app.
+const CONFIG_TOOLS: &[&str] = &[
+    "vite", "vitest", "next", "webpack", "rspack", "rollup", "rolldown", "tsup", "svelte", "astro", "remix",
+    "react-router", "eslint", "prettier", "postcss", "tailwind", "playwright", "jest", "babel",
+];
+/// The JavaScript dotfile forms of those tools' configuration.
+const CONFIG_DOTFILES: &[&str] = &[".eslintrc", ".prettierrc", ".postcssrc", ".babelrc"];
+const CONFIG_EXTENSIONS: &[&str] = &["js", "cjs", "mjs", "ts", "cts", "mts"];
+
+/// Whether `file`, keyed as analysis keys it, is a well-known tool config
+/// file in the analysis root.
+fn is_tool_config(file: &str) -> bool {
+    if file.contains('/') {
+        return false;
+    }
+    let Some((stem, extension)) = file.rsplit_once('.') else { return false };
+    CONFIG_EXTENSIONS.contains(&extension)
+        && (CONFIG_DOTFILES.contains(&stem)
+            || stem.strip_suffix(".config").is_some_and(|tool| CONFIG_TOOLS.contains(&tool)))
+}
+
+/// The config-only modules: what the config roots (a build configuration
+/// the host declares, or a well-known tool config file in the analysis
+/// root) import, transitively, that no other module can reach. A config
+/// runs in its tool, never in the app, so an unanalysed import of one opens
+/// nothing the app renders. A config file app code imports, and a module a
+/// config imports beside app code, are not config-only.
+pub(crate) fn config_only<'i>(files: &BTreeMap<String, FileFacts>, inputs: &'i CssInputs) -> &'i BTreeSet<String> {
+    inputs.config_only.get_or_init(|| {
+        let declared: BTreeSet<&str> = inputs.analysis_context.config_files.iter().map(String::as_str).collect();
+        let roots: Vec<&String> =
+            files.keys().filter(|file| declared.contains(file.as_str()) || is_tool_config(file)).collect();
+        if roots.is_empty() {
+            return BTreeSet::new();
+        }
+        let mut imports: BTreeMap<&String, Vec<String>> = BTreeMap::new();
+        for (file, ff) in files {
+            for load in &ff.runtime_imports {
+                let crate::loads::LoadTarget::Specifier(spec) = &load.target else { continue };
+                if let Some(target) = resolve_import_source(file, spec, files, inputs) {
+                    imports.entry(file).or_default().push(target);
+                }
+            }
+            // A runtime load reaches what it may load: a literal's module, a
+            // closed expansion's, or, open, every module.
+            for load in &ff.module_loads {
+                let reached: Vec<String> = match load_reach(file, load, files, inputs) {
+                    LoadReach::Modules(modules) => modules.into_iter().cloned().collect(),
+                    LoadReach::Any(_) => files.keys().cloned().collect(),
+                };
+                imports.entry(file).or_default().extend(reached);
+            }
+        }
+        let reach = |from: Vec<&String>| -> BTreeSet<String> {
+            let mut seen: BTreeSet<String> = from.iter().map(|file| (*file).clone()).collect();
+            let mut work: Vec<String> = seen.iter().cloned().collect();
+            while let Some(file) = work.pop() {
+                for target in imports.get(&file).into_iter().flatten() {
+                    if seen.insert(target.clone()) {
+                        work.push(target.clone());
+                    }
+                }
+            }
+            seen
+        };
+        let configured = reach(roots);
+        let app = reach(files.keys().filter(|file| !configured.contains(*file)).collect());
+        configured.into_iter().filter(|file| !app.contains(file)).collect()
+    })
 }
 
 #[cfg(test)]
@@ -1062,6 +1195,11 @@ fn probe_files<T>(base: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -
                 };
             }
             Some(HostReading::Adapted) => return ProbeOutcome::Absent,
+            // The system's own modules are known wherever they sit: the
+            // loader evaluated them, and their import opens nothing.
+            Some(HostReading::Unanalysed) if is_system_module(&host.candidate, inputs) => {
+                return ProbeOutcome::Absent;
+            }
             Some(HostReading::Unanalysed) => {
                 return ProbeOutcome::Incomplete {
                     candidate: host.candidate.clone(),
@@ -3268,6 +3406,9 @@ pub(crate) fn load_reach<'f, T>(
         .flat_map(|evidence| &evidence.expansions)
         .find(|expansion| expansion.importer == file && expansion.start == load.start);
     let Some(expansion) = expansion.filter(|expansion| expansion.closed) else {
+        if let Some(reach) = declared_reach(file, load, files, inputs) {
+            return reach;
+        }
         return LoadReach::Any("which may load any module, and the host lists no closed expansion of it".to_string());
     };
     let mut modules = Vec::new();
@@ -3282,6 +3423,53 @@ pub(crate) fn load_reach<'f, T>(
         return LoadReach::Any(format!("which may load any of {} modules", modules.len()));
     }
     LoadReach::Modules(modules)
+}
+
+/// What a computed `import()` the configuration declares closed may load:
+/// the build's chunks, the modules its literal `import()`s name, up to the
+/// bound. None where no declaration names the call.
+fn declared_reach<'f, T>(
+    file: &str,
+    load: &crate::loads::ModuleLoad,
+    files: &'f BTreeMap<String, T>,
+    inputs: &CssInputs,
+) -> Option<LoadReach<'f>> {
+    let enclosing = load.enclosing_function.as_deref()?;
+    let site = inputs.analysis_context.closed_dynamic_imports.iter().find(|site| {
+        load.dynamic_import && site.importer == file && site.enclosing_function == enclosing
+    })?;
+    match site.targets {
+        ClosedTargets::BuildChunks => {
+            let chunks = inputs.build_chunks.get()?;
+            let modules: Vec<&'f String> = chunks.iter().filter_map(|chunk| files.get_key_value(chunk).map(|(key, _)| key)).collect();
+            if modules.len() > LOAD_SET_LIMIT {
+                return Some(LoadReach::Any(format!(
+                    "declared closed over the build's chunks, which are {} modules, more than the bound",
+                    modules.len()
+                )));
+            }
+            Some(LoadReach::Modules(modules))
+        }
+    }
+}
+
+/// Fills `inputs.build_chunks` once, from every module's loads: each
+/// analysed module a literal `import()` names.
+pub(crate) fn note_build_chunks<'l, T>(
+    loads: impl Iterator<Item = (&'l str, &'l crate::loads::ModuleLoad)>,
+    files: &BTreeMap<String, T>,
+    inputs: &CssInputs,
+) {
+    if inputs.analysis_context.closed_dynamic_imports.is_empty() || inputs.build_chunks.get().is_some() {
+        return;
+    }
+    let mut chunks = BTreeSet::new();
+    for (file, load) in loads {
+        if load.dynamic_import && matches!(load.target, crate::loads::LoadTarget::Specifier(_)) {
+            chunks.extend(loaded_modules(file, load, files, inputs).into_iter().cloned());
+        }
+    }
+    let _ = inputs.build_chunks.set(chunks.into_iter().collect());
 }
 
 pub(crate) fn loaded_modules<'f, T>(
@@ -8526,8 +8714,14 @@ fn run_with_system_floor(
     // is reported once per importer and specifier: a case variant, a skipped
     // source where analysis would otherwise have read a later candidate, and
     // any other opening, as each stops pruning.
-    let incomplete: Vec<IncompleteProbe> =
-        inputs.incomplete_probes.lock().map(|probes| probes.iter().cloned().collect()).unwrap_or_default();
+    // An unanalysed import a config-only module makes opens nothing the
+    // app renders.
+    let config_only = config_only(files, inputs);
+    let incomplete: Vec<IncompleteProbe> = inputs
+        .incomplete_probes
+        .lock()
+        .map(|probes| probes.iter().filter(|probe| !config_only.contains(&probe.importer)).cloned().collect())
+        .unwrap_or_default();
     // Each import is reported once; one a skipped-source finding names
     // already says pruning stops.
     let mut unanalysed_reported: FxHashSet<(&str, &str)> = incomplete
@@ -8568,11 +8762,66 @@ fn run_with_system_floor(
                 "warn",
                 format!(
                     "'{specifier}' opens {opened}, which analysis does not read, so nothing is pruned: \
-                     every variant and state option in the app ships — analyse {opened}, or serve it \
-                     as an asset"
+                     every variant and state option in the app ships — analyse {opened}{}, or serve it \
+                     as an asset",
+                    if opened.starts_with("../") {
+                        " (it sits outside the analysis root: widen the root, or list its directory in the analysed sources)"
+                    } else {
+                        ""
+                    }
                 ),
                 Some(RESOLVE_UNANALYSED_IMPORT),
             )),
+        }
+    }
+    // Each computed import() a declaration closes, recorded as the
+    // assumption it is; a declaration that closes none is reported.
+    note_build_chunks(
+        files.iter().flat_map(|(path, ff)| ff.module_loads.iter().map(move |load| (path.as_str(), load))),
+        files,
+        inputs,
+    );
+    for site in &inputs.analysis_context.closed_dynamic_imports {
+        let closed: Vec<&crate::loads::ModuleLoad> = files
+            .get(&site.importer)
+            .map(|ff| {
+                ff.module_loads
+                    .iter()
+                    .filter(|load| {
+                        load.dynamic_import
+                            && !matches!(load.target, crate::loads::LoadTarget::Specifier(_))
+                            && load.enclosing_function.as_deref() == Some(site.enclosing_function.as_str())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if closed.is_empty() {
+            diagnostics.push(diagnostic(
+                &site.importer,
+                &site.enclosing_function,
+                "warn",
+                format!(
+                    "closedDynamicImports names {} in {}, but no computed import() is written there, so the \
+                     declaration closes nothing — name the file and the function the import() is written in",
+                    site.enclosing_function, site.importer
+                ),
+                Some(LOAD_DECLARED_CLOSED_UNMATCHED),
+            ));
+        }
+        let chunks = inputs.build_chunks.get().map_or(0, Vec::len);
+        for load in closed {
+            diagnostics.push(diagnostic(
+                &site.importer,
+                &site.enclosing_function,
+                "info",
+                format!(
+                    "{} on line {} is declared closed (closedDynamicImports): the analysis assumes it loads only \
+                     the build's chunks, the {chunks} modules this build's literal import()s name, and does not \
+                     check that it does",
+                    load.call, load.line
+                ),
+                Some(LOAD_DECLARED_CLOSED),
+            ));
         }
     }
     let shadowing: Vec<ShadowingProbe> =
@@ -14094,6 +14343,45 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(warned(loader, 3, Some(listed(true, 3, &[("pages/data.json", ExpandedStatus::Opaque)]))), Vec::<String>::new());
     }
 
+    /// Contract: a computed `import()` the configuration declares closed
+    /// (`closedDynamicImports`) may load only the build's chunks, the modules
+    /// the build's literal `import()`s name, and the analysis records that
+    /// assumption. An undeclared one, or one declared in another function,
+    /// still may load any module, and a chunk's own write still counts.
+    #[test]
+    fn a_declared_closed_import_reaches_only_the_build_chunks() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        let chunk = "export function retryable(load) {\n  let failed;\n  return () => failed ? import(/* @vite-ignore */ `${failed}?retry=1`) : load();\n}\n";
+        let router = "import { retryable } from './chunk';\nexport const view = retryable(() => import('./view.js'));\n";
+        let run = |declared: Option<&str>, view: &str| -> (bool, Vec<String>) {
+            let mut inputs = logical_space_inputs();
+            inputs.analysis_context.closed_dynamic_imports = declared
+                .map(|function| ClosedDynamicImport {
+                    importer: "chunk.ts".to_string(),
+                    enclosing_function: function.to_string(),
+                    targets: ClosedTargets::BuildChunks,
+                })
+                .into_iter()
+                .collect();
+            let files = [("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("chunk.ts", chunk), ("router.ts", router), ("view.js", view)];
+            let out = analyze(&files, &inputs);
+            let codes = out.diagnostics.iter().filter_map(|d| d.code.clone()).filter(|code| code.starts_with("animus.load.")).collect();
+            (unattributed(&out).is_empty(), codes)
+        };
+        let plain = "export const View = 1;\n";
+        // Undeclared, the retry may load any module, so Fam's members are unknown.
+        assert_eq!(run(None, plain), (false, vec![]));
+        // Declared, it loads only view.js, and the assumption is recorded.
+        assert_eq!(run(Some("retryable"), plain), (true, vec![LOAD_DECLARED_CLOSED.to_string()]));
+        // Declared in a function it is not written in, it closes nothing, and says so.
+        assert_eq!(run(Some("reload"), plain), (false, vec![LOAD_DECLARED_CLOSED_UNMATCHED.to_string()]));
+        // A chunk that rewrites the family is still read as writing it.
+        let writes = "import { Fam } from './fam';\nFam.Box = () => null;\nexport const View = 1;\n";
+        assert!(!run(Some("retryable"), writes).0);
+    }
+
     /// Contract: every computed load analysis reads is one `prepare` lists,
     /// by the same offset and as written, so a host that expands each listed
     /// load leaves none unexpanded.
@@ -16052,6 +16340,72 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// otherwise have been read, and as an unanalysed import otherwise: no
     /// opening stops pruning silently. An asset, or an adapted original,
     /// names no module, as before, and stops nothing.
+    /// Contract: an unanalysed import made only by build or tooling
+    /// configuration (a config the host declares, a well-known tool config
+    /// file in the root, or a module only those import) leaves pruning on.
+    /// A module app code imports, even one named as a config or also
+    /// imported by one, still stops it.
+    #[test]
+    fn an_unanalysed_import_from_configuration_alone_leaves_pruning_on() {
+        let app = "import { R } from './r';\nexport const App = () => <R size=\"sm\" active />;\n";
+        let outside = "import shared from '../outside';\nexport default shared;\n";
+        let run_expanded = |declared: &[&str], extra: &[(&str, &str)], app: &str, expansions: Vec<HostExpansion>| {
+            let mut inputs = test_inputs();
+            inputs.analysis_context.config_files = declared.iter().map(|file| file.to_string()).collect();
+            inputs.probe_evidence = Some(ProbeEvidence {
+                generation: 1,
+                identity: String::new(),
+                expansions,
+                registry: Vec::new(),
+                bases: [(
+                    "../outside".to_string(),
+                    HostCandidate {
+                        candidate: "../outside.ts".into(),
+                        actual: None,
+                        analysed_as: None,
+                        reading: Some(HostReading::Unanalysed),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            });
+            let mut files = vec![("r.tsx", RECIPE), ("app.tsx", app)];
+            files.extend_from_slice(extra);
+            kept_sizes(&analyze(&files, &inputs), "r.tsx::R")
+        };
+        let run = |declared: &[&str], extra: &[(&str, &str)], app: &str| run_expanded(declared, extra, app, Vec::new());
+        let pruned = run(&[], &[], app);
+        let everything = vec!["sm", "md", "lg"];
+        assert_ne!(pruned, everything);
+        // A well-known tool config, and a module only a config imports.
+        assert_eq!(run(&[], &[("vitest.config.ts", outside)], app), pruned);
+        let via = "import shared from '../../outside';\nexport default shared;\n";
+        let vite = "import build from './tools/build';\nexport default build;\n";
+        assert_eq!(run(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], app), pruned);
+        // A config at a path the host declares, and the same file undeclared.
+        let custom = [("config/build.ts", via)];
+        assert_eq!(run(&["config/build.ts"], &custom, app), pruned);
+        assert_eq!(run(&[], &custom, app), everything);
+        // App code that imports a config file, or a module a config also
+        // imports, keeps it from being config-only.
+        let importing = format!("import theme from './tailwind.config';\n{app}");
+        assert_eq!(run(&[], &[("tailwind.config.ts", outside)], &importing), everything);
+        let shared = format!("import build from './tools/build';\n{app}");
+        assert_eq!(run(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], &shared), everything);
+        // So does a computed load the app makes: a closed expansion that lists
+        // it, or one that may load any module.
+        let globbing = format!("const tools = import.meta.glob('./tools/*.ts', {{ eager: true }});\n{app}");
+        let expansion = HostExpansion {
+            importer: "app.tsx".to_string(),
+            start: globbing.find("import.meta.glob").expect("a glob") as u32,
+            closed: true,
+            files: vec![ExpandedFile { path: "tools/build.ts".to_string(), status: ExpandedStatus::Analysed }],
+        };
+        assert_eq!(run_expanded(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], &globbing, vec![expansion]), everything);
+        let open = format!("export const load = (name) => import(`./tools/${{name}}.ts`);\n{app}");
+        assert_eq!(run(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], &open), everything);
+    }
+
     #[test]
     fn a_skipped_source_ends_the_probe_and_an_asset_does_not() {
         let evidence = |reading: HostReading| {

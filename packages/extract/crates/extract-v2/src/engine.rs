@@ -855,6 +855,11 @@ fn unstable_style_statics(
         // A runtime load hands on every module it may load: the one a
         // literal names, or each one a template, a context or a glob may
         // reach, up to the bound.
+        analyze_css::note_build_chunks(
+            style.iter().flat_map(|(path, module)| module.loads.iter().map(move |load| (path.as_str(), load))),
+            files,
+            inputs,
+        );
         // A glob of several patterns is one call: judged once.
         let mut calls = std::collections::BTreeSet::new();
         for load in &module.loads {
@@ -3682,6 +3687,57 @@ export const App = () => <Box tone="red" />;
     /// A kit read from its compiled output can rename a collection's export,
     /// so its unregistered references name the kit's source condition; a
     /// project's own do not.
+    /// Contract: the configured system file and the modules its load read
+    /// are known wherever they sit. An app root in a subdirectory whose entry
+    /// imports the system from the parent (gamut's probe shape) opens
+    /// nothing: the kit's static stage inputs stay static, and pruning stays
+    /// on. Without that knowledge the import is an unanalysed opening.
+    #[test]
+    fn an_import_of_the_system_from_outside_the_root_opens_nothing() {
+        let files = serde_json::json!([
+            { "path": "tokens.ts", "source": "export const pad = { padding: 4 };\n" },
+            { "path": "card.tsx", "source": "import { pad } from './tokens';\nexport const Card = ds.styles({ ...pad }).asElement('div');\n" },
+            { "path": "main.tsx", "source": "import { system } from '../src/ds';\nimport { Card } from './card';\nexport const App = () => <Card />;\n" },
+        ])
+        .to_string();
+        let run_host = |system_modules: &str, host: &str| -> (bool, Vec<String>) {
+            let mut engine = ExtractEngine::new(Some(EngineOptions {
+                analysis_context_json: Some(format!(r#"{{"systemModules":{system_modules}}}"#)),
+                ..Default::default()
+            }))
+            .unwrap();
+            let prepared: serde_json::Value = serde_json::from_str(&engine.prepare(files.clone()).unwrap()).unwrap();
+            let evidence = serde_json::json!({
+                "generation": 1,
+                "identity": prepared["identity"],
+                "bases": { "../src/ds": { "candidate": host, "reading": "unanalysed" } },
+            });
+            let out: serde_json::Value =
+                serde_json::from_str(&engine.analyze(files.clone(), Some(evidence.to_string())).unwrap()).unwrap();
+            let codes = out["diagnostics"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|d| d["code"].as_str().map(str::to_string))
+                .filter(|code| code == "animus.chain.stage-evaluation-failed" || code == "animus.resolve.unanalysed-import")
+                .collect();
+            (out["css"].as_str().unwrap_or_default().contains("padding"), codes)
+        };
+        let run = |system_modules: &str| run_host(system_modules, "../src/ds.ts");
+        let (extracted, codes) = run("[]");
+        assert!(!extracted && codes.contains(&"animus.resolve.unanalysed-import".to_string()), "{codes:?}");
+        assert_eq!(run(r#"["../src/ds.ts","../src/theme.ts"]"#), (true, vec![]));
+        // A host that opens another file than the loader read (a stale
+        // compiled ds.js beside ds.ts) opens it as before.
+        // A host that opens another file than the loader read opens it as
+        // before: a stale compiled ds.js beside ds.ts, or ds.ts where the
+        // load read ds/index.ts.
+        for (system, host) in [(r#"["../src/ds.ts"]"#, "../src/ds.js"), (r#"["../src/ds/index.ts"]"#, "../src/ds.ts")] {
+            let (extracted, codes) = run_host(system, host);
+            assert!(!extracted && codes.contains(&"animus.resolve.unanalysed-import".to_string()), "{host}: {codes:?}");
+        }
+    }
+
     #[test]
     fn an_unregistered_reference_into_a_kits_compiled_output_names_its_source_condition() {
         let mut engine = ExtractEngine::new(Some(EngineOptions {
@@ -3990,7 +4046,7 @@ export const App = () => <Box tone="red" />;
         const REFERENCE: &str = "const parts = { ...c };\n\
                                  function text(part) { return [part.element, Object.keys(part.admission.props).join(',')].join(' '); }\n\
                                  export function referenceText(name) { const part = parts[name]; if (part) return text(part); return ''; }\n";
-        let rows: [(&str, String, bool); 14] = [
+        let rows: [(&str, String, bool); 15] = [
             ("a factory's closure returns its argument", FACTORY.to_string(), true),
             (
                 "the factory writes its argument",
@@ -4040,9 +4096,16 @@ export const App = () => <Box tone="red" />;
                 format!("{FACTORY}{}", REFERENCE.replace("const part = parts[name];", "const part = parts[name]; part.admission.props.padding = 9;")),
                 false,
             ),
+            // A closure's captured uses are its own body's, path by path: one
+            // handed to unknown code still only reads a primitive member.
             (
                 "a closure handed out captures the alias",
                 format!("{FACTORY}{}", REFERENCE.replace("const part = parts[name];", "const part = parts[name]; external(() => { log(part.element); });")),
+                true,
+            ),
+            (
+                "a closure handed out hands on the held path",
+                format!("{FACTORY}{}", REFERENCE.replace("const part = parts[name];", "const part = parts[name]; external(() => { log(part.admission); });")),
                 false,
             ),
         ];
@@ -4089,6 +4152,107 @@ export const App = () => <Box tone="red" />;
                 assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "depth {depth}: {contract}");
             }
         }
+    }
+
+    /// Contract: proven read-only uses of a held stage input are reads (the
+    /// owner's ruling for docs-style catalogs, refining spec §6.6 F10, F11a):
+    /// a module-scope `const` alias is followed, not an escape; `Object.hasOwn`
+    /// reads keys; a logical operand only tested is read; a closure's uses of
+    /// a captured binding are judged one by one, so a closure handed out
+    /// escapes only the paths its own body hands on; and `Object.entries`
+    /// results through `filter`/`map` callbacks are followed per path. A
+    /// write, a hand-on of the held path or of the whole binding, a value
+    /// built from it that escapes, or code the extractor cannot read still
+    /// refuses. Each row: its name, the docs module, and whether `pad`
+    /// extracts.
+    #[test]
+    fn proven_read_only_uses_of_a_held_stage_input_are_reads() {
+        const CONTRACT: &str = "import { pad } from './tokens.js';\n\
+            export const catalog = { Part: { element: 'div', description: 'd', admission: { name: 'P', props: pad }, \
+            props: { size: { kind: 'variant', description: 's' } } } };\n\
+            export const admissions = { P: pad };\n";
+        const ALIAS: &str = "import { catalog } from './contract.js';\nconst checked = catalog;\n\
+            export function doc(name) { const part = checked[name]; return { name, element: part.element }; }\n";
+        const HAS_OWN: &str = "import { admissions } from './contract.js';\n\
+            export const isAdmission = (name) => Object.hasOwn(admissions, name);\n";
+        const TESTED: &str = "import { catalog } from './contract.js';\n\
+            export function doc(name) { const part = catalog[name]; return part.admission && part.admission.name ? { system: part.admission.name } : {}; }\n";
+        const CLOSURE: &str = "import { catalog } from './contract.js';\n\
+            export const Pilot = ({ name }) => { const part = catalog[name]; return <Table control={(key) => <Control fact={part.props[key]} />} />; };\n";
+        const ENTRIES: &str = "import { catalog } from './contract.js';\n\
+            export const List = ({ term }) => { const parts = Object.entries(catalog).filter(([name, part]) => \
+            [name, part.description, ...Object.keys(part.props)].some((value) => value.includes(term))); \
+            return parts.map(([name, part]) => <Row key={name} text={part.description} />); };\n";
+        let closure = |body: &str| CLOSURE.replace("(key) => <Control fact={part.props[key]} />", body);
+        let rows: Vec<(&str, String, bool)> = vec![
+            ("a module-scope alias only read", ALIAS.to_string(), true),
+            ("Object.hasOwn reads keys", HAS_OWN.to_string(), true),
+            ("a logical operand only tested", TESTED.to_string(), true),
+            ("a closure handed out reads a disjoint path", CLOSURE.to_string(), true),
+            ("Object.entries results through filter and map", ENTRIES.to_string(), true),
+            ("the whole chain", format!("{ALIAS}{}", [HAS_OWN, TESTED, CLOSURE, ENTRIES].map(|m| m.lines().skip(1).collect::<Vec<_>>().join("\n")).join("\n")).replace("import { catalog } from './contract.js';", "import { catalog, admissions } from './contract.js';"), true),
+            ("the alias is written", format!("{ALIAS}checked.Part.admission.props.padding = 9;\n"), false),
+            ("hasOwn is not the global one", format!("const Object = {{ hasOwn: (o) => {{ o.P.padding = 9; }} }};\n{HAS_OWN}"), false),
+            ("the closure hands on the held path", closure("(key) => { log(part.admission); return null; }"), false),
+            ("the closure writes the held path", closure("(key) => { part.admission.props.x = 1; return null; }"), false),
+            ("the closure returns the binding", closure("() => part"), false),
+            ("the closure passes the binding whole", closure("() => register(part)"), false),
+            ("the closure returns a value holding the held path", closure("() => ({ held: part.admission })"), false),
+            ("the closure stores the held path", closure("() => { store.held = part.admission; return null; }"), false),
+            ("the closure calls through a computed member", closure("(key) => part[key]()"), false),
+            ("the closure reads arguments", closure("function (key) { log(arguments); return <Control fact={part.props[key]} />; }"), false),
+            (
+                "a filter callback writes",
+                ENTRIES.replace("[name, part.description, ...Object.keys(part.props)]", "(part.admission.props.padding = 9, [name])"),
+                false,
+            ),
+            ("the filtered entries are handed on", format!("{}register(Object.entries(catalog).filter(() => true));\n", ENTRIES), false),
+            (
+                "a function callback reaches an element through arguments",
+                format!("{ENTRIES}Object.values(catalog).forEach(function () {{ arguments[0].admission.props.padding = 9; }});\n"),
+                false,
+            ),
+            (
+                "a function callback with a parameter reaches it through arguments too",
+                format!("{ENTRIES}Object.values(catalog).forEach(function (p) {{ if (p) arguments[0].admission.props.padding = 9; }});\n"),
+                false,
+            ),
+            (
+                "an entries callback reaches the pair through arguments",
+                format!("{ENTRIES}Object.entries(catalog).forEach(function ([k, p]) {{ arguments[0][1].admission.props.padding = 9; }});\n"),
+                false,
+            ),
+            (
+                "a closure declared first hands the filtered entries on",
+                ENTRIES.replace("const parts = ", "function leak() { register(parts); }\n leak();\n const parts = "),
+                false,
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (row, docs, extracts) in rows {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let files = serde_json::json!([
+                { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
+                { "path": "contract.js", "source": CONTRACT },
+                { "path": "docs.tsx", "source": docs },
+                {
+                    "path": "reader.tsx",
+                    "source": "import './docs.tsx';\nimport { pad } from './tokens.js';\n\
+                               export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+                },
+            ]);
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+            if out["css"].as_str().unwrap_or_default().contains("padding") != extracts {
+                let why: Vec<String> = out["diagnostics"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|d| d["message"].as_str().map(str::to_string))
+                    .collect();
+                wrong.push(format!("{row} (extracts: {extracts}): {why:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
     /// Contract: analysis output is independent of the order the caller

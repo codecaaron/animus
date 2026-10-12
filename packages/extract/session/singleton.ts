@@ -94,6 +94,15 @@ export function claimUnmatchedExcludeReport(key: SessionKey): boolean {
   return true;
 }
 
+/** True for the build's first caller only: the one that reports what the
+ *  build extracted. */
+export function claimExtractionReport(key: SessionKey): boolean {
+  const state = joined(key);
+  if (state.extractionReported) return false;
+  state.extractionReported = true;
+  return true;
+}
+
 export function getSharedCss(key: SessionKey): string {
   return publicationOf(key)?.styles ?? '';
 }
@@ -519,6 +528,7 @@ const OPTION_CLASSES = {
   engine: digestOf('engine'),
   mode: digestOf('mode'),
   runtimeImport: digestOf('runtimeImport'),
+  closedDynamicImports: digestOf('closedDynamicImports'),
   root: 'excluded',
 } as const satisfies {
   [Key in keyof AnimusCoreOptions]-?: OptionDigest<Key> | 'excluded';
@@ -565,6 +575,9 @@ export interface SessionState {
   /** Whether the build reported its unmatched user excludes: once, after
    *  its first full discovery, whether or not that pass publishes. */
   unmatchedExcludesReported: boolean;
+  /** Whether the build reported what it extracted: once, from its first
+   *  analysis, whichever environment ran it. */
+  extractionReported: boolean;
 }
 
 const SESSION_REGISTRY = Symbol.for('animus.session-registry.v1');
@@ -628,6 +641,7 @@ export function joinSession(
       publication: null,
       artifactDir: null,
       unmatchedExcludesReported: false,
+      extractionReported: false,
     };
     sessions.set(id, state);
     return state;
