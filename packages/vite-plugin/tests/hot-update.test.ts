@@ -816,6 +816,12 @@ function observedContext(root: string) {
       system,
       packageMap: {},
       ownership: {},
+      analyzedHashes: new Map(),
+      packageReadRecord: null,
+      replacementEpoch: '',
+      externalPackageDirs: [],
+      externalSourceEntries: new Map(),
+      externalSourceSideEffects: new Map(),
     };
     session.publication = publication;
     session.onOutcome?.({

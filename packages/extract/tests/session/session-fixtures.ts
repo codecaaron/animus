@@ -29,7 +29,11 @@ import type {
   SessionOptions,
 } from '../../session/extraction-session';
 import type { CliLockRecord } from '../../session/published-set';
-import type { SessionKey } from '../../session/singleton';
+import type {
+  RegistryPublication,
+  SessionKey,
+  SessionState,
+} from '../../session/singleton';
 
 /** The engine-free tests' stand-in for the native `resolveSpecifier`: a
  *  package as Node's `require.resolve` finds it, else a declared workspace's
@@ -80,6 +84,27 @@ export function latestSessionKey(): SessionKey {
  * restores it through its saved property descriptor. The engine-API test
  * seam lives outside the registry and survives.
  */
+/** Merges `fields` into the build's committed publication, as a session's
+ *  commit would write it; the rest keep their empty values. */
+export function publishRecord(
+  state: SessionState,
+  fields: Partial<RegistryPublication>
+): void {
+  state.publication = {
+    manifestJson: '{}',
+    styles: '',
+    systemPropsModule: '',
+    analyzedHashes: new Map(),
+    packageReadRecord: null,
+    replacementEpoch: '',
+    externalPackageDirs: [],
+    externalSourceEntries: new Map(),
+    externalSourceSideEffects: new Map(),
+    ...state.publication,
+    ...fields,
+  };
+}
+
 export function resetAnimusGlobals(): () => void {
   const saved = Object.getOwnPropertyDescriptor(
     globalThis,
