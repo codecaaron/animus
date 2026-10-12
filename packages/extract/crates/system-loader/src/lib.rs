@@ -1933,8 +1933,10 @@ pub fn load_system_module_reading(
     context: &ResolutionContext,
     reads: &mut LoadReads,
 ) -> Result<SystemConfig, String> {
+    // One load reads each directory's listing once: the exact-case check
+    // otherwise lists a directory again for every candidate in it.
     let (specifier_map, source_map, stub_exports, manifests, type_exports) =
-        resolve_all_deps_reading(system_path, root_dir, context, reads)?;
+        resolution::with_listing_cache(|| resolve_all_deps_reading(system_path, root_dir, context, reads))?;
 
     let entry_path = fs::canonicalize(system_path)
         .map_err(|e| format!("failed to canonicalize '{}': {}", system_path, e))?
