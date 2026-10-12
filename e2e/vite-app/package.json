@@ -21,13 +21,13 @@
     "@animus-ui/system": "workspace:*",
     "@animus-ui/test-ds": "workspace:*",
     "@animus-ui/vite-plugin": "workspace:*",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@animus-ui/assertions": "workspace:*",
-    "@cloudflare/vite-plugin": "1.54.4",
-    "@vitejs/plugin-react": "^6.1.1",
-    "vite": "^8.2.2"
+    "@cloudflare/vite-plugin": "1.63.1",
+    "@vitejs/plugin-react": "^6.1.2",
+    "vite": "^8.3.4"
   }
 }

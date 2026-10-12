@@ -10,12 +10,12 @@
     "@animus-ui/properties": "file:./tarballs/animus-ui-properties.tgz",
     "@animus-ui/system": "file:./tarballs/animus-ui-system.tgz",
     "@animus-ui/vite-plugin": "file:./tarballs/animus-ui-vite-plugin.tgz",
-    "svelte": "5.57.0"
+    "svelte": "5.57.2"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "7.3.0",
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@types/react": "18.3.31",
     "typescript": "7.0.2",
-    "vite": "8.2.2"
+    "vite": "8.3.4"
   }
 }

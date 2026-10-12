@@ -211,7 +211,7 @@ needs no NAPI engine, no bundler, and no Rust changes. The verified joins:
   `standalone`/`composed` sub-layers under `anm-variants`), emission order within a
   layer, selector specificity, and `!important`.
 - **Provenance** — the join `components[id] ⨝ component_fragments[id] ⨝
-fileFacts[file].chains[].descriptor.stages[]`: every rule links back through its
+  fileFacts[file].chains[].descriptor.stages[]`: every rule links back through its
   class-suffix grammar (`--{prop}-{option}`, `--compound-{i}`, `--{state}`) to the
   builder stage (`styles|variant|compound|states|system|props`) and its byte-exact
   `argSpan` in the authored source, with authored (pre-resolution) declaration

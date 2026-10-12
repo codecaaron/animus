@@ -320,8 +320,8 @@ interface RspackLikeCompiler extends WebpackLikeCompiler {
 
 /** The experiments webpack's default rules are built from. */
 interface WebpackRuleExperiments {
-  css?: boolean;
-  asyncWebAssembly?: boolean;
+  css?: boolean | 'auto';
+  asyncWebAssembly?: boolean | 'auto';
   syncWebAssembly?: boolean;
 }
 
