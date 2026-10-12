@@ -36,13 +36,12 @@ export { discoverFiles } from '@animus-ui/extract/pipeline';
  *  to Vite already. */
 interface SourceKitConfig {
   optimizeDeps: { exclude: string[]; include: string[] };
-  ssr?: { noExternal: string[] };
+  ssr: { noExternal: string[] };
 }
 
 async function sourceKitConfig(
   rootDir: string,
   systemPath: string,
-  serving: boolean,
   engine: Parameters<typeof sourceKitDependencies>[1] &
     Parameters<typeof systemKitDependencies>[2]
 ): Promise<SourceKitConfig | undefined> {
@@ -55,19 +54,18 @@ async function sourceKitConfig(
   }
   if (kits.size === 0) return undefined;
   const names = [...kits.keys()];
-  const config: SourceKitConfig = {
+  return {
     optimizeDeps: {
       exclude: names,
       include: [...kits.values()].flatMap((kit) =>
         kit.dependencies.map((dependency) => `${kit.name} > ${dependency}`)
       ),
     },
+    // SSR, in development and in a build, externalizes an installed package
+    // and Node loads its runtime dist past the transform, so the server
+    // renders what the client, served through it, does not.
+    ssr: { noExternal: names },
   };
-  // Dev SSR externalizes an installed package and loads its runtime dist
-  // past the transform, so the server renders what the client, served
-  // through it, does not. A build already transforms it.
-  if (serving) config.ssr = { noExternal: names };
-  return config;
 }
 
 export interface AnimusExtractOptions {
@@ -202,7 +200,6 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       const kits = await sourceKitConfig(
         root,
         resolve(root, options.system),
-        env.command === 'serve',
         ctx.kitEngine()
       );
       return kits ? { define, ...kits } : { define };

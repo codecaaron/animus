@@ -1785,6 +1785,8 @@ export class ExtractionSession {
       extensions: context.extensions,
     });
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
+    const systemPackageRoot = findPackageRoot(resolvedSystemPath);
+    const memberFiles = new Map<string, string>();
     const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
       // A stateless native read of the system file, like the system loader:
@@ -1794,8 +1796,15 @@ export class ExtractionSession {
           this.engine().systemMembership ?? requireEngine().systemMembership,
       },
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
-      resolver.resolveSpecifier,
-      context.extensions
+      // The application's modules import as discovery resolves, from the
+      // root; a kit's, from its own directory, as the system loader
+      // evaluates them.
+      (specifier, importer) =>
+        findPackageRoot(importer) === systemPackageRoot
+          ? resolver.resolveSpecifier(specifier)
+          : resolver.loaderResolve(specifier, dirname(importer)),
+      context.extensions,
+      memberFiles
     );
     discoveryDiagnostics.push(
       ...importedKitDiagnostics(
@@ -1822,7 +1831,11 @@ export class ExtractionSession {
       ),
       locatePackage: nativePackageLocator(this.engine(), context.workspaces),
       specifiers: packageNames,
-      resolveSpecifier: resolver.resolveSpecifier,
+      // A kit another kit extends can resolve only from that kit.
+      resolveSpecifier: async (specifier) =>
+        (await resolver.resolveSpecifier(specifier)) ??
+        memberFiles.get(specifier) ??
+        null,
       unresolvedReason: resolver.unresolvedReason,
       requireSourceEntry: resolver.requireSourceEntry,
       rootDir,

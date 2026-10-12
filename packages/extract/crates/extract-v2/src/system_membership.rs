@@ -16,19 +16,30 @@
 //! chain initialises, transitively. Each maps through local aliases to the
 //! import that binds it.
 //!
+//! Membership is transitive: each member is followed through local and
+//! package re-exports to the module that declares it, and that module's own
+//! roots are read in turn, so a kit another kit extends is a member too. A
+//! member reached through a package is spelled as the first package import
+//! on the way, by the module that spells it (`importer`).
+//!
+//! A root chain not yet built is a builder. One that leaves the positions
+//! membership follows (a binding, an assignment, an object property) is a
+//! finding: kits extended past that point are not read.
+//!
 //! Following an identity can need a module the caller has not supplied:
 //! the result then lists those requests (`needs`), which the caller resolves
 //! (its host's package resolution, its extension order) and reads, and asks
 //! again with them (spec §2.3, `NeedsInputs`).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use oxc::ast::ast::{
     Argument, ArrayExpressionElement, AssignmentTarget, BindingPattern, CallExpression, Expression,
     ObjectPropertyKind, Program, PropertyKey, VariableDeclarator,
 };
 use oxc::ast::AstKind;
-use oxc::span::GetSpan;
+use oxc::semantic::{AstNodes, NodeId, Semantic, SymbolId};
+use oxc::span::{GetSpan, Span};
 
 use crate::facts::FileFacts;
 use crate::owned_ast::{OwnedAst, ParseCounter};
@@ -78,15 +89,35 @@ pub enum RootFinding {
     },
     /// A `createSystem` call no import, declaration or parameter binds.
     Unimported { line: usize, column: usize },
+    /// A builder leaves the positions membership follows (`how`): kits it
+    /// extends from there are not read.
+    Escapes { line: usize, column: usize, how: String },
+}
+
+/// A finding in one of the modules membership reads.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Finding {
+    pub file: String,
+    #[serde(flatten)]
+    pub finding: RootFinding,
+}
+
+/// A member specifier, as the module `importer` spells it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Member {
+    pub specifier: String,
+    pub importer: String,
 }
 
 #[derive(Debug, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Membership {
-    /// The member specifiers, as their imports spell them, in discovery
-    /// order without repeats.
-    pub members: Vec<String>,
-    pub findings: Vec<RootFinding>,
+    /// The members, the system file's first, then each read module's, in
+    /// discovery order without repeats.
+    pub members: Vec<Member>,
+    pub findings: Vec<Finding>,
     /// Requests to resolve and read before the answer is final.
     pub needs: Vec<(String, String)>,
     /// False where the system file could not be parsed: no membership.
@@ -225,6 +256,79 @@ impl Follower<'_> {
     }
 }
 
+/// Where a member's binding is declared, and the first package import on
+/// the way to it.
+struct Origin {
+    package: Option<(String, String)>,
+    declared: Declared,
+}
+
+enum Declared {
+    File(String),
+    Pending,
+    Unknown,
+}
+
+fn is_bare(specifier: &str) -> bool {
+    !specifier.starts_with('.') && !std::path::Path::new(specifier).is_absolute()
+}
+
+impl Follower<'_> {
+    /// Follows `name`, exported by the module `specifier` names from
+    /// `importer`, through local and package re-exports to the module that
+    /// declares it.
+    fn origin(&mut self, importer: &str, specifier: &str, name: &str, seen: &mut BTreeSet<String>) -> Origin {
+        let package = is_bare(specifier).then(|| (importer.to_string(), specifier.to_string()));
+        let at = |package: Option<(String, String)>, declared| Origin { package, declared };
+        if is_animus_system_specifier(specifier) {
+            return at(package, Declared::Unknown);
+        }
+        let key = format!("{importer}\0{specifier}");
+        let Some(resolution) = self.inputs.resolved.get(&key) else {
+            self.needs.insert((importer.to_string(), specifier.to_string()));
+            return at(package, Declared::Pending);
+        };
+        let Some(file) = resolution.file.clone() else { return at(package, Declared::Unknown) };
+        if !seen.insert(format!("{file}#{name}")) {
+            return at(package, Declared::Unknown);
+        }
+        let Some((facts, declared)) = self.facts(&file) else { return at(package, Declared::Unknown) };
+        let exported = facts.exports.iter().find(|entry| entry.exported == name).cloned();
+        let declares = declared.contains(name);
+        let imports = facts.imports.clone();
+        let stars = facts.star_exports.clone();
+        let next = if let Some(source) = exported.as_ref().and_then(|entry| entry.source.clone()) {
+            let original = exported.as_ref().and_then(|entry| entry.original.clone()).unwrap_or_else(|| name.to_string());
+            self.origin(&file, &source, &original, seen)
+        } else if let Some(imported) = exported.as_ref().and_then(|entry| {
+            let local = entry.local.clone().unwrap_or_else(|| name.to_string());
+            imports.iter().find(|import| import.local == local).cloned()
+        }) {
+            self.origin(&file, &imported.source, &imported.imported, seen)
+        } else if exported.is_some() || declares {
+            return at(package, Declared::File(file));
+        } else {
+            // `export * from` provides `name` when exactly one source
+            // provides it: declares it, or re-exports it from a package.
+            let found: Vec<Origin> = stars.iter().map(|star| self.origin(&file, star, name, seen)).collect();
+            if found.iter().any(|origin| matches!(origin.declared, Declared::Pending)) {
+                Origin { package: None, declared: Declared::Pending }
+            } else {
+                let mut providing = found
+                    .into_iter()
+                    .filter(|origin| origin.package.is_some() || matches!(origin.declared, Declared::File(_)));
+                match (providing.next(), providing.next()) {
+                    (Some(origin), None) => origin,
+                    _ => Origin { package: None, declared: Declared::Unknown },
+                }
+            }
+        };
+        // The first package on the way is the member; one further in only
+        // says where it is declared.
+        Origin { package: package.or(next.package), declared: next.declared }
+    }
+}
+
 fn unknown(why: String) -> Identity {
     Identity::Unknown { why, case_mismatch: false }
 }
@@ -257,6 +361,12 @@ impl<'a> Scan<'a> {
                     }
                     _ => {}
                 },
+                // `{ base: createSystem() }` binds `base`, as `holder.base`.
+                AstKind::ObjectProperty(property) if !property.computed => {
+                    if let PropertyKey::StaticIdentifier(key) = &property.key {
+                        scan.assignments.push((key.name.to_string(), &property.value));
+                    }
+                }
                 AstKind::AssignmentPattern(pattern) => {
                     if let BindingPattern::BindingIdentifier(target) = &pattern.left {
                         scan.assignments.push((target.name.to_string(), &pattern.right));
@@ -359,22 +469,78 @@ fn listed_identifiers(element: Option<&Argument<'_>>) -> Vec<String> {
         .collect()
 }
 
-/// Reads the membership of the system file in `inputs`.
+/// Reads the membership of the system file in `inputs`, and of each module
+/// declaring a member, transitively.
 pub fn system_membership(inputs: &MembershipInputs) -> Membership {
-    let Some(source) = inputs.files.get(&inputs.system) else {
-        return Membership::default();
-    };
+    let mut follower = Follower { inputs, facts: BTreeMap::new(), needs: BTreeSet::new() };
+    let mut members: Vec<Member> = Vec::new();
+    let mut findings: Vec<Finding> = Vec::new();
+    let mut pending = false;
+    let mut queue = VecDeque::from([inputs.system.clone()]);
+    let mut queued = BTreeSet::from([inputs.system.clone()]);
+    while let Some(file) = queue.pop_front() {
+        let Some(read) = read_system(&file, &mut follower) else {
+            if file == inputs.system {
+                return Membership::default();
+            }
+            continue;
+        };
+        if read.pending {
+            pending = true;
+            continue;
+        }
+        findings.extend(read.findings.into_iter().map(|finding| Finding { file: file.clone(), finding }));
+        for (source, imported) in read.linked {
+            let origin = follower.origin(&file, &source, &imported, &mut BTreeSet::new());
+            let (importer, specifier) = origin.package.unwrap_or_else(|| (file.clone(), source.clone()));
+            // A package is one member by its spelling; a module, by where it
+            // is spelled.
+            let repeat = members.iter().any(|member| {
+                member.specifier == specifier && (is_bare(&specifier) || member.importer == importer)
+            });
+            if !repeat {
+                members.push(Member { specifier, importer });
+            }
+            match origin.declared {
+                Declared::File(declaring) => {
+                    if queued.insert(declaring.clone()) {
+                        queue.push_back(declaring);
+                    }
+                }
+                Declared::Pending => pending = true,
+                Declared::Unknown => {}
+            }
+        }
+    }
+    if pending {
+        return Membership { members: Vec::new(), findings: Vec::new(), needs: follower.needs.into_iter().collect(), parsed: true };
+    }
+    Membership { members, findings, needs: Vec::new(), parsed: true }
+}
+
+/// One module's roots: the bindings its roots link, by import, and its
+/// findings; `pending` while an identity waits on a module.
+struct SystemRead {
+    linked: Vec<(String, String)>,
+    findings: Vec<RootFinding>,
+    pending: bool,
+}
+
+/// Reads one module's roots, or None where it is not supplied or does not
+/// parse.
+fn read_system(file: &str, follower: &mut Follower<'_>) -> Option<SystemRead> {
+    let inputs = follower.inputs;
+    let source = inputs.files.get(file)?;
     let counter = ParseCounter::new(0);
-    let ast = OwnedAst::parse(inputs.system.clone(), source.clone(), &counter);
+    let ast = OwnedAst::parse(file.to_string(), source.clone(), &counter);
     let facts = crate::facts::extract_file_facts(&ast);
     if facts.parse_panicked {
-        return Membership::default();
+        return None;
     }
     let program: &Program<'_> = ast.program();
     let semantic = oxc::semantic::SemanticBuilder::new().with_build_nodes(true).build(program).semantic;
     let scan = Scan::of(&semantic);
-    let mut follower = Follower { inputs, facts: BTreeMap::new(), needs: BTreeSet::new() };
-    let system = inputs.system.as_str();
+    let system = file;
 
     let called = |path: &str| scan.calls.iter().find(|call| callee_path(&call.callee).as_deref() == Some(path)).map(|call| call.callee.span().start);
     let mut state = Roots::default();
@@ -469,10 +635,12 @@ pub fn system_membership(inputs: &MembershipInputs) -> Membership {
     }
 
     if state.pending {
-        return Membership { members: Vec::new(), findings: Vec::new(), needs: follower.needs.into_iter().collect(), parsed: true };
+        return Some(SystemRead { linked: Vec::new(), findings: Vec::new(), pending: true });
     }
 
-    Membership { members: members(source, &scan, &facts, &state.roots), findings: state.findings, needs: Vec::new(), parsed: true }
+    let mut findings = state.findings;
+    findings.extend(escapes(&semantic, source, &state.roots));
+    Some(SystemRead { linked: members(source, &scan, &facts, &state.roots), findings, pending: false })
 }
 
 #[derive(Default)]
@@ -586,10 +754,11 @@ fn import_local_spans(program: &Program<'_>) -> BTreeMap<(String, String), u32> 
     spans
 }
 
-/// The member specifiers, in the lexer's discovery order: every root call's
-/// `includes`, the legacy `.includes([…])` calls, each root call's
-/// consecutive links, then each bound chain's.
-fn members(source: &str, scan: &Scan<'_>, facts: &FileFacts, roots: &BTreeSet<String>) -> Vec<String> {
+/// The imports the members bind, as (specifier, imported name), in the
+/// lexer's discovery order: every root call's `includes`, the legacy
+/// `.includes([…])` calls, each root call's consecutive links, then each
+/// bound chain's.
+fn members(source: &str, scan: &Scan<'_>, facts: &FileFacts, roots: &BTreeSet<String>) -> Vec<(String, String)> {
     let is_root = |call: &CallExpression<'_>| callee_path(&call.callee).is_some_and(|path| roots.contains(&path));
     let mut calls: Vec<&CallExpression<'_>> = scan.calls.clone();
     // Inner calls first: a chain's links share its start, and each link is
@@ -689,6 +858,18 @@ fn members(source: &str, scan: &Scan<'_>, facts: &FileFacts, roots: &BTreeSet<St
             uses.entry(name).or_default().push(start.span().start);
         }
     }
+    // A binding or assignment of one: `const b = base` binds `b` in turn.
+    let values = scan
+        .declarators
+        .iter()
+        .filter_map(|declarator| declarator.init.as_ref())
+        .chain(scan.assignments.iter().map(|(_, value)| *value));
+    for value in values {
+        let start = leftmost(value);
+        if let Some(name) = start_name(start) {
+            uses.entry(name).or_default().push(start.span().start);
+        }
+    }
     let mut index = 0;
     while index < bound.len() {
         let root = bound[index].clone();
@@ -697,8 +878,7 @@ fn members(source: &str, scan: &Scan<'_>, facts: &FileFacts, roots: &BTreeSet<St
         starts.sort_unstable();
         starts.dedup();
         for start in starts {
-            let Some(found) = links.get(&start) else { continue };
-            for base in found {
+            for base in links.get(&start).into_iter().flatten() {
                 add(&mut identifiers, base.clone());
             }
             if let Some(name) = binds.get(&start) {
@@ -710,8 +890,11 @@ fn members(source: &str, scan: &Scan<'_>, facts: &FileFacts, roots: &BTreeSet<St
     }
 
     // Each identifier through its local aliases to the import that binds it.
-    let imports: BTreeMap<&str, &str> =
-        facts.imports.iter().map(|binding| (binding.local.as_str(), binding.source.as_str())).collect();
+    let imports: BTreeMap<&str, (&str, &str)> = facts
+        .imports
+        .iter()
+        .map(|binding| (binding.local.as_str(), (binding.source.as_str(), binding.imported.as_str())))
+        .collect();
     let mut aliases: BTreeMap<String, String> = BTreeMap::new();
     for declarator in &scan.declarators {
         if let (BindingPattern::BindingIdentifier(ident), Some(init)) = (&declarator.id, &declarator.init) {
@@ -732,7 +915,7 @@ fn members(source: &str, scan: &Scan<'_>, facts: &FileFacts, roots: &BTreeSet<St
             }
         }
     }
-    let mut members: Vec<String> = Vec::new();
+    let mut members: Vec<(String, String)> = Vec::new();
     for identifier in identifiers {
         let mut current = identifier;
         let mut seen = BTreeSet::new();
@@ -742,12 +925,147 @@ fn members(source: &str, scan: &Scan<'_>, facts: &FileFacts, roots: &BTreeSet<St
                 None => break,
             }
         }
-        if let Some(specifier) = imports.get(current.as_str()) {
-            if !members.iter().any(|member| member == specifier) {
-                members.push(specifier.to_string());
+        if let Some((specifier, imported)) = imports.get(current.as_str()) {
+            let member = (specifier.to_string(), imported.to_string());
+            if !members.contains(&member) {
+                members.push(member);
             }
         }
     }
     members
 }
 
+
+/// The chain `start` begins, outward through its calls, parentheses and
+/// type assertions: its outermost node, and whether it is settled — built,
+/// or read for a property rather than called on.
+fn chain_end(nodes: &AstNodes<'_>, start: NodeId) -> (NodeId, bool) {
+    let mut current = start;
+    let mut built = false;
+    loop {
+        let span = nodes.kind(current).span();
+        let parent = nodes.parent_node(current);
+        if parent.id() == current {
+            return (current, built);
+        }
+        match parent.kind() {
+            AstKind::StaticMemberExpression(member) if member.object.span() == span => {
+                match nodes.parent_kind(parent.id()) {
+                    AstKind::CallExpression(call) if call.callee.span() == member.span => {
+                        built |= member.property.name == "build";
+                        current = nodes.parent_id(parent.id());
+                    }
+                    _ => return (current, true),
+                }
+            }
+            AstKind::ParenthesizedExpression(_)
+            | AstKind::TSAsExpression(_)
+            | AstKind::TSSatisfiesExpression(_)
+            | AstKind::TSNonNullExpression(_)
+            | AstKind::ChainExpression(_) => current = parent.id(),
+            _ => return (current, built),
+        }
+    }
+}
+
+/// Where a position that takes a builder sends it, for a finding.
+fn escape_how(kind: &AstKind<'_>) -> &'static str {
+    match kind {
+        AstKind::CallExpression(_) | AstKind::NewExpression(_) => "it is passed to a function",
+        AstKind::ReturnStatement(_) | AstKind::ArrowFunctionExpression(_) => "it is returned from a function",
+        AstKind::ArrayExpression(_) => "it is placed in an array",
+        AstKind::ConditionalExpression(_) | AstKind::LogicalExpression(_) => "it is chosen conditionally",
+        AstKind::SpreadElement(_) => "it is spread",
+        AstKind::VariableDeclarator(_) => "it is destructured",
+        AstKind::AssignmentExpression(_) => "it is assigned to a target membership does not follow",
+        AstKind::ObjectProperty(_) => "it is stored under a computed key",
+        _ => "it is used where membership does not follow it",
+    }
+}
+
+/// Each builder — a root chain not yet built — that leaves the positions
+/// membership follows: a declaration, an assignment to a name or a property,
+/// an object property, or a statement of its own. A builder bound by one is
+/// followed through the binding's uses: a name by its references, a property
+/// by the dotted paths that end in it, as membership reads them.
+fn escapes(semantic: &Semantic<'_>, source: &str, roots: &BTreeSet<String>) -> Vec<RootFinding> {
+    let nodes = semantic.nodes();
+    let scoping = semantic.scoping();
+    let mut starts: Vec<NodeId> = nodes
+        .iter()
+        .filter(|node| {
+            matches!(node.kind(), AstKind::CallExpression(call)
+                if callee_path(&call.callee).is_some_and(|path| roots.contains(&path)))
+        })
+        .map(|node| node.id())
+        .collect();
+    let mut symbols: BTreeSet<SymbolId> = BTreeSet::new();
+    let mut properties: BTreeSet<String> = BTreeSet::new();
+    let mut findings = Vec::new();
+    let mut follow_symbol = |symbol: Option<SymbolId>, starts: &mut Vec<NodeId>| {
+        if let Some(symbol) = symbol {
+            if symbols.insert(symbol) {
+                starts.extend(semantic.symbol_references(symbol).filter(|reference| !reference.is_write()).map(|reference| reference.node_id()));
+            }
+        }
+    };
+    let mut index = 0;
+    while index < starts.len() {
+        let (end, settled) = chain_end(nodes, starts[index]);
+        index += 1;
+        if settled {
+            continue;
+        }
+        let span: Span = nodes.kind(end).span();
+        let parent = nodes.parent_node(end);
+        let mut property = None;
+        match parent.kind() {
+            AstKind::VariableDeclarator(declarator) if declarator.init.as_ref().is_some_and(|init| init.span() == span) => {
+                if let BindingPattern::BindingIdentifier(ident) = &declarator.id {
+                    follow_symbol(ident.symbol_id.get(), &mut starts);
+                    continue;
+                }
+            }
+            AstKind::AssignmentExpression(assignment) if assignment.right.span() == span => match &assignment.left {
+                AssignmentTarget::AssignmentTargetIdentifier(target) => {
+                    let symbol = target.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
+                    follow_symbol(symbol, &mut starts);
+                    continue;
+                }
+                AssignmentTarget::StaticMemberExpression(target) => property = Some(target.property.name.to_string()),
+                _ => {}
+            },
+            AstKind::ObjectProperty(object_property) if !object_property.computed && object_property.value.span() == span => {
+                if let PropertyKey::StaticIdentifier(key) = &object_property.key {
+                    property = Some(key.name.to_string());
+                }
+            }
+            AstKind::ExpressionStatement(_)
+            | AstKind::ExportDefaultDeclaration(_)
+            | AstKind::ExportSpecifier(_)
+            | AstKind::TSTypeQuery(_)
+            | AstKind::UnaryExpression(_) => continue,
+            _ => {}
+        }
+        if let Some(name) = property {
+            if properties.insert(name.clone()) {
+                // Each dotted path ending in it that is read, not written.
+                for node in nodes.iter() {
+                    let AstKind::StaticMemberExpression(member) = node.kind() else { continue };
+                    if member.property.name != name.as_str() || !is_member_path(&member.object) {
+                        continue;
+                    }
+                    let written = matches!(nodes.parent_kind(node.id()),
+                        AstKind::AssignmentExpression(assignment) if assignment.left.span() == member.span);
+                    if !written {
+                        starts.push(node.id());
+                    }
+                }
+            }
+            continue;
+        }
+        let (line, column) = crate::facts::line_column(source, span.start);
+        findings.push(RootFinding::Escapes { line, column, how: escape_how(&parent.kind()).to_string() });
+    }
+    findings
+}

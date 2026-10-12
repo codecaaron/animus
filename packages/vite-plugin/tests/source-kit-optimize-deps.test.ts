@@ -47,10 +47,10 @@ function sourceKit(dir: string, dependencies: Record<string, string>): void {
  *  compiled code, a compiled kit with its builder code raw), so the plugin
  *  excludes every installed kit, one that declares the source condition or
  *  one the system extends, and prebundles its dependencies in its place; a
- *  linked kit is source to Vite already. Dev SSR would externalize it and
- *  load its dist, so the dev server keeps it in the SSR transform; a build
- *  already transforms it. */
-test('an installed kit leaves the dependency optimizer and dev SSR externals, and its dependencies take its place', async () => {
+ *  linked kit is source to Vite already. SSR, in development and in a build,
+ *  would externalize it and load its dist, so it stays in the SSR
+ *  transform. */
+test('an installed kit leaves the dependency optimizer and SSR externals, and its dependencies take its place', async () => {
   const root = realpathSync(
     mkdtempSync(join(tmpdir(), 'animus-kit-optimize-'))
   );
@@ -106,18 +106,17 @@ test('an installed kit leaves the dependency optimizer and dev SSR externals, an
     throw new Error('expected a plain function `config` hook');
   }
   const config: ConfigHookCall = hook;
-  const optimizeDeps = {
-    exclude: ['@acme/installed', 'compiled-kit'],
-    include: ['@acme/installed > cjs-dep', 'compiled-kit > runtime-dep'],
+  const kits = {
+    optimizeDeps: {
+      exclude: ['@acme/installed', 'compiled-kit'],
+      include: ['@acme/installed > cjs-dep', 'compiled-kit > runtime-dep'],
+    },
+    ssr: { noExternal: ['@acme/installed', 'compiled-kit'] },
   };
   expect(
     await config({ root: app }, { command: 'serve', mode: 'development' })
-  ).toEqual({
-    define: { __ANIMUS_DEV__: true },
-    optimizeDeps,
-    ssr: { noExternal: ['@acme/installed', 'compiled-kit'] },
-  });
+  ).toEqual({ define: { __ANIMUS_DEV__: true }, ...kits });
   expect(
     await config({ root: app }, { command: 'build', mode: 'production' })
-  ).toEqual({ define: { __ANIMUS_DEV__: false }, optimizeDeps });
+  ).toEqual({ define: { __ANIMUS_DEV__: false }, ...kits });
 });
