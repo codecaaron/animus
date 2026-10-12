@@ -9,7 +9,10 @@ import type {
   ProjectManifest,
   SourceEntryOwnership,
 } from '@animus-ui/extract/pipeline';
-import type { WatchChanges } from '@animus-ui/extract/session';
+import type {
+  SessionPublication,
+  WatchChanges,
+} from '@animus-ui/extract/session';
 import type { DevEnvironment } from 'vite';
 
 /** What the probe's Session holds: its sources by root-relative path, and
@@ -45,6 +48,49 @@ export interface ContextProbe {
   respond(responder: ProbeResponder): void;
 }
 
+/** A Session publication carrying `fields`, every other one empty. */
+export function publicationWith(
+  fields: Partial<SessionPublication> = {}
+): SessionPublication {
+  return {
+    manifest: makeManifest(),
+    manifestJson: '{}',
+    analysisGlobalCss: '',
+    analysisComponentCss: '',
+    styles: '',
+    systemPropsModule: '',
+    system: {
+      propConfigJson: '{}',
+      groupRegistryJson: '{}',
+      scalesJson: '{}',
+      variableMapJson: '{}',
+      variableCss: '',
+      contextualVarsJson: '{}',
+      selectorAliasesJson: null,
+      globalStyleBlocksJson: null,
+      keyframesJson: null,
+    },
+    packageMap: {},
+    ownership: {},
+    analyzedHashes: new Map(),
+    packageReadRecord: null,
+    replacementEpoch: '',
+    externalPackageDirs: [],
+    externalSourceEntries: new Map(),
+    externalSourceSideEffects: new Map(),
+    ...fields,
+  };
+}
+
+/** Serves `fields` merged into what the context serves now, as adopting a
+ *  publication does. */
+export function serve(
+  ctx: PluginContext,
+  fields: Partial<SessionPublication>
+): void {
+  ctx.served = { ...publicationWith(), ...ctx.served, ...fields };
+}
+
 /** A published outcome: `manifest` becomes the served manifest, as the
  *  context's adoption does. */
 export function published(
@@ -58,7 +104,7 @@ export function published(
     systemPropsChanged?: boolean;
   } = {}
 ): ObservedOutcome {
-  if (options.manifest) probe.ctx.storedManifest = options.manifest;
+  if (options.manifest) serve(probe.ctx, { manifest: options.manifest });
   return {
     outcome: {
       kind: 'published',
@@ -141,8 +187,31 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
     heldSources: new Map(),
     corpus: { published: { analysisEntries: new Map(), ownership: {} } },
   };
-  const externalPackageDirs: string[] = [];
-  const reverseProvenance: Record<string, string[]> = {};
+  // The served publication's views are getters: extras naming one seed the
+  // publication the probe serves instead.
+  const {
+    storedManifest,
+    storedManifestJson,
+    system,
+    externalPackageDirs,
+    externalSourceEntries,
+    externalSourceSideEffects,
+    ...hooks
+  } = extras ?? {};
+  const fields: Partial<SessionPublication> = {
+    manifest: storedManifest ?? makeManifest(),
+    externalPackageDirs: externalPackageDirs ?? [],
+  };
+  if (storedManifestJson !== undefined)
+    fields.manifestJson = storedManifestJson;
+  if (system !== undefined) fields.system = system;
+  if (externalSourceEntries !== undefined) {
+    fields.externalSourceEntries = new Map(externalSourceEntries);
+  }
+  if (externalSourceSideEffects !== undefined) {
+    fields.externalSourceSideEffects = new Map(externalSourceSideEffects);
+  }
+  const served = publicationWith(fields);
   // A context instance whose own fields shadow every member the Vite hooks
   // read, the Session reduced to the sources and corpus they consult;
   // owner-typed extras are spread last for each exact hook consumer.
@@ -154,17 +223,18 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
       tracing: false,
       rootDir,
       options: {},
-      externalPackageDirs,
+      served,
       excludeMatcher: createExcludeMatcher(undefined),
       outputExcludes: [],
       assetCopyDir: null,
       session,
       abortedParseHashes: new Map<string, string>(),
-      reverseProvenance,
-      storedManifest: makeManifest(),
-      system: { groupRegistryJson: '{}', sourceThemeManifestsJson: null },
       transformOutputHashes: new Map<string, string>(),
-      recordTransformOutput(relativePath: string, code: string) {
+      recordTransformOutput(
+        this: PluginContext,
+        relativePath: string,
+        code: string
+      ) {
         this.transformOutputHashes.set(relativePath, `probe:${code.length}`);
       },
       async submitChanges(changes: WatchChanges) {
@@ -187,7 +257,7 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
       warn(msg: string) {
         probe.warnings.push(msg);
       },
-      ...extras,
+      ...hooks,
     }
   );
   probe = {

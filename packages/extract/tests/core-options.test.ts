@@ -158,6 +158,22 @@ describe('assertKnownOptionKeys', () => {
   });
 });
 
+// Contract: `runtimeImport` is a shared typed option (spec §12.2 row 1):
+// every host accepts it, and a value that is not a module specifier fails.
+describe('runtimeImport is a core option', () => {
+  test('accepted by the shared gate, and a non-string value fails', () => {
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', runtimeImport: '@acme/rt' })
+    ).not.toThrow();
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', runtimeImport: 5 })
+    ).toThrow(/Invalid value for "runtimeImport"/);
+    expect(() =>
+      assertKnownOptionKeys({ system: './ds.ts', runtimeImport: '' })
+    ).toThrow(/Invalid value for "runtimeImport"/);
+  });
+});
+
 describe('a user exclude list never re-admits output', () => {
   test("an in-root output directory named '..build' is inside the root and excluded", () => {
     const dir = outputExclusion('/app', '/app/..build');

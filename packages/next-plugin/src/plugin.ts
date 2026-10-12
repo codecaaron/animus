@@ -218,7 +218,10 @@ export class AnimusWebpackPlugin {
     // Transforms import the virtual id, which the module factory resolves to
     // this session's system-props module: a transform a persistent cache
     // restores then binds to the current session, not the one that built it.
-    this.session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
+    this.session.delivery = {
+      ...this.session.delivery,
+      systemPropsModuleId: TURBOPACK_SYSTEM_PROPS_ID,
+    };
     this.animusLoaderPaths = new Set([resolveAnimusLoaderPath()]);
     if (options.loaderPath) {
       this.animusLoaderPaths.add(options.loaderPath);

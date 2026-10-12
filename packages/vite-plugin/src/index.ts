@@ -221,13 +221,13 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     // engine. buildEnd runs once per build, failed ones included; closeBundle
     // can run twice for a failed one.
     buildEnd() {
-      if (!ctx.endBuild(this.environment ?? ctx.singleEnvironment)) return;
+      if (!ctx.builds.end(this.environment ?? ctx.builds.single)) return;
       cancelSystemReload(ctx);
       ctx.close();
     },
 
     async buildStart() {
-      await ctx.openBuild(this.environment ?? ctx.singleEnvironment);
+      await ctx.builds.open(this.environment ?? ctx.builds.single);
       await runBuildStart(
         ctx,
         async (specifier, importer) => {

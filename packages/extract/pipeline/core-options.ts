@@ -93,6 +93,11 @@ export interface AnimusCoreOptions {
   /** Full `@layer` declaration order. */
   layers?: string[];
   engine?: 'v2';
+  /** The module extracted terminals import their factories from; default
+   *  `@animus-ui/system/runtime` in every host. `@animus-ui/system` also
+   *  supplies every terminal; another override must supply every terminal
+   *  the analysis extracts. */
+  runtimeImport?: string;
   /**
    * Decides emitted bytes (minify, dev diagnostics, engine devMode) and wins
    * over environment signals; never process lifecycle (watchers, HMR).
@@ -120,6 +125,7 @@ export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'engine',
   'mode',
   'root',
+  'runtimeImport',
 ]);
 
 /** Carries a stable `name` so drivers can map it to their own config-error
@@ -257,6 +263,11 @@ const CORE_VALUE_GATES: ReadonlyArray<{
   { key: 'verbose', ok: isVerbose, expected: "a boolean or 'trace'" },
   { key: 'minify', ok: isBoolean, expected: 'a boolean' },
   { key: 'prefix', ok: isString, expected: 'a string' },
+  {
+    key: 'runtimeImport',
+    ok: (value): value is string => isString(value) && value !== '',
+    expected: 'a module specifier',
+  },
   { key: 'prefixContextualVars', ok: isBoolean, expected: 'a boolean' },
   {
     key: 'targets',

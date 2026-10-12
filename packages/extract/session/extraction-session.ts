@@ -143,18 +143,10 @@ import {
   setSystemAuthority,
   resetAnalysisStartedPromise,
   setOwningWatchSession,
+  setPublication,
   setAnalysisStartedPromise,
-  setAnalyzedHashes,
   getSharedPackageReadRecord,
-  setSharedPackageReadRecord,
-  setManifestJson,
-  setReplacementEpoch,
   setSessionArtifactDir,
-  setSharedCss,
-  setSharedExternalDirs,
-  setSharedExternalEntries,
-  setSharedExternalSideEffects,
-  setSharedSystemProps,
   setWatchTransaction,
   requireEngine,
 } from './singleton';
@@ -362,6 +354,21 @@ function isDiskNumber<Value>(value: Value): value is Value & number {
   );
 }
 
+/** The session's own system-props file, imported by absolute path: what a
+ *  host that serves no system-props module (the CLI) delivers. */
+export const SESSION_ARTIFACT: unique symbol = Symbol(
+  'animus.session-artifact'
+);
+
+/** The modules generated code imports, as the host delivers them (spec
+ *  §12.2 row 2): each declared, the system-props one always explicitly. */
+export interface DeliveryIds {
+  /** The stylesheet module. */
+  cssModuleId: string;
+  /** A system-props module id the host serves, or the session's own file. */
+  systemPropsModuleId: string | typeof SESSION_ARTIFACT;
+}
+
 /** One published generation, as a host serving from memory reads it. */
 export interface SessionPublication {
   manifest: ProjectManifest;
@@ -378,6 +385,17 @@ export interface SessionPublication {
   system: SystemConfig;
   packageMap: Record<string, string>;
   ownership: Readonly<Record<string, SourceEntryOwnership>>;
+  /** Root-relative path → hash of the bytes the analysis read, including
+   *  files that produced no entries: the loader's stale-input witness. */
+  analyzedHashes: ReadonlyMap<string, string>;
+  /** What the analysis read of the discovered packages (spec §2.2 A4). */
+  packageReadRecord: PackageReadRecord | null;
+  /** The generation's replacement epoch. */
+  replacementEpoch: string;
+  /** The external package state this generation analysed. */
+  externalPackageDirs: string[];
+  externalSourceEntries: Map<string, string>;
+  externalSourceSideEffects: Map<string, boolean>;
 }
 
 /** How an attempt ended, for a host that redelivers modules itself. */
@@ -442,9 +460,6 @@ interface AssetFingerprints {
 export class ExtractionSession {
   /** Set by the adapter before any pipeline run. */
   rootDir: string | null = null;
-  /** The module extracted terminals import their factories from; an
-   *  override must supply every terminal the analysis extracts. */
-  runtimeImport: string = DEFAULT_RUNTIME_IMPORT;
   /** A host that resolves imports itself (Vite's `this.resolve`): package
    *  discovery asks it first, the loader only for a declared workspace it
    *  cannot resolve. Null resolves through the loader alone. */
@@ -491,12 +506,12 @@ export class ExtractionSession {
   /** Physical asset files registered with the host watcher. */
   assetDependencyPaths = new Set<string>();
   private assetDependencyKeys = new Set<string>();
-  /** System-props module id override. Turbopack rejects absolute-path
-   *  imports, so its driver sets a virtual id; null injects the abs path. */
-  systemPropsModuleId: string | null = null;
-  /** The stylesheet module generated code imports; a host that serves the
-   *  stylesheet itself names its own. */
-  cssModuleId: string = ANIMUS_CSS_MODULE_ID;
+  /** What generated code imports; a host that serves its own modules
+   *  declares them before planning. */
+  delivery: DeliveryIds = {
+    cssModuleId: ANIMUS_CSS_MODULE_ID,
+    systemPropsModuleId: SESSION_ARTIFACT,
+  };
   /** Whether the analysis-inputs hydration corpus is written to disk. Only
    *  isolated loader workers replay it; an in-process loader reads memory. */
   persistAnalysisInputs = false;
@@ -574,10 +589,15 @@ export class ExtractionSession {
   get heldSources(): ReadonlyMap<string, { hash: string; source: string }> {
     return this.fileCache;
   }
-  /** The generation an emit produced, current once its ingestion
-   *  publishes. */
-  private stagedPublication: Omit<SessionPublication, 'ownership'> | null =
-    null;
+  /** The generation an emit produced, until it commits with the
+   *  ingestion's ownership and the external package state it analysed. */
+  private stagedPublication: Omit<
+    SessionPublication,
+    | 'ownership'
+    | 'externalPackageDirs'
+    | 'externalSourceEntries'
+    | 'externalSourceSideEffects'
+  > | null = null;
 
   private readonly options: SessionOptions;
   private readonly staticCssJson: string | null;
@@ -739,6 +759,11 @@ export class ExtractionSession {
       (diagnostic) => diagnostic.file !== relPath
     );
     return this.ingestionFailureDiagnostics.length !== before;
+  }
+
+  /** The module extracted terminals import their factories from. */
+  private get runtimeImport(): string {
+    return this.options.runtimeImport ?? DEFAULT_RUNTIME_IMPORT;
   }
 
   get sessionDir(): string {
@@ -1468,8 +1493,16 @@ export class ExtractionSession {
     if (staged === null) return;
     this.stagedPublication = null;
     const previous = this.publication;
-    const publication = { ...staged, ownership: result.ownership };
+    const publication: SessionPublication = {
+      ...staged,
+      ownership: result.ownership,
+      externalPackageDirs: this.externalPackageDirs,
+      externalSourceEntries: this.externalSourceEntries,
+      externalSourceSideEffects: this.externalSourceSideEffects,
+    };
     this.publication = publication;
+    // The registry is this publication's projection: one write, at commit.
+    setPublication(this.key, publication);
     this.onOutcome?.({
       kind: 'published',
       publication,
@@ -2044,12 +2077,6 @@ export class ExtractionSession {
         rawEntries.find((entry) => entry.path === path)
       );
 
-      // External package state publishes in the same successful generation
-      // as the source projection.
-      setSharedExternalDirs(this.key, admitted.packageDirs);
-      setSharedExternalEntries(this.key, admitted.sourceEntries);
-      setSharedExternalSideEffects(this.key, admitted.sourceEntrySideEffects);
-
       this.onExternalRootsCommitted?.(this.externalWatchRoots);
 
       // Registered only on SUCCESS: a failed pipeline leaves no owner that
@@ -2466,9 +2493,11 @@ export class ExtractionSession {
       system,
       emitter: {
         runtimeImport: this.runtimeImport,
-        cssModuleId: this.cssModuleId,
+        cssModuleId: this.delivery.cssModuleId,
         systemPropsModuleId:
-          this.systemPropsModuleId ?? systemPropsPath(this.sessionDir),
+          this.delivery.systemPropsModuleId === SESSION_ARTIFACT
+            ? systemPropsPath(this.sessionDir)
+            : this.delivery.systemPropsModuleId,
       },
       pathAliasesJson: this.pathAliasesJson,
       staticCssJson: this.staticCssJson,
@@ -2604,8 +2633,6 @@ export class ExtractionSession {
       surface: 'generated runtime modules',
     });
 
-    setSharedCss(this.key, fullCss);
-
     const systemPropsContent = buildSystemPropsModule({
       systemPropMapJson: JSON.stringify(manifest?.system_prop_map ?? {}),
       groupRegistryJson: system.groupRegistryJson,
@@ -2613,32 +2640,6 @@ export class ExtractionSession {
       admittedTransforms: manifest?.admitted_transforms ?? {},
       typedSystemProps: manifest?.typed_system_props ?? [],
     });
-
-    setSharedSystemProps(this.key, systemPropsContent);
-
-    setManifestJson(this.key, result.manifestJson);
-    if (manifest) {
-      this.stagedPublication = {
-        manifest,
-        manifestJson: result.manifestJson,
-        analysisGlobalCss: sheets.globalCss,
-        analysisComponentCss: sheets.componentCss,
-        styles: fullCss,
-        systemPropsModule: systemPropsContent,
-        system,
-        packageMap,
-      };
-    }
-
-    // The analyzed-hash map publishes with the manifest — one generation,
-    // one publication; it is the loader's stale-input witness.
-    setAnalyzedHashes(
-      this.key,
-      new Map(fileEntries.map((entry) => [entry.path, entry.hash]))
-    );
-    if (this.packageReadRecord !== null) {
-      setSharedPackageReadRecord(this.key, this.packageReadRecord);
-    }
 
     // Payloads first, then the commit, then the epoch LAST and only when its
     // value moved — an epoch-woken reader never sees an uncommitted write.
@@ -2703,6 +2704,22 @@ export class ExtractionSession {
 
     this.publishAnalysisCommit(epoch, generation);
     this.publishReplacementEpoch(epoch);
+    // Staged last: an attempt that fails before here commits nothing.
+    this.stagedPublication = {
+      manifest,
+      manifestJson: result.manifestJson,
+      analysisGlobalCss: sheets.globalCss,
+      analysisComponentCss: sheets.componentCss,
+      styles: fullCss,
+      systemPropsModule: systemPropsContent,
+      system,
+      packageMap,
+      analyzedHashes: new Map(
+        fileEntries.map((entry) => [entry.path, entry.hash])
+      ),
+      packageReadRecord: this.packageReadRecord,
+      replacementEpoch: epoch,
+    };
 
     bt.total = this.elapsed(pipelineStart);
     logBuildTimings(bt, manifest?.timing, (msg) => this.log(msg), this.verbose);
@@ -2998,7 +3015,6 @@ export class ExtractionSession {
     // In memory, no artifact names the epoch and no sibling is reconciled.
     if (!this.persistArtifacts) {
       this.lastEpochValue = epoch;
-      setReplacementEpoch(this.key, epoch);
       return;
     }
     // Probe DISK, not just the memo: a sibling's reconciliation can delete
@@ -3017,7 +3033,6 @@ export class ExtractionSession {
       this.lastEpochValue = epoch;
       this.reconcileSiblingEpochs(epoch);
     }
-    setReplacementEpoch(this.key, epoch);
   }
 
   /** sessions-root listing memo, keyed by the root dir's mtime — a new or

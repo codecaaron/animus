@@ -53,6 +53,8 @@ import {
 import {
   findSession,
   getManifestJson,
+  getReplacementEpoch,
+  getSharedCss,
   SessionConfigurationConflict,
 } from '../../session/singleton';
 import {
@@ -338,6 +340,36 @@ afterEach(() => {
   restoreGlobals();
   vi.restoreAllMocks();
   disposeTempRoots();
+});
+
+// Contract: the registry shows only committed publications (spec SA8). Its
+// readers (the CLI, unplugin, Next's loaders) see one generation whole, so
+// an attempt that fails after its analysis leaves them the last committed one.
+describe('the registry is the committed publication', () => {
+  test('an attempt that fails after analysis leaves the last committed generation', async () => {
+    const root = createProject();
+    const session = await startSession(root, PLAN_A);
+    const committed = {
+      manifest: getManifestJson(session.key),
+      css: getSharedCss(session.key),
+      epoch: getReplacementEpoch(session.key),
+    };
+    mocks.analyzeProject.mockImplementation(() =>
+      buildManifest(PLAN_B, '.btn{margin:16px;}')
+    );
+    session.onArtifactWrite = (name) => {
+      if (name === 'styles.css') throw new Error('disk full');
+    };
+
+    await expect(session.runFullPipeline()).rejects.toThrow('disk full');
+
+    expect({
+      manifest: getManifestJson(session.key),
+      css: getSharedCss(session.key),
+      epoch: getReplacementEpoch(session.key),
+    }).toEqual(committed);
+    session.close();
+  });
 });
 
 describe('session directory + transaction write order (design D1/D2)', () => {

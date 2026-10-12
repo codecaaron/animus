@@ -30,6 +30,7 @@ import {
   collectSessionAssets,
   createBuildId,
   engineApi,
+  EnvironmentBuilds,
   ExtractionSession,
   getAnalyzedHashes,
   getManifestJson,
@@ -56,7 +57,10 @@ import type {
   ProjectManifest,
   ServedFiles,
 } from '@animus-ui/extract/pipeline';
-import type { SessionKey } from '@animus-ui/extract/session';
+import type {
+  BuildingEnvironment,
+  SessionKey,
+} from '@animus-ui/extract/session';
 import type {
   ExternalIdResult,
   UnpluginBuildContext,
@@ -261,12 +265,6 @@ function canResolve(
   context: UnpluginBuildContext & UnpluginContext
 ): context is UnpluginBuildContext & UnpluginContext & RollupResolveContext {
   return 'resolve' in context;
-}
-
-/** One environment's build, as Vite hands it to a hook: the object is its
- *  identity, the name its key. */
-interface BuildingEnvironment {
-  readonly name: string;
 }
 
 /** Whether a hook context names the environment it builds (Vite). */
@@ -646,7 +644,10 @@ export const unpluginFactory: UnpluginFactory<
       session.assetClassification = hostAssets;
       session.loadExpander = hostLoadExpander;
       session.hostResolve = hostResolver;
-      session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
+      session.delivery = {
+        ...session.delivery,
+        systemPropsModuleId: TURBOPACK_SYSTEM_PROPS_ID,
+      };
       session.structuralExclude = outputExclusions(root, hostOutputTargets());
       // Each full pass re-reads the tsconfig aliases.
       session.aliasesFromTsconfig = true;
@@ -693,26 +694,18 @@ export const unpluginFactory: UnpluginFactory<
     });
   }
 
-  /** Each Rollup-family environment build that started and has not ended,
-   *  by name, with the promise its end settles. A Vite buildApp can build
-   *  environments in parallel on one plugin instance; they share one
-   *  pipeline and one Session, retired by the last to end. A build of an
-   *  environment whose build is open (a reused builder, or a second
-   *  environment under one name) waits for that build's end, so each build
-   *  ends only its own generation, once, in buildEnd. webpack-like hosts run
-   *  one compile at a time and are not tracked. */
-  const openBuilds = new Map<
-    string,
-    { environment: BuildingEnvironment; ended: Promise<void>; end(): void }
-  >();
-  const singleEnvironment: BuildingEnvironment = { name: 'build' };
+  /** The Rollup family's environment builds: a Vite buildApp can build
+   *  environments in parallel on one plugin instance, sharing one pipeline
+   *  and one Session. webpack-like hosts run one compile at a time and are
+   *  not tracked. */
+  const builds = new EnvironmentBuilds();
   const tracksEnvironments =
     meta.framework === 'rollup' ||
     meta.framework === 'rolldown' ||
     meta.framework === 'vite';
 
   function environmentOf(context: UnpluginBuildContext): BuildingEnvironment {
-    return hasEnvironment(context) ? context.environment : singleEnvironment;
+    return hasEnvironment(context) ? context.environment : builds.single;
   }
 
   /** Opens this hook's environment build once no build under its name is
@@ -722,30 +715,14 @@ export const unpluginFactory: UnpluginFactory<
     context: UnpluginBuildContext
   ): Promise<boolean> {
     if (!tracksEnvironments) return false;
-    const environment = environmentOf(context);
-    for (;;) {
-      const open = openBuilds.get(environment.name);
-      if (open === undefined) break;
-      await open.ended;
-    }
-    let end = () => {};
-    const ended = new Promise<void>((settle) => {
-      end = settle;
-    });
-    openBuilds.set(environment.name, { environment, ended, end });
-    return openBuilds.size > 1;
+    return builds.open(environmentOf(context));
   }
 
   /** Ends this hook's environment build; whether none is left open. Only
    *  the build that opened an entry ends it. */
   function closeEnvironmentBuild(context: UnpluginBuildContext): boolean {
     if (!tracksEnvironments) return true;
-    const environment = environmentOf(context);
-    const open = openBuilds.get(environment.name);
-    if (open === undefined || open.environment !== environment) return false;
-    openBuilds.delete(environment.name);
-    open.end();
-    return openBuilds.size === 0;
+    return builds.end(environmentOf(context));
   }
 
   async function joinPipeline(): Promise<void> {
