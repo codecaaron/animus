@@ -905,7 +905,7 @@ fn unstable_style_statics(
         let held_here = held.iter().filter(|(held_in, ..)| *held_in == file.as_str()).flat_map(|(_, at, holder, positions)| {
             let handoff = &module.facts.handoffs[*at];
             positions.iter().map(move |position| {
-                let on_at = position.iter().chain(&handoff.within).take(crate::flow::PATH_DEPTH).cloned().collect();
+                let on_at = position.iter().chain(&handoff.within).cloned().collect();
                 (&handoff.binding, handoff.at.clone(), *holder, on_at)
             })
         });
@@ -4059,6 +4059,35 @@ export const App = () => <Box tone="red" />;
             ]);
             let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
             assert_eq!(out["css"].as_str().unwrap_or_default().contains("padding"), extracts, "{row}: {}", out["diagnostics"]);
+        }
+        // An object held deeper than Flow's path bound is held whole: a
+        // change anywhere around it reaches it, however deep it sits.
+        for depth in [8, 9, 12] {
+            let keys: Vec<String> = (0..depth).map(|i| format!("k{i}")).collect();
+            let nest = |inner: &str| keys.iter().rev().fold(inner.to_string(), |held, key| format!("{{ {key}: {held} }}"));
+            let path = keys.join(".");
+            let shapes = [
+                format!("const id = (p) => ({});\nexport const held = id(pad);\n", nest("p")),
+                format!("const id = () => ({});\nexport const held = id();\n", nest("pad")),
+                format!("export const held = {};\n", nest("pad")),
+            ];
+            for shape in shapes {
+                let contract = format!(
+                    "import {{ pad }} from './tokens.js';\n{shape}function mutate(x) {{ x.padding = 9; }}\nmutate(held.{path});\n"
+                );
+                let mut engine = ExtractEngine::new(None).unwrap();
+                let files = serde_json::json!([
+                    { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
+                    { "path": "contract.js", "source": contract },
+                    {
+                        "path": "reader.tsx",
+                        "source": "import './contract.js';\nimport { pad } from './tokens.js';\n\
+                                   export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+                    },
+                ]);
+                let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+                assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "depth {depth}: {contract}");
+            }
         }
     }
 

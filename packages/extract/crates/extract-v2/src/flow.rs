@@ -13,8 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The most atoms a region holds before it widens to `Top`.
 pub const REGION_ATOMS: usize = 64;
 
-/// The deepest member path Flow keeps; a deeper one collapses to the path
-/// above it.
+/// The deepest path of a change Flow keeps: a deeper change collapses to the
+/// path above it, which reaches more. Where an object sits is never cut
+/// short, so a change that collapses above it reaches it whole.
 pub const PATH_DEPTH: usize = 8;
 
 /// The key of a member path that stands for every member: a computed key.

@@ -2060,8 +2060,6 @@ fn held_position(span: Span, ancestors: &[AstKind<'_>]) -> (Vec<String>, bool) {
         current = kind.span();
     }
     keys.reverse();
-    let held = held && keys.len() <= crate::flow::PATH_DEPTH;
-    keys.truncate(crate::flow::PATH_DEPTH);
     (keys, held)
 }
 
@@ -2925,7 +2923,7 @@ pub(crate) fn alias_positions(
         let (callee_file, callee_name) = declared(file, &pass.callee)?;
         let inner = alias_positions(&callee_file, &pass.function(&callee_name), pass.index, depth + 1, declared, readings_of)?;
         positions.extend(inner.into_iter().map(|inner| {
-            at.iter().chain(&inner).take(crate::flow::PATH_DEPTH).cloned().collect()
+            at.iter().chain(&inner).cloned().collect()
         }));
     }
     Some(positions)
@@ -3381,7 +3379,6 @@ fn returned_position(span: Span, ancestors: &[AstKind<'_>]) -> Option<(Span, Vec
         }
     };
     keys.reverse();
-    keys.truncate(crate::flow::PATH_DEPTH);
     Some((function, keys))
 }
 
