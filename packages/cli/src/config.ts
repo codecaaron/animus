@@ -418,6 +418,7 @@ export async function resolveCliConfig(
     minify: pick('minify', undefined),
     staticCss: pick('staticCss', undefined),
     layers: pick('layers', undefined),
+    runtimeImport: pick('runtimeImport', undefined),
     mode: resolvedMode.mode,
   };
 
@@ -468,6 +469,7 @@ export function projectResolvedConfig(config: ResolvedCliConfig) {
     layers: config.options.layers ?? null,
     extensions: config.options.extensions ?? null,
     staticCss: config.options.staticCss ?? null,
+    runtimeImport: config.options.runtimeImport ?? null,
     exclude: config.excludePatterns,
     provenance: config.provenance,
   };
