@@ -38,7 +38,7 @@ export async function runBuildStart(
   // The hot path classifies file events by the Session's own scan policy.
   ctx.excludeMatcher = session.scanConfig.excludeMatcher;
   ctx.extensionsSet = session.scanConfig.extensionsSet;
-  // An earlier environment's closeBundle closed it: it joins its build again.
+  // An earlier build's end retired it: it joins its build again.
   session.reattach();
   session.hostResolve = resolveSpecifier;
   // A build fails on an aborted parse. A dev server starts through it with
