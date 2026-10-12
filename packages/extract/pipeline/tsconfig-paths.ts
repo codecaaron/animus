@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'fs';
 import { dirname, isAbsolute, join, resolve } from 'path';
 
+import { requireAnchoredAt } from './resolve-asset';
+
 import type { PathAliasPair } from './path-aliases';
 
 /**
@@ -189,14 +191,17 @@ function resolveExtendsTarget(
       ) ?? null
     );
   }
+  // Resolve from fromDir through a require anchored there, not
+  // require.resolve's `paths`: Turbopack traces a loader's own requires, and
+  // reports a computed require.resolve as a module it cannot find.
+  const anchored = requireAnchoredAt(fromDir);
   try {
-    return require.resolve(
-      specifier.endsWith('.json') ? specifier : `${specifier}/tsconfig.json`,
-      { paths: [fromDir] }
+    return anchored.resolve(
+      specifier.endsWith('.json') ? specifier : `${specifier}/tsconfig.json`
     );
   } catch {
     try {
-      return require.resolve(specifier, { paths: [fromDir] });
+      return anchored.resolve(specifier);
     } catch {
       return null;
     }

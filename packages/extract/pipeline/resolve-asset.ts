@@ -14,7 +14,9 @@ import type { PathAliasEntry } from './path-aliases';
 // cache, which rebuilding per call would throw away.
 const requireByRoot = new Map<string, ReturnType<typeof createRequire>>();
 
-function requireAnchoredAt(rootDir: string): ReturnType<typeof createRequire> {
+export function requireAnchoredAt(
+  rootDir: string
+): ReturnType<typeof createRequire> {
   let req = requireByRoot.get(rootDir);
   if (!req) {
     req = createRequire(join(rootDir, 'package.json'));
