@@ -70,6 +70,25 @@ describe('registerSystemWatchPaths', () => {
     expect(add).toHaveBeenCalledWith(['/ws/ui-kit/src']);
   });
 
+  // Contract: a reused plugin instance whose dev server is replaced
+  // registers every path with the new server's watcher; the old watcher's
+  // registrations do not carry over.
+  it("registers again with a replacement server's watcher", () => {
+    const { ctx, add } = contextWithWatcher({
+      systemDependencyPaths: ['/ws/tokens/src/palette.ts'],
+      externalPackageDirs: ['/ws/ui-kit/src'],
+    });
+    ctx.registerSystemWatchPaths();
+    const addAgain = vi.fn();
+    ctx.devServer = { watcher: { add: addAgain } };
+    ctx.registerSystemWatchPaths();
+    expect(add.mock.calls).toEqual([
+      [['/ws/tokens/src/palette.ts']],
+      [['/ws/ui-kit/src']],
+    ]);
+    expect(addAgain.mock.calls).toEqual(add.mock.calls);
+  });
+
   it('no-ops without a dev server', () => {
     const { ctx } = contextWithWatcher({
       externalPackageDirs: ['/ws/ui-kit/src'],
