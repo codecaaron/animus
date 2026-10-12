@@ -90,7 +90,6 @@ import {
   walkPackageSources,
   writeAssetCopy,
   pruneStaleAssets,
-  engineModuleParser,
   surfaceManifestDiagnostics,
   systemLoadReads,
 } from '../pipeline/index';
@@ -149,6 +148,7 @@ import {
   getSharedPackageReadRecord,
   setSessionArtifactDir,
   setWatchTransaction,
+  requireEngine,
 } from './singleton';
 import { logBuildTimings } from './timing';
 
@@ -1803,7 +1803,12 @@ export class ExtractionSession {
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
     const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
-      engineModuleParser(this.engine()),
+      // A stateless native read of the system file, like the system loader:
+      // the native module answers where a host's engine supplies none.
+      {
+        systemMembership:
+          this.engine().systemMembership ?? requireEngine().systemMembership,
+      },
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
       resolver.resolveSpecifier,
       context.extensions

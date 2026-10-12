@@ -16,5 +16,7 @@ require_fresh_napi_v2
 # static-css-overrides and property-diagnostics share the canary's precondition
 # (they drive the REAL v2 engine), so they run in this NAPI-gated lane, not
 # verify:unit:ts. So does the external-package collector, which reads each
-# kit's source root from the native table.
-exec bun test packages/extract/tests/canary.test.ts packages/extract/tests/collect-external-packages.test.ts packages/extract/tests/static-css-overrides.test.ts packages/extract/tests/property-diagnostics.test.ts packages/extract/tests/prefix-contextual-vars.test.ts packages/extract/tests/skipped-sources.test.ts packages/extract/tests/kit-publication.test.ts
+# kit's source root from the native table; system membership, which the
+# engine reads from its own parse; and the alias comparison, whose aliased
+# bases are the engine's expansion.
+exec bun test packages/extract/tests/canary.test.ts packages/extract/tests/collect-external-packages.test.ts packages/extract/tests/static-css-overrides.test.ts packages/extract/tests/property-diagnostics.test.ts packages/extract/tests/prefix-contextual-vars.test.ts packages/extract/tests/skipped-sources.test.ts packages/extract/tests/kit-publication.test.ts packages/extract/tests/discover-packages.test.ts packages/extract/tests/alias-agreement.test.ts

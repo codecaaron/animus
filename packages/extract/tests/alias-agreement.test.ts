@@ -7,9 +7,12 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, test } from 'vitest';
+
+const native = createRequire(import.meta.url)('../index-v2.js');
 
 import {
   AliasAgreementCache,
@@ -58,9 +61,29 @@ describe('compareAliases', () => {
         pathAliasesJson,
         order: undefined,
         readings: {},
-        // The parser's decoded specifiers, whatever the source spells.
-        moduleSpecifiers: () =>
-          JSON.stringify({ files: { 'src/App.tsx': specifiers } }),
+        // The parser's decoded specifiers, whatever the source spells, with
+        // the engine's own expansion of each one a path alias names.
+        moduleSpecifiers: (_files, aliasesJson) =>
+          JSON.stringify({
+            files: { 'src/App.tsx': specifiers },
+            bases: {
+              'src/App.tsx': JSON.parse(
+                native.moduleSpecifiers(
+                  JSON.stringify([
+                    {
+                      path: 'src/App.tsx',
+                      source: specifiers
+                        .map(
+                          (specifier) => `import ${JSON.stringify(specifier)};`
+                        )
+                        .join('\n'),
+                    },
+                  ]),
+                  aliasesJson
+                )
+              ).bases['src/App.tsx'],
+            },
+          }),
         resolve: async (specifier) => {
           resolved.push(specifier);
           return host(specifier);

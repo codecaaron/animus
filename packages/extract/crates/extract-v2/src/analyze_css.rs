@@ -57,6 +57,24 @@ pub struct AliasEntry {
     pub alias_type: AliasType,
 }
 
+/// The path aliases an `EngineOptions.pathAliasesJson` names: none for an
+/// absent, blank or `null` value.
+pub fn parse_path_aliases(json: Option<&str>) -> Result<Vec<AliasEntry>, String> {
+    match json {
+        None => Ok(Vec::new()),
+        Some(s) if s.trim().is_empty() || s.trim() == "null" => Ok(Vec::new()),
+        Some(s) => {
+            #[derive(serde::Deserialize)]
+            struct AliasWrapper {
+                aliases: Vec<AliasEntry>,
+            }
+            serde_json::from_str::<AliasWrapper>(s)
+                .map(|w| w.aliases)
+                .map_err(|e| format!("EngineOptions.pathAliasesJson: invalid JSON — {e}"))
+        }
+    }
+}
+
 /// First alias that matches wins, so entry order is significant.
 pub fn expand_alias(source: &str, aliases: &[AliasEntry]) -> Option<String> {
     for alias in aliases {
@@ -278,19 +296,7 @@ impl CssInputs {
                     .map_err(|e| format!("EngineOptions.{name}: invalid JSON — {e}")),
             }
         }
-        let path_aliases = match path_aliases_json {
-            None => Vec::new(),
-            Some(s) if s.trim().is_empty() || s.trim() == "null" => Vec::new(),
-            Some(s) => {
-                #[derive(serde::Deserialize)]
-                struct AliasWrapper {
-                    aliases: Vec<AliasEntry>,
-                }
-                serde_json::from_str::<AliasWrapper>(s)
-                    .map(|w| w.aliases)
-                    .map_err(|e| format!("EngineOptions.pathAliasesJson: invalid JSON — {e}"))?
-            }
-        };
+        let path_aliases = parse_path_aliases(path_aliases_json)?;
         let static_css = match static_css_json {
             None => None,
             Some(s) if s.trim().is_empty() || s.trim() == "null" => None,
