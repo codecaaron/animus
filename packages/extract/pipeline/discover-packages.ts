@@ -18,6 +18,10 @@ import {
   probeOnDisk,
   seeOnDisk,
 } from './extension-policy';
+import {
+  BUILT_IN_EXTENSION_POLICY,
+  extensionPolicyJson,
+} from './host-extensions';
 import { parseInternalWire } from './internal-wire';
 import { readKitDescriptor } from './kit-descriptor';
 import {
@@ -28,6 +32,7 @@ import {
   PACKAGE_MISMATCH,
   severityFor,
   UNIMPORTED_CREATE_SYSTEM,
+  UNFOLLOWED_SYSTEM_BUILDER,
   UNPROVEN_ROOT_BINDING,
 } from './manifest-diagnostics';
 import { isEngineTransformExtension } from './mdx-preprocessor';
@@ -539,6 +544,9 @@ export async function collectExternalPackageSources(opts: {
   kitSourceRoot: KitSourceRootResolver;
   /** Where the system loader locates each package from `rootDir`. */
   locatePackage: PackageLocator;
+  /** The directory each specifier's package is located from: the kit's own
+   *  for a package a kit's system extends; `rootDir` otherwise. */
+  locateFrom?: (specifier: string) => string;
   rootDir: string;
   extensionsSet: ReadonlySet<string>;
   hasEntry: (relPath: string) => boolean;
@@ -746,7 +754,9 @@ export async function collectExternalPackageSources(opts: {
     // the host spells the entry. Only where the entry's own real path lies
     // inside it: an entry linked out of the package is not its file.
     let resolvedRoot = absEntry ? findPackageRoot(absEntry) : null;
-    const locatedRoot = packageName && locatePackage(packageName, rootDir);
+    const locatedRoot =
+      packageName &&
+      locatePackage(packageName, opts.locateFrom?.(specifier) ?? rootDir);
     if (
       resolvedRoot &&
       locatedRoot &&
@@ -1128,6 +1138,61 @@ export function sourceKitDependencies(
   });
 }
 
+/**
+ * The installed packages a system's membership reaches: each is a kit,
+ * whether or not it declares the source condition, and so is every kit its
+ * own system extends or includes. Read before any host resolves (a
+ * bundler's config), so the application's modules import as the system
+ * loader resolves them from the root, and a kit's from its own directory.
+ */
+export async function systemKitDependencies(
+  rootDir: string,
+  systemPath: string,
+  engine: Pick<
+    EngineApi,
+    'systemMembership' | 'resolveSpecifier' | 'locatePackage'
+  >
+): Promise<SourceKitDependency[]> {
+  const workspaces = declaredWorkspacePackages(rootDir);
+  const resolveSpecifier = engine.resolveSpecifier;
+  const systemPackageRoot = findPackageRoot(systemPath);
+  const kitMembers = new Map<string, string>();
+  const members = await extractSystemFilePackages(
+    systemPath,
+    engine,
+    undefined,
+    (specifier, importer) =>
+      resolveSpecifier?.(
+        specifier,
+        findPackageRoot(importer) === systemPackageRoot
+          ? rootDir
+          : dirname(importer),
+        [],
+        workspaces,
+        extensionPolicyJson(BUILT_IN_EXTENSION_POLICY)
+      )?.path ?? null,
+    undefined,
+    kitMembers
+  );
+  const locatePackage = nativePackageLocator(engine, workspaces);
+  const roots = new Map<string, string>();
+  for (const member of members) {
+    if (!isPackageSpecifier(member)) continue;
+    const name = bareSpecifierPackageName(member);
+    // A kit's member is the copy that kit resolves, not the application's.
+    const file = kitMembers.get(member);
+    const pkgRoot = file ? findPackageRoot(file) : locatePackage(name, rootDir);
+    if (pkgRoot !== null && !roots.has(name)) roots.set(name, pkgRoot);
+  }
+  return [...roots].map(([name, pkgRoot]) => ({
+    name,
+    installed: isInstalledPackage(pkgRoot),
+    dependencies: dependencyNames(readPackageManifest(pkgRoot), [
+      'dependencies',
+    ]),
+  }));
+}
+
 /** A specifier that names a package: not relative or absolute, and no URL,
  *  scheme (`node:`, `virtual:`), subpath import or virtual id. */
 export function isPackageSpecifier(specifier: string): boolean {
@@ -1421,8 +1486,10 @@ export function engineModuleParser(
 
 /** A host's resolution of a bare specifier to its entry file: the one it
  *  resolves the packages a system extends with, under its own conditions. */
+/** A package specifier's file, as the module `importer` imports it. */
 export type PackageResolver = (
-  specifier: string
+  specifier: string,
+  importer: string
 ) => string | null | Promise<string | null>;
 
 /** The file a specifier names from `importer`, or why it names none: a
@@ -1453,8 +1520,9 @@ async function resolveModuleFile(
       : unresolved;
   }
   try {
-    const file = await resolvePackage?.(specifier);
-    return file ? { file } : unresolved;
+    const file = await resolvePackage?.(specifier, importer);
+    // A host can answer with a query (Vite's `?v=`): the module is the file.
+    return file ? { file: file.split('?')[0] } : unresolved;
   } catch {
     return unresolved;
   }
@@ -1488,7 +1556,7 @@ export function unimportedCreateSystemCall(
  *  the admission its name gives it, with a finding. */
 const MEMBERSHIP_ROUNDS = 256;
 
-type MembershipFinding =
+type MembershipFinding = { file: string } & (
   | {
       kind: 'unproven';
       local: string;
@@ -1498,10 +1566,12 @@ type MembershipFinding =
       why: string | null;
       admitted: boolean;
     }
-  | { kind: 'unimported'; line: number; column: number };
+  | { kind: 'unimported'; line: number; column: number }
+  | { kind: 'escapes'; line: number; column: number; how: string }
+);
 
 interface MembershipAnswer {
-  members: string[];
+  members: Array<{ specifier: string; importer: string }>;
   findings: MembershipFinding[];
   needs: Array<[importer: string, specifier: string]>;
   parsed: boolean;
@@ -1520,7 +1590,11 @@ export async function extractSystemFilePackages(
   engine: Pick<EngineApi, 'systemMembership'>,
   report?: (diagnostic: ManifestDiagnostic) => void,
   resolvePackage?: PackageResolver,
-  extensions?: ExtensionOrder
+  extensions?: ExtensionOrder,
+  /** Filled with each package member a kit's module spells, by the file it
+   *  names from that kit: the instance that kit's system extends, which can
+   *  differ from the application's own copy, or exist only under the kit. */
+  kitMembers?: Map<string, string>
 ): Promise<string[]> {
   const { systemMembership } = engine;
   if (systemMembership === undefined) {
@@ -1578,14 +1652,14 @@ export async function extractSystemFilePackages(
   }
   if (!answer.parsed) return [];
 
-  let reportedUnimported = false;
+  const reportedUnimported = new Set<string>();
   for (const finding of answer.findings) {
     if (finding.kind === 'unimported') {
-      // Reported once, at the first such call.
-      if (reportedUnimported) continue;
-      reportedUnimported = true;
+      // Reported once per module, at the first such call.
+      if (reportedUnimported.has(finding.file)) continue;
+      reportedUnimported.add(finding.file);
       report?.({
-        file: systemFilePath,
+        file: finding.file,
         component: 'createSystem',
         kind: 'warn',
         message: `'createSystem' is called with no import or local binding, so it is not read as a system root: the system loader evaluates this file without auto-imports, where the name is undefined — import createSystem from '@animus-ui/system'`,
@@ -1596,12 +1670,25 @@ export async function extractSystemFilePackages(
       });
       continue;
     }
+    if (finding.kind === 'escapes') {
+      report?.({
+        file: finding.file,
+        component: 'createSystem',
+        kind: 'warn',
+        message: `a system builder leaves what discovery follows here (${finding.how}), so a kit extended on it from there is not read as a member and its components are not extracted — extend it in the chain that creates it, or through a variable`,
+        code: UNFOLLOWED_SYSTEM_BUILDER,
+        severity: severityFor(UNFOLLOWED_SYSTEM_BUILDER),
+        line: finding.line,
+        column: finding.column,
+      });
+      continue;
+    }
     const shown =
       finding.what !== null
         ? `it is ${finding.what}, so it is not read as a system root`
         : `discovery cannot follow what it is bound to (${finding.why}), so it is ${finding.admitted ? 'still read' : 'not read'} as a system root by its name alone`;
     report?.({
-      file: systemFilePath,
+      file: finding.file,
       component: finding.local,
       kind: 'warn',
       message: `'${finding.local}' is not proven to be Animus's createSystem: ${shown} — import createSystem from '@animus-ui/system', directly or through a re-export discovery can follow`,
@@ -1612,14 +1699,26 @@ export async function extractSystemFilePackages(
     });
   }
 
-  const systemFileDir = dirname(systemFilePath);
   // Preserve a bare import's subpath: collapsing `@scope/kit/definition` to
-  // the package root can make a subpath-only export unresolvable.
+  // the package root can make a subpath-only export unresolvable. A
+  // relative one is resolved against the module that spells it.
+  const systemPackageRoot = findPackageRoot(systemFilePath);
+  for (const { specifier, importer } of answer.members) {
+    const file = resolved[`${importer}\0${specifier}`]?.file;
+    if (
+      file !== undefined &&
+      !specifier.startsWith('.') &&
+      findPackageRoot(importer) !== systemPackageRoot &&
+      !kitMembers?.has(specifier)
+    ) {
+      kitMembers?.set(specifier, file);
+    }
+  }
   return [
     ...new Set(
-      answer.members.map((specifier) =>
+      answer.members.map(({ specifier, importer }) =>
         specifier.startsWith('.')
-          ? resolve(systemFileDir, specifier)
+          ? resolve(dirname(importer), specifier)
           : specifier
       )
     ),

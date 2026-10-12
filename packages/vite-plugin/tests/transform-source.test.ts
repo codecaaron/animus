@@ -275,6 +275,30 @@ describe('transform: dependencies resolved outside the root are not new files', 
   });
 });
 
+describe('transform: a kit served versioned is still transformed', () => {
+  // Contract: a discovered kit is never served past the transform. Vite
+  // serves a dependency excluded from prebundling with a version query
+  // (`?v=`), which names the same module; any other query (`?raw`) reads
+  // the file as something else and is left alone.
+  it('transforms a `?v=` id and leaves a `?raw` one', async () => {
+    const kitDir = join(ROOT, 'node_modules', 'kit', 'dist');
+    const probe = makeProbe({
+      knownFiles: { 'node_modules/kit/dist/index.js': ['Box#1'] },
+      isProd: true,
+    });
+    probe.ctx.externalPackageDirs.push(kitDir);
+    const served = (query: string) =>
+      transformSource(
+        probe.ctx,
+        "export const Box = ds.styles({}).asElement('div');",
+        join(kitDir, 'index.js') + query
+      ).then((result) => result?.code ?? null);
+
+    expect(await served('?v=8aee3c06')).toBe('TRANSFORMED');
+    expect(await served('?raw')).toBeNull();
+  });
+});
+
 describe('transform: new-file detection logs at the standard level', () => {
   it('routes the detection line through the non-verbose channel', async () => {
     const probe = makeProbe();
