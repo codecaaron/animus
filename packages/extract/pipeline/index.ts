@@ -36,6 +36,17 @@ export type { DiscoveryResolver, HostResolve } from './host-package-resolver';
 export { AliasAgreementCache, compareAliases } from './alias-agreement';
 export type { AliasAgreement } from './alias-agreement';
 export { discoveryResolver } from './host-package-resolver';
+export type { OutputTargets } from './output-targets';
+export {
+  analysedOutputs,
+  esbuildOutputTargets,
+  mergeOutputTargets,
+  noOutputTargets,
+  outputExclusions,
+  rollupOutputTargets,
+  viteOutputTargets,
+  webpackOutputTargets,
+} from './output-targets';
 export type {
   AnimusCoreOptions,
   AnimusMode,
