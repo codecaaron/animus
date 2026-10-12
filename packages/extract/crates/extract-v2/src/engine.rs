@@ -476,13 +476,13 @@ struct StyleModule {
     loader_escape: Option<&'static str>,
 }
 
-/// Each module-scope static that a use anywhere in the analysis may change
-/// before a style reads it, keyed by its module and local name, with the
-/// first such use said as a clause: `preset is passed to decorate() in
-/// a.tsx on line 4`. A namespace re-export or a runtime load of a module
-/// unsettles every static it exports. Statics stored in an unstable object,
-/// or read from an unstable binding, are unstable too.
-fn unstable_style_statics(
+/// Records into `flow` what a use anywhere in the analysis may change of
+/// the module-scope statics styles read, each said as a clause: `preset is
+/// passed to decorate() in a.tsx on line 4`. A namespace re-export or a
+/// runtime load of a module unsettles every static it exports. Statics
+/// stored in an unstable object, or read from an unstable binding, are
+/// unstable too.
+fn record_style_changes(
     style: &BTreeMap<String, StyleModule>,
     modules: &ModuleFacts,
     links: &ProjectLinks,
@@ -490,7 +490,8 @@ fn unstable_style_statics(
     files: &BTreeMap<String, rustc_hash::FxHashMap<String, crate::static_value::StaticValue>>,
     inputs: &analyze_css::CssInputs,
     readings_of: &mut ReadingsOf<'_>,
-) -> BTreeMap<(String, String), (String, crate::flow::Uncertainty)> {
+    flow: &mut crate::flow::FlowBuilder,
+) {
     // The declarations a binding names: itself or, for `export default
     // X`'s cell, X, whose object the cell shares, through each binding X's
     // import may be.
@@ -639,9 +640,8 @@ fn unstable_style_statics(
         let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
         format!("{name} {} in {file}{line}", used.what)
     };
-    use crate::flow::{AbsenceQuery, ChangeKind, Coverage, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom};
+    use crate::flow::{ChangeKind, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom};
     let object = |(file, local): (String, String)| ObjectId { module: file, binding: local };
-    let mut flow = FlowBuilder::new();
     // Each object a module exports, under each name it exports it as.
     for (module, path) in links.paths.iter().enumerate() {
         for name in links.table.exported_names(module).names {
@@ -733,7 +733,7 @@ fn unstable_style_statics(
             // A namespace used whole may change anything its module exports,
             // as the member tables read it.
             if let Some(Request::Module(target)) = namespace_of(file, name).filter(|_| !name.contains('.')) {
-                hand_on(&mut flow, &links.paths[target], &said(file, name, used));
+                hand_on(flow, &links.paths[target], &said(file, name, used));
                 continue;
             }
             for target in targets_of(name) {
@@ -779,7 +779,7 @@ fn unstable_style_statics(
             let Some(target) = analyze_css::resolve_import_source(file, spec, files, inputs) else {
                 continue;
             };
-            hand_on(&mut flow, &target, &format!("{file} hands on {target} {how}"));
+            hand_on(flow, &target, &format!("{file} hands on {target} {how}"));
         }
         // A runtime load hands on every module it may load: the one a
         // literal names, or each one a template, a context or a glob may
@@ -806,7 +806,7 @@ fn unstable_style_statics(
                 }
             };
             for target in targets {
-                hand_on(&mut flow, target, &format!("{file} hands on {target} at runtime"));
+                hand_on(flow, target, &format!("{file} hands on {target} at runtime"));
             }
         }
         // Code from a string can `import()` any module and change what it
@@ -855,12 +855,20 @@ fn unstable_style_statics(
             flow.flow(to, from, format!("{dependent} {how} {on}, and "));
         }
     }
-    let effects = flow.close();
+}
+
+/// Each module-scope static that `changes` says may change before a style
+/// reads it, keyed by its module and local name, with the first such change
+/// said as a clause.
+fn unstable_style_statics(
+    changes: &crate::flow::ValueEffects,
+    files: &BTreeMap<String, rustc_hash::FxHashMap<String, crate::static_value::StaticValue>>,
+) -> BTreeMap<(String, String), (String, crate::flow::Uncertainty)> {
     let mut unstable = BTreeMap::new();
     for (file, statics) in files {
         for local in statics.keys() {
-            let query = AbsenceQuery::Stable(ObjectId::new(file, local), Vec::new());
-            if let Coverage::Exposed(exposures) = effects.covers(&query) {
+            let query = crate::flow::AbsenceQuery::Stable(crate::flow::ObjectId::new(file, local), Vec::new());
+            if let crate::flow::Coverage::Exposed(exposures) = changes.covers(&query) {
                 // Every exposure is what the binding is uncertain as; the
                 // first names it.
                 let uncertainty = exposures
@@ -1181,7 +1189,10 @@ impl ExtractEngine {
         let readings_by_file: BTreeMap<String, crate::usage_facts::ParamReadings> =
             lowered_by_file.iter().map(|(path, lowered)| (path.clone(), std::sync::Arc::clone(&lowered.readings))).collect();
         let mut readings_of = |file: &str| readings_by_file.get(file).cloned().unwrap_or_default();
-        for ((file, local), (reason, uncertainty)) in unstable_style_statics(
+        // One relation of what may change, closed once: style statics' uses
+        // and the member tables', read from the structural facts.
+        let mut flow = crate::flow::FlowBuilder::new();
+        record_style_changes(
             &style_modules,
             &imports_by_file,
             &links,
@@ -1189,7 +1200,16 @@ impl ExtractEngine {
             &statics_by_file,
             &self.opts.css_inputs,
             &mut readings_of,
-        ) {
+            &mut flow,
+        );
+        {
+            let families = crate::family_members::FamilyIndex::build(&structural_by_file, |_, binding| binding.to_string());
+            let component = |_: &str, _: &str| -> Option<String> { None };
+            crate::family_members::ObjectMembers::new(&structural_by_file, &self.opts.css_inputs, &links, &families, &component)
+                .record_changes(&mut flow);
+        }
+        let changes = flow.close();
+        for ((file, local), (reason, uncertainty)) in unstable_style_statics(&changes, &statics_by_file) {
             if statics_by_file.get_mut(&file).and_then(|statics| statics.remove(&local)).is_some() {
                 // Only a value the binding had before const initializers read
                 // other consts is held; one derived from them is not.
@@ -1368,11 +1388,12 @@ impl ExtractEngine {
 
         // Facts own every resolved reference; release the modules' scopings.
         drop(references);
-        let mut css = analyze_css::run(
+        let mut css = analyze_css::run_with_changes(
             &self.facts,
             &self.order,
             &self.opts.css_inputs,
             &self.opts.prefix,
+            changes,
         );
         // Only the engine holds the sources a diagnostic's line and column
         // are read from.

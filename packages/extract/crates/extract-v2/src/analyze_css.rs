@@ -2902,7 +2902,19 @@ pub fn run(
     inputs: &CssInputs,
     class_prefix: &str,
 ) -> CssOutput {
-    run_with_system_floor(files, order, inputs, class_prefix, true)
+    run_with_system_floor(files, order, inputs, class_prefix, true, None)
+}
+
+/// `run`, its member tables answering from `changes`: the one relation of
+/// what may change, closed already with the member tables' changes in it.
+pub(crate) fn run_with_changes(
+    files: &BTreeMap<String, FileFacts>,
+    order: &[String],
+    inputs: &CssInputs,
+    class_prefix: &str,
+    changes: crate::flow::ValueEffects,
+) -> CssOutput {
+    run_with_system_floor(files, order, inputs, class_prefix, true, Some(changes))
 }
 
 // Usage maps are keyed by component id (`{file}::{binding}`); bare-binding
@@ -6052,6 +6064,7 @@ fn run_with_system_floor(
     inputs: &CssInputs,
     class_prefix: &str,
     total_system_floor: bool,
+    changes: Option<crate::flow::ValueEffects>,
 ) -> CssOutput {
     let links = &crate::link::ProjectLinks::link(files, inputs);
     let breakpoints = extract_breakpoints(&inputs.theme);
@@ -7033,6 +7046,9 @@ fn run_with_system_floor(
     };
     let mut object_members =
         crate::family_members::ObjectMembers::new(files, inputs, links, &family_index, &declared_component);
+    if let Some(changes) = changes {
+        object_members = object_members.with_changes(changes);
+    }
     // A member tag written through a facade or alias whose member is stable
     // resolves like a family member tag.
     let member_bindings: BTreeMap<String, FxHashMap<String, String>> = order
@@ -9023,7 +9039,7 @@ mod tests {
         }
         let links = crate::link::ProjectLinks::link(&files, inputs);
         judge_object_handoffs(&mut files, inputs, &links);
-        run_with_system_floor(&files, &order, inputs, "animus", total_system_floor)
+        run_with_system_floor(&files, &order, inputs, "animus", total_system_floor, None)
     }
 
     fn test_inputs() -> CssInputs {

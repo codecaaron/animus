@@ -672,6 +672,13 @@ impl<'f> ObjectMembers<'f> {
         table
     }
 
+    /// Answers from `changes`, a relation closed already that holds this
+    /// collector's changes among others', rather than building its own.
+    pub(crate) fn with_changes(mut self, changes: ValueEffects) -> Self {
+        self.changed = Some(changes);
+        self
+    }
+
     /// What the uses in the analysed modules may change, closed once, on
     /// the first question.
     pub(crate) fn changes(&mut self) -> &ValueEffects {
@@ -718,9 +725,16 @@ impl<'f> ObjectMembers<'f> {
     /// families and the contexts React's `createContext` builds, whose
     /// `Provider` a tag reads.
     fn changed(&mut self) -> ValueEffects {
+        let mut flow = FlowBuilder::new();
+        self.record_changes(&mut flow);
+        flow.close()
+    }
+
+    /// Records into `flow` the changes `changed` names, so one relation can
+    /// hold them beside other collectors' before it is closed.
+    pub(crate) fn record_changes(&mut self, flow: &mut FlowBuilder) {
         let files = self.files;
         let inputs = self.inputs;
-        let mut flow = FlowBuilder::new();
         // Each object a module exports, under each name it exports it as.
         let modules: Vec<String> = files.keys().cloned().collect();
         for module in &modules {
@@ -786,7 +800,7 @@ impl<'f> ObjectMembers<'f> {
                 };
                 // A write to an assigned facade's target changes the facade.
                 let facades = self.facades_on(module, ff, name);
-                reach.record(&mut flow, self.families, facades, &reason);
+                reach.record(flow, self.families, facades, &reason);
             }
             // A package may re-export our objects (a linked workspace
             // package) under any name: a use that may write through its
@@ -809,7 +823,7 @@ impl<'f> ObjectMembers<'f> {
                     continue;
                 };
                 let reason = format!("{module} re-exports {target} as the namespace {name}");
-                self.namespace_reach(&target).record(&mut flow, self.families, Vec::new(), &reason);
+                self.namespace_reach(&target).record(flow, self.families, Vec::new(), &reason);
             }
             // A module the analysis cannot find runs when this one loads it
             // by declaration, bindings or not, and may re-export any object.
@@ -843,7 +857,7 @@ impl<'f> ObjectMembers<'f> {
                 };
                 for target in targets {
                     let reason = format!("{module} loads {target} at runtime on line {}", load.line);
-                    self.namespace_reach(target).record(&mut flow, self.families, Vec::new(), &reason);
+                    self.namespace_reach(target).record(flow, self.families, Vec::new(), &reason);
                 }
             }
             // Code from a string can `import()` any module and change what
@@ -859,7 +873,6 @@ impl<'f> ObjectMembers<'f> {
                 flow.open(ReasonId::OpaqueEffect, Region::of(RegionAtom::AllExports), reason);
             }
         }
-        flow.close()
     }
 
     /// What `module`'s namespace may hold: each object it exports and,
