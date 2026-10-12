@@ -8,6 +8,7 @@ import { parseFilesJson } from './source-ingestion';
 
 import type { ListedLoad } from './host-expansions';
 import type { ProbeEvidenceGatherer } from './probe-evidence';
+import type { PreparedPackage } from './registry-packages';
 import type { WorkspacePackages } from './workspace-packages';
 
 /** The stateful engine handle produced by `new native.ExtractEngine(...)`. */
@@ -343,11 +344,13 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
             identity: string;
             bases: string[];
             loads: ListedLoad[];
+            packages: PreparedPackage[];
           }>(engine.prepare(filesJson), 'ExtractEngine.prepare');
           evidence = probeEvidence(
             prepared.bases,
             prepared.identity,
-            prepared.loads
+            prepared.loads,
+            prepared.packages
           );
         }
         return engine.analyze(filesJson, evidence);

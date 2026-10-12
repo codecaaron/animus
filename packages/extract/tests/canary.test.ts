@@ -5,6 +5,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
@@ -591,3 +592,109 @@ test.each([
     lg: manifest.css.includes('padding: 99px'),
   }).toEqual({ sm: true, lg: kept });
 });
+
+// Contract: a registry package reaches no app source except through an alias
+// or a declared dependency (spec §6.3). A load of `@reg/pkg` keeps `pad`
+// extractable when the host finds the package installed from a registry,
+// in a pnpm store too, and declaring no local package; a workspace link, a
+// `file:` copy, a local package it declares directly or through a registry
+// dependency, or a `react` alias onto the module that holds `pad` keeps the
+// opening.
+test.each([
+  ['installed from a registry', {}, 'tokens.ts', true],
+  ['in a pnpm store', { store: true }, 'tokens.ts', true],
+  ['linked from the workspace', { linked: true }, 'tokens.ts', false],
+  ['copied in by a file: dependency', { copied: true }, 'tokens.ts', false],
+  ['declaring the local kit', { declares: true }, 'kit/tokens.ts', false],
+  [
+    'whose dependency declares the local kit',
+    { through: true },
+    'kit/tokens.ts',
+    false,
+  ],
+  ['beside a local kit it does not declare', {}, 'kit/tokens.ts', true],
+  ['with react aliased onto the module', { aliased: true }, 'tokens.ts', false],
+] as const)(
+  'a package %s keeps pad extractable as expected',
+  (
+    _row,
+    layout: {
+      store?: boolean;
+      linked?: boolean;
+      copied?: boolean;
+      declares?: boolean;
+      through?: boolean;
+      aliased?: boolean;
+    },
+    tokens,
+    extracts
+  ) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-registry-')));
+    const manifest = (dir: string, name: string, dependencies = {}) => {
+      mkdirSync(join(root, dir), { recursive: true });
+      writeFileSync(
+        join(root, dir, 'package.json'),
+        JSON.stringify({ name, version: '1.0.0', dependencies })
+      );
+    };
+    const link = (from: string, to: string) => {
+      mkdirSync(join(root, from, '..'), { recursive: true });
+      symlinkSync(join(root, to), join(root, from));
+    };
+    manifest('.', 'app', {
+      '@reg/pkg': layout.copied ? 'file:./proxy' : '1.0.0',
+      '@local/kit': 'workspace:*',
+    });
+    manifest('kit', '@local/kit');
+    link('node_modules/@local/kit', 'kit');
+    const registry = layout.declares
+      ? { '@local/kit': '1.0.0' }
+      : layout.through
+        ? { '@reg/dep': '1.0.0' }
+        : {};
+    if (layout.linked) {
+      manifest('proxy', '@reg/pkg');
+      link('node_modules/@reg/pkg', 'proxy');
+    } else if (layout.store) {
+      manifest(
+        'node_modules/.pnpm/@reg+pkg@1.0.0/node_modules/@reg/pkg',
+        '@reg/pkg',
+        registry
+      );
+      link(
+        'node_modules/@reg/pkg',
+        'node_modules/.pnpm/@reg+pkg@1.0.0/node_modules/@reg/pkg'
+      );
+    } else {
+      manifest('node_modules/@reg/pkg', '@reg/pkg', registry);
+    }
+    manifest('node_modules/@reg/dep', '@reg/dep', { '@local/kit': '1.0.0' });
+    const tokensImport = './' + tokens.replace(/\.ts$/, '');
+    const analysed = {
+      [tokens]: 'export const pad = { padding: 4 };\n',
+      'app.tsx': `import { pad } from '${tokensImport}';\nexport const load = () => import('@reg/pkg');\nexport const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n`,
+    } satisfies Record<string, string>;
+    for (const [path, source] of Object.entries(analysed)) {
+      writeFileSync(join(root, path), source);
+    }
+    const filesJson = JSON.stringify(
+      Object.entries(analysed).map(([path, source]) => ({ path, source }))
+    );
+    const aliases = {
+      aliases: [{ pattern: 'react', replacement: 'tokens', type: 'exact' }],
+    };
+    const engine = new v2.ExtractEngine(
+      layout.aliased ? { pathAliasesJson: JSON.stringify(aliases) } : {}
+    );
+    const prepared = JSON.parse(engine.prepare(filesJson));
+    const evidence = gatherProbeEvidence(
+      root,
+      new Set(Object.keys(analysed)),
+      undefined
+    )(prepared.bases, prepared.identity, prepared.loads, prepared.packages);
+    const css = JSON.parse(engine.analyze(filesJson, evidence)).css;
+    rmSync(root, { recursive: true, force: true });
+
+    expect(css.includes('padding')).toBe(extracts);
+  }
+);

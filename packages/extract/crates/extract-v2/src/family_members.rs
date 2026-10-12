@@ -220,7 +220,8 @@ fn object_id(object: &Object, families: &FamilyIndex) -> ObjectId {
 /// A namespace import of a module the analysis does not read.
 enum UnreadNamespace {
     Missing,
-    Package,
+    /// A package, by the identity the analysis names it with.
+    Package(String),
 }
 
 /// An object whose members a member tag reads.
@@ -746,7 +747,7 @@ impl<'f> ObjectMembers<'f> {
                     // is followed below.
                     Some((namespace, member)) => match self.unread_namespace(module, ff, namespace) {
                         Some(UnreadNamespace::Missing) => Reach::anywhere(ReasonId::UnresolvedSpecifier),
-                        Some(UnreadNamespace::Package) => Reach::default(),
+                        Some(UnreadNamespace::Package(_)) => Reach::default(),
                         None => match ff
                             .namespace_imports
                             .get(namespace)
@@ -761,7 +762,7 @@ impl<'f> ObjectMembers<'f> {
                     },
                     None => match ff.namespace_imports.get(name) {
                         Some(spec) => match self.unread_namespace(module, ff, name) {
-                            Some(UnreadNamespace::Package) => Reach::default(),
+                            Some(UnreadNamespace::Package(_)) => Reach::default(),
                             Some(UnreadNamespace::Missing) => Reach::anywhere(ReasonId::UnresolvedSpecifier),
                             None => resolve_import_source(module, spec, files, inputs)
                                 .map(|target| self.namespace_reach(&target))
@@ -792,17 +793,19 @@ impl<'f> ObjectMembers<'f> {
             // package) under any name: a use that may write through its
             // namespace may reach any of them.
             for (namespace, (subject, used)) in &ff.written_namespaces {
-                if !matches!(self.unread_namespace(module, ff, namespace), Some(UnreadNamespace::Package)) {
+                let Some(UnreadNamespace::Package(identity)) = self.unread_namespace(module, ff, namespace) else {
                     continue;
-                }
+                };
                 let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
                 let reason = format!("{subject} {} in {module}{line}", used.what);
-                flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
+                if let Some(unread) = crate::link::unread_package(&identity, files, inputs) {
+                    self.open_unread(&mut flow, unread, &reason);
+                }
             }
             for (name, spec) in &ff.namespace_exports {
                 if let Some(unread) = crate::link::unread_source(module, spec, files, inputs) {
                     let reason = format!("{module} re-exports {spec} as the namespace {name}, and {}", unread.clause());
-                    flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+                    self.open_unread(&mut flow, unread, &reason);
                     continue;
                 }
                 let Some(target) = resolve_import_source(module, spec, files, inputs) else {
@@ -830,7 +833,7 @@ impl<'f> ObjectMembers<'f> {
                     if let Some(unread) = crate::link::unread_source(module, spec, files, inputs) {
                         let reason =
                             format!("{module} loads {spec} at runtime on line {}, and {}", load.line, unread.clause());
-                        flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+                        self.open_unread(&mut flow, unread, &reason);
                     }
                 }
                 let targets = match crate::analyze_css::load_reach(module, load, files, inputs) {
@@ -865,6 +868,19 @@ impl<'f> ObjectMembers<'f> {
     /// What `module`'s namespace may hold: each object it exports and,
     /// where an open route leaves an export or the module's names
     /// incomplete, every exported object.
+    /// Opens what an unread module may reach: any module, or for a package
+    /// installed from a registry, the modules it can reach.
+    fn open_unread(&mut self, flow: &mut FlowBuilder, unread: crate::link::Unread, reason: &str) {
+        match unread {
+            crate::link::Unread::Registry(reaches) => {
+                for target in &reaches {
+                    self.namespace_reach(target).record(flow, self.families, Vec::new(), reason);
+                }
+            }
+            unread => flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason.to_string()),
+        }
+    }
+
     fn namespace_reach(&mut self, module: &str) -> Reach {
         let mut reach = Reach::default();
         let Some(index) = self.links.module(module) else { return reach };
@@ -928,7 +944,7 @@ impl<'f> ObjectMembers<'f> {
         match &record.requests[import.request] {
             Request::Unresolved(_) => Some(UnreadNamespace::Missing),
             Request::Outside(identity) if crate::link::is_node_builtin(identity) => None,
-            Request::Outside(_) => Some(UnreadNamespace::Package),
+            Request::Outside(identity) => Some(UnreadNamespace::Package(identity.clone())),
             Request::Module(_) => None,
         }
     }

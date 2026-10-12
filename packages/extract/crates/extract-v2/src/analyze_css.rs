@@ -903,6 +903,24 @@ pub struct ProbeEvidence {
     /// to (spec §6.3), by importer and the load's byte offset.
     #[serde(default)]
     pub expansions: Vec<HostExpansion>,
+    /// Each unread package `prepare` lists that the host installed from a
+    /// registry (spec §6.3), with the analysed modules it can reach.
+    #[serde(default)]
+    pub registry: Vec<RegistryPackage>,
+}
+
+/// An unread package the host installed from a registry, under
+/// `node_modules`, every instance of it alike (spec §6.3, A4). It names
+/// only published packages, so of the app's own modules it reaches only
+/// the entries of the local packages it, or a registry package it depends
+/// on, declares as a dependency or peer.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryPackage {
+    /// The package as the analysis names it (see `link::Named::Package`).
+    pub identity: String,
+    /// The analysed modules of the local packages it reaches.
+    pub reaches: Vec<String>,
 }
 
 /// The path a specifier probes from `from_file`, relative to rootDir: a
@@ -9161,6 +9179,7 @@ mod tests {
             .into_iter()
             .collect(),
             expansions: Vec::new(),
+            registry: Vec::new(),
         });
         let entries: Vec<(&str, &str)> = files.iter().map(|(path, source)| (*path, source.as_str())).collect();
         let out = analyze(&entries, &inputs);
@@ -13984,6 +14003,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             generation: 1,
             identity: String::new(),
             expansions: Vec::new(),
+            registry: Vec::new(),
             bases: ["data.json", "icon.svg?url", "styles.css"].into_iter().map(asset).collect(),
         });
         for (mutate, warns) in [
@@ -15989,6 +16009,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 generation: 1,
                 identity: String::new(),
                 expansions: Vec::new(),
+                registry: Vec::new(),
                 bases: [(
                     "twin".to_string(),
                     HostCandidate {
@@ -16038,6 +16059,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 generation: 1,
                 identity: String::new(),
                 expansions: Vec::new(),
+                registry: Vec::new(),
                 bases: [(
                     "a".to_string(),
                     HostCandidate { candidate: "a.json".into(), actual: None, analysed_as: None, reading: Some(reading) },
