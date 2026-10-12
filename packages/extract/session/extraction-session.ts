@@ -577,10 +577,8 @@ export class ExtractionSession {
   get heldSources(): ReadonlyMap<string, { hash: string; source: string }> {
     return this.fileCache;
   }
-  /** The generation an emit produced, current once its ingestion
-   *  publishes. */
-  /** An attempt's publication, until it commits with the ingestion's
-   *  ownership and the external package state it analysed. */
+  /** The generation an emit produced, until it commits with the
+   *  ingestion's ownership and the external package state it analysed. */
   private stagedPublication: Omit<
     SessionPublication,
     | 'ownership'
