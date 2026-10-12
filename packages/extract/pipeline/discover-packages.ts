@@ -544,6 +544,9 @@ export async function collectExternalPackageSources(opts: {
   kitSourceRoot: KitSourceRootResolver;
   /** Where the system loader locates each package from `rootDir`. */
   locatePackage: PackageLocator;
+  /** The directory each specifier's package is located from: the kit's own
+   *  for a package a kit's system extends; `rootDir` otherwise. */
+  locateFrom?: (specifier: string) => string;
   rootDir: string;
   extensionsSet: ReadonlySet<string>;
   hasEntry: (relPath: string) => boolean;
@@ -751,7 +754,9 @@ export async function collectExternalPackageSources(opts: {
     // the host spells the entry. Only where the entry's own real path lies
     // inside it: an entry linked out of the package is not its file.
     let resolvedRoot = absEntry ? findPackageRoot(absEntry) : null;
-    const locatedRoot = packageName && locatePackage(packageName, rootDir);
+    const locatedRoot =
+      packageName &&
+      locatePackage(packageName, opts.locateFrom?.(specifier) ?? rootDir);
     if (
       resolvedRoot &&
       locatedRoot &&
@@ -1151,7 +1156,7 @@ export async function systemKitDependencies(
   const workspaces = declaredWorkspacePackages(rootDir);
   const resolveSpecifier = engine.resolveSpecifier;
   const systemPackageRoot = findPackageRoot(systemPath);
-  const memberFiles = new Map<string, string>();
+  const kitMembers = new Map<string, string>();
   const members = await extractSystemFilePackages(
     systemPath,
     engine,
@@ -1167,16 +1172,16 @@ export async function systemKitDependencies(
         extensionPolicyJson(BUILT_IN_EXTENSION_POLICY)
       )?.path ?? null,
     undefined,
-    memberFiles
+    kitMembers
   );
   const locatePackage = nativePackageLocator(engine, workspaces);
   const roots = new Map<string, string>();
   for (const member of members) {
     if (!isPackageSpecifier(member)) continue;
     const name = bareSpecifierPackageName(member);
-    const file = memberFiles.get(member);
-    const pkgRoot =
-      locatePackage(name, rootDir) ?? (file ? findPackageRoot(file) : null);
+    // A kit's member is the copy that kit resolves, not the application's.
+    const file = kitMembers.get(member);
+    const pkgRoot = file ? findPackageRoot(file) : locatePackage(name, rootDir);
     if (pkgRoot !== null && !roots.has(name)) roots.set(name, pkgRoot);
   }
   return [...roots].map(([name, pkgRoot]) => ({
@@ -1586,9 +1591,10 @@ export async function extractSystemFilePackages(
   report?: (diagnostic: ManifestDiagnostic) => void,
   resolvePackage?: PackageResolver,
   extensions?: ExtensionOrder,
-  /** Filled with the file each package member names from the module that
-   *  spells it: a kit another kit extends may resolve only from that kit. */
-  memberFiles?: Map<string, string>
+  /** Filled with each package member a kit's module spells, by the file it
+   *  names from that kit: the instance that kit's system extends, which can
+   *  differ from the application's own copy, or exist only under the kit. */
+  kitMembers?: Map<string, string>
 ): Promise<string[]> {
   const { systemMembership } = engine;
   if (systemMembership === undefined) {
@@ -1696,10 +1702,16 @@ export async function extractSystemFilePackages(
   // Preserve a bare import's subpath: collapsing `@scope/kit/definition` to
   // the package root can make a subpath-only export unresolvable. A
   // relative one is resolved against the module that spells it.
+  const systemPackageRoot = findPackageRoot(systemFilePath);
   for (const { specifier, importer } of answer.members) {
     const file = resolved[`${importer}\0${specifier}`]?.file;
-    if (file !== undefined && !specifier.startsWith('.')) {
-      if (!memberFiles?.has(specifier)) memberFiles?.set(specifier, file);
+    if (
+      file !== undefined &&
+      !specifier.startsWith('.') &&
+      findPackageRoot(importer) !== systemPackageRoot &&
+      !kitMembers?.has(specifier)
+    ) {
+      kitMembers?.set(specifier, file);
     }
   }
   return [

@@ -2,6 +2,7 @@ import { execFileSync } from 'child_process';
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -153,6 +154,49 @@ test('dev SSR serves a kit another kit extends through the transform, though the
     const { html } = await server.ssrLoadModule('/src/render.js');
     expect(html).toMatch(RENDERED_CARD);
     expect(server.config.optimizeDeps.exclude).toEqual(['kit', 'nested']);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a kit's private copy of a kit it extends is the copy served through the transform, beside the application's own", async () => {
+  const root = nestedKitApp();
+  const own = join(root, 'node_modules/nested');
+  const copy = join(root, 'node_modules/kit/node_modules/nested');
+  mkdirSync(join(copy, 'dist'), { recursive: true });
+  for (const file of ['package.json', 'dist/definition.js']) {
+    writeFileSync(join(copy, file), readFileSync(join(own, file)));
+  }
+  writeFileSync(
+    join(copy, 'dist/index.js'),
+    `import { ds } from './definition.js';
+export const Card = ds.styles({ padding: 16 }).asElement('div');`
+  );
+  writeFileSync(
+    join(root, 'node_modules/kit/dist/index.js'),
+    `export { Card } from 'nested';`
+  );
+  writeFileSync(
+    join(root, 'src/main.js'),
+    `import React from 'react';
+import { Card } from 'kit';
+export const App = () => React.createElement(Card, null, 'hello');`
+  );
+  // SAFETY: vite-plus runs Vite's server and consumes the same plugin hooks;
+  // only the nominal declarations differ, and tsc overflows on them.
+  const startDevServer = createServer as StartDevServer;
+  const server = await startDevServer({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    plugins: [animusExtract({ system: './src/ds.js' })],
+    optimizeDeps: { noDiscovery: true, include: ['react'] },
+    server: { middlewareMode: true, hmr: false },
+  });
+  try {
+    await server.pluginContainer.buildStart({});
+    const { html } = await server.ssrLoadModule('/src/render.js');
+    expect(html).toMatch(RENDERED_CARD);
   } finally {
     await server.close();
   }
