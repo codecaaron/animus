@@ -445,9 +445,6 @@ interface AssetFingerprints {
 export class ExtractionSession {
   /** Set by the adapter before any pipeline run. */
   rootDir: string | null = null;
-  /** The module extracted terminals import their factories from; an
-   *  override must supply every terminal the analysis extracts. */
-  runtimeImport: string = DEFAULT_RUNTIME_IMPORT;
   /** A host that resolves imports itself (Vite's `this.resolve`): package
    *  discovery asks it first, the loader only for a declared workspace it
    *  cannot resolve. Null resolves through the loader alone. */
@@ -747,6 +744,11 @@ export class ExtractionSession {
       (diagnostic) => diagnostic.file !== relPath
     );
     return this.ingestionFailureDiagnostics.length !== before;
+  }
+
+  /** The module extracted terminals import their factories from. */
+  private get runtimeImport(): string {
+    return this.options.runtimeImport ?? DEFAULT_RUNTIME_IMPORT;
   }
 
   get sessionDir(): string {

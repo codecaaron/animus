@@ -4,7 +4,6 @@ import {
   builtInAssetClassification,
   contentHash,
   DEFAULT_EXTENSIONS,
-  DEFAULT_RUNTIME_IMPORT,
   findSheetAssetSpecifiers,
   isPathWithinRoot,
   parseFilesJson,
@@ -351,6 +350,7 @@ export class PluginContext {
         staticCss: options.staticCss,
         layers: options.layers,
         engine: options.engine,
+        runtimeImport: options.runtimeImport,
         mode: this.emissionProd ? 'production' : 'development',
       },
       {
@@ -376,7 +376,6 @@ export class PluginContext {
     session.assetClassification = this.assetClassification;
     session.loadExpander = this.loadExpander;
     session.pathAliasesJson = this.pathAliasesJson;
-    session.runtimeImport = options.runtimeImport ?? DEFAULT_RUNTIME_IMPORT;
     session.cssModuleId = VIRTUAL_CSS_ID;
     session.systemPropsModuleId = VIRTUAL_SYSTEM_PROPS_ID;
     session.structuralExclude = this.outputExcludes;

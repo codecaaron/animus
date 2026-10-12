@@ -518,6 +518,7 @@ const OPTION_CLASSES = {
   layers: digestOf('layers'),
   engine: digestOf('engine'),
   mode: digestOf('mode'),
+  runtimeImport: digestOf('runtimeImport'),
   root: 'excluded',
 } as const satisfies {
   [Key in keyof AnimusCoreOptions]-?: OptionDigest<Key> | 'excluded';

@@ -247,6 +247,9 @@ function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
       minify: isConfigBoolean(raw.minify) ? raw.minify : undefined,
       staticCss: configStaticCss(raw.staticCss),
       layers: isConfigStringArray(raw.layers) ? raw.layers : undefined,
+      runtimeImport: isConfigString(raw.runtimeImport)
+        ? raw.runtimeImport
+        : undefined,
       mode:
         raw.mode === 'development' || raw.mode === 'production'
           ? raw.mode
