@@ -4,6 +4,7 @@ import {
   resolveMode,
   viteAssetClassification,
   viteExtensionPolicy,
+  viteHostExpander,
   viteOutputTargets,
 } from '@animus-ui/extract/pipeline';
 import { join, resolve } from 'path';
@@ -59,6 +60,9 @@ export function applyResolvedConfig(
   // Vite's extension order, with its defaults applied.
   ctx.extensionPolicy = viteExtensionPolicy(config.resolve.extensions);
   ctx.assetClassification = viteAssetClassification(config.assetsInclude);
+  // How the build expands computed loads (spec §6.3): only where every
+  // environment is bundled and no alias rewrites a relative specifier.
+  ctx.loadExpander = viteHostExpander(config);
   ctx.log(`extension order: ${ctx.extensionPolicy.resolverVersion}`);
   ctx.logger = config.logger;
   // Public base for dev /@fs asset URLs (build URLs are resolved by Vite's

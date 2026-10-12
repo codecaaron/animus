@@ -493,6 +493,10 @@ pub struct FileFacts {
     /// load any module and change what it exports.
     #[serde(skip)]
     pub(crate) dynamic_code: Option<&'static str>,
+    /// How the module lets a loader escape (`reads module.require`), which
+    /// can load any module and change what it exports.
+    #[serde(skip)]
+    pub(crate) loader_escape: Option<&'static str>,
     /// Extensions of an `Object.member` parent, which are never chains.
     #[serde(skip)]
     pub member_parent_extensions: Vec<chain_walk::MemberParentExtension>,
@@ -531,10 +535,15 @@ pub struct FileFacts {
     /// components they spread their props into.
     #[serde(skip)]
     pub(crate) spread_wrappers: BTreeMap<String, crate::usage_facts::SpreadWrapper>,
-    /// Modules this file loads at runtime (`import()`, `require()`, a
-    /// context or a glob): their exports render where usage cannot follow.
+    /// Modules this file loads at runtime (`import()`, `require()`, wrapped
+    /// or not, a context or a glob): their exports render where usage cannot
+    /// follow.
     #[serde(skip)]
     pub(crate) module_loads: Vec<crate::loads::ModuleLoad>,
+    /// Each `import` and `export … from` declaration the compiler keeps,
+    /// bindings or not: the module it names runs when this one loads.
+    #[serde(skip)]
+    pub(crate) runtime_imports: Vec<crate::loads::ModuleLoad>,
     /// The specifiers of this file's bindingless runtime imports
     /// (`import './x'`): the host loads each for its effects, so each is
     /// probed (spec §2.2 A8).
@@ -1037,6 +1046,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         written_namespaces,
         param_readings: Arc::clone(&lowered.readings),
         dynamic_code: lowered.dynamic_code,
+        loader_escape: lowered.loader_escape,
         member_parent_extensions: Vec::new(),
         member_rooted_chains: Vec::new(),
         object_member_chains: const_initializers.chains,
@@ -1050,6 +1060,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         value_escapes: BTreeSet::new(),
         spread_wrappers: BTreeMap::new(),
         module_loads: lowered.loads.iter().filter_map(|load| load.module_load(source)).collect(),
+        runtime_imports: lowered.loads.iter().filter_map(|load| load.runtime_import(source)).collect(),
         bindingless_imports: lowered
             .loads
             .iter()

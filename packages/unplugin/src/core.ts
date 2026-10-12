@@ -19,8 +19,10 @@ import {
   servedFiles,
   viteAssetClassification,
   viteExtensionPolicy,
+  viteHostExpander,
   viteOutputTargets,
   webpackExtensionPolicy,
+  webpackHostExpander,
   webpackOutputTargets,
 } from '@animus-ui/extract/pipeline';
 import {
@@ -47,6 +49,8 @@ import type {
   AnimusMode,
   HostAssetClassification,
   HostExtensionPolicy,
+  HostLoadExpander,
+  WebpackRuleEntry,
   HostResolve,
   OutputTargets,
   ProjectManifest,
@@ -316,10 +320,78 @@ interface RspackLikeCompiler extends WebpackLikeCompiler {
   };
 }
 
+/** The experiments webpack's default rules are built from. */
+interface WebpackRuleExperiments {
+  css?: boolean;
+  asyncWebAssembly?: boolean;
+  syncWebAssembly?: boolean;
+}
+
+/** Normalized webpack options, as far as their default rules. */
+interface WebpackNormalizedOptions {
+  module?: { defaultRules?: ReadonlyArray<WebpackRuleEntry> };
+}
+
+/** Rules as comparable text: a RegExp by its source and flags, a function
+ *  by its text. */
+function ruleText(rules: ReadonlyArray<WebpackRuleEntry> | undefined): string {
+  return JSON.stringify(rules ?? null, (_key, value: WebpackRuleValue) =>
+    value instanceof RegExp
+      ? `/${value.source}/${value.flags}`
+      : value instanceof Function
+        ? String(value)
+        : value
+  );
+}
+
+/** A value inside a rule, as the comparison reads it. */
+type WebpackRuleValue =
+  | RegExp
+  | ((...args: never[]) => boolean)
+  | string
+  | number
+  | boolean
+  | null
+  | readonly WebpackRuleValue[]
+  | { [key: string]: WebpackRuleValue };
+
+/** Whether `module.defaultRules` is webpack's own default list: the list
+ *  webpack's defaults give the compiler's experiments, unchanged. Throws
+ *  where webpack's option API is not available. */
+function defaultRulesAreWebpacks(compiler: WebpackLikeCompiler): boolean {
+  const config = compiler.webpack?.config;
+  if (config === undefined) {
+    throw new Error("webpack's option defaults are not available");
+  }
+  const { css, asyncWebAssembly, syncWebAssembly } =
+    compiler.options.experiments ?? {};
+  const fresh = config.getNormalizedWebpackOptions({
+    experiments: { css, asyncWebAssembly, syncWebAssembly },
+  });
+  config.applyWebpackOptionsDefaults(fresh);
+  return (
+    ruleText(fresh.module?.defaultRules) ===
+    ruleText(compiler.options.module?.defaultRules)
+  );
+}
+
+/** A webpack parser's wrapped-context options, which build a template or
+ *  concatenated request's context. */
+interface WrappedContextOptions {
+  wrappedContextRegExp?: RegExp;
+  wrappedContextRecursive?: boolean;
+}
+
 interface WebpackLikeCompiler {
   options: {
     mode?: string;
     output?: { path?: string };
+    module?: {
+      parser?: Record<string, WrappedContextOptions | undefined>;
+      rules?: ReadonlyArray<WebpackRuleEntry>;
+      defaultRules?: ReadonlyArray<WebpackRuleEntry>;
+    };
+    experiments?: WebpackRuleExperiments;
     resolve?: {
       conditionNames?: string[];
       extensions?: string[];
@@ -336,9 +408,34 @@ interface WebpackLikeCompiler {
   };
   /** Set once `watch()` starts, before the first compilation. */
   watchMode?: boolean;
+  /** webpack's resolvers, whose options decide a context's alternative
+   *  requests. */
+  resolverFactory?: {
+    get(
+      type: 'normal' | 'context',
+      options: { dependencyType: string }
+    ): {
+      options: {
+        extensions: Iterable<string>;
+        mainFiles: Iterable<string>;
+        modules: ReadonlyArray<string | readonly string[]>;
+        fullySpecified?: boolean;
+        enforceExtension?: boolean;
+        alias?: ReadonlyArray<{ name: string }>;
+        fallback?: ReadonlyArray<{ name: string }>;
+      };
+    };
+  };
   webpack?: {
     version?: string;
     DefinePlugin?: new (defs: Record<string, string>) => WebpackLikeApplied;
+    /** webpack's own option normalization and defaults. */
+    config?: {
+      getNormalizedWebpackOptions(config: {
+        experiments: WebpackRuleExperiments;
+      }): WebpackNormalizedOptions;
+      applyWebpackOptionsDefaults(options: WebpackNormalizedOptions): void;
+    };
   };
   rspack?: {
     rspackVersion?: string;
@@ -378,6 +475,22 @@ interface KitResolveData {
 }
 interface WebpackLikeApplied {
   apply: (compiler: WebpackLikeCompiler) => void;
+}
+
+/** Whether every webpack JavaScript parser keeps the default wrapped
+ *  context, `/.*\/` and recursive. */
+function wrappedContextDefaults(
+  parser: Record<string, WrappedContextOptions | undefined> | undefined
+): boolean {
+  return Object.entries(parser ?? {})
+    .filter(([type]) => type === 'javascript' || type.startsWith('javascript/'))
+    .every(
+      ([, options]) =>
+        (options?.wrappedContextRegExp === undefined ||
+          (options.wrappedContextRegExp.source === '.*' &&
+            options.wrappedContextRegExp.flags === '')) &&
+        options?.wrappedContextRecursive !== false
+    );
 }
 
 /** A Rollup-family plugin context, which resolves through the bundler's
@@ -436,6 +549,9 @@ export const unpluginFactory: UnpluginFactory<
   let hostExtensions: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
   let hostAssets: HostAssetClassification =
     builtInAssetClassification('noHost');
+  /** How the bundler expands computed loads (spec §6.3); none where its
+   *  expansion is not reproduced. */
+  let hostLoadExpander: HostLoadExpander | undefined;
   /** The bundler's own resolution, which package discovery asks first
    *  (spec §2.2 A4); none where the host exposes no resolver. */
   let hostResolver: HostResolve | null = null;
@@ -528,6 +644,7 @@ export const unpluginFactory: UnpluginFactory<
       session.conditions = hostConditions;
       session.extensionPolicy = hostExtensions;
       session.assetClassification = hostAssets;
+      session.loadExpander = hostLoadExpander;
       session.hostResolve = hostResolver;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
       session.structuralExclude = outputExclusions(root, hostOutputTargets());
@@ -877,12 +994,17 @@ export const unpluginFactory: UnpluginFactory<
         build: Parameters<typeof viteOutputTargets>[0]['build'] & {
           watch?: unknown;
         };
-        environments?: Parameters<typeof viteOutputTargets>[0]['environments'];
-        resolve: { extensions: string[] };
+        resolve: {
+          extensions: string[];
+          alias?: ReadonlyArray<{ find: string | RegExp }>;
+        };
         assetsInclude: (file: string) => boolean;
+        environments?: Parameters<typeof viteHostExpander>[0]['environments'] &
+          Parameters<typeof viteOutputTargets>[0]['environments'];
       }) {
         hostExtensions = viteExtensionPolicy(config.resolve.extensions);
         hostAssets = viteAssetClassification(config.assetsInclude);
+        hostLoadExpander = viteHostExpander(config);
         hostOutputTargets = () => viteOutputTargets(config);
         const serving =
           config.command === 'serve' || Boolean(config.build.watch);
@@ -1099,6 +1221,41 @@ export const unpluginFactory: UnpluginFactory<
     // Read per run: webpack applies its output default after plugins.
     hostOutputTargets = () =>
       webpackOutputTargets(compiler.options.output?.path);
+    // Rspack builds contexts in its own implementation, not reproduced.
+    const resolverFactory = compiler.resolverFactory;
+    hostLoadExpander =
+      meta.framework === 'webpack' && resolverFactory !== undefined
+        ? webpackHostExpander({
+            resolveReading: (category) => {
+              const read = resolverFactory.get('normal', {
+                dependencyType: category,
+              }).options;
+              const context = resolverFactory.get('context', {
+                dependencyType: category,
+              }).options;
+              return {
+                extensions: [...read.extensions],
+                mainFiles: [...read.mainFiles],
+                modules: read.modules,
+                fullySpecified: read.fullySpecified === true,
+                enforceExtension: read.enforceExtension === true,
+                aliasNames: [read, context].flatMap((resolver) =>
+                  [...(resolver.alias ?? []), ...(resolver.fallback ?? [])].map(
+                    (entry) => entry.name
+                  )
+                ),
+              };
+            },
+            // Read for every expansion: a plugin can add a rule later.
+            options: () => ({
+              rules: compiler.options.module?.rules ?? [],
+              defaultRulesAreWebpacks: defaultRulesAreWebpacks(compiler),
+              wrappedDefaults: wrappedContextDefaults(
+                compiler.options.module?.parser
+              ),
+            }),
+          })
+        : undefined;
     const DefinePlugin =
       compiler.webpack?.DefinePlugin ?? compiler.rspack?.DefinePlugin;
     if (!DefinePlugin) {

@@ -53,7 +53,7 @@ pub struct OwnedAst {
 pub fn source_type_for(path: &str) -> SourceType {
     if path.ends_with(".tsx") {
         SourceType::tsx()
-    } else if path.ends_with(".ts") {
+    } else if path.ends_with(".ts") || path.ends_with(".mts") || path.ends_with(".cts") {
         SourceType::ts()
     } else if path.ends_with(".jsx") || path.ends_with(".js") {
         SourceType::jsx()

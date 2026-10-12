@@ -2,8 +2,10 @@ import { realpathSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import { policyCandidates, seeOnDisk } from './extension-policy';
+import { hostExpansions } from './host-expansions';
 
 import type { ExtensionOrder } from './extension-policy';
+import type { HostLoadExpander, ListedLoad } from './host-expansions';
 
 /** What the host's filesystem opens for one probe base (spec §2.2 A2, A8),
  *  as the engine's `HostCandidate` reads it. */
@@ -28,7 +30,17 @@ export interface HostReadings {
   isAsset?(file: string, query: string): boolean;
   /** Each adapted original (`.mdx`, `.svelte`) and its analysis children. */
   adapted?: ReadonlyMap<string, readonly string[]>;
+  /** How the host's bundler expands computed loads (spec §6.3). */
+  expander?: HostLoadExpander;
 }
+
+/** The session's evidence for the probe bases and computed loads the
+ *  engine's `prepare` names, carrying its input identity, as JSON. */
+export type ProbeEvidenceGatherer = (
+  bases: readonly string[],
+  identity: string,
+  loads?: readonly ListedLoad[]
+) => string;
 
 let generations = 0;
 
@@ -112,7 +124,8 @@ export function hostCandidate(
 
 /**
  * The session's host-candidate evidence for one analysis (spec §2.3): each
- * probe base the engine's `prepare` names, as `hostCandidate` reads it. The
+ * probe base the engine's `prepare` names, as `hostCandidate` reads it, and
+ * the host's expansion of each computed load it lists (spec §6.3). The
  * evidence carries the input identity `prepare` reported, and each call is a
  * new ingest generation, so no evidence is read for other files.
  */
@@ -121,9 +134,9 @@ export function gatherProbeEvidence(
   analysed: ReadonlySet<string>,
   order: ExtensionOrder | undefined,
   readings: HostReadings = {}
-): (bases: readonly string[], identity: string) => string {
+): ProbeEvidenceGatherer {
   const root = realRoot(rootDir);
-  return (bases, identity) => {
+  return (bases, identity, loads = []) => {
     const byBase: Record<string, HostCandidate> = {};
     for (const base of bases) {
       const host = hostCandidate(
@@ -136,8 +149,23 @@ export function gatherProbeEvidence(
       );
       if (host !== null) byBase[base] = host;
     }
+    const expansions =
+      readings.expander === undefined
+        ? []
+        : hostExpansions(
+            loads,
+            rootDir,
+            analysed,
+            readings.expander,
+            readings.isAsset
+          );
     generations += 1;
-    return JSON.stringify({ generation: generations, identity, bases: byBase });
+    return JSON.stringify({
+      generation: generations,
+      identity,
+      bases: byBase,
+      ...(expansions.length > 0 && { expansions }),
+    });
   };
 }
 
