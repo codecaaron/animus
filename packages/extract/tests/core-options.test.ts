@@ -14,6 +14,13 @@ import {
   outputExclusion,
 } from '../pipeline/core-options';
 import { discoverFiles } from '../pipeline/discover-files';
+import {
+  analysedOutputs,
+  esbuildOutputTargets,
+  outputExclusions,
+  rollupOutputTargets,
+  webpackOutputTargets,
+} from '../pipeline/output-targets';
 
 describe('assertKnownOptionKeys', () => {
   test('accepts every core key and driver namespaces', () => {
@@ -159,6 +166,53 @@ describe('a user exclude list never re-admits output', () => {
     expect(matcher.matches('/app/..build/index.js', '..build/index.js')).toBe(
       true
     );
+  });
+});
+
+// Contract: one model of where a bundler writes (directories it fills,
+// files it writes by exact name) feeds both the exclusion and the render
+// check, so the two never classify output differently.
+describe('output targets', () => {
+  test("webpack writes under its path's fixed prefix", () => {
+    expect(webpackOutputTargets('/app/out/[fullhash]/js').dirs).toEqual([
+      '/app/out',
+    ]);
+    expect(webpackOutputTargets('/app/out').dirs).toEqual(['/app/out']);
+  });
+
+  test('an output file at the root is excluded by its own name', () => {
+    const targets = esbuildOutputTargets({
+      absWorkingDir: '/app',
+      outfile: 'bundle.js',
+    });
+    expect(targets).toEqual({ dirs: [], files: ['/app/bundle.js'] });
+    expect(outputExclusions('/app', targets)).toEqual(['bundle.js']);
+    expect(outputExclusions('/app', { dirs: ['/app'], files: [] })).toEqual([]);
+  });
+
+  test('a file beside sources names itself; a directory over them says so', () => {
+    const analysed = ['/app/src/helper.ts', '/app/src/bundle.js'];
+    const file = analysedOutputs(
+      '/app',
+      rollupOutputTargets({ file: '/app/src/bundle.js' }),
+      analysed
+    );
+    expect(file).toContain('its own earlier output: src/bundle.js');
+    expect(file).not.toContain('helper');
+    expect(
+      analysedOutputs(
+        '/app',
+        rollupOutputTargets({ file: '/app/src/bundle.js' }),
+        ['/app/src/helper.ts']
+      )
+    ).toBeNull();
+    const dir = analysedOutputs(
+      '/app',
+      rollupOutputTargets({ dir: '/app/src' }),
+      ['/app/src/helper.ts']
+    );
+    expect(dir).toContain("inside its output directory 'src': src/helper.ts");
+    expect(dir).toContain('write the output outside the source tree');
   });
 });
 

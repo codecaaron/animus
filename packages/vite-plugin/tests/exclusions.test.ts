@@ -18,6 +18,8 @@ import { applyResolvedConfig } from '../src/config';
 import { PluginContext } from '../src/context';
 import { makeManifest } from './manifest-fixture';
 
+import type { InlineConfig } from 'vite';
+
 afterEach(() => {
   vi.restoreAllMocks();
   disposeTempRoots();
@@ -27,6 +29,8 @@ interface BuildLayout {
   exclude: string[];
   /** Vite's `build.outDir`; its default `dist` when absent. */
   outDir?: string;
+  /** More of Vite's config: environments, output options. */
+  config?: InlineConfig;
   systemSource?: string;
   /** App-relative files written before the build. */
   files?: Record<string, string>;
@@ -84,7 +88,8 @@ async function buildWithUserExcludes(excludeOrLayout: string[] | BuildLayout) {
         root: app,
         logLevel: 'silent',
         customLogger,
-        build: { outDir: layout.outDir ?? 'dist' },
+        ...layout.config,
+        build: { ...layout.config?.build, outDir: layout.outDir ?? 'dist' },
       },
       'build'
     )
@@ -99,6 +104,32 @@ describe('a user exclude list never re-admits output', () => {
 
     expect(analyzed).toContain('src/App.tsx');
     expect(analyzed.filter((path) => path.startsWith('dist/'))).toEqual([]);
+  });
+
+  // Contract: every place Vite writes is output, as its own
+  // getResolvedOutDirs reads it: each environment's `outDir`, and each
+  // output's `dir` (which every environment inherits).
+  test("every environment's and every output's directory stays out", async () => {
+    const outputs = (path: string) => /^(server-out|esm|cjs)\//.test(path);
+    const environments = await buildWithUserExcludes({
+      exclude: ['stories'],
+      config: { environments: { ssr: { build: { outDir: 'server-out' } } } },
+      files: { 'server-out/entry.js': 'export {};\n' },
+    });
+    const outputDirs = await buildWithUserExcludes({
+      exclude: ['stories'],
+      config: {
+        build: {
+          rolldownOptions: { output: [{ dir: 'esm' }, { dir: 'cjs' }] },
+        },
+      },
+      files: { 'esm/index.js': 'export {};\n', 'cjs/index.js': 'export {};\n' },
+    });
+
+    for (const { analyzed } of [environments, outputDirs]) {
+      expect(analyzed).toContain('src/App.tsx');
+      expect(analyzed.filter(outputs)).toEqual([]);
+    }
   });
 });
 

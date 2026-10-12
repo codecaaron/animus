@@ -7,7 +7,7 @@
   "scripts": {
     "build": "animus build --root . --system ./src/ds.ts --strict --exclude 'fixtures/**' && rollup -c rollup.config.mjs",
     "verify:build": "bash ../../scripts/verify/build-consumer.sh",
-    "verify:assert": "node scripts/assert-artifacts.mjs && node scripts/assert-host.mjs && node scripts/assert-watch.mjs && node scripts/assert-watch-build-parity.mjs && node scripts/assert-prefixed.mjs",
+    "verify:assert": "node scripts/assert-artifacts.mjs && node scripts/assert-host.mjs && node scripts/assert-watch.mjs && node scripts/assert-watch-build-parity.mjs && node scripts/assert-prefixed.mjs && node scripts/assert-own-output.mjs",
     "verify": "vp run @animus-ui/rollup-app#verify:build && vp run @animus-ui/rollup-app#verify:assert"
   },
   "dependencies": {

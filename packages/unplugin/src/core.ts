@@ -1,4 +1,5 @@
 import {
+  analysedOutputs,
   BUILT_IN_EXTENSION_POLICY,
   builtInAssetClassification,
   DiagnosticFailure,
@@ -6,16 +7,23 @@ import {
   ENGINE_TRANSFORM_EXTENSIONS,
   esbuildAssetClassification,
   esbuildExtensionPolicy,
+  esbuildOutputTargets,
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
+  mergeOutputTargets,
+  noOutputTargets,
+  outputExclusions,
   rollupExtensionPolicy,
+  rollupOutputTargets,
   servedFiles,
   viteAssetClassification,
   viteExtensionPolicy,
   viteHostExpander,
+  viteOutputTargets,
   webpackExtensionPolicy,
   webpackHostExpander,
+  webpackOutputTargets,
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_CSS_MODULE_ID,
@@ -44,6 +52,7 @@ import type {
   HostLoadExpander,
   WebpackRuleEntry,
   HostResolve,
+  OutputTargets,
   ProjectManifest,
   ServedFiles,
 } from '@animus-ui/extract/pipeline';
@@ -101,6 +110,8 @@ export interface HostState {
   /** The files the run's analysis extracted components from, and the
    *  extensions it dropped over their parent. */
   served: ServedFiles;
+  /** Every file the run's analysis read, absolute. */
+  analyzedFiles: string[];
 }
 
 export function createHostState(): HostState {
@@ -109,6 +120,7 @@ export function createHostState(): HostState {
     mode: null,
     cssText: '',
     served: { listed: new Set(), dropped: new Map() },
+    analyzedFiles: [],
     systemPropsJs: '',
     kitRedirects: new Map(),
     kitSideEffects: new Map(),
@@ -280,6 +292,12 @@ interface RollupResolveContext {
   } | null>;
 }
 
+/** What a render hook reports through. */
+interface OwnOutputReporter {
+  warn(message: string): void;
+  error(message: string): never;
+}
+
 interface EsbuildOptionsLike {
   outdir?: string;
   outfile?: string;
@@ -367,6 +385,7 @@ interface WrappedContextOptions {
 interface WebpackLikeCompiler {
   options: {
     mode?: string;
+    output?: { path?: string };
     module?: {
       parser?: Record<string, WrappedContextOptions | undefined>;
       rules?: ReadonlyArray<WebpackRuleEntry>;
@@ -536,6 +555,13 @@ export const unpluginFactory: UnpluginFactory<
   /** The bundler's own resolution, which package discovery asks first
    *  (spec §2.2 A4); none where the host exposes no resolver. */
   let hostResolver: HostResolve | null = null;
+  /** What Rollup and Rolldown named at render, which they name only after
+   *  analysis: this process's later builds exclude it. */
+  let learnedOutputTargets = noOutputTargets();
+  /** Where the bundler writes, which discovery excludes whatever the
+   *  user's `exclude` list: read when a run starts, after the bundler
+   *  applied its defaults. */
+  let hostOutputTargets = (): OutputTargets => learnedOutputTargets;
   /** Hooks can fire before buildStart (webpack's make taps run
    *  concurrently), so joiners await this before awaiting the pipeline. */
   let signalPipelineStarted!: () => void;
@@ -621,6 +647,7 @@ export const unpluginFactory: UnpluginFactory<
       session.loadExpander = hostLoadExpander;
       session.hostResolve = hostResolver;
       session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
+      session.structuralExclude = outputExclusions(root, hostOutputTargets());
       // Each full pass re-reads the tsconfig aliases.
       session.aliasesFromTsconfig = true;
       state.key = session.key;
@@ -652,10 +679,10 @@ export const unpluginFactory: UnpluginFactory<
       state.kitSideEffects = new Map(session.externalSourceSideEffects);
       state.redirectTargets = new Set(state.kitRedirects.values());
       state.externalPackageDirs = [...session.externalPackageDirs];
-      const watchPaths = new Set<string>();
-      for (const key of getAnalyzedHashes(session.key)?.keys() ?? []) {
-        watchPaths.add(resolve(root, key));
-      }
+      state.analyzedFiles = [...analyzed.keys()].map((key) =>
+        resolve(root, key)
+      );
+      const watchPaths = new Set<string>(state.analyzedFiles);
       for (const dep of session.systemDependencyPaths) watchPaths.add(dep);
       // Absent now; creating one rebuilds against a system that loads it.
       for (const path of session.systemMissingPaths) watchPaths.add(path);
@@ -775,6 +802,21 @@ export const unpluginFactory: UnpluginFactory<
         source: bytes,
       });
     }
+  }
+
+  /** Rollup and Rolldown name their output only at render, after
+   *  analysis: this process's later builds exclude it, and an analysis that
+   *  already read a file there is reported, failing a build under `strict`. */
+  function checkOwnOutput(
+    context: OwnOutputReporter,
+    output: { dir?: string; file?: string }
+  ): void {
+    const targets = rollupOutputTargets(output);
+    learnedOutputTargets = mergeOutputTargets([learnedOutputTargets, targets]);
+    const message = analysedOutputs(root, targets, state.analyzedFiles);
+    if (message === null) return;
+    if (options.strict && !watching()) context.error(message);
+    context.warn(message);
   }
 
   /** Analysis is a filesystem walk, so watch mode misses edits to
@@ -947,19 +989,23 @@ export const unpluginFactory: UnpluginFactory<
       // Vite runs the normalized buildStart, so its own signals decide:
       // serving or `build.watch` runs another turn.
       configResolved(config: {
-        command: string;
         root: string;
-        build: { watch?: unknown };
+        command: string;
+        build: Parameters<typeof viteOutputTargets>[0]['build'] & {
+          watch?: unknown;
+        };
         resolve: {
           extensions: string[];
           alias?: ReadonlyArray<{ find: string | RegExp }>;
         };
         assetsInclude: (file: string) => boolean;
-        environments?: Parameters<typeof viteHostExpander>[0]['environments'];
+        environments?: Parameters<typeof viteHostExpander>[0]['environments'] &
+          Parameters<typeof viteOutputTargets>[0]['environments'];
       }) {
         hostExtensions = viteExtensionPolicy(config.resolve.extensions);
         hostAssets = viteAssetClassification(config.assetsInclude);
         hostLoadExpander = viteHostExpander(config);
+        hostOutputTargets = () => viteOutputTargets(config);
         const serving =
           config.command === 'serve' || Boolean(config.build.watch);
         watching = () => serving;
@@ -988,6 +1034,15 @@ export const unpluginFactory: UnpluginFactory<
         } finally {
           registerWatchTargets(this);
         }
+      },
+      renderStart(outputOptions) {
+        checkOwnOutput(this, outputOptions);
+      },
+    },
+
+    rolldown: {
+      renderStart(outputOptions) {
+        checkOwnOutput(this, outputOptions);
       },
     },
 
@@ -1065,6 +1120,7 @@ export const unpluginFactory: UnpluginFactory<
       },
       config(buildOptions) {
         esbuildOptions = buildOptions;
+        hostOutputTargets = () => esbuildOutputTargets(buildOptions);
         hostConditions = buildOptions.conditions ?? [];
         hostExtensions = esbuildExtensionPolicy(buildOptions.resolveExtensions);
         hostAssets = esbuildAssetClassification(buildOptions.loader);
@@ -1162,6 +1218,9 @@ export const unpluginFactory: UnpluginFactory<
       `${meta.framework === 'rspack' ? 'rspack' : 'webpack'} rules not modelled`
     );
     watching = () => compiler.watchMode === true;
+    // Read per run: webpack applies its output default after plugins.
+    hostOutputTargets = () =>
+      webpackOutputTargets(compiler.options.output?.path);
     // Rspack builds contexts in its own implementation, not reproduced.
     const resolverFactory = compiler.resolverFactory;
     hostLoadExpander =

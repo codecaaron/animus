@@ -1,10 +1,11 @@
 import {
   buildPathAliasesJson,
-  outputExclusion,
+  outputExclusions,
   resolveMode,
   viteAssetClassification,
   viteExtensionPolicy,
   viteHostExpander,
+  viteOutputTargets,
 } from '@animus-ui/extract/pipeline';
 import { join, resolve } from 'path';
 import { isFileLoadingAllowed } from 'vite';
@@ -47,10 +48,7 @@ export function applyResolvedConfig(
       );
     }
   }
-  ctx.outputExclude = outputExclusion(
-    config.root,
-    resolve(config.root, config.build.outDir)
-  );
+  ctx.outputExcludes = outputExclusions(config.root, viteOutputTargets(config));
   // Vite substitutes the mode for its `development|production` condition.
   ctx.resolveConditions = config.resolve.conditions.map((condition) =>
     condition === 'development|production'
