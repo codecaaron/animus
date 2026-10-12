@@ -6,7 +6,7 @@ rust-version = "1.95.0"
 
 [dependencies]
 oxc = { version = "0.139", features = ["semantic", "transformer", "codegen"] }
-rquickjs = "0.12.1"
+rquickjs = "0.14.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 
