@@ -67,8 +67,15 @@ const verificationDependencies = [
   'verify-workers',
   'verify-packed',
 ];
-const deployCondition =
-  "github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.deploy_workers == true))";
+/** A release no longer waits on the Worker builds, which run only on an
+ *  explicit dispatch. */
+const releaseDependencies = verificationDependencies.filter(
+  (job) => job !== 'verify-workers'
+);
+/** Worker builds and deploys run only on a dispatch that asks for them. */
+const workerDispatch =
+  "github.event_name == 'workflow_dispatch' && inputs.deploy_workers == true";
+const deployCondition = `github.ref == 'refs/heads/main' && ${workerDispatch}`;
 const releaseCondition =
   "(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.publish_packages == true)";
 const cloudflareAccountIdVariable = 'CLOUDFLARE_ACCOUNT_ID';
@@ -214,7 +221,7 @@ describe('parsed CI graph', () => {
         runsOn: 'ubuntu-latest',
       },
       release: {
-        needs: verificationDependencies,
+        needs: releaseDependencies,
         runsOn: 'ubuntu-latest',
       },
     });
@@ -297,8 +304,9 @@ describe('parsed CI graph', () => {
     const jobs = readWorkflow().jobs;
 
     expect(normalizeWhitespace(jobs.release.if)).toBe(releaseCondition);
-    expect(jobs.release.needs).toEqual(verificationDependencies);
+    expect(jobs.release.needs).toEqual(releaseDependencies);
     expect(jobs.release.needs).not.toContain('deploy-workers');
+    expect(normalizeWhitespace(jobs['verify-workers'].if)).toBe(workerDispatch);
   });
 
   it('keeps lane preparation, receipt artifacts, and package-owned claims', () => {
@@ -484,7 +492,7 @@ describe('parsed CI graph', () => {
       'npm publish "$RELEASE_BUNDLE/animus-ui-cli-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
       'npm publish "$RELEASE_BUNDLE/animus-ui-unplugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
     ]);
-    expect(release.needs).toContain('verify-workers');
+    expect(release.needs).not.toContain('verify-workers');
   });
 
   it('scopes runner.temp release bundle paths to the release steps', () => {
