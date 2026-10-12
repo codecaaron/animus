@@ -4,10 +4,9 @@
 // package script is read for the files it names, and every shell script it
 // runs is followed to the files that script names.
 //
-// Keep the name knip.config.ts, never knip.ts. Under `vp run`, PATH starts with
-// Bun 1.3.13, whose `bunx --bun knip` runs a local knip.ts as a script instead
-// of knip: knip analyzes nothing, and the hygiene run stops with "knip printed
-// no report".
+// Keep the name knip.config.ts, never knip.ts. Bun 1.3.13's `bunx --bun knip`
+// ran a local knip.ts as a script instead of knip: knip analyzed nothing, and
+// the hygiene run stopped with "knip printed no report". Bun 1.4.3 runs knip.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
