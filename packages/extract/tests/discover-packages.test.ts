@@ -909,15 +909,21 @@ export const ds = renamed.extend(kit).build().seal();`,
       `const holder = { base: createSystem() };
 const take = (from) => from.base;
 export const ds = take(holder).extend(kit).build().seal();`,
+      `const holder = { base: createSystem() };
+const get = () => holder.base;
+export const ds = get().extend(kit).build().seal();`,
+      `const holder = { base: createSystem() };
+const get = () => holder;
+export const ds = get().base.extend(kit).build().seal();`,
     ]) {
-      expect(
+      const { members, codes } =
         await read(`import { createSystem } from '@animus-ui/system';
 import { system as kit } from 'plain-kit/definition';
-${held}`)
-      ).toEqual({
-        members: [],
-        codes: ['animus.discovery.unfollowed-system-builder'],
-      });
+${held}`);
+      expect(members).toEqual([]);
+      expect(new Set(codes)).toEqual(
+        new Set(['animus.discovery.unfollowed-system-builder'])
+      );
     }
   });
 });

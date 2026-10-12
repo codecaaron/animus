@@ -991,11 +991,21 @@ fn chain_end(nodes: &AstNodes<'_>, start: NodeId) -> (NodeId, bool) {
     }
 }
 
+/// Whether the expression statement `statement` is a concise arrow's body
+/// (`() => value`), which returns its value rather than discarding it.
+fn returns(nodes: &AstNodes<'_>, statement: NodeId) -> bool {
+    let body = nodes.parent_id(statement);
+    matches!(nodes.parent_kind(body), AstKind::ArrowFunctionExpression(arrow) if arrow.expression)
+}
+
 /// Where a position that takes a builder sends it, for a finding.
 fn escape_how(kind: &AstKind<'_>) -> &'static str {
     match kind {
         AstKind::CallExpression(_) | AstKind::NewExpression(_) => "it is passed to a function",
-        AstKind::ReturnStatement(_) | AstKind::ArrowFunctionExpression(_) => "it is returned from a function",
+        // A statement that takes a builder is a concise arrow's body.
+        AstKind::ReturnStatement(_) | AstKind::ArrowFunctionExpression(_) | AstKind::ExpressionStatement(_) => {
+            "it is returned from a function"
+        }
         AstKind::ArrayExpression(_) => "it is placed in an array",
         AstKind::ConditionalExpression(_) | AstKind::LogicalExpression(_) => "it is chosen conditionally",
         AstKind::SpreadElement(_) => "it is spread",
@@ -1088,8 +1098,8 @@ fn escapes(semantic: &Semantic<'_>, source: &str, roots: &BTreeSet<String>) -> V
                     }
                 }
             }
-            AstKind::ExpressionStatement(_)
-            | AstKind::ExportDefaultDeclaration(_)
+            AstKind::ExpressionStatement(_) if !returns(nodes, parent.id()) => continue,
+            AstKind::ExportDefaultDeclaration(_)
             | AstKind::ExportSpecifier(_)
             | AstKind::TSTypeQuery(_)
             | AstKind::UnaryExpression(_) => continue,
@@ -1152,8 +1162,8 @@ fn escapes(semantic: &Semantic<'_>, source: &str, roots: &BTreeSet<String>) -> V
                         continue;
                     }
                 }
-                AstKind::ExpressionStatement(_)
-                | AstKind::ExportDefaultDeclaration(_)
+                AstKind::ExpressionStatement(_) if !returns(nodes, parent.id()) => continue,
+                AstKind::ExportDefaultDeclaration(_)
                 | AstKind::ExportSpecifier(_)
                 | AstKind::TSTypeQuery(_)
                 | AstKind::UnaryExpression(_) => continue,
@@ -1198,7 +1208,8 @@ fn holding_object(nodes: &AstNodes<'_>, scoping: &oxc::semantic::Scoping, proper
             }
             _ => None,
         },
-        AstKind::ExpressionStatement(_) | AstKind::ExportDefaultDeclaration(_) => None,
+        AstKind::ExpressionStatement(_) if !returns(nodes, parent.id()) => None,
+        AstKind::ExportDefaultDeclaration(_) => None,
         other => Some(Err((span.start, escape_how(&other)))),
     }
 }
