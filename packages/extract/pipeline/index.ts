@@ -32,10 +32,10 @@ export {
   assertRuntimeImportSuppliesTerminals,
   DEFAULT_RUNTIME_IMPORT,
 } from './runtime-import';
-export type { HostFirstResolver, HostResolve } from './host-package-resolver';
+export type { DiscoveryResolver, HostResolve } from './host-package-resolver';
 export { AliasAgreementCache, compareAliases } from './alias-agreement';
 export type { AliasAgreement } from './alias-agreement';
-export { hostFirstPackageResolver } from './host-package-resolver';
+export { discoveryResolver } from './host-package-resolver';
 export type { OutputTargets } from './output-targets';
 export {
   analysedOutputs,
