@@ -254,8 +254,9 @@ export class PluginContext {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   devServer: any;
 
-  /** The paths already registered with Vite's watcher. */
-  private readonly watchedPaths = new Set<string>();
+  /** The paths already registered, per watcher: a reused plugin instance
+   *  whose dev server is replaced registers everything with the new one. */
+  private readonly watchedPaths = new WeakMap<object, Set<string>>();
 
   // Per-plugin-instance engine state: two differently-configured plugins in
   // one process must not share an engine.
@@ -670,7 +671,7 @@ export class PluginContext {
   }
 
   /** Registers the Session's watch plan with Vite's watcher, each path
-   *  once. Vite also watches its packages' own directories beside the
+   *  once per watcher. Vite also watches its packages' own directories beside the
    *  plan's canonical roots, and an absent path either covers (or the root
    *  does) is left to their watch: a watch on an absent file inside a
    *  watched directory stops that directory's events under inotify
@@ -688,9 +689,14 @@ export class PluginContext {
     ];
     const covered = this.rootDir ? [this.rootDir, ...directories] : directories;
     const plan = session.watchPlan(covered);
+    let registered = this.watchedPaths.get(watcher);
+    if (registered === undefined) {
+      registered = new Set();
+      this.watchedPaths.set(watcher, registered);
+    }
     for (const paths of [plan.files, plan.missing, directories]) {
-      const added = paths.filter((path) => !this.watchedPaths.has(path));
-      for (const path of added) this.watchedPaths.add(path);
+      const added = paths.filter((path) => !registered.has(path));
+      for (const path of added) registered.add(path);
       if (added.length > 0) watcher.add(added);
     }
   }
