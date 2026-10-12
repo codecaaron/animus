@@ -280,6 +280,12 @@ export const KIT_SYSTEM_NOT_INCLUDED = 'animus.kit.system-not-included';
  *  Animus's factory, so it is no root. */
 export const UNPROVEN_ROOT_BINDING = 'animus.discovery.unproven-root-binding';
 
+/** A system builder, a `createSystem` chain not yet built, leaves the
+ *  bindings and chains discovery follows, so kits extended on it from there
+ *  are not read as members. */
+export const UNFOLLOWED_SYSTEM_BUILDER =
+  'animus.discovery.unfollowed-system-builder';
+
 /** A system file calls `createSystem` with no import or local binding. The
  *  system loader evaluates the file without auto-imports, where the name is
  *  undefined, so the call is no root. */
@@ -441,6 +447,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [KIT_STALE_DESCRIPTOR, 'warn'],
   [UNPROVEN_ROOT_BINDING, 'warn'],
   [UNIMPORTED_CREATE_SYSTEM, 'warn'],
+  [UNFOLLOWED_SYSTEM_BUILDER, 'warn'],
   [ALIAS_MISMATCH, 'warn'],
   [PACKAGE_MISMATCH, 'warn'],
   [SYSTEM_INSTANCE_MISMATCH, 'error'],

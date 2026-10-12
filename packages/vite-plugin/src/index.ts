@@ -5,6 +5,7 @@ import {
   keepsKitSourceEffects,
   resolveMode,
   sourceKitDependencies,
+  systemKitDependencies,
 } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
 
@@ -18,45 +19,53 @@ import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
 
 import type {
   DiagnosticLevels,
+  SourceKitDependency,
   StaticCssConfig,
 } from '@animus-ui/extract/pipeline';
 import type { Plugin } from 'vite';
 
 export { discoverFiles } from '@animus-ui/extract/pipeline';
 
-/** The optimizer would prebundle an installed source kit from its compiled
- *  entry, past the transform, so each is excluded and served as the source
- *  the redirect names; its own dependencies, which that source imports as
- *  a browser would, are prebundled in its place (`kit > dependency`). A
- *  linked kit is source to Vite already. */
+/** The optimizer would prebundle an installed kit past the transform: a
+ *  source kit from its compiled entry, and a compiled kit with its builder
+ *  code raw. So every installed kit is excluded and served through the
+ *  transform (a source kit as the source its redirect names); its own
+ *  dependencies, which that module imports as a browser would, are
+ *  prebundled in its place (`kit > dependency`). A kit is one that declares
+ *  the source condition, or one the system extends. A linked kit is source
+ *  to Vite already. */
 interface SourceKitConfig {
   optimizeDeps: { exclude: string[]; include: string[] };
-  ssr?: { noExternal: string[] };
+  ssr: { noExternal: string[] };
 }
 
-function sourceKitConfig(
+async function sourceKitConfig(
   rootDir: string,
-  serving: boolean,
-  engine: Parameters<typeof sourceKitDependencies>[1]
-): SourceKitConfig | undefined {
-  const kits = sourceKitDependencies(rootDir, engine).filter(
-    (kit) => kit.installed
-  );
-  if (kits.length === 0) return undefined;
-  const names = kits.map((kit) => kit.name);
-  const config: SourceKitConfig = {
+  systemPath: string,
+  engine: Parameters<typeof sourceKitDependencies>[1] &
+    Parameters<typeof systemKitDependencies>[2]
+): Promise<SourceKitConfig | undefined> {
+  const kits = new Map<string, SourceKitDependency>();
+  for (const kit of [
+    ...sourceKitDependencies(rootDir, engine),
+    ...(await systemKitDependencies(rootDir, systemPath, engine)),
+  ]) {
+    if (kit.installed && !kits.has(kit.name)) kits.set(kit.name, kit);
+  }
+  if (kits.size === 0) return undefined;
+  const names = [...kits.keys()];
+  return {
     optimizeDeps: {
       exclude: names,
-      include: kits.flatMap((kit) =>
+      include: [...kits.values()].flatMap((kit) =>
         kit.dependencies.map((dependency) => `${kit.name} > ${dependency}`)
       ),
     },
+    // SSR, in development and in a build, externalizes an installed package
+    // and Node loads its runtime dist past the transform, so the server
+    // renders what the client, served through it, does not.
+    ssr: { noExternal: names },
   };
-  // Dev SSR externalizes an installed package and loads its runtime dist,
-  // so the server renders what the client, served the source, does not.
-  // A build already reads the source.
-  if (serving) config.ssr = { noExternal: names };
-  return config;
 }
 
 export interface AnimusExtractOptions {
@@ -182,14 +191,15 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     enforce: 'pre',
 
     // `__ANIMUS_DEV__` gates the system runtime's development-only diagnostics.
-    config(userConfig, env) {
+    async config(userConfig, env) {
       const { mode } = resolveMode(options.mode, () =>
         env.command === 'build' ? 'production' : 'development'
       );
       const define = { __ANIMUS_DEV__: mode === 'development' };
-      const kits = sourceKitConfig(
-        resolve(userConfig.root ?? process.cwd()),
-        env.command === 'serve',
+      const root = resolve(userConfig.root ?? process.cwd());
+      const kits = await sourceKitConfig(
+        root,
+        resolve(root, options.system),
         ctx.kitEngine()
       );
       return kits ? { define, ...kits } : { define };

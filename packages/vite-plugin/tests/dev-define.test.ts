@@ -17,14 +17,14 @@ describe('__ANIMUS_DEV__ define', () => {
     return callConfigHook({}, { command, mode: 'test' });
   };
 
-  test('dev serve declares the token as dev', () => {
-    expect(runConfigHook('serve')).toEqual({
+  test('dev serve declares the token as dev', async () => {
+    expect(await runConfigHook('serve')).toEqual({
       define: { __ANIMUS_DEV__: true },
     });
   });
 
-  test('build declares the token as not-dev', () => {
-    expect(runConfigHook('build')).toEqual({
+  test('build declares the token as not-dev', async () => {
+    expect(await runConfigHook('build')).toEqual({
       define: { __ANIMUS_DEV__: false },
     });
   });

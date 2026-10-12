@@ -97,6 +97,7 @@ export {
   isExcludedPackageRelativePath,
   probeAbsolutePathSpecifier,
   sourceKitDependencies,
+  systemKitDependencies,
   staleDistIncludesMessage,
   unresolvableIncludesMessage,
   walkPackageSources,
