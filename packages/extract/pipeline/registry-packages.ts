@@ -27,6 +27,13 @@ const DEPENDENCY_BOUND = 4000;
  *  one from a registry. */
 const LOCAL_PROTOCOLS = ['file:', 'link:', 'workspace:', 'portal:'];
 
+type Manifest = {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+};
+
 /**
  * Each listed package every instance of which the host installed from a
  * registry (spec §6.3, A4): resolved through `node_modules` to a real path
