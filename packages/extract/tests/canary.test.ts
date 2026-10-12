@@ -597,9 +597,9 @@ test.each([
 // or a declared dependency (spec §6.3). A load of `@reg/pkg` keeps `pad`
 // extractable when the host finds the package installed from a registry,
 // in a pnpm store too, and declaring no local package; a workspace link, a
-// `file:` copy, a local package it declares directly or through a registry
-// dependency, or a `react` alias onto the module that holds `pad` keeps the
-// opening.
+// `file:` copy, a local package it declares directly, through a registry
+// dependency or as a `file:` copy under node_modules, or a `react` alias onto
+// the module that holds `pad` keeps the opening.
 test.each([
   ['installed from a registry', {}, 'tokens.ts', true],
   ['in a pnpm store', { store: true }, 'tokens.ts', true],
@@ -610,6 +610,12 @@ test.each([
     'whose dependency declares the local kit',
     { through: true },
     'kit/tokens.ts',
+    false,
+  ],
+  [
+    'declaring a file: copy of a local package',
+    { copiesKit: true },
+    'node_modules/@local/copy/tokens.ts',
     false,
   ],
   ['beside a local kit it does not declare', {}, 'kit/tokens.ts', true],
@@ -624,6 +630,7 @@ test.each([
       copied?: boolean;
       declares?: boolean;
       through?: boolean;
+      copiesKit?: boolean;
       aliased?: boolean;
     },
     tokens,
@@ -647,11 +654,14 @@ test.each([
     });
     manifest('kit', '@local/kit');
     link('node_modules/@local/kit', 'kit');
+    manifest('node_modules/@local/copy', '@local/copy');
     const registry = layout.declares
       ? { '@local/kit': '1.0.0' }
       : layout.through
         ? { '@reg/dep': '1.0.0' }
-        : {};
+        : layout.copiesKit
+          ? { '@local/copy': 'file:../../kit' }
+          : {};
     if (layout.linked) {
       manifest('proxy', '@reg/pkg');
       link('node_modules/@reg/pkg', 'proxy');
@@ -698,3 +708,52 @@ test.each([
     expect(css.includes('padding')).toBe(extracts);
   }
 );
+
+// Contract: the same, across analyses in one process. A registry package
+// that gains a declared local dependency between two analyses, with the
+// lockfile unchanged, reaches it in the second.
+test('a registry package that gains a local dependency reaches it in the next analysis', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-registry-')));
+  const manifest = (dir: string, name: string, dependencies = {}) => {
+    mkdirSync(join(root, dir), { recursive: true });
+    writeFileSync(
+      join(root, dir, 'package.json'),
+      JSON.stringify({ name, version: '1.0.0', dependencies })
+    );
+  };
+  manifest('.', 'app', { '@reg/pkg': '1.0.0', '@local/kit': 'workspace:*' });
+  writeFileSync(join(root, 'bun.lock'), '{}\n');
+  manifest('kit', '@local/kit');
+  mkdirSync(join(root, 'node_modules/@local'), { recursive: true });
+  symlinkSync(join(root, 'kit'), join(root, 'node_modules/@local/kit'));
+  manifest('node_modules/@reg/pkg', '@reg/pkg');
+  const analysed = {
+    'kit/tokens.ts': 'export const pad = { padding: 4 };\n',
+    'app.tsx':
+      "import { pad } from './kit/tokens';\nexport const load = () => import('@reg/pkg');\nexport const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+  } satisfies Record<string, string>;
+  for (const [path, source] of Object.entries(analysed)) {
+    writeFileSync(join(root, path), source);
+  }
+  const filesJson = JSON.stringify(
+    Object.entries(analysed).map(([path, source]) => ({ path, source }))
+  );
+  const analyse = () => {
+    const engine = new v2.ExtractEngine({});
+    const prepared = JSON.parse(engine.prepare(filesJson));
+    const evidence = gatherProbeEvidence(
+      root,
+      new Set(Object.keys(analysed)),
+      undefined
+    )(prepared.bases, prepared.identity, prepared.loads, prepared.packages);
+    return JSON.parse(engine.analyze(filesJson, evidence)).css.includes(
+      'padding'
+    );
+  };
+  const before = analyse();
+  manifest('node_modules/@reg/pkg', '@reg/pkg', { '@local/kit': '1.0.0' });
+  const after = analyse();
+  rmSync(root, { recursive: true, force: true });
+
+  expect({ before, after }).toEqual({ before: true, after: false });
+});

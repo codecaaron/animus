@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { bareSpecifierPackageName } from './discover-packages';
@@ -26,44 +26,6 @@ const DEPENDENCY_BOUND = 4000;
 /** Dependency specs that link or copy a local package rather than install
  *  one from a registry. */
 const LOCAL_PROTOCOLS = ['file:', 'link:', 'workspace:', 'portal:'];
-
-/** The files a package manager rewrites on every install or link. */
-const LOCKFILES = [
-  'pnpm-lock.yaml',
-  'bun.lock',
-  'bun.lockb',
-  'package-lock.json',
-  'npm-shrinkwrap.json',
-  'yarn.lock',
-];
-
-/** Each registry package's reached local roots, by its real directory, for
- *  the install the lockfile stamp names: an install or link rewrites the
- *  lockfile, which drops them. */
-const reachedByInstall = new Map<string, Map<string, string[] | null>>();
-
-/** The nearest lockfile above `root`, stamped with its size and mtime;
- *  null where none is found, so nothing is kept between analyses. */
-function lockfileStamp(root: string): string | null {
-  for (let dir = root; ; dir = dirname(dir)) {
-    for (const name of LOCKFILES) {
-      try {
-        const stat = statSync(join(dir, name));
-        return `${join(dir, name)}:${stat.size}:${stat.mtimeMs}`;
-      } catch {
-        // Not this one.
-      }
-    }
-    if (dirname(dir) === dir) return null;
-  }
-}
-
-type Manifest = {
-  dependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
-  peerDependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-};
 
 /**
  * Each listed package every instance of which the host installed from a
@@ -104,14 +66,7 @@ export function registryPackages(
       listed,
     ]);
   }
-  const stamp = lockfileStamp(root);
-  const reachedRoots =
-    (stamp && reachedByInstall.get(stamp)) ||
-    new Map<string, string[] | null>();
-  if (stamp) {
-    reachedByInstall.clear();
-    reachedByInstall.set(stamp, reachedRoots);
-  }
+  const reachedRoots = new Map<string, string[] | null>();
   const result: RegistryPackage[] = [];
   for (const [identity, instances] of byIdentity) {
     const roots = new Set<string>();
@@ -205,17 +160,21 @@ function localDependencies(
   while (work.length > 0) {
     const dir = work.pop()!;
     const declared = manifest(dir);
-    const names = [
-      ...Object.keys(declared?.dependencies ?? {}),
-      ...Object.keys(declared?.peerDependencies ?? {}),
-      ...Object.keys(declared?.optionalDependencies ?? {}),
-    ];
-    for (const name of names) {
+    const specs = {
+      ...declared?.optionalDependencies,
+      ...declared?.peerDependencies,
+      ...declared?.dependencies,
+    };
+    for (const [name, spec] of Object.entries(specs)) {
       const dependency = installedPackage(name, dir);
       if (dependency === null || seen.has(dependency)) continue;
       seen.add(dependency);
       if (seen.size > DEPENDENCY_BOUND) return null;
-      if (insideNodeModules(dependency)) work.push(dependency);
+      // A local protocol links or copies a local package, wherever it lands.
+      const linked = LOCAL_PROTOCOLS.some((protocol) =>
+        spec.startsWith(protocol)
+      );
+      if (!linked && insideNodeModules(dependency)) work.push(dependency);
       else local.add(dependency);
     }
   }
