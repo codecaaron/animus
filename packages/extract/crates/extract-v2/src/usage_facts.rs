@@ -1912,11 +1912,11 @@ pub(crate) fn style_object_uses(
     // What a function only ever called returns is held by each `const` its
     // calls initialize; any other reference hands it on.
     let holders = scan.called_functions.take().map(|called| called.holders).unwrap_or_default();
-    for (binding, function, used) in std::mem::take(&mut scan.returns) {
+    for (binding, function, at, used) in std::mem::take(&mut scan.returns) {
         match holders.get(&function) {
             None => {}
             Some(Some(holders)) => {
-                scan.containers.extend(holders.iter().map(|holder| (binding.clone(), holder.clone(), Vec::new())));
+                scan.containers.extend(holders.iter().map(|holder| (binding.clone(), holder.clone(), at.clone())));
             }
             Some(None) => scan.style_uses.push((binding, used, UseAt::WHOLE)),
         }
@@ -2899,32 +2899,36 @@ pub(crate) fn handed_on(
     Some(all)
 }
 
-/// Whether a call of the function `function` of `file` returns the object
-/// passed as its parameter `index`, or a fresh object holding it, and does
-/// nothing else to it but read it: the call's result holds the object. Each
-/// callee whose result the function returns with the object passed on must
-/// return it in turn, at most four calls deep.
-pub(crate) fn aliases(
+/// Where a call of the function `function` of `file` holds the object
+/// passed as its parameter `index`, when it returns it, or a fresh object
+/// holding it, and does nothing else to it but read it: each path in the
+/// call's result that holds the object. Each callee whose result the
+/// function returns with the object passed on must return it in turn, at
+/// most four calls deep.
+pub(crate) fn alias_positions(
     file: &str,
     function: &str,
     index: usize,
     depth: usize,
     declared: &Declared<'_>,
     readings_of: &mut ReadingsOf<'_>,
-) -> bool {
+) -> Option<Vec<Vec<String>>> {
     if depth > 4 {
-        return false;
+        return None;
     }
     let readings = readings_of(file);
-    let Some(ParamReading::Alias(passes)) = readings.get(function).and_then(|params| params.get(index)) else {
-        return false;
+    let Some(ParamReading::Alias { returned, through }) = readings.get(function).and_then(|params| params.get(index)) else {
+        return None;
     };
-    passes.iter().all(|pass| match declared(file, &pass.callee) {
-        Some((callee_file, callee_name)) => {
-            aliases(&callee_file, &pass.function(&callee_name), pass.index, depth + 1, declared, readings_of)
-        }
-        None => false,
-    })
+    let mut positions = returned.clone();
+    for (pass, at) in through {
+        let (callee_file, callee_name) = declared(file, &pass.callee)?;
+        let inner = alias_positions(&callee_file, &pass.function(&callee_name), pass.index, depth + 1, declared, readings_of)?;
+        positions.extend(inner.into_iter().map(|inner| {
+            at.iter().chain(&inner).take(crate::flow::PATH_DEPTH).cloned().collect()
+        }));
+    }
+    Some(positions)
 }
 
 /// How a function treats the object passed as one of its parameters.
@@ -2935,10 +2939,11 @@ pub(crate) enum ParamReading {
     /// for every member).
     ReadOnly(Vec<Pass>, Vec<Vec<String>>),
     /// Returned, or stored in a fresh object or array the function returns,
-    /// and otherwise only read: the call's result holds it. Passed on only to
-    /// these callees, whose results the function returns, which must return
-    /// it in turn.
-    Alias(Vec<Pass>),
+    /// and otherwise only read: the call's result holds it, at each path in
+    /// `returned`. Passed on only to the callees in `through`, whose results
+    /// the function returns at each path given, which must return it in
+    /// turn.
+    Alias { returned: Vec<Vec<String>>, through: Vec<(Pass, Vec<String>)> },
     /// A use that may change the object or hand it to code not followed.
     Unsafe,
 }
@@ -3171,12 +3176,14 @@ struct ParamScan<'a, 's> {
 /// The uses of a parameter that decide between `ReadOnly` and `Alias`.
 #[derive(Default)]
 struct ParamUses {
-    /// Returned by its function, itself or in a fresh object or array.
-    returned: bool,
+    /// Where its function's result holds it: returned itself, or in a fresh
+    /// object or array.
+    returned: Vec<Vec<String>>,
     /// Its members handed on, or its values copied out.
     hands_members: bool,
-    /// Passed to callees whose results its function returns.
-    returned_through: Vec<Pass>,
+    /// Passed to callees whose results its function returns, with where its
+    /// result holds each callee's.
+    returned_through: Vec<(Pass, Vec<String>)>,
 }
 
 impl ParamScan<'_, '_> {
@@ -3188,13 +3195,13 @@ impl ParamScan<'_, '_> {
                 continue;
             };
             let ParamReading::ReadOnly(passes, _) = slot else { continue };
-            if !uses.returned && uses.returned_through.is_empty() {
+            if uses.returned.is_empty() && uses.returned_through.is_empty() {
                 continue;
             }
             *slot = if uses.hands_members || !passes.is_empty() {
                 ParamReading::Unsafe
             } else {
-                ParamReading::Alias(uses.returned_through)
+                ParamReading::Alias { returned: uses.returned, through: uses.returned_through }
             };
         }
         self.readings
@@ -3228,9 +3235,9 @@ impl<'a> Visit<'a> for ParamScan<'a, '_> {
         let ParamReading::ReadOnly(passes, handed) = slot else { return };
         let uses = self.uses.entry((function, index)).or_default();
         // Returned by its own function; a closure returning it hands it on.
-        if let Some(returned_by) = returned_value(ident.span, &self.ancestors) {
+        if let Some((returned_by, at)) = returned_position(ident.span, &self.ancestors) {
             if Some(returned_by) == own {
-                uses.returned = true;
+                uses.returned.push(at);
             } else {
                 *slot = ParamReading::Unsafe;
             }
@@ -3253,8 +3260,8 @@ impl<'a> Visit<'a> for ParamScan<'a, '_> {
             {
                 let pass = Pass { callee, calls, index };
                 let at = self.ancestors.iter().rposition(|kind| kind.span() == call).unwrap_or(0);
-                match returned_value(call, &self.ancestors[..at]) {
-                    Some(returned_by) if Some(returned_by) == own => uses.returned_through.push(pass),
+                match returned_position(call, &self.ancestors[..at]) {
+                    Some((returned_by, at)) if Some(returned_by) == own => uses.returned_through.push((pass, at)),
                     _ => passes.push(pass),
                 }
             }
@@ -3329,12 +3336,21 @@ fn local_alias_target(span: Span, ancestors: &[AstKind<'_>]) -> Option<(SymbolId
 /// literals: a `return` argument or a concise arrow body. `ancestors` runs
 /// from the root to the expression's parent.
 fn returned_value(span: Span, ancestors: &[AstKind<'_>]) -> Option<Span> {
+    returned_position(span, ancestors).map(|(function, _)| function)
+}
+
+/// `returned_value`, and where in the result the expression sits: the keys
+/// of the fresh literals around it from the outermost, `ANY_MEMBER` for an
+/// array element.
+fn returned_position(span: Span, ancestors: &[AstKind<'_>]) -> Option<(Span, Vec<String>)> {
     let mut rest = ancestors.iter().rev();
     let mut current = span;
-    loop {
+    let mut keys = Vec::new();
+    let function = loop {
         match rest.next()? {
             kind if is_erased_wrapper(kind) => current = kind.span(),
             AstKind::ObjectProperty(prop) if prop.value.span() == current && !prop.computed => {
+                keys.push(prop.key.static_name().map_or_else(|| crate::flow::ANY_MEMBER.to_string(), |key| key.to_string()));
                 match rest.next()? {
                     AstKind::ObjectExpression(object) => current = object.span,
                     _ => return None,
@@ -3343,26 +3359,30 @@ fn returned_value(span: Span, ancestors: &[AstKind<'_>]) -> Option<Span> {
             AstKind::ArrayExpression(array)
                 if array.elements.iter().any(|element| element.span() == current && !element.is_spread()) =>
             {
+                keys.push(crate::flow::ANY_MEMBER.to_string());
                 current = array.span;
             }
             AstKind::ReturnStatement(_) => {
-                return rest.find_map(|kind| match kind {
+                break rest.find_map(|kind| match kind {
                     AstKind::Function(function) => Some(function.span),
                     AstKind::ArrowFunctionExpression(arrow) => Some(arrow.span),
                     _ => None,
-                });
+                })?;
             }
             AstKind::ExpressionStatement(_) => {
-                return match (rest.next(), rest.next()) {
+                break match (rest.next(), rest.next()) {
                     (Some(AstKind::FunctionBody(_)), Some(AstKind::ArrowFunctionExpression(arrow))) if arrow.expression => {
-                        Some(arrow.span)
+                        arrow.span
                     }
-                    _ => None,
+                    _ => return None,
                 };
             }
             _ => return None,
         }
-    }
+    };
+    keys.reverse();
+    keys.truncate(crate::flow::PATH_DEPTH);
+    Some((function, keys))
 }
 
 /// Visits every value reference to an object binding and records the first
@@ -3403,9 +3423,9 @@ struct ObjectUseScan<'a, 's> {
     /// In style mode, the module-scope functions nothing exports, and the
     /// `const` each call of one initializes.
     called_functions: Option<CalledFunctions>,
-    /// (binding, the function that returns it, the use): see
-    /// `CalledFunctions`.
-    returns: Vec<(String, SymbolId, ObjectUse)>,
+    /// (binding, the function that returns it, where its result holds it,
+    /// the use): see `CalledFunctions`.
+    returns: Vec<(String, SymbolId, Vec<String>, ObjectUse)>,
     /// In style mode, each function's own `const` that holds a member of an
     /// object binding.
     local_aliases: FxHashMap<SymbolId, LocalAlias>,
@@ -3657,15 +3677,16 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 }
                 // Returned by a module-scope function: decided once every
                 // reference to the function is seen.
-                let returned_by = returned_value(ident.span, &self.ancestors)
-                    .and_then(|span| self.called_functions.as_ref()?.spans.get(&span).copied());
-                if let Some(function) = returned_by {
+                let returned_by = returned_position(ident.span, &self.ancestors).and_then(|(span, at)| {
+                    Some((*self.called_functions.as_ref()?.spans.get(&span)?, at))
+                });
+                if let Some((function, at)) = returned_by {
                     let what = match style_object_use(ident.span, &self.ancestors, &containers, self.global_object) {
                         StyleUse::Unsafe(what) => what,
                         _ => "is returned from a function".to_string(),
                     };
                     let used = ObjectUse { line: Some(self.line(ident.span)), what };
-                    self.returns.push((binding.name.clone(), function, used));
+                    self.returns.push((binding.name.clone(), function, at, used));
                     return;
                 }
                 match style_object_use(ident.span, &self.ancestors, &containers, self.global_object) {

@@ -601,23 +601,24 @@ fn unstable_style_statics(
         declared(file, &handoff.callee)
             .map(|(callee_file, name)| (callee_file, crate::usage_facts::returned_function(&name, handoff.calls - 1)))
     };
-    // (module, the hand-off's position in its module, the holder).
-    let mut held: Vec<(&str, usize, &String)> = Vec::new();
+    // (module, the hand-off's position in its module, the holder, each path
+    // in it that holds the argument).
+    let mut held: Vec<(&str, usize, &String, Vec<Vec<String>>)> = Vec::new();
     for (file, module) in style {
         for (at, handoff) in module.facts.handoffs.iter().enumerate() {
             let Some(holder) = &handoff.holder else { continue };
-            let aliases = callee_of(file, handoff).is_some_and(|(callee_file, function)| {
-                crate::usage_facts::aliases(&callee_file, &function, handoff.index, 0, &declared, readings_of)
+            let positions = callee_of(file, handoff).and_then(|(callee_file, function)| {
+                crate::usage_facts::alias_positions(&callee_file, &function, handoff.index, 0, &declared, readings_of)
             });
-            if aliases {
-                held.push((file, at, holder));
+            if let Some(positions) = positions {
+                held.push((file, at, holder, positions));
             }
         }
     }
     // The `const`s that hold an object stored in them, a static or not.
     let holders: std::collections::BTreeSet<(String, String)> = held
         .iter()
-        .map(|(file, _, holder)| (file.to_string(), holder.to_string()))
+        .map(|(file, _, holder, _)| (file.to_string(), holder.to_string()))
         .chain(style.iter().flat_map(|(file, module)| {
             module.facts.stored.iter().map(move |(_, container, ..)| (file.clone(), container.clone()))
         }))
@@ -774,7 +775,7 @@ fn unstable_style_statics(
         // A function hands a nested object on to whatever it hands
         // members to, so only an object of primitives passes as a read.
         for (at, handoff) in module.facts.handoffs.iter().enumerate() {
-            if held.iter().any(|(held_in, held_at, _)| *held_in == file.as_str() && *held_at == at) {
+            if held.iter().any(|(held_in, held_at, ..)| *held_in == file.as_str() && *held_at == at) {
                 continue;
             }
             // A callee that only reads the object may still hand on members
@@ -899,10 +900,14 @@ fn unstable_style_statics(
         // object as far below; a spread's copy holds the object's members
         // where it sits, so a change there names the member.
         let stored = module.facts.stored.iter().map(|(stored, container, at)| (stored, Vec::new(), container, at.clone()));
-        // A call's result holds what it returns where the argument sits.
-        let held_here = held.iter().filter(|(held_in, ..)| *held_in == file.as_str()).map(|(_, at, holder)| {
+        // A call's result holds the argument at each path the callee returns
+        // it at, and the object where it sits in the argument.
+        let held_here = held.iter().filter(|(held_in, ..)| *held_in == file.as_str()).flat_map(|(_, at, holder, positions)| {
             let handoff = &module.facts.handoffs[*at];
-            (&handoff.binding, handoff.at.clone(), *holder, handoff.within.clone())
+            positions.iter().map(move |position| {
+                let on_at = position.iter().chain(&handoff.within).take(crate::flow::PATH_DEPTH).cloned().collect();
+                (&handoff.binding, handoff.at.clone(), *holder, on_at)
+            })
         });
         for (dependent, dependent_at, on, on_at) in stored.chain(held_here) {
             let to = possible(file, dependent).into_iter().map(|target| (object(target), dependent_at.clone())).collect();
@@ -3985,7 +3990,7 @@ export const App = () => <Box tone="red" />;
         const REFERENCE: &str = "const parts = { ...c };\n\
                                  function text(part) { return [part.element, Object.keys(part.admission.props).join(',')].join(' '); }\n\
                                  export function referenceText(name) { const part = parts[name]; if (part) return text(part); return ''; }\n";
-        let rows: [(&str, String, bool); 11] = [
+        let rows: [(&str, String, bool); 14] = [
             ("a factory's closure returns its argument", FACTORY.to_string(), true),
             (
                 "the factory writes its argument",
@@ -4004,7 +4009,26 @@ export const App = () => <Box tone="red" />;
                 false,
             ),
             ("the result is handed on", format!("{FACTORY}register(c);\n"), false),
+            (
+                "a fresh result's member that holds the argument is handed on",
+                "import { pad } from './tokens.js';\nconst id = (p) => ({ inner: p });\nexport const held = id(pad);\n\
+                 function mutate(x) { x.padding = 9; }\nmutate(held.inner);\n"
+                    .to_string(),
+                false,
+            ),
+            (
+                "a fresh result's other member is handed on",
+                "import { pad } from './tokens.js';\nconst id = (p) => ({ inner: p, other: { q: 1 } });\nexport const held = id(pad);\n\
+                 register(held.other);\n"
+                    .to_string(),
+                true,
+            ),
             ("an uncalled function returns pad", "import { pad } from './tokens.js';\nconst get = () => pad;\n".to_string(), true),
+            (
+                "a member of a held call result that holds pad is handed on",
+                "import { pad } from './tokens.js';\nconst get = () => ({ inner: pad });\nexport const g = get();\nregister(g.inner);\n".to_string(),
+                false,
+            ),
             (
                 "a held call result is written",
                 "import { pad } from './tokens.js';\nconst get = () => pad;\nexport const g = get();\ng.padding = 9;\n".to_string(),
