@@ -1,0 +1,9 @@
+{
+  "name": "@animus-ui/typescript-5.9",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pins TypeScript 5.9, the oldest TypeScript Animus supports. verify:types compiles the published declarations with it.",
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

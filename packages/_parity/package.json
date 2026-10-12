@@ -13,6 +13,6 @@
     "@animus-ui/assertions": "workspace:*",
     "@animus-ui/extract": "workspace:*",
     "lightningcss": "^1.33.0",
-    "oxc-parser": "^0.148.0"
+    "oxc-parser": "^0.153.0"
   }
 }
