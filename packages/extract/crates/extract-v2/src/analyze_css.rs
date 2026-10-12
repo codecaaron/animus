@@ -6258,6 +6258,52 @@ fn drain_transform_failures(
     }
 }
 
+/// An extension's variant rule order (`ComponentCss::variant_order`): its
+/// parent's rules it leaves unchanged, in the parent's order, then each
+/// option it adds or changes and each default it moves, axis by axis in its
+/// own order. An option is changed when its styles differ from the
+/// parent's (an added option, a deep-merged one, or a changed axis base); a
+/// default moves with its option, or when the extension picks another.
+fn extension_variant_order(parent: &ComponentCss, own: &[VariantCss]) -> Vec<(String, Option<String>)> {
+    let inherited = |prop: &str| parent.variants.iter().find(|variant| variant.prop == prop);
+    let changed = |variant: &VariantCss, option: &str| {
+        let styles = variant.options.iter().find(|(name, _)| name == option).map(|(_, styles)| styles);
+        let parent_styles = inherited(&variant.prop)
+            .and_then(|parent| parent.options.iter().find(|(name, _)| name == option))
+            .map(|(_, styles)| styles);
+        styles != parent_styles
+    };
+    let moves_default = |variant: &VariantCss| {
+        inherited(&variant.prop).map(|parent| &parent.default_option) != Some(&variant.default_option)
+            || variant.default_option.as_deref().is_some_and(|default| changed(variant, default))
+    };
+    let parent_order =
+        if parent.variant_order.is_empty() { crate::css::natural_variant_order(&parent.variants) } else { parent.variant_order.clone() };
+    let mut order: Vec<(String, Option<String>)> = parent_order
+        .into_iter()
+        .filter(|(prop, option)| match own.iter().find(|variant| variant.prop == *prop) {
+            None => true,
+            Some(variant) => match option {
+                Some(option) => variant.options.iter().any(|(name, _)| name == option) && !changed(variant, option),
+                None => !moves_default(variant),
+            },
+        })
+        .collect();
+    for variant in own {
+        order.extend(
+            variant
+                .options
+                .iter()
+                .filter(|(name, _)| changed(variant, name))
+                .map(|(name, _)| (variant.prop.clone(), Some(name.clone()))),
+        );
+        if variant.default_option.is_some() && moves_default(variant) {
+            order.push((variant.prop.clone(), None));
+        }
+    }
+    order
+}
+
 fn run_with_system_floor(
     files: &BTreeMap<String, FileFacts>,
     order: &[String],
@@ -6984,21 +7030,31 @@ fn run_with_system_floor(
                             _ => {}
                         }
 
-                        for pv in &parent_css.variants {
-                            if !component_css.variants.iter().any(|v| v.prop == pv.prop) {
-                                component_css.variants.push(VariantCss {
-                                    prop: pv.prop.clone(),
-                                    options: pv.options.clone(),
-                                    default_option: pv.default_option.clone(),
-                                });
-                            }
-                        }
+                        // Within a layer the ancestors' rules come first, so
+                        // at equal specificity the extension's choices win:
+                        // what it inherits unchanged keeps its parent's
+                        // order, and what it adds or changes follows.
+                        let own_variants = std::mem::take(&mut component_css.variants);
+                        component_css.variant_order = extension_variant_order(parent_css, &own_variants);
+                        component_css.variants = parent_css
+                            .variants
+                            .iter()
+                            .filter(|pv| !own_variants.iter().any(|v| v.prop == pv.prop))
+                            .cloned()
+                            .collect();
+                        component_css.variants.extend(own_variants);
 
-                        for (name, styles) in &parent_css.states {
-                            if !component_css.states.iter().any(|(n, _)| n == name) {
-                                component_css.states.push((name.clone(), styles.clone()));
-                            }
-                        }
+                        let own_states = std::mem::take(&mut component_css.states);
+                        let changed = |(name, styles): &&(String, ResolvedStyles)| {
+                            parent_css.states.iter().all(|(parent, inherited)| parent != name || inherited != styles)
+                        };
+                        component_css.states = parent_css
+                            .states
+                            .iter()
+                            .filter(|(name, _)| !own_states.iter().filter(changed).any(|(n, _)| n == name))
+                            .chain(own_states.iter().filter(changed))
+                            .cloned()
+                            .collect();
 
                         if !parent_css.compounds.is_empty() {
                             let mut merged_compounds = parent_css.compounds.clone();
@@ -12166,6 +12222,63 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "{}",
             out.sheets.base
         );
+    }
+
+    // Contract: within a layer, an extension's rules follow its ancestors',
+    // so at equal specificity its own choices win, at every depth.
+    #[test]
+    fn within_a_layer_an_extensions_rules_follow_its_ancestors() {
+        let out = analyze(
+            &[(
+                "family.tsx",
+                "export const Parent = ds.styles({ display: 'inline' })\n\
+                   .variant({ prop: 'size', defaultVariant: 'a', variants: { a: { display: 'block' } } })\n\
+                   .compound({ size: 'a' }, { opacity: 0.1 })\n\
+                   .states({ busy: { display: 'table' } })\n\
+                   .asElement('span');\n\
+                 export const Child = Parent.extend()\n\
+                   .variant({ prop: 'voice', defaultVariant: 'x', variants: { x: {}, y: { display: 'flex' } } })\n\
+                   .compound({ voice: 'y' }, { opacity: 0.2 })\n\
+                   .states({ open: { display: 'grid' } })\n\
+                   .asElement('ol');\n\
+                 export const Grand = Child.extend()\n\
+                   .variant({ prop: 'tone', defaultVariant: 'p', variants: { p: {}, q: { display: 'list-item' } } })\n\
+                   .states({ shut: { display: 'none' } })\n\
+                   .asElement('ul');\n\
+                 export const Duo = ds\n\
+                   .variant({ prop: 'first', defaultVariant: 'a', variants: { a: { display: 'block' }, c: { display: 'table' } } })\n\
+                   .variant({ prop: 'second', variants: { b: { display: 'flex' } } })\n\
+                   .asElement('div');\n\
+                 export const DuoChild = Duo.extend()\n\
+                   .variant({ prop: 'first', variants: { c: { opacity: 0.5 }, extra: { display: 'none' } } })\n\
+                   .asElement('div');\n\
+                 export const App = () => <><Child size='a' voice='y' busy open /><Grand size='a' voice='y' tone='q' busy open shut /><DuoChild first='a' second='b' /><DuoChild first='c' /><DuoChild first='extra' /></>;\n",
+            )],
+            &test_inputs(),
+        );
+        let at = |sheet: &str, component: &str, suffix: &str| {
+            sheet
+                .lines()
+                .position(|line| line.contains(&format!("animus-{component}-")) && line.contains(&format!("{suffix} {{")))
+                .unwrap_or_else(|| panic!("no {component} {suffix} rule:\n{sheet}"))
+        };
+        let variants = &out.sheets.variants;
+        assert!(at(variants, "Child", "--size-a") < at(variants, "Child", "--voice-y"), "{variants}");
+        assert!(at(variants, "Grand", "--size-a") < at(variants, "Grand", "--voice-y"), "{variants}");
+        assert!(at(variants, "Grand", "--voice-y") < at(variants, "Grand", "--tone-q"), "{variants}");
+        // An inherited option the extension leaves unchanged keeps its place
+        // among the parent's axes; one it adds or deep-merges into follows.
+        assert!(at(variants, "DuoChild", "--first-a") < at(variants, "DuoChild", "--second-b"), "{variants}");
+        assert!(at(variants, "DuoChild", "--second-b") < at(variants, "DuoChild", "--first-c"), "{variants}");
+        assert!(at(variants, "DuoChild", "--second-b") < at(variants, "DuoChild", "--first-extra"), "{variants}");
+        let states = &out.sheets.states;
+        assert!(at(states, "Child", "--busy") < at(states, "Child", "--open"), "{states}");
+        assert!(at(states, "Grand", "--busy") < at(states, "Grand", "--open"), "{states}");
+        assert!(at(states, "Grand", "--open") < at(states, "Grand", "--shut"), "{states}");
+        let compounds = &out.sheets.compounds;
+        let child = &compounds[compounds.find("animus-Child-").unwrap_or_else(|| panic!("{compounds}"))..];
+        let opacity = |value: &str| child.find(&format!("opacity: {value}")).unwrap_or_else(|| panic!("{compounds}"));
+        assert!(opacity("0.1") < opacity("0.2"), "{compounds}");
     }
 
     fn child_rule(out: &CssOutput) -> &str {

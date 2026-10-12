@@ -52,6 +52,7 @@ impl PipelineState {
     fn finish(self, class_name: String) -> ComponentPipelineOutput {
         ComponentPipelineOutput {
             component_css: ComponentCss {
+                variant_order: Vec::new(),
                 class_name,
                 base: self.base_styles,
                 variants: self.variant_css_list,

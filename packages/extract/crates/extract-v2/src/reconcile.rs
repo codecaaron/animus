@@ -330,6 +330,7 @@ mod tests {
         states: &[&str],
     ) -> ComponentCss {
         ComponentCss {
+            variant_order: Vec::new(),
             class_name: class_name.to_string(),
             base: None,
             variants: if options.is_empty() {

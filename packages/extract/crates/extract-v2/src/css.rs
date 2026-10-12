@@ -273,8 +273,55 @@ pub struct ComponentCss {
     pub class_name: String,
     pub base: Option<ResolvedStyles>,
     pub variants: Vec<VariantCss>,
+    /// The order the variant rules are written in, as (axis, option), with
+    /// `None` for the axis's default rule; empty for each axis's options
+    /// then its default, in `variants` order. An extension sets it: what it
+    /// inherits unchanged keeps its parent's order, and what it adds or
+    /// changes follows.
+    pub variant_order: Vec<(String, Option<String>)>,
     pub compounds: Vec<ResolvedStyles>,
     pub states: Vec<(String, ResolvedStyles)>,
+}
+
+impl ComponentCss {
+    /// The variant rules in the order they are written: each rule's
+    /// selector class and styles.
+    pub fn variant_rules(&self) -> Vec<(String, &ResolvedStyles)> {
+        let natural = natural_variant_order(&self.variants);
+        let mut written: FxHashSet<(&str, Option<&str>)> = FxHashSet::default();
+        let mut rules = Vec::new();
+        // An entry no longer present (a pruned option) writes nothing, and
+        // a rule the order leaves out still follows, in `variants` order.
+        for (prop, option) in self.variant_order.iter().chain(&natural) {
+            let Some(variant) = self.variants.iter().find(|variant| variant.prop == *prop) else { continue };
+            let Some((name, styles)) = (match option {
+                Some(option) => variant.options.iter().find(|(name, _)| name == option),
+                None => variant.default_option.as_ref().and_then(|default| variant.options.iter().find(|(name, _)| name == default)),
+            }) else {
+                continue;
+            };
+            if !written.insert((variant.prop.as_str(), option.as_ref().map(|_| name.as_str()))) {
+                continue;
+            }
+            let suffix = if option.is_some() { name.as_str() } else { "default" };
+            rules.push((format!("{}--{}-{}", self.class_name, variant.prop, suffix), styles));
+        }
+        rules
+    }
+}
+
+/// Each axis's options, then its default rule, in `variants` order.
+pub fn natural_variant_order(variants: &[VariantCss]) -> Vec<(String, Option<String>)> {
+    variants
+        .iter()
+        .flat_map(|variant| {
+            variant
+                .options
+                .iter()
+                .map(|(name, _)| (variant.prop.clone(), Some(name.clone())))
+                .chain(variant.default_option.as_ref().map(|_| (variant.prop.clone(), None)))
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -405,20 +452,8 @@ pub fn generate_css_sheets_ordered(
 
         if !component.variants.is_empty() {
             let mut frag = String::with_capacity(512);
-            for variant in &component.variants {
-                for (option_name, styles) in &variant.options {
-                    let selector = format!(
-                        "{}--{}-{}",
-                        component.class_name, variant.prop, option_name
-                    );
-                    write_rule_block(&mut frag, &selector, styles, breakpoints);
-                }
-                if let Some(ref default_name) = variant.default_option {
-                    if let Some((_name, styles)) = variant.options.iter().find(|(n, _)| n == default_name) {
-                        let selector = format!("{}--{}-default", component.class_name, variant.prop);
-                        write_rule_block(&mut frag, &selector, styles, breakpoints);
-                    }
-                }
+            for (selector, styles) in component.variant_rules() {
+                write_rule_block(&mut frag, &selector, styles, breakpoints);
             }
             if !frag.is_empty() {
                 fragments.total_variants_bytes += frag.len();
@@ -523,20 +558,8 @@ fn generate_layer_content(
                 }
             }
             LayerKind::Variants => {
-                for variant in &component.variants {
-                    for (option_name, styles) in &variant.options {
-                        let selector = format!(
-                            "{}--{}-{}",
-                            component.class_name, variant.prop, option_name
-                        );
-                        write_rule_block(&mut output, &selector, styles, breakpoints);
-                    }
-                    if let Some(ref default_name) = variant.default_option {
-                        if let Some((_name, styles)) = variant.options.iter().find(|(n, _)| n == default_name) {
-                            let selector = format!("{}--{}-default", component.class_name, variant.prop);
-                            write_rule_block(&mut output, &selector, styles, breakpoints);
-                        }
-                    }
+                for (selector, styles) in component.variant_rules() {
+                    write_rule_block(&mut output, &selector, styles, breakpoints);
                 }
             }
             LayerKind::Compounds => {
@@ -2195,6 +2218,7 @@ mod tests {
     #[test]
     fn generates_base_layer() {
         let components = vec![ComponentCss {
+            variant_order: Vec::new(),
             class_name: "animus-Box-abcd1234".to_string(),
             base: Some(ResolvedStyles {
                 declarations: vec![
@@ -2226,6 +2250,7 @@ mod tests {
     #[test]
     fn generates_variant_layer() {
         let components = vec![ComponentCss {
+            variant_order: Vec::new(),
             class_name: "animus-Btn-1234abcd".to_string(),
             base: None,
             variants: vec![VariantCss {
@@ -2269,6 +2294,7 @@ mod tests {
     #[test]
     fn generates_state_layer() {
         let components = vec![ComponentCss {
+            variant_order: Vec::new(),
             class_name: "animus-Layout-deadbeef".to_string(),
             base: None,
             variants: vec![],
@@ -2295,6 +2321,7 @@ mod tests {
     #[test]
     fn generates_pseudo_selectors() {
         let components = vec![ComponentCss {
+            variant_order: Vec::new(),
             class_name: "animus-Btn-aabb".to_string(),
             base: Some(ResolvedStyles {
                 declarations: vec![],
@@ -2321,6 +2348,7 @@ mod tests {
     #[test]
     fn generates_responsive_media() {
         let components = vec![ComponentCss {
+            variant_order: Vec::new(),
             class_name: "animus-Box-ccdd".to_string(),
             base: Some(ResolvedStyles {
                 declarations: vec![CssDeclaration {
@@ -2778,6 +2806,7 @@ mod tests {
 
     fn make_component_css(class_name: &str, variant_prop: &str, options: &[(&str, &str, &str)]) -> ComponentCss {
         ComponentCss {
+            variant_order: Vec::new(),
             class_name: class_name.to_string(),
             base: None,
             variants: vec![VariantCss {
@@ -2994,6 +3023,7 @@ mod tests {
     #[test]
     fn composed_includes_pseudo_selectors() {
         let child = ComponentCss {
+            variant_order: Vec::new(),
             class_name: "animus-Child-def".to_string(),
             base: None,
             variants: vec![VariantCss {
@@ -3039,6 +3069,7 @@ mod tests {
     #[test]
     fn composed_emits_selector_breakpoint_and_conditioned_groups() {
         let child = ComponentCss {
+            variant_order: Vec::new(),
             class_name: "animus-Child-def".to_string(),
             base: None,
             variants: vec![VariantCss {

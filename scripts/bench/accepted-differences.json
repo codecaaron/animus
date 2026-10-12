@@ -1,1 +1,9 @@
-[]
+[
+  {
+    "row": "build:vite-app",
+    "fixture": "vite-app",
+    "baseline": "398cec66a54f59e1aad03e0567f066d2bcb278a587628ec07d2cda15a3d78f03",
+    "candidate": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
+    "reason": "Within a layer an extension's rules follow its ancestors': StackItem's inherited direction variant now precedes its own emphasis variant, and the minifier merges the two adjacent flex-direction:column rules into one selector list. The same rules after splitting selector lists; no property is shared, so nothing changes winner."
+  }
+]
