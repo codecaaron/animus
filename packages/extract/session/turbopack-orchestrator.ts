@@ -286,16 +286,14 @@ export function startTurbopackWatcher(
     );
   };
 
-  /** Watches the system, asset and configuration dependencies no root
-   *  watcher reports, by their directories, for those files only. */
+  /** Watches the Session's plan (its files, and the absent paths whose
+   *  creation reloads the system) where no root watcher reports them, by
+   *  their directories, for those paths only. */
   const syncDependencyWatchers = (): void => {
     if (closed) return;
     const wanted = new Map<string, Set<string>>();
-    for (const path of [
-      ...session.systemDependencyPaths,
-      ...session.assetDependencyPaths,
-      ...session.configInputPaths,
-    ]) {
+    const plan = session.watchPlan();
+    for (const path of [...plan.files, ...plan.missing]) {
       if (watchedByRoot(path)) continue;
       const files = wanted.get(dirname(path)) ?? new Set<string>();
       files.add(path);

@@ -655,14 +655,11 @@ export const unpluginFactory: UnpluginFactory<
       try {
         await session.runFullPipeline();
       } catch (error) {
-        // A failed load still names what to watch for the retry: the files
-        // it read and the paths it found absent.
-        state.watchPaths = [
-          resolve(root, options.system),
-          ...session.systemDependencyPaths,
-          ...session.systemMissingPaths,
-          join(root, 'tsconfig.json'),
-        ];
+        // A failed load still names what to watch for the retry: the
+        // Session's plan holds the files it read and the paths it found
+        // absent.
+        const plan = session.watchPlan();
+        state.watchPaths = [...plan.files, ...plan.missing];
         throw error;
       }
       state.sessionDir = getSessionArtifactDir(session.key);
@@ -683,13 +680,14 @@ export const unpluginFactory: UnpluginFactory<
       state.analyzedFiles = [...analyzed.keys()].map((key) =>
         resolve(root, key)
       );
-      const watchPaths = new Set<string>(state.analyzedFiles);
-      for (const dep of session.systemDependencyPaths) watchPaths.add(dep);
-      // Absent now; creating one rebuilds against a system that loads it.
-      for (const path of session.systemMissingPaths) watchPaths.add(path);
-      for (const dep of session.assetDependencyPaths) watchPaths.add(dep);
-      watchPaths.add(join(root, 'tsconfig.json'));
-      state.watchPaths = [...watchPaths];
+      // Rollup watches only its module graph: the analysed files join the
+      // Session's plan (an absent path's creation rebuilds against a system
+      // that loads it). Its directories need no watch: Rollup's graph holds
+      // the kit sources an import reaches.
+      const plan = session.watchPlan();
+      state.watchPaths = [
+        ...new Set([...state.analyzedFiles, ...plan.files, ...plan.missing]),
+      ];
       state.transformFile = engineApi(session.key).transformFile;
     });
   }

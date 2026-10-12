@@ -16,17 +16,22 @@ describe('registerSystemWatchPaths', () => {
     const ctx = new PluginContext({ system: './src/ds.ts' });
     const add = vi.fn();
     ctx.devServer = { watcher: { add } };
-    // Registration reads only these three path lists of the Session.
+    // Registration reads the Session's watch plan, over these lists.
     ctx.session = Object.assign(Object.create(ExtractionSession.prototype), {
+      rootDir: null,
+      options: { system: './src/ds.ts' },
       systemDependencyPaths: [],
       systemMissingPaths: [],
+      assetDependencyPaths: new Set<string>(),
+      configInputPaths: [],
+      externalWatchRoots: [],
       externalPackageDirs: [],
       ...paths,
     });
     return { ctx, add };
   }
 
-  it('registers loader-reported system dependency paths, once per list', () => {
+  it('registers loader-reported system dependency paths, once each', () => {
     const { ctx, add } = contextWithWatcher({
       systemDependencyPaths: ['/ws/tokens/src/theme.ts'],
     });

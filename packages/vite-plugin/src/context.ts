@@ -5,7 +5,6 @@ import {
   contentHash,
   DEFAULT_EXTENSIONS,
   findSheetAssetSpecifiers,
-  isPathWithinRoot,
   parseFilesJson,
   resolveAssetFile,
   resolveVerbosity,
@@ -255,9 +254,8 @@ export class PluginContext {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   devServer: any;
 
-  /** The Session's path lists already registered with Vite's watcher; the
-   *  Session replaces a list when it changes. */
-  private readonly watchedPathLists = new WeakSet<readonly string[]>();
+  /** The paths already registered with Vite's watcher. */
+  private readonly watchedPaths = new Set<string>();
 
   // Per-plugin-instance engine state: two differently-configured plugins in
   // one process must not share an engine.
@@ -671,44 +669,30 @@ export class PluginContext {
     return this.session?.isSystemDependency(absFile) ?? false;
   }
 
-  /** Watch every loader-reported dependency path, the external package
-   *  roots, and the paths the load found absent that no watched directory
-   *  covers (creating one reloads the system). Vite hard-ignores
-   *  node_modules, so dependencies installed there produce no events. A list
-   *  already registered is not added again. */
+  /** Registers the Session's watch plan with Vite's watcher, each path
+   *  once. Vite also watches its packages' own directories beside the
+   *  plan's canonical roots, and an absent path either covers (or the root
+   *  does) is left to their watch: a watch on an absent file inside a
+   *  watched directory stops that directory's events under inotify
+   *  (chokidar's non-fsevents handler). Vite hard-ignores node_modules, so
+   *  dependencies installed there produce no events. */
   registerSystemWatchPaths(): void {
     const watcher = this.devServer?.watcher;
     const session = this.session;
     if (!watcher || !session) return;
-    for (const paths of [
-      session.systemDependencyPaths,
-      session.systemMissingPaths,
-      session.externalPackageDirs,
-    ]) {
-      if (paths.length === 0 || this.watchedPathLists.has(paths)) continue;
-      this.watchedPathLists.add(paths);
-      const added =
-        paths === session.systemMissingPaths
-          ? this.uncoveredMissingPaths(paths, session.externalPackageDirs)
-          : paths;
+    const directories = [
+      ...new Set([
+        ...session.watchPlan().directories,
+        ...session.externalPackageDirs,
+      ]),
+    ];
+    const covered = this.rootDir ? [this.rootDir, ...directories] : directories;
+    const plan = session.watchPlan(covered);
+    for (const paths of [plan.files, plan.missing, directories]) {
+      const added = paths.filter((path) => !this.watchedPaths.has(path));
+      for (const path of added) this.watchedPaths.add(path);
       if (added.length > 0) watcher.add(added);
     }
-  }
-
-  /** The absent paths no watched directory reports a creation for. Vite's
-   *  root watch and a package root's watch already do, and a watch on an
-   *  absent file inside a watched directory stops that directory's events
-   *  under inotify (chokidar's non-fsevents handler). */
-  private uncoveredMissingPaths(
-    paths: readonly string[],
-    packageDirs: readonly string[]
-  ): string[] {
-    const watchedDirs = this.rootDir
-      ? [this.rootDir, ...packageDirs]
-      : packageDirs;
-    return paths.filter(
-      (path) => !watchedDirs.some((dir) => isPathWithinRoot(dir, path))
-    );
   }
 
   /** Invalidate the component CSS and system-props modules, then reload. The
