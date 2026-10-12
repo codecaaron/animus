@@ -367,7 +367,7 @@ const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
 
 /** Diagnostic codes, and the host's uncoded warning kinds, in the build
  *  output; a line counts once per code it names. */
-function diagnosticCounts(lines: readonly string[]) {
+export function diagnosticCounts(lines: readonly string[]) {
   const counts = new Map<string, number>();
   const add = (key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
   for (const line of lines) {
@@ -841,4 +841,4 @@ function main(): void {
   if (unrunnable) process.exitCode = 1;
 }
 
-main();
+if (import.meta.main) main();
