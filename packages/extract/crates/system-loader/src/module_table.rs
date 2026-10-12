@@ -7,7 +7,7 @@
 //! import or re-export through it names its export without proving that the
 //! export exists, and an `export *` of it is an opening, never an absence.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// A module's position in the table.
 pub type ModuleIndex = usize;
@@ -178,6 +178,34 @@ pub struct ModuleTable<B> {
     modules: Vec<ModuleRecord<B>>,
     /// For each module, the modules that import, re-export or star it.
     dependents: Vec<BTreeSet<ModuleIndex>>,
+    /// Each module's export names, to the first local, indirect and
+    /// namespace export entry of each: what a search of those lists in
+    /// order finds, without searching them per lookup.
+    names: Vec<ExportIndex>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ExportIndex {
+    local: HashMap<String, usize>,
+    indirect: HashMap<String, usize>,
+    namespace: HashMap<String, usize>,
+}
+
+impl ExportIndex {
+    fn of<B, R>(record: &ModuleRecord<B, R>) -> Self {
+        fn first<'a>(names: impl Iterator<Item = &'a String>) -> HashMap<String, usize> {
+            let mut index = HashMap::new();
+            for (at, name) in names.enumerate() {
+                index.entry(name.clone()).or_insert(at);
+            }
+            index
+        }
+        Self {
+            local: first(record.local_exports.iter().map(|(name, _)| name)),
+            indirect: first(record.indirect_exports.iter().map(|(name, ..)| name)),
+            namespace: first(record.namespace_exports.iter().map(|(name, _)| name)),
+        }
+    }
 }
 
 impl<B: Clone + Eq + Ord> ModuleTable<B> {
@@ -190,7 +218,8 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
                 }
             }
         }
-        Self { modules, dependents }
+        let names = modules.iter().map(ExportIndex::of).collect();
+        Self { modules, dependents, names }
     }
 
     pub fn record(&self, module: ModuleIndex) -> &ModuleRecord<B> {
@@ -263,12 +292,13 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
             return ExportLookup::Absent;
         }
         let record = &self.modules[module];
+        let index = &self.names[module];
         let through = |request: RequestId| &record.requests[request];
-        if let Some((_, binding)) = record.local_exports.iter().find(|(exported, _)| exported == name) {
+        if let Some((_, binding)) = index.local.get(name).map(|&at| &record.local_exports[at]) {
             spelled.push((module, name.to_string()));
             return ExportLookup::Resolved(Terminal::Local { module, binding: binding.clone() });
         }
-        if let Some((_, request, imported)) = record.indirect_exports.iter().find(|(exported, ..)| exported == name) {
+        if let Some((_, request, imported)) = index.indirect.get(name).map(|&at| &record.indirect_exports[at]) {
             return match through(*request) {
                 Request::Module(target) => self.resolve(*target, imported, set, spelled),
                 Request::Outside(identity) => {
@@ -277,7 +307,7 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
                 Request::Unresolved(specifier) => unresolved(module, specifier, Some(imported)),
             };
         }
-        if let Some((_, request)) = record.namespace_exports.iter().find(|(exported, _)| exported == name) {
+        if let Some((_, request)) = index.namespace.get(name).map(|&at| &record.namespace_exports[at]) {
             return match through(*request) {
                 Request::Module(target) => {
                     spelled.push((module, name.to_string()));

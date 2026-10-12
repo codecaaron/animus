@@ -814,6 +814,17 @@ pub fn resolve_all_deps_reading(
     // canonical path → the bare specifier that pulled in a non-workspace
     // package, so the CommonJS guard can name the import that failed.
     let mut external_modules: HashMap<String, String> = HashMap::new();
+    // Each resolved file's canonical path, read once: a closure's modules
+    // import the same file many times.
+    let mut canonical_paths: HashMap<String, String> = HashMap::new();
+    let mut canonical = |resolved: &str| -> String {
+        canonical_paths
+            .entry(resolved.to_string())
+            .or_insert_with(|| {
+                fs::canonicalize(resolved).unwrap_or_else(|_| PathBuf::from(resolved)).to_string_lossy().to_string()
+            })
+            .clone()
+    };
 
     let entry_path = fs::canonicalize(system_path)
         .map_err(|e| format!("failed to canonicalize '{}': {}", system_path, e))?
@@ -889,10 +900,7 @@ pub fn resolve_all_deps_reading(
                 ));
                 match resolution {
                     Ok(resolved) => {
-                        let canonical = fs::canonicalize(&resolved)
-                            .unwrap_or_else(|_| PathBuf::from(&resolved))
-                            .to_string_lossy()
-                            .to_string();
+                        let canonical = canonical(&resolved);
                         specifier_map
                             .insert((current_path.clone(), spec.clone()), canonical.clone());
                         if !visited.contains(&canonical) {
@@ -931,10 +939,7 @@ pub fn resolve_all_deps_reading(
                 // package into "X is not a function" in an unrelated module.
                 match resolve_bare_specifier_observed(spec, &current_dir.to_string_lossy(), context, reads) {
                     Ok((resolved, manifest)) => {
-                        let canonical = fs::canonicalize(&resolved)
-                            .unwrap_or_else(|_| PathBuf::from(&resolved))
-                            .to_string_lossy()
-                            .to_string();
+                        let canonical = canonical(&resolved);
                         let manifest = fs::canonicalize(&manifest)
                             .unwrap_or(manifest)
                             .to_string_lossy()
@@ -1112,14 +1117,15 @@ fn build_bundle(
     let order = linked::evaluation_order(specifier_map, source_map, entry_path);
     let mut paths: Vec<&String> = source_map.keys().collect();
     paths.sort();
+    let refs: linked::ModuleRefs = paths.iter().enumerate().map(|(at, path)| ((*path).clone(), at)).collect();
     let mut modules: HashMap<String, linked::LinkedModule> = HashMap::with_capacity(paths.len());
     for path in &paths {
-        let module = linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map)?;
+        let module = linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map, &refs)?;
         modules.insert((*path).clone(), module);
     }
     // An import or re-export that links to nothing fails here, before any
     // module runs.
-    let linker = linked::Linker::new(&modules, stub_exports, type_exports);
+    let linker = linked::Linker::new(&modules, stub_exports, type_exports, &refs);
     for path in &paths {
         linker.check_links(path)?;
     }
@@ -1127,9 +1133,12 @@ fn build_bundle(
         paths.iter().enumerate().map(|(index, path)| (path.as_str(), format!("__linked{index}"))).collect();
     let generator = |module: &str| &generators[module];
 
-    // The global-style and theme scans walk `__modules` in this order.
+    // The global-style and theme scans walk `__modules` in this order. Each
+    // module object is also listed, by its place among the sorted paths, in
+    // `__modules['#']`, which no scan enumerates.
+    bundle.push_str("Object.defineProperty(__modules, '#', { value: [] });\n");
     for path in &order {
-        let _ = writeln!(bundle, "__modules['{}'] = {{}};", js_quoted(path));
+        let _ = writeln!(bundle, "__modules['#'][{}] = __modules['{}'] = {{}};", refs[path], js_quoted(path));
     }
     bundle.push('\n');
     let mut module_spans = Vec::with_capacity(paths.len());
@@ -1149,8 +1158,8 @@ fn build_bundle(
         for (name, read) in linker.getters(path) {
             let _ = writeln!(
                 bundle,
-                "Object.defineProperty(__modules['{}'], '{}', {{ enumerable: true, get: () => {} }});",
-                js_quoted(path),
+                "Object.defineProperty({}, '{}', {{ enumerable: true, get: () => {} }});",
+                linked::module_ref(&refs, path),
                 js_quoted(&name),
                 read
             );

@@ -36,9 +36,22 @@ fn module_key(path: &str, spec: &str, specifier_map: &HashMap<(String, String), 
         .unwrap_or_else(|| stub_key(spec))
 }
 
+/// Each analysed module's place in `__modules['#']`, the registry's
+/// non-enumerable list of module objects, by key: a read through it names a
+/// module in a few characters where its key is a whole path.
+pub(crate) type ModuleRefs = HashMap<String, usize>;
+
+/// The expression for the module object registered as `key`.
+pub(crate) fn module_ref(refs: &ModuleRefs, key: &str) -> String {
+    match refs.get(key) {
+        Some(at) => format!("__modules['#'][{at}]"),
+        None => format!("__modules['{}']", js_quoted(key)),
+    }
+}
+
 /// The read of export `name` of the module registered as `key`.
-fn export_read(key: &str, name: &str) -> String {
-    format!("__modules['{}']['{}']", js_quoted(key), js_quoted(name))
+fn export_read(refs: &ModuleRefs, key: &str, name: &str) -> String {
+    format!("{}['{}']", module_ref(refs, key), js_quoted(name))
 }
 
 /// Every module in evaluation order: depth-first post-order from the entry,
@@ -154,6 +167,7 @@ pub(crate) fn rewrite_module_for_linking(
     source: &str,
     canonical_path: &str,
     specifier_map: &HashMap<(String, String), String>,
+    refs: &ModuleRefs,
 ) -> Result<LinkedModule, String> {
     let allocator = Allocator::default();
     let ParserReturn { program, .. } =
@@ -212,7 +226,7 @@ pub(crate) fn rewrite_module_for_linking(
                         ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
                             let local = &namespace.local;
                             import_targets.insert(local.name.to_string(), ExportTarget::Namespace { from: from.clone() });
-                            imported.insert(local.symbol_id(), format!("__modules['{}']", js_quoted(&from)));
+                            imported.insert(local.symbol_id(), module_ref(refs, &from));
                             continue;
                         }
                     };
@@ -222,7 +236,7 @@ pub(crate) fn rewrite_module_for_linking(
                         local.name.to_string(),
                         ExportTarget::Indirect { from: from.clone(), name: name.clone() },
                     );
-                    imported.insert(local.symbol_id(), export_read(&from, &name));
+                    imported.insert(local.symbol_id(), export_read(refs, &from, &name));
                 }
                 remove(&mut edits, decl.span.start, decl.span.end);
             }
@@ -443,6 +457,7 @@ pub(crate) struct Linker<'a> {
     /// Each TypeScript module's type-only export names, which its stripped
     /// record no longer holds.
     type_exports: &'a HashMap<String, HashSet<String>>,
+    refs: &'a ModuleRefs,
 }
 
 impl<'a> Linker<'a> {
@@ -450,6 +465,7 @@ impl<'a> Linker<'a> {
         modules: &HashMap<String, LinkedModule>,
         stubs: &'a HashMap<String, HashSet<String>>,
         type_exports: &'a HashMap<String, HashSet<String>>,
+        refs: &'a ModuleRefs,
     ) -> Self {
         use crate::module_table::{Import, ImportName, ModuleRecord, ModuleTable, Request};
         let mut keys: Vec<String> = modules.keys().cloned().collect();
@@ -459,14 +475,16 @@ impl<'a> Linker<'a> {
         for key in &keys {
             let linked = &modules[key];
             let mut requests: Vec<Request> = Vec::new();
+            // Each distinct request once, numbered in first-seen order.
+            let mut numbered: HashMap<Request, usize> = HashMap::new();
             let mut request = |from: &str| {
                 let target = match index.get(from) {
                     Some(&at) => Request::Module(at),
                     None if stubs.contains_key(from) => Request::Outside(from.to_string()),
                     None => Request::Unresolved(from.to_string()),
                 };
-                requests.iter().position(|known| *known == target).unwrap_or_else(|| {
-                    requests.push(target);
+                *numbered.entry(target).or_insert_with_key(|target| {
+                    requests.push(target.clone());
                     requests.len() - 1
                 })
             };
@@ -497,7 +515,7 @@ impl<'a> Linker<'a> {
             record.requests = requests;
             records.push(record);
         }
-        Self { table: ModuleTable::new(records), keys, index, stubs, type_exports }
+        Self { table: ModuleTable::new(records), keys, index, stubs, type_exports, refs }
     }
 
     /// Export `name` of `module`, with each open star of a stub closed: the
@@ -546,11 +564,11 @@ impl<'a> Linker<'a> {
                     .find(|(exported, local)| exported == asked && local == binding)
                     .or_else(|| exports.iter().find(|(_, local)| local == binding))
                     .map(|(exported, _)| exported)?;
-                Some(export_read(&self.keys[*module], name))
+                Some(export_read(self.refs, &self.keys[*module], name))
             }
-            Terminal::Namespace(module) => Some(format!("__modules['{}']", js_quoted(&self.keys[*module]))),
-            Terminal::External { module, export: Some(name) } => Some(export_read(module, name)),
-            Terminal::External { module, export: None } => Some(format!("__modules['{}']", js_quoted(module))),
+            Terminal::Namespace(module) => Some(module_ref(self.refs, &self.keys[*module])),
+            Terminal::External { module, export: Some(name) } => Some(export_read(self.refs, module, name)),
+            Terminal::External { module, export: None } => Some(module_ref(self.refs, module)),
         }
     }
 
