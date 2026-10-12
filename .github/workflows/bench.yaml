@@ -4,7 +4,9 @@ name: Bench
 # Linux x64 binary and dists in turn and runs that commit's verify:bench
 # against the pinned reference release, all on one runner, so commits are
 # compared on the same hardware. Each commit's receipt is uploaded under
-# its position and ref, so a ref may repeat as a drift control.
+# its position and ref, so a ref may repeat as a drift control. With
+# `profile`, each commit's binary keeps its symbols and its large-closure
+# load is also profiled, and those reports are uploaded beside its receipt.
 
 on:
   workflow_dispatch:
@@ -18,6 +20,11 @@ on:
         required: false
         type: string
         default: ''
+      profile:
+        description: Also profile each commit's large-closure load (perf, perf stat, strace) on an unstripped build
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -45,8 +52,14 @@ jobs:
         env:
           REFS: ${{ inputs.refs }}
           ROWS: ${{ inputs.rows }}
+          PROFILE: ${{ inputs.profile }}
         run: |
           set -euo pipefail
+          if [ "$PROFILE" = true ]; then
+            sudo apt-get install -y -qq strace linux-tools-common "linux-tools-$(uname -r)"
+            sudo sysctl -qw kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
+            export CARGO_PROFILE_RELEASE_STRIP=none
+          fi
           receipts="$RUNNER_TEMP/receipts"
           mkdir -p "$receipts"
           rows=()
@@ -56,6 +69,10 @@ jobs:
             n=$((n + 1))
             echo "::group::$ref"
             git checkout --force --quiet "$ref"
+            # Each ref installs from its own lockfile into empty node_modules:
+            # bun keeps an earlier ref's packages as "no changes". The reference
+            # tarballs and cargo targets carry over.
+            git clean -ffdxq -e .bench -e target
             bun install
             (
               cd packages/extract/crates/extract-v2
@@ -67,6 +84,14 @@ jobs:
             rm -rf .bench/receipts
             bun scripts/bench/run.ts "${rows[@]}" || echo "::warning::$ref did not pass verify:bench"
             cp .bench/receipts/*.json "$receipts/$n-$ref.json"
+            if [ "$PROFILE" = true ]; then
+              closure="$PWD/.bench/fixtures/large-closure"
+              load=(node scripts/bench/runners/loader.cjs "$PWD/packages/extract" "$closure/src/system.ts" "$closure")
+              perf stat -r 9 -e task-clock,page-faults,context-switches,cpu-migrations -- "${load[@]}" > /dev/null 2> "$receipts/$n-$ref.stat.txt"
+              strace -f -c -o "$receipts/$n-$ref.strace.txt" -- "${load[@]}" > /dev/null
+              perf record -q -F 2999 -g -o "$RUNNER_TEMP/perf.data" -- "${load[@]}" > /dev/null
+              perf report -i "$RUNNER_TEMP/perf.data" --no-children --sort dso,symbol --stdio --percent-limit 0.3 > "$receipts/$n-$ref.perf.txt" 2> /dev/null
+            fi
             echo "::endgroup::"
           done
 
