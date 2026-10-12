@@ -847,6 +847,79 @@ export const ds = base.extend(kit).build().seal();`
     expect(members).toEqual([]);
     expect(codes).toEqual(['animus.discovery.unfollowed-system-builder']);
   });
+
+  /** The membership of `system` beside the installed `kit` and `nested`. */
+  const readWithKits = async (
+    kitSource: string,
+    system: string,
+    nestedSource = NESTED
+  ): Promise<{ members: string[]; codes: string[] }> => {
+    const path = writeFixture(system);
+    const dir = dirname(path);
+    kit(join(dir, 'node_modules'), 'nested', nestedSource);
+    kit(join(dir, 'node_modules'), 'kit', kitSource);
+    const codes: string[] = [];
+    try {
+      const members = await extractSystemFilePackages(
+        path,
+        ENGINE,
+        (diagnostic) => codes.push(diagnostic.code ?? ''),
+        resolvePackage
+      );
+      return { members, codes };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("a namespace import's member is a member, in the system and in a kit", async () => {
+    expect(
+      await readWithKits(
+        `import { createSystem } from '@animus-ui/system';
+import * as nested from 'nested/definition';
+export const ds = createSystem().extend(nested.ds).build().seal();`,
+        `import { createSystem } from '@animus-ui/system';
+import * as kit from 'kit/definition';
+export const ds = createSystem().extend(kit.ds).build().seal();`
+      )
+    ).toEqual({ members: ['kit/definition', 'nested/definition'], codes: [] });
+  });
+
+  test("a kit whose system is its default export has that system's members", async () => {
+    expect(
+      await readWithKits(
+        `import { createSystem } from '@animus-ui/system';
+import { ds as nested } from 'nested/definition';
+export default createSystem().extend(nested).build().seal();`,
+        `import { createSystem } from '@animus-ui/system';
+import kit from 'kit/definition';
+export const ds = createSystem().extend(kit).build().seal();`
+      )
+    ).toEqual({ members: ['kit/definition', 'nested/definition'], codes: [] });
+  });
+
+  test('a holder of a builder that membership cannot follow is a finding', async () => {
+    for (const held of [
+      `const holder = {};
+holder.base = createSystem();
+export const ds = holder['base'].extend(kit).build().seal();`,
+      `const holder = { base: createSystem() };
+const { base: renamed } = holder;
+export const ds = renamed.extend(kit).build().seal();`,
+      `const holder = { base: createSystem() };
+const take = (from) => from.base;
+export const ds = take(holder).extend(kit).build().seal();`,
+    ]) {
+      expect(
+        await read(`import { createSystem } from '@animus-ui/system';
+import { system as kit } from 'plain-kit/definition';
+${held}`)
+      ).toEqual({
+        members: [],
+        codes: ['animus.discovery.unfollowed-system-builder'],
+      });
+    }
+  });
 });
 
 describe('extractSystemFilePackages root bindings', () => {

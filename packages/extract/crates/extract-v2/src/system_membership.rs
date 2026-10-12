@@ -142,11 +142,16 @@ struct Follower<'i> {
 }
 
 /// The names a module exports by declaring them: `export function`,
-/// `export class`, or `export const`/`let`/`var`.
+/// `export class`, `export const`/`let`/`var`, or `export default`.
 fn declared_exports(program: &Program<'_>) -> BTreeSet<String> {
     use oxc::ast::ast::{Declaration, Statement};
     let mut names = BTreeSet::new();
     for statement in &program.body {
+        // `export default <expression>` declares the module's default.
+        if let Statement::ExportDefaultDeclaration(_) = statement {
+            names.insert("default".to_string());
+            continue;
+        }
         let Statement::ExportNamedDeclaration(export) = statement else { continue };
         match &export.declaration {
             Some(Declaration::FunctionDeclaration(function)) => {
@@ -439,16 +444,26 @@ fn leftmost<'b, 'a>(expr: &'b Expression<'a>) -> &'b Expression<'a> {
     }
 }
 
-/// The base identifier of a link's single argument: `x` or `x.member…`.
+/// The base identifier of a link's single argument, with the member read
+/// directly off it: `x` for `x`, `x.member` for `x.member…`.
 fn link_base(call: &CallExpression<'_>) -> Option<String> {
     if call.arguments.len() != 1 {
         return None;
     }
     let mut expr = call.arguments[0].as_expression()?;
+    let mut member_name = None;
     loop {
         match expr {
-            Expression::Identifier(ident) => return Some(ident.name.to_string()),
-            Expression::StaticMemberExpression(member) => expr = &member.object,
+            Expression::Identifier(ident) => {
+                return Some(match member_name {
+                    Some(member) => format!("{}.{member}", ident.name),
+                    None => ident.name.to_string(),
+                });
+            }
+            Expression::StaticMemberExpression(member) => {
+                member_name = Some(member.property.name.to_string());
+                expr = &member.object;
+            }
             _ => return None,
         }
     }
@@ -917,7 +932,11 @@ fn members(source: &str, scan: &Scan<'_>, facts: &FileFacts, roots: &BTreeSet<St
     }
     let mut members: Vec<(String, String)> = Vec::new();
     for identifier in identifiers {
-        let mut current = identifier;
+        let (base, read) = match identifier.split_once('.') {
+            Some((base, read)) => (base.to_string(), Some(read)),
+            None => (identifier.clone(), None),
+        };
+        let mut current = base;
         let mut seen = BTreeSet::new();
         while !imports.contains_key(current.as_str()) && seen.insert(current.clone()) {
             match aliases.get(&current) {
@@ -925,11 +944,15 @@ fn members(source: &str, scan: &Scan<'_>, facts: &FileFacts, roots: &BTreeSet<St
                 None => break,
             }
         }
-        if let Some((specifier, imported)) = imports.get(current.as_str()) {
-            let member = (specifier.to_string(), imported.to_string());
-            if !members.contains(&member) {
-                members.push(member);
-            }
+        // A named import binds the member; a namespace import's member
+        // (`kit.system`) is that module's export of the name.
+        let member = match (imports.get(current.as_str()), facts.namespace_imports.get(&current), read) {
+            (Some((specifier, imported)), _, _) => (specifier.to_string(), imported.to_string()),
+            (None, Some(specifier), Some(read)) => (specifier.clone(), read.to_string()),
+            _ => continue,
+        };
+        if !members.contains(&member) {
+            members.push(member);
         }
     }
     members
@@ -979,6 +1002,7 @@ fn escape_how(kind: &AstKind<'_>) -> &'static str {
         AstKind::VariableDeclarator(_) => "it is destructured",
         AstKind::AssignmentExpression(_) => "it is assigned to a target membership does not follow",
         AstKind::ObjectProperty(_) => "it is stored under a computed key",
+        AstKind::ComputedMemberExpression(_) => "it is read through a computed key",
         _ => "it is used where membership does not follow it",
     }
 }
@@ -987,7 +1011,10 @@ fn escape_how(kind: &AstKind<'_>) -> &'static str {
 /// membership follows: a declaration, an assignment to a name or a property,
 /// an object property, or a statement of its own. A builder bound by one is
 /// followed through the binding's uses: a name by its references, a property
-/// by the dotted paths that end in it, as membership reads them.
+/// by the dotted paths that end in it, as membership reads them. The object
+/// holding a property-bound builder is followed too: read through a dotted
+/// path or bound to another name, it is followed; used any other way, its
+/// builder leaves what membership follows.
 fn escapes(semantic: &Semantic<'_>, source: &str, roots: &BTreeSet<String>) -> Vec<RootFinding> {
     let nodes = semantic.nodes();
     let scoping = semantic.scoping();
@@ -1001,6 +1028,7 @@ fn escapes(semantic: &Semantic<'_>, source: &str, roots: &BTreeSet<String>) -> V
         .collect();
     let mut symbols: BTreeSet<SymbolId> = BTreeSet::new();
     let mut properties: BTreeSet<String> = BTreeSet::new();
+    let mut holders: Vec<SymbolId> = Vec::new();
     let mut findings = Vec::new();
     let mut follow_symbol = |symbol: Option<SymbolId>, starts: &mut Vec<NodeId>| {
         if let Some(symbol) = symbol {
@@ -1032,12 +1060,32 @@ fn escapes(semantic: &Semantic<'_>, source: &str, roots: &BTreeSet<String>) -> V
                     follow_symbol(symbol, &mut starts);
                     continue;
                 }
-                AssignmentTarget::StaticMemberExpression(target) => property = Some(target.property.name.to_string()),
+                AssignmentTarget::StaticMemberExpression(target) => {
+                    property = Some(target.property.name.to_string());
+                    // `holder.base = …`: the path's first name holds it.
+                    let mut object = &target.object;
+                    while let Expression::StaticMemberExpression(member) = object {
+                        object = &member.object;
+                    }
+                    if let Expression::Identifier(ident) = object {
+                        let symbol = ident.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
+                        holders.extend(symbol);
+                    }
+                }
                 _ => {}
             },
             AstKind::ObjectProperty(object_property) if !object_property.computed && object_property.value.span() == span => {
                 if let PropertyKey::StaticIdentifier(key) = &object_property.key {
                     property = Some(key.name.to_string());
+                    if let Some(found) = holding_object(nodes, scoping, parent.id()) {
+                        match found {
+                            Ok(symbol) => holders.extend(symbol),
+                            Err((at, how)) => {
+                                let (line, column) = crate::facts::line_column(source, at);
+                                findings.push(RootFinding::Escapes { line, column, how: how.to_string() });
+                            }
+                        }
+                    }
                 }
             }
             AstKind::ExpressionStatement(_)
@@ -1067,5 +1115,90 @@ fn escapes(semantic: &Semantic<'_>, source: &str, roots: &BTreeSet<String>) -> V
         let (line, column) = crate::facts::line_column(source, span.start);
         findings.push(RootFinding::Escapes { line, column, how: escape_how(&parent.kind()).to_string() });
     }
+
+    // Each holder's uses, and the names it is bound to in turn.
+    let mut held: BTreeSet<SymbolId> = BTreeSet::new();
+    let mut index = 0;
+    while index < holders.len() {
+        let symbol = holders[index];
+        index += 1;
+        if !held.insert(symbol) {
+            continue;
+        }
+        for reference in semantic.symbol_references(symbol).filter(|reference| !reference.is_write()) {
+            let node = reference.node_id();
+            let span = nodes.kind(node).span();
+            let parent = nodes.parent_node(node);
+            match parent.kind() {
+                AstKind::StaticMemberExpression(member) if member.object.span() == span => continue,
+                // A computed write stores another value; a computed read
+                // takes the builder out of sight.
+                AstKind::ComputedMemberExpression(member)
+                    if member.object.span() == span
+                        && matches!(nodes.parent_kind(parent.id()),
+                            AstKind::AssignmentExpression(assignment) if assignment.left.span() == member.span) =>
+                {
+                    continue
+                }
+                AstKind::VariableDeclarator(declarator) if declarator.init.as_ref().is_some_and(|init| init.span() == span) => {
+                    if let BindingPattern::BindingIdentifier(ident) = &declarator.id {
+                        holders.extend(ident.symbol_id.get());
+                        continue;
+                    }
+                }
+                AstKind::AssignmentExpression(assignment) if assignment.right.span() == span => {
+                    if let AssignmentTarget::AssignmentTargetIdentifier(target) = &assignment.left {
+                        holders.extend(target.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id()));
+                        continue;
+                    }
+                }
+                AstKind::ExpressionStatement(_)
+                | AstKind::ExportDefaultDeclaration(_)
+                | AstKind::ExportSpecifier(_)
+                | AstKind::TSTypeQuery(_)
+                | AstKind::UnaryExpression(_) => continue,
+                _ => {}
+            }
+            let (line, column) = crate::facts::line_column(source, span.start);
+            findings.push(RootFinding::Escapes { line, column, how: escape_how(&parent.kind()).to_string() });
+        }
+    }
     findings
+}
+
+/// Where an object literal holding a builder goes: the name it is bound to,
+/// or the offset and manner of a use membership does not follow.
+type Holding = Result<Option<SymbolId>, (u32, &'static str)>;
+
+/// Where the object literal holding a builder under `property` goes,
+/// through enclosing literals; None where it is a statement of its own or a
+/// module's default export, or assigned to a property, whose paths are read
+/// by spelling.
+fn holding_object(nodes: &AstNodes<'_>, scoping: &oxc::semantic::Scoping, property: NodeId) -> Option<Holding> {
+    let mut object = nodes.parent_id(property);
+    // `{ a: { base: createSystem() } }`: the outermost literal holds it.
+    while let AstKind::ObjectProperty(outer) = nodes.parent_kind(object) {
+        if outer.computed || outer.value.span() != nodes.kind(object).span() {
+            break;
+        }
+        object = nodes.parent_id(nodes.parent_id(object));
+    }
+    let span = nodes.kind(object).span();
+    let parent = nodes.parent_node(object);
+    match parent.kind() {
+        AstKind::VariableDeclarator(declarator) if declarator.init.as_ref().is_some_and(|init| init.span() == span) => {
+            match &declarator.id {
+                BindingPattern::BindingIdentifier(ident) => Some(Ok(ident.symbol_id.get())),
+                _ => Some(Err((span.start, "it is destructured"))),
+            }
+        }
+        AstKind::AssignmentExpression(assignment) if assignment.right.span() == span => match &assignment.left {
+            AssignmentTarget::AssignmentTargetIdentifier(target) => {
+                Some(Ok(target.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id())))
+            }
+            _ => None,
+        },
+        AstKind::ExpressionStatement(_) | AstKind::ExportDefaultDeclaration(_) => None,
+        other => Some(Err((span.start, escape_how(&other)))),
+    }
 }
