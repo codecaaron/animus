@@ -1,0 +1,79 @@
+name: Bench
+
+# Manual speed-gate runs that never publish: builds each listed commit's
+# Linux x64 binary and dists in turn and runs that commit's verify:bench
+# against the pinned reference release, all on one runner, so commits are
+# compared on the same hardware. Each commit's receipt is uploaded under
+# its position and ref, so a ref may repeat as a drift control.
+
+on:
+  workflow_dispatch:
+    inputs:
+      refs:
+        description: Commits to measure, space-separated, in order
+        required: true
+        type: string
+      rows:
+        description: verify:bench rows to run, space-separated (empty runs every row)
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - name: Measure each commit
+        env:
+          REFS: ${{ inputs.refs }}
+          ROWS: ${{ inputs.rows }}
+        run: |
+          set -euo pipefail
+          receipts="$RUNNER_TEMP/receipts"
+          mkdir -p "$receipts"
+          rows=()
+          for row in $ROWS; do rows+=(--row "$row"); done
+          n=0
+          for ref in $REFS; do
+            n=$((n + 1))
+            echo "::group::$ref"
+            git checkout --force --quiet "$ref"
+            bun install
+            (
+              cd packages/extract/crates/extract-v2
+              unset RUSTUP_TOOLCHAIN
+              bunx @napi-rs/cli build --platform --no-js --release --target x86_64-unknown-linux-gnu
+            )
+            bunx vp run build:ts
+            bun scripts/bench/prepare.ts
+            rm -rf .bench/receipts
+            bun scripts/bench/run.ts "${rows[@]}" || echo "::warning::$ref did not pass verify:bench"
+            cp .bench/receipts/*.json "$receipts/$n-$ref.json"
+            echo "::endgroup::"
+          done
+
+      - name: Upload receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: receipts-bench-refs
+          path: ${{ runner.temp }}/receipts/
+          if-no-files-found: error
