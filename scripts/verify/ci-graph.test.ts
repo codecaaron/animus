@@ -68,10 +68,12 @@ const verificationDependencies = [
   'verify-packed',
 ];
 /** A release no longer waits on the Worker builds, which run only on an
- *  explicit dispatch. */
-const releaseDependencies = verificationDependencies.filter(
-  (job) => job !== 'verify-workers'
-);
+ *  explicit dispatch, and waits on the speed gate, which runs only where a
+ *  release publishes. */
+const releaseDependencies = [
+  ...verificationDependencies.filter((job) => job !== 'verify-workers'),
+  'bench',
+];
 /** Worker builds and deploys run only on a dispatch that asks for them. */
 const workerDispatch =
   "github.event_name == 'workflow_dispatch' && inputs.deploy_workers == true";
@@ -186,6 +188,7 @@ describe('parsed CI graph', () => {
       'verify-vite',
       'verify-workers',
       'verify-packed',
+      'bench',
       'deploy-workers',
       'release',
     ]);
@@ -216,6 +219,7 @@ describe('parsed CI graph', () => {
         needs: ['build-extract'],
         runsOn: 'ubuntu-latest',
       },
+      bench: { needs: ['build-extract'], runsOn: 'ubuntu-latest' },
       'deploy-workers': {
         needs: verificationDependencies,
         runsOn: 'ubuntu-latest',
@@ -305,6 +309,10 @@ describe('parsed CI graph', () => {
 
     expect(normalizeWhitespace(jobs.release.if)).toBe(releaseCondition);
     expect(jobs.release.needs).toEqual(releaseDependencies);
+    // The speed gate runs exactly where a release publishes: a release
+    // never waits on a skipped gate, and no other push spends its minutes.
+    expect(normalizeWhitespace(jobs.bench.if)).toBe(releaseCondition);
+    expect(jobs['deploy-workers'].needs).not.toContain('bench');
     expect(jobs.release.needs).not.toContain('deploy-workers');
     expect(normalizeWhitespace(jobs['verify-workers'].if)).toBe(workerDispatch);
   });
@@ -317,6 +325,7 @@ describe('parsed CI graph', () => {
       'verify-vite',
       'verify-workers',
       'verify-packed',
+      'bench',
     ];
 
     for (const jobName of preparedLanes) {
@@ -341,6 +350,12 @@ describe('parsed CI graph', () => {
         'bunx vp run @animus-ui/next-app#verify:assert\n' +
         'bunx vp run @animus-ui/next-app#verify:prefixed\n'
     );
+    expect(
+      namedStep(jobs.bench, 'Fetch the pinned reference release').run
+    ).toBe('bun scripts/bench/prepare.ts');
+    expect(namedStep(jobs.bench, 'Speed gate').run).toBe(
+      'bunx vp run verify:bench'
+    );
     expect(namedStep(jobs['verify-vite'], 'Vite consumer lane').run).toBe(
       'bunx vp run @animus-ui/vite-app#verify:build\n' +
         'bunx vp run @animus-ui/vite-app#verify:assert\n' +
@@ -364,6 +379,7 @@ describe('parsed CI graph', () => {
       'verify-next': ['receipts-next', 'e2e/next-app/.receipts/'],
       'verify-vite': ['receipts-vite', 'e2e/vite-app/.receipts/'],
       'verify-packed': ['receipts-packed', 'e2e/packed-app/.staging/receipts/'],
+      bench: ['receipts-bench', '.bench/receipts/'],
     } as const;
     for (const [jobName, [name, path]] of Object.entries(receipts)) {
       const upload = namedStep(jobs[jobName], 'Upload lane receipts');
