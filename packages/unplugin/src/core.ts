@@ -981,7 +981,10 @@ export const unpluginFactory: UnpluginFactory<
         modeOracle = this.meta?.watchMode ? 'development' : 'production';
         hostResolver = pluginResolver(this);
         try {
-          await startPipeline();
+          // The build buildEnd retires is the one opened here, as in the
+          // normalized buildStart.
+          if (await openEnvironmentBuild(this)) await joinPipeline();
+          else await startPipeline();
         } finally {
           registerWatchTargets(this);
         }

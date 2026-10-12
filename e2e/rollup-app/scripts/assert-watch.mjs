@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import {
   cpSync,
   existsSync,
@@ -195,6 +196,68 @@ try {
 } finally {
   run.signal('SIGKILL');
   cleanup();
+}
+
+// The Rollup host's own watch, through the plugin rather than `animus
+// watch`: an edit rebuilds and the emitted sheet takes it. Without this leg
+// nothing drove a plugin watch rebuild, so a rebuild that throws passed.
+const hostScratch = join(lane, 'fixtures', `.watch-host-${process.pid}`);
+const hostConfig = join(lane, `.watch-host-${process.pid}.config.mjs`);
+const hostWidget = join(hostScratch, 'src', 'Widget.tsx');
+const hostSheet = join(hostScratch, 'out', 'animus.css');
+const sheetHas = (color) =>
+  existsSync(hostSheet) && readFileSync(hostSheet, 'utf-8').includes(color);
+let host = null;
+try {
+  rmSync(hostScratch, { recursive: true, force: true });
+  cpSync(join(lane, 'fixtures', 'watch-root'), hostScratch, {
+    recursive: true,
+  });
+  writeFileSync(hostWidget, widgetSource('#a1b2c3'));
+  writeFileSync(
+    hostConfig,
+    `import { animusRollup as animus } from '@animus-ui/unplugin/rollup';\n` +
+      `import esbuild from 'rollup-plugin-esbuild';\n` +
+      `export default {\n` +
+      `  input: ${JSON.stringify(hostWidget)},\n` +
+      `  external: (id) => /^react/.test(id),\n` +
+      `  plugins: [\n` +
+      `    animus({ root: ${JSON.stringify(hostScratch)}, system: './src/ds.ts', mode: 'production' }),\n` +
+      `    esbuild({ jsx: 'automatic', target: 'es2022' }),\n` +
+      `  ],\n` +
+      `  output: { dir: ${JSON.stringify(join(hostScratch, 'out'))}, format: 'esm' },\n` +
+      `};\n`
+  );
+  let stderr = '';
+  host = spawn(
+    join(lane, 'node_modules', '.bin', 'rollup'),
+    ['-c', hostConfig, '--watch'],
+    { cwd: lane, stdio: ['ignore', 'pipe', 'pipe'] }
+  );
+  host.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+  const builds = () => stderr.match(/created /g)?.length ?? 0;
+  const failed = () => stderr.includes('[!]');
+  await until(() => builds() >= 1 || failed(), 'the Rollup host first build');
+  check('the Rollup host builds the first color', sheetHas('#a1b2c3'));
+  await mutateUntil(
+    () => writeFileSync(hostWidget, widgetSource('#c3b2a1')),
+    () => builds() >= 2 || failed(),
+    'the Rollup host rebuild'
+  );
+  check(
+    'the Rollup host rebuilds after an edit, without an error',
+    builds() >= 2 && !failed(),
+    stderr.slice(-600)
+  );
+  check('the rebuilt sheet takes the edit', sheetHas('#c3b2a1'));
+} catch (error) {
+  check('the Rollup host watch ran', false, String(error));
+} finally {
+  host?.kill('SIGKILL');
+  rmSync(hostScratch, { recursive: true, force: true });
+  rmSync(hostConfig, { force: true });
 }
 
 report(
