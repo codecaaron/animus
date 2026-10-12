@@ -369,6 +369,13 @@ export interface DeliveryIds {
   systemPropsModuleId: string | typeof SESSION_ARTIFACT;
 }
 
+/** What a host watches for a Session (see `ExtractionSession.watchPlan`). */
+export interface WatchPlan {
+  files: string[];
+  missing: string[];
+  directories: string[];
+}
+
 /** One published generation, as a host serving from memory reads it. */
 export interface SessionPublication {
   manifest: ProjectManifest;
@@ -647,6 +654,33 @@ export class ExtractionSession {
   // Membership keys (lexical + canonical) for the system's evaluated module
   // files. A failed reload keeps the last set — the stale config still serves.
   private systemDependencyKeys: Set<string> = new Set();
+
+  /** What a host watches for this Session, one list for every host: the
+   *  files whose change it acts on (the system module and the modules it
+   *  read, asset() sources, the configuration inputs), the paths the system
+   *  load found absent, whose creation reloads it, and the external package
+   *  roots, watched recursively. An absent path inside `covered` (roots the
+   *  host already watches recursively) is left out: a host's recursive
+   *  watch reports its creation, and watching an absent file inside a
+   *  watched directory can stop that directory's events (inotify). */
+  watchPlan(covered: readonly string[] = []): WatchPlan {
+    const system =
+      this.rootDir === null ? [] : [resolve(this.rootDir, this.options.system)];
+    return {
+      files: [
+        ...new Set([
+          ...system,
+          ...this.systemDependencyPaths,
+          ...this.assetDependencyPaths,
+          ...this.configInputPaths,
+        ]),
+      ],
+      missing: this.systemMissingPaths.filter(
+        (path) => !covered.some((root) => isPathWithinRoot(root, path))
+      ),
+      directories: [...this.externalWatchRoots],
+    };
+  }
 
   /** Whether `path` is the system module, one of its dependencies, or a
    *  path its load found absent: a change to it reloads the system. */
@@ -1176,6 +1210,7 @@ export class ExtractionSession {
       { hash: string; source: string } | null
     >();
     const priorExternalFileOwners = { ...this.externalFileOwners };
+    const priorHostSuppliedKeys = new Set(this.hostSuppliedKeys);
     const recordPrior = (key: string) => {
       if (!priorCacheEntries.has(key)) {
         priorCacheEntries.set(key, this.fileCache.get(key) ?? null);
@@ -1406,6 +1441,7 @@ export class ExtractionSession {
             else this.fileCache.set(key, prior);
           }
           this.externalFileOwners = priorExternalFileOwners;
+          this.hostSuppliedKeys = priorHostSuppliedKeys;
         }
         if (this.statusAttemptOpen) {
           this.debouncePending.clear();
@@ -1436,6 +1472,24 @@ export class ExtractionSession {
     this.heldRejection = rejection.message;
     this.onOutcome?.({ kind: 'held', abortedOriginals: rejection.originals });
     throw new AbortedParseRejection(rejection.message);
+  }
+
+  /** Holds a held full read's entries: what it read stays the held bytes,
+   *  never overwriting held host bytes with the disk's (a key the host
+   *  supplied before that this read took from disk keeps its bytes). */
+  private holdObservedEntries(
+    entries: readonly FileEntry[],
+    supplied: ReadonlySet<string>
+  ): void {
+    for (const entry of entries) {
+      const fromHost = supplied.has(entry.path);
+      if (this.hostSuppliedKeys.has(entry.path) && !fromHost) continue;
+      this.fileCache.set(entry.path, {
+        hash: entry.hash,
+        source: entry.source,
+      });
+      if (fromHost) this.hostSuppliedKeys.add(entry.path);
+    }
   }
 
   /** Held sources whose bytes the host supplied and which the disk no
@@ -1786,15 +1840,18 @@ export class ExtractionSession {
     // Every path the read reaches, to check that it reaches each host
     // source under its own spelling.
     const readPaths = new Set<string>();
+    // The keys whose bytes this read took from the host, committed only
+    // when the read publishes or holds: a failed read leaves the held
+    // record as it was.
+    const supplied = new Set<string>();
     for (const filePath of files) {
       const relPath = relative(rootDir, filePath);
       readPaths.add(filePath);
       let source: string;
       try {
-        const supplied = hostSources.get(filePath);
-        source = supplied ?? readFileSync(filePath, 'utf-8');
-        if (supplied === undefined) this.hostSuppliedKeys.delete(relPath);
-        else this.hostSuppliedKeys.add(relPath);
+        const hostSource = hostSources.get(filePath);
+        source = hostSource ?? readFileSync(filePath, 'utf-8');
+        if (hostSource !== undefined) supplied.add(relPath);
       } catch (err) {
         if (!isDeletedSource(err)) {
           ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
@@ -2014,7 +2071,9 @@ export class ExtractionSession {
       for (const entry of admitted.entries) {
         const entryPath = resolve(rootDir, entry.path);
         readPaths.add(entryPath);
-        const source = hostSources.get(entryPath) ?? entry.source;
+        const hostSource = hostSources.get(entryPath);
+        if (hostSource !== undefined) supplied.add(entry.path);
+        const source = hostSource ?? entry.source;
         rawEntries.push({
           path: entry.path,
           source,
@@ -2044,15 +2103,19 @@ export class ExtractionSession {
 
       this.beginStatusAttempt();
       let accepted: SourceIngestionResult;
+      const readEntries = this.withoutOutputSources(rawEntries);
       try {
-        accepted = await this.corpus.prepare(
-          this.withoutOutputSources(rawEntries)
-        );
+        accepted = await this.corpus.prepare(readEntries);
         this.throwOnAbortedParse(accepted);
         this.skippedSources = accepted.skippedOriginals ?? [];
         this.ingestionOpenings = accepted.openings ?? [];
         this.ingestionAdapted = adaptedOriginals(accepted.ownership);
       } catch (err) {
+        // A held full read keeps what it read, so the hold's end and its
+        // deferred reload compare against these bytes.
+        if (err instanceof AbortedParseRejection) {
+          this.holdObservedEntries(readEntries, supplied);
+        }
         this.debouncePending.clear();
         this.writeAnalysisStatus('failed', pending, String(err));
         throw err;
@@ -2076,6 +2139,7 @@ export class ExtractionSession {
       this.publishSourceIngestion(accepted, 'full', (path) =>
         rawEntries.find((entry) => entry.path === path)
       );
+      this.hostSuppliedKeys = supplied;
 
       this.onExternalRootsCommitted?.(this.externalWatchRoots);
 
@@ -2210,6 +2274,7 @@ export class ExtractionSession {
   close(): void {
     this.releasePublicationClaim?.();
     this.releasePublicationClaim = null;
+    this.hostSuppliedKeys.clear();
     if (this.joinedKey === null || this.participant === null) return;
     // Another participant takes over the build's analysis, never this one.
     if (getOwningWatchSession(this.joinedKey) === this) {

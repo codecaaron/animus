@@ -443,8 +443,9 @@ describe('root verification graph', () => {
     expect(references).toEqual([]);
   });
 
-  it('keeps the root graph at or below the 30-task anti-reproliferation budget (G1)', () => {
-    expect(Object.keys(rootTasks()).length).toBeLessThanOrEqual(30);
+  // 31 since verify:bench, the speed gate the owner asked for as a task.
+  it('keeps the root graph at or below the 31-task anti-reproliferation budget (G1)', () => {
+    expect(Object.keys(rootTasks()).length).toBeLessThanOrEqual(31);
   });
 
   it('presents exactly four ordinary contributor workflow shapes', () => {

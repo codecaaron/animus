@@ -412,6 +412,52 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
+  # ─── Speed gate (only where a release publishes) ────────
+  bench:
+    needs: [build-extract]
+    # Paired timing against the pinned last-known-fast release: once per
+    # release, not on every push, to save CI minutes.
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_packages == true)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .tool-versions
+
+      - name: Download v2 linux binary
+        uses: actions/download-artifact@v8
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - run: bun install
+
+      - name: Build TS
+        run: bunx vp run build:ts
+
+      - name: Fetch the pinned reference release
+        run: bun scripts/bench/prepare.ts
+
+      - name: Speed gate
+        run: bunx vp run verify:bench
+
+      - name: Upload lane receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: receipts-bench
+          path: .bench/receipts/
+          include-hidden-files: true
+          if-no-files-found: error
+
   # ─── Worker deployment (explicit dispatch only) ──
   deploy-workers:
     needs:
@@ -474,6 +520,7 @@ jobs:
         verify-next,
         verify-vite,
         verify-packed,
+        bench,
       ]
     if: >-
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||

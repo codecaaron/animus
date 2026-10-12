@@ -537,7 +537,7 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     const { parent, app } = createKitWorkspace();
     const file = join(app, 'src', 'Button.tsx');
     writeFileSync(file, 'export const Button = 1;\n');
-    const state = { systemLoadFails: false };
+    const state = { systemLoadFails: false, systemLoads: 0 };
     const systemFacts = factsExtractor({
       [join(app, 'src', 'system.ts')]: {
         ...emptyFacts(join(app, 'src', 'system.ts')),
@@ -548,6 +548,7 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
       { system: './src/system.ts', exclude },
       () => ({
         loadSystemModule: () => {
+          state.systemLoads += 1;
           if (state.systemLoadFails) throw new Error('planned system failure');
           return {
             propConfig: '{}',
@@ -619,10 +620,10 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     ctx.close();
   });
 
+  // Contract: a held full read keeps what it read, and a deferred reload
+  // refuses only over held host bytes the disk lacks; it never publishes
+  // the disk over them, and it publishes once the disk holds them.
   it('refuses a reload a parse hold deferred rather than publish the disk over held bytes', async () => {
-    // The deferred reload's full read does not carry the bytes an earlier
-    // held observation supplied (ticket 12 follow-up): with the disk still
-    // behind them, it refuses loudly and keeps the prior publication.
     const { app, file, ctx, state, update } = await startedContext();
     const card12 = 'export const Button = 12;\n';
     writeFileSync(file, '');
@@ -636,15 +637,15 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     await flushSystemReload(ctx);
     state.systemLoadFails = false;
 
-    // The owed reload enters a parse hold. The Card edit that follows is
-    // kept; its deferred reload would read the held Broken from disk, so
-    // it refuses too.
+    // The owed reload enters a parse hold, and its held full read keeps the
+    // Broken bytes it read. The Card edit that follows is held behind it,
+    // with no reload of its own.
     writeFileSync(broken, 'export const broken = ;\n');
     await update(broken, async () => 'export const broken = ;\n');
     const card20 = 'export const Button = 20;\n';
-    await expect(update(file, async () => card20)).rejects.toThrow(
-      /system reload not published: .*src\/Broken\.ts/
-    );
+    const loads = state.systemLoads;
+    await update(file, async () => card20);
+    expect(state.systemLoads).toBe(loads);
     expect(ctx.session?.heldSources.get('src/Button.tsx')?.source).toBe(card20);
 
     // The repair would run the deferred reload over the empty Card on disk.

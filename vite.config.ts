@@ -480,6 +480,10 @@ export default defineConfig({
         command: 'bun scripts/consumers/measure.ts',
         cache: false,
       },
+      'verify:bench': {
+        command: 'bun scripts/bench/run.ts',
+        cache: false,
+      },
 
       clean: {
         command:

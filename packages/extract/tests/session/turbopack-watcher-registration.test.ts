@@ -366,6 +366,50 @@ describe('startTurbopackWatcher OS registration', () => {
     }
   });
 
+  // Contract: a path the system load found absent, outside the root's
+  // watch, is watched too; creating it reloads the system (spec §12.2 row 7).
+  test('an absent system path outside the root is watched, and creating it reloads', async () => {
+    const restoreGlobals = resetAnimusGlobals();
+    try {
+      const root = createProject();
+      const systemPath = join(root, 'src', 'system.ts');
+      writeFileSync(systemPath, 'export const system = {};\n');
+      const shared = makeTempRoot('animus-outside-missing-');
+      const absent = join(shared, 'tokens.tsx');
+      engine.loadSystemModule.mockReturnValue({
+        ...SYSTEM_CONFIG,
+        dependencies: [systemPath],
+        missing: [absent],
+      });
+      const session = new ExtractionSession({ system: './src/system.ts' });
+      session.rootDir = root;
+      session.development = true;
+      const handle = startedHandle(
+        startTurbopackWatcher(session, root, {
+          debounceMs: 5,
+          watchFn: fakeWatch,
+          holdEvents: true,
+        })
+      );
+      await session.runFullPipeline();
+      await handle.deliverHeldEvents();
+      const watcher = () => watchers.find((w) => w.dir === shared && !w.closed);
+      expect(watcher()).toBeDefined();
+
+      const loads = engine.loadSystemModule.mock.calls.length;
+      writeFileSync(absent, 'export const t = 1;\n');
+      watcher()!.listener!('rename', 'tokens.tsx');
+      await vi.waitFor(() =>
+        expect(engine.loadSystemModule.mock.calls.length).toBe(loads + 1)
+      );
+      handle.close();
+      await handle.settle();
+      session.close();
+    } finally {
+      restoreGlobals();
+    }
+  });
+
   test('a batch that arrives after close() never enters the session', async () => {
     const root = createProject();
     const entries: WatchChanges[] = [];
