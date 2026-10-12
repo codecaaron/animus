@@ -2750,6 +2750,26 @@ export const App = () => <Box tone="red" />;
             let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
+        // A concise arrow returns the member it evaluates too: a write
+        // through the call's result changes it.
+        let member_returns = [
+            ("member returned by a called arrow", "const get = () => pad.inner;\nget().padding = 9;\n"),
+            ("member returned by a then callback", "Promise.resolve().then(() => pad.inner).then((o) => { o.padding = 9; });\n"),
+        ];
+        for (row, mutation) in member_returns {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let files = serde_json::json!([
+                { "path": "tokens.js", "source": "export const pad = { inner: { padding: 4 } };\n" },
+                { "path": "mutate.js", "source": format!("import {{ pad }} from './tokens.js';\n{mutation}") },
+                {
+                    "path": "reader.tsx",
+                    "source": "import './mutate.js';\nimport { pad } from './tokens.js';\n\
+                               export const C = ds.styles({ ...pad.inner }).asElement('div');\nexport const App = () => <C />;\n",
+                },
+            ]);
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+            assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
+        }
         // A hot update's data can hold a loader its disposed version stored:
         // the replacement changes `pad` through it, then loads the reader,
         // which the bundle keeps reachable through an unused load.

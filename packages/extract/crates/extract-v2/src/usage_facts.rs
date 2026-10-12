@@ -2470,6 +2470,13 @@ fn style_object_use(
                 Some(AstKind::ObjectProperty(_) | AstKind::ArrayExpression(_)) => {
                     StyleUse::MemberHandoff(handed, format!("has its member {name} stored in an object"))
                 }
+                // A concise arrow body is the arrow's return value, which
+                // the call hands on (`() => pad.inner`).
+                Some(AstKind::ExpressionStatement(_))
+                    if matches!({ let mut up = rest.clone(); (up.next(), up.next()) }, (Some(AstKind::FunctionBody(_)), Some(AstKind::ArrowFunctionExpression(arrow))) if arrow.expression) =>
+                {
+                    StyleUse::MemberHandoff(handed, format!("has its member {name} returned from a function"))
+                }
                 // A value only compared, combined, tested or discarded.
                 Some(
                     AstKind::BinaryExpression(_)
