@@ -369,6 +369,13 @@ export interface DeliveryIds {
   systemPropsModuleId: string | typeof SESSION_ARTIFACT;
 }
 
+/** What a host watches for a Session (see `ExtractionSession.watchPlan`). */
+export interface WatchPlan {
+  files: string[];
+  missing: string[];
+  directories: string[];
+}
+
 /** One published generation, as a host serving from memory reads it. */
 export interface SessionPublication {
   manifest: ProjectManifest;
@@ -647,6 +654,33 @@ export class ExtractionSession {
   // Membership keys (lexical + canonical) for the system's evaluated module
   // files. A failed reload keeps the last set — the stale config still serves.
   private systemDependencyKeys: Set<string> = new Set();
+
+  /** What a host watches for this Session, one list for every host: the
+   *  files whose change it acts on (the system module and the modules it
+   *  read, asset() sources, the configuration inputs), the paths the system
+   *  load found absent, whose creation reloads it, and the external package
+   *  roots, watched recursively. An absent path inside `covered` (roots the
+   *  host already watches recursively) is left out: a host's recursive
+   *  watch reports its creation, and watching an absent file inside a
+   *  watched directory can stop that directory's events (inotify). */
+  watchPlan(covered: readonly string[] = []): WatchPlan {
+    const system =
+      this.rootDir === null ? [] : [resolve(this.rootDir, this.options.system)];
+    return {
+      files: [
+        ...new Set([
+          ...system,
+          ...this.systemDependencyPaths,
+          ...this.assetDependencyPaths,
+          ...this.configInputPaths,
+        ]),
+      ],
+      missing: this.systemMissingPaths.filter(
+        (path) => !covered.some((root) => isPathWithinRoot(root, path))
+      ),
+      directories: [...this.externalWatchRoots],
+    };
+  }
 
   /** Whether `path` is the system module, one of its dependencies, or a
    *  path its load found absent: a change to it reloads the system. */
