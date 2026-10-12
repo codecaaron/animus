@@ -156,7 +156,7 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
       options: {},
       externalPackageDirs,
       excludeMatcher: createExcludeMatcher(undefined),
-      outputExclude: null,
+      outputExcludes: [],
       assetCopyDir: null,
       session,
       abortedParseHashes: new Map<string, string>(),

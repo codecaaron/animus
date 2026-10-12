@@ -44,6 +44,7 @@ import type {
   ExternalPackageOutcome,
   HostAssetClassification,
   HostExtensionPolicy,
+  HostLoadExpander,
   ProjectManifest,
   SystemConfig,
 } from '@animus-ui/extract/pipeline';
@@ -132,6 +133,9 @@ export class PluginContext {
   /** Vite's asset classification, captured at `configResolved`. */
   assetClassification: HostAssetClassification =
     builtInAssetClassification('noHost');
+  /** How Vite's build expands computed loads, captured at
+   *  `configResolved`; none where it cannot be reproduced exactly. */
+  loadExpander: HostLoadExpander | undefined;
 
   extensionsSet: ReadonlySet<string>;
 
@@ -139,9 +143,10 @@ export class PluginContext {
    *  exclude list and the output directory. */
   excludeMatcher!: ExcludeMatcher;
 
-  /** Vite's output directory as a structural exclusion; null outside the
-   *  root. Set in `configResolved`. */
-  outputExclude: string | null = null;
+  /** Where Vite writes, every environment's output directories and files,
+   *  as structural exclusions; none outside the root. Set in
+   *  `configResolved`. */
+  outputExcludes: string[] = [];
 
   // `null` means no analysis has published yet; a failed analysis leaves the
   // previous manifest current instead of clearing it.
@@ -363,12 +368,12 @@ export class PluginContext {
     session.conditions = this.resolveConditions;
     session.extensionPolicy = this.extensionPolicy;
     session.assetClassification = this.assetClassification;
+    session.loadExpander = this.loadExpander;
     session.pathAliasesJson = this.pathAliasesJson;
     session.runtimeImport = options.runtimeImport ?? DEFAULT_RUNTIME_IMPORT;
     session.cssModuleId = VIRTUAL_CSS_ID;
     session.systemPropsModuleId = VIRTUAL_SYSTEM_PROPS_ID;
-    session.structuralExclude =
-      this.outputExclude === null ? [] : [this.outputExclude];
+    session.structuralExclude = this.outputExcludes;
     this.session = session;
     return session;
   }

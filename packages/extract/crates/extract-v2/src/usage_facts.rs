@@ -1723,7 +1723,24 @@ fn unsafe_object_uses(
     object_consts: &BTreeMap<&str, bool>,
     assigned_targets: &BTreeSet<&str>,
 ) -> (BTreeMap<String, ObjectUse>, Vec<Handoff>, WrittenNamespaces) {
-    let candidates = object_bindings(program, scoping, object_consts, assigned_targets);
+    scan_object_uses(program, scoping, object_bindings(program, scoping, object_consts, assigned_targets))
+}
+
+/// See `FileFacts::written_namespaces`: the module's namespace imports
+/// alone, for static style values.
+pub(crate) fn written_namespaces(program: &Program<'_>, scoping: &Scoping) -> WrittenNamespaces {
+    let namespaces = object_bindings(program, scoping, &BTreeMap::new(), &BTreeSet::new())
+        .into_iter()
+        .filter(|(_, binding)| binding.namespace)
+        .collect();
+    scan_object_uses(program, scoping, namespaces).2
+}
+
+fn scan_object_uses(
+    program: &Program<'_>,
+    scoping: &Scoping,
+    candidates: FxHashMap<SymbolId, ObjectBinding>,
+) -> (BTreeMap<String, ObjectUse>, Vec<Handoff>, WrittenNamespaces) {
     if candidates.is_empty() {
         return (BTreeMap::new(), Vec::new(), BTreeMap::new());
     }
@@ -2321,6 +2338,252 @@ pub(crate) fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::
     let mut reads = Reads { scoping, found: None };
     reads.visit_program(program);
     reads.found
+}
+
+/// How a module lets a loader escape, which can load any module. The
+/// loaders are the unbound `require` and `module`, the `module` builtin
+/// (`node:module`) as imported or required, and anything named
+/// `createRequire`; an ambient declaration (`declare const require: any`)
+/// binds nothing. A loader escapes when read anywhere but as a `typeof`
+/// operand, `require` as a direct callee (`require(…)`, `require.context(…)`,
+/// `require.resolve(…)`), or `module` or the builtin through a constant
+/// member that loads nothing (`module.exports`, `builtinModules`), so an
+/// alias, `(0, require)(…)`, `require.call(…)`, `module.require(…)` and a
+/// computed member all count, as does `require` read from the unbound global
+/// object. Not followed: other routes to a loader through the global object
+/// (`globalThis.module`) or `process` (`process.mainModule`).
+pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::Scoping) -> Option<&'static str> {
+    use oxc::ast::ast::{
+        Argument, BindingPattern, BindingProperty, CallExpression, ComputedMemberExpression, ExportAllDeclaration,
+        ExportNamedDeclaration, Expression, IdentifierReference, ImportDeclaration, ImportDeclarationSpecifier,
+        ImportExpression, ModuleExportName, StaticMemberExpression, TSImportEqualsDeclaration, TSModuleReference,
+        UnaryExpression, VariableDeclarator,
+    };
+    use oxc::syntax::operator::UnaryOperator;
+    const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "self", "global"];
+    const BUILTINS: [&str; 2] = ["module", "node:module"];
+    /// Members of the unbound `module` that load nothing.
+    const MODULE_MEMBERS: [&str; 6] = ["exports", "id", "filename", "loaded", "path", "paths"];
+    /// Exports of the `module` builtin that load nothing.
+    const BUILTIN_MEMBERS: [&str; 5] = ["builtinModules", "isBuiltin", "findSourceMap", "SourceMap", "findPackageJSON"];
+    const REQUIRE: &str = "hands on require other than as a direct call";
+    const MODULE: &str = "reads module other than through a member that loads nothing";
+    const BUILTIN: &str = "reads node:module other than through a member that loads nothing";
+    const CREATE: &str = "reads createRequire";
+    fn is_require(expr: &Expression<'_>) -> bool {
+        matches!(expr.get_inner_expression(), Expression::Identifier(id) if id.name == "require")
+    }
+    /// `require('module')` or `require('node:module')`.
+    fn requires_builtin(call: &CallExpression<'_>) -> bool {
+        is_require(&call.callee) && call.arguments.first().and_then(Argument::as_expression).is_some_and(builtin_specifier)
+    }
+    /// A constant specifier of the builtin, read as a load reads it.
+    fn builtin_specifier(specifier: &Expression<'_>) -> bool {
+        matches!(crate::loads::load_of(specifier), crate::loads::LoadTarget::Specifier(name) if BUILTINS.contains(&name.as_str()))
+    }
+    /// A declarator that binds the required builtin to one name, whose reads
+    /// are then judged as the builtin's.
+    fn binds_builtin(declarator: &VariableDeclarator<'_>) -> bool {
+        let init = declarator.init.as_ref().map(Expression::get_inner_expression);
+        matches!(declarator.id, BindingPattern::BindingIdentifier(_))
+            && matches!(init, Some(Expression::CallExpression(call)) if requires_builtin(call))
+    }
+    /// The names bound to the builtin as a whole.
+    #[derive(Default)]
+    struct Builtins(FxHashSet<SymbolId>);
+    impl<'a> Visit<'a> for Builtins {
+        fn visit_import_declaration(&mut self, import: &ImportDeclaration<'a>) {
+            if BUILTINS.contains(&import.source.value.as_str()) {
+                for specifier in import.specifiers.iter().flatten() {
+                    match specifier {
+                        ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                            self.0.extend(default.local.symbol_id.get())
+                        }
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
+                            self.0.extend(namespace.local.symbol_id.get())
+                        }
+                        ImportDeclarationSpecifier::ImportSpecifier(_) => {}
+                    }
+                }
+            }
+        }
+        fn visit_variable_declarator(&mut self, declarator: &VariableDeclarator<'a>) {
+            if let (true, BindingPattern::BindingIdentifier(id)) = (binds_builtin(declarator), &declarator.id) {
+                self.0.extend(id.symbol_id.get());
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
+        fn visit_ts_import_equals_declaration(&mut self, import: &TSImportEqualsDeclaration<'a>) {
+            if let TSModuleReference::ExternalModuleReference(external) = &import.module_reference {
+                if BUILTINS.contains(&external.expression.value.as_str()) {
+                    self.0.extend(import.id.symbol_id.get());
+                }
+            }
+        }
+    }
+    #[derive(Clone, Copy, PartialEq)]
+    enum Loader {
+        Module,
+        Builtin,
+    }
+    struct Uses<'s> {
+        scoping: &'s oxc::semantic::Scoping,
+        builtins: FxHashSet<SymbolId>,
+        found: Option<&'static str>,
+    }
+    impl Uses<'_> {
+        /// Bound by nothing, or only by an ambient declaration.
+        fn unbound(&self, id: &IdentifierReference<'_>) -> bool {
+            let symbol = |id| self.scoping.get_reference(id).symbol_id();
+            id.reference_id.get().is_some_and(|id| symbol(id).is_none_or(|symbol| self.scoping.symbol_flags(symbol).is_ambient()))
+        }
+        fn names_builtin(&self, id: &IdentifierReference<'_>) -> bool {
+            id.reference_id
+                .get()
+                .and_then(|id| self.scoping.get_reference(id).symbol_id())
+                .is_some_and(|symbol| self.builtins.contains(&symbol))
+        }
+        /// The loader `expr` is, if one whose members are judged.
+        fn loader(&self, expr: &Expression<'_>) -> Option<Loader> {
+            match expr.get_inner_expression() {
+                Expression::Identifier(id) if id.name == "module" && self.unbound(id) => Some(Loader::Module),
+                Expression::Identifier(id) if self.names_builtin(id) => Some(Loader::Builtin),
+                Expression::CallExpression(call) if requires_builtin(call) => Some(Loader::Builtin),
+                _ => None,
+            }
+        }
+        fn loads_nothing(loader: Loader, name: &str) -> bool {
+            match loader {
+                Loader::Module => MODULE_MEMBERS.contains(&name),
+                Loader::Builtin => BUILTIN_MEMBERS.contains(&name),
+            }
+        }
+        /// `require`, `require.context` or `require.resolve`, which a call
+        /// uses only to load or name a module.
+        fn direct_loader(callee: &Expression<'_>) -> bool {
+            is_require(callee)
+                || callee.get_inner_expression().as_member_expression().is_some_and(|member| {
+                    matches!(member.static_property_name(), Some("context" | "resolve")) && is_require(member.object())
+                })
+        }
+        /// Judges the constant member `name` of `object`, true when the read
+        /// of `object` loads nothing and needs no visit.
+        fn member(&mut self, object: &Expression<'_>, name: &str) -> bool {
+            if name == "createRequire" {
+                self.found.get_or_insert(CREATE);
+            }
+            if name == "require" {
+                if let Expression::Identifier(id) = object.get_inner_expression() {
+                    if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.unbound(id) {
+                        self.found.get_or_insert("reads require from the global object");
+                    }
+                }
+            }
+            self.loader(object).is_some_and(|loader| Self::loads_nothing(loader, name))
+        }
+    }
+    impl<'a> Visit<'a> for Uses<'_> {
+        fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
+            let value = id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).is_value());
+            if !value {
+                return;
+            }
+            if id.name == "require" && self.unbound(id) {
+                self.found.get_or_insert(REQUIRE);
+            } else if id.name == "module" && self.unbound(id) {
+                self.found.get_or_insert(MODULE);
+            } else if self.names_builtin(id) {
+                self.found.get_or_insert(BUILTIN);
+            }
+        }
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            if !Self::direct_loader(&call.callee) {
+                oxc::ast_visit::walk::walk_call_expression(self, call);
+                return;
+            }
+            // The builtin required where no constant member or binding of
+            // it is judged.
+            if requires_builtin(call) {
+                self.found.get_or_insert(BUILTIN);
+            }
+            for argument in &call.arguments {
+                self.visit_argument(argument);
+            }
+        }
+        fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
+            if builtin_specifier(&import.source) {
+                self.found.get_or_insert(BUILTIN);
+            }
+            oxc::ast_visit::walk::walk_import_expression(self, import);
+        }
+        fn visit_unary_expression(&mut self, unary: &UnaryExpression<'a>) {
+            let bare = matches!(unary.argument.get_inner_expression(), Expression::Identifier(_));
+            if unary.operator == UnaryOperator::Typeof && bare {
+                return;
+            }
+            oxc::ast_visit::walk::walk_unary_expression(self, unary);
+        }
+        fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
+            if !self.member(&member.object, &member.property.name) {
+                self.visit_expression(&member.object);
+            }
+        }
+        fn visit_computed_member_expression(&mut self, member: &ComputedMemberExpression<'a>) {
+            if member.static_property_name().is_none_or(|name| !self.member(&member.object, &name)) {
+                oxc::ast_visit::walk::walk_computed_member_expression(self, member);
+            }
+        }
+        fn visit_variable_declarator(&mut self, declarator: &VariableDeclarator<'a>) {
+            if binds_builtin(declarator) {
+                return;
+            }
+            oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        }
+        fn visit_import_declaration(&mut self, import: &ImportDeclaration<'a>) {
+            let builtin = BUILTINS.contains(&import.source.value.as_str()) && !import.import_kind.is_type();
+            let loads = |specifier: &ImportDeclarationSpecifier<'_>| match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                    !named.import_kind.is_type() && !BUILTIN_MEMBERS.contains(&named.imported.name().as_str())
+                }
+                _ => false,
+            };
+            oxc::ast_visit::walk::walk_import_declaration(self, import);
+            if builtin && import.specifiers.iter().flatten().any(loads) {
+                self.found.get_or_insert(BUILTIN);
+            }
+        }
+        fn visit_export_all_declaration(&mut self, export: &ExportAllDeclaration<'a>) {
+            if BUILTINS.contains(&export.source.value.as_str()) && !export.export_kind.is_type() {
+                self.found.get_or_insert(BUILTIN);
+            }
+            oxc::ast_visit::walk::walk_export_all_declaration(self, export);
+        }
+        fn visit_export_named_declaration(&mut self, export: &ExportNamedDeclaration<'a>) {
+            let builtin = export.source.as_ref().is_some_and(|source| BUILTINS.contains(&source.value.as_str()));
+            let loads = |specifier: &oxc::ast::ast::ExportSpecifier<'_>| !BUILTIN_MEMBERS.contains(&specifier.local.name().as_str());
+            if builtin && export.specifiers.iter().any(loads) {
+                self.found.get_or_insert(BUILTIN);
+            }
+            oxc::ast_visit::walk::walk_export_named_declaration(self, export);
+        }
+        fn visit_binding_property(&mut self, property: &BindingProperty<'a>) {
+            if property.key.static_name().is_some_and(|name| name == "createRequire") {
+                self.found.get_or_insert(CREATE);
+            }
+            oxc::ast_visit::walk::walk_binding_property(self, property);
+        }
+        fn visit_module_export_name(&mut self, name: &ModuleExportName<'a>) {
+            if name.name() == "createRequire" {
+                self.found.get_or_insert(CREATE);
+            }
+            oxc::ast_visit::walk::walk_module_export_name(self, name);
+        }
+    }
+    let mut builtins = Builtins::default();
+    builtins.visit_program(program);
+    let mut uses = Uses { scoping, builtins: builtins.0, found: None };
+    uses.visit_program(program);
+    uses.found
 }
 
 /// One module's functions, each with how its parameters treat an object.

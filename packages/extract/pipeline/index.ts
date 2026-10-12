@@ -36,6 +36,17 @@ export type { DiscoveryResolver, HostResolve } from './host-package-resolver';
 export { AliasAgreementCache, compareAliases } from './alias-agreement';
 export type { AliasAgreement } from './alias-agreement';
 export { discoveryResolver } from './host-package-resolver';
+export type { OutputTargets } from './output-targets';
+export {
+  analysedOutputs,
+  esbuildOutputTargets,
+  mergeOutputTargets,
+  noOutputTargets,
+  outputExclusions,
+  rollupOutputTargets,
+  viteOutputTargets,
+  webpackOutputTargets,
+} from './output-targets';
 export type {
   AnimusCoreOptions,
   AnimusMode,
@@ -254,6 +265,20 @@ export {
   viteAssetClassification,
 } from './host-assets';
 export type { HostAssetClassification } from './host-assets';
+export { viteHostExpander, viteLoadExpander } from './vite-expansions';
+export { webpackHostExpander, webpackLoadExpander } from './webpack-expansions';
+export type {
+  WebpackOptionsReading,
+  WebpackResolveReading,
+  WebpackRuleEntry,
+  WebpackRuleReading,
+} from './webpack-expansions';
+export type {
+  ExpandedPath,
+  HostLoadExpander,
+  ListedArgs,
+  ListedLoad,
+} from './host-expansions';
 export { adaptedOriginals } from './probe-evidence';
 export type { ServedFiles } from './served-files';
 export { droppedExtensionMessage, servedFiles } from './served-files';

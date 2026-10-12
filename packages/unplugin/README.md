@@ -88,9 +88,18 @@ Options are the shared driver core (`system`, `exclude`, `strict`, `mode`,
 default, the dev-signal define, engine dev diagnostics — never process
 lifecycle. When absent, the bundler's own command oracle applies (webpack/
 rspack `compiler.options.mode`, rollup watch mode), else `production`
-(esbuild exposes no signal). `exclude` patterns are glob-aware and MERGE
-with the defaults (`node_modules`, `dist`, `.test.`, `.spec.`, `.next`,
-`.animus`).
+(esbuild exposes no signal). `exclude` patterns are glob-aware; a list
+REPLACES the `dist`, `.test.` and `.spec.` defaults, while `node_modules`,
+`.next` and `.animus` always apply. Wherever the bundler writes is
+always excluded too: its output directories (every Vite environment's,
+each output's `dir`, webpack's `output.path` up to its first `[…]`
+placeholder) and its output files by exact name (`outfile`,
+`output.file`). webpack, rspack, esbuild and Vite name them before
+analysis. Rollup and Rolldown name them only after analysis, so a watch
+excludes them from its second build on, and a build that has already
+analysed one reports it (an output file as earlier output; a file inside
+an output directory as earlier output or a source beside the output),
+naming what to add to `exclude`; under `strict` that build fails.
 
 The full consumer contract — module-id families, the define contract,
 artifact set, platform matrix — lives in the

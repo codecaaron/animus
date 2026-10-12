@@ -161,3 +161,55 @@ describe('a webpack compile that ends without done or failed', () => {
     expect(existsSync(sessions) ? readdirSync(sessions) : []).toEqual([]);
   });
 });
+
+describe('a Rollup watch rebuild', () => {
+  // Contract: Rollup runs the plugin's own `rollup.buildStart`; the build it
+  // opens is the one buildEnd retires, so the watch's next build claims the
+  // build again instead of meeting its own claim.
+  test('claims its build again after the previous build ended', async () => {
+    restoreGlobals = resetAnimusGlobals();
+    const root = createProject('animus-unplugin-rollup-rebuild-');
+    setEngineApiOverride(() => ({
+      extractFacts: parserStoppingAt('(('),
+      loadSystemModule: () => ({ ...SYSTEM_CONFIG, dependencies: [] }),
+      analyzeProject: () => buildManifest(PLAN_A),
+      transformFile: (source: string) => ({
+        code: source,
+        hasComponents: false,
+      }),
+      clearAnalysisCache: () => {},
+    }));
+    const plugin = unpluginFactory(
+      { system: './src/system.ts', root },
+      { framework: 'rollup', watchMode: true, versions: {} }
+    );
+    if (
+      Array.isArray(plugin) ||
+      !plugin.rollup?.buildStart ||
+      !plugin.buildEnd
+    ) {
+      throw new Error(
+        'expected one plugin with rollup buildStart and buildEnd'
+      );
+    }
+    const startHook = plugin.rollup.buildStart;
+    const buildStart = 'handler' in startHook ? startHook.handler : startHook;
+    const buildEnd = plugin.buildEnd;
+    const context = {
+      meta: { watchMode: true },
+      addWatchFile: () => {},
+      emitFile: () => 'animus-css',
+    };
+    // SAFETY: the hooks read only `meta.watchMode`, `addWatchFile` and
+    // `emitFile` from their context, and only `plugins` from the options.
+    const start = () =>
+      buildStart.call(context as never, { plugins: [] } as never);
+    // SAFETY: as above.
+    const end = () => buildEnd.call(context as never);
+
+    await start();
+    await end();
+    // An edit: Rollup's watch builds again on the same plugin instance.
+    await expect(start()).resolves.toBeUndefined();
+  });
+});

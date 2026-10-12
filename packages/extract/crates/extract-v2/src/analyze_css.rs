@@ -203,6 +203,39 @@ pub struct AnalysisContext {
     pub openings: Vec<IngestionOpening>,
 }
 
+/// One computed load's expansion under the host's own semantics: every
+/// file it may load, with how the analysis reads each, and whether the
+/// host could list them all.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostExpansion {
+    /// The importing module, as the analysis keys it.
+    pub importer: String,
+    /// The load's byte offset in the importer.
+    pub start: u32,
+    /// Whether `files` is every file the load may load.
+    pub closed: bool,
+    pub files: Vec<ExpandedFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ExpandedFile {
+    pub path: String,
+    pub status: ExpandedStatus,
+}
+
+/// How the analysis reads a file an expansion may load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExpandedStatus {
+    /// A module the analysis holds.
+    Analysed,
+    /// A file the host loads as an opaque value (spec §2.2 A8).
+    Opaque,
+    /// A file the analysis does not read.
+    Unanalysed,
+}
+
 /// Why ingestion ended a probe Incomplete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -866,6 +899,10 @@ pub struct ProbeEvidence {
     #[serde(default)]
     pub identity: String,
     pub bases: FxHashMap<String, HostCandidate>,
+    /// What the host's bundler expands each computed load `prepare` lists
+    /// to (spec §6.3), by importer and the load's byte offset.
+    #[serde(default)]
+    pub expansions: Vec<HostExpansion>,
 }
 
 /// The path a specifier probes from `from_file`, relative to rootDir: a
@@ -3181,10 +3218,58 @@ fn member_path_ids(
 /// unless the host says its bundler leaves it unbundled (Vite, Rollup,
 /// Turbopack), in which case it loads code outside the bundle and reaches
 /// no analysed module.
-pub(crate) fn loaded_modules<'f>(
+/// How many modules one load may reach before it counts as reaching any
+/// (spec §6.3, the load-set bound).
+pub(crate) const LOAD_SET_LIMIT: usize = 64;
+
+/// What one runtime load may load, as Flow reads it.
+pub(crate) enum LoadReach<'f> {
+    /// These analysed modules, and nothing else.
+    Modules(Vec<&'f String>),
+    /// Any module, said as a clause.
+    Any(String),
+}
+
+/// What `load`, in `file`, may load. A literal names its module. A
+/// computed load (a template with substitutions, a context, a glob, any
+/// other expression) reaches its host expansion where the host listed it
+/// closed with every file analysed or opaque, up to the bound; otherwise
+/// it may load any module.
+pub(crate) fn load_reach<'f, T>(
     file: &str,
     load: &crate::loads::ModuleLoad,
-    files: &'f BTreeMap<String, FileFacts>,
+    files: &'f BTreeMap<String, T>,
+    inputs: &CssInputs,
+) -> LoadReach<'f> {
+    if let crate::loads::LoadTarget::Specifier(_) = load.target {
+        return LoadReach::Modules(loaded_modules(file, load, files, inputs));
+    }
+    let expansion = inputs
+        .probe_evidence
+        .iter()
+        .flat_map(|evidence| &evidence.expansions)
+        .find(|expansion| expansion.importer == file && expansion.start == load.start);
+    let Some(expansion) = expansion.filter(|expansion| expansion.closed) else {
+        return LoadReach::Any("which may load any module, and the host lists no closed expansion of it".to_string());
+    };
+    let mut modules = Vec::new();
+    for expanded in &expansion.files {
+        match (expanded.status, files.get_key_value(&expanded.path)) {
+            (ExpandedStatus::Opaque, _) => {}
+            (ExpandedStatus::Analysed, Some((key, _))) => modules.push(key),
+            _ => return LoadReach::Any(format!("which may load {}, a module the analysis does not read", expanded.path)),
+        }
+    }
+    if modules.len() > LOAD_SET_LIMIT {
+        return LoadReach::Any(format!("which may load any of {} modules", modules.len()));
+    }
+    LoadReach::Modules(modules)
+}
+
+pub(crate) fn loaded_modules<'f, T>(
+    file: &str,
+    load: &crate::loads::ModuleLoad,
+    files: &'f BTreeMap<String, T>,
     inputs: &CssInputs,
 ) -> Vec<&'f String> {
     use crate::loads::LoadTarget;
@@ -3248,10 +3333,10 @@ pub(crate) fn loaded_modules<'f>(
 /// which also covers absolute file keys; an alias is expanded. A prefix into
 /// an analysed package names that package's modules, or every module when
 /// its directory is unknown, and one into any other package names none.
-fn modules_under<'f>(
+fn modules_under<'f, T>(
     file: &str,
     prefix: &str,
-    files: &'f BTreeMap<String, FileFacts>,
+    files: &'f BTreeMap<String, T>,
     inputs: &CssInputs,
     keep: impl Fn(&str) -> bool,
 ) -> Vec<&'f String> {
@@ -9075,6 +9160,7 @@ mod tests {
             ]
             .into_iter()
             .collect(),
+            expansions: Vec::new(),
         });
         let entries: Vec<(&str, &str)> = files.iter().map(|(path, source)| (*path, source.as_str())).collect();
         let out = analyze(&entries, &inputs);
@@ -12841,9 +12927,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
-    /// A module loaded at runtime (`import()`, `require()`, a context or a
-    /// glob) renders its exports where usage cannot follow, so each
-    /// component it can load keeps every option.
+    /// A module loaded at runtime (`import()`, `require()`, wrapped or not,
+    /// a context or a glob) renders its exports where usage cannot follow,
+    /// so each component it can load keeps every option.
     #[test]
     fn components_a_module_load_can_reach_keep_every_option() {
         let kept = |setup: &str| {
@@ -12867,6 +12953,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "export const load = (name) => import(`./${name}`);",
             "export const load = (name) => import('./' + name);",
             "const ui = require('./r');\nexport const Big = () => <ui.R size=\"lg\" />;",
+            "export const render = (c, props) => [c, props];\nrender((require)('./r').R, { size: 'lg' });",
             "const context = require.context('./', false, /r\\.tsx$/);",
             "const context = import.meta.webpackContext('./');",
             "const modules = import.meta.glob('./*.tsx', { eager: true });",
@@ -12883,7 +12970,13 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         ] {
             assert_eq!(kept(setup), (vec!["sm"], vec!["active"]), "{setup}");
         }
-        // A loaded compose family hands over its slots.
+        // A component only a wrapped require reaches is rendered all the same.
+        let only_loaded = kept_options(&[
+            ("r.tsx", RECIPE),
+            ("entry.ts", "export const render = (c, props) => [c, props];\nrender((require)('./r').R, { size: 'lg' });\n"),
+        ]);
+        assert_eq!(only_loaded, (vec!["sm", "md", "lg"], vec!["active", "busy"]));
+                // A loaded compose family hands over its slots.
         let family = format!(
             "{}export const Fam = compose({{ Root: R }}, {{ name: 'Fam' }});\n",
             RECIPE.replacen("export const R", "const R", 1)
@@ -13700,6 +13793,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     fn analyze_with_logical_space(entries: &[(&str, &str)]) -> CssOutput {
+        analyze(entries, &logical_space_inputs())
+    }
+
+    fn logical_space_inputs() -> CssInputs {
         let mut inputs = CssInputs::from_json(
             None,
             None,
@@ -13721,7 +13818,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         )
         .unwrap();
         inputs.theme.insert("space.8".into(), "0.5rem".into());
-        analyze(entries, &inputs)
+        inputs
     }
 
     /// An object handed to a module-scope function nothing writes stays
@@ -13785,8 +13882,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
         let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
         let barrel = "export * from './fam';\nexport * from 'some-package';\n";
-        // `./bridge` is outside the analysis and may `export { Fam as X }`.
-        let bridged = "export * from './bridge';\n";
+        // `some-bridge` is a package outside the analysis and may
+        // `export { Fam as X }`.
+        let bridged = "export * from 'some-bridge';\n";
         let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
         for (mutate, warns) in [
             ("import { Fam } from './barrel';\nFam.Box = () => null;\n", true),
@@ -13821,6 +13919,233 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// A package the analysis does not read may re-export any analysed
+    /// object (a linked workspace package), so a write through its
+    /// namespace re-exported, loaded with `import()` or with `require()`,
+    /// wrapped or not, leaves every member table unproven, through a further
+    /// star too. A
+    /// module built into Node imports nothing analysed, and a load of an
+    /// analysed module reaches only what it exports.
+    #[test]
+    fn a_write_through_a_package_the_analysis_does_not_read_reaches_any_exported_object() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        let proxied = "export * as ns from '@local/proxy';\n";
+        let rows: [(&[(&str, &str)], bool); 9] = [
+            (&[("proxied.ts", proxied), ("mutate.ts", "import { ns } from './proxied';\nns.Fam.Box = () => null;\n")], true),
+            (
+                &[
+                    ("proxied.ts", proxied),
+                    ("hop.ts", "export * from './proxied';\n"),
+                    ("mutate.ts", "import { ns } from './hop';\nns.Fam.Box = () => null;\n"),
+                ],
+                true,
+            ),
+            (&[("mutate.ts", "import('@local/proxy').then((ui) => { ui.Fam.Box = () => null; });\n")], true),
+            (&[("mutate.ts", "require('@local/proxy').Fam.Box = () => null;\n")], true),
+            (&[("mutate.ts", "(require)('@local/proxy').Fam.Box = () => null;\n")], true),
+            (&[("mutate.ts", "import('node:path').then((path) => { path.Fam = null; });\n")], false),
+            (&[("mutate.ts", "require('fs').Fam = null;\n")], false),
+            (&[("mutate.ts", "require('_http_agent').Fam = null;\n")], false),
+            (&[("mutate.ts", "import('./recipe').then((recipe) => { recipe.Box.x = 1; });\n")], false),
+        ];
+        for (more, warns) in rows {
+            let mut files = vec![("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app)];
+            files.extend_from_slice(more);
+            let out = analyze_with_logical_space(&files);
+            assert_eq!(unattributed(&out).len(), usize::from(warns), "{more:?}: {:?}", out.diagnostics);
+        }
+    }
+
+    /// A path that names no analysed file may still be a module at run time
+    /// (excluded, generated, or in a language the analysis does not read),
+    /// which may re-export any analysed object: re-exporting its namespace,
+    /// loading it with `import()` or `require()`, or importing it, bindings
+    /// or not, leaves every member table unproven. A file the host reads as
+    /// an opaque value imports nothing; without the host's reading, a file
+    /// is not opaque, whatever its spelling.
+    #[test]
+    fn a_write_through_a_module_the_analysis_cannot_find_reaches_any_exported_object() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        let mut inputs = logical_space_inputs();
+        let asset = |base: &str| {
+            let candidate = HostCandidate {
+                candidate: base.to_string(),
+                actual: None,
+                analysed_as: None,
+                reading: Some(HostReading::Asset),
+            };
+            (base.to_string(), candidate)
+        };
+        inputs.probe_evidence = Some(ProbeEvidence {
+            generation: 1,
+            identity: String::new(),
+            expansions: Vec::new(),
+            bases: ["data.json", "icon.svg?url", "styles.css"].into_iter().map(asset).collect(),
+        });
+        for (mutate, warns) in [
+            ("export * as ns from './generated';\n", true),
+            ("import('./generated').then((m) => { m.Fam.Box = () => null; });\n", true),
+            ("require('./generated.js').Fam.Box = () => null;\n", true),
+            ("import './generated.js';\n", true),
+            ("import {} from './generated.js';\n", true),
+            ("import '/workspace/generated.js';\n", true),
+            ("import { x } from 'file:///workspace/generated.js';\nexport const y = x;\n", true),
+            ("export * from 'C:\\\\workspace\\\\generated.js';\n", true),
+            ("import('./generated.js?inline').then((m) => { m.Fam.Box = () => null; });\n", true),
+            ("import('./other.json').then((data) => { data.Fam = null; });\n", true),
+            ("import type { Shape } from './generated.js';\nexport type Local = Shape;\n", false),
+            ("import('./data.json').then((data) => { data.Fam = null; });\n", false),
+            ("import('./icon.svg?url').then((icon) => { icon.Fam = null; });\n", false),
+            ("require('./styles.css');\n", false),
+        ] {
+            let out = analyze(
+                &[("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("mutate.ts", mutate)],
+                &inputs,
+            );
+            assert_eq!(unattributed(&out).len(), usize::from(warns), "{mutate}: {:?}", out.diagnostics);
+        }
+    }
+
+    /// A computed load (a template with substitutions, a computed
+    /// `require`, a context, a glob) reaches only what the host's bundler
+    /// expands it to, and only where the host lists that expansion closed
+    /// with every file analysed or opaque, up to the bound (spec §6.3, 64
+    /// modules). Otherwise it may load any module, an excluded one
+    /// included, so every member table is unproven. A glob of several
+    /// patterns is one call.
+    #[test]
+    fn a_computed_load_reaches_only_a_closed_host_expansion() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        let warned = |loader: &str, pages: usize, expansion: Option<HostExpansion>| -> Vec<String> {
+            let mut inputs = logical_space_inputs();
+            inputs.probe_evidence =
+                Some(ProbeEvidence { expansions: expansion.into_iter().collect(), ..ProbeEvidence::default() });
+            let paths: Vec<String> = (0..pages).map(|page| format!("pages/p{page}.js")).collect();
+            let mut files = vec![("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("loader.ts", loader)];
+            files.extend(paths.iter().map(|path| (path.as_str(), "export const page = 1;\n")));
+            unattributed(&analyze(&files, &inputs)).iter().map(|d| d.message.clone()).collect()
+        };
+        // Without the host's expansion, any computed load may load any module.
+        for loader in [
+            "export const open = (name) => import(`./excluded/${name}.js`);\n",
+            "export const open = (name) => require('./excluded/' + name);\n",
+            "export const pages = require.context('./excluded', true, /\\.js$/);\n",
+            "export const pages = import.meta.glob(['./excluded/*.js', './other/*.js']);\n",
+            // A recognised loader through parentheses, an optional call or a
+            // constant computed member is the same loader.
+            "export const open = (name) => (require)(name);\n",
+            "export const open = (name) => (require)?.(name);\n",
+            "export const pages = (require.context)('./excluded', true, /\\.js$/);\n",
+            "export const pages = require['context']('./excluded', true, /\\.js$/);\n",
+            "export const pages = (import.meta.glob)('./excluded/*.js', { eager: true });\n",
+        ] {
+            let warned = warned(loader, 0, None);
+            assert!(
+                warned.len() == 1 && warned[0].contains("the host lists no closed expansion"),
+                "{loader}: {warned:?}"
+            );
+        }
+        // With it, the load reaches what the host lists.
+        let loader = "export const open = (name) => import(`./pages/${name}.js`);\n";
+        let start = loader.find("import(").unwrap() as u32;
+        let listed = |closed: bool, analysed: usize, more: &[(&str, ExpandedStatus)]| HostExpansion {
+            importer: "loader.ts".to_string(),
+            start,
+            closed,
+            files: (0..analysed)
+                .map(|page| ExpandedFile { path: format!("pages/p{page}.js"), status: ExpandedStatus::Analysed })
+                .chain(more.iter().map(|(path, status)| ExpandedFile { path: path.to_string(), status: *status }))
+                .collect(),
+        };
+        let any = |clause: &str, rows: Vec<String>| rows.len() == 1 && rows[0].contains(clause);
+        let not_closed = warned(loader, 3, Some(listed(false, 3, &[])));
+        assert!(any("the host lists no closed expansion", not_closed.clone()), "{not_closed:?}");
+        assert_eq!(warned(loader, LOAD_SET_LIMIT, Some(listed(true, LOAD_SET_LIMIT, &[]))), Vec::<String>::new());
+        let past = warned(loader, LOAD_SET_LIMIT + 1, Some(listed(true, LOAD_SET_LIMIT + 1, &[])));
+        assert!(any("which may load any of 65 modules", past.clone()), "{past:?}");
+        let excluded = warned(loader, 3, Some(listed(true, 3, &[("pages/p3.test.js", ExpandedStatus::Unanalysed)])));
+        assert!(any("which may load pages/p3.test.js, a module the analysis does not read", excluded.clone()), "{excluded:?}");
+        assert_eq!(warned(loader, 3, Some(listed(true, 3, &[("pages/data.json", ExpandedStatus::Opaque)]))), Vec::<String>::new());
+    }
+
+    /// Contract: every computed load analysis reads is one `prepare` lists,
+    /// by the same offset and as written, so a host that expands each listed
+    /// load leaves none unexpanded.
+    #[test]
+    fn every_computed_load_analysis_reads_is_listed() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        let loader = concat!(
+            "export const a = (n) => import(/* webpackInclude: /\\.js$/ */ `./pages/${n}.js`);\n",
+            "export const b = (n) => (require)?.('./data/' + n + '.json');\n",
+            "export const c = require['context']('./ctx', false, /\\.js$/i);\n",
+            "export const d = import.meta.webpackContext('./wc', { regExp: /x/, chunkName: 'c', mode: 'lazy' });\n",
+            "export const e = import.meta.glob(['./g/*.js', '!./g/skip.js'], { query: '?raw', import: 'default' });\n",
+            "export const f = (s) => import(s);\n",
+            "export const g = (o) => import.meta.glob('./h/*.js', o);\n",
+            "export const h = (n) => import(`./raw/${n}.js`, { with: { type: 'raw' } });\n",
+            "export const i = (n, o) => import(`./raw/${n}.js`, o);\n",
+            "export const j = (n) => import(`${n}`);\n",
+            "export const k = (n) => import('' + n);\n",
+            "export const l = import.meta.glob('./h/*.js', false);\n",
+            "export const m = (n) => import(`./pages/${`group/${n}`}.js`);\n",
+            "export const o = (n) => import(`./pages/${'group/' + n}.js`);\n",
+            "export const p = (n) => import(`./q/${n}.js`, { 'with': { type: 'raw' } });\n",
+            "export const q = (n) => import(`./q/${n}.js`, { with: { type: 'raw' }, with: { type: 'code' } });\n",
+        );
+        let allocator = oxc::allocator::Allocator::default();
+        let program = oxc::parser::Parser::new(&allocator, loader, oxc::span::SourceType::ts()).parse().program;
+        let (_, listed) = crate::loads::collect_listed(&program);
+        let listed = serde_json::to_value(&listed).unwrap();
+        let start = |at: &str| loader.find(at).unwrap();
+        assert_eq!(
+            listed,
+            serde_json::json!([
+                { "start": start("import(/*"), "kind": "import", "args": { "quasis": ["./pages/", ".js"], "template": true, "options": null, "comments": ["/* webpackInclude: /\\.js$/ */"] } },
+                { "start": start("(require)"), "kind": "require", "args": { "quasis": ["./data/", ".json"], "template": false, "options": null, "comments": [] } },
+                { "start": start("require['"), "kind": "context", "args": { "dir": "./ctx", "recursive": false, "regExp": { "source": "\\.js$", "flags": "i" }, "include": null, "exclude": null, "mode": null } },
+                { "start": start("import.meta.webpackContext"), "kind": "webpackContext", "args": { "dir": "./wc", "recursive": null, "regExp": { "source": "x", "flags": "" }, "include": null, "exclude": null, "mode": "lazy" } },
+                { "start": start("import.meta.glob(["), "kind": "glob", "args": { "patterns": ["./g/*.js", "!./g/skip.js"], "options": { "query": "?raw", "import": "default" } } },
+                // A bare variable is no template or concatenation, which
+                // hosts read another way, and an argument that is not
+                // written statically, or options that are no object literal,
+                // list no arguments.
+                { "start": start("import(s)"), "kind": "import", "args": null },
+                { "start": start("import.meta.glob('./h/*.js', o)"), "kind": "glob", "args": null },
+                { "start": start("import(`./raw/${n}.js`, {"), "kind": "import", "args": { "quasis": ["./raw/", ".js"], "template": true, "options": { "with": { "type": "raw" } }, "comments": [] } },
+                { "start": start("import(`./raw/${n}.js`, o"), "kind": "import", "args": null },
+                { "start": start("import(`${n}`)"), "kind": "import", "args": { "quasis": ["", ""], "template": true, "options": null, "comments": [] } },
+                { "start": start("import('' + n)"), "kind": "import", "args": { "quasis": ["", ""], "template": false, "options": null, "comments": [] } },
+                { "start": start("import.meta.glob('./h/*.js', false)"), "kind": "glob", "args": null },
+                // A substitution that is text itself, and options with a
+                // quoted or repeated key, list no arguments.
+                { "start": start("import(`./pages/${`"), "kind": "import", "args": null },
+                { "start": start("import(`./pages/${'"), "kind": "import", "args": null },
+                { "start": start("import(`./q/${n}.js`, { '"), "kind": "import", "args": null },
+                { "start": start("import(`./q/${n}.js`, { with: { type: 'raw' }, with"), "kind": "import", "args": null },
+            ])
+        );
+        let files = [("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("loader.ts", loader)];
+        let warned = |inputs: &CssInputs| unattributed(&analyze(&files, inputs)).len();
+        assert!(warned(&logical_space_inputs()) > 0);
+        let mut inputs = logical_space_inputs();
+        let expansions = listed.as_array().unwrap().iter().map(|load| HostExpansion {
+            importer: "loader.ts".to_string(),
+            start: load["start"].as_u64().unwrap() as u32,
+            closed: true,
+            files: Vec::new(),
+        });
+        inputs.probe_evidence = Some(ProbeEvidence { expansions: expansions.collect(), ..ProbeEvidence::default() });
+        assert_eq!(warned(&inputs), 0);
+    }
+
     /// Code a module runs from a string can `import()` any module and
     /// rebind what an exported object holds, so a member tag of one
     /// rendered elsewhere is not proven; a module running none leaves it.
@@ -13848,6 +14173,77 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                     "{runner}: {warned:?}"
                 ),
                 None => assert!(warned.is_empty(), "{runner}: {warned:?}"),
+            }
+        }
+    }
+
+    /// A loader read anywhere but as a direct callee or a member that loads
+    /// nothing (an alias, a call through `call`, `apply`, `bind` or a
+    /// sequence, `module.require`, a computed member, the global object's
+    /// `require`, or a `createRequire` result) can load any module and rebind
+    /// what an exported object holds, so a member tag of one rendered
+    /// elsewhere is not proven. An ambient declaration binds no loader. A
+    /// direct `require` of a literal path reaches only that module, and
+    /// `module.exports` loads nothing.
+    #[test]
+    fn an_escaped_loader_may_rebind_any_exported_object() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
+        let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
+        macro_rules! create {
+            ($rest:literal) => {
+                concat!("import { createRequire } from 'node:module';\n", $rest)
+            };
+        }
+        let handed = Some("hands on require other than as a direct call");
+        let module = Some("reads module other than through a member that loads nothing");
+        let builtin = Some("reads node:module other than through a member that loads nothing");
+        for (path, loader, reason) in [
+            ("loader.ts", "export const open = (name) => (0, require)(name);\n", handed),
+            ("loader.ts", "const r = require;\nexport const open = (name) => r(name);\n", handed),
+            ("loader.ts", "export const open = (name) => require.call(null, name);\n", handed),
+            ("loader.ts", "export const open = (name) => require.apply(null, [name]);\n", handed),
+            ("loader.ts", "export const open = (name) => require.bind(null)(name);\n", handed),
+            ("loader.ts", "export const open = (name) => globalThis.require(name);\n", Some("reads require from the global object")),
+            ("loader.ts", "export const open = (name) => module.require(name);\n", module),
+            ("loader.ts", create!("export const open = (name) => createRequire(import.meta.url)(name);\n"), Some("reads createRequire")),
+            (
+                "loader.ts",
+                create!("const load = createRequire(import.meta.url);\nexport const open = (name) => load(name);\n"),
+                Some("reads createRequire"),
+            ),
+            ("loader.cts", "declare const require: any;\nconst r = require;\nexport const open = (name) => r(name);\n", handed),
+            ("loader.cts", "declare const module: any;\nexport const open = (name) => module.require(name);\n", module),
+            ("loader.ts", "const m = module;\nexport const open = (name) => m.require(name);\n", module),
+            ("loader.ts", "const { require: r } = module;\nexport const open = (name) => r.call(module, name);\n", module),
+            ("loader.ts", "const k = 'require';\nexport const open = (name) => module[k](name);\n", module),
+            (
+                "loader.ts",
+                "const m = require('node:module'), k = 'createRequire';\nexport const open = (name) => m[k](__filename)(name);\n",
+                builtin,
+            ),
+            ("loader.ts", "const m = await import(`node:module`), k = 'createRequire';\nexport const open = (name) => m[k](__filename)(name);\n", builtin),
+            ("loader.ts", "const m = require(`node:module`), k = 'createRequire';\nexport const open = (name) => m[k](__filename)(name);\n", builtin),
+            ("loader.ts", "const m = require('node:module', null), k = 'createRequire';\nexport const open = (name) => m[k](__filename)(name);\n", builtin),
+            ("loader.ts", "export const open = (name) => module.hot.data.load(name);\n", module),
+            ("loader.ts", "export const x = require('./x');\n", None),
+            ("loader.ts", "module.exports = { loaded: module.loaded };\n", None),
+        ] {
+            let out = analyze_with_logical_space(&[
+                ("recipe.tsx", recipe),
+                ("fam.tsx", fam),
+                ("x.ts", "export const x = 1;\n"),
+                (path, loader),
+                ("app.tsx", app),
+            ]);
+            let warned: Vec<&str> = unattributed(&out).iter().map(|d| d.message.as_str()).collect();
+            match reason {
+                Some(reason) => assert!(
+                    warned.len() == 1
+                        && warned[0].contains(&format!("({path} {reason}, so it can load any module and change what it exports)")),
+                    "{loader}: {warned:?}"
+                ),
+                None => assert!(warned.is_empty(), "{loader}: {warned:?}"),
             }
         }
     }
@@ -15592,6 +15988,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             inputs.probe_evidence = Some(ProbeEvidence {
                 generation: 1,
                 identity: String::new(),
+                expansions: Vec::new(),
                 bases: [(
                     "twin".to_string(),
                     HostCandidate {
@@ -15640,6 +16037,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             Some(ProbeEvidence {
                 generation: 1,
                 identity: String::new(),
+                expansions: Vec::new(),
                 bases: [(
                     "a".to_string(),
                     HostCandidate { candidate: "a.json".into(), actual: None, analysed_as: None, reading: Some(reading) },

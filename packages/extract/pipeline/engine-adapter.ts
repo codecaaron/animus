@@ -6,6 +6,8 @@
 import { parseInternalWire } from './internal-wire';
 import { parseFilesJson } from './source-ingestion';
 
+import type { ListedLoad } from './host-expansions';
+import type { ProbeEvidenceGatherer } from './probe-evidence';
 import type { WorkspacePackages } from './workspace-packages';
 
 /** The stateful engine handle produced by `new native.ExtractEngine(...)`. */
@@ -105,10 +107,10 @@ export interface EngineApi {
     analysisContextJson?: string,
     generatedNamesJson?: string,
     propertyRecordsJson?: string,
-    /** Given, the session's host-candidate evidence for the bases the
+    /** Given, the session's evidence for the bases and computed loads the
      *  engine's `prepare` names, carrying its input identity (spec §2.2
-     *  A2, A8), as JSON. */
-    probeEvidence?: (bases: readonly string[], identity: string) => string
+     *  A2, A8, §6.3), as JSON. */
+    probeEvidence?: ProbeEvidenceGatherer
   ) => string;
   transformFile: (
     source: string,
@@ -340,8 +342,13 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           const prepared = parseInternalWire<{
             identity: string;
             bases: string[];
+            loads: ListedLoad[];
           }>(engine.prepare(filesJson), 'ExtractEngine.prepare');
-          evidence = probeEvidence(prepared.bases, prepared.identity);
+          evidence = probeEvidence(
+            prepared.bases,
+            prepared.identity,
+            prepared.loads
+          );
         }
         return engine.analyze(filesJson, evidence);
       },
