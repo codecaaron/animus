@@ -5,6 +5,9 @@
 //! `EXTENSION_POLICY` in `packages/extract/pipeline/extension-policy.ts`,
 //! which source ingestion reads (`node packages/extract/scripts/extension-policy.ts --write`).
 
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -164,12 +167,63 @@ pub fn see_within(base: &Path, candidate: &str) -> Seen {
     Seen::File
 }
 
+thread_local! {
+    /// Each directory's entry names, read once, while a
+    /// [`with_listing_cache`] scope is open; None outside one.
+    static LISTINGS: RefCell<Option<HashMap<PathBuf, Option<HashSet<OsString>>>>> = const { RefCell::new(None) };
+}
+
+/// Runs `run` with each directory [`see_within`] checks listed at most once:
+/// a directory's listing is read the first time the pass checks it and
+/// answers every later check in that pass. A limit: a file another process
+/// writes to that directory after it is listed is not seen until the next
+/// pass. A nested scope shares the open one.
+pub fn with_listing_cache<T>(run: impl FnOnce() -> T) -> T {
+    if LISTINGS.with(|listings| listings.borrow().is_some()) {
+        return run();
+    }
+    struct Close;
+    impl Drop for Close {
+        fn drop(&mut self) {
+            LISTINGS.with(|listings| *listings.borrow_mut() = None);
+        }
+    }
+    LISTINGS.with(|listings| *listings.borrow_mut() = Some(HashMap::new()));
+    let _close = Close;
+    run()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The directories read for their listing, counted.
+    static DIRECTORY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `directory`'s entries, read from the disk.
+fn read_directory(directory: &Path) -> std::io::Result<std::fs::ReadDir> {
+    #[cfg(test)]
+    DIRECTORY_READS.with(|reads| reads.set(reads.get() + 1));
+    std::fs::read_dir(directory)
+}
+
+/// The entry names `directory` lists; None where it cannot be read.
+fn entry_names(directory: &Path) -> Option<HashSet<OsString>> {
+    read_directory(directory).ok().map(|entries| entries.flatten().map(|entry| entry.file_name()).collect())
+}
+
 /// Whether `directory` lists an entry spelled exactly `name`.
 fn lists(directory: &Path, name: &std::ffi::OsStr) -> bool {
     let directory = if directory.as_os_str().is_empty() { Path::new(".") } else { directory };
-    std::fs::read_dir(directory)
-        .map(|entries| entries.flatten().any(|entry| entry.file_name() == name))
-        .unwrap_or(false)
+    LISTINGS.with(|listings| match listings.borrow_mut().as_mut() {
+        Some(listings) => listings
+            .entry(directory.to_path_buf())
+            .or_insert_with(|| entry_names(directory))
+            .as_ref()
+            .is_some_and(|names| names.contains(name)),
+        None => read_directory(directory)
+            .map(|entries| entries.flatten().any(|entry| entry.file_name() == name))
+            .unwrap_or(false),
+    })
 }
 
 /// `path` with `.` dropped and `..` taken back, without touching the disk,
@@ -193,3 +247,42 @@ pub fn lexical(path: &Path) -> PathBuf {
 
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Contract: one resolution pass lists each directory once, however many
+    /// candidates it checks in it, and answers each exactly as an unshared
+    /// check does. Listing it per candidate made a system load over large
+    /// directories quadratic (0.1.26: 33 s against 1.2 s).
+    #[test]
+    fn a_pass_lists_each_directory_once() {
+        let dir = std::env::temp_dir().join(format!("animus-listings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("icons")).expect("create fixture");
+        for n in 0..50 {
+            std::fs::write(dir.join("icons").join(format!("Icon{n}.mjs")), "").expect("write fixture");
+        }
+        let candidates: Vec<String> = (0..50)
+            .map(|n| format!("Icon{n}.mjs"))
+            .chain(["icon0.mjs".to_string(), "Absent.mjs".to_string()])
+            .map(|name| dir.join("icons").join(name).to_string_lossy().to_string())
+            .collect();
+        let check = || candidates.iter().map(|candidate| see_within(&dir, candidate)).collect::<Vec<_>>();
+        let counted = |run: &dyn Fn() -> Vec<Seen>| {
+            DIRECTORY_READS.with(|reads| reads.set(0));
+            let seen = run();
+            (seen, DIRECTORY_READS.with(|reads| reads.get()))
+        };
+        let (unshared, unshared_reads) = counted(&check);
+        let (shared, shared_reads) = counted(&|| with_listing_cache(check));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(shared, unshared);
+        assert!(unshared[..50].iter().all(|seen| *seen == Seen::File));
+        // `dir` and `dir/icons`, for each candidate found, against once each.
+        assert_eq!(unshared_reads, 100 + if unshared[50] == Seen::Missing { 0 } else { 2 });
+        assert_eq!(shared_reads, 2);
+    }
+}
