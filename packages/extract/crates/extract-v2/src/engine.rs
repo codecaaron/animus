@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::identity::LocalId;
 use crate::link::ProjectLinks;
-use crate::loads::{LoadKind, Spelling};
+use crate::loads::LoadKind;
 use crate::usage_facts::{reads_only, ReadingsOf};
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
 use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, OpeningReason, Request, Terminal};
@@ -464,10 +464,16 @@ fn possible_bindings(links: &ProjectLinks, lookup: ExportLookup<LocalId>, throug
 /// One module's inputs to `unstable_style_statics`.
 struct StyleModule {
     facts: crate::usage_facts::StyleObjectFacts,
+    /// See `FileFacts::written_namespaces`.
+    written_namespaces: crate::usage_facts::WrittenNamespaces,
     namespace_exports: BTreeMap<String, String>,
-    loads: Vec<String>,
+    loads: Vec<crate::loads::ModuleLoad>,
+    /// The modules its `import` and `export … from` declarations load.
+    imports: Vec<String>,
     /// How it runs code from a string, which can load any module.
     dynamic_code: Option<&'static str>,
+    /// How it lets a loader escape, which can load any module.
+    loader_escape: Option<&'static str>,
 }
 
 /// Each module-scope static that a use anywhere in the analysis may change
@@ -744,22 +750,76 @@ fn unstable_style_statics(
                 }
             }
         }
+        // A package may re-export our objects (a linked workspace package)
+        // under any name: a use that may write through its namespace may
+        // reach any of them.
+        for (namespace, (subject, used)) in &module.written_namespaces {
+            if matches!(namespace_of(file, namespace), Some(Request::Outside(identity)) if !crate::link::is_node_builtin(&identity)) {
+                flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), said(file, subject, used));
+            }
+        }
         let reexports = module
             .namespace_exports
             .iter()
             .map(|(name, spec)| (spec, format!("as the namespace {name}")));
-        let loads = module.loads.iter().map(|spec| (spec, "at runtime".to_string()));
-        for (spec, how) in reexports.chain(loads) {
+        // A module the analysis cannot find runs when this one imports it,
+        // bindings or not, and may re-export any static.
+        for spec in &module.imports {
+            if let Some(unread @ crate::link::Unread::Missing) = crate::link::unread_source(file, spec, files, inputs) {
+                let reason = format!("{file} imports {spec}, and {}", unread.clause());
+                flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+            }
+        }
+        for (spec, how) in reexports {
+            if let Some(unread) = crate::link::unread_source(file, spec, files, inputs) {
+                let reason = format!("{file} hands on {spec} {how}, and {}", unread.clause());
+                flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+                continue;
+            }
             let Some(target) = analyze_css::resolve_import_source(file, spec, files, inputs) else {
                 continue;
             };
             hand_on(&mut flow, &target, &format!("{file} hands on {target} {how}"));
+        }
+        // A runtime load hands on every module it may load: the one a
+        // literal names, or each one a template, a context or a glob may
+        // reach, up to the bound.
+        // A glob of several patterns is one call: judged once.
+        let mut calls = std::collections::BTreeSet::new();
+        for load in &module.loads {
+            if !calls.insert(load.start) && !matches!(load.target, crate::loads::LoadTarget::Specifier(_)) {
+                continue;
+            }
+            if let crate::loads::LoadTarget::Specifier(spec) = &load.target {
+                if let Some(unread) = crate::link::unread_source(file, spec, files, inputs) {
+                    let reason = format!("{file} hands on {spec} at runtime, and {}", unread.clause());
+                    flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+                    continue;
+                }
+            }
+            let targets = match analyze_css::load_reach(file, load, files, inputs) {
+                analyze_css::LoadReach::Modules(targets) => targets,
+                analyze_css::LoadReach::Any(why) => {
+                    let reason = format!("{file} loads {} at runtime on line {}, {why}", load.call, load.line);
+                    flow.open(ReasonId::UnexpandedHostLoad, Region::of(RegionAtom::AllExports), reason);
+                    continue;
+                }
+            };
+            for target in targets {
+                hand_on(&mut flow, target, &format!("{file} hands on {target} at runtime"));
+            }
         }
         // Code from a string can `import()` any module and change what it
         // exports.
         if let Some(how) = module.dynamic_code {
             let reason = format!("{file} {how}, so code from a string can load and change any module");
             flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), reason);
+        }
+        // An escaped loader can load any module under a name the analysis
+        // never sees.
+        if let Some(how) = module.loader_escape {
+            let reason = format!("{file} {how}, so it can load any module and change what it exports");
+            flow.open(ReasonId::OpaqueEffect, Region::of(RegionAtom::AllExports), reason);
         }
     }
     // A static stored in an object, or read from a binding, may change with
@@ -804,6 +864,14 @@ fn unstable_style_statics(
         }
     }
     unstable
+}
+
+/// A computed load `prepare` lists, with the module that makes it.
+#[derive(serde::Serialize)]
+struct ListedLoad {
+    importer: String,
+    #[serde(flatten)]
+    load: crate::loads::HostLoad,
 }
 
 #[napi]
@@ -873,9 +941,10 @@ impl ExtractEngine {
     }
 
     /// Parses `file_entries_json` for the next `analyze` of the same files,
-    /// and returns their input identity and the path each of their
-    /// specifiers probes (`probe_base`), sorted: the bases a session gathers
-    /// host-candidate evidence for, which carries that identity.
+    /// and returns their input identity, the path each of their specifiers
+    /// probes (`probe_base`), sorted, and their computed loads: the bases a
+    /// session gathers host-candidate evidence for, and the loads it lists
+    /// the host's expansions of (spec §6.3), which carry that identity.
     #[napi]
     pub fn prepare(&mut self, file_entries_json: String) -> napi::Result<String> {
         let entries = canonical_entries(&file_entries_json)?;
@@ -885,8 +954,11 @@ impl ExtractEngine {
             entries.into_iter().map(|e| ast_store::FileEntry { path: e.path, source: e.source }).collect(),
         );
         let mut bases = std::collections::BTreeSet::new();
+        let mut loads = Vec::new();
         for ast in store.iter() {
-            for load in crate::loads::collect(ast.program()) {
+            let (all, listed) = crate::loads::collect_listed(ast.program());
+            loads.extend(listed.into_iter().map(|load| ListedLoad { importer: ast.path.clone(), load }));
+            for load in all {
                 if let Some(base) =
                     load.specifier().and_then(|spec| analyze_css::probe_base(&ast.path, spec, &self.opts.css_inputs))
                 {
@@ -895,7 +967,7 @@ impl ExtractEngine {
             }
         }
         self.prepared = Some((kept, store));
-        serde_json::to_string(&serde_json::json!({ "identity": identity, "bases": bases }))
+        serde_json::to_string(&serde_json::json!({ "identity": identity, "bases": bases, "loads": loads }))
             .map_err(|e| napi::Error::from_reason(format!("probe bases: {e}")))
     }
 
@@ -1068,19 +1140,25 @@ impl ExtractEngine {
                 ast.path.clone(),
                 StyleModule {
                     facts,
+                    written_namespaces: if namespace_imports.is_empty() {
+                        BTreeMap::new()
+                    } else {
+                        crate::usage_facts::written_namespaces(program, &lowered_by_file[&ast.path].scoping)
+                    },
                     namespace_exports: crate::usage_facts::collect_namespace_exports(module),
                     loads: lowered_by_file[&ast.path]
                         .loads
                         .iter()
-                        .filter(|load| {
-                            matches!(
-                                load.kind,
-                                LoadKind::DynamicImport | LoadKind::Call { require: true } | LoadKind::WrappedRequire
-                            ) && load.spelling == Spelling::String
-                        })
+                        .filter_map(|load| load.module_load(ast.source()))
+                        .collect(),
+                    imports: lowered_by_file[&ast.path]
+                        .loads
+                        .iter()
+                        .filter(|load| matches!(load.kind, LoadKind::Import { runtime: true, .. } | LoadKind::Reexport { runtime: true }))
                         .filter_map(|load| load.specifier().map(str::to_string))
                         .collect(),
                     dynamic_code: lowered_by_file[&ast.path].dynamic_code,
+                    loader_escape: lowered_by_file[&ast.path].loader_escape,
                 },
             );
         }
@@ -2386,6 +2464,85 @@ export const App = () => <Box tone="red" />;
             ("held by name", concat!(import_pad!(), "pad.padding = 9;"), "pad"),
             ("held one member", concat!(import_pad!(), "pad.padding = 9;"), "{ padding: pad.padding }"),
             ("direct eval, by name", concat!(import_pad!(), "eval('pad.padding = 9');"), "pad"),
+            // A package outside the analysis may re-export `pad` (a linked
+            // workspace package): a write or hand-off through its namespace
+            // may change it.
+            ("package namespace, member written", "import * as ui from '@local/proxy';\nui.pad.padding = 9;", "{ ...pad }"),
+            ("package namespace, handed on", "import * as ui from '@local/proxy';\nregister(ui);", "{ ...pad }"),
+            // A template literal with no substitution is a literal specifier.
+            ("package import(), template literal", "await import(`@local/proxy`).then((m) => { m.pad.padding = 9; });", "{ ...pad }"),
+            ("package require(), template literal", "require(`@local/proxy`).pad.padding = 9;", "{ ...pad }"),
+            // A path the analysis cannot find may be a module at run time.
+            ("missing module import()", "await import('./generated.js').then((m) => { m.pad.padding = 9; });", "{ ...pad }"),
+            ("missing module side-effect import", "import './generated.js';", "{ ...pad }"),
+            ("missing module imported by absolute path", "import '/workspace/generated.js';", "{ ...pad }"),
+            // A computed load hands on every module it may load.
+            (
+                "template import() that may load the module",
+                "const name = 'tokens';\nawait import(`./${name}.js`).then((m) => { m.pad.padding = 9; });",
+                "{ ...pad }",
+            ),
+            (
+                "wrapped require of a computed specifier",
+                "const name = './tokens.js';\n(require)(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
+                "optional wrapped require of a computed specifier",
+                "const name = './tokens.js';\nconst loaded = (require)?.(name);\nloaded.pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
+                "eager glob that loads the module",
+                "const modules = import.meta.glob('./*.js', { eager: true });\nmodules['./tokens.js'].pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            // A loader read anywhere but as a direct callee can load any
+            // module under a name the analysis never sees.
+            ("sequence-wrapped require", "const name = './tokens.js';\n(0, require)(name).pad.padding = 9;", "{ ...pad }"),
+            ("an alias of require", "const name = './tokens.js';\nconst r = require;\nr(name).pad.padding = 9;", "{ ...pad }"),
+            ("require.call", "const name = './tokens.js';\nrequire.call(null, name).pad.padding = 9;", "{ ...pad }"),
+            ("require.apply", "const name = './tokens.js';\nrequire.apply(null, [name]).pad.padding = 9;", "{ ...pad }"),
+            ("require.bind", "const name = './tokens.js';\nrequire.bind(null)(name).pad.padding = 9;", "{ ...pad }"),
+            ("the global object's require", "const name = './tokens.js';\nglobalThis.require(name).pad.padding = 9;", "{ ...pad }"),
+            ("module.require", "const name = './tokens.js';\nmodule.require(name).pad.padding = 9;", "{ ...pad }"),
+            ("an alias of module", "const name = './tokens.js';\nconst m = module;\nm.require(name).pad.padding = 9;", "{ ...pad }"),
+            (
+                "require destructured from module",
+                "const name = './tokens.js';\nconst { require: r } = module;\nr.call(module, name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            ("a computed member of module", "const name = './tokens.js';\nconst k = 'require';\nmodule[k](name).pad.padding = 9;", "{ ...pad }"),
+            (
+                "a computed member of the builtin imported by a template",
+                "const name = './tokens.js';\nconst m = await import(`node:module`), k = 'createRequire';\nm[k](__filename)(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
+                "a computed member of the builtin required by a template",
+                "const name = './tokens.js';\nconst m = require(`node:module`), k = 'createRequire';\nm[k](__filename)(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
+                "a computed member of the builtin required with an extra argument",
+                "const name = './tokens.js';\nconst m = require('node:module', null), k = 'createRequire';\nm[k](__filename)(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
+                "a computed member of the required builtin",
+                "const name = './tokens.js';\nconst m = require('node:module'), k = 'createRequire';\nm[k](__filename)(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
+                "a createRequire result",
+                "import { createRequire } from 'node:module';\nconst name = './tokens.js';\ncreateRequire(import.meta.url)(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
+                "a held createRequire result",
+                "import { createRequire } from 'node:module';\nconst name = './tokens.js';\nconst load = createRequire(import.meta.url);\nload(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
             // Code from a string can load and change any module (PF3).
             (
                 "eval loads the module",
@@ -2429,15 +2586,30 @@ export const App = () => <Box tone="red" />;
                 "{ ...pad }",
             ),
         ];
-        for (row, mutation, read) in rows {
+        // An ambient declaration binds no loader.
+        let ambient = [
+            (
+                "an ambient require",
+                "declare const require: any;\nconst name = './tokens.js';\nconst r = require;\nr(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+            (
+                "an ambient module",
+                "declare const module: any;\nconst name = './tokens.js';\nmodule.require(name).pad.padding = 9;",
+                "{ ...pad }",
+            ),
+        ];
+        let rows = (rows.map(|(row, mutation, read)| (row, "mutate.js", mutation, read)).into_iter())
+            .chain(ambient.map(|(row, mutation, read)| (row, "mutate.cts", mutation, read)));
+        for (row, path, mutation, read) in rows {
             let mut engine = ExtractEngine::new(None).unwrap();
             let files = serde_json::json!([
                 { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
-                { "path": "mutate.js", "source": format!("{mutation}\n") },
+                { "path": path, "source": format!("{mutation}\n") },
                 {
                     "path": "reader.tsx",
                     "source": format!(
-                        "import './mutate.js';\nimport {{ pad }} from './tokens.js';\n\
+                        "import './{path}';\nimport {{ pad }} from './tokens.js';\n\
                          export const C = ds.styles({read}).asElement('div');\nexport const App = () => <C />;\n"
                     ),
                 },
@@ -2445,6 +2617,25 @@ export const App = () => <Box tone="red" />;
             let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
+        // A hot update's data can hold a loader its disposed version stored:
+        // the replacement changes `pad` through it, then loads the reader,
+        // which the bundle keeps reachable through an unused load.
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let files = serde_json::json!([
+            { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
+            { "path": "entry.js", "source": "export const later = () => require('./reader.js');\n" },
+            {
+                "path": "replacement.js",
+                "source": "module.hot.data.load('./tokens.js').pad.padding = 9;\nrequire('./reader.js');\n",
+            },
+            {
+                "path": "reader.js",
+                "source": "import { pad } from './tokens.js';\nexport const C = ds.styles({ ...pad }).asElement('div');\n\
+                           export const App = () => <C />;\n",
+            },
+        ]);
+        let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+        assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "a loader held in hot data: {}", out["css"]);
         // `export default pad` holds `pad`'s object, so a write through the
         // default reaches it: by default import, a re-export by name, a star
         // past that, the namespace's `default`, a hand-off, or a further
@@ -2576,11 +2767,15 @@ export const App = () => <Box tone="red" />;
         let child = out["component_fragments"]["b.tsx::Child"]["base"].as_str().unwrap_or_default();
         assert!(child.contains("display: flex") && child.contains("color: red"), "{child}: {}", out["diagnostics"]);
         // A type query of eval, or a schema builder's own `Function` member
-        // (TypeBox's `Type.Function`), runs nothing, and a type query of a
-        // function's `arguments` reads none of them: the static still
-        // extracts.
+        // (TypeBox's `Type.Function`), runs nothing, a type query of a
+        // function's `arguments` reads none of them, and a direct `require`
+        // of a literal path, or `typeof require`, loads only that path or
+        // nothing: the static still extracts.
         for (row, module) in [
             ("type query", "export type Evaluate = typeof eval;\n"),
+            ("a direct require of another module", "require('./typebox');\n"),
+            ("typeof require", "export const loads = typeof require === 'function';\n"),
+            ("module.exports", "module.exports = { loaded: module.loaded };\n"),
             (
                 "a type query of arguments in a read-only callee",
                 "import { pad } from './tokens';\nfunction read(o) { type Args = typeof arguments; return o.padding; }\nread(pad);\n",

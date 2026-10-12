@@ -18,6 +18,10 @@ import {
   probeOnDisk,
   seeOnDisk,
 } from './extension-policy';
+import {
+  BUILT_IN_EXTENSION_POLICY,
+  extensionPolicyJson,
+} from './host-extensions';
 import { parseInternalWire } from './internal-wire';
 import { readKitDescriptor } from './kit-descriptor';
 import {
@@ -1116,6 +1120,53 @@ export function sourceKitDependencies(
   return declared.flatMap((name) => {
     const pkgRoot = locatePackage(name, rootDir);
     if (pkgRoot === null || !declaresKitSource(engine, pkgRoot)) return [];
+    return [
+      {
+        name,
+        installed: isInstalledPackage(pkgRoot),
+        dependencies: dependencyNames(readPackageManifest(pkgRoot), [
+          'dependencies',
+        ]),
+      },
+    ];
+  });
+}
+
+/**
+ * The installed packages a system file's roots extend or include: each is a
+ * kit, whether or not it declares the source condition. Read before any
+ * host resolves (a bundler's config), so its packages resolve as the system
+ * loader resolves them from the root.
+ */
+export async function systemKitDependencies(
+  rootDir: string,
+  systemPath: string,
+  engine: Pick<EngineApi, 'extractFacts' | 'resolveSpecifier' | 'locatePackage'>
+): Promise<SourceKitDependency[]> {
+  const workspaces = declaredWorkspacePackages(rootDir);
+  const resolveSpecifier = engine.resolveSpecifier;
+  const members = await extractSystemFilePackages(
+    systemPath,
+    engineModuleParser(engine),
+    undefined,
+    (specifier) =>
+      resolveSpecifier?.(
+        specifier,
+        rootDir,
+        [],
+        workspaces,
+        extensionPolicyJson(BUILT_IN_EXTENSION_POLICY)
+      )?.path ?? null
+  );
+  const locatePackage = nativePackageLocator(engine, workspaces);
+  const names = new Set(
+    members
+      .filter((member) => isPackageSpecifier(member))
+      .map(bareSpecifierPackageName)
+  );
+  return [...names].flatMap((name) => {
+    const pkgRoot = locatePackage(name, rootDir);
+    if (pkgRoot === null) return [];
     return [
       {
         name,

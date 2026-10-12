@@ -358,3 +358,37 @@ describe('engine handle lifetime', () => {
     expect(findSession(key)).toBeUndefined();
   });
 });
+
+describe("Vite's load expansion", () => {
+  /** Contract (spec §6.3): vite-plugin hands its Session the expander for
+   *  Vite's build where every environment is bundled, and none where Vite's
+   *  expansion cannot be reproduced (a served environment, or an alias that
+   *  can rewrite a relative specifier). */
+  it('reaches the Session only where Vite bundles every environment', async () => {
+    const root = makeTempRoot('animus-load-expander-');
+    const expanderFor = async (
+      command: 'build' | 'serve',
+      alias: Record<string, string> = {}
+    ) => {
+      const ctx = new PluginContext({ system: './ds.ts' });
+      applyResolvedConfig(
+        ctx,
+        await resolveConfig(
+          { configFile: false, root, logLevel: 'silent', resolve: { alias } },
+          command
+        )
+      );
+      const session = ctx.createSession();
+      try {
+        return session.loadExpander;
+      } finally {
+        session.close();
+      }
+    };
+    expect(await expanderFor('build')).toBeDefined();
+    expect(await expanderFor('serve')).toBeUndefined();
+    expect(
+      await expanderFor('build', { './ui': '/elsewhere' })
+    ).toBeUndefined();
+  });
+});
