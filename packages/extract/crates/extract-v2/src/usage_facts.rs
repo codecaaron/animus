@@ -253,11 +253,9 @@ pub fn collect_props_forwarding(
     let mut held: Vec<(String, ComponentFunction<'_, '_>)> = Vec::new();
     for stmt in &program.body {
         match stmt {
-            Statement::ExportNamedDeclaration(export) => {
-                if let Some(declaration) = &export.declaration {
-                    components.extend(declared_components(declaration));
-                    held.extend(held_components(declaration));
-                }
+            Statement::ExportDeclaration(export) => {
+                components.extend(declared_components(&export.declaration));
+                held.extend(held_components(&export.declaration));
             }
             Statement::ExportDefaultDeclaration(export) => match &export.declaration {
                 ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
@@ -341,14 +339,29 @@ fn declared_components<'b, 'a>(
 /// A component function's first parameter and body.
 struct ComponentFunction<'b, 'a> {
     props: Option<&'b oxc::ast::ast::FormalParameter<'a>>,
-    body: &'b oxc::ast::ast::FunctionBody<'a>,
+    body: ComponentBody<'b, 'a>,
+}
+
+/// A function's body, or an arrow's block or concise body.
+enum ComponentBody<'b, 'a> {
+    Function(&'b oxc::ast::ast::FunctionBody<'a>),
+    Arrow(&'b oxc::ast::ast::ArrowFunctionBody<'a>),
+}
+
+impl<'a> ComponentBody<'_, 'a> {
+    fn visit(&self, visitor: &mut impl Visit<'a>) {
+        match self {
+            Self::Function(body) => visitor.visit_function_body(body),
+            Self::Arrow(body) => visitor.visit_arrow_function_body(body),
+        }
+    }
 }
 
 impl<'b, 'a> ComponentFunction<'b, 'a> {
     fn of_function(function: &'b oxc::ast::ast::Function<'a>) -> Option<Self> {
         Some(Self {
             props: function.params.items.first(),
-            body: function.body.as_deref()?,
+            body: ComponentBody::Function(function.body.as_deref()?),
         })
     }
 
@@ -358,7 +371,7 @@ impl<'b, 'a> ComponentFunction<'b, 'a> {
         match crate::chain_walk::unwrap_type_assertions(expr) {
             Expression::ArrowFunctionExpression(arrow) => Some(Self {
                 props: arrow.params.items.first(),
-                body: &arrow.body,
+                body: ComponentBody::Arrow(&arrow.body),
             }),
             Expression::FunctionExpression(function) => Self::of_function(function),
             Expression::CallExpression(call) => {
@@ -397,7 +410,7 @@ fn props_forwarding(function: ComponentFunction<'_, '_>, scoping: &Scoping) -> O
             spread,
             targets: Vec::new(),
         };
-        scan.visit_function_body(function.body);
+        function.body.visit(&mut scan);
         if !scan.targets.is_empty() {
             routes.push(ForwardRoute { named, targets: scan.targets, derived });
         }
@@ -412,7 +425,7 @@ fn props_forwarding(function: ComponentFunction<'_, '_>, scoping: &Scoping) -> O
     // alternative. `const rest = visible ? props : {}` spreads the props or
     // nothing. Each declaration counts, in a block or a nested function too.
     let mut declarations = PropsDeclarations { props: &props, rests: Vec::new(), values: Vec::new() };
-    declarations.visit_function_body(function.body);
+    function.body.visit(&mut declarations);
     for (body_named, rest) in declarations.rests {
         route(named.iter().cloned().chain(body_named).collect(), rest, false);
     }
@@ -771,37 +784,42 @@ pub fn collect_export_facts(program: &Program<'_>) -> Vec<ExportFact> {
     use oxc::ast::ast::Declaration;
     let mut out = Vec::new();
     for stmt in &program.body {
-        if let Statement::ExportNamedDeclaration(export) = stmt {
-            if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
-                for declarator in &decl.declarations {
-                    if let oxc::ast::ast::BindingPattern::BindingIdentifier(ident) = &declarator.id
-                    {
-                        out.push(ExportFact {
-                            exported: ident.name.to_string(),
-                            local: Some(ident.name.to_string()),
-                            source: None,
-                            original: None,
-                        });
+        match stmt {
+            Statement::ExportDeclaration(export) => {
+                if let Declaration::VariableDeclaration(decl) = &export.declaration {
+                    for declarator in &decl.declarations {
+                        if let oxc::ast::ast::BindingPattern::BindingIdentifier(ident) = &declarator.id {
+                            out.push(ExportFact {
+                                exported: ident.name.to_string(),
+                                local: Some(ident.name.to_string()),
+                                source: None,
+                                original: None,
+                            });
+                        }
                     }
                 }
             }
-            for spec in &export.specifiers {
-                let is_reexport = export.source.is_some();
-                out.push(ExportFact {
-                    exported: spec.exported.name().to_string(),
-                    local: if is_reexport {
-                        None
-                    } else {
-                        Some(spec.local.name().to_string())
-                    },
-                    source: export.source.as_ref().map(|s| s.value.to_string()),
-                    original: if is_reexport {
-                        Some(spec.local.name().to_string())
-                    } else {
-                        None
-                    },
-                });
+            Statement::ExportNamedDeclaration(export) => {
+                for spec in &export.specifiers {
+                    out.push(ExportFact {
+                        exported: spec.exported.name().to_string(),
+                        local: Some(spec.local.name().to_string()),
+                        source: None,
+                        original: None,
+                    });
+                }
             }
+            Statement::ExportFromDeclaration(export) => {
+                for spec in &export.specifiers {
+                    out.push(ExportFact {
+                        exported: spec.exported.name().to_string(),
+                        local: None,
+                        source: Some(export.source.value.to_string()),
+                        original: Some(spec.local.name().to_string()),
+                    });
+                }
+            }
+            _ => {}
         }
     }
     out
@@ -957,6 +975,7 @@ pub(crate) fn collect_enriched_usage(
         origins,
         provided: provided_components(program),
         rests: origins.map(|scoping| rest_parameters(program, scoping)).unwrap_or_default(),
+        declaring: oxc::ast::ast::VariableDeclarationKind::Var,
     };
     collector.visit_program(program);
     let usage = collector.finish();
@@ -1214,7 +1233,7 @@ fn opaque_calls(
 fn top_level_names(statement: &Statement<'_>) -> Vec<String> {
     use oxc::ast::ast::{BindingPattern, Declaration, ExportDefaultDeclarationKind};
     let declaration = match statement {
-        Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+        Statement::ExportDeclaration(export) => Some(&export.declaration),
         Statement::ExportDefaultDeclaration(export) => {
             let id = match &export.declaration {
                 ExportDefaultDeclarationKind::FunctionDeclaration(function) => function.id.as_ref(),
@@ -1768,6 +1787,7 @@ fn scan_object_uses(
             .collect(),
         exported: FxHashSet::default(),
         consts: FxHashMap::default(),
+        declaring: oxc::ast::ast::VariableDeclarationKind::Var,
     };
     if !member_consts.namespaces.is_empty() {
         member_consts.visit_program(program);
@@ -1807,24 +1827,32 @@ struct MemberConsts<'s> {
     namespaces: FxHashMap<SymbolId, String>,
     exported: FxHashSet<SymbolId>,
     consts: FxHashMap<SymbolId, String>,
+    /// The kind of the declaration whose declarators are being visited.
+    declaring: oxc::ast::ast::VariableDeclarationKind,
 }
 
 impl<'a> Visit<'a> for MemberConsts<'_> {
-    fn visit_export_named_declaration(&mut self, export: &oxc::ast::ast::ExportNamedDeclaration<'a>) {
-        if let Some(oxc::ast::ast::Declaration::VariableDeclaration(declaration)) = &export.declaration {
+    fn visit_export_declaration(&mut self, export: &oxc::ast::ast::ExportDeclaration<'a>) {
+        if let oxc::ast::ast::Declaration::VariableDeclaration(declaration) = &export.declaration {
             for declarator in &declaration.declarations {
                 if let oxc::ast::ast::BindingPattern::BindingIdentifier(id) = &declarator.id {
                     self.exported.extend(id.symbol_id.get());
                 }
             }
         }
-        oxc::ast_visit::walk::walk_export_named_declaration(self, export);
+        oxc::ast_visit::walk::walk_export_declaration(self, export);
+    }
+
+    fn visit_variable_declaration(&mut self, declaration: &oxc::ast::ast::VariableDeclaration<'a>) {
+        let outer = std::mem::replace(&mut self.declaring, declaration.kind);
+        oxc::ast_visit::walk::walk_variable_declaration(self, declaration);
+        self.declaring = outer;
     }
 
     fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
         use oxc::ast::ast::{BindingPattern, VariableDeclarationKind};
         if let (VariableDeclarationKind::Const, BindingPattern::BindingIdentifier(id), Some(init)) =
-            (declarator.kind, &declarator.id, &declarator.init)
+            (self.declaring, &declarator.id, &declarator.init)
         {
             let object = match crate::chain_walk::unwrap_type_assertions(init) {
                 Expression::ComputedMemberExpression(member) => Some(&member.object),
@@ -1957,7 +1985,7 @@ pub(crate) fn holder_consts<'b>(program: &'b Program<'_>) -> impl Iterator<Item 
         .body
         .iter()
         .filter_map(|stmt| match stmt {
-            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            Statement::ExportDeclaration(export) => Some(&export.declaration),
             other => other.as_declaration(),
         })
         .filter_map(|declaration| match declaration {
@@ -2085,7 +2113,7 @@ fn initializing_const(span: Span, ancestors: &[AstKind<'_>]) -> Option<(String, 
     let Some(AstKind::VariableDeclaration(declaration)) = ancestors.get(at.checked_sub(1)?) else { return None };
     let top_level = match ancestors.get(at.checked_sub(2)?) {
         Some(AstKind::Program(_)) => true,
-        Some(AstKind::ExportNamedDeclaration(_)) => matches!(ancestors.get(at.checked_sub(3)?), Some(AstKind::Program(_))),
+        Some(AstKind::ExportDeclaration(_)) => matches!(ancestors.get(at.checked_sub(3)?), Some(AstKind::Program(_))),
         _ => false,
     };
     (top_level && declaration.kind == VariableDeclarationKind::Const)
@@ -2233,7 +2261,7 @@ fn container_const(span: Span, ancestors: &[AstKind<'_>]) -> Option<(String, Vec
                 let Some(AstKind::VariableDeclaration(declaration)) = rest.next() else { return None };
                 let top_level = match rest.next() {
                     Some(AstKind::Program(_)) => true,
-                    Some(AstKind::ExportNamedDeclaration(_)) => matches!(rest.next(), Some(AstKind::Program(_))),
+                    Some(AstKind::ExportDeclaration(_)) => matches!(rest.next(), Some(AstKind::Program(_))),
                     _ => false,
                 };
                 return (top_level && declaration.kind == VariableDeclarationKind::Const)
@@ -2311,7 +2339,7 @@ fn holder_const<'b, 'a: 'b>(span: Span, mut ancestors: impl Iterator<Item = &'b 
     let Some(AstKind::VariableDeclaration(declaration)) = ancestors.next() else { return None };
     let top_level = match ancestors.next() {
         Some(AstKind::Program(_)) => true,
-        Some(AstKind::ExportNamedDeclaration(_)) => matches!(ancestors.next(), Some(AstKind::Program(_))),
+        Some(AstKind::ExportDeclaration(_)) => matches!(ancestors.next(), Some(AstKind::Program(_))),
         _ => false,
     };
     (top_level && declaration.kind == VariableDeclarationKind::Const).then(|| id.name.to_string())
@@ -2489,9 +2517,7 @@ fn style_object_use(
                 }
                 // A concise arrow body is the arrow's return value, which
                 // the call hands on (`() => pad.inner`).
-                Some(AstKind::ExpressionStatement(_))
-                    if matches!({ let mut up = rest.clone(); (up.next(), up.next()) }, (Some(AstKind::FunctionBody(_)), Some(AstKind::ArrowFunctionExpression(arrow))) if arrow.expression) =>
-                {
+                Some(AstKind::ArrowFunctionExpression(_)) => {
                     StyleUse::MemberHandoff(handed, format!("has its member {name} returned from a function"))
                 }
                 // A value only compared, combined, tested or discarded.
@@ -2643,7 +2669,7 @@ pub(crate) fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::
 pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::Scoping) -> Option<&'static str> {
     use oxc::ast::ast::{
         Argument, BindingPattern, BindingProperty, CallExpression, ComputedMemberExpression, ExportAllDeclaration,
-        ExportNamedDeclaration, Expression, IdentifierReference, ImportDeclaration, ImportDeclarationSpecifier,
+        ExportFromDeclaration, Expression, IdentifierReference, ImportDeclaration, ImportDeclarationSpecifier,
         ImportExpression, ModuleExportName, StaticMemberExpression, TSImportEqualsDeclaration, TSModuleReference,
         UnaryExpression, VariableDeclarator,
     };
@@ -2846,13 +2872,13 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
             }
             oxc::ast_visit::walk::walk_export_all_declaration(self, export);
         }
-        fn visit_export_named_declaration(&mut self, export: &ExportNamedDeclaration<'a>) {
-            let builtin = export.source.as_ref().is_some_and(|source| BUILTINS.contains(&source.value.as_str()));
+        fn visit_export_from_declaration(&mut self, export: &ExportFromDeclaration<'a>) {
+            let builtin = BUILTINS.contains(&export.source.value.as_str());
             let loads = |specifier: &oxc::ast::ast::ExportSpecifier<'_>| !BUILTIN_MEMBERS.contains(&specifier.local.name().as_str());
             if builtin && export.specifiers.iter().any(loads) {
                 self.found.get_or_insert(BUILTIN);
             }
-            oxc::ast_visit::walk::walk_export_named_declaration(self, export);
+            oxc::ast_visit::walk::walk_export_from_declaration(self, export);
         }
         fn visit_binding_property(&mut self, property: &BindingProperty<'a>) {
             if property.key.static_name().is_some_and(|name| name == "createRequire") {
@@ -3022,7 +3048,7 @@ pub(crate) fn function_param_readings(
     let mut functions = Vec::new();
     for stmt in &program.body {
         let declaration = match stmt {
-            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            Statement::ExportDeclaration(export) => Some(&export.declaration),
             Statement::ExportDefaultDeclaration(export) => {
                 if let ExportDefaultDeclarationKind::FunctionDeclaration(func) = &export.declaration {
                     if let Some(id) = &func.id {
@@ -3055,13 +3081,13 @@ pub(crate) fn function_param_readings(
     let mut spans: FxHashMap<String, Span> = FxHashMap::default();
     for (name, key, function) in &functions {
         let formal = function.params;
-        let Some(body) = function.body else {
+        if function.body.is_none() && function.concise.is_none() {
             // An overload signature never overrides its implementation.
             readings
                 .entry(key.clone())
                 .or_insert_with(|| vec![ParamReading::Unsafe; formal.items.len() + 1]);
             continue;
-        };
+        }
         let mut reading = Vec::new();
         for (index, param) in formal.items.iter().enumerate() {
             match &param.pattern {
@@ -3082,7 +3108,7 @@ pub(crate) fn function_param_readings(
         let reassigned = scoping
             .get_root_binding(name.as_str().into())
             .is_some_and(|symbol| scoping.get_resolved_references(symbol).any(oxc::semantic::Reference::is_write));
-        if reassigned || (!function.arrow && reads_own_arguments(body, scoping)) {
+        if reassigned || function.body.is_some_and(|body| !function.arrow && reads_own_arguments(body, scoping)) {
             reading.iter_mut().for_each(|param| *param = ParamReading::Unsafe);
         }
         spans.insert(key.clone(), function.span);
@@ -3114,25 +3140,26 @@ pub(crate) fn function_param_readings(
 /// expression.
 struct FunctionParts<'b, 'a> {
     params: &'b oxc::ast::ast::FormalParameters<'a>,
+    /// A block body; a function has none when it is only a signature.
     body: Option<&'b oxc::ast::ast::FunctionBody<'a>>,
-    /// An arrow, whose body's statement is its result when `concise`.
+    /// An arrow, whose result is `concise` when it has no block body.
     arrow: bool,
-    concise: bool,
+    concise: Option<&'b Expression<'a>>,
     span: Span,
 }
 
 impl<'b, 'a> FunctionParts<'b, 'a> {
     fn of_function(func: &'b oxc::ast::ast::Function<'a>) -> Self {
-        Self { params: &func.params, body: func.body.as_deref(), arrow: false, concise: false, span: func.span }
+        Self { params: &func.params, body: func.body.as_deref(), arrow: false, concise: None, span: func.span }
     }
 
     fn of_expression(expr: &'b Expression<'a>) -> Option<Self> {
         match expr.get_inner_expression() {
             Expression::ArrowFunctionExpression(arrow) => Some(Self {
                 params: &arrow.params,
-                body: Some(&arrow.body),
+                body: arrow.get_function_body(),
                 arrow: true,
-                concise: arrow.expression,
+                concise: arrow.get_expression(),
                 span: arrow.span,
             }),
             Expression::FunctionExpression(func) => Some(Self::of_function(func)),
@@ -3143,13 +3170,11 @@ impl<'b, 'a> FunctionParts<'b, 'a> {
     /// The function this one returns as its only result: a concise body,
     /// or a body that is one `return`.
     fn returned(&self) -> Option<Self> {
-        let [statement] = self.body?.statements.as_slice() else { return None };
-        let result = match statement {
-            Statement::ExpressionStatement(statement) if self.concise => &statement.expression,
-            Statement::ReturnStatement(statement) => statement.argument.as_ref()?,
-            _ => return None,
-        };
-        Self::of_expression(result)
+        if let Some(result) = self.concise {
+            return Self::of_expression(result);
+        }
+        let [Statement::ReturnStatement(statement)] = self.body?.statements.as_slice() else { return None };
+        Self::of_expression(statement.argument.as_ref()?)
     }
 }
 
@@ -3473,14 +3498,8 @@ fn returned_position(span: Span, ancestors: &[AstKind<'_>]) -> Option<(Span, Vec
                     _ => None,
                 })?;
             }
-            AstKind::ExpressionStatement(_) => {
-                break match (rest.next(), rest.next()) {
-                    (Some(AstKind::FunctionBody(_)), Some(AstKind::ArrowFunctionExpression(arrow))) if arrow.expression => {
-                        arrow.span
-                    }
-                    _ => return None,
-                };
-            }
+            // A concise arrow body is the arrow's result.
+            AstKind::ArrowFunctionExpression(arrow) => break arrow.span,
             _ => return None,
         }
     };
@@ -4327,14 +4346,9 @@ fn object_use<'b, 'a: 'b>(
             }
         }
         // A concise arrow body is the arrow's return value, which the call
-        // hands on (`() => pad`, `.then(() => pad)`); any other statement
-        // discards it.
-        AstKind::ExpressionStatement(_) => match (ancestors.next(), ancestors.next()) {
-            (Some(AstKind::FunctionBody(_)), Some(AstKind::ArrowFunctionExpression(arrow))) if arrow.expression => {
-                unfollowed("is returned from a function")
-            }
-            _ => None,
-        },
+        // hands on (`() => pad`, `.then(() => pad)`); a statement discards it.
+        AstKind::ArrowFunctionExpression(_) => unfollowed("is returned from a function"),
+        AstKind::ExpressionStatement(_) => None,
         AstKind::ForInStatement(statement) if statement.right.span() == current => None,
         // An assigned facade's own sources may name it.
         AstKind::ObjectProperty(_) if assigned_target && in_own_assign_source(&mut ancestors, global_object) => None,
@@ -4711,7 +4725,7 @@ fn initializes_top_level_object<'b, 'a: 'b>(ancestors: &mut impl Iterator<Item =
     initializes
         && matches!(ancestors.next(), Some(AstKind::VariableDeclaration(declaration))
             if declaration.kind == oxc::ast::ast::VariableDeclarationKind::Const)
-        && matches!(ancestors.next(), Some(AstKind::Program(_) | AstKind::ExportNamedDeclaration(_)))
+        && matches!(ancestors.next(), Some(AstKind::Program(_) | AstKind::ExportDeclaration(_)))
 }
 
 struct WrapperScan<'a, 's> {
@@ -5144,7 +5158,7 @@ fn initializes_top_level_const<'b, 'a: 'b>(
     declaration.kind == VariableDeclarationKind::Const
         && match ancestors.next() {
             Some(AstKind::Program(_)) => true,
-            Some(AstKind::ExportNamedDeclaration(_)) => {
+            Some(AstKind::ExportDeclaration(_)) => {
                 matches!(ancestors.next(), Some(AstKind::Program(_)))
             }
             _ => false,
@@ -5254,6 +5268,8 @@ struct FactCollector<'a, 's> {
     rests: FxHashMap<SymbolId, BTreeSet<String>>,
     /// Enriched collection only: see `TagOrigin::Provided`.
     provided: FxHashSet<SymbolId>,
+    /// The kind of the declaration whose declarators are being visited.
+    declaring: oxc::ast::ast::VariableDeclarationKind,
 }
 
 /// `cloneElement` calls, resolved once the walk has seen every `const`
@@ -5716,7 +5732,7 @@ fn literal_union_parameters(program: &Program<'_>, scoping: &Scoping) -> FxHashM
     };
     for statement in &program.body {
         let declaration = match statement {
-            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            Statement::ExportDeclaration(export) => Some(&export.declaration),
             other => other.as_declaration(),
         };
         match declaration {
@@ -5893,13 +5909,19 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
         oxc::ast_visit::walk::walk_jsx_opening_element(self, elem);
     }
 
+    fn visit_variable_declaration(&mut self, declaration: &oxc::ast::ast::VariableDeclaration<'a>) {
+        let outer = std::mem::replace(&mut self.declaring, declaration.kind);
+        oxc::ast_visit::walk::walk_variable_declaration(self, declaration);
+        self.declaring = outer;
+    }
+
     fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
         if let Some(clones) = &mut self.clones {
             if let (
                 oxc::ast::ast::VariableDeclarationKind::Const,
                 oxc::ast::ast::BindingPattern::BindingIdentifier(id),
                 Some(init),
-            ) = (declarator.kind, &declarator.id, &declarator.init)
+            ) = (self.declaring, &declarator.id, &declarator.init)
             {
                 if let (Some(symbol), Expression::JSXElement(element)) =
                     (id.symbol_id.get(), init.get_inner_expression())
@@ -6263,7 +6285,7 @@ fn prop_tags_and_uses(
     };
     for statement in &program.body {
         let declaration = match statement {
-            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            Statement::ExportDeclaration(export) => Some(&export.declaration),
             other => other.as_declaration(),
         };
         match declaration {
@@ -6511,8 +6533,8 @@ fn context_consts(program: &Program<'_>, scoping: &Scoping, react: &ReactImports
     for statement in &program.body {
         let declaration = match statement {
             Statement::VariableDeclaration(declaration) => declaration,
-            Statement::ExportNamedDeclaration(export) => match &export.declaration {
-                Some(Declaration::VariableDeclaration(declaration)) => declaration,
+            Statement::ExportDeclaration(export) => match &export.declaration {
+                Declaration::VariableDeclaration(declaration) => declaration,
                 _ => continue,
             },
             _ => continue,
@@ -6549,7 +6571,7 @@ fn ordinary_components(program: &Program<'_>, scoping: &Scoping) -> BTreeSet<Str
     let mut names = BTreeSet::new();
     for statement in &program.body {
         let declaration = match statement {
-            Statement::ExportNamedDeclaration(export) => export.declaration.as_ref(),
+            Statement::ExportDeclaration(export) => Some(&export.declaration),
             Statement::ExportDefaultDeclaration(export) => {
                 let id = match &export.declaration {
                     ExportDefaultDeclarationKind::FunctionDeclaration(function) if function.body.is_some() => {
@@ -6709,6 +6731,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         finite_params: FxHashMap::default(),
         provided: FxHashSet::default(),
         rests: FxHashMap::default(),
+        declaring: oxc::ast::ast::VariableDeclarationKind::Var,
     };
     collector.visit_program(program);
     collector.finish()

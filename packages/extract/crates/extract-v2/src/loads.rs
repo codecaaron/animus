@@ -5,7 +5,7 @@
 //! specifier is written.
 
 use oxc::ast::ast::{
-    Argument, CallExpression, ExportNamedDeclaration, Expression, ImportDeclarationSpecifier, ImportExpression,
+    Argument, CallExpression, ExportFromDeclaration, Expression, ImportDeclarationSpecifier, ImportExpression,
     ImportOrExportKind, Program, Statement,
 };
 use oxc::ast_visit::Visit;
@@ -119,9 +119,8 @@ pub fn collect_listed(program: &Program<'_>) -> (Vec<Load>, Vec<HostLoad>) {
                     };
                 (LoadKind::Import { runtime, bindingless }, &import.source, import.span)
             }
-            Statement::ExportNamedDeclaration(export) => {
-                let Some(source) = &export.source else { continue };
-                (LoadKind::Reexport { runtime: reexport_needs_runtime(export) }, source, export.span)
+            Statement::ExportFromDeclaration(export) => {
+                (LoadKind::Reexport { runtime: reexport_needs_runtime(export) }, &export.source, export.span)
             }
             Statement::ExportAllDeclaration(export) => {
                 let runtime = export.export_kind != ImportOrExportKind::Type;
@@ -144,7 +143,7 @@ pub fn collect_listed(program: &Program<'_>) -> (Vec<Load>, Vec<HostLoad>) {
 
 /// A type-only re-export, or one whose every named specifier is a type, is
 /// erased before anything loads.
-fn reexport_needs_runtime(export: &ExportNamedDeclaration<'_>) -> bool {
+fn reexport_needs_runtime(export: &ExportFromDeclaration<'_>) -> bool {
     export.export_kind != ImportOrExportKind::Type
         && (export.specifiers.is_empty()
             || export.specifiers.iter().any(|spec| spec.export_kind != ImportOrExportKind::Type))
@@ -452,9 +451,7 @@ enum Loader {
 fn loader(callee: &Expression<'_>) -> Loader {
     let member = |object: &Expression<'_>, name: String| match object.get_inner_expression() {
         Expression::Identifier(id) if id.name == "require" => Loader::RequireMember(name),
-        Expression::MetaProperty(meta) if meta.meta.name == "import" && meta.property.name == "meta" => {
-            Loader::ImportMetaMember(name)
-        }
+        Expression::ImportMeta(_) => Loader::ImportMetaMember(name),
         _ => Loader::Other,
     };
     match callee.get_inner_expression() {

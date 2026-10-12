@@ -125,8 +125,12 @@ pub fn declaration_keys(program: &Program<'_>, source: &str, names: &BTreeSet<St
     use oxc::ast::ast::{BindingPattern, Declaration, Statement, VariableDeclaration};
     let mut wanted: BTreeMap<String, String> = names.iter().map(|name| (name.clone(), name.clone())).collect();
     for statement in &program.body {
-        let Statement::ExportNamedDeclaration(export) = statement else { continue };
-        for specifier in &export.specifiers {
+        let specifiers = match statement {
+            Statement::ExportNamedDeclaration(export) => &export.specifiers,
+            Statement::ExportFromDeclaration(export) => &export.specifiers,
+            _ => continue,
+        };
+        for specifier in specifiers {
             let exported = specifier.exported.name().to_string();
             if names.contains(&exported) {
                 wanted.insert(specifier.local.name().to_string(), exported);
@@ -184,8 +188,8 @@ pub fn declaration_keys(program: &Program<'_>, source: &str, names: &BTreeSet<St
     for statement in &program.body {
         match statement {
             Statement::VariableDeclaration(declaration) => declare(declaration),
-            Statement::ExportNamedDeclaration(export) => {
-                if let Some(Declaration::VariableDeclaration(declaration)) = &export.declaration {
+            Statement::ExportDeclaration(export) => {
+                if let Declaration::VariableDeclaration(declaration) = &export.declaration {
                     declare(declaration);
                 }
             }
@@ -684,8 +688,8 @@ fn build_object_index<'a, 'b>(
                     }
                 }
             }
-            Statement::ExportNamedDeclaration(export) => {
-                if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
+            Statement::ExportDeclaration(export) => {
+                if let Declaration::VariableDeclaration(decl) = &export.declaration {
                     for d in &decl.declarations {
                         if let Some(init) = &d.init {
                             index_objects(init, &mut index);
@@ -1141,8 +1145,8 @@ fn collect_const_initializers(
     for stmt in &program.body {
         match stmt {
             Statement::VariableDeclaration(decl) => record(decl),
-            Statement::ExportNamedDeclaration(export) => {
-                if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
+            Statement::ExportDeclaration(export) => {
+                if let Declaration::VariableDeclaration(decl) = &export.declaration {
                     record(decl);
                 }
             }
@@ -1270,8 +1274,8 @@ fn build_identifier_index<'a>(program: &Program<'a>) -> BTreeMap<(u32, u32), Str
                     }
                 }
             }
-            Statement::ExportNamedDeclaration(export) => {
-                if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
+            Statement::ExportDeclaration(export) => {
+                if let Declaration::VariableDeclaration(decl) = &export.declaration {
                     for d in &decl.declarations {
                         if let Some(init) = &d.init {
                             index_identifiers(init, &mut index);

@@ -312,8 +312,8 @@ impl<'s> Module<'s> {
         self.program.body.iter().find_map(|stmt| {
             let function = match stmt {
                 Statement::FunctionDeclaration(function) => function,
-                Statement::ExportNamedDeclaration(export) => match &export.declaration {
-                    Some(Declaration::FunctionDeclaration(function)) => function,
+                Statement::ExportDeclaration(export) => match &export.declaration {
+                    Declaration::FunctionDeclaration(function) => function,
                     _ => return None,
                 },
                 Statement::ExportDefaultDeclaration(export) => match &export.declaration {
@@ -332,8 +332,8 @@ impl<'s> Module<'s> {
         self.program.body.iter().find_map(|stmt| {
             let decl = match stmt {
                 Statement::VariableDeclaration(decl) => decl,
-                Statement::ExportNamedDeclaration(export) => match &export.declaration {
-                    Some(Declaration::VariableDeclaration(decl)) => decl,
+                Statement::ExportDeclaration(export) => match &export.declaration {
+                    Declaration::VariableDeclaration(decl) => decl,
                     _ => return None,
                 },
                 _ => return None,
@@ -361,13 +361,12 @@ impl<'s> Module<'s> {
             kind,
         };
         self.program.body.iter().find_map(|stmt| match stmt {
-            Statement::ExportNamedDeclaration(export) => {
+            Statement::ExportDeclaration(export) => {
                 let declares = match &export.declaration {
-                    Some(Declaration::VariableDeclaration(decl)) => decl.declarations.iter().any(|d| {
+                    Declaration::VariableDeclaration(decl) => decl.declarations.iter().any(|d| {
                         d.id.get_binding_identifiers().iter().any(|id| id.name == exported)
                     }),
-                    Some(decl) => decl.id().is_some_and(|id| id.name == exported),
-                    None => false,
+                    decl => decl.id().is_some_and(|id| id.name == exported),
                 };
                 declares.then(|| declared(exported))
             }

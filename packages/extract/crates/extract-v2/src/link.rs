@@ -187,9 +187,6 @@ fn type_only_export_specifiers(program: &Program<'_>) -> FxHashSet<(u32, u32)> {
     let mut spans = FxHashSet::default();
     for statement in &program.body {
         let Statement::ExportNamedDeclaration(export) = statement else { continue };
-        if export.source.is_some() {
-            continue;
-        }
         for specifier in &export.specifiers {
             if export.export_kind.is_type() || specifier.export_kind.is_type() {
                 spans.insert((specifier.span.start, specifier.span.end));

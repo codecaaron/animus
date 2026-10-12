@@ -654,7 +654,9 @@ fn has_esm_syntax(source: &str, file_path: &str) -> bool {
         matches!(
             stmt,
             Statement::ImportDeclaration(_)
+                | Statement::ExportDeclaration(_)
                 | Statement::ExportNamedDeclaration(_)
+                | Statement::ExportFromDeclaration(_)
                 | Statement::ExportAllDeclaration(_)
                 | Statement::ExportDefaultDeclaration(_)
         )
@@ -718,25 +720,23 @@ fn extract_import_specifiers(source: &str, file_path: &str) -> Vec<ImportInfo> {
                     names,
                 });
             }
-            Statement::ExportNamedDeclaration(decl) => {
+            Statement::ExportFromDeclaration(decl) => {
                 if decl.export_kind.is_type() {
                     continue;
                 }
-                if let Some(source) = &decl.source {
-                    let names: Vec<String> = decl
-                        .specifiers
-                        .iter()
-                        .filter(|es| !es.export_kind.is_type())
-                        .map(|es| module_export_name(&es.local))
-                        .collect();
-                    if !decl.specifiers.is_empty() && names.is_empty() {
-                        continue;
-                    }
-                    imports.push(ImportInfo {
-                        specifier: source.value.to_string(),
-                        names,
-                    });
+                let names: Vec<String> = decl
+                    .specifiers
+                    .iter()
+                    .filter(|es| !es.export_kind.is_type())
+                    .map(|es| module_export_name(&es.local))
+                    .collect();
+                if !decl.specifiers.is_empty() && names.is_empty() {
+                    continue;
                 }
+                imports.push(ImportInfo {
+                    specifier: decl.source.value.to_string(),
+                    names,
+                });
             }
             Statement::ExportAllDeclaration(decl) => {
                 if decl.export_kind.is_type() {
@@ -1647,7 +1647,7 @@ fn reads_shared_host_name(source: &str) -> bool {
     let wrapper = format!("const __configured = ({source});");
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, &wrapper, SourceType::mjs()).parse();
-    if parsed.panicked || !parsed.diagnostics.is_empty() {
+    if parsed.fatal_error || !parsed.diagnostics.is_empty() {
         return true;
     }
     let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
@@ -1707,7 +1707,7 @@ fn host_binding_evidence(
     let local = offset - start;
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, text, SourceType::mjs()).parse();
-    if parsed.panicked || !parsed.diagnostics.is_empty() {
+    if parsed.fatal_error || !parsed.diagnostics.is_empty() {
         return Err(inconclusive(format!("is defined in {module}, which does not parse as module code")));
     }
     let semantic = SemanticBuilder::new().with_build_nodes(true).build(&parsed.program).semantic;

@@ -152,19 +152,19 @@ fn declared_exports(program: &Program<'_>) -> BTreeSet<String> {
             names.insert("default".to_string());
             continue;
         }
-        let Statement::ExportNamedDeclaration(export) = statement else { continue };
+        let Statement::ExportDeclaration(export) = statement else { continue };
         match &export.declaration {
-            Some(Declaration::FunctionDeclaration(function)) => {
+            Declaration::FunctionDeclaration(function) => {
                 if let Some(id) = &function.id {
                     names.insert(id.name.to_string());
                 }
             }
-            Some(Declaration::ClassDeclaration(class)) => {
+            Declaration::ClassDeclaration(class) => {
                 if let Some(id) = &class.id {
                     names.insert(id.name.to_string());
                 }
             }
-            Some(Declaration::VariableDeclaration(declaration)) => {
+            Declaration::VariableDeclaration(declaration) => {
                 for declarator in &declaration.declarations {
                     if let BindingPattern::BindingIdentifier(id) = &declarator.id {
                         names.insert(id.name.to_string());
@@ -991,19 +991,12 @@ fn chain_end(nodes: &AstNodes<'_>, start: NodeId) -> (NodeId, bool) {
     }
 }
 
-/// Whether the expression statement `statement` is a concise arrow's body
-/// (`() => value`), which returns its value rather than discarding it.
-fn returns(nodes: &AstNodes<'_>, statement: NodeId) -> bool {
-    let body = nodes.parent_id(statement);
-    matches!(nodes.parent_kind(body), AstKind::ArrowFunctionExpression(arrow) if arrow.expression)
-}
-
 /// Where a position that takes a builder sends it, for a finding.
 fn escape_how(kind: &AstKind<'_>) -> &'static str {
     match kind {
         AstKind::CallExpression(_) | AstKind::NewExpression(_) => "it is passed to a function",
-        // A statement that takes a builder is a concise arrow's body.
-        AstKind::ReturnStatement(_) | AstKind::ArrowFunctionExpression(_) | AstKind::ExpressionStatement(_) => {
+        // An arrow that takes a builder has it as its concise body.
+        AstKind::ReturnStatement(_) | AstKind::ArrowFunctionExpression(_) => {
             "it is returned from a function"
         }
         AstKind::ArrayExpression(_) => "it is placed in an array",
@@ -1098,7 +1091,7 @@ fn escapes(semantic: &Semantic<'_>, source: &str, roots: &BTreeSet<String>) -> V
                     }
                 }
             }
-            AstKind::ExpressionStatement(_) if !returns(nodes, parent.id()) => continue,
+            AstKind::ExpressionStatement(_) => continue,
             AstKind::ExportDefaultDeclaration(_)
             | AstKind::ExportSpecifier(_)
             | AstKind::TSTypeQuery(_)
@@ -1162,7 +1155,7 @@ fn escapes(semantic: &Semantic<'_>, source: &str, roots: &BTreeSet<String>) -> V
                         continue;
                     }
                 }
-                AstKind::ExpressionStatement(_) if !returns(nodes, parent.id()) => continue,
+                AstKind::ExpressionStatement(_) => continue,
                 AstKind::ExportDefaultDeclaration(_)
                 | AstKind::ExportSpecifier(_)
                 | AstKind::TSTypeQuery(_)
@@ -1208,7 +1201,7 @@ fn holding_object(nodes: &AstNodes<'_>, scoping: &oxc::semantic::Scoping, proper
             }
             _ => None,
         },
-        AstKind::ExpressionStatement(_) if !returns(nodes, parent.id()) => None,
+        AstKind::ExpressionStatement(_) => None,
         AstKind::ExportDefaultDeclaration(_) => None,
         other => Some(Err((span.start, escape_how(&other)))),
     }

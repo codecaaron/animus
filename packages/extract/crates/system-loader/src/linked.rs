@@ -71,7 +71,7 @@ pub(crate) fn evaluation_order(
             .iter()
             .filter_map(|stmt| match stmt {
                 Statement::ImportDeclaration(decl) => Some(decl.source.value.as_str()),
-                Statement::ExportNamedDeclaration(decl) => decl.source.as_ref().map(|s| s.value.as_str()),
+                Statement::ExportFromDeclaration(decl) => Some(decl.source.value.as_str()),
                 Statement::ExportAllDeclaration(decl) => Some(decl.source.value.as_str()),
                 _ => None,
             })
@@ -240,29 +240,29 @@ pub(crate) fn rewrite_module_for_linking(
                 }
                 remove(&mut edits, decl.span.start, decl.span.end);
             }
-            Statement::ExportNamedDeclaration(decl) => {
-                if let Some(source_literal) = &decl.source {
-                    let from = key(&source_literal.value);
-                    for es in &decl.specifiers {
-                        module.exports.push((
-                            module_export_name(&es.exported),
-                            ExportTarget::Indirect { from: from.clone(), name: module_export_name(&es.local) },
-                        ));
-                    }
-                    remove(&mut edits, decl.span.start, decl.span.end);
-                } else if let Some(declaration) = &decl.declaration {
-                    edits.push(Edit {
-                        start: decl.span.start as usize,
-                        end: declaration.span().start as usize,
-                        text: String::new(),
-                    });
-                    collect_declaration_export_names(declaration, &mut local_exports);
-                } else {
-                    for es in &decl.specifiers {
-                        local_exports.push((module_export_name(&es.exported), module_export_name(&es.local)));
-                    }
-                    remove(&mut edits, decl.span.start, decl.span.end);
+            Statement::ExportFromDeclaration(decl) => {
+                let from = key(&decl.source.value);
+                for es in &decl.specifiers {
+                    module.exports.push((
+                        module_export_name(&es.exported),
+                        ExportTarget::Indirect { from: from.clone(), name: module_export_name(&es.local) },
+                    ));
                 }
+                remove(&mut edits, decl.span.start, decl.span.end);
+            }
+            Statement::ExportDeclaration(decl) => {
+                edits.push(Edit {
+                    start: decl.span.start as usize,
+                    end: decl.declaration.span().start as usize,
+                    text: String::new(),
+                });
+                collect_declaration_export_names(&decl.declaration, &mut local_exports);
+            }
+            Statement::ExportNamedDeclaration(decl) => {
+                for es in &decl.specifiers {
+                    local_exports.push((module_export_name(&es.exported), module_export_name(&es.local)));
+                }
+                remove(&mut edits, decl.span.start, decl.span.end);
             }
             Statement::ExportDefaultDeclaration(decl) => {
                 let start = decl.declaration.span().start;
