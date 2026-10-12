@@ -8,8 +8,9 @@ set -euo pipefail
 # Published declarations: consumer fixtures import the packages as a consumer
 # does, so they resolve through each package's exports to its built dist
 # declarations. Each project compiles under consumer-strict options on the
-# repo's TypeScript and on 5.9 (e2e/next16-app installs it), and pins exact
-# public types: a type that widens, erases or overflows (TS2590) fails here.
+# repo's TypeScript and on 5.9, the oldest TypeScript Animus supports
+# (packages/_typescript-5.9 installs it), and pins exact public types: a type
+# that widens, erases or overflows (TS2590) fails here.
 # Needs a fresh `vp run build:ts`.
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -24,7 +25,7 @@ node_modules/.bin/tsc -p packages/system/__tests__/tsconfig.test-d.json --noEmit
 require_fresh_package_dist system
 require_fresh_package_dist test-ds
 
-TS59=e2e/next16-app/node_modules/typescript/bin/tsc
+TS59=packages/_typescript-5.9/node_modules/typescript/bin/tsc
 if [ ! -f "$TS59" ]; then
   echo "ERROR: TypeScript 5.9 missing at $TS59. Run: bun install" >&2
   exit 1
@@ -32,7 +33,7 @@ fi
 case "$(node "$TS59" --version)" in
   "Version 5.9."*) ;;
   *)
-    echo "ERROR: $TS59 is $(node "$TS59" --version), not 5.9: e2e/next16-app's typescript pin moved. Point TS59 in scripts/verify/types.sh at a 5.9 install" >&2
+    echo "ERROR: $TS59 is $(node "$TS59" --version), not 5.9: packages/_typescript-5.9 must pin typescript 5.9" >&2
     exit 1
     ;;
 esac

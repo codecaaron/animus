@@ -15,15 +15,15 @@
     "@animus-ui/system": "workspace:*",
     "@animus-ui/test-ds": "workspace:*",
     "@animus-ui/unplugin": "workspace:*",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@animus-ui/extract": "workspace:*",
     "@rollup/plugin-commonjs": "^29.0.3",
-    "@rollup/plugin-node-resolve": "^16.0.0",
-    "@rollup/plugin-replace": "^6.0.0",
-    "rollup": "^4.63.1",
-    "rollup-plugin-esbuild": "^6.1.0"
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-replace": "^6.0.3",
+    "rollup": "^4.64.5",
+    "rollup-plugin-esbuild": "^6.2.1"
   }
 }

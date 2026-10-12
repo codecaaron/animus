@@ -57,9 +57,9 @@ wrapper or its loader-only metadata exports.
 - `loadSystemModule(systemPath, rootDir, exportName?) → NapiSystemConfig` —
   strips TS types via OXC, bundles + evaluates the SystemInstance with rquickjs,
   returns `{ propConfig, groupRegistry, scalesJson, variableMapJson,
-variableCss, contextualVarsJson, declarationScalesJson?, selectorAliases?, selectorOrder?,
-conditionAliases?, globalStyleBlocks?, keyframesBlocks?, dependencies,
-sourceThemeManifests? }` (snake_case → camelCase auto).
+  variableCss, contextualVarsJson, declarationScalesJson?, selectorAliases?, selectorOrder?,
+  conditionAliases?, globalStyleBlocks?, keyframesBlocks?, dependencies,
+  sourceThemeManifests? }` (snake_case → camelCase auto).
   `sourceThemeManifests` is the per-module built-theme token capture
   (`{ modulePath: { exportName: [token paths] } }`) — the source-token
   witness for the cross-source correlation diagnostic; `None` when no

@@ -53,6 +53,7 @@ The direct-path pattern bypasses package resolution entirely, so it is immune to
 
 ```ts
 import { applyUnitFallback } from '@animus-ui/extract/pipeline';
+
 import { analyzeProject } from './run-pipeline'; // v2-backed shim
 ```
 
