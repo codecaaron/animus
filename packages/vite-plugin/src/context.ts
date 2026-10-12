@@ -376,8 +376,10 @@ export class PluginContext {
     session.assetClassification = this.assetClassification;
     session.loadExpander = this.loadExpander;
     session.pathAliasesJson = this.pathAliasesJson;
-    session.cssModuleId = VIRTUAL_CSS_ID;
-    session.systemPropsModuleId = VIRTUAL_SYSTEM_PROPS_ID;
+    session.delivery = {
+      cssModuleId: VIRTUAL_CSS_ID,
+      systemPropsModuleId: VIRTUAL_SYSTEM_PROPS_ID,
+    };
     session.structuralExclude = this.outputExcludes;
     this.session = session;
     return session;

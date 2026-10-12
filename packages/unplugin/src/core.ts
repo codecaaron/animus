@@ -644,7 +644,10 @@ export const unpluginFactory: UnpluginFactory<
       session.assetClassification = hostAssets;
       session.loadExpander = hostLoadExpander;
       session.hostResolve = hostResolver;
-      session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
+      session.delivery = {
+        ...session.delivery,
+        systemPropsModuleId: TURBOPACK_SYSTEM_PROPS_ID,
+      };
       session.structuralExclude = outputExclusions(root, hostOutputTargets());
       // Each full pass re-reads the tsconfig aliases.
       session.aliasesFromTsconfig = true;

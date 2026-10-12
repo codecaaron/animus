@@ -354,6 +354,21 @@ function isDiskNumber<Value>(value: Value): value is Value & number {
   );
 }
 
+/** The session's own system-props file, imported by absolute path: what a
+ *  host that serves no system-props module (the CLI) delivers. */
+export const SESSION_ARTIFACT: unique symbol = Symbol(
+  'animus.session-artifact'
+);
+
+/** The modules generated code imports, as the host delivers them (spec
+ *  §12.2 row 2): each declared, the system-props one always explicitly. */
+export interface DeliveryIds {
+  /** The stylesheet module. */
+  cssModuleId: string;
+  /** A system-props module id the host serves, or the session's own file. */
+  systemPropsModuleId: string | typeof SESSION_ARTIFACT;
+}
+
 /** One published generation, as a host serving from memory reads it. */
 export interface SessionPublication {
   manifest: ProjectManifest;
@@ -491,12 +506,12 @@ export class ExtractionSession {
   /** Physical asset files registered with the host watcher. */
   assetDependencyPaths = new Set<string>();
   private assetDependencyKeys = new Set<string>();
-  /** System-props module id override. Turbopack rejects absolute-path
-   *  imports, so its driver sets a virtual id; null injects the abs path. */
-  systemPropsModuleId: string | null = null;
-  /** The stylesheet module generated code imports; a host that serves the
-   *  stylesheet itself names its own. */
-  cssModuleId: string = ANIMUS_CSS_MODULE_ID;
+  /** What generated code imports; a host that serves its own modules
+   *  declares them before planning. */
+  delivery: DeliveryIds = {
+    cssModuleId: ANIMUS_CSS_MODULE_ID,
+    systemPropsModuleId: SESSION_ARTIFACT,
+  };
   /** Whether the analysis-inputs hydration corpus is written to disk. Only
    *  isolated loader workers replay it; an in-process loader reads memory. */
   persistAnalysisInputs = false;
@@ -2461,9 +2476,11 @@ export class ExtractionSession {
       system,
       emitter: {
         runtimeImport: this.runtimeImport,
-        cssModuleId: this.cssModuleId,
+        cssModuleId: this.delivery.cssModuleId,
         systemPropsModuleId:
-          this.systemPropsModuleId ?? systemPropsPath(this.sessionDir),
+          this.delivery.systemPropsModuleId === SESSION_ARTIFACT
+            ? systemPropsPath(this.sessionDir)
+            : this.delivery.systemPropsModuleId,
       },
       pathAliasesJson: this.pathAliasesJson,
       staticCssJson: this.staticCssJson,

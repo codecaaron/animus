@@ -3,12 +3,13 @@ export type { WindowClock, WindowTimer } from './coalescing-window';
 export { pruneStaleAssets } from '../pipeline/asset-copies';
 export { EnvironmentBuilds } from './environment-builds';
 export type { BuildingEnvironment } from './environment-builds';
-export { ExtractionSession } from './extraction-session';
+export { ExtractionSession, SESSION_ARTIFACT } from './extraction-session';
 export type {
   SessionHost,
   SessionLogger,
   SessionOptions,
   SessionOutcome,
+  DeliveryIds,
   SessionPublication,
   WatchChanges,
 } from './extraction-session';

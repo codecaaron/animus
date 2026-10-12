@@ -13,7 +13,10 @@ import type { ExtractionSession } from './extraction-session';
 export async function runSessionPipeline(
   session: ExtractionSession
 ): Promise<void> {
-  session.systemPropsModuleId = TURBOPACK_SYSTEM_PROPS_ID;
+  session.delivery = {
+    ...session.delivery,
+    systemPropsModuleId: TURBOPACK_SYSTEM_PROPS_ID,
+  };
   session.persistAnalysisInputs = true;
   await session.runFullPipeline();
 }
