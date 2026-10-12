@@ -499,6 +499,74 @@ describe('extractSystemFilePackages chain-scan tolerance', () => {
     }
   };
 
+  // The lexer's spellings the engine read keeps, each a successful build
+  // with no CSS where membership drops it.
+  test('a system stored in an object property keeps its later links', async () => {
+    await expectDiscovered(
+      `
+      import { createSystem } from '@animus-ui/system';
+      import { system as kit } from 'plain-kit/definition';
+
+      const holder = {};
+      holder.base = createSystem();
+      export const ds = holder.base.extend(kit).build().seal();
+    `,
+      ['plain-kit/definition']
+    );
+  });
+
+  test('an includes nested in the argument, before its first closing brace', async () => {
+    await expectDiscovered(
+      `
+      import { createSystem } from '@animus-ui/system';
+      import { system as kit } from 'plain-kit/definition';
+
+      export const ds = createSystem({ meta: { includes: [kit] } }).build().seal();
+    `,
+      ['plain-kit/definition']
+    );
+  });
+
+  test("a namespace import's createSystem keeps its links", async () => {
+    await expectDiscovered(
+      `
+      import * as animus from '@animus-ui/system';
+      import { system as kit } from 'plain-kit/definition';
+
+      export const ds = animus.createSystem().extend(kit).build().seal();
+    `,
+      ['plain-kit/definition']
+    );
+  });
+
+  test('a long re-export chain to createSystem is followed to the end', async () => {
+    const path = writeFixture(`
+      import { createSystem } from './barrel1';
+      import { system as kit } from 'plain-kit/definition';
+      export const ds = createSystem().extend(kit).build().seal();
+    `);
+    const dir = dirname(path);
+    for (let n = 1; n <= 40; n++) {
+      writeFileSync(
+        join(dir, `barrel${n}.ts`),
+        n === 40
+          ? `export { createSystem } from '@animus-ui/system';`
+          : `export { createSystem } from './barrel${n + 1}';`
+      );
+    }
+    const diagnostics: ManifestDiagnostic[] = [];
+    try {
+      expect(
+        await extractSystemFilePackages(path, ENGINE, (d) =>
+          diagnostics.push(d)
+        )
+      ).toEqual(['plain-kit/definition']);
+      expect(diagnostics).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('a line comment between the call and the first link', async () => {
     await expectDiscovered(
       `

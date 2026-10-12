@@ -247,11 +247,16 @@ impl<'a> Scan<'a> {
             match node.kind() {
                 AstKind::CallExpression(call) => scan.calls.push(call),
                 AstKind::VariableDeclarator(declarator) => scan.declarators.push(declarator),
-                AstKind::AssignmentExpression(assignment) => {
-                    if let AssignmentTarget::AssignmentTargetIdentifier(target) = &assignment.left {
+                AstKind::AssignmentExpression(assignment) => match &assignment.left {
+                    AssignmentTarget::AssignmentTargetIdentifier(target) => {
                         scan.assignments.push((target.name.to_string(), &assignment.right));
                     }
-                }
+                    // `holder.base = …` binds `base`, as the spelling reads it.
+                    AssignmentTarget::StaticMemberExpression(target) => {
+                        scan.assignments.push((target.property.name.to_string(), &assignment.right));
+                    }
+                    _ => {}
+                },
                 AstKind::AssignmentPattern(pattern) => {
                     if let BindingPattern::BindingIdentifier(target) = &pattern.left {
                         scan.assignments.push((target.name.to_string(), &pattern.right));
@@ -276,14 +281,45 @@ fn callee_path(expr: &Expression<'_>) -> Option<String> {
     }
 }
 
-/// The expression a chain starts from: through calls' callees and member
-/// objects, past parentheses and type assertions.
+/// Whether `expr` is a name or a dotted path of names: `a` or `a.b.c`.
+fn is_member_path(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::Identifier(_) => true,
+        Expression::StaticMemberExpression(member) => is_member_path(&member.object),
+        _ => false,
+    }
+}
+
+/// The name a chain start is used and bound by: an identifier's name, or a
+/// dotted path's last segment, as the file's spelling reads it.
+fn start_name(expr: &Expression<'_>) -> Option<String> {
+    match expr {
+        Expression::Identifier(ident) => Some(ident.name.to_string()),
+        Expression::StaticMemberExpression(member) if is_member_path(&member.object) => {
+            Some(member.property.name.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// The expression a chain starts from: through each link's callee to the
+/// expression it is called on, past parentheses and type assertions. A
+/// dotted path (`holder.base`), and a call through one that is no link
+/// (`ns.createSystem()`), is a start of its own.
 fn leftmost<'b, 'a>(expr: &'b Expression<'a>) -> &'b Expression<'a> {
     match expr {
         Expression::CallExpression(call) => match &call.callee {
+            Expression::StaticMemberExpression(member)
+                if is_member_path(&call.callee)
+                    && member.property.name != "extend"
+                    && member.property.name != "from" =>
+            {
+                expr
+            }
             Expression::StaticMemberExpression(member) => leftmost(&member.object),
             _ => expr,
         },
+        Expression::StaticMemberExpression(_) if is_member_path(expr) => expr,
         Expression::StaticMemberExpression(member) => leftmost(&member.object),
         Expression::ParenthesizedExpression(paren) => leftmost(&paren.expression),
         Expression::TSAsExpression(cast) => leftmost(&cast.expression),
@@ -479,6 +515,38 @@ fn admit(state: &mut Roots, local: &str, at: (usize, usize), identity: Identity,
     }
 }
 
+/// Each `includes: [ … ]` property in `object`, at any depth through
+/// nested objects and arrays, by its key's offset.
+fn includes_properties<'b, 'a>(
+    object: &'b oxc::ast::ast::ObjectExpression<'a>,
+    found: &mut Vec<(u32, &'b oxc::ast::ast::ArrayExpression<'a>)>,
+) {
+    fn within<'b, 'a>(expr: &'b Expression<'a>, found: &mut Vec<(u32, &'b oxc::ast::ast::ArrayExpression<'a>)>) {
+        match expr {
+            Expression::ObjectExpression(object) => includes_properties(object, found),
+            Expression::ArrayExpression(array) => {
+                for element in &array.elements {
+                    if let Some(expr) = element.as_expression() {
+                        within(expr, found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for property in &object.properties {
+        let ObjectPropertyKind::ObjectProperty(property) = property else { continue };
+        if let (PropertyKey::StaticIdentifier(key), false, Expression::ArrayExpression(array)) =
+            (&property.key, property.computed, &property.value)
+        {
+            if key.name == "includes" {
+                found.push((key.span.start, array));
+            }
+        }
+        within(&property.value, found);
+    }
+}
+
 /// The module `import('x')`, `await import('x')` or `require('x')` loads.
 fn loaded_module(init: &Expression<'_>) -> Option<String> {
     match init {
@@ -534,29 +602,25 @@ fn members(source: &str, scan: &Scan<'_>, facts: &FileFacts, roots: &BTreeSet<St
         }
     };
 
-    // `createSystem({ includes: [a, b] })`, where `includes` comes before any
-    // closing brace in the argument, as the spelling read it.
+    // `createSystem({ includes: [a, b] })`: the first `includes` property,
+    // at any depth of the first argument, whose key comes before the
+    // argument's first closing brace, as the spelling read it.
     for call in calls.iter().filter(|call| is_root(call)) {
         let Some(Expression::ObjectExpression(object)) = call.arguments.first().and_then(Argument::as_expression) else {
             continue;
         };
-        for property in &object.properties {
-            let ObjectPropertyKind::ObjectProperty(property) = property else { continue };
-            let PropertyKey::StaticIdentifier(key) = &property.key else { continue };
-            if key.name != "includes" || property.computed {
-                continue;
-            }
-            if source[object.span.start as usize..key.span.start as usize].contains('}') {
-                break;
-            }
-            if let Expression::ArrayExpression(array) = &property.value {
-                for element in &array.elements {
-                    if let ArrayExpressionElement::Identifier(ident) = element {
-                        add(&mut identifiers, ident.name.to_string());
-                    }
+        let start = object.span.start as usize;
+        let close = source[start..].find('}').map_or(usize::MAX, |at| start + at);
+        let mut found: Vec<(u32, &oxc::ast::ast::ArrayExpression<'_>)> = Vec::new();
+        includes_properties(object, &mut found);
+        if let Some((_, array)) =
+            found.into_iter().filter(|(key, _)| (*key as usize) < close).min_by_key(|(key, _)| *key)
+        {
+            for element in &array.elements {
+                if let ArrayExpressionElement::Identifier(ident) = element {
+                    add(&mut identifiers, ident.name.to_string());
                 }
             }
-            break;
         }
     }
 
@@ -620,8 +684,9 @@ fn members(source: &str, scan: &Scan<'_>, facts: &FileFacts, roots: &BTreeSet<St
     let mut uses: BTreeMap<String, Vec<u32>> = BTreeMap::new();
     for call in &calls {
         let Expression::StaticMemberExpression(member) = &call.callee else { continue };
-        if let Expression::Identifier(ident) = leftmost(&member.object) {
-            uses.entry(ident.name.to_string()).or_default().push(ident.span.start);
+        let start = leftmost(&member.object);
+        if let Some(name) = start_name(start) {
+            uses.entry(name).or_default().push(start.span().start);
         }
     }
     let mut index = 0;

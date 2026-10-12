@@ -1481,9 +1481,12 @@ export function unimportedCreateSystemCall(
   };
 }
 
-/** The rounds a membership read may ask for more modules: each round reads
- *  the modules the last one's identities stopped at. */
-const MEMBERSHIP_ROUNDS = 32;
+/** The rounds a membership read resolves the modules it asks for: each
+ *  reads the modules the last one's identities stopped at, one re-export
+ *  hop further. Past it, what is still asked for is finalized as
+ *  unresolved and read once more, so an identity it could not follow keeps
+ *  the admission its name gives it, with a finding. */
+const MEMBERSHIP_ROUNDS = 256;
 
 type MembershipFinding =
   | {
@@ -1535,22 +1538,24 @@ export async function extractSystemFilePackages(
     string,
     { file?: string; why?: string; caseMismatch?: boolean }
   > = {};
-  let answer: MembershipAnswer | null = null;
-  for (let round = 0; round <= MEMBERSHIP_ROUNDS; round++) {
+  let answer: MembershipAnswer;
+  for (let round = 0; ; round++) {
     answer = parseInternalWire<MembershipAnswer>(
       systemMembership(
         JSON.stringify({ system: systemFilePath, files, resolved })
       ),
       'systemMembership'
     );
+    // An answer that still asks is no answer: it is never taken as the
+    // membership.
     if (answer.needs.length === 0) break;
     for (const [importer, specifier] of answer.needs) {
       const key = `${importer}\0${specifier}`;
-      // Past the bound, a module still asked for is one discovery cannot
-      // follow.
       const found =
-        round === MEMBERSHIP_ROUNDS
-          ? { why: `'${specifier}' could not be resolved` }
+        round >= MEMBERSHIP_ROUNDS
+          ? {
+              why: `following '${specifier}' stopped after ${MEMBERSHIP_ROUNDS} re-exports`,
+            }
           : await resolveModuleFile(
               importer,
               specifier,
@@ -1571,7 +1576,7 @@ export async function extractSystemFilePackages(
       }
     }
   }
-  if (answer === null || !answer.parsed) return [];
+  if (!answer.parsed) return [];
 
   let reportedUnimported = false;
   for (const finding of answer.findings) {
