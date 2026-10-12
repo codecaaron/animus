@@ -11,6 +11,7 @@ export type {
   SessionOutcome,
   DeliveryIds,
   SessionPublication,
+  WatchPlan,
   WatchChanges,
 } from './extraction-session';
 export {

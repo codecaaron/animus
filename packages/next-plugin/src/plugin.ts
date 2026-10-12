@@ -369,20 +369,18 @@ export class AnimusWebpackPlugin {
     });
 
     compiler.hooks.compilation.tap(PLUGIN_NAME, (compilation: Compilation) => {
+      // The Session's watch plan, as webpack's dependency kinds: a path the
+      // system load found absent reloads it when created.
       const registerSystemDependencies = () => {
-        for (const dep of this.session.systemDependencyPaths) {
-          if (existsSync(dep)) compilation.fileDependencies.add(dep);
-          else compilation.missingDependencies.add(dep);
+        const plan = this.session.watchPlan();
+        for (const path of plan.files) {
+          if (existsSync(path)) compilation.fileDependencies.add(path);
+          else compilation.missingDependencies.add(path);
         }
-        // A path the system load found absent reloads it when created.
-        for (const path of this.session.systemMissingPaths) {
+        for (const path of plan.missing) {
           compilation.missingDependencies.add(path);
         }
-        for (const dep of this.session.assetDependencyPaths) {
-          if (existsSync(dep)) compilation.fileDependencies.add(dep);
-          else compilation.missingDependencies.add(dep);
-        }
-        for (const root of this.session.externalWatchRoots) {
+        for (const root of plan.directories) {
           compilation.contextDependencies.add(root);
         }
       };
