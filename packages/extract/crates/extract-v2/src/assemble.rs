@@ -69,7 +69,7 @@ pub struct MergedChainConfig {
     pub variant_config: Vec<(String, Vec<String>, Option<String>)>,
     /// Compound (sorted conditions, class_name) — parent-first.
     pub compound_configs: Vec<(BTreeMap<String, Value>, String)>,
-    /// State names, with the parent's appended after the child's.
+    /// State names, the inherited ones before the extension's own.
     pub state_names: Vec<String>,
 }
 
