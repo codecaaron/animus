@@ -340,6 +340,8 @@ jobs:
   # ─── Supported Worker consumer release gate ────────────
   verify-workers:
     needs: [build-extract]
+    # Off by default to save CI minutes: runs only on an explicit dispatch with deploy_workers.
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_workers == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -410,7 +412,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
-  # ─── Worker deployment (main push, schedule, or explicit dispatch) ──
+  # ─── Worker deployment (explicit dispatch only) ──
   deploy-workers:
     needs:
       [
@@ -425,9 +427,7 @@ jobs:
       ]
     if: >-
       github.ref == 'refs/heads/main' &&
-      (github.event_name == 'push' ||
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && inputs.deploy_workers == true))
+      github.event_name == 'workflow_dispatch' && inputs.deploy_workers == true
     permissions:
       contents: read
     concurrency:
@@ -473,7 +473,6 @@ jobs:
         verify,
         verify-next,
         verify-vite,
-        verify-workers,
         verify-packed,
       ]
     if: >-
