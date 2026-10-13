@@ -12,7 +12,6 @@ import { checkCustomProperties } from './property-diagnostics';
 import { applyUnitFallback } from './unit-fallback';
 
 import type { AnalyzeProjectInputs } from './analyze-project-args';
-import type { ExtensionOrder } from './extension-policy';
 import type { HostAssetClassification } from './host-assets';
 import type { HostLoadExpander } from './host-expansions';
 import type { KitDescriptorRecord } from './kit-descriptor';
@@ -21,6 +20,7 @@ import type {
   ManifestDiagnostic,
 } from './manifest-diagnostics';
 import type { ProjectManifest } from './manifest-schema';
+import type { ExtensionOrder } from './native-resolution';
 import type { IngestionOpening } from './source-ingestion';
 import type { SystemConfig } from './system-config';
 

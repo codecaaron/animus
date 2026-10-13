@@ -1,6 +1,6 @@
 import { EXTENSION_POLICY } from './extension-policy';
 
-import type { ExtensionOrder } from './extension-policy';
+import type { ExtensionOrder } from './native-resolution';
 
 /**
  * The extension order a host resolver uses (spec §2.2 A2): the extensions it

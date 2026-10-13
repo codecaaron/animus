@@ -14,9 +14,9 @@ import {
 } from './manifest-diagnostics';
 import { hostCandidate } from './probe-evidence';
 
-import type { ExtensionOrder } from './extension-policy';
 import type { HostResolve } from './host-package-resolver';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
+import type { ExtensionOrder } from './native-resolution';
 import type { HostReadings } from './probe-evidence';
 
 /** A file's identity on disk: its real path, which follows links and

@@ -1,12 +1,12 @@
 import { realpathSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
-import { policyCandidates, seeOnDisk } from './extension-policy';
 import { hostExpansions } from './host-expansions';
+import { seeFile, specifierCandidates } from './native-resolution';
 import { registryPackages } from './registry-packages';
 
-import type { ExtensionOrder } from './extension-policy';
 import type { HostLoadExpander, ListedLoad } from './host-expansions';
+import type { ExtensionOrder } from './native-resolution';
 import type { PreparedPackage } from './registry-packages';
 
 /** What the host's filesystem opens for one probe base (spec §2.2 A2, A8),
@@ -62,7 +62,7 @@ function realRoot(rootDir: string): string {
  * What the host's filesystem opens for `base` (spec §2.2 A2, A8): the first
  * of its candidates, in the host's order, that the host opens. The
  * filesystem decides what opens, and each name below the session root is
- * checked against its own directory's listing (`seeOnDisk`); nothing is
+ * checked against its own directory's listing (`seeFile`); nothing is
  * folded. Null where no candidate opens.
  *
  * A candidate the analysis holds answers before the filesystem is asked: an
@@ -83,7 +83,7 @@ export function hostCandidate(
   // file: the file is probed without it, and the host reads it with it.
   const at = base.indexOf('?');
   const query = at === -1 ? '' : base.slice(at);
-  const candidates = policyCandidates(at === -1 ? base : base.slice(0, at), {
+  const candidates = specifierCandidates(at === -1 ? base : base.slice(0, at), {
     policy: order,
   });
   for (const [index, file] of candidates.entries()) {
@@ -95,7 +95,7 @@ export function hostCandidate(
         ? { candidate, actual: null, analysedAs: null, reading: 'asset' }
         : { candidate, actual: null, analysedAs: file };
     }
-    const seen = seeOnDisk(join(rootDir, file), rootDir);
+    const seen = seeFile(join(rootDir, file), rootDir);
     if (seen.kind === 'missing') continue;
     if (seen.kind === 'case-only') {
       return {

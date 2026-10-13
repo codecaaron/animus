@@ -103,7 +103,7 @@ export {
   unresolvableIncludesMessage,
   walkPackageSources,
 } from './discover-packages';
-export { caseMismatchReason } from './extension-policy';
+export { caseMismatchReason } from './native-resolution';
 export type { KitDescriptor, KitDescriptorRecord } from './kit-descriptor';
 export {
   buildKitDescriptor,

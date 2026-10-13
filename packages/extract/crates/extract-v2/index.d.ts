@@ -23,6 +23,13 @@ export declare class ExtractEngine {
 }
 
 /**
+ * The built-in extension policy, as JSON (`{ appended, nodeNext, alias }`):
+ * the order in which a relative or aliased specifier's candidate files are
+ * tried wherever a host names none.
+ */
+export declare function builtInExtensionPolicy(): string
+
+/**
  * Whether the package at `package_dir` declares the kit source condition:
  * an `animus` key anywhere in its `exports`, valid or not, read from the
  * manifest alone.
@@ -135,6 +142,18 @@ export declare function locatePackage(name: string, fromDir: string, workspaces?
 export declare function moduleSpecifiers(fileEntriesJson: string, pathAliasesJson?: string | undefined | null): string
 
 /**
+ * How a probe of `candidates` ends, below `within` as [`see_file`] reads
+ * it: `found` at `path`, `case-mismatch` at the first `candidate` the
+ * filesystem opens only under another spelling (`actual`), or `absent`.
+ */
+export interface NapiProbedFile {
+  kind: string
+  path?: string
+  candidate?: string
+  actual?: string
+}
+
+/**
  * A specifier as the system loader resolves it: the real path of the file
  * it names, with that of the `package.json` that selected it for a
  * package, or why it names none.
@@ -143,6 +162,17 @@ export interface NapiResolvedSpecifier {
   path?: string
   manifest?: string
   unresolved?: string
+}
+
+/**
+ * What the filesystem holds at `candidate`, spelled exactly below the
+ * directory it shares with `within` (from the root when absent): `file`,
+ * `case-only` with the spelling the filesystem reports (`actual`), or
+ * `missing`.
+ */
+export interface NapiSeenFile {
+  kind: string
+  actual?: string
 }
 
 export interface NapiSystemConfig {
@@ -212,6 +242,8 @@ export interface NapiSystemConfig {
   loadFindingsJson?: string
 }
 
+export declare function probeFile(candidates: Array<string>, within?: string | undefined | null): NapiProbedFile
+
 /**
  * A kit's source root (spec §2.2 A5), as JSON: the package located from
  * `from_dir` as the system loader locates it, the rule that chose the root
@@ -231,6 +263,16 @@ export declare function resolveKitSourceRoot(specifier: string, fromDir: string,
  * `conditions`, `import` and `default`), then `module`, then `main`.
  */
 export declare function resolveSpecifier(specifier: string, fromDir: string, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null): NapiResolvedSpecifier
+
+export declare function seeFile(candidate: string, within?: string | undefined | null): NapiSeenFile
+
+/**
+ * The files `base` can name, in the order the policy tries them
+ * (`extension_policy_json`, the built-in one when absent): with `sources`,
+ * only those extensions, and with `joined_index`, a base ending in `/`
+ * names its index without another `/`.
+ */
+export declare function specifierCandidates(base: string, extensionPolicyJson?: string | undefined | null, sources?: Array<string> | undefined | null, joinedIndex?: boolean | undefined | null): Array<string>
 
 /**
  * Which kits a system file's roots extend or include, from the engine's

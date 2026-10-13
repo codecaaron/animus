@@ -260,6 +260,83 @@ pub fn locate_package(
     Some(std::fs::canonicalize(&dir).unwrap_or(dir).to_string_lossy().to_string())
 }
 
+/// The built-in extension policy, as JSON (`{ appended, nodeNext, alias }`):
+/// the order in which a relative or aliased specifier's candidate files are
+/// tried wherever a host names none.
+#[napi]
+pub fn built_in_extension_policy() -> String {
+    serde_json::to_string(animus_system_loader::resolution::extension_policy())
+        .expect("the extension policy serializes")
+}
+
+/// The files `base` can name, in the order the policy tries them
+/// (`extension_policy_json`, the built-in one when absent): with `sources`,
+/// only those extensions, and with `joined_index`, a base ending in `/`
+/// names its index without another `/`.
+#[napi]
+pub fn specifier_candidates(
+    base: String,
+    extension_policy_json: Option<String>,
+    sources: Option<Vec<String>>,
+    joined_index: Option<bool>,
+) -> napi::Result<Vec<String>> {
+    let context = resolution_context(None, None, extension_policy_json).map_err(napi::Error::from_reason)?;
+    Ok(context.extensions.candidates_among(&base, sources.as_deref(), joined_index.unwrap_or(false)))
+}
+
+/// What the filesystem holds at `candidate`, spelled exactly below the
+/// directory it shares with `within` (from the root when absent): `file`,
+/// `case-only` with the spelling the filesystem reports (`actual`), or
+/// `missing`.
+#[napi(object)]
+pub struct NapiSeenFile {
+    pub kind: String,
+    pub actual: Option<String>,
+}
+
+#[napi]
+pub fn see_file(candidate: String, within: Option<String>) -> NapiSeenFile {
+    use animus_system_loader::resolution::Seen;
+    let within = std::path::PathBuf::from(within.unwrap_or_default());
+    match animus_system_loader::resolution::see_within(&within, &candidate) {
+        Seen::File => NapiSeenFile { kind: "file".into(), actual: None },
+        Seen::CaseOnly(actual) => NapiSeenFile { kind: "case-only".into(), actual: Some(actual) },
+        Seen::Missing => NapiSeenFile { kind: "missing".into(), actual: None },
+    }
+}
+
+/// How a probe of `candidates` ends, below `within` as [`see_file`] reads
+/// it: `found` at `path`, `case-mismatch` at the first `candidate` the
+/// filesystem opens only under another spelling (`actual`), or `absent`.
+#[napi(object)]
+pub struct NapiProbedFile {
+    pub kind: String,
+    pub path: Option<String>,
+    pub candidate: Option<String>,
+    pub actual: Option<String>,
+}
+
+#[napi]
+pub fn probe_file(candidates: Vec<String>, within: Option<String>) -> NapiProbedFile {
+    use animus_system_loader::resolution::Seen;
+    let within = std::path::PathBuf::from(within.unwrap_or_default());
+    for candidate in candidates {
+        match animus_system_loader::resolution::see_within(&within, &candidate) {
+            Seen::File => return NapiProbedFile { kind: "found".into(), path: Some(candidate), candidate: None, actual: None },
+            Seen::CaseOnly(actual) => {
+                return NapiProbedFile {
+                    kind: "case-mismatch".into(),
+                    path: None,
+                    candidate: Some(candidate),
+                    actual: Some(actual),
+                };
+            }
+            Seen::Missing => {}
+        }
+    }
+    NapiProbedFile { kind: "absent".into(), path: None, candidate: None, actual: None }
+}
+
 /// A fast fingerprint of the bytes at `path` (foldhash, 64 bits, hex), for
 /// telling whether a file changed between watch passes in one process: no
 /// security property, and no stability across versions. `None` where the

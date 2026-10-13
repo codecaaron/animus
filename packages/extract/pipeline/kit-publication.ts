@@ -16,8 +16,8 @@ import {
   exportsSubpaths,
   KIT_SOURCE_CONDITION,
 } from './discover-packages';
-import { caseMismatchReason, probeOnDisk, seeOnDisk } from './extension-policy';
 import { parseInternalWire } from './internal-wire';
+import { caseMismatchReason, probeFile, seeFile } from './native-resolution';
 import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 
@@ -242,7 +242,7 @@ export function kitPublicationFailures(
       }
       for (const file of matched) admit(subpath, file);
     } else {
-      const seen = seeOnDisk(resolve(pkgRoot, target), pkgRoot);
+      const seen = seeFile(resolve(pkgRoot, target), pkgRoot);
       if (seen.kind === 'file') admit(subpath, relPath);
       else {
         failures.push(
@@ -272,7 +272,7 @@ export function kitPublicationFailures(
       ).files[file] ?? [];
     for (const specifier of specifiers) {
       if (specifier.startsWith('.')) {
-        const probed = probeOnDisk(
+        const probed = probeFile(
           relativeSourceCandidates(file, specifier),
           dirname(file)
         );

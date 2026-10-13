@@ -13,12 +13,6 @@ import {
 import { globToRegExp } from './core-options';
 import { discoverFiles } from './discover-files';
 import {
-  caseMismatchReason,
-  policyCandidates,
-  probeOnDisk,
-  seeOnDisk,
-} from './extension-policy';
-import {
   BUILT_IN_EXTENSION_POLICY,
   extensionPolicyJson,
 } from './host-extensions';
@@ -36,15 +30,21 @@ import {
   UNPROVEN_ROOT_BINDING,
 } from './manifest-diagnostics';
 import { isEngineTransformExtension } from './mdx-preprocessor';
+import {
+  caseMismatchReason,
+  probeFile,
+  seeFile,
+  specifierCandidates,
+} from './native-resolution';
 import { isPathWithinRoot } from './source-identity';
 import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 import { declaredWorkspacePackages } from './workspace-packages';
 
 import type { EngineApi } from './engine-adapter';
-import type { ExtensionOrder, ProbedFile } from './extension-policy';
 import type { KitDescriptorRecord } from './kit-descriptor';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
+import type { ExtensionOrder, ProbedFile } from './native-resolution';
 import type {
   ExtractExportFact,
   ExtractFactsResult,
@@ -111,10 +111,10 @@ export function probeAbsolutePathSpecifier(
 ): ProbedFile {
   // `..` is taken back lexically first, as Node resolves a specifier, so
   // the path a probe returns is the path it checked.
-  return probeOnDisk(
-    policyCandidates(normalize(absSpecifier), {
+  return probeFile(
+    specifierCandidates(normalize(absSpecifier), {
       sources: extensionsSet,
-      index: join,
+      joinedIndex: true,
       policy,
     }),
     within
@@ -724,7 +724,7 @@ export async function collectExternalPackageSources(opts: {
         extensions
       );
       const hosted = absEntry === null ? null : normalize(absEntry);
-      const seen = hosted === null ? null : seeOnDisk(hosted, rootDir);
+      const seen = hosted === null ? null : seeFile(hosted, rootDir);
       const probed: ProbedFile =
         own.kind === 'case-mismatch' || hosted === null || seen === null
           ? own
@@ -1503,7 +1503,7 @@ async function resolveModuleFile(
 ): Promise<{ file: string } | { why: string; caseMismatch?: true }> {
   const unresolved = { why: `'${specifier}' could not be resolved` };
   if (specifier.startsWith('.')) {
-    const probed = probeOnDisk(
+    const probed = probeFile(
       relativeSourceCandidates(importer, specifier, extensions),
       dirname(importer)
     );
