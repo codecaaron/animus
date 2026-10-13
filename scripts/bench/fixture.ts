@@ -1,9 +1,11 @@
 // The large-closure system fixture for verify:bench's loader row: a system
-// whose kit reaches an icon package of thousands of .mjs files in two large
-// directories, shaped like issuer's 6,303-path closure. Every icon imports a
-// shared helper one directory up, and the package barrel imports every
-// icon, so the loader resolves each file against a directory of thousands
-// of entries: the shape #295's per-candidate directory listing made slow.
+// entry that imports a kit for its effects, whose kit reaches an icon
+// package of thousands of .mjs files in two large directories, shaped like
+// issuer's 6,303-path closure. The system value reaches none of it. Every
+// icon imports a shared helper one directory up, and the package barrel
+// imports every icon, so a loader that crawls the whole graph resolves each
+// file against a directory of thousands of entries: the shape #295's
+// per-candidate directory listing made slow.
 //
 // Generated, never committed: the bytes are a function of ICONS_PER_SET, and
 // the receipt records their digest (`fixtureDigest`).
@@ -44,15 +46,16 @@ export function writeLargeClosure(
     'src/system.ts',
     [
       "import { createSystem, createTheme } from '@animus-ui/system';",
-      "import { iconCount } from 'bench-kit';",
+      // Imported for its effects, as an app's entry imports component
+      // families: a loader that runs the whole graph crawls every icon; one
+      // that runs what the system reaches reads none.
+      "import 'bench-kit';",
       '',
       'export const theme = createTheme()',
       "  .addColors({ bench: { ink: '#123456' } })",
       '  .build();',
       '',
       'export const ds = createSystem().build().seal();',
-      '',
-      'export const icons = iconCount;',
       '',
     ].join('\n')
   );

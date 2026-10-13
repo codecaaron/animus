@@ -151,6 +151,15 @@ impl<'c> Loader<'c> {
     /// Selects what the system exported from `entry` reaches: `export_name`,
     /// or the export root inference names.
     pub fn select(&mut self, entry: &str, export_name: Option<&str>) -> Result<Selection, String> {
+        let selected = self.select_reached(entry, export_name);
+        // A failed load still reports what it found in the owned code it read.
+        if selected.is_err() {
+            self.audit(entry, export_name.unwrap_or("the system"));
+        }
+        selected
+    }
+
+    fn select_reached(&mut self, entry: &str, export_name: Option<&str>) -> Result<Selection, String> {
         self.retain(entry)?;
         let root = match export_name {
             Some(name) => name.to_string(),
@@ -1674,4 +1683,360 @@ fn record_of(source: &str, path: &str) -> ModuleRecord<String, String> {
         }
     }
     record
+}
+
+#[cfg(test)]
+mod tests {
+    //! The bounded loader's contract: a load runs only what the exported
+    //! system reaches, reports registrations in owned code it did not run,
+    //! and keeps Node's evaluation order among what it runs.
+
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    use crate::{load_system_module, load_system_module_reading, LoadReads, ResolutionContext, SystemConfig};
+
+    /// A stand-in `@animus-ui/system`: the loader knows Animus by package
+    /// identity, so this package is Animus to it.
+    const FAKE_SYSTEM: &str = "\
+        const sealed = (globals, keyframes) => ({\n\
+          toConfig: () => ({ propConfig: '{}', groupRegistry: '{}' }),\n\
+          getVocabularyRecord: () => ({ version: 1, keyframes, globalStyles: globals, collisions: [], legacyVerbs: [] }),\n\
+        });\n\
+        const bundle = (globals, keyframes) => ({\n\
+          createGlobalStyles: (styles) => ({ __brand: 'GlobalStyleBlock', styles }),\n\
+          createKeyframes: (frames) => ({ __brand: 'Keyframes', frames }),\n\
+          registerGlobalStyles: (blocks) => bundle([...globals, ...Object.entries(blocks).map(([name, block]) => ({ name, styles: block.styles }))], keyframes),\n\
+          registerKeyframes: (sets) => bundle(globals, [...keyframes, ...Object.entries(sets).map(([name, set]) => ({ name, frames: set.frames }))]),\n\
+          seal: () => sealed(globals, keyframes),\n\
+        });\n\
+        export const createSystem = () => ({ build: () => bundle([], []) });\n\
+        export const createTheme = () => ({\n\
+          tokens: {},\n\
+          addColors(colors) { Object.assign(this.tokens, colors); return this; },\n\
+          build() { const manifest = { tokenMap: { ...this.tokens } }; return { manifest, serialize: () => ({ scalesJson: JSON.stringify(manifest.tokenMap), variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) }; },\n\
+        });\n";
+
+    /// A scratch project: its files, a `package.json`, and the stand-in
+    /// system package.
+    fn project(label: &str, files: &[(&str, &str)]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("animus-bounded-{}-{label}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let write = |path: &Path, contents: &str| {
+            fs::create_dir_all(path.parent().expect("a file has a parent")).expect("create fixture dir");
+            fs::write(path, contents).expect("write fixture");
+        };
+        write(&dir.join("package.json"), "{\"name\":\"app\",\"type\":\"module\"}");
+        write(&dir.join("node_modules/@animus-ui/system/package.json"), "{\"name\":\"@animus-ui/system\",\"type\":\"module\",\"exports\":\"./index.js\"}");
+        write(&dir.join("node_modules/@animus-ui/system/index.js"), FAKE_SYSTEM);
+        for (path, contents) in files {
+            write(&dir.join(path), contents);
+        }
+        fs::canonicalize(&dir).expect("canonical fixture")
+    }
+
+    fn load(dir: &Path, entry: &str, export: Option<&str>) -> Result<SystemConfig, String> {
+        let result = load_system_module(&dir.join(entry).to_string_lossy(), &dir.to_string_lossy(), export, &ResolutionContext::default());
+        let _ = fs::remove_dir_all(dir);
+        result
+    }
+
+    fn findings(config: &SystemConfig) -> Vec<(String, String, usize)> {
+        let json: serde_json::Value = serde_json::from_str(config.load_findings_json.as_deref().unwrap_or("[]")).expect("findings parse");
+        json.as_array()
+            .expect("an array")
+            .iter()
+            .map(|finding| {
+                let file = finding["file"].as_str().unwrap_or_default();
+                let file = Path::new(file).file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
+                (finding["code"].as_str().unwrap_or_default().to_string(), file, finding["line"].as_u64().unwrap_or(0) as usize)
+            })
+            .collect()
+    }
+
+    const STATE: &str = "import { createSystem, createTheme } from '@animus-ui/system';\n\
+        export const theme = createTheme().addColors({ ink: '#123456' }).build();\n\
+        export const holder = { bundle: createSystem().build() };\n";
+    const SYSTEM: &str = "import { holder } from './state';\nimport './side';\nexport { theme } from './state';\nexport const ds = holder.bundle.seal();\n";
+
+    /// Contract (owner ruling): a registration made by importing a module
+    /// the system does not reach is not applied, and the load reports it
+    /// where it is written; so is a keyframe registration.
+    #[test]
+    fn a_registration_the_system_does_not_reach_is_reported_not_applied() {
+        for (label, side, expected) in [
+            (
+                "global",
+                "import { holder } from './state';\nholder.bundle = holder.bundle.registerGlobalStyles({ rogue: holder.bundle.createGlobalStyles({ body: { color: 'red' } }) });\n",
+                "globals",
+            ),
+            (
+                "keyframes",
+                "import { holder } from './state';\nholder.bundle = holder.bundle.registerKeyframes({ rogue: holder.bundle.createKeyframes({ pulse: { name: 'k', frames: { from: { opacity: 0 } } } }) });\n",
+                "keyframes",
+            ),
+        ] {
+            let dir = project(&format!("unreached-{label}"), &[("state.ts", STATE), ("system.ts", SYSTEM), ("side.ts", side)]);
+            let config = load(&dir, "system.ts", None).expect("the system loads");
+            let applied = if expected == "globals" { &config.global_style_blocks } else { &config.keyframes_blocks };
+            assert!(applied.as_deref().is_none_or(|json| !json.contains("rogue")), "{label}: {applied:?}");
+            assert_eq!(findings(&config), [(crate::REGISTRATION_UNREACHED.to_string(), "side.ts".to_string(), 2)], "{label}");
+        }
+    }
+
+    /// Contract (owner ruling): a module that mutates the theme's tokens is
+    /// not run when the system does not reach it, and is not reported.
+    #[test]
+    fn token_mutation_from_another_module_is_not_applied_or_reported() {
+        let side = "import { theme } from './state';\ntheme.manifest.tokenMap.ink = '#654321';\n";
+        let dir = project("token-mutation", &[("state.ts", STATE), ("system.ts", SYSTEM), ("side.ts", side)]);
+        let config = load(&dir, "system.ts", None).expect("the system loads");
+        assert_eq!(config.scales_json, r##"{"ink":"#123456"}"##);
+        assert_eq!(config.load_findings_json, None);
+    }
+
+    /// Contract (owner ruling): an import the system does not read is not
+    /// followed, so code it names that cannot load here (Intl, a missing
+    /// file, a Node builtin) does not fail the load.
+    #[test]
+    fn an_import_the_system_does_not_read_does_not_fail_the_load() {
+        let system = "import { holder } from './state';\nimport './intl';\nimport './missing';\nimport 'node:fs';\nexport { theme } from './state';\nexport const ds = holder.bundle.seal();\n";
+        let dir = project("ignored-imports", &[("state.ts", STATE), ("system.ts", system), ("intl.js", "export const c = new Intl.Collator();\n")]);
+        load(&dir, "system.ts", None).expect("unread imports fail nothing");
+    }
+
+    /// Contract: code a reached module runs that the loader cannot run as
+    /// selected fails the load with its location.
+    #[test]
+    fn retained_code_the_loader_cannot_run_fails_with_its_location() {
+        for (label, helper, expected) in [
+            ("eval", "export const t = 1;\neval('t');\n", "helper.js:2:1 uses direct `eval`"),
+            ("with", "export const t = 1;\nwith ({}) {}\n", "helper.js:2:1 uses a `with` statement"),
+            ("await", "export const t = await Promise.resolve(1);\n", "helper.js:1:18 uses top-level `await`"),
+        ] {
+            let system = "import { createSystem } from '@animus-ui/system';\nimport { t } from './helper.js';\nexport const ds = createSystem().build().seal();\nexport const theme = { serialize: () => ({ scalesJson: String(t), variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n";
+            let dir = project(&format!("refuse-{label}"), &[("system.js", system), ("helper.js", helper)]);
+            let error = load(&dir, "system.js", None).expect_err("refused");
+            assert!(error.contains(expected), "{label}: {error}");
+        }
+    }
+
+    /// Contract: the system export is inferred only when certain: exactly
+    /// one sealed system, counted by the declaration that creates it, and no
+    /// export that may be one. Anything else asks for the export by name.
+    #[test]
+    fn the_system_export_is_inferred_only_when_certain() {
+        let sealed = "import { createSystem, createTheme } from '@animus-ui/system';\nexport const theme = createTheme().build();\n";
+        for (label, rest, expected) in [
+            ("helper-built", "const makeDs = () => createSystem().build().seal();\nexport const ds = makeDs();\n", Err("Name the system's export with the `systemExport` option")),
+            ("proto-alias", "export const ds = createSystem().build().seal();\nexport const other = { __proto__: ds };\n", Err("'other' (an object with `__proto__`)")),
+            ("later-write", "export const ds = createSystem().build().seal();\nexport const late = {};\nlate.toConfig = ds.toConfig;\n", Err("'late' is an object written after its declaration")),
+            ("aliases", "export const ds = createSystem().build().seal();\nexport default ds;\nexport { ds as system };\n", Ok(())),
+            ("default", "export default createSystem().build().seal();\n", Ok(())),
+            ("iife", "export const ds = /* @__PURE__ */ (() => createSystem().build().seal())();\n", Ok(())),
+        ] {
+            let dir = project(&format!("root-{label}"), &[("system.js", &format!("{sealed}{rest}"))]);
+            match (load(&dir, "system.js", None), expected) {
+                (Ok(_), Ok(())) => {}
+                (Err(error), Err(expected)) => assert!(error.contains(expected), "{label}: {error}"),
+                (result, expected) => panic!("{label}: {:?} for {expected:?}", result.map(|_| ())),
+            }
+        }
+        // A star-forwarded system, and a helper-built one named explicitly.
+        let dir = project("root-star", &[("system.js", "export * from './inner.js';\n"), ("inner.js", &format!("{sealed}export const ds = createSystem().build().seal();\n"))]);
+        load(&dir, "system.js", None).expect("a star-forwarded system infers");
+        let dir = project("root-named", &[("system.js", &format!("{sealed}const makeDs = () => createSystem().build().seal();\nexport const ds = makeDs();\n"))]);
+        load(&dir, "system.js", Some("ds")).expect("the named export loads");
+    }
+
+    /// Contract: modules behind barrels run in Node's order, though the
+    /// barrels never run: Node gives `{"a":2,"b":1,"ran":["barrel"]}`, and
+    /// the bounded load the same order without the barrel's own code.
+    #[test]
+    fn modules_behind_a_barrel_run_in_node_order() {
+        let theme = "export const theme = { serialize: () => ({ scalesJson: JSON.stringify(data), variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n";
+        let dir = project(
+            "barrel-order",
+            &[
+                ("shared.js", "export let count = 0;\nexport const next = () => ++count;\nexport const ran = [];\n"),
+                ("a.js", "import { next } from './shared.js';\nexport const a = next();\n"),
+                ("b.js", "import { next } from './shared.js';\nexport const b = next();\n"),
+                ("barrel.js", "import { ran } from './shared.js';\nran.push('barrel');\nexport { b } from './b.js';\nexport { a } from './a.js';\n"),
+                ("system.js", &format!("import {{ createSystem }} from '@animus-ui/system';\nimport {{ a }} from './barrel.js';\nimport {{ b }} from './b.js';\nimport {{ ran }} from './shared.js';\nconst data = {{ a, b, ran }};\nexport const ds = createSystem().build().seal();\n{theme}")),
+            ],
+        );
+        let config = load(&dir, "system.js", None).expect("loads");
+        assert_eq!(config.scales_json, r#"{"a":2,"b":1,"ran":[]}"#);
+    }
+
+    /// Contract: a cycle among reached modules keeps Node's order: `b` runs
+    /// first, its function hoisted, as Node runs it (Node:
+    /// `{"first":"a","b":"a","a":"afunction"}`).
+    #[test]
+    fn a_cycle_among_reached_modules_keeps_node_order() {
+        let theme = "export const theme = { serialize: () => ({ scalesJson: JSON.stringify(data), variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n";
+        let dir = project(
+            "cycle",
+            &[
+                ("a.js", "import { b } from './b.js';\nexport const order = [];\norder.push('a');\nexport const a = 'a' + typeof b;\n"),
+                ("b.js", "import { order } from './a.js';\nexport function b() { return order[0]; }\n"),
+                ("system.js", &format!("import {{ createSystem }} from '@animus-ui/system';\nimport {{ a, order }} from './a.js';\nimport {{ b }} from './b.js';\nconst data = {{ first: order[0], b: b(), a }};\nexport const ds = createSystem().build().seal();\n{theme}")),
+            ],
+        );
+        let config = load(&dir, "system.js", None).expect("loads");
+        assert_eq!(config.scales_json, r#"{"first":"a","b":"a","a":"afunction"}"#);
+    }
+
+    /// Contract: a namespace read only by member reaches those members; one
+    /// used whole is a module namespace with every name, in code-unit order.
+    #[test]
+    fn a_namespace_reaches_what_its_use_reads() {
+        let theme = "export const theme = { serialize: () => ({ scalesJson: JSON.stringify(data), variableMapJson: '{}', variableCss: '', contextualVarsJson: '{}' }) };\n";
+        let dir = project(
+            "namespace",
+            &[
+                ("parts.js", "export const zeta = 1;\nexport const alpha = 2;\nexport * from './more.js';\n"),
+                ("more.js", "export const Mid = 3;\n"),
+                ("unread.js", "throw new Error('runs only when its namespace is whole');\nexport const x = 1;\n"),
+                ("member.js", "export * as unread from './unread.js';\nexport const own = 4;\n"),
+                ("system.js", &format!("import {{ createSystem }} from '@animus-ui/system';\nimport * as parts from './parts.js';\nimport * as member from './member.js';\nconst data = {{ keys: Object.keys(parts), own: member.own }};\nexport const ds = createSystem().build().seal();\n{theme}")),
+            ],
+        );
+        let config = load(&dir, "system.js", None).expect("loads");
+        assert_eq!(config.scales_json, r#"{"keys":["Mid","alpha","zeta"],"own":4}"#);
+    }
+
+    /// Contract: a name only a type declares routes nowhere, so a star target
+    /// exporting `interface ds` beside one exporting a real `ds` is not
+    /// ambiguous.
+    #[test]
+    fn a_type_only_name_does_not_make_a_route_ambiguous() {
+        let dir = project(
+            "type-shadow",
+            &[
+                ("types.ts", "export interface ds { a: 1 }\n"),
+                ("real.ts", "import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem().build().seal();\n"),
+                ("both.ts", "export * from './types';\nexport * from './real';\n"),
+                ("system.ts", "import { createTheme } from '@animus-ui/system';\nexport { ds } from './both';\nexport const theme = createTheme().build();\n"),
+            ],
+        );
+        load(&dir, "system.ts", None).expect("the type routes nowhere");
+    }
+
+    /// Contract: the theme manifests name each built theme where main's
+    /// whole-graph load named it: through a barrel that never runs, and in a
+    /// kit whose system the app extends.
+    #[test]
+    fn theme_manifests_keep_routed_and_kit_themes() {
+        let dir = project(
+            "theme-manifests",
+            &[
+                ("themes/leaf.ts", "import { createTheme } from '@animus-ui/system';\nexport const theme = createTheme().addColors({ ink: '#123456' }).build();\n"),
+                ("themes/index.ts", "export { theme } from './leaf';\n"),
+                ("node_modules/kit/package.json", "{\"name\":\"kit\",\"type\":\"module\",\"exports\":{\".\":{\"animus\":\"./src/index.ts\"}}}"),
+                ("node_modules/kit/src/index.ts", "export { ds as system } from './system';\nexport { referenceTokens as theme } from './theme';\n"),
+                ("node_modules/kit/src/system.ts", "import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem().build().seal();\n"),
+                ("node_modules/kit/src/theme.ts", "import { createTheme } from '@animus-ui/system';\nexport const referenceTokens = createTheme().addColors({ kit: '#000' }).build();\n"),
+                ("system.ts", "import { createSystem } from '@animus-ui/system';\nimport { system as kit } from 'kit';\nexport { theme } from './themes';\nexport const ds = createSystem().build().seal();\nexport const uses = [kit];\n"),
+            ],
+        );
+        let config = load(&dir, "system.ts", None).expect("loads");
+        let manifests: serde_json::Value = serde_json::from_str(config.source_theme_manifests.as_deref().expect("manifests")).unwrap();
+        let named: Vec<String> = manifests
+            .as_object()
+            .unwrap()
+            .iter()
+            .flat_map(|(path, themes)| {
+                let tail = path.rsplit("/node_modules/").next().unwrap_or(path).rsplit(std::path::MAIN_SEPARATOR).take(2).collect::<Vec<_>>().join("<");
+                themes.as_object().unwrap().keys().map(move |name| format!("{tail}:{name}")).collect::<Vec<_>>()
+            })
+            .collect();
+        for expected in ["leaf.ts<themes:theme", "index.ts<themes:theme", "theme.ts<src:referenceTokens", "index.ts<src:theme", "system.ts<"] {
+            assert!(named.iter().any(|name| name.starts_with(expected)), "{expected} in {named:?}");
+        }
+    }
+
+    /// Contract (intended change): a registered block names the module that
+    /// declares the binding its registration names, even when another module
+    /// exports a block of equal content.
+    #[test]
+    fn a_registered_block_names_the_module_declaring_its_binding() {
+        let dir = project(
+            "global-origin",
+            &[
+                ("base.ts", "import { createSystem } from '@animus-ui/system';\nexport const bundle = createSystem().build();\nexport const reset = bundle.createGlobalStyles({ body: { margin: 0 } });\n"),
+                ("copy.ts", "import { bundle } from './base';\nexport const reset = bundle.createGlobalStyles({ body: { margin: 0 } });\n"),
+                ("system.ts", "import { createTheme } from '@animus-ui/system';\nimport { bundle, reset } from './base';\nimport { reset as same } from './copy';\nexport const theme = createTheme().build();\nexport const both = [same];\nexport const ds = bundle.registerGlobalStyles({ reset }).seal();\n"),
+            ],
+        );
+        let config = load(&dir, "system.ts", None).expect("loads");
+        let blocks: serde_json::Value = serde_json::from_str(config.global_style_blocks.as_deref().expect("globals")).unwrap();
+        assert_eq!(blocks["reset"]["source"], "base.ts", "{blocks}");
+        assert_eq!(blocks["reset"]["sourceExport"], "reset", "{blocks}");
+    }
+
+    /// Contract: the audit reports what it can prove as an omission, and what
+    /// it cannot as unproved; it never reports a same-named method of
+    /// another API, and never reads a third-party package.
+    #[test]
+    fn the_audit_proves_what_it_reports() {
+        let side = "import { holder } from './state';\nimport { tracker } from 'analytics';\n\
+            const { registerGlobalStyles } = holder.bundle;\n\
+            holder.bundle = registerGlobalStyles({ a: holder.bundle.createGlobalStyles({}) });\n\
+            export function later() { holder.bundle.registerKeyframes({}); }\n\
+            tracker.registerKeyframes('page');\n";
+        let dir = project(
+            "audit",
+            &[
+                ("state.ts", STATE),
+                ("system.ts", SYSTEM),
+                ("side.ts", side),
+                ("node_modules/analytics/package.json", "{\"name\":\"analytics\",\"type\":\"module\",\"exports\":\"./index.js\"}"),
+                ("node_modules/analytics/index.js", "import { holder } from '../../state.ts';\nexport const tracker = { registerKeyframes() {} };\n"),
+            ],
+        );
+        let config = load(&dir, "system.ts", None).expect("loads");
+        assert_eq!(
+            findings(&config),
+            [
+                (crate::REGISTRATION_UNREACHED.to_string(), "side.ts".to_string(), 4),
+                (crate::REGISTRATION_UNPROVED.to_string(), "side.ts".to_string(), 5),
+            ]
+        );
+        assert!(!config.dependencies.iter().any(|path| path.ends_with("analytics/index.js")), "{:?}", config.dependencies);
+    }
+
+    /// Contract: what a load reads is what it watches: the modules it ran,
+    /// routed through or audited, never a module nothing reaches; and a
+    /// failed load keeps its reads and its findings.
+    #[test]
+    fn a_load_watches_what_it_read_and_keeps_findings_on_failure() {
+        let dir = project(
+            "watch",
+            &[
+                ("state.ts", STATE),
+                ("system.ts", SYSTEM),
+                ("side.ts", "import { holder } from './state';\nholder.bundle = holder.bundle.registerGlobalStyles({});\nimport './deeper';\n"),
+                ("deeper.ts", "export const deeper = 1;\n"),
+                ("unread/icon.js", "export const icon = 1;\n"),
+            ],
+        );
+        let entry = dir.join("system.ts");
+        let config = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default()).expect("loads");
+        let read: Vec<&str> = config.dependencies.iter().filter_map(|path| path.strip_prefix(dir.to_str().unwrap())).collect();
+        for expected in ["/system.ts", "/state.ts", "/side.ts", "/deeper.ts"] {
+            assert!(read.contains(&expected), "{expected} in {read:?}");
+        }
+        assert!(!read.iter().any(|path| path.contains("unread")), "{read:?}");
+        // The system now reads a module that fails: the load fails, keeping
+        // what it read and the finding it made.
+        fs::write(dir.join("state.ts"), format!("{STATE}import {{ nope }} from './absent-module';\nexport const uses = nope;\n")).unwrap();
+        let mut reads = LoadReads::default();
+        let failed = load_system_module_reading(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default(), &mut reads);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(failed.is_err());
+        assert!(reads.read.iter().any(|path| path.ends_with("/state.ts")), "{:?}", reads.read);
+        assert!(reads.findings.iter().any(|finding| finding.file.ends_with("/side.ts")), "{:?}", reads.findings);
+        assert!(reads.missing.iter().any(|path| path.contains("absent-module")), "{:?}", reads.missing);
+    }
 }
