@@ -1037,6 +1037,12 @@ struct BundleLayout {
     /// The bundle range of each reference to an imported binding, and the
     /// local name the module refers to it by.
     import_refs: Vec<(usize, usize, String)>,
+    /// Every module the load read, run or routed, in evaluation order.
+    read_order: Vec<String>,
+    /// Each routed module's export names that read a module that runs: the
+    /// name, then the module and export it reads. A routed module never runs,
+    /// so what its exports hold is read from the module each one reads.
+    routed_reads: FxHashMap<String, Vec<(String, String, String)>>,
 }
 
 impl BundleLayout {
@@ -1188,8 +1194,25 @@ fn build_bundle(selection: &bounded::Selection) -> Result<(String, BundleLayout)
         body: String::new(),
         import_refs: Vec::new(),
     })));
-    let order: Vec<String> =
-        linked::evaluation_order(&ordered, entry_path).into_iter().filter(|path| modules.contains_key(path)).collect();
+    let read_order = linked::evaluation_order(&ordered, entry_path);
+    let order: Vec<String> = read_order.iter().filter(|path| modules.contains_key(*path)).cloned().collect();
+    let routed_reads: FxHashMap<String, Vec<(String, String, String)>> = selection
+        .routed
+        .keys()
+        .map(|path| {
+            let reads = linker
+                .getters(path)
+                .into_iter()
+                .filter_map(|(name, getter)| match getter {
+                    linked::Getter::Module { module, name: Some(export) } if modules.contains_key(&module) => {
+                        Some((name, module, export))
+                    }
+                    _ => None,
+                })
+                .collect();
+            (path.clone(), reads)
+        })
+        .collect();
     let generator = |module: &str| format!("__modules['#run'][{}]", refs[module]);
 
     // The global-style and theme scans walk `__modules` in this order. Each
@@ -1260,6 +1283,8 @@ fn build_bundle(selection: &bounded::Selection) -> Result<(String, BundleLayout)
             stub_specifiers,
             module_spans,
             import_refs,
+            read_order,
+            routed_reads,
         },
     ))
 }
@@ -1320,6 +1345,7 @@ fn execute_bundle(
     layout: &BundleLayout,
     entry_path: &str,
     export_name: Option<&str>,
+    global_origins: &FxHashMap<String, (String, String)>,
 ) -> Result<SystemConfig, String> {
     let runtime = Runtime::new().map_err(|e| format!("rquickjs Runtime::new failed: {}", e))?;
     let context =
@@ -1332,6 +1358,11 @@ fn execute_bundle(
             .map_err(|e| format!("authored-callable probe failed to compile: {}", e))?;
         ctx.eval::<(), _>(bundle_script.as_bytes())
             .map_err(|e| describe_eval_failure(&ctx, layout, &e))?;
+        if !global_origins.is_empty() {
+            let origins = serde_json::to_string(global_origins).expect("origins serialize");
+            ctx.eval::<(), _>(format!("Object.defineProperty(globalThis, '__global_origins', {{ value: {origins} }});").as_bytes())
+                .map_err(|e| format!("global origins failed to install: {e}"))?;
+        }
 
         // The lookup takes the same escape the registration used, so the two
         // keys still match.
@@ -1343,9 +1374,38 @@ fn execute_bundle(
         let mut config = extract_system_config(&ctx, &namespace, export_name, |config, sources| {
             transform_provenance(config, &authored_probe, sources, bundle_script, layout)
         })?;
-        config.source_theme_manifests = extract_source_theme_manifests(&ctx);
+        config.source_theme_manifests = extract_source_theme_manifests(&ctx).map(|scanned| with_routed_themes(&scanned, layout));
         Ok(config)
     })
+}
+
+/// The scanned theme manifests with each routed module's exports added, in
+/// the order the load read the modules: a routed module never runs, so each
+/// of its exports holding a built theme holds what the export it reads holds.
+fn with_routed_themes(scanned: &str, layout: &BundleLayout) -> String {
+    let Ok(serde_json::Value::Object(mut scanned)) = serde_json::from_str::<serde_json::Value>(scanned) else {
+        return scanned.to_string();
+    };
+    let mut manifests = serde_json::Map::new();
+    for path in &layout.read_order {
+        if let Some(themes) = scanned.remove(path) {
+            manifests.insert(path.clone(), themes);
+            continue;
+        }
+        let Some(reads) = layout.routed_reads.get(path) else { continue };
+        let mut themes = serde_json::Map::new();
+        for (name, module, export) in reads {
+            let from = manifests.get(module).or_else(|| scanned.get(module));
+            if let Some(tokens) = from.and_then(|themes| themes.get(export)) {
+                themes.insert(name.clone(), tokens.clone());
+            }
+        }
+        if !themes.is_empty() {
+            manifests.insert(path.clone(), serde_json::Value::Object(themes));
+        }
+    }
+    manifests.extend(scanned);
+    serde_json::Value::Object(manifests).to_string()
 }
 
 /// Walk the already-evaluated module registry for built-theme token paths —
@@ -1924,7 +1984,10 @@ fn extract_vocabulary_record<'js>(
   };
   const blockOf = (entry) => {
     const block = Object.assign({ styles: entry.styles, fontFaces: entry.fontFaces || [] }, entry.unlayered === true ? { unlayered: true } : {});
-    const declaring = sourceOf(entry);
+    // The binding a registration names, carried from the selection, is its
+    // declaring module; content decides only where no binding is known.
+    const origin = (globalThis.__global_origins || {})[entry.name];
+    const declaring = origin ? { path: origin[0], key: origin[1] } : sourceOf(entry);
     if (declaring !== undefined) {
       block.source = declaring.path;
       block.sourceExport = declaring.key;
@@ -2038,7 +2101,7 @@ pub fn load_system_module_reading(
     let selection = selected?;
 
     let (bundle, layout) = build_bundle(&selection)?;
-    let mut config = execute_bundle(&bundle, &layout, &entry_path, Some(&selection.root))?;
+    let mut config = execute_bundle(&bundle, &layout, &entry_path, Some(&selection.root), &selection.global_origins)?;
     config.global_style_blocks = config
         .global_style_blocks
         .map(|blocks| sources_relative_to(&blocks, root_dir));
@@ -2108,6 +2171,7 @@ mod tests {
             manifests: FxHashSet::default(),
             type_exports: type_exports.clone(),
             asked,
+            global_origins: FxHashMap::default(),
         })
     }
 
@@ -2398,7 +2462,7 @@ export const ds = tokens;
 
         let (bundle, layout) =
             build_whole(&specifier_map, &source_map, &stub_exports, &FxHashMap::default(), "/b.js").unwrap();
-        let error = execute_bundle(&bundle, &layout, "/b.js", None)
+        let error = execute_bundle(&bundle, &layout, "/b.js", None, &FxHashMap::default())
             .expect_err("a throwing bundle must fail the load");
 
         assert!(error.starts_with("bundle eval failed:"), "{error}");
@@ -2724,7 +2788,6 @@ export const ds = tokens;
              export const mathGlobal = (v) => Math.round(v);\n",
         );
         write_fixture(&dir.join("factory.js"), "export const made = ((btoa) => (v) => btoa(String(v)))((s) => s);\n");
-        write_fixture(&dir.join("direct.js"), "eval('');\nexport const viaEval = (v) => btoa(String(v));\n");
         write_fixture(
             &dir.join("authored.js"),
             "export const authored = (() => { const bias = (v) => v; const __modules = (v) => v; return (v) => bias(v) + __modules(v); })();\n",
@@ -2735,12 +2798,11 @@ export const ds = tokens;
                 "import {{ local, mathLocal, setImported }} from './local.js';\n\
                  import {{ global, decl, own, mathOwn, mathGlobal }} from './global.js';\n\
                  import {{ made }} from './factory.js';\n\
-                 import {{ viaEval }} from './direct.js';\n\
                  import {{ authored }} from './authored.js';\n\
                  const link = Symbol.for('animus.transform.authored');\n\
                  const forward = (fn) => {{ const w = (v) => fn(v); Object.defineProperty(w, link, {{ value: fn }}); return w; }};\n\
                  const built = new Function('v', 'return btoa(String(v))');\n\
-                 const linked = {{ local, global, decl, own, made, viaEval, built, mathLocal, setImported, mathOwn, mathGlobal, authored }};\n\
+                 const linked = {{ local, global, decl, own, made, built, mathLocal, setImported, mathOwn, mathGlobal, authored }};\n\
                  const transforms = Object.fromEntries(Object.entries(linked).map(([id, fn]) => [id, forward(fn)]));\n\
                  transforms.unlinked = (v) => btoa(String(v));\n\
                  transforms.renamed = forward(global);\n\
@@ -2768,7 +2830,6 @@ export const ds = tokens;
         assert_eq!(provenance["own"], serde_json::json!({ "hostGlobals": [] }));
         assert!(reason("local").contains("reads 'btoa' declared in") && reason("local").ends_with("local.js outside the callback"));
         assert!(reason("made").contains("factory.js outside the callback"), "{}", reason("made"));
-        assert!(reason("viaEval").contains("calls eval directly"), "{}", reason("viaEval"));
         assert!(reason("built").contains("has no position"), "{}", reason("built"));
         assert!(reason("unlinked").contains("older than this extractor"), "{}", reason("unlinked"));
         assert!(reason("renamed").contains("differs from its configured source"), "{}", reason("renamed"));

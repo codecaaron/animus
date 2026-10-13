@@ -49,6 +49,9 @@ pub(crate) struct Selection {
     /// entry's system and companions, and every name of a namespace the
     /// system uses whole.
     pub asked: FxHashMap<String, FxHashSet<String>>,
+    /// Each global style registration's declaring module and export, by its
+    /// registered name, where the registration names a binding.
+    pub global_origins: FxHashMap<String, (String, String)>,
 }
 
 /// What a request resolved to.
@@ -73,6 +76,10 @@ struct Module {
 /// the binding of, or a namespace to build whole.
 enum Need {
     Retain(String),
+    /// The theme companions of a module another package's import names: its
+    /// `theme` and `tokens`, the token-ownership evidence of the package
+    /// whose system the lineage reads.
+    Companions(String),
     Ask { importer: String, module: String, name: String },
     Namespace(String),
 }
@@ -165,6 +172,7 @@ impl<'c> Loader<'c> {
         // against one table, then read every module an answer waits on,
         // together. One round per depth of route, not per module read.
         let mut namespaces: FxHashSet<String> = FxHashSet::default();
+        let mut companions: FxHashSet<String> = FxHashSet::default();
         let (mut asks, mut spaces): (Vec<(String, String, String)>, Vec<String>) = (Vec::new(), Vec::new());
         loop {
             while let Some(need) = work.pop_front() {
@@ -176,6 +184,15 @@ impl<'c> Loader<'c> {
                         }
                     }
                     Need::Ask { importer, module, name } => asks.push((importer, module, name)),
+                    Need::Companions(path) => {
+                        if companions.insert(path.clone()) {
+                            for name in self.exported_names(&path)? {
+                                if name == "theme" || name == "tokens" {
+                                    asks.push((path.clone(), path.clone(), name));
+                                }
+                            }
+                        }
+                    }
                     Need::Namespace(path) => {
                         if namespaces.insert(path.clone()) {
                             work.push_back(Need::Retain(path.clone()));
@@ -261,7 +278,83 @@ impl<'c> Loader<'c> {
             manifests: std::mem::take(&mut self.manifests),
             type_exports: std::mem::take(&mut self.type_exports),
             asked: std::mem::take(&mut self.asked),
+            global_origins: self.global_origins()?,
         })
+    }
+
+    /// Where each registered global style block is declared: for every
+    /// `registerGlobalStyles({ name: binding })` a retained module makes on an
+    /// Animus value, the module that declares the binding and its export of
+    /// it (the one named like the registration, else the first). A name two
+    /// registrations give different origins is left to content.
+    fn global_origins(&mut self) -> Result<FxHashMap<String, (String, String)>, String> {
+        let mut origins: FxHashMap<String, Option<(String, String)>> = FxHashMap::default();
+        let mut retained: Vec<String> = self.modules.iter().filter(|(_, module)| module.retained).map(|(path, _)| path.clone()).collect();
+        retained.sort();
+        for path in retained {
+            let source = self.modules[&path].raw.clone();
+            let allocator = Allocator::default();
+            let program = Parser::new(&allocator, &source, source_type(&path)).parse().program;
+            let semantic = SemanticBuilder::new().with_build_nodes(true).build(&program).semantic;
+            let calls: Vec<&oxc::ast::ast::CallExpression<'_>> = semantic
+                .nodes()
+                .iter()
+                .filter_map(|node| match node.kind() {
+                    AstKind::CallExpression(call) => Some(call),
+                    _ => None,
+                })
+                .collect();
+            for call in calls {
+                let Some(member) = call.callee.get_inner_expression().as_member_expression() else { continue };
+                if member.static_property_name() != Some("registerGlobalStyles")
+                    || !self.animus_value(&path, &program, member.object(), 0)?
+                {
+                    continue;
+                }
+                let Some(Expression::ObjectExpression(argument)) = call.arguments.first().and_then(|a| a.as_expression()) else {
+                    continue;
+                };
+                for property in &argument.properties {
+                    let ObjectPropertyKind::ObjectProperty(property) = property else { continue };
+                    let (Some(name), Expression::Identifier(value)) = (property.key.static_name(), property.value.get_inner_expression())
+                    else {
+                        continue;
+                    };
+                    let origin = self.declared_export(&path, &program, &value.name, &name)?;
+                    let slot = origins.entry(name.to_string()).or_insert_with(|| origin.clone());
+                    if *slot != origin {
+                        *slot = None;
+                    }
+                }
+            }
+        }
+        Ok(origins.into_iter().filter_map(|(name, origin)| origin.map(|origin| (name, origin))).collect())
+    }
+
+    /// The module that declares `local` of `module`, through imports, and its
+    /// export of that binding: the one named `prefer`, else the first.
+    fn declared_export(&mut self, module: &str, program: &Program<'_>, local: &str, prefer: &str) -> Result<Option<(String, String)>, String> {
+        let (declaring, binding) = match declaration(program, local) {
+            Some(Decl::Import { spec, name: Some(name) }) => match self.target(module, &spec) {
+                Target::Module(path) => {
+                    self.acquire(&path)?;
+                    match self.terminal(&path, &name)? {
+                        Some(terminal) => terminal,
+                        None => return Ok(None),
+                    }
+                }
+                _ => return Ok(None),
+            },
+            Some(Decl::Import { .. }) | None => return Ok(None),
+            Some(_) => (module.to_string(), local.to_string()),
+        };
+        let exports = &self.modules[&declaring].record.local_exports;
+        let export = exports
+            .iter()
+            .find(|(exported, bound)| exported == prefer && *bound == binding)
+            .or_else(|| exports.iter().find(|(_, bound)| *bound == binding))
+            .map(|(exported, _)| exported.clone());
+        Ok(export.map(|export| (declaring, export)))
     }
 
     /// Fails a reached import or export that links to nothing, as Node
@@ -471,6 +564,9 @@ impl<'c> Loader<'c> {
                     Target::Module(target) => target,
                 };
                 self.acquire(&target)?;
+                if package_dir(Path::new(&target)) != package_dir(Path::new(path)) {
+                    needs.push(Need::Companions(target.clone()));
+                }
                 match name {
                     Some(name) => needs.push(Need::Ask { importer: path.to_string(), module: target, name }),
                     None => {
