@@ -94,6 +94,54 @@ describe('external membership in the watch pass', () => {
     expect(paths.some((p) => p.includes('ui-old'))).toBe(false);
   });
 
+  /** A kit installed in the app's own node_modules lies under the project
+   *  root: its edits and deletions are the kit's, never project files the
+   *  project's node_modules exclusion drops. */
+  test('a kit installed under the project root is watched as the kit', async () => {
+    const { app } =
+      createKitWorkspace(`import { createSystem } from '@animus-ui/system';
+import kit from '../node_modules/@kits/ui/src/index.ts';
+export const system = createSystem({}).extend(kit);
+`);
+    const kit = join(app, 'node_modules', '@kits', 'ui');
+    mkdirSync(join(kit, 'src'), { recursive: true });
+    writeFileSync(join(kit, 'package.json'), '{"name":"@kits/ui"}');
+    writeFileSync(join(kit, 'src', 'index.ts'), "export * from './Button';\n");
+    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_SOURCE);
+    const session = makeSession(app);
+    await session.runFullPipeline();
+
+    const kitButtonKey = relative(app, join(kit, 'src', 'Button.tsx'));
+    expect(session.externalWatchRoots).toEqual([join(kit, 'src')]);
+    expect(lastAnalyzedPaths()).toContain(kitButtonKey);
+    const callsAfterFull = mocks.analyzeProject.mock.calls.length;
+
+    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_STYLE_EDIT);
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([join(kit, 'src', 'Button.tsx')]),
+      removedFiles: new Set(),
+    });
+    expect(mocks.analyzeProject.mock.calls.length).toBe(callsAfterFull + 1);
+    expect(lastAnalyzedSource(kitButtonKey)).toBe(BUTTON_STYLE_EDIT);
+
+    rmSync(join(kit, 'src', 'Button.tsx'));
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set(),
+      removedFiles: new Set([join(kit, 'src', 'Button.tsx')]),
+    });
+    expect(mocks.analyzeProject.mock.calls.length).toBe(callsAfterFull + 2);
+    expect(lastAnalyzedPaths()).not.toContain(kitButtonKey);
+
+    // Restored as it was, reported as its directory: the deletion left the
+    // kit's inventory, so the rewalk finds it new.
+    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_STYLE_EDIT);
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([join(kit, 'src')]),
+      removedFiles: new Set(),
+    });
+    expect(lastAnalyzedSource(kitButtonKey)).toBe(BUTTON_STYLE_EDIT);
+  });
+
   test('symlink alias and canonical spellings collapse to one source identity', async () => {
     const { parent, app, kit } = createKitWorkspace();
     const alias = join(parent, 'link-ui');
