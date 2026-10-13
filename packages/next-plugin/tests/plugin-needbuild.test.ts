@@ -347,7 +347,9 @@ describe('watchOptions.ignored gains the replacements-epoch artifact path (desig
       plugin.setRootDir(root);
       // The installed kit's admitted root, as a full pass records it.
       const kitRoot = join(root, 'node_modules', 'kit', 'src');
-      plugin['session'].externalWatchRoots = [kitRoot];
+      // A root admitted on its own inside the kit's dependencies.
+      const nestedRoot = join(kitRoot, 'node_modules', 'other', 'src');
+      plugin['session'].externalWatchRoots = [kitRoot, nestedRoot];
       applyPlugin(plugin, harness.compiler);
       const added = () => ({ add: () => {} });
       harness.compilationHandlers.forEach((fn) =>
@@ -369,6 +371,8 @@ describe('watchOptions.ignored gains the replacements-epoch artifact path (desig
       );
       // A sibling whose name extends the root's is not under it.
       expect(matcher(`${kitRoot}-old/Badge.tsx`)).toBe(true);
+      // The deepest admitted root decides, by its own exclusions.
+      expect(matcher(join(nestedRoot, 'Badge.tsx'))).toBe(false);
       // The kit's own dependencies stay as the host decides.
       expect(matcher(join(kitRoot, 'node_modules'))).toBe(true);
       expect(matcher(join(kitRoot, 'node_modules', 'dep', 'index.js'))).toBe(

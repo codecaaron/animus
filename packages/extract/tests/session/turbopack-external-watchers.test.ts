@@ -3,8 +3,8 @@
  * module mocker cannot intercept fs builtins.
  */
 import { EventEmitter } from 'events';
-import { mkdirSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { dirname, join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { ExtractionSession } from '../../session/extraction-session';
@@ -170,6 +170,47 @@ describe('external root registration (design D4)', () => {
       handle!.close();
     }
     expect(watchers.every((w) => w.closed)).toBe(true);
+  });
+
+  /** A link created in a kit is a file event, never a tree to walk: the
+   *  initial walk does not follow directory links either. */
+  test('a directory link created in a kit is not followed', () => {
+    const { root, kitA } = createTree();
+    const elsewhere = join(dirname(root), 'elsewhere');
+    mkdirSync(join(elsewhere, 'deep', 'er'), { recursive: true });
+    const { session } = makeSession(root, [kitA]);
+    const handle = start(session, root);
+    try {
+      symlinkSync(elsewhere, join(kitA, 'linked'), 'dir');
+      watcherFor(kitA)!.trigger('linked');
+      expect(
+        calls
+          .map((c) => c.dir)
+          .filter((dir) => dir.startsWith(join(kitA, 'linked')))
+      ).toEqual([]);
+    } finally {
+      handle!.close();
+    }
+  });
+
+  /** A directory-level event names no entry: the directory's subtree is
+   *  read again, so created directories are watched and removed ones closed. */
+  test('a directory-level event reconciles its subtree', () => {
+    const { root, kitA } = createTree();
+    mkdirSync(join(kitA, 'old'));
+    const { session } = makeSession(root, [kitA]);
+    const handle = start(session, root);
+    try {
+      const old = watcherFor(join(kitA, 'old'));
+      expect(old).toBeDefined();
+      mkdirSync(join(kitA, 'fresh', 'inner'), { recursive: true });
+      rmSync(join(kitA, 'old'), { recursive: true });
+      watcherFor(kitA)!.trigger(null);
+      expect(watcherFor(join(kitA, 'fresh', 'inner'))).toBeDefined();
+      expect(old!.closed).toBe(true);
+    } finally {
+      handle!.close();
+    }
   });
 
   test('kit file events flow into the session change sets', async () => {
