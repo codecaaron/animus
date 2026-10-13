@@ -1,6 +1,6 @@
 //! Engine-neutral TypeScript system-module loader.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -616,13 +616,6 @@ fn resolve_relative(
     }
 }
 
-/// `names` are the names as the *imported* module defines them — what a stub
-/// must define, since the bundle reads `__modules['__stub__/x']['name']`.
-struct ImportInfo {
-    specifier: String,
-    names: Vec<String>,
-}
-
 fn module_export_name(name: &oxc::ast::ast::ModuleExportName<'_>) -> String {
     match name {
         oxc::ast::ast::ModuleExportName::IdentifierName(id) => id.name.to_string(),
@@ -703,101 +696,6 @@ fn looks_like_commonjs(source: &str, file_path: &str) -> bool {
     source.contains("module.exports") || source.contains("require(")
 }
 
-fn extract_import_specifiers(source: &str, file_path: &str) -> Vec<ImportInfo> {
-    let allocator = Allocator::default();
-    let source_type = SourceType::from_path(Path::new(file_path))
-        .unwrap_or_else(|_| SourceType::mjs())
-        .with_module(true);
-
-    let ParserReturn { program, .. } = Parser::new(&allocator, source, source_type).parse();
-
-    let mut imports = Vec::new();
-    for stmt in &program.body {
-        match stmt {
-            Statement::ImportDeclaration(decl) => {
-                // Type-only imports are erased by the strip, so they must not
-                // drive resolution: a types-only package has no runtime entry.
-                if decl.import_kind.is_type() {
-                    continue;
-                }
-
-                let mut names = Vec::new();
-                let mut specifier_count = 0usize;
-                let mut value_count = 0usize;
-                if let Some(specifiers) = &decl.specifiers {
-                    for spec in specifiers {
-                        specifier_count += 1;
-                        match spec {
-                            oxc::ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) => {
-                                if s.import_kind.is_type() {
-                                    continue;
-                                }
-                                value_count += 1;
-                                names.push(module_export_name(&s.imported));
-                            }
-                            _ => value_count += 1,
-                        }
-                    }
-                }
-
-                // `import { type A } from 'x'` leaves no value binding and is
-                // erased too; only a bare `import 'x'` keeps its side effect.
-                if specifier_count > 0 && value_count == 0 {
-                    continue;
-                }
-
-                imports.push(ImportInfo {
-                    specifier: decl.source.value.to_string(),
-                    names,
-                });
-            }
-            Statement::ExportFromDeclaration(decl) => {
-                if decl.export_kind.is_type() {
-                    continue;
-                }
-                let names: Vec<String> = decl
-                    .specifiers
-                    .iter()
-                    .filter(|es| !es.export_kind.is_type())
-                    .map(|es| module_export_name(&es.local))
-                    .collect();
-                if !decl.specifiers.is_empty() && names.is_empty() {
-                    continue;
-                }
-                imports.push(ImportInfo {
-                    specifier: decl.source.value.to_string(),
-                    names,
-                });
-            }
-            Statement::ExportAllDeclaration(decl) => {
-                if decl.export_kind.is_type() {
-                    continue;
-                }
-                // `export * from 'pkg'` needs the module object to exist; the
-                // individual names are unknowable without evaluating 'pkg'.
-                imports.push(ImportInfo {
-                    specifier: decl.source.value.to_string(),
-                    names: Vec::new(),
-                });
-            }
-            _ => {}
-        }
-    }
-    imports
-}
-
-/// Crawl a system entry's module graph: (importing module, specifier) →
-/// canonical path, canonical path → stripped source, stub export names, the
-/// canonical `package.json` files whose fields selected a module, and each
-/// TypeScript module's type-only export names, which the strip erases.
-type DependencyResolution = (
-    FxHashMap<(String, String), String>,
-    FxHashMap<String, String>,
-    FxHashMap<String, FxHashSet<String>>,
-    FxHashSet<String>,
-    FxHashMap<String, FxHashSet<String>>,
-);
-
 /// The files a system load read or looked for, kept even when the load
 /// fails: what must be watched for a retry to see the fix.
 #[derive(Default)]
@@ -811,13 +709,6 @@ pub struct LoadReads {
     pub findings: Vec<LoadFinding>,
 }
 
-pub fn resolve_all_deps(
-    system_path: &str,
-    root_dir: &str,
-    context: &ResolutionContext,
-) -> Result<DependencyResolution, String> {
-    resolve_all_deps_reading(system_path, root_dir, context, &mut LoadReads::default())
-}
 
 /// The relative candidates the extension policy tries before `resolved`, or
 /// every candidate when nothing resolved.
@@ -831,166 +722,6 @@ fn absent_relative_candidates(
     policy.candidates(&target).into_iter().take_while(|candidate| Some(candidate.as_str()) != resolved).collect()
 }
 
-pub fn resolve_all_deps_reading(
-    system_path: &str,
-    _root_dir: &str,
-    context: &ResolutionContext,
-    reads: &mut LoadReads,
-) -> Result<DependencyResolution, String> {
-    let mut specifier_map: FxHashMap<(String, String), String> = FxHashMap::default();
-    let mut source_map: FxHashMap<String, String> = FxHashMap::default();
-    let mut stub_exports: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
-    let mut manifests: FxHashSet<String> = FxHashSet::default();
-    let mut type_exports: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
-    let mut visited: FxHashSet<String> = FxHashSet::default();
-    let mut queue: VecDeque<String> = VecDeque::new();
-    // canonical path → the bare specifier that pulled in a non-workspace
-    // package, so the CommonJS guard can name the import that failed.
-    let mut external_modules: FxHashMap<String, String> = FxHashMap::default();
-    let entry_path = fs::canonicalize(system_path)
-        .map_err(|e| format!("failed to canonicalize '{}': {}", system_path, e))?
-        .to_string_lossy()
-        .to_string();
-
-    queue.push_back(entry_path.clone());
-
-    while let Some(current_path) = queue.pop_front() {
-        if visited.contains(&current_path) {
-            continue;
-        }
-        visited.insert(current_path.clone());
-        reads.read.insert(current_path.clone());
-
-        let raw_source = resolution::read_source(&current_path)
-            .map_err(|e| format!("failed to read '{}': {}", current_path, e))?;
-
-        if let Some(spec) = external_modules.get(&current_path) {
-            if looks_like_commonjs(&raw_source, &current_path) {
-                return Err(format!(
-                    "CommonJS module '{}' (resolved to '{}') cannot be evaluated in the system \
-                     loader; add it to the runtime stub list or use an ESM entry",
-                    spec, current_path
-                ));
-            }
-        }
-
-        // Every source the extension policy can resolve to that is not plain
-        // JavaScript: TypeScript in any module flavour, and JSX.
-        let is_ts = [".ts", ".tsx", ".mts", ".cts", ".jsx"].iter().any(|extension| current_path.ends_with(extension));
-        let processed = if is_ts {
-            let types = type_only_export_names(&raw_source, &current_path);
-            if !types.is_empty() {
-                type_exports.insert(current_path.clone(), types);
-            }
-            strip_typescript_module(&raw_source, &current_path)?
-        } else {
-            raw_source.clone()
-        };
-
-        // The imports the evaluated module makes: for TypeScript, those that
-        // survive the strip, which erases an import only a type uses and adds
-        // the JSX transform's automatic-runtime import. A module that only an
-        // erased import names is never crawled.
-        let import_infos = extract_import_specifiers(&processed, &current_path);
-
-        let current_dir = Path::new(&current_path)
-            .parent()
-            .unwrap_or_else(|| Path::new("."));
-
-        for info in import_infos {
-            let spec = &info.specifier;
-            // Crawling an asset import yields an exports-less module whose
-            // `.default` is undefined — the least debuggable failure here.
-            if let Some(reason) = asset_import_reason(spec) {
-                return Err(format!(
-                    "asset import '{}' in '{}' cannot traverse system \
-                     evaluation ({}); reference package-owned assets with \
-                     asset('<specifier>') from @animus-ui/system, or use a \
-                     literal URL string (e.g. '/fonts/inter.woff2') — the \
-                     host bundler's asset pipeline owns resolution",
-                    spec, current_path, reason
-                ));
-            }
-            if spec.starts_with('.') || spec.starts_with('/') {
-                let resolution = resolve_relative(current_dir, spec, &context.extensions);
-                reads.missing.extend(absent_relative_candidates(
-                    current_dir,
-                    spec,
-                    &context.extensions,
-                    resolution.as_ref().ok().map(String::as_str),
-                ));
-                match resolution {
-                    Ok(resolved) => {
-                        let canonical = real_path_string(PathBuf::from(resolved));
-                        specifier_map
-                            .insert((current_path.clone(), spec.clone()), canonical.clone());
-                        if !visited.contains(&canonical) {
-                            queue.push_back(canonical);
-                        }
-                    }
-                    // The evaluated module makes this import, so it would
-                    // read as undefined.
-                    Err(RelativeMiss::CaseMismatch(reason)) => return Err(reason),
-                    Err(RelativeMiss::Absent) => {
-                        return Err(format!(
-                            "relative import '{}' in '{}' names no file, and the module \
-                             evaluates it (it is not a type-only import), so the system cannot \
-                             load — check the path and the file's extension",
-                            spec, current_path
-                        ));
-                    }
-                }
-            } else if spec.starts_with("node:") {
-                return Err(format!(
-                    "Node builtin '{}' imported by '{}' is not available in the \
-                     system loader sandbox; system modules must evaluate without \
-                     Node APIs — move this dependency out of the system entry's \
-                     module graph",
-                    spec, current_path
-                ));
-            } else if is_runtime_stub_specifier(spec) {
-                // Register the stub even when no names are imported, so bare
-                // `import 'react'` and `export * from 'react'` find an object.
-                let stub = stub_exports.entry(stub_key(spec)).or_default();
-                for name in &info.names {
-                    stub.insert(name.clone());
-                }
-            } else {
-                // No generic stub fallback: a silent stub turns a missing
-                // package into "X is not a function" in an unrelated module.
-                match resolve_bare_specifier_observed(spec, &current_dir.to_string_lossy(), context, reads) {
-                    Ok((resolved, manifest)) => {
-                        let canonical = real_path_string(PathBuf::from(resolved));
-                        let manifest = real_path_string(manifest);
-                        reads.read.insert(manifest.clone());
-                        manifests.insert(manifest);
-                        specifier_map
-                            .insert((current_path.clone(), spec.clone()), canonical.clone());
-                        if !spec.starts_with("@animus-ui/") {
-                            external_modules.insert(canonical.clone(), spec.clone());
-                        }
-                        if !visited.contains(&canonical) {
-                            queue.push_back(canonical);
-                        }
-                    }
-                    Err(e) => {
-                        return Err(format!(
-                            "failed to resolve package '{}' imported by '{}': {}. \
-                             Is the package built? (run bun run build:ts) If it is not needed \
-                             to evaluate the system, add it to the runtime stub list \
-                             (RUNTIME_STUB_SPECIFIERS in the system loader).",
-                            spec, current_path, e
-                        ));
-                    }
-                }
-            }
-        }
-
-        source_map.insert(current_path.clone(), processed);
-    }
-
-    Ok((specifier_map, source_map, stub_exports, manifests, type_exports))
-}
 
 /// The names a TypeScript module exports as types only: `export interface`,
 /// `export type`, and their re-exports. The strip erases them, so a
@@ -1102,7 +833,7 @@ fn offsets_to_line_numbers(bundle: &str, offsets: Vec<(usize, String)>) -> Vec<(
 /// evaluation order. The returned [`BundleLayout`] attributes an eval failure
 /// to its module.
 fn build_bundle(selection: &bounded::Selection) -> Result<(String, BundleLayout), String> {
-    let bounded::Selection { specifier_map, retained: source_map, stub_exports, type_exports, entry: entry_path, .. } =
+    let bounded::Selection { specifier_map, retained: source_map, stub_exports, entry: entry_path, .. } =
         selection;
     let mut bundle =
         String::with_capacity(source_map.values().map(|s| s.len()).sum::<usize>() + 4096);
@@ -1163,7 +894,7 @@ fn build_bundle(selection: &bounded::Selection) -> Result<(String, BundleLayout)
             .collect()
     };
     let unlinked = rewrite(&|_, _| None)?;
-    let linker = linked::Linker::with_routes(&unlinked, &routed, stub_exports, type_exports);
+    let linker = linked::Linker::with_routes(&unlinked, &routed, stub_exports);
     // A retained module's object holds its own exports and the names asked
     // of it, so an import of any other name reads where its route ends.
     let own: FxHashMap<String, FxHashSet<String>> =
@@ -2145,7 +1876,6 @@ mod tests {
         specifier_map: &FxHashMap<(String, String), String>,
         source_map: &FxHashMap<String, String>,
         stub_exports: &FxHashMap<String, FxHashSet<String>>,
-        type_exports: &FxHashMap<String, FxHashSet<String>>,
         entry_path: &str,
     ) -> Result<(String, BundleLayout), String> {
         let refs: linked::ModuleRefs = FxHashMap::default();
@@ -2153,10 +1883,7 @@ mod tests {
         for (path, source) in source_map {
             modules.insert(path.clone(), linked::rewrite_module_for_linking(source, path, specifier_map, &refs, &|_, _| None)?);
         }
-        let linker = linked::Linker::new(&modules, stub_exports, type_exports);
-        for path in source_map.keys() {
-            linker.check_links(path)?;
-        }
+        let linker = linked::Linker::with_routes(&modules, &FxHashMap::default(), stub_exports);
         let asked = source_map
             .keys()
             .map(|path| (path.clone(), linker.getters(path).into_iter().map(|(name, _)| name).collect()))
@@ -2168,8 +1895,6 @@ mod tests {
             routed: FxHashMap::default(),
             specifier_map: specifier_map.clone(),
             stub_exports: stub_exports.clone(),
-            manifests: FxHashSet::default(),
-            type_exports: type_exports.clone(),
             asked,
             global_origins: FxHashMap::default(),
         })
@@ -2271,7 +1996,7 @@ export const ds = tokens;
             "console.log('hello');\nconsole.warn('warned');\nconsole.error('erred');\n",
         );
         let (bundle, _) =
-            build_whole(&FxHashMap::default(), &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &FxHashMap::default(), "/entry.js").unwrap();
 
         assert!(bundle.starts_with("globalThis.console"));
         eval_bundle(&bundle).expect("top-level console calls must not abort the bundle");
@@ -2279,11 +2004,10 @@ export const ds = tokens;
 
     #[test]
     fn aliased_stub_import_binds_the_noop() {
-        let infos =
-            extract_import_specifiers("import { space as dsSpace } from 'react';", "/entry.ts");
-        assert_eq!(infos.len(), 1);
-        assert_eq!(infos[0].specifier, "react");
-        assert_eq!(infos[0].names, vec!["space".to_string()]);
+        // A stub defines the name the import names, not its local alias.
+        let record = bounded::record_of("import { space as dsSpace } from 'react';", "/entry.ts");
+        assert_eq!(record.requests, ["react"]);
+        assert_eq!(record.imports[0].name, module_table::ImportName::Name("space".to_string()));
 
         let stub_exports =
             FxHashMap::from_iter([(stub_key("react"), FxHashSet::from_iter(["space".to_string()]))]);
@@ -2292,7 +2016,7 @@ export const ds = tokens;
             "import { space as dsSpace } from 'react';\nexport const applied = dsSpace();\n",
         );
         let (bundle, _) =
-            build_whole(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &stub_exports, "/entry.js").unwrap();
 
         let checked = format!(
             "{bundle}\nif (typeof __modules['/entry.js'].applied !== 'object') throw new Error('dsSpace is not the noop');\n"
@@ -2302,15 +2026,10 @@ export const ds = tokens;
 
     #[test]
     fn re_export_from_stub_registers_the_source_name() {
-        let infos = extract_import_specifiers(
-            "export { space as dsSpace } from 'react';\nexport * from 'react-dom';",
-            "/entry.ts",
-        );
-        assert_eq!(infos.len(), 2);
-        assert_eq!(infos[0].specifier, "react");
-        assert_eq!(infos[0].names, vec!["space".to_string()]);
-        assert_eq!(infos[1].specifier, "react-dom");
-        assert!(infos[1].names.is_empty());
+        let record = bounded::record_of("export { space as dsSpace } from 'react';\nexport * from 'react-dom';", "/entry.ts");
+        assert_eq!(record.requests, ["react", "react-dom"]);
+        assert_eq!(record.indirect_exports, [("dsSpace".to_string(), 0, "space".to_string())]);
+        assert_eq!(record.star_exports, [1]);
 
         let stub_exports = FxHashMap::from_iter([
             (stub_key("react"), FxHashSet::from_iter(["space".to_string()])),
@@ -2321,7 +2040,7 @@ export const ds = tokens;
             "export { space as dsSpace } from 'react';\nexport * from 'react-dom';\n",
         );
         let (bundle, _) =
-            build_whole(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &stub_exports, "/entry.js").unwrap();
 
         let checked = format!(
             "{bundle}\nif (__modules['/entry.js'].dsSpace !== __modules['__stub__/react'].space) throw new Error('dsSpace is not the stub\\'s space');\n"
@@ -2333,7 +2052,7 @@ export const ds = tokens;
     fn export_star_never_assigns_undefined() {
         let source_map = single_module("/entry.js", "export * from 'react';\n");
         let (bundle, _) =
-            build_whole(&FxHashMap::default(), &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &FxHashMap::default(), "/entry.js").unwrap();
 
         // An unregistered module brings in no name.
         let checked = format!(
@@ -2352,7 +2071,7 @@ export const ds = tokens;
             ("/entry.ts".to_string(), "export * as ns from 'pkg';\n".to_string()),
             ("/canonical/pkg.ts".to_string(), "export const v = 7;\n".to_string()),
         ]);
-        let (bundle, _) = build_whole(&resolved_map, &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.ts").unwrap();
+        let (bundle, _) = build_whole(&resolved_map, &source_map, &FxHashMap::default(), "/entry.ts").unwrap();
         let checked = format!("{bundle}\nif (__modules['/entry.ts'].ns.v !== 7) throw new Error('ns is not pkg');\n");
         eval_bundle(&checked).expect("`export * as ns` binds pkg's namespace");
 
@@ -2360,7 +2079,7 @@ export const ds = tokens;
             FxHashMap::from_iter([(stub_key("react"), FxHashSet::from_iter(["space".to_string()]))]);
         let source_map = single_module("/entry.js", "export * as R from 'react';\n");
         let (bundle, _) =
-            build_whole(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &stub_exports, "/entry.js").unwrap();
         let checked = format!(
             "{bundle}\nif (__modules['/entry.js'].R !== __modules['__stub__/react']) throw new Error('R is not the stub');\n"
         );
@@ -2384,7 +2103,7 @@ export const ds = tokens;
         ]);
 
         let (bundle, _) =
-            build_whole(&specifier_map, &source_map, &FxHashMap::default(), &FxHashMap::default(), &entry).unwrap();
+            build_whole(&specifier_map, &source_map, &FxHashMap::default(), &entry).unwrap();
 
         eval_bundle(&bundle).expect("a quoted module path must produce an evaluable bundle");
     }
@@ -2394,7 +2113,7 @@ export const ds = tokens;
         let stub_exports = FxHashMap::from_iter([(stub_key("it's-a-module"), FxHashSet::default())]);
         let source_map = single_module("/entry.js", "import x from \"it's-a-module\";\n");
         let (bundle, _) =
-            build_whole(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &stub_exports, "/entry.js").unwrap();
 
         eval_bundle(&bundle).expect("a quoted stub specifier must produce an evaluable bundle");
     }
@@ -2403,7 +2122,7 @@ export const ds = tokens;
     fn arbitrary_module_namespace_names_stay_valid_js() {
         let source_map = single_module("/entry.js", "const v = 1;\nexport { v as \"it's\" };\n");
         let (bundle, _) =
-            build_whole(&FxHashMap::default(), &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &FxHashMap::default(), "/entry.js").unwrap();
 
         eval_bundle(&bundle).expect("a quoted export name must produce an evaluable bundle");
     }
@@ -2428,9 +2147,9 @@ export const ds = tokens;
 
         let source_map = single_module("/entry.js", "const value = 1;\n");
         let (first, layout) =
-            build_whole(&FxHashMap::default(), &source_map, &first_stubs, &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &first_stubs, "/entry.js").unwrap();
         let (second, _) =
-            build_whole(&FxHashMap::default(), &source_map, &second_stubs, &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &second_stubs, "/entry.js").unwrap();
 
         assert_eq!(first, second, "stub emission must not depend on map order");
         assert_eq!(
@@ -2461,7 +2180,7 @@ export const ds = tokens;
         let stub_exports = FxHashMap::from_iter([(stub_key("react"), FxHashSet::default())]);
 
         let (bundle, layout) =
-            build_whole(&specifier_map, &source_map, &stub_exports, &FxHashMap::default(), "/b.js").unwrap();
+            build_whole(&specifier_map, &source_map, &stub_exports, "/b.js").unwrap();
         let error = execute_bundle(&bundle, &layout, "/b.js", None, &FxHashMap::default())
             .expect_err("a throwing bundle must fail the load");
 
@@ -2483,6 +2202,26 @@ export const ds = tokens;
             Some(7)
         );
         assert_eq!(bundle_line_from_stack("    at native\n"), None);
+    }
+
+    /// What `entry`'s imports reach, read without a system root, as a
+    /// load's selection reads it.
+    fn reach(entry: &Path) -> Result<bounded::Selection, String> {
+        reach_reading(entry).0
+    }
+
+    /// [`reach`], with what it read and looked for, kept when it fails.
+    fn reach_reading(entry: &Path) -> (Result<bounded::Selection, String>, LoadReads) {
+        let context = ResolutionContext::default();
+        let entry = match fs::canonicalize(entry) {
+            Ok(entry) => entry,
+            Err(error) => return (Err(error.to_string()), LoadReads::default()),
+        };
+        resolution::with_listing_cache(|| {
+            let mut loader = bounded::Loader::new(&context);
+            let selected = loader.reach_all(&entry.to_string_lossy());
+            (selected, loader.into_reads())
+        })
     }
 
     fn scratch_dir(label: &str) -> PathBuf {
@@ -2755,7 +2494,7 @@ export const ds = tokens;
         write_fixture(&dir.join("erased.ts"), "import { Shape } from './types';\ntype T = Shape;\nexport default {};\n");
         write_fixture(&dir.join("types.ts"), "import './missing';\nexport interface Shape {}\n");
         write_fixture(&dir.join("value.ts"), "import { size } from './tokens';\nexport const s = size;\n");
-        let crawl = |entry: &str| resolve_all_deps(&dir.join(entry).to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
+        let crawl = |entry: &str| reach(&dir.join(entry));
         assert!(crawl("erased.ts").is_ok(), "{:?}", crawl("erased.ts").err());
         let error = crawl("value.ts").err().unwrap_or_default();
         assert!(error.contains("'./tokens'") && error.contains("value.ts"), "{error}");
@@ -3475,7 +3214,7 @@ export const ds = tokens;
              export const value = thing;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
+        let result = reach(&entry);
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("an unresolvable bare specifier must fail the load");
@@ -4233,7 +3972,7 @@ export const ds = tokens;
              export const value = fontUrl;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
+        let result = reach(&entry);
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a bundler asset-query import must fail the load");
@@ -4262,7 +4001,7 @@ export const ds = tokens;
              export const value = fontUrl;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
+        let result = reach(&entry);
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a binary asset import must fail the load");
@@ -4282,7 +4021,7 @@ export const ds = tokens;
              export const value = createHash;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
+        let result = reach(&entry);
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a Node builtin import must fail the load");
@@ -4311,10 +4050,10 @@ export const ds = tokens;
             "import { thing } from 'fake-esm-pkg';\nexport const value = thing;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
+        let result = reach(&entry);
         let _ = fs::remove_dir_all(&dir);
 
-        let (specifier_map, source_map, stub_exports, _, _) =
+        let bounded::Selection { specifier_map, retained: source_map, stub_exports, .. } =
             result.expect("a resolvable bare specifier must be crawled");
         assert!(
             stub_exports.is_empty(),
@@ -4332,7 +4071,7 @@ export const ds = tokens;
 
     #[test]
     fn type_only_imports_never_drive_resolution() {
-        let infos = extract_import_specifiers(
+        let record = bounded::record_of(
             "import type { Property } from 'csstype';\n\
              import { type Only } from 'type-fest';\n\
              export type { Thing } from 'types-pkg';\n\
@@ -4341,10 +4080,9 @@ export const ds = tokens;
             "/entry.ts",
         );
 
-        let specifiers: Vec<&str> = infos.iter().map(|i| i.specifier.as_str()).collect();
-        assert_eq!(specifiers, vec!["side-effect", "runtime-pkg"]);
-        assert!(infos[0].names.is_empty());
-        assert_eq!(infos[1].names, vec!["real".to_string()]);
+        assert_eq!(record.requests, ["side-effect", "runtime-pkg"]);
+        let names: Vec<&module_table::ImportName> = record.imports.iter().map(|import| &import.name).collect();
+        assert_eq!(names, [&module_table::ImportName::Name("real".to_string())]);
     }
 
     #[test]
@@ -4357,10 +4095,10 @@ export const ds = tokens;
              export const value: Thing = 1;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
+        let result = reach(&entry);
         let _ = fs::remove_dir_all(&dir);
 
-        let (specifier_map, _, stub_exports, _, _) =
+        let bounded::Selection { specifier_map, stub_exports, .. } =
             result.expect("type-only imports must not participate in resolution");
         assert!(specifier_map.is_empty(), "{specifier_map:?}");
         assert!(stub_exports.is_empty(), "{stub_exports:?}");
@@ -4384,7 +4122,7 @@ export const ds = tokens;
             "import { thing } from 'fake-cjs-pkg';\nexport const value = thing;\n",
         );
 
-        let result = resolve_all_deps(&entry.to_string_lossy(), &dir.to_string_lossy(), &ResolutionContext::default());
+        let result = reach(&entry);
         let _ = fs::remove_dir_all(&dir);
 
         let error = result.expect_err("a CommonJS dependency must fail the load");
@@ -4707,13 +4445,7 @@ export const ds = tokens;
              export const system = { tokens, palette };\n",
         );
 
-        let mut reads = LoadReads::default();
-        let result = resolve_all_deps_reading(
-            &entry.to_string_lossy(),
-            &dir.to_string_lossy(),
-            &ResolutionContext::default(),
-            &mut reads,
-        );
+        let (result, reads) = reach_reading(&entry);
 
         assert!(result.is_err(), "'./palette' names no file");
         let canonical_dir = fs::canonicalize(&dir).unwrap();
@@ -4731,13 +4463,7 @@ export const ds = tokens;
             &kit_entry,
             "import { kit } from '@animus-test/absent-kit';\nexport const system = kit;\n",
         );
-        let mut kit_reads = LoadReads::default();
-        let kit_result = resolve_all_deps_reading(
-            &kit_entry.to_string_lossy(),
-            &dir.to_string_lossy(),
-            &ResolutionContext::default(),
-            &mut kit_reads,
-        );
+        let (kit_result, kit_reads) = reach_reading(&kit_entry);
         assert!(kit_result.is_err(), "the package is not installed");
         assert!(
             kit_reads.missing.iter().any(|p| p.ends_with("node_modules/@animus-test/absent-kit")

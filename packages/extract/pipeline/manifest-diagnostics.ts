@@ -568,17 +568,22 @@ export function loadFindingDiagnostics(
   return parseInternalWire<LoadFinding[]>(
     loadFindingsJson,
     "loadFindingsJson (the system loader's findings)"
-  ).map(
-    (finding): ManifestDiagnostic => ({
+  ).map((finding): ManifestDiagnostic => {
+    const diagnostic: ManifestDiagnostic = {
       file: finding.file,
       component: finding.method || 'system',
       kind: 'warn',
       message: finding.reason,
       code: finding.code,
       severity: severityFor(finding.code),
-      ...(finding.line > 0 ? { line: finding.line, column: finding.column } : {}),
-    })
-  );
+    };
+    // An unreadable module has no location to give.
+    if (finding.line > 0) {
+      diagnostic.line = finding.line;
+      diagnostic.column = finding.column;
+    }
+    return diagnostic;
+  });
 }
 
 /** The diagnostics a loaded system's own records carry: vocabulary

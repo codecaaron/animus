@@ -530,27 +530,15 @@ pub(crate) struct Linker<'a> {
     keys: Vec<String>,
     index: FxHashMap<String, crate::module_table::ModuleIndex>,
     stubs: &'a FxHashMap<String, FxHashSet<String>>,
-    /// Each TypeScript module's type-only export names, which its stripped
-    /// record no longer holds.
-    type_exports: &'a FxHashMap<String, FxHashSet<String>>,
 }
 
 impl<'a> Linker<'a> {
-    pub fn new(
-        modules: &FxHashMap<String, LinkedModule>,
-        stubs: &'a FxHashMap<String, FxHashSet<String>>,
-        type_exports: &'a FxHashMap<String, FxHashSet<String>>,
-    ) -> Self {
-        Self::with_routes(modules, &FxHashMap::default(), stubs, type_exports)
-    }
-
     /// The linker over `modules`, which run, and `routed`, which are read
     /// only for their routes: their records link, their bodies never run.
     pub fn with_routes(
         modules: &FxHashMap<String, LinkedModule>,
         routed: &FxHashMap<String, LinkedModule>,
         stubs: &'a FxHashMap<String, FxHashSet<String>>,
-        type_exports: &'a FxHashMap<String, FxHashSet<String>>,
     ) -> Self {
         let modules: FxHashMap<&String, &LinkedModule> = modules.iter().chain(routed.iter()).collect();
         use crate::module_table::{Import, ImportName, ModuleRecord, ModuleTable, Request};
@@ -601,7 +589,7 @@ impl<'a> Linker<'a> {
             record.requests = requests;
             records.push(record);
         }
-        Self { table: ModuleTable::new(records), keys, index, stubs, type_exports }
+        Self { table: ModuleTable::new(records), keys, index, stubs }
     }
 
     /// Export `name` of `module`, with each open star of a stub closed: the
@@ -699,48 +687,6 @@ impl<'a> Linker<'a> {
         // lists them.
         getters.sort_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));
         getters
-    }
-
-    /// Fails as Node fails to link: an import of a name its module does not
-    /// export, or exports ambiguously through `export *`, a re-export that
-    /// does not resolve, and either through a module the graph does not hold.
-    pub fn check_links(&self, module: &str) -> Result<(), String> {
-        use crate::module_table::{ExportLookup, ImportName, Request, LINK_ABSENT_IMPORT, LINK_AMBIGUOUS_IMPORT};
-        let at = self.index[module];
-        let record = self.table.record(at);
-        // A re-export is named by the name it exports, as Node names it.
-        let reexports =
-            record.indirect_exports.iter().map(|(exported, request, name)| ("re-exports", exported.as_str(), *request, name.as_str()));
-        let imports = record.imports.iter().filter_map(|import| match &import.name {
-            ImportName::Name(name) => Some(("imports", name.as_str(), import.request, name.as_str())),
-            ImportName::Namespace => None,
-        });
-        for (verb, shown, request, name) in imports.chain(reexports) {
-            let (from, lookup) = match &record.requests[request] {
-                Request::Module(target) => (self.keys[*target].clone(), self.resolve(*target, name)),
-                // A stub's object answers any name.
-                Request::Outside(_) => continue,
-                Request::Unresolved(key) => (key.clone(), ExportLookup::Absent),
-            };
-            // A type a TypeScript module exports, imported or re-exported
-            // without `type`: the strip erased it, and a bundler without
-            // isolated modules erases the import too, so it links to nothing
-            // and fails nothing.
-            let erased_type = || self.type_exports.get(&from).is_some_and(|types| types.contains(name));
-            let (code, problem) = match lookup {
-                ExportLookup::Resolved(_) => continue,
-                ExportLookup::Absent if erased_type() => continue,
-                ExportLookup::Ambiguous(_) => (LINK_AMBIGUOUS_IMPORT, "which resolves it ambiguously through `export *`"),
-                _ if verb == "re-exports" => (LINK_ABSENT_IMPORT, "which resolves to no binding"),
-                _ => (LINK_ABSENT_IMPORT, "which does not export it"),
-            };
-            let target = if verb == "re-exports" { String::new() } else { format!(" from '{from}'") };
-            return Err(format!(
-                "module '{module}' {verb} '{shown}'{target}, {problem} ({code}); the system loader links this \
-                 module graph as Node does, and Node rejects this too"
-            ));
-        }
-        Ok(())
     }
 }
 

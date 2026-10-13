@@ -32,6 +32,7 @@ use crate::{
 
 /// What a load selected: the modules to run and the routes their imports
 /// take.
+#[derive(Debug)]
 pub(crate) struct Selection {
     pub entry: String,
     /// The system's export name on the entry.
@@ -43,8 +44,6 @@ pub(crate) struct Selection {
     pub routed: FxHashMap<String, ModuleRecord<String, String>>,
     pub specifier_map: FxHashMap<(String, String), String>,
     pub stub_exports: FxHashMap<String, FxHashSet<String>>,
-    pub manifests: FxHashSet<String>,
-    pub type_exports: FxHashMap<String, FxHashSet<String>>,
     /// The names of each retained module asked beyond its local exports: the
     /// entry's system and companions, and every name of a namespace the
     /// system uses whole.
@@ -107,7 +106,6 @@ pub(crate) struct Loader<'c> {
     /// Each module a bare specifier outside Animus resolved to, by that
     /// specifier: a CommonJS one is refused.
     external: FxHashMap<String, String>,
-    manifests: FxHashSet<String>,
     stub_exports: FxHashMap<String, FxHashSet<String>>,
     type_exports: FxHashMap<String, FxHashSet<String>>,
     asked: FxHashMap<String, FxHashSet<String>>,
@@ -133,7 +131,6 @@ impl<'c> Loader<'c> {
             modules: FxHashMap::default(),
             targets: FxHashMap::default(),
             external: FxHashMap::default(),
-            manifests: FxHashSet::default(),
             stub_exports: FxHashMap::default(),
             type_exports: FxHashMap::default(),
             asked: FxHashMap::default(),
@@ -177,9 +174,15 @@ impl<'c> Loader<'c> {
                 work.push_back(Need::Ask { importer: entry.to_string(), module: entry.to_string(), name: name.to_string() });
             }
         }
-        // In rounds: retain what is due, then answer every waiting question
-        // against one table, then read every module an answer waits on,
-        // together. One round per depth of route, not per module read.
+        self.run(work)?;
+        self.audit(entry, &root);
+        self.selection(entry, root)
+    }
+
+    /// Answers every need: retains what is due, then answers every waiting
+    /// question against one table, then reads every module an answer waits
+    /// on, together, in rounds: one round per depth of route, not per module.
+    fn run(&mut self, mut work: VecDeque<Need>) -> Result<(), String> {
         let mut namespaces: FxHashSet<String> = FxHashSet::default();
         let mut companions: FxHashSet<String> = FxHashSet::default();
         let (mut asks, mut spaces): (Vec<(String, String, String)>, Vec<String>) = (Vec::new(), Vec::new());
@@ -250,8 +253,17 @@ impl<'c> Loader<'c> {
             asks = waiting;
             spaces = waiting_spaces;
         }
-        self.audit(entry, &root);
-        self.selection(entry, root)
+        Ok(())
+    }
+
+    /// Everything the entry's own imports reach, with no system root: the
+    /// selection a module graph's tests read.
+    #[cfg(test)]
+    pub(crate) fn reach_all(&mut self, entry: &str) -> Result<Selection, String> {
+        self.retain(entry)?;
+        let work: VecDeque<Need> = self.reached_imports(entry)?.into();
+        self.run(work)?;
+        self.selection(entry, String::new())
     }
 
     /// The selection, with every request of every acquired module resolved
@@ -284,8 +296,6 @@ impl<'c> Loader<'c> {
             routed,
             specifier_map,
             stub_exports: std::mem::take(&mut self.stub_exports),
-            manifests: std::mem::take(&mut self.manifests),
-            type_exports: std::mem::take(&mut self.type_exports),
             asked: std::mem::take(&mut self.asked),
             global_origins: self.global_origins()?,
         })
@@ -468,8 +478,7 @@ impl<'c> Loader<'c> {
             Ok((resolved, manifest)) => {
                 let canonical = real_path_string(resolved.into());
                 let manifest = real_path_string(manifest);
-                self.reads.read.insert(manifest.clone());
-                self.manifests.insert(manifest);
+                self.reads.read.insert(manifest);
                 if !spec.starts_with("@animus-ui/") {
                     self.external.insert(canonical.clone(), spec.to_string());
                 }
@@ -1556,7 +1565,7 @@ fn source_type(path: &str) -> SourceType {
 /// A module's runtime imports and exports from its syntax, requests by
 /// specifier in source order. Type-only declarations, and local exports of a
 /// name only a type declares, are left out: they name no runtime binding.
-fn record_of(source: &str, path: &str) -> ModuleRecord<String, String> {
+pub(crate) fn record_of(source: &str, path: &str) -> ModuleRecord<String, String> {
     let allocator = Allocator::default();
     let program = Parser::new(&allocator, source, source_type(path)).parse().program;
     let mut record = ModuleRecord {
@@ -1568,7 +1577,7 @@ fn record_of(source: &str, path: &str) -> ModuleRecord<String, String> {
         star_exports: Vec::new(),
         default_cells: Vec::new(),
     };
-    let mut request = |requests: &mut Vec<String>, spec: &str| match requests.iter().position(|seen| seen == spec) {
+    let request = |requests: &mut Vec<String>, spec: &str| match requests.iter().position(|seen| seen == spec) {
         Some(at) => at,
         None => {
             requests.push(spec.to_string());
@@ -1604,7 +1613,13 @@ fn record_of(source: &str, path: &str) -> ModuleRecord<String, String> {
     for stmt in &program.body {
         match stmt {
             Statement::ImportDeclaration(decl) => {
-                if decl.import_kind.is_type() {
+                // `import type`, and `import { type A }` with no value
+                // specifier, are erased with their request; a bare
+                // `import 'x'` keeps its.
+                let values = decl.specifiers.iter().flatten().filter(|specifier| {
+                    !matches!(specifier, ImportDeclarationSpecifier::ImportSpecifier(named) if named.import_kind.is_type())
+                });
+                if decl.import_kind.is_type() || (decl.specifiers.as_ref().is_some_and(|all| !all.is_empty()) && values.count() == 0) {
                     continue;
                 }
                 let at = request(&mut record.requests, &decl.source.value);
