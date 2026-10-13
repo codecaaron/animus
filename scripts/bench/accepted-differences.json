@@ -19,5 +19,19 @@
     "baseline": "a263c383a0302ff7e19483dee6602cffe766cee8ac2c2c4c878cc20fdc6f42bc",
     "candidate": "0802b1b98e7d55f5fbe4d9e32f4c6f12fc2ca502164e0739528810a277ed23d1",
     "reason": "The loader's dependencies are every file it read, not only the modules it ran: the barrels it routed through, the owned modules it audited for registrations and the package manifests it consulted join the list, so 15 paths become 19. The config is identical (configDigest unchanged)."
+  },
+  {
+    "row": "loader:large-closure",
+    "fixture": "large-closure",
+    "baseline": "34c45a3cc32451b8af1df64e21264b3affe237d6a42fa6dc39ba307d0806853a",
+    "candidate": "1e418de3a3903cd5bffbf47c106cf223ceac5be400ba943426aac4a93edb9c39",
+    "reason": "The loader runs only what the exported system reaches, and its dependencies are the files it read: the 6,252 icons and the kit behind the entry's bare import are no longer read, so the 6,265 paths become 13. The config is identical (configDigest unchanged). (macOS, whose config digest differs from Linux's)"
+  },
+  {
+    "row": "loader:showcase",
+    "fixture": "showcase",
+    "baseline": "110356185d053789b6f1f57a4f003dc7192fa35866046146fc69b581d1efa607",
+    "candidate": "40d22d44062651435399f59777a8a388fb44a0e2470691cf397a2d1ce7a3321d",
+    "reason": "The loader's dependencies are every file it read, not only the modules it ran: the barrels it routed through, the owned modules it audited for registrations and the package manifests it consulted join the list, so 15 paths become 19. The config is identical (configDigest unchanged). (macOS, whose config digest differs from Linux's)"
   }
 ]
