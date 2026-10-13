@@ -1,10 +1,10 @@
 /**
  * The system and the analysis read one instance of each kit (spec §2.2
- * A4). Discovery asks the host which instance a kit specifier names; the
- * system loader resolves the system file's imports itself. Until the loader
- * takes the host's instance, a kit whose analysed instance differs from the
- * one the system evaluated is refused: its components would be extracted
- * against another instance's vocabulary.
+ * A4). Discovery asks the host which instance a kit specifier names, and
+ * the system loader takes those instances (C8). This is a self-check: a kit
+ * whose analysed instance still differs from the one the system evaluated
+ * is refused, since its components would be extracted against another
+ * instance's vocabulary.
  */
 
 import { realpathSync } from 'fs';

@@ -126,7 +126,8 @@ function evaluateSystemModule(
   rootDir: string,
   conditions: readonly string[] | undefined,
   workspaces: WorkspacePackages | undefined,
-  extensions: HostExtensionPolicy | undefined
+  extensions: HostExtensionPolicy | undefined,
+  instances: Readonly<Record<string, string>> | undefined
 ) {
   try {
     return engine.loadSystemModule(
@@ -135,7 +136,8 @@ function evaluateSystemModule(
       systemExport,
       conditions,
       workspaces,
-      extensions && extensionPolicyJson(extensions)
+      extensions && extensionPolicyJson(extensions),
+      instances
     );
   } catch (error) {
     reportFindingsOn(error);
@@ -174,6 +176,9 @@ export function loadSystemConfig(
     workspaces?: WorkspacePackages;
     /** The host's extension order; the built-in policy when absent. */
     extensions?: HostExtensionPolicy;
+    /** The host's instance of each kit the system reaches, by package name
+     *  (C8): the loader evaluates that instance from every importer. */
+    instances?: Readonly<Record<string, string>>;
   }
 ): SystemConfig {
   const config = evaluateSystemModule(
@@ -183,7 +188,8 @@ export function loadSystemConfig(
     opts.rootDir,
     opts.conditions,
     opts.workspaces,
-    opts.extensions
+    opts.extensions,
+    opts.instances
   );
 
   let scalesJson: string = config.scalesJson;

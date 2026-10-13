@@ -127,6 +127,7 @@ pub struct NapiSystemConfig {
 /// read or attempted) and `missing` (the paths it looked for and found
 /// absent), so the host watches them for the retry.
 #[napi]
+#[allow(clippy::too_many_arguments)]
 pub fn load_system_module(
     env: napi::Env,
     system_path: String,
@@ -135,8 +136,9 @@ pub fn load_system_module(
     conditions: Option<Vec<String>>,
     workspaces: Option<std::collections::HashMap<String, String>>,
     extension_policy_json: Option<String>,
+    instances: Option<std::collections::HashMap<String, String>>,
 ) -> napi::Result<NapiSystemConfig> {
-    let context = resolution_context(conditions, workspaces, extension_policy_json)
+    let context = resolution_context(conditions, workspaces, extension_policy_json, instances)
         .map_err(napi::Error::from_reason)?;
     let mut reads = animus_system_loader::LoadReads::default();
     let config = match animus_system_loader::load_system_module_reading(
@@ -193,12 +195,14 @@ fn load_failure(env: &napi::Env, message: String, reads: animus_system_loader::L
 
 /// The host's export conditions, in its order, the session root's declared
 /// workspace packages (name → canonical directory), which a package lookup
-/// consults after `node_modules`, and the host's extension order as JSON
-/// (`{ appended, nodeNext }`), the built-in policy when absent.
+/// consults after `node_modules`, the host's extension order as JSON
+/// (`{ appended, nodeNext }`), the built-in policy when absent, and the
+/// instance the host resolves each kit to, by package name.
 fn resolution_context(
     conditions: Option<Vec<String>>,
     workspaces: Option<std::collections::HashMap<String, String>>,
     extension_policy_json: Option<String>,
+    instances: Option<std::collections::HashMap<String, String>>,
 ) -> Result<animus_system_loader::ResolutionContext, String> {
     Ok(animus_system_loader::ResolutionContext {
         conditions: conditions.unwrap_or_default(),
@@ -211,6 +215,11 @@ fn resolution_context(
             Some(json) => serde_json::from_str(&json).map_err(|error| format!("invalid extension policy: {error}"))?,
             None => animus_system_loader::resolution::extension_policy().clone(),
         },
+        instances: instances
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, dir)| (name, std::path::PathBuf::from(dir)))
+            .collect(),
     })
 }
 
@@ -236,9 +245,10 @@ pub fn resolve_specifier(
     conditions: Option<Vec<String>>,
     workspaces: Option<std::collections::HashMap<String, String>>,
     extension_policy_json: Option<String>,
+    instances: Option<std::collections::HashMap<String, String>>,
 ) -> NapiResolvedSpecifier {
     // One call lists each directory it checks once, as a system load does.
-    NapiResolvedSpecifier::from(resolution_context(conditions, workspaces, extension_policy_json).and_then(|context| {
+    NapiResolvedSpecifier::from(resolution_context(conditions, workspaces, extension_policy_json, instances).and_then(|context| {
         animus_system_loader::resolution::with_listing_cache(|| {
             animus_system_loader::resolve_specifier(&specifier, &from_dir, &context)
         })
@@ -255,7 +265,7 @@ pub fn locate_package(
     from_dir: String,
     workspaces: Option<std::collections::HashMap<String, String>>,
 ) -> Option<String> {
-    let context = resolution_context(None, workspaces, None).ok()?;
+    let context = resolution_context(None, workspaces, None, None).ok()?;
     let dir = animus_system_loader::locate_package(&name, &from_dir, &context).ok()?;
     Some(std::fs::canonicalize(&dir).unwrap_or(dir).to_string_lossy().to_string())
 }
@@ -280,7 +290,7 @@ pub fn specifier_candidates(
     sources: Option<Vec<String>>,
     joined_index: Option<bool>,
 ) -> napi::Result<Vec<String>> {
-    let context = resolution_context(None, None, extension_policy_json).map_err(napi::Error::from_reason)?;
+    let context = resolution_context(None, None, extension_policy_json, None).map_err(napi::Error::from_reason)?;
     Ok(context.extensions.candidates_among(&base, sources.as_deref(), joined_index.unwrap_or(false)))
 }
 
@@ -383,7 +393,7 @@ pub fn resolve_kit_source_root(
     sources: Option<Vec<String>>,
 ) -> String {
     // One call lists each directory it checks once, as a system load does.
-    let found = resolution_context(conditions, workspaces, extension_policy_json).and_then(|context| {
+    let found = resolution_context(conditions, workspaces, extension_policy_json, None).and_then(|context| {
         animus_system_loader::resolution::with_listing_cache(|| {
             animus_system_loader::resolve_kit_source_root(
                 &specifier,

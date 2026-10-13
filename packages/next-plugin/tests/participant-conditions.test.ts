@@ -241,7 +241,7 @@ describe('one agreed system authority', () => {
     const owner = participant('browser');
     const other = participant('node');
     await owner.runFullPipeline();
-    other.agreeWithSystemAuthority();
+    await other.agreeWithSystemAuthority();
 
     // The edit selects the kit root, which differs by condition, and a
     // file that cannot parse fails the reload's analysis.
@@ -263,7 +263,7 @@ describe('one agreed system authority', () => {
     ).rejects.toThrow();
 
     expect(getSharedCss(owner.key)).toContain('#333333');
-    expect(() => other.agreeWithSystemAuthority()).not.toThrow();
+    await expect(other.agreeWithSystemAuthority()).resolves.toBeUndefined();
   }, 60000);
 
   /** Contract: a reload's proofs are its own. A reload can change what
@@ -305,7 +305,7 @@ describe('one agreed system authority', () => {
     const owner = participant('browser');
     const other = participant('node');
     await owner.runFullPipeline();
-    other.agreeWithSystemAuthority();
+    await other.agreeWithSystemAuthority();
 
     // The manifest moves `node` to another file; the owner's reload commits
     // the same system it had.
@@ -318,7 +318,7 @@ describe('one agreed system authority', () => {
     });
 
     expect(getSharedCss(owner.key)).toContain('#333333');
-    expect(() => other.agreeWithSystemAuthority()).toThrow(
+    await expect(other.agreeWithSystemAuthority()).rejects.toThrow(
       'SessionConfigurationConflict'
     );
   }, 60000);

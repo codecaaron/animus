@@ -397,7 +397,9 @@ describe('production run (full pipeline)', () => {
         appended: ['.js', '.json', '.wasm'],
         nodeNext: [],
         alias: [],
-      })
+      }),
+      // No kit aliased: the host chose no instance.
+      {}
     );
     expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
 

@@ -121,7 +121,7 @@ export declare function fingerprintFile(path: string): string | null
  * read or attempted) and `missing` (the paths it looked for and found
  * absent), so the host watches them for the retry.
  */
-export declare function loadSystemModule(systemPath: string, rootDir: string, exportName?: string | undefined | null, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null): NapiSystemConfig
+export declare function loadSystemModule(systemPath: string, rootDir: string, exportName?: string | undefined | null, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null, instances?: Record<string, string> | undefined | null): NapiSystemConfig
 
 /**
  * The directory of the package `name` as the system loader locates it from
@@ -262,7 +262,7 @@ export declare function resolveKitSourceRoot(specifier: string, fromDir: string,
  * policy; a package through `exports` (its `animus` source condition, then
  * `conditions`, `import` and `default`), then `module`, then `main`.
  */
-export declare function resolveSpecifier(specifier: string, fromDir: string, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null): NapiResolvedSpecifier
+export declare function resolveSpecifier(specifier: string, fromDir: string, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null, instances?: Record<string, string> | undefined | null): NapiResolvedSpecifier
 
 export declare function seeFile(candidate: string, within?: string | undefined | null): NapiSeenFile
 
