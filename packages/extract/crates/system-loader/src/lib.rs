@@ -830,7 +830,7 @@ pub fn resolve_all_deps_reading(
         visited.insert(current_path.clone());
         reads.read.insert(current_path.clone());
 
-        let raw_source = fs::read_to_string(&current_path)
+        let raw_source = resolution::read_source(&current_path)
             .map_err(|e| format!("failed to read '{}': {}", current_path, e))?;
 
         if let Some(spec) = external_modules.get(&current_path) {

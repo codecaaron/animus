@@ -211,6 +211,8 @@ struct Pass {
     directories: FxHashMap<PathBuf, Directory>,
     seen: FxHashMap<PathBuf, FxHashMap<String, Seen>>,
     join_real_paths: bool,
+    /// A file whose real path the pass joined was found a link when read.
+    relinked: bool,
 }
 
 /// What a pass has read of one directory: its entries, listed when the pass
@@ -234,11 +236,12 @@ impl Pass {
         &self.directories[directory]
     }
 
-    /// Whether every real path the pass joined still holds: each directory
-    /// it read a real path for still resolves to it, and still lists each
-    /// entry that was not a link as one that is not.
+    /// Whether every real path the pass joined still holds: no file it was
+    /// joined for was a link when read ([`read_source`]), each directory it
+    /// read a real path for still resolves to it, and still lists each entry
+    /// that was not a link as one that is not.
     fn real_paths_hold(&self) -> bool {
-        self.directories.iter().all(|(path, read)| {
+        !self.relinked && self.directories.iter().all(|(path, read)| {
             let Some(real) = read.real.get() else { return true };
             let now = entry_names(path);
             let plain_still = |(name, link): (&OsString, &bool)| {
@@ -261,8 +264,9 @@ thread_local! {
 /// writes to that directory after it is listed is not seen until the next
 /// pass. A real path is never stale: where a directory the pass joined a
 /// real path through was relinked during it, or an entry it listed became
-/// a link, `run` runs again with every real path read from the disk, so
-/// `run` must start afresh each time. A nested scope shares the open one.
+/// a link or was one when [`read_source`] read it, `run` runs again with
+/// every real path read from the disk, so `run` must start afresh each
+/// time. A nested scope shares the open one.
 pub fn with_listing_cache<T>(mut run: impl FnMut() -> T) -> T {
     if PASS.with(|pass| pass.borrow().is_some()) {
         return run();
@@ -335,6 +339,31 @@ fn real_path_in_pass(path: &Path) -> Option<PathBuf> {
         let real = read.real.get_or_init(|| std::fs::canonicalize(directory).ok());
         Some(real.as_ref()?.join(name))
     })
+}
+
+/// The source at `path`, a real path [`real_path`] gave. In a pass that
+/// joins real paths, the last segment is opened without following a link:
+/// one there now means the joined real path went stale after its directory
+/// was listed, so the pass runs again reading every real path from the
+/// disk, and the source is read through the link meanwhile.
+pub fn read_source(path: &str) -> std::io::Result<String> {
+    #[cfg(unix)]
+    if PASS.with(|pass| pass.borrow().as_ref().is_some_and(|pass| pass.join_real_paths)) {
+        use std::io::Read;
+        use std::os::unix::fs::OpenOptionsExt;
+        match std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path) {
+            Ok(mut file) => {
+                let mut source = String::new();
+                file.read_to_string(&mut source)?;
+                return Ok(source);
+            }
+            Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+                PASS.with(|pass| pass.borrow_mut().as_mut().map(|pass| pass.relinked = true));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    std::fs::read_to_string(path)
 }
 
 /// Whether `path` is absolute and spelled with no `.`, `..` or empty
@@ -456,8 +485,9 @@ mod tests {
 
     /// Contract: a pass's real path is the one `fs::canonicalize` gives, even
     /// where a link changes during the pass: a directory link retargeted
-    /// after a file through it resolved, and a listed file that became a
-    /// link. A stale one sends watch to the wrong file.
+    /// after a file through it resolved, a listed file that became a link,
+    /// and one that was a link only while its source was read. A stale one
+    /// sends watch to the wrong file.
     #[test]
     fn a_pass_never_returns_a_stale_real_path() {
         use std::os::unix::fs::symlink;
@@ -485,10 +515,32 @@ mod tests {
             relink("old/b.js", "../new/b.js");
             real_path(dir.join("old/b.js"))
         });
+        // A listed file that is a link only while its source is read: the
+        // source and the real path must name the same file.
+        std::fs::create_dir_all(dir.join("swap")).expect("create fixture");
+        std::fs::write(dir.join("swap/a.js"), "").expect("write fixture");
+        std::fs::write(dir.join("swap/b.js"), "swap").expect("write fixture");
+        std::fs::write(dir.join("new/b.js"), "new").expect("write fixture");
+        let runs = std::cell::Cell::new(0);
+        let read_through = with_listing_cache(|| {
+            runs.set(runs.get() + 1);
+            real_path(dir.join("swap/a.js"));
+            let path = real_path(dir.join("swap/b.js"));
+            if runs.get() == 1 {
+                relink("swap/b.js", "../new/b.js");
+            }
+            let source = read_source(&path.to_string_lossy()).expect("read fixture");
+            if runs.get() == 1 {
+                std::fs::remove_file(dir.join("swap/b.js")).expect("unlink fixture");
+                std::fs::write(dir.join("swap/b.js"), "swap").expect("restore fixture");
+            }
+            (path, source)
+        });
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(retargeted, dir.join("new/b.js"));
         assert_eq!(became_link, dir.join("new/b.js"));
+        assert_eq!(read_through, (dir.join("swap/b.js"), "swap".to_string()));
     }
 
     /// Contract: the allocation-free check of a plain path answers exactly as
