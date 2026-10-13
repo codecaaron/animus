@@ -1,6 +1,6 @@
 //! Engine-neutral TypeScript system-module loader.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,6 +13,7 @@ use oxc::semantic::SemanticBuilder;
 use oxc::span::SourceType;
 use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::{Context, Function, Object, Runtime};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 mod kit_source;
 mod linked;
@@ -146,12 +147,6 @@ pub fn resolve_bare_specifier_observed(
     let (pkg_name, subpath) = split_specifier(specifier);
     let pkg_json_path = locate_package_observed(pkg_name, from_dir, context, reads)?.join("package.json");
     select_package_entry_observed(pkg_json_path, subpath, context, specifier, true, reads)
-}
-
-/// `path` with its links and `.` segments resolved, as `require.resolve`
-/// and Vite return it; as given when it cannot be.
-fn real_path(path: PathBuf) -> PathBuf {
-    fs::canonicalize(&path).unwrap_or(path)
 }
 
 /// The file the package whose manifest is `pkg_json_path` names for
@@ -544,15 +539,22 @@ pub fn resolve_specifier(
 ) -> Result<(PathBuf, Option<PathBuf>), String> {
     if specifier.starts_with('.') || specifier.starts_with('/') {
         resolve_relative(Path::new(from_dir), specifier, &context.extensions)
-            .map(|path| (real_path(PathBuf::from(path)), None))
+            .map(|path| (resolution::real_path(PathBuf::from(path)), None))
             .map_err(|miss| match miss {
                 RelativeMiss::Absent => format!("could not resolve '{specifier}' from {from_dir:?}"),
                 RelativeMiss::CaseMismatch(reason) => reason,
             })
     } else {
         resolve_bare_specifier(specifier, from_dir, context)
-            .map(|(path, manifest)| (real_path(PathBuf::from(path)), Some(real_path(manifest))))
+            .map(|(path, manifest)| {
+                (resolution::real_path(PathBuf::from(path)), Some(resolution::real_path(manifest)))
+            })
     }
+}
+
+/// [`resolution::real_path`], as the string the loader keys modules by.
+fn real_path_string(path: PathBuf) -> String {
+    resolution::real_path(path).to_string_lossy().to_string()
 }
 
 /// Why a relative specifier resolved to no file.
@@ -760,11 +762,11 @@ fn extract_import_specifiers(source: &str, file_path: &str) -> Vec<ImportInfo> {
 /// canonical `package.json` files whose fields selected a module, and each
 /// TypeScript module's type-only export names, which the strip erases.
 type DependencyResolution = (
-    HashMap<(String, String), String>,
-    HashMap<String, String>,
-    HashMap<String, HashSet<String>>,
-    HashSet<String>,
-    HashMap<String, HashSet<String>>,
+    FxHashMap<(String, String), String>,
+    FxHashMap<String, String>,
+    FxHashMap<String, FxHashSet<String>>,
+    FxHashSet<String>,
+    FxHashMap<String, FxHashSet<String>>,
 );
 
 /// The files a system load read or looked for, kept even when the load
@@ -804,28 +806,16 @@ pub fn resolve_all_deps_reading(
     context: &ResolutionContext,
     reads: &mut LoadReads,
 ) -> Result<DependencyResolution, String> {
-    let mut specifier_map: HashMap<(String, String), String> = HashMap::new();
-    let mut source_map: HashMap<String, String> = HashMap::new();
-    let mut stub_exports: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut manifests: HashSet<String> = HashSet::new();
-    let mut type_exports: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut visited: HashSet<String> = HashSet::new();
+    let mut specifier_map: FxHashMap<(String, String), String> = FxHashMap::default();
+    let mut source_map: FxHashMap<String, String> = FxHashMap::default();
+    let mut stub_exports: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+    let mut manifests: FxHashSet<String> = FxHashSet::default();
+    let mut type_exports: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+    let mut visited: FxHashSet<String> = FxHashSet::default();
     let mut queue: VecDeque<String> = VecDeque::new();
     // canonical path → the bare specifier that pulled in a non-workspace
     // package, so the CommonJS guard can name the import that failed.
-    let mut external_modules: HashMap<String, String> = HashMap::new();
-    // Each resolved file's canonical path, read once: a closure's modules
-    // import the same file many times.
-    let mut canonical_paths: HashMap<String, String> = HashMap::new();
-    let mut canonical = |resolved: &str| -> String {
-        canonical_paths
-            .entry(resolved.to_string())
-            .or_insert_with(|| {
-                fs::canonicalize(resolved).unwrap_or_else(|_| PathBuf::from(resolved)).to_string_lossy().to_string()
-            })
-            .clone()
-    };
-
+    let mut external_modules: FxHashMap<String, String> = FxHashMap::default();
     let entry_path = fs::canonicalize(system_path)
         .map_err(|e| format!("failed to canonicalize '{}': {}", system_path, e))?
         .to_string_lossy()
@@ -900,7 +890,7 @@ pub fn resolve_all_deps_reading(
                 ));
                 match resolution {
                     Ok(resolved) => {
-                        let canonical = canonical(&resolved);
+                        let canonical = real_path_string(PathBuf::from(resolved));
                         specifier_map
                             .insert((current_path.clone(), spec.clone()), canonical.clone());
                         if !visited.contains(&canonical) {
@@ -939,11 +929,8 @@ pub fn resolve_all_deps_reading(
                 // package into "X is not a function" in an unrelated module.
                 match resolve_bare_specifier_observed(spec, &current_dir.to_string_lossy(), context, reads) {
                     Ok((resolved, manifest)) => {
-                        let canonical = canonical(&resolved);
-                        let manifest = fs::canonicalize(&manifest)
-                            .unwrap_or(manifest)
-                            .to_string_lossy()
-                            .to_string();
+                        let canonical = real_path_string(PathBuf::from(resolved));
+                        let manifest = real_path_string(manifest);
                         reads.read.insert(manifest.clone());
                         manifests.insert(manifest);
                         specifier_map
@@ -978,7 +965,7 @@ pub fn resolve_all_deps_reading(
 /// `export type`, and their re-exports. The strip erases them, so a
 /// re-export or import of one that omits `type` finds no binding at link
 /// time, where a bundler without isolated modules accepts it.
-fn type_only_export_names(source: &str, file_path: &str) -> HashSet<String> {
+fn type_only_export_names(source: &str, file_path: &str) -> FxHashSet<String> {
     let allocator = Allocator::default();
     let source_type = SourceType::from_path(Path::new(file_path)).unwrap_or_else(|_| SourceType::ts().with_module(true));
     let parsed = Parser::new(&allocator, source, source_type).parse();
@@ -1078,10 +1065,10 @@ fn offsets_to_line_numbers(bundle: &str, offsets: Vec<(usize, String)>) -> Vec<(
 /// evaluation order. The returned [`BundleLayout`] attributes an eval failure
 /// to its module.
 fn build_bundle(
-    specifier_map: &HashMap<(String, String), String>,
-    source_map: &HashMap<String, String>,
-    stub_exports: &HashMap<String, HashSet<String>>,
-    type_exports: &HashMap<String, HashSet<String>>,
+    specifier_map: &FxHashMap<(String, String), String>,
+    source_map: &FxHashMap<String, String>,
+    stub_exports: &FxHashMap<String, FxHashSet<String>>,
+    type_exports: &FxHashMap<String, FxHashSet<String>>,
     entry_path: &str,
 ) -> Result<(String, BundleLayout), String> {
     let mut bundle =
@@ -1096,7 +1083,7 @@ fn build_bundle(
 
     // Stub modules first, emitted in sorted key order (and with sorted export
     // names) so the same inputs always produce the same bytes.
-    let mut stub_modules: Vec<(&String, &HashSet<String>)> = stub_exports.iter().collect();
+    let mut stub_modules: Vec<(&String, &FxHashSet<String>)> = stub_exports.iter().collect();
     stub_modules.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut stub_specifiers: Vec<String> = Vec::with_capacity(stub_modules.len());
@@ -1120,7 +1107,7 @@ fn build_bundle(
     let mut paths: Vec<&String> = source_map.keys().collect();
     paths.sort();
     let refs: linked::ModuleRefs = paths.iter().enumerate().map(|(at, path)| ((*path).clone(), at)).collect();
-    let mut modules: HashMap<String, linked::LinkedModule> = HashMap::with_capacity(paths.len());
+    let mut modules: FxHashMap<String, linked::LinkedModule> = FxHashMap::with_capacity_and_hasher(paths.len(), Default::default());
     for path in &paths {
         let module = linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map, &refs)?;
         modules.insert((*path).clone(), module);
@@ -2060,8 +2047,8 @@ export const ds = tokens;
         })
     }
 
-    fn single_module(path: &str, source: &str) -> HashMap<String, String> {
-        HashMap::from([(path.to_string(), source.to_string())])
+    fn single_module(path: &str, source: &str) -> FxHashMap<String, String> {
+        FxHashMap::from_iter([(path.to_string(), source.to_string())])
     }
 
     #[test]
@@ -2098,7 +2085,7 @@ export const ds = tokens;
             "console.log('hello');\nconsole.warn('warned');\nconsole.error('erred');\n",
         );
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &HashMap::new(), &HashMap::new(), "/entry.js").unwrap();
+            build_bundle(&FxHashMap::default(), &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.js").unwrap();
 
         assert!(bundle.starts_with("globalThis.console"));
         eval_bundle(&bundle).expect("top-level console calls must not abort the bundle");
@@ -2113,13 +2100,13 @@ export const ds = tokens;
         assert_eq!(infos[0].names, vec!["space".to_string()]);
 
         let stub_exports =
-            HashMap::from([(stub_key("react"), HashSet::from(["space".to_string()]))]);
+            FxHashMap::from_iter([(stub_key("react"), FxHashSet::from_iter(["space".to_string()]))]);
         let source_map = single_module(
             "/entry.js",
             "import { space as dsSpace } from 'react';\nexport const applied = dsSpace();\n",
         );
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
+            build_bundle(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
 
         let checked = format!(
             "{bundle}\nif (typeof __modules['/entry.js'].applied !== 'object') throw new Error('dsSpace is not the noop');\n"
@@ -2139,16 +2126,16 @@ export const ds = tokens;
         assert_eq!(infos[1].specifier, "react-dom");
         assert!(infos[1].names.is_empty());
 
-        let stub_exports = HashMap::from([
-            (stub_key("react"), HashSet::from(["space".to_string()])),
-            (stub_key("react-dom"), HashSet::new()),
+        let stub_exports = FxHashMap::from_iter([
+            (stub_key("react"), FxHashSet::from_iter(["space".to_string()])),
+            (stub_key("react-dom"), FxHashSet::default()),
         ]);
         let source_map = single_module(
             "/entry.js",
             "export { space as dsSpace } from 'react';\nexport * from 'react-dom';\n",
         );
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
+            build_bundle(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
 
         let checked = format!(
             "{bundle}\nif (__modules['/entry.js'].dsSpace !== __modules['__stub__/react'].space) throw new Error('dsSpace is not the stub\\'s space');\n"
@@ -2160,7 +2147,7 @@ export const ds = tokens;
     fn export_star_never_assigns_undefined() {
         let source_map = single_module("/entry.js", "export * from 'react';\n");
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &HashMap::new(), &HashMap::new(), "/entry.js").unwrap();
+            build_bundle(&FxHashMap::default(), &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.js").unwrap();
 
         // An unregistered module brings in no name.
         let checked = format!(
@@ -2171,23 +2158,23 @@ export const ds = tokens;
 
     #[test]
     fn export_star_as_namespace_binds_the_name() {
-        let resolved_map = HashMap::from([(
+        let resolved_map = FxHashMap::from_iter([(
             ("/entry.ts".to_string(), "pkg".to_string()),
             "/canonical/pkg.ts".to_string(),
         )]);
-        let source_map = HashMap::from([
+        let source_map = FxHashMap::from_iter([
             ("/entry.ts".to_string(), "export * as ns from 'pkg';\n".to_string()),
             ("/canonical/pkg.ts".to_string(), "export const v = 7;\n".to_string()),
         ]);
-        let (bundle, _) = build_bundle(&resolved_map, &source_map, &HashMap::new(), &HashMap::new(), "/entry.ts").unwrap();
+        let (bundle, _) = build_bundle(&resolved_map, &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.ts").unwrap();
         let checked = format!("{bundle}\nif (__modules['/entry.ts'].ns.v !== 7) throw new Error('ns is not pkg');\n");
         eval_bundle(&checked).expect("`export * as ns` binds pkg's namespace");
 
         let stub_exports =
-            HashMap::from([(stub_key("react"), HashSet::from(["space".to_string()]))]);
+            FxHashMap::from_iter([(stub_key("react"), FxHashSet::from_iter(["space".to_string()]))]);
         let source_map = single_module("/entry.js", "export * as R from 'react';\n");
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
+            build_bundle(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
         let checked = format!(
             "{bundle}\nif (__modules['/entry.js'].R !== __modules['__stub__/react']) throw new Error('R is not the stub');\n"
         );
@@ -2200,8 +2187,8 @@ export const ds = tokens;
         let dep = format!("{}/dep.js", dir);
         let entry = format!("{}/entry.js", dir);
 
-        let specifier_map = HashMap::from([((entry.clone(), "./dep.js".to_string()), dep.clone())]);
-        let source_map = HashMap::from([
+        let specifier_map = FxHashMap::from_iter([((entry.clone(), "./dep.js".to_string()), dep.clone())]);
+        let source_map = FxHashMap::from_iter([
             (dep.clone(), "export const v = 1;\n".to_string()),
             (
                 entry.clone(),
@@ -2211,17 +2198,17 @@ export const ds = tokens;
         ]);
 
         let (bundle, _) =
-            build_bundle(&specifier_map, &source_map, &HashMap::new(), &HashMap::new(), &entry).unwrap();
+            build_bundle(&specifier_map, &source_map, &FxHashMap::default(), &FxHashMap::default(), &entry).unwrap();
 
         eval_bundle(&bundle).expect("a quoted module path must produce an evaluable bundle");
     }
 
     #[test]
     fn stub_specifiers_with_quotes_stay_valid_js() {
-        let stub_exports = HashMap::from([(stub_key("it's-a-module"), HashSet::new())]);
+        let stub_exports = FxHashMap::from_iter([(stub_key("it's-a-module"), FxHashSet::default())]);
         let source_map = single_module("/entry.js", "import x from \"it's-a-module\";\n");
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &stub_exports, &HashMap::new(), "/entry.js").unwrap();
+            build_bundle(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
 
         eval_bundle(&bundle).expect("a quoted stub specifier must produce an evaluable bundle");
     }
@@ -2230,34 +2217,34 @@ export const ds = tokens;
     fn arbitrary_module_namespace_names_stay_valid_js() {
         let source_map = single_module("/entry.js", "const v = 1;\nexport { v as \"it's\" };\n");
         let (bundle, _) =
-            build_bundle(&HashMap::new(), &source_map, &HashMap::new(), &HashMap::new(), "/entry.js").unwrap();
+            build_bundle(&FxHashMap::default(), &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.js").unwrap();
 
         eval_bundle(&bundle).expect("a quoted export name must produce an evaluable bundle");
     }
 
     #[test]
     fn bundle_output_is_stable_across_equal_inputs() {
-        let names_react = HashSet::from(["useMemo".to_string(), "createElement".to_string()]);
-        let names_dom = HashSet::from(["render".to_string()]);
-        let names_jsx = HashSet::from(["jsx".to_string()]);
+        let names_react = FxHashSet::from_iter(["useMemo".to_string(), "createElement".to_string()]);
+        let names_dom = FxHashSet::from_iter(["render".to_string()]);
+        let names_jsx = FxHashSet::from_iter(["jsx".to_string()]);
 
-        // Two maps with identical content but different insertion orders — each
-        // HashMap instance gets its own hasher, so iteration order differs.
-        let mut first_stubs = HashMap::new();
+        // Two maps with identical content but different insertion orders, so
+        // their iteration orders may differ.
+        let mut first_stubs = FxHashMap::default();
         first_stubs.insert(stub_key("react"), names_react.clone());
         first_stubs.insert(stub_key("react-dom"), names_dom.clone());
         first_stubs.insert(stub_key("react/jsx-runtime"), names_jsx.clone());
 
-        let mut second_stubs = HashMap::new();
+        let mut second_stubs = FxHashMap::default();
         second_stubs.insert(stub_key("react/jsx-runtime"), names_jsx);
         second_stubs.insert(stub_key("react-dom"), names_dom);
         second_stubs.insert(stub_key("react"), names_react);
 
         let source_map = single_module("/entry.js", "const value = 1;\n");
         let (first, layout) =
-            build_bundle(&HashMap::new(), &source_map, &first_stubs, &HashMap::new(), "/entry.js").unwrap();
+            build_bundle(&FxHashMap::default(), &source_map, &first_stubs, &FxHashMap::default(), "/entry.js").unwrap();
         let (second, _) =
-            build_bundle(&HashMap::new(), &source_map, &second_stubs, &HashMap::new(), "/entry.js").unwrap();
+            build_bundle(&FxHashMap::default(), &source_map, &second_stubs, &FxHashMap::default(), "/entry.js").unwrap();
 
         assert_eq!(first, second, "stub emission must not depend on map order");
         assert_eq!(
@@ -2273,7 +2260,7 @@ export const ds = tokens;
 
     #[test]
     fn eval_failure_names_owning_module_and_stub_list() {
-        let source_map = HashMap::from([
+        let source_map = FxHashMap::from_iter([
             ("/a.js".to_string(), "const first = 1;\n".to_string()),
             (
                 "/b.js".to_string(),
@@ -2281,14 +2268,14 @@ export const ds = tokens;
             ),
         ]);
         // Force /a.js ahead of /b.js so the failure lands in the second module.
-        let specifier_map = HashMap::from([(
+        let specifier_map = FxHashMap::from_iter([(
             ("/b.js".to_string(), "./a.js".to_string()),
             "/a.js".to_string(),
         )]);
-        let stub_exports = HashMap::from([(stub_key("react"), HashSet::new())]);
+        let stub_exports = FxHashMap::from_iter([(stub_key("react"), FxHashSet::default())]);
 
         let (bundle, layout) =
-            build_bundle(&specifier_map, &source_map, &stub_exports, &HashMap::new(), "/b.js").unwrap();
+            build_bundle(&specifier_map, &source_map, &stub_exports, &FxHashMap::default(), "/b.js").unwrap();
         let error = execute_bundle(&bundle, &layout, "/b.js", None)
             .expect_err("a throwing bundle must fail the load");
 

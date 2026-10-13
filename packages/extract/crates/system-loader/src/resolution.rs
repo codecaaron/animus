@@ -5,11 +5,12 @@
 //! `EXTENSION_POLICY` in `packages/extract/pipeline/extension-policy.ts`,
 //! which source ingestion reads (`node packages/extract/scripts/extension-policy.ts --write`).
 
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::cell::{OnceCell, RefCell};
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
+
+use rustc_hash::FxHashMap;
 
 /// The candidate files a specifier's base path names, in the order they are
 /// tried: the base itself, the base with each appended extension, its
@@ -202,12 +203,34 @@ fn see_lexical(base: &Path, candidate: &str) -> Seen {
     Seen::File
 }
 
-/// What one resolution pass has read: each directory's entry names, and
-/// what each candidate was seen to be from each base.
+/// What one resolution pass has read: each directory it checked, and what
+/// each candidate was seen to be from each base.
 #[derive(Default)]
 struct Pass {
-    listings: HashMap<PathBuf, Option<HashSet<OsString>>>,
-    seen: HashMap<PathBuf, HashMap<String, Seen>>,
+    directories: FxHashMap<PathBuf, Directory>,
+    seen: FxHashMap<PathBuf, FxHashMap<String, Seen>>,
+}
+
+/// What a pass has read of one directory: its entries, listed when the pass
+/// first checks it (None where it cannot be read), and its real path, read
+/// when a file in it is first resolved (None where it cannot be).
+struct Directory {
+    listing: Option<Listing>,
+    real: OnceCell<Option<PathBuf>>,
+}
+
+/// A directory's entry names, each with whether it is a symbolic link.
+type Listing = FxHashMap<OsString, bool>;
+
+impl Pass {
+    /// `directory` as this pass has read it, listed on the first check.
+    fn directory(&mut self, directory: &Path) -> &Directory {
+        if !self.directories.contains_key(directory) {
+            let read = Directory { listing: entry_names(directory), real: OnceCell::new() };
+            self.directories.insert(directory.to_path_buf(), read);
+        }
+        &self.directories[directory]
+    }
 }
 
 thread_local! {
@@ -215,11 +238,12 @@ thread_local! {
     static PASS: RefCell<Option<Pass>> = const { RefCell::new(None) };
 }
 
-/// Runs `run` with each directory [`see_within`] checks listed at most once:
-/// a directory's listing is read the first time the pass checks it and
-/// answers every later check in that pass. A limit: a file another process
-/// writes to that directory after it is listed is not seen until the next
-/// pass. A nested scope shares the open one.
+/// Runs `run` with each directory [`see_within`] or [`real_path`] checks
+/// listed at most once, and resolved to its real path at most once: a
+/// directory's listing is read the first time the pass checks it and
+/// answers every later check in that pass. A limit: a file or link another
+/// process writes to that directory after it is listed is not seen until
+/// the next pass. A nested scope shares the open one.
 pub fn with_listing_cache<T>(run: impl FnOnce() -> T) -> T {
     if PASS.with(|pass| pass.borrow().is_some()) {
         return run();
@@ -248,9 +272,42 @@ fn read_directory(directory: &Path) -> std::io::Result<std::fs::ReadDir> {
     std::fs::read_dir(directory)
 }
 
-/// The entry names `directory` lists; None where it cannot be read.
-fn entry_names(directory: &Path) -> Option<HashSet<OsString>> {
-    read_directory(directory).ok().map(|entries| entries.flatten().map(|entry| entry.file_name()).collect())
+/// The entries `directory` lists; None where it cannot be read.
+fn entry_names(directory: &Path) -> Option<Listing> {
+    read_directory(directory).ok().map(|entries| {
+        entries
+            .flatten()
+            .map(|entry| (entry.file_name(), entry.file_type().is_ok_and(|kind| kind.is_symlink())))
+            .collect()
+    })
+}
+
+/// `path` with its links and `.` segments resolved, as `require.resolve`
+/// and Vite return it; as given when it cannot be. In a pass, a plain path
+/// ([`is_plain`]) whose directory lists its name, spelled exactly, as an
+/// entry that is not a link is its directory's real path, read once per
+/// directory, joined with that name; a link, or a name spelled otherwise
+/// (another case on a case-insensitive disk), is resolved from the disk.
+pub fn real_path(path: PathBuf) -> PathBuf {
+    real_path_in_pass(&path).unwrap_or_else(|| std::fs::canonicalize(&path).unwrap_or(path))
+}
+
+/// [`real_path`] from the open pass's directories; None where the disk
+/// must answer.
+fn real_path_in_pass(path: &Path) -> Option<PathBuf> {
+    if !path.to_str().is_some_and(is_plain) {
+        return None;
+    }
+    let (directory, name) = (path.parent()?, path.file_name()?);
+    PASS.with(|pass| {
+        let mut pass = pass.borrow_mut();
+        let read = pass.as_mut()?.directory(directory);
+        if read.listing.as_ref()?.get(name) != Some(&false) {
+            return None;
+        }
+        let real = read.real.get_or_init(|| std::fs::canonicalize(directory).ok());
+        Some(real.as_ref()?.join(name))
+    })
 }
 
 /// Whether `path` is absolute and spelled with no `.`, `..` or empty
@@ -303,15 +360,7 @@ fn see_plain(base: &Path, candidate: &str) -> Option<Seen> {
 fn lists(directory: &Path, name: &std::ffi::OsStr) -> bool {
     let directory = if directory.as_os_str().is_empty() { Path::new(".") } else { directory };
     PASS.with(|pass| match pass.borrow_mut().as_mut() {
-        Some(Pass { listings, .. }) => {
-            if let Some(names) = listings.get(directory) {
-                return names.as_ref().is_some_and(|names| names.contains(name));
-            }
-            let names = entry_names(directory);
-            let listed = names.as_ref().is_some_and(|names| names.contains(name));
-            listings.insert(directory.to_path_buf(), names);
-            listed
-        }
+        Some(pass) => pass.directory(directory).listing.as_ref().is_some_and(|names| names.contains_key(name)),
         None => read_directory(directory)
             .map(|entries| entries.flatten().any(|entry| entry.file_name() == name))
             .unwrap_or(false),

@@ -7,7 +7,9 @@
 //! import or re-export through it names its export without proving that the
 //! export exists, and an `export *` of it is an opening, never an absence.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A module's position in the table.
 pub type ModuleIndex = usize;
@@ -186,15 +188,15 @@ pub struct ModuleTable<B> {
 
 #[derive(Debug, Clone, Default)]
 struct ExportIndex {
-    local: HashMap<String, usize>,
-    indirect: HashMap<String, usize>,
-    namespace: HashMap<String, usize>,
+    local: FxHashMap<String, usize>,
+    indirect: FxHashMap<String, usize>,
+    namespace: FxHashMap<String, usize>,
 }
 
 impl ExportIndex {
     fn of<B, R>(record: &ModuleRecord<B, R>) -> Self {
-        fn first<'a>(names: impl Iterator<Item = &'a String>) -> HashMap<String, usize> {
-            let mut index = HashMap::new();
+        fn first<'a>(names: impl Iterator<Item = &'a String>) -> FxHashMap<String, usize> {
+            let mut index = FxHashMap::default();
             for (at, name) in names.enumerate() {
                 index.entry(name.clone()).or_insert(at);
             }
@@ -249,7 +251,7 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
 
     /// ResolveExport for export `name` of `module`.
     pub fn resolve_export(&self, module: ModuleIndex, name: &str) -> ExportLookup<B> {
-        self.resolve(module, name, &mut HashSet::new(), &mut Vec::new())
+        self.resolve(module, name, &mut FxHashSet::default(), &mut Vec::new())
     }
 
     /// ResolveExport for export `name` of `module`, with the name each route
@@ -257,7 +259,7 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
     /// declares the binding or exports the namespace.
     pub fn resolve_export_spelled(&self, module: ModuleIndex, name: &str) -> (ExportLookup<B>, Vec<(ModuleIndex, String)>) {
         let mut spelled = Vec::new();
-        let lookup = self.resolve(module, name, &mut HashSet::new(), &mut spelled);
+        let lookup = self.resolve(module, name, &mut FxHashSet::default(), &mut spelled);
         (lookup, spelled)
     }
 
@@ -285,7 +287,7 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
         &self,
         module: ModuleIndex,
         name: &str,
-        set: &mut HashSet<(ModuleIndex, String)>,
+        set: &mut FxHashSet<(ModuleIndex, String)>,
         spelled: &mut Vec<(ModuleIndex, String)>,
     ) -> ExportLookup<B> {
         if !set.insert((module, name.to_string())) {
@@ -363,15 +365,15 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
     /// through a star, with the open stars that may add more.
     pub fn exported_names(&self, module: ModuleIndex) -> Names {
         let mut names = Names { names: Vec::new(), openings: Vec::new() };
-        self.collect_names(module, &mut HashSet::new(), &mut HashSet::new(), &mut names, true);
+        self.collect_names(module, &mut FxHashSet::default(), &mut FxHashSet::default(), &mut names, true);
         names
     }
 
     fn collect_names<'t>(
         &'t self,
         module: ModuleIndex,
-        stars: &mut HashSet<ModuleIndex>,
-        seen: &mut HashSet<&'t str>,
+        stars: &mut FxHashSet<ModuleIndex>,
+        seen: &mut FxHashSet<&'t str>,
         out: &mut Names,
         own: bool,
     ) {
