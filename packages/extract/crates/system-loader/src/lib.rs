@@ -63,9 +63,10 @@ pub struct SystemConfig {
     /// Coded witness entries from the sealed registration record, as one JSON
     /// array — the host shims console away, so this is the only channel.
     pub vocabulary_witnesses: Option<String>,
-    /// Sorted canonical paths of every module evaluated for this system, entry
-    /// included and runtime stubs excluded, and of each `package.json` that
-    /// selected one; plugins use it as the reload set.
+    /// Sorted canonical paths of every file the load read: each module it
+    /// ran, routed through or audited, entry included and runtime stubs
+    /// excluded, and each `package.json` it consulted; plugins use it as the
+    /// reload set.
     pub dependencies: Vec<String>,
     /// Paths the resolution looked for and found absent, ahead of the file
     /// it chose, sorted: creating one changes what the system loads.
@@ -73,6 +74,33 @@ pub struct SystemConfig {
     /// Built-theme token paths, `{ modulePath: { exportName: [paths] } }`,
     /// keyed like `dependencies`. `None` when no module exports a built theme.
     pub source_theme_manifests: Option<String>,
+    /// The load's own findings, as one JSON array of [`LoadFinding`]s: each
+    /// registration in owned code the system does not reach, which the load
+    /// did not apply. `None` when there are none.
+    pub load_findings_json: Option<String>,
+}
+
+/// A registration the load found in owned code it did not run.
+pub const REGISTRATION_UNREACHED: &str = "animus.system.registration-unreached";
+/// A call that may be a registration the load did not run, unproved.
+pub const REGISTRATION_UNPROVED: &str = "animus.system.registration-unproved";
+/// Owned code the load could not audit for registrations.
+pub const AUDIT_INCOMPLETE: &str = "animus.system.audit-incomplete";
+
+/// One finding about code a load did not run, located in its source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadFinding {
+    pub code: &'static str,
+    /// `error` for a proved omission, which fails a strict build; `warn`
+    /// otherwise. Each is reported as a warning by default.
+    pub severity: &'static str,
+    pub file: String,
+    pub line: usize,
+    pub column: usize,
+    /// The registration as written, `registerGlobalStyles`, or empty.
+    pub method: String,
+    pub reason: String,
 }
 
 /// Strip TypeScript types from a complete module, preserving imports,
@@ -779,6 +807,8 @@ pub struct LoadReads {
     /// Paths looked for and found absent, ahead of the file chosen: creating
     /// one changes what the system loads.
     pub missing: BTreeSet<String>,
+    /// What the load found in owned code it did not run.
+    pub findings: Vec<LoadFinding>,
 }
 
 pub fn resolve_all_deps(
@@ -1574,6 +1604,7 @@ fn extract_system_config<'js>(
         // Populated by execute_bundle after config extraction (the registry
         // walk needs the live rquickjs context, not the namespace alone).
         source_theme_manifests: None,
+        load_findings_json: None,
     })
 }
 
@@ -2003,6 +2034,7 @@ pub fn load_system_module_reading(
     });
     reads.read.extend(selecting.read);
     reads.missing.extend(selecting.missing);
+    reads.findings.extend(selecting.findings);
     let selection = selected?;
 
     let (bundle, layout) = build_bundle(&selection)?;
@@ -2015,6 +2047,8 @@ pub fn load_system_module_reading(
     // the system reaches or how its routes resolve.
     config.dependencies = reads.read.iter().cloned().collect();
     config.missing = reads.missing.iter().cloned().collect();
+    config.load_findings_json = (!reads.findings.is_empty())
+        .then(|| serde_json::to_string(&reads.findings).expect("findings serialize"));
 
     Ok(config)
 }

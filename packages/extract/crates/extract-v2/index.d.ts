@@ -204,6 +204,12 @@ export interface NapiSystemConfig {
    * `{ modulePath: { exportName: [token paths] } }`. Absent when none exist.
    */
   sourceThemeManifests?: string
+  /**
+   * The load's own findings as one JSON array: each registration in owned
+   * code the system does not reach, which the load did not apply. Absent
+   * when there are none.
+   */
+  loadFindingsJson?: string
 }
 
 /**

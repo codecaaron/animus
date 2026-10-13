@@ -6,7 +6,7 @@ import {
 } from './discover-packages';
 import { extensionPolicyJson } from './host-extensions';
 import { parseInternalWire } from './internal-wire';
-import { warnLine } from './manifest-diagnostics';
+import { loadFindingDiagnostics, warnLine } from './manifest-diagnostics';
 import { applyPrefix, applyPropertyNames } from './prefix';
 import { splitInvalidPropertyRegistrations } from './property-registrations';
 
@@ -49,8 +49,12 @@ export interface SystemConfig {
   /** Coded witness entries from the sealed system's registration record —
    *  the witness channel, since the evaluation host's console is a no-op. */
   vocabularyWitnessesJson?: string | null;
-  /** Canonical absolute paths of every module the loader evaluated (sorted;
-   *  runtime stubs excluded) — the system-reload membership set. */
+  /** The loader's findings about owned code the system does not reach, as
+   *  one JSON array (`loadFindingDiagnostics` reads it). */
+  loadFindingsJson?: string | null;
+  /** Canonical absolute paths of every file the loader read: each module it
+   *  ran, routed through or audited, and each `package.json` it consulted
+   *  (sorted; runtime stubs excluded) — the system-reload membership set. */
   dependencies?: string[];
   /** Paths the loader looked for and found absent, ahead of the file it
    *  chose: creating one changes what the system loads. */
@@ -82,6 +86,7 @@ export interface SystemLoadReads {
 interface EngineLoadError {
   dependencies?: string[];
   missing?: string[];
+  loadFindingsJson?: string;
   cause?: EngineLoadError;
 }
 
@@ -95,6 +100,20 @@ export function systemLoadReads<Thrown>(error: Thrown): SystemLoadReads {
     dependencies: carrier?.dependencies ?? [],
     missing: carrier?.missing ?? [],
   };
+}
+
+/** A failed load keeps the findings it made before failing: each joins the
+ *  error's message, so the failure reports them too. */
+function reportFindingsOn<Thrown>(error: Thrown): void {
+  // SAFETY: the engine's load error is an `Error` whose `loadFindingsJson`
+  // is the findings wire (the loadSystemModule binding); any other throw
+  // carries none.
+  const thrown = error as (Error & EngineLoadError) | null | undefined;
+  if (!(thrown instanceof Error) || !thrown.loadFindingsJson) return;
+  const reasons = loadFindingDiagnostics(thrown.loadFindingsJson).map(
+    (diagnostic) => diagnostic.message
+  );
+  thrown.message = [thrown.message, ...reasons].join('\n');
 }
 
 /** The loader's evaluation of the system file. A failure on a file that
@@ -119,6 +138,7 @@ function evaluateSystemModule(
       extensions && extensionPolicyJson(extensions)
     );
   } catch (error) {
+    reportFindingsOn(error);
     let source: string;
     try {
       source = readFileSync(systemPath, 'utf-8');
@@ -235,6 +255,7 @@ export function loadSystemConfig(
     globalStyleBlocksJson: config.globalStyleBlocks || null,
     keyframesJson: config.keyframesBlocks || null,
     vocabularyWitnessesJson: config.vocabularyWitnesses || null,
+    loadFindingsJson: config.loadFindingsJson || null,
     dependencies: config.dependencies ?? [],
     missing: config.missing ?? [],
     sourceThemeManifestsJson: config.sourceThemeManifests || null,

@@ -386,6 +386,17 @@ export const VOCABULARY_COLLISION = 'animus.vocabulary.collision';
 export const INVALID_PROPERTY_REGISTRATION =
   'animus.theme.invalid-property-registration';
 
+/** A registration in owned code the exported system does not reach: the
+ *  loader runs only what the system reaches, so it was not applied. */
+export const REGISTRATION_UNREACHED = 'animus.system.registration-unreached';
+
+/** A call in unreached owned code that may be a registration, unproved: it
+ *  sits in a function, or its receiver is not traced to an Animus builder. */
+export const REGISTRATION_UNPROVED = 'animus.system.registration-unproved';
+
+/** Owned code the loader could not check for unreached registrations. */
+export const AUDIT_INCOMPLETE = 'animus.system.audit-incomplete';
+
 /** Minted when a sealed kit with registered vocabulary is consumed through
  *  the deprecated `from()`/`includes:` verbs. */
 export const VOCABULARY_LEGACY_VERB = 'animus.vocabulary.legacy-verb';
@@ -458,6 +469,9 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [VOCABULARY_COLLISION, 'warn'],
   [VOCABULARY_LEGACY_VERB, 'warn'],
   [INVALID_PROPERTY_REGISTRATION, 'error'],
+  [REGISTRATION_UNREACHED, 'error'],
+  [REGISTRATION_UNPROVED, 'warn'],
+  [AUDIT_INCOMPLETE, 'warn'],
   [PROPERTY_FALLBACK_SUPPRESSED, 'info'],
   [PROPERTY_FALLBACK_CHAIN_SUPPRESSED, 'warn'],
   [PROPERTY_UNREGISTERED_ANIMATION, 'info'],
@@ -533,12 +547,48 @@ export function vocabularyWitnessDiagnostics(
   return diagnostics;
 }
 
+/** One finding the system loader reports about owned code it did not run,
+ *  as the loader's wire carries it. */
+type LoadFinding = {
+  code: string;
+  file: string;
+  line: number;
+  column: number;
+  method: string;
+  reason: string;
+};
+
+/** The loader's findings about owned code the system does not reach, each
+ *  located where the code sits: a warning by default, an error-severity
+ *  record for a proved omission, so strict fails on it. */
+export function loadFindingDiagnostics(
+  loadFindingsJson: string | null | undefined
+): ManifestDiagnostic[] {
+  if (!loadFindingsJson) return [];
+  return parseInternalWire<LoadFinding[]>(
+    loadFindingsJson,
+    "loadFindingsJson (the system loader's findings)"
+  ).map(
+    (finding): ManifestDiagnostic => ({
+      file: finding.file,
+      component: finding.method || 'system',
+      kind: 'warn',
+      message: finding.reason,
+      code: finding.code,
+      severity: severityFor(finding.code),
+      ...(finding.line > 0 ? { line: finding.line, column: finding.column } : {}),
+    })
+  );
+}
+
 /** The diagnostics a loaded system's own records carry: vocabulary
- *  witnesses and invalid `@property` registrations. */
+ *  witnesses, invalid `@property` registrations, and the loader's findings
+ *  about owned code the system does not reach. */
 export function systemLoadDiagnostics(
   system: Pick<
     SystemConfig,
     | 'vocabularyWitnessesJson'
+    | 'loadFindingsJson'
     | 'invalidPropertyRegistrations'
     | 'prefixNameConflicts'
     | 'scalesJson'
@@ -572,6 +622,7 @@ export function systemLoadDiagnostics(
   );
   return [
     ...vocabularyWitnessDiagnostics(system.vocabularyWitnessesJson),
+    ...loadFindingDiagnostics(system.loadFindingsJson),
     ...registrations,
     ...conflicts,
     ...tokenCollisionDiagnostics(system),

@@ -116,6 +116,10 @@ pub struct NapiSystemConfig {
     /// Per-module built-theme token manifests, shaped
     /// `{ modulePath: { exportName: [token paths] } }`. Absent when none exist.
     pub source_theme_manifests: Option<String>,
+    /// The load's own findings as one JSON array: each registration in owned
+    /// code the system does not reach, which the load did not apply. Absent
+    /// when there are none.
+    pub load_findings_json: Option<String>,
 }
 
 /// A failed load throws an `Error` carrying `dependencies` (the files it
@@ -165,6 +169,7 @@ pub fn load_system_module(
         dependencies: config.dependencies,
         missing: Some(config.missing),
         source_theme_manifests: config.source_theme_manifests,
+        load_findings_json: config.load_findings_json,
     })
 }
 
@@ -176,6 +181,10 @@ fn load_failure(env: &napi::Env, message: String, reads: animus_system_loader::L
         let mut error = env.create_error(napi::Error::from_reason(message.clone()))?;
         error.set_named_property("dependencies", reads.read.iter().cloned().collect::<Vec<_>>())?;
         error.set_named_property("missing", reads.missing.iter().cloned().collect::<Vec<_>>())?;
+        if !reads.findings.is_empty() {
+            let findings = serde_json::to_string(&reads.findings).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+            error.set_named_property("loadFindingsJson", findings)?;
+        }
         Ok(napi::Error::from(error.to_unknown()))
     };
     build().unwrap_or_else(|_| napi::Error::from_reason(message))

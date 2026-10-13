@@ -107,6 +107,8 @@ pub(crate) struct Loader<'c> {
     table: Option<Linked>,
     /// The nearest `package.json` name of each directory asked.
     package_names: FxHashMap<std::path::PathBuf, Option<String>>,
+    /// The owner package directories, once the audit has asked.
+    owners: Option<FxHashSet<std::path::PathBuf>>,
 }
 
 /// The table over every acquired module, with its key order.
@@ -130,6 +132,7 @@ impl<'c> Loader<'c> {
             asked: FxHashMap::default(),
             table: None,
             package_names: FxHashMap::default(),
+            owners: None,
         }
     }
 
@@ -221,6 +224,7 @@ impl<'c> Loader<'c> {
             asks = waiting;
             spaces = waiting_spaces;
         }
+        self.audit(entry, &root);
         self.selection(entry, root)
     }
 
@@ -821,6 +825,27 @@ impl<'c> Loader<'c> {
         self.animus_local(module, &program, local, depth)
     }
 
+    /// Whether property `key` of the object literal `binding` of `module`
+    /// holds an Animus value.
+    fn animus_property(&mut self, module: &str, binding: &str, key: &str, depth: usize) -> Result<bool, String> {
+        let source = self.modules[module].raw.clone();
+        let allocator = Allocator::default();
+        let program = Parser::new(&allocator, &source, source_type(module)).parse().program;
+        let value = match declaration(&program, binding) {
+            Some(Decl::Init(Expression::ObjectExpression(literal))) => literal.properties.iter().find_map(|property| match property {
+                ObjectPropertyKind::ObjectProperty(property) if !property.computed && property.key.static_name().as_deref() == Some(key) => {
+                    Some(&property.value)
+                }
+                _ => None,
+            }),
+            _ => None,
+        };
+        match value {
+            Some(value) => self.animus_value(module, &program, value, depth + 1),
+            None => self.animus_local(module, &program, binding, depth + 1),
+        }
+    }
+
     /// Whether `local`, declared in `program`, holds an Animus value.
     fn animus_local(&mut self, module: &str, program: &Program<'_>, local: &str, depth: usize) -> Result<bool, String> {
         Ok(match declaration(program, local) {
@@ -868,8 +893,256 @@ impl<'c> Loader<'c> {
                 },
             },
             Expression::Identifier(identifier) => self.animus_local(module, program, &identifier.name, depth + 1)?,
-            _ => false,
+            // A member of an Animus value (a kit's `.system`), or a property of
+            // a module-level object literal that holds one.
+            expression => match expression.as_member_expression() {
+                Some(member) => {
+                    let property = member.static_property_name().and_then(|key| match member.object().get_inner_expression() {
+                        Expression::Identifier(object) => match declaration(program, &object.name) {
+                            Some(Decl::Init(Expression::ObjectExpression(literal))) => literal.properties.iter().find_map(|property| match property {
+                                ObjectPropertyKind::ObjectProperty(property)
+                                    if !property.computed && property.key.static_name().as_deref() == Some(key) =>
+                                {
+                                    Some(&property.value)
+                                }
+                                _ => None,
+                            }),
+                            _ => None,
+                        },
+                        _ => None,
+                    });
+                    match property {
+                        Some(value) => self.animus_value(module, program, value, depth + 1)?,
+                        None => {
+                            // An imported object's property, traced in its module.
+                            let imported = match (member.static_property_name(), member.object().get_inner_expression()) {
+                                (Some(key), Expression::Identifier(object)) => match declaration(program, &object.name) {
+                                    Some(Decl::Import { spec, name: Some(name) }) => Some((spec, name, key.to_string())),
+                                    _ => None,
+                                },
+                                _ => None,
+                            };
+                            match imported {
+                                Some((spec, name, key)) => match self.target(module, &spec) {
+                                    Target::Module(path) => {
+                                        self.acquire(&path)?;
+                                        match self.terminal(&path, &name)? {
+                                            Some((at, binding)) => self.animus_property(&at, &binding, &key, depth + 1)?,
+                                            None => false,
+                                        }
+                                    }
+                                    _ => false,
+                                },
+                                None => self.animus_value(module, program, member.object(), depth + 1)?,
+                            }
+                        }
+                    }
+                }
+                None => false,
+            },
         })
+    }
+
+    /// Reports each registration in owned code the load did not run: the
+    /// targets of a retained module's requests that do not run, the routed
+    /// modules whose bodies never run, and, transitively, owned modules they
+    /// import. Third-party code is not read. An audit never fails the load.
+    fn audit(&mut self, entry: &str, root: &str) {
+        let owners = self.owner_dirs(entry);
+        let runs = |modules: &FxHashMap<String, Module>, path: &str| modules.get(path).is_some_and(|module| module.retained);
+        let mut queue: VecDeque<String> = VecDeque::new();
+        let mut paths: Vec<String> = self.modules.keys().cloned().collect();
+        paths.sort();
+        for path in &paths {
+            if runs(&self.modules, path) {
+                for spec in self.modules[path].record.requests.clone() {
+                    if let Target::Module(target) = self.target(path, &spec) {
+                        queue.push_back(target);
+                    }
+                }
+            } else {
+                queue.push_back(path.clone());
+            }
+        }
+        let mut seen: FxHashSet<String> = FxHashSet::default();
+        while let Some(path) = queue.pop_front() {
+            if !seen.insert(path.clone()) || runs(&self.modules, &path) || !self.owned(&path, &owners) {
+                continue;
+            }
+            let source = match self.modules.get(&path) {
+                Some(module) => module.raw.clone(),
+                None => {
+                    self.reads.read.insert(path.clone());
+                    match resolution::read_source(&path) {
+                        Ok(source) => source,
+                        Err(error) => {
+                            self.incomplete(&path, &format!("it could not be read ({error})"));
+                            continue;
+                        }
+                    }
+                }
+            };
+            self.audit_source(&path, &source, root);
+            for spec in record_of(&source, &path).requests {
+                if let Target::Module(target) = self.target(&path, &spec) {
+                    queue.push_back(target);
+                }
+            }
+        }
+    }
+
+    /// The registrations `source` makes, as findings: proved when the call
+    /// runs as its module evaluates and its receiver traces to an Animus
+    /// builder; unproved when it sits in a function or its receiver cannot be
+    /// traced. A same-named method of a third-party value is not one.
+    fn audit_source(&mut self, path: &str, source: &str, root: &str) {
+        const REGISTRATIONS: [&str; 2] = ["registerGlobalStyles", "registerKeyframes"];
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, source_type(path)).parse();
+        if !parsed.diagnostics.is_empty() {
+            self.incomplete(path, "it does not parse");
+            return;
+        }
+        let program = parsed.program;
+        let semantic = SemanticBuilder::new().with_build_nodes(true).build(&program).semantic;
+        let scoping = semantic.scoping();
+        for node in semantic.nodes().iter() {
+            let AstKind::CallExpression(call) = node.kind() else { continue };
+            // The method and the value it is called on, as far as the call
+            // shows them: `x.register…()`, `x.register….call()`, or a
+            // destructured or imported `register…()`.
+            let callee = call.callee.get_inner_expression();
+            let found: Option<(String, Option<&Expression<'_>>)> = match callee.as_member_expression() {
+                Some(member) => match member.static_property_name() {
+                    Some(name) if REGISTRATIONS.contains(&name) => Some((name.to_string(), Some(member.object()))),
+                    Some("call" | "apply") => member.object().as_member_expression().and_then(|inner| {
+                        inner
+                            .static_property_name()
+                            .filter(|name| REGISTRATIONS.contains(name))
+                            .map(|name| (name.to_string(), Some(inner.object())))
+                    }),
+                    _ => None,
+                },
+                None => match callee {
+                    Expression::Identifier(identifier) => match declaration(&program, &identifier.name) {
+                        Some(Decl::Destructured { key, from }) if REGISTRATIONS.contains(&key.as_str()) => Some((key, Some(from))),
+                        Some(Decl::Import { name: Some(name), .. }) if REGISTRATIONS.contains(&name.as_str()) => Some((name, None)),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+            };
+            let Some((method, receiver)) = found else { continue };
+            if receiver.is_some_and(|receiver| self.third_party(path, &program, receiver)) {
+                continue;
+            }
+            let at_top = semantic.nodes().ancestor_kinds(node.id()).all(|kind| !kind.is_function_like());
+            let traced = match receiver {
+                Some(receiver) => self.animus_value(path, &program, receiver, 0).unwrap_or(false),
+                None => false,
+            };
+            let (line, column) = line_column(source, call.span.start);
+            let place = format!("{path}:{line}:{column}");
+            let finding = if at_top && traced {
+                crate::LoadFinding {
+                    code: crate::REGISTRATION_UNREACHED,
+                    severity: "error",
+                    reason: format!(
+                        "{method} at {place} runs when its module is imported, but the exported system '{root}' \
+                         does not reach that module, so the load did not apply it: a registration outside the \
+                         system's chain is ignored. Register it in the chain '{root}' is sealed from \
+                         ({REGISTRATION_UNREACHED})",
+                        REGISTRATION_UNREACHED = crate::REGISTRATION_UNREACHED
+                    ),
+                    file: path.to_string(),
+                    line,
+                    column,
+                    method,
+                }
+            } else {
+                let why = if at_top { "its receiver is not traced to an Animus builder" } else { "it sits in a function" };
+                crate::LoadFinding {
+                    code: crate::REGISTRATION_UNPROVED,
+                    severity: "warn",
+                    reason: format!(
+                        "{method} at {place} is in code the exported system '{root}' does not reach, so the load \
+                         did not run it ({why}). If it registers into the system, register it in the chain '{root}' \
+                         is sealed from ({REGISTRATION_UNPROVED})",
+                        REGISTRATION_UNPROVED = crate::REGISTRATION_UNPROVED
+                    ),
+                    file: path.to_string(),
+                    line,
+                    column,
+                    method,
+                }
+            };
+            self.reads.findings.push(finding);
+        }
+        let _ = scoping;
+    }
+
+    fn incomplete(&mut self, path: &str, why: &str) {
+        self.reads.findings.push(crate::LoadFinding {
+            code: crate::AUDIT_INCOMPLETE,
+            severity: "warn",
+            file: path.to_string(),
+            line: 0,
+            column: 0,
+            method: String::new(),
+            reason: format!(
+                "the load could not check {path} for registrations the system does not reach: {why} ({})",
+                crate::AUDIT_INCOMPLETE
+            ),
+        });
+    }
+
+    /// Whether a receiver's root binding is imported from a third-party
+    /// package: one neither owned nor `@animus-ui/system`.
+    fn third_party(&mut self, path: &str, program: &Program<'_>, receiver: &Expression<'_>) -> bool {
+        let mut root = receiver.get_inner_expression();
+        loop {
+            root = match root {
+                Expression::CallExpression(call) => match call.callee.get_inner_expression().as_member_expression() {
+                    Some(member) => member.object().get_inner_expression(),
+                    None => return false,
+                },
+                expression => match expression.as_member_expression() {
+                    Some(member) => member.object().get_inner_expression(),
+                    None => break,
+                },
+            };
+        }
+        let Expression::Identifier(identifier) = root else { return false };
+        let Some(Decl::Import { spec, .. }) = declaration(program, &identifier.name) else { return false };
+        if spec.starts_with('.') || spec.starts_with('/') {
+            return false;
+        }
+        let Target::Module(target) = self.target(path, &spec) else { return false };
+        let owners = self.owners.clone().unwrap_or_default();
+        !self.owned(&target, &owners) && self.package_name(Path::new(&target)).as_deref() != Some("@animus-ui/system")
+    }
+
+    /// The package directories whose code is owned: the entry's package and
+    /// the session's declared workspaces.
+    fn owner_dirs(&mut self, entry: &str) -> FxHashSet<std::path::PathBuf> {
+        let mut owners: FxHashSet<std::path::PathBuf> = self
+            .context
+            .workspaces
+            .values()
+            .map(|dir| std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone()))
+            .collect();
+        owners.extend(package_dir(Path::new(entry)));
+        self.owners = Some(owners.clone());
+        owners
+    }
+
+    /// Whether `path` is owned code: in an owner package, or in a source kit
+    /// (a package declaring the `animus` source condition), wherever it is
+    /// installed. Each manifest that decides it is read evidence.
+    fn owned(&mut self, path: &str, owners: &FxHashSet<std::path::PathBuf>) -> bool {
+        let Some(dir) = package_dir(Path::new(path)) else { return false };
+        self.reads.read.insert(dir.join("package.json").to_string_lossy().to_string());
+        owners.contains(&dir) || crate::declares_kit_source(&dir)
     }
 
     /// Whether `spec`, written in `module`, names the `@animus-ui/system`
@@ -1144,6 +1417,27 @@ fn close_stub_stars(mut known: Vec<Terminal<String>>, openings: Vec<crate::modul
         1 => ExportLookup::Resolved(known.remove(0)),
         _ => ExportLookup::Ambiguous(known),
     }
+}
+
+/// The directory of the nearest `package.json` above `file`.
+fn package_dir(file: &Path) -> Option<std::path::PathBuf> {
+    let mut dir = file.parent()?.to_path_buf();
+    loop {
+        if dir.join("package.json").is_file() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+/// A byte offset's 1-based line and column (in characters).
+fn line_column(source: &str, offset: u32) -> (usize, usize) {
+    let before = &source[..offset as usize];
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().map_or(0, |text| text.chars().count()) + 1;
+    (line, column)
 }
 
 fn is_typescript(path: &str) -> bool {
