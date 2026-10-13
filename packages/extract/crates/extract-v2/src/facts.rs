@@ -120,7 +120,7 @@ impl KeySource {
 /// Every property of the object literals each named top-level `const`
 /// builds, keyed by the declaration's binding, as written: where the global
 /// blocks those declarations declare are located. A name an `export { local
-/// as name }` gives a declaration finds it by its local binding; a name
+/// as name }` gives a declaration finds it by its local binding; a value
 /// `export { a as name } from` gives is another module's `a`, never a local.
 pub fn declaration_keys(program: &Program<'_>, source: &str, names: &BTreeSet<String>) -> BTreeMap<String, Vec<KeySource>> {
     use oxc::ast::ast::{BindingPattern, Declaration, Statement, VariableDeclaration};
@@ -128,10 +128,11 @@ pub fn declaration_keys(program: &Program<'_>, source: &str, names: &BTreeSet<St
         .body
         .iter()
         .filter_map(|statement| match statement {
-            Statement::ExportFromDeclaration(export) => Some(&export.specifiers),
+            Statement::ExportFromDeclaration(export) if export.export_kind.is_value() => Some(&export.specifiers),
             _ => None,
         })
         .flatten()
+        .filter(|specifier| specifier.export_kind.is_value())
         .map(|specifier| specifier.exported.name().to_string())
         .collect();
     let mut wanted: BTreeMap<String, String> =

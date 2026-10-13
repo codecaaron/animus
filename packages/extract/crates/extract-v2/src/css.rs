@@ -786,55 +786,40 @@ pub fn generate_composed_variant_css<'a>(
 
             // The shared axes' rules follow the child's own rule order, so an
             // extension's own options win inside the family as they do
-            // outside it.
-            let rules: Vec<_> = child_css
+            // outside it. The root's default selects one of the child's
+            // options, so its rule closes the run of that axis's rules that
+            // holds the option, wherever the child's own default rule sits:
+            // within a run only one rule can apply.
+            let mut output = String::new();
+            let mut pending: Option<(&str, &ResolvedStyles)> = None;
+            let rules = child_css
                 .ordered_variant_rules()
                 .into_iter()
-                .filter(|(variant, _, _)| family.shared_keys.contains(&variant.prop))
-                .collect();
-            let mut output = String::new();
-            for (at, &(variant, option, styles)) in rules.iter().enumerate() {
-                if let Some(option_name) = option {
-                    write_composed_rule_pair(
-                        &mut output,
-                        family.root_class,
-                        child_class,
-                        &variant.prop,
-                        option_name,
-                        styles,
-                        breakpoints,
-                    );
+                .filter(|(variant, _, _)| family.shared_keys.contains(&variant.prop));
+            for (variant, option, styles) in rules {
+                let Some(option_name) = option else { continue };
+                if let Some((prop, default_styles)) = pending.filter(|(prop, _)| *prop != variant.prop) {
+                    write_composed_default_inheritance_rule(&mut output, family.root_class, child_class, prop, default_styles, breakpoints);
+                    pending = None;
                 }
-                // The root's default takes the place of the child's default
-                // rule, or follows the axis's last option when the child
-                // writes none.
-                let default_here = match option {
-                    None => true,
-                    Some(_) => {
-                        let axis = |(other, _, _): &&(&VariantCss, Option<&str>, &ResolvedStyles)| other.prop == variant.prop;
-                        !rules[at + 1..].iter().any(|rule| axis(&rule))
-                            && !rules.iter().any(|rule| axis(&rule) && rule.1.is_none())
-                    }
-                };
-                if !default_here {
-                    continue;
-                }
-                let Some(default_styles) = root_css
-                    .and_then(|root| root.variants.iter().find(|v| v.prop == variant.prop))
-                    .and_then(|root_variant| root_variant.default_option.as_deref())
-                    .and_then(|default_name| variant.options.iter().find(|(n, _)| n == default_name))
-                    .map(|(_, styles)| styles)
-                else {
-                    continue;
-                };
-                write_composed_default_inheritance_rule(
+                write_composed_rule_pair(
                     &mut output,
                     family.root_class,
                     child_class,
                     &variant.prop,
-                    default_styles,
+                    option_name,
+                    styles,
                     breakpoints,
                 );
+                let root_default = root_css
+                    .and_then(|root| root.variants.iter().find(|v| v.prop == variant.prop))
+                    .and_then(|root_variant| root_variant.default_option.as_deref());
+                if root_default == Some(option_name) {
+                    pending = Some((&variant.prop, styles));
+                }
+            }
+            if let Some((prop, default_styles)) = pending {
+                write_composed_default_inheritance_rule(&mut output, family.root_class, child_class, prop, default_styles, breakpoints);
             }
             if !output.is_empty() {
                 rules_by_child.push((child_class, output));
