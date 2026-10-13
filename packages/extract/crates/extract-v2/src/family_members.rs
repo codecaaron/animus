@@ -324,6 +324,12 @@ impl<'f> ObjectMembers<'f> {
         self.table(&object).members.get(slot).cloned()
     }
 
+    /// What `tag`, written in `file`, renders: as a member tag (`member`),
+    /// or as a facade's own tag.
+    pub(crate) fn of_tag(&mut self, file: &str, tag: &str, member: bool) -> Option<Member> {
+        if member { self.member(file, tag) } else { self.root(file, tag) }
+    }
+
     /// What `tag`, written in `file`, renders when it names a facade built
     /// with `Object.assign(T, …)`. The call returns the object `T` holds, so
     /// `<X>` renders it whatever is written onto it later: `T`'s component,

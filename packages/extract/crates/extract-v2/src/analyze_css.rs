@@ -628,9 +628,10 @@ const TRANSFORM_UNSEALED_BINDING: &str = "animus.transform.unsealed-binding";
 /// stylesheet and the system builder stays in the bundle. Valid runtime
 /// uses exist, so build strictness never escalates it.
 const RUNTIME_BUILDER_REFERENCE: &str = "animus.extract.runtime-builder-reference";
-/// A warning, never escalated by build strictness: system props on a tag
-/// whose import resolves to no extracted component still reach the browser
-/// through the dynamic-slot fallback, without their static utility classes.
+/// Retired: never emitted. A value a render routes to an extracted component
+/// through a declaration usage attribution misses now takes that
+/// component's static class (`RoutedValue`). Kept in the code table so
+/// configuration naming it stays valid.
 const UNATTRIBUTED_SYSTEM_PROPS: &str = "animus.usage.unattributed-system-props";
 /// A warning, never escalated: props a `cloneElement` call passes to an
 /// element usage cannot name, from a value it cannot list, are not tracked,
@@ -702,7 +703,8 @@ pub(crate) const STATIC_CSS_INVALID_SHAPE: &str = "animus.static-css.invalid-sha
 /// from 0 to 100 keeps its old reading, an integer or nothing.
 const INVALID_OPACITY_MODIFIER: &str = "animus.style.invalid-opacity-modifier";
 
-/// Every code the engine emits, with its severity: `error` fails strict
+/// Every code the engine emits, or once emitted and retired (configuration
+/// naming it stays valid), with its severity: `error` fails strict
 /// builds, `warn` never does, and a host prints `info` only in its verbose
 /// log. Codes group by their `animus.<area>.` prefix.
 /// The native module publishes this table (`diagnosticCodes`), so a host
@@ -4067,102 +4069,138 @@ fn spread_wrapper_targets(
     (published, proxies, forwards)
 }
 
-/// One warning per tag and prop set for a capitalised tag, rendered as an
-/// element or by `createElement`, that resolves to no extracted component:
-/// one `file` imports from an analyzed module, or a top-level function the
-/// attribution leaves out (`attributed`), such as a wrapper of an imported
-/// wrapper. It names only the system props the component it reaches takes
-/// and really loses (`LostThrough`). An import outside the analysis never
-/// warns.
+/// A literal system-prop value renders pass to a declaration usage
+/// attribution misses, the extracted component that the declaration's route
+/// carries it to (named as the module that hands it on reads it), and the
+/// offset of each render. It takes that component's static class, as if
+/// written on it; usage proofs never read it, so it can only add a class.
+struct RoutedValue<'u> {
+    prop: &'u str,
+    value: &'u Value,
+    component: String,
+    uses: Vec<u32>,
+}
+
+/// `file`'s routed values, one per component, prop and value. A render
+/// routes them when its tag resolves to no extracted component and is:
+/// - a capitalised tag, rendered as an element or by `createElement`, that
+///   `file` imports from an analyzed module, or a top-level function the
+///   attribution leaves out (`attributed`), such as a wrapper of an
+///   imported wrapper;
+/// - a member tag, or a facade's own tag, read through an object whose
+///   member named an extracted component when the object was built but
+///   which something may have changed since, or names a function component
+///   forwarding its props.
+///
+/// Only system props the component reached takes are routed
+/// (`LostThrough`); an import outside the analysis routes nothing.
 /// `takes_system_prop(file, name, prop)`: whether `name`, as `file` declares
 /// or imports it, is an extracted component taking `prop` as a system prop.
 #[allow(clippy::too_many_arguments)]
-fn unattributed_system_props(
+fn routed_values<'u>(
     file: &str,
-    ff: &FileFacts,
+    ff: &'u FileFacts,
     unattributed_imports: &[&str],
     attributed: &dyn Fn(&str) -> bool,
-    files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
+    member_expr_bindings: &FxHashMap<String, String>,
+    objects: &mut crate::family_members::ObjectMembers<'_>,
+    (files, inputs): (&BTreeMap<String, FileFacts>, &'u CssInputs),
     links: &crate::link::ProjectLinks,
+    component_takes: &dyn Fn(&str, &str) -> bool,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
-) -> Vec<CssDiagnostic> {
-    let mut reported: FxHashSet<(&str, Vec<&str>)> = FxHashSet::default();
-    let mut warnings = Vec::new();
-    for render in tag_renders(ff, inputs) {
-        let TagRender { tag, member: false, props, at, origin, .. } = render else {
-            continue;
-        };
+) -> Vec<RoutedValue<'u>> {
+    use crate::family_members::Member;
+    let mut routed: Vec<RoutedValue<'u>> = Vec::new();
+    let mut index: FxHashMap<(String, &str, String), usize> = FxHashMap::default();
+    let mut route = |prop: &'u str, value: &'u Value, component: String, at: u32| {
+        let key = (component.clone(), prop, serde_json::to_string(value).unwrap_or_default());
+        let at_index = *index.entry(key).or_insert_with(|| {
+            routed.push(RoutedValue { prop, value, component, uses: Vec::new() });
+            routed.len() - 1
+        });
+        routed[at_index].uses.push(at);
+    };
+    for TagRender { tag, member, call, values, at, origin } in tag_renders(ff, inputs) {
         // A name a parameter or a nested binding shadows is not the import.
         let imported = unattributed_imports.contains(&tag) && origin.is_none_or(|origin| origin == TagOrigin::Import);
         let local = origin == Some(TagOrigin::TopLevel) && !attributed(tag);
-        if !tag.starts_with(|c: char| c.is_ascii_uppercase()) || !(imported || local) {
+        if !member && tag.starts_with(|c: char| c.is_ascii_uppercase()) && (imported || local) {
+            if let Some(lost) = lost_through_binding(file, tag, files, inputs, links) {
+                for (prop, value, component) in route_values(&values, &lost, (files, inputs), links, takes_system_prop) {
+                    route(prop, value, component, at);
+                }
+            }
+        }
+        if member_expr_bindings.contains_key(tag) {
             continue;
         }
-        let Some((declaration_file, declaration, lost)) = lost_through_binding(file, tag, files, inputs, links) else {
-            continue;
-        };
-        warnings.extend(lost_props_warning(
-            file,
-            tag,
-            at,
-            props,
-            (&declaration_file, &declaration, &lost),
-            (files, inputs),
-            links,
-            takes_system_prop,
-            &mut reported,
-        ));
+        // An element or a `createElement` call of a bound member, or an
+        // element of an unstable object's member.
+        match objects.of_tag(file, tag, member) {
+            Some(Member::Unstable(component, _)) if !call => {
+                for &(prop, value) in values.iter().filter(|(prop, _)| component_takes(&component, prop)) {
+                    route(prop, value, binding_of(&component).to_string(), at);
+                }
+            }
+            Some(Member::Bound { module, binding }) if member => {
+                if let Some(lost) = lost_through_binding(&module, &binding, files, inputs, links) {
+                    for (prop, value, component) in route_values(&values, &lost, (files, inputs), links, takes_system_prop) {
+                        route(prop, value, component, at);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
-    warnings
+    routed
 }
 
 /// A tag a module renders, as an element or by `createElement`: the name or
-/// dotted path as written, the registered system props it is known to pass,
-/// and where.
+/// dotted path as written, the literal values of registered system props it
+/// is known to pass, and where.
 struct TagRender<'u> {
     tag: &'u str,
     member: bool,
     call: bool,
-    props: Vec<&'u str>,
+    values: Vec<(&'u str, &'u Value)>,
     at: u32,
     /// Where the tag's name is bound, when the facts were collected with
     /// the file's scopes.
     origin: Option<TagOrigin>,
 }
 
-/// Every tag `ff` renders with the system props it passes, in usage order.
-/// A `createElement` call whose props are not known passes none.
+/// Every tag `ff` renders passing a system-prop value, with those values,
+/// in usage order. A `createElement` call whose props are not known passes
+/// none.
 fn tag_renders<'u>(ff: &'u FileFacts, inputs: &'u CssInputs) -> impl Iterator<Item = TagRender<'u>> {
-    ff.usage_for_analysis().iter().filter_map(move |usage| match usage {
-        UsageFact::Element { tag, attrs, span, origin, .. } => {
-            let (tag, member) = match tag {
-                TagFact::Ident(tag) => (tag.as_str(), false),
-                TagFact::Member(tag) => (tag.as_str(), true),
-            };
-            Some(TagRender {
-                tag,
-                member,
-                call: false,
-                props: passed_system_props(attrs, inputs).collect(),
-                at: span.0,
-                origin: *origin,
-            })
-        }
-        UsageFact::CreateElement { ident, member, props: Some(props), clone: false, at, origin, .. } => {
-            let (tag, is_member) = match (ident, member) {
-                (Some(ident), _) => (ident.as_str(), false),
-                (None, Some(member)) => (member.as_str(), true),
-                (None, None) => return None,
-            };
-            let props = props
-                .iter()
-                .map(|(name, _)| name.as_str())
-                .filter(|name| inputs.config.contains_key(*name))
-                .collect();
-            Some(TagRender { tag, member: is_member, call: true, props, at: *at, origin: *origin })
-        }
-        _ => None,
+    let system = |name: &str| inputs.config.contains_key(name);
+    ff.usage_for_analysis().iter().filter_map(move |usage| {
+        let render = match usage {
+            UsageFact::Element { tag, attrs, span, origin, .. } => {
+                let (tag, member) = match tag {
+                    TagFact::Ident(tag) => (tag.as_str(), false),
+                    TagFact::Member(tag) => (tag.as_str(), true),
+                };
+                let values = attrs
+                    .iter()
+                    .filter(|attr| !attr.skip && system(&attr.name))
+                    .flat_map(|attr| attr.class_values().map(|value| (attr.name.as_str(), value)))
+                    .collect();
+                TagRender { tag, member, call: false, values, at: span.0, origin: *origin }
+            }
+            UsageFact::CreateElement { ident, member, props: Some(_), literals, clone: false, at, origin, .. } => {
+                let (tag, is_member) = match (ident, member) {
+                    (Some(ident), _) => (ident.as_str(), false),
+                    (None, Some(member)) => (member.as_str(), true),
+                    (None, None) => return None,
+                };
+                let values =
+                    literals.iter().filter(|(name, _)| system(name)).map(|(name, value)| (name.as_str(), value)).collect();
+                TagRender { tag, member: is_member, call: true, values, at: *at, origin: *origin }
+            }
+            _ => return None,
+        };
+        (!render.values.is_empty()).then_some(render)
     })
 }
 
@@ -4201,7 +4239,7 @@ fn lost_through_export<'f>(
 
 /// The extracted component taking `prop` that `lost`, read in `file`, hands
 /// it to: a target itself, or the one a target that loses it reaches in
-/// turn, with that target.
+/// turn.
 fn component_reached(
     file: &str,
     lost: &LostThrough<'_>,
@@ -4210,185 +4248,44 @@ fn component_reached(
     links: &crate::link::ProjectLinks,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
     visited: &mut FxHashSet<(String, String)>,
-) -> Option<(String, Option<String>)> {
+) -> Option<String> {
     lost.reaching(prop).into_iter().find_map(|target| {
         if takes_system_prop(file, target, prop) {
-            return Some((target.clone(), None));
+            return Some(target.clone());
         }
         let (next_file, next, next_lost) = lost_through_binding(file, target, files, inputs, links)?;
         if !visited.insert((next_file.clone(), next)) {
             return None;
         }
-        let (component, _) = component_reached(&next_file, &next_lost, prop, (files, inputs), links, takes_system_prop, visited)?;
-        Some((component, Some(target.clone())))
+        component_reached(&next_file, &next_lost, prop, (files, inputs), links, takes_system_prop, visited)
     })
 }
 
-/// The warning for `tag` passing `props` to `declaration`, which loses them
-/// through `lost`, once per tag and set of the props it really loses.
-#[allow(clippy::too_many_arguments)]
-fn lost_props_warning<'u>(
-    file: &str,
-    tag: &'u str,
-    at: u32,
-    props: Vec<&'u str>,
-    (declaration_file, declaration, lost): (&str, &str, &LostThrough<'_>),
+/// Each of `values` a declaration hands on through `lost`, read in its
+/// declaring file, with the extracted component taking its prop that the
+/// route reaches.
+fn route_values<'u>(
+    values: &[(&'u str, &'u Value)],
+    (declaration_file, declaration, lost): &(String, String, LostThrough<'_>),
     analysis: (&BTreeMap<String, FileFacts>, &CssInputs),
     links: &crate::link::ProjectLinks,
     takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
-    reported: &mut FxHashSet<(&'u str, Vec<&'u str>)>,
-) -> Option<CssDiagnostic> {
-    let takes = |prop: &str| {
-        let mut visited = FxHashSet::from_iter([(declaration_file.to_string(), declaration.to_string())]);
-        component_reached(declaration_file, lost, prop, analysis, links, takes_system_prop, &mut visited)
-    };
-    let mut props: Vec<&str> = props.into_iter().filter(|prop| takes(prop).is_some()).collect();
-    props.sort_unstable();
-    props.dedup();
-    if props.is_empty() {
-        return None;
-    }
-    let listed = props.join(", ");
-    let (target, via) = props.iter().find_map(|prop| takes(prop)).unwrap_or_default();
-    // The first hop surely reaches the component, or the name it reaches
-    // the component through.
-    let surely = props.iter().any(|prop| {
-        lost.surely_reaches(prop, |name| Some(name) == via.as_ref() || takes_system_prop(declaration_file, name, prop))
-    });
-    if !reported.insert((tag, props)) {
-        return None;
-    }
-    let how = match (lost, via) {
-        (LostThrough::Alias(_), None) => format!(
-            "an alias of the extracted component {target} that usage tracking does not follow"
-        ),
-        (LostThrough::Alias(_), Some(via)) => format!(
-            "an alias of {via} that usage tracking does not follow, which reaches the extracted component {target}"
-        ),
-        (LostThrough::Spread(_), None) if surely => format!(
-            "a function component that forwards them by spread to the extracted component {target}"
-        ),
-        (LostThrough::Spread(_), Some(via)) if surely => format!(
-            "a function component that forwards them by spread to {via}, which reaches the extracted component {target}"
-        ),
-        (LostThrough::Spread(_), None) => format!(
-            "a function component that may forward them to the extracted component {target}, \
-             spreading what a call it passes its props to returns"
-        ),
-        (LostThrough::Spread(_), Some(via)) => format!(
-            "a function component that may forward them to {via}, which reaches the extracted \
-             component {target}, spreading what a call it passes its props to returns"
-        ),
-    };
-    Some(
-        diagnostic(
-            file,
-            tag,
-            "warn",
-            format!(
-                "system props {listed} get no static utility classes: the tag resolves to \
-                 {declaration} in {declaration_file}, {how}, so they fall back to dynamic \
-                 slots — render the extracted component itself, or list the values under \
-                 staticCss.systemProps"
-            ),
-            Some(UNATTRIBUTED_SYSTEM_PROPS),
-        )
-        .at(at)
-        .dropping(&listed),
-    )
-}
-
-/// The registered system props an element passes, as written.
-fn passed_system_props<'u>(
-    attrs: &'u [crate::usage_facts::AttrFact],
-    inputs: &'u CssInputs,
-) -> impl Iterator<Item = &'u str> {
-    attrs
+) -> Vec<(&'u str, &'u Value, String)> {
+    // A prop can carry several values; its route is walked once.
+    let mut reached: FxHashMap<&str, Option<String>> = FxHashMap::default();
+    values
         .iter()
-        .filter(|attr| !attr.skip && inputs.config.contains_key(&attr.name))
-        .map(|attr| attr.name.as_str())
-}
-
-/// One warning per member tag, or facade's own tag, and set of props, read
-/// through an object (an object of components, a facade copying a compose
-/// family, or an alias of one) whose member loses the system props the tag
-/// is passed:
-/// one that named an extracted component when the object was built, but
-/// which something may have changed since, or one that names a function
-/// component forwarding its props (`LostThrough`).
-#[allow(clippy::too_many_arguments)]
-fn untraced_member_system_props(
-    file: &str,
-    ff: &FileFacts,
-    member_expr_bindings: &FxHashMap<String, String>,
-    objects: &mut crate::family_members::ObjectMembers<'_>,
-    (files, inputs): (&BTreeMap<String, FileFacts>, &CssInputs),
-    links: &crate::link::ProjectLinks,
-    component_takes: &dyn Fn(&str, &str) -> bool,
-    takes_system_prop: &dyn Fn(&str, &str, &str) -> bool,
-) -> Vec<CssDiagnostic> {
-    use crate::family_members::Member;
-    let mut reported: FxHashSet<(&str, Vec<&str>)> = FxHashSet::default();
-    let mut warnings = Vec::new();
-    for render in tag_renders(ff, inputs) {
-        let TagRender { tag, member, call, mut props, at, .. } = render;
-        if member_expr_bindings.contains_key(tag) || props.is_empty() {
-            continue;
-        }
-        // A member tag, or a facade's own tag (`<X>` for `X = Object.assign(T, …)`).
-        // An element or a `createElement` call of a bound member warns; an
-        // unstable object's member warns for an element only.
-        let read = if member { objects.member(file, tag) } else { objects.root(file, tag) };
-        let (component, reason) = match read {
-            Some(Member::Unstable(component, reason)) if !call => (component, reason),
-            Some(Member::Bound { module, binding }) if member => {
-                if let Some((declaration_file, declaration, lost)) =
-                    lost_through_binding(&module, &binding, files, inputs, links)
-                {
-                    warnings.extend(lost_props_warning(
-                        file,
-                        tag,
-                        at,
-                        props,
-                        (&declaration_file, &declaration, &lost),
-                        (files, inputs),
-                        links,
-                        takes_system_prop,
-                        &mut reported,
-                    ));
-                }
-                continue;
-            }
-            _ => continue,
-        };
-        props.retain(|prop| component_takes(&component, prop));
-        props.sort_unstable();
-        props.dedup();
-        if props.is_empty() {
-            continue;
-        }
-        let listed = props.join(", ");
-        if !reported.insert((tag, props)) {
-            continue;
-        }
-        let binding = binding_of(&component);
-        let component_file = component.strip_suffix(binding).and_then(|id| id.strip_suffix("::")).unwrap_or("");
-        let object = tag.rsplit_once('.').map_or(tag, |(object, _)| object);
-        warnings.push(diagnostic(
-            file,
-            tag,
-            "warn",
-            format!(
-                "system props {listed} get no static utility classes: the tag renders {binding} \
-                 from {component_file} through the object {object}, which the extractor cannot \
-                 prove unchanged since it was built ({reason}), so they fall back to dynamic \
-                 slots — render {binding} directly or through its compose family, or list the \
-                 values under staticCss.systemProps"
-            ),
-            Some(UNATTRIBUTED_SYSTEM_PROPS),
-        ));
-    }
-    warnings
+        .filter_map(|&(prop, value)| {
+            let component = reached
+                .entry(prop)
+                .or_insert_with(|| {
+                    let mut visited = FxHashSet::from_iter([(declaration_file.clone(), declaration.clone())]);
+                    component_reached(declaration_file, lost, prop, analysis, links, takes_system_prop, &mut visited)
+                })
+                .clone()?;
+            Some((prop, value, component))
+        })
+        .collect()
 }
 
 /// A diagnostic about a component with no finer location points at the
@@ -4528,6 +4425,7 @@ fn identity_uncertainty_diagnostics(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
+    objects: &mut crate::family_members::ObjectMembers<'_>,
 ) -> Vec<CssDiagnostic> {
     let mut seen: FxHashSet<(&str, String)> = FxHashSet::default();
     let mut records: Vec<(TagClass, &str, String, CssDiagnostic)> = Vec::new();
@@ -4562,6 +4460,18 @@ fn identity_uncertainty_diagnostics(
                     (false, false) => format!("<{tag}>"),
                 };
                 let (class, mut reason) = uncertain_tag_reason(file, ff, tag, origin, files, inputs, links);
+                // A member tag, or a facade's own tag, of an object that named
+                // a component when it was built but may have changed since.
+                if let Some(crate::family_members::Member::Unstable(component, why)) =
+                    objects.of_tag(file, tag, tag.contains('.'))
+                {
+                    let (component_file, binding) = component.rsplit_once("::").unwrap_or(("", &component));
+                    let object = tag.rsplit_once('.').map_or(tag, |(object, _)| object);
+                    reason = format!(
+                        "renders {binding} from {component_file} through the object {object}, which \
+                         extraction cannot prove unchanged since it was built ({why})"
+                    );
+                }
                 if shared_name {
                     reason.push_str(", and shares its name with an Animus component another file declares");
                 }
@@ -5237,20 +5147,6 @@ impl<'f> LostThrough<'f> {
         }
         let forwarding = ff.props_forwarding.get(binding)?;
         Some(Self::Spread(&forwarding.routes))
-    }
-
-    /// Whether `prop`, passed to the declaration, surely reaches a name
-    /// `takes` accepts: through an alias, or a spread of the props or their
-    /// rest, not of what a call returns.
-    fn surely_reaches(&self, prop: &str, takes: impl Fn(&String) -> bool) -> bool {
-        match self {
-            Self::Alias(target) => takes(target),
-            Self::Spread(routes) => routes
-                .iter()
-                .filter(|route| !route.derived && !route.named.iter().any(|name| name == prop))
-                .flat_map(|route| &route.targets)
-                .any(takes),
-        }
     }
 
     /// The names, read in the declaration's file, that `prop`, passed to the
@@ -7596,26 +7492,25 @@ fn run_with_system_floor(
         let attributed = |tag: &str| {
             file_lookup.as_ref().unwrap_or(&global_lookup).attribution.contains_key(tag)
         };
-        diagnostics.extend(unattributed_system_props(
+        // A literal a render routes to an extracted component through a
+        // declaration usage attribution misses takes that component's static
+        // class, and a value the class declines is reported at the render.
+        let routed = routed_values(
             path,
             ff,
             &unattributed_imports,
             &attributed,
-            files,
-            inputs,
-            links,
-            &takes_system_prop,
-        ));
-        diagnostics.extend(untraced_member_system_props(
-            path,
-            ff,
             member_expr_bindings,
             &mut object_members,
             (files, inputs),
             links,
             &component_takes,
             &takes_system_prop,
-        ));
+        );
+        for RoutedValue { prop, value, component, uses } in &routed {
+            let uses: Vec<_> = uses.iter().map(|at| (*at, component.as_str())).collect();
+            all_utility_inputs.extend(admitted_input(&inputs.config, path, component, (prop, value, &uses), &mut diagnostics));
+        }
         diagnostics.extend(untracked_clone_props(path, ff));
         let lookup = file_lookup.as_ref().unwrap_or(&global_lookup);
         diagnostics.extend(unread_create_element_props(path, ff, |fact| match fact {
@@ -7713,7 +7608,7 @@ fn run_with_system_floor(
     }
     // Development keeps every component anyway.
     if !inputs.dev_mode {
-        diagnostics.extend(identity_uncertainty_diagnostics(&uncertain_identities, files, inputs, links));
+        diagnostics.extend(identity_uncertainty_diagnostics(&uncertain_identities, files, inputs, links, &mut object_members));
     }
 
     // A component a reference hands somewhere usage tracking does not follow
