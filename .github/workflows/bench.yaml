@@ -7,6 +7,8 @@ name: Bench
 # its position and ref, so a ref may repeat as a drift control. With
 # `profile`, each commit's binary keeps its symbols and its large-closure
 # load is also profiled, and those reports are uploaded beside its receipt.
+# `cpu` and `attempts` start several runners and measure only on those with
+# the named CPU, since ubuntu-latest does not choose the processor.
 
 on:
   workflow_dispatch:
@@ -25,6 +27,16 @@ on:
         required: false
         type: boolean
         default: false
+      cpu:
+        description: Measure only on a runner whose CPU model contains this text (empty takes any runner)
+        required: false
+        type: string
+        default: ''
+      attempts:
+        description: JSON list naming the runners to start in parallel, e.g. [1,2,3,4]; with `cpu`, those on another CPU stop at once
+        required: false
+        type: string
+        default: '[1]'
 
 permissions:
   contents: read
@@ -33,22 +45,44 @@ jobs:
   bench:
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: ${{ fromJSON(inputs.attempts) }}
     steps:
+      - name: Check the CPU
+        id: cpu
+        env:
+          CPU: ${{ inputs.cpu }}
+        run: |
+          model=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')
+          echo "CPU: $model"
+          if [ -z "$CPU" ] || [[ "$model" == *"$CPU"* ]]; then
+            echo "match=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$model is not $CPU; nothing measured on this runner"
+          fi
+
       - uses: actions/checkout@v7
+        if: steps.cpu.outputs.match == 'true'
         with:
           fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.cpu.outputs.match == 'true'
 
       - uses: actions/setup-node@v7
+        if: steps.cpu.outputs.match == 'true'
         with:
           node-version-file: .tool-versions
 
       - uses: oven-sh/setup-bun@v2
+        if: steps.cpu.outputs.match == 'true'
         with:
           bun-version-file: .tool-versions
 
       - name: Measure each commit
+        if: steps.cpu.outputs.match == 'true'
         env:
           REFS: ${{ inputs.refs }}
           ROWS: ${{ inputs.rows }}
@@ -87,7 +121,7 @@ jobs:
             if [ "$PROFILE" = true ]; then
               closure="$PWD/.bench/fixtures/large-closure"
               load=(node scripts/bench/runners/loader.cjs "$PWD/packages/extract" "$closure/src/system.ts" "$closure")
-              perf stat -r 9 -e task-clock,page-faults,context-switches,cpu-migrations -- "${load[@]}" > /dev/null 2> "$receipts/$n-$ref.stat.txt"
+              perf stat -r 9 -e task-clock,page-faults,context-switches,cycles,instructions,cache-misses,branch-misses,dTLB-load-misses -- "${load[@]}" > /dev/null 2> "$receipts/$n-$ref.stat.txt"
               strace -f -c -o "$receipts/$n-$ref.strace.txt" -- "${load[@]}" > /dev/null
               perf record -q -F 2999 -g -o "$RUNNER_TEMP/perf.data" -- "${load[@]}" > /dev/null
               perf report -i "$RUNNER_TEMP/perf.data" --no-children --sort dso,symbol --stdio --percent-limit 0.3 > "$receipts/$n-$ref.perf.txt" 2> /dev/null
@@ -96,9 +130,9 @@ jobs:
           done
 
       - name: Upload receipts
-        if: always()
+        if: always() && steps.cpu.outputs.match == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: receipts-bench-refs
+          name: receipts-bench-refs-${{ matrix.attempt }}
           path: ${{ runner.temp }}/receipts/
           if-no-files-found: error
