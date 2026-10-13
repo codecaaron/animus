@@ -82,7 +82,14 @@ impl AttrFact {
     /// Every value the attribute can write, when they are known: its
     /// static value, or the finite values a runtime value is proven to take.
     pub(crate) fn proven_values(&self) -> Option<impl Iterator<Item = &Value>> {
-        (self.literal && !self.dynamic).then(|| self.static_value.iter().chain(&self.enumerable_values))
+        (self.literal && !self.dynamic).then(|| self.class_values())
+    }
+
+    /// Every static value the attribute can write, each of which takes a
+    /// system prop's utility class: its static value, or the statically known
+    /// alternatives of a runtime one.
+    pub(crate) fn class_values(&self) -> impl Iterator<Item = &Value> {
+        self.static_value.iter().chain(&self.enumerable_values)
     }
 }
 
@@ -258,9 +265,6 @@ pub struct ForwardRoute {
     pub named: Vec<String>,
     /// The tags that receive the spread, as written (`Recipe`, `Ns.Item`).
     pub targets: Vec<String>,
-    /// The spread is of what a call the props are passed to returns, which
-    /// may or may not carry a given prop.
-    pub derived: bool,
 }
 
 /// Top-level function components, plain or inside `forwardRef`/`memo`,
@@ -427,7 +431,7 @@ fn props_forwarding(function: ComponentFunction<'_, '_>, scoping: &Scoping) -> O
     // The props, by binding: a name a nested scope declares again is not it.
     let props = Props { scoping, symbol: binding.symbol_id.get()? };
     let mut routes = Vec::new();
-    let mut route = |named: Vec<String>, spread: SymbolId, derived: bool| {
+    let mut route = |named: Vec<String>, spread: SymbolId| {
         let mut scan = SpreadTargets {
             props: &props,
             spread,
@@ -435,10 +439,10 @@ fn props_forwarding(function: ComponentFunction<'_, '_>, scoping: &Scoping) -> O
         };
         function.body.visit(&mut scan);
         if !scan.targets.is_empty() {
-            routes.push(ForwardRoute { named, targets: scan.targets, derived });
+            routes.push(ForwardRoute { named, targets: scan.targets });
         }
     };
-    route(named.clone(), props.symbol, false);
+    route(named.clone(), props.symbol);
     // `const { a, ...rest } = props` in the body, then `{...rest}`: neither
     // the props the parameter names nor the ones the body names reach the
     // tags `rest` is spread into.
@@ -450,10 +454,10 @@ fn props_forwarding(function: ComponentFunction<'_, '_>, scoping: &Scoping) -> O
     let mut declarations = PropsDeclarations { props: &props, rests: Vec::new(), values: Vec::new() };
     function.body.visit(&mut declarations);
     for (body_named, rest) in declarations.rests {
-        route(named.iter().cloned().chain(body_named).collect(), rest, false);
+        route(named.iter().cloned().chain(body_named).collect(), rest);
     }
-    for (bound, derived) in declarations.values {
-        route(named.clone(), bound, derived);
+    for bound in declarations.values {
+        route(named.clone(), bound);
     }
     (!routes.is_empty()).then_some(PropsForwarding { routes })
 }
@@ -592,9 +596,9 @@ struct PropsDeclarations<'p, 's> {
     /// rest binding.
     rests: Vec<(Vec<String>, SymbolId)>,
     /// Each binding of a value whose every alternative is the props, may
-    /// carry any of them, or spreads nothing, and whether it may carry what
-    /// the props do not (a call's result, a destructured part).
-    values: Vec<(SymbolId, bool)>,
+    /// carry any of them (a call's result, a destructured part), or spreads
+    /// nothing.
+    values: Vec<SymbolId>,
 }
 
 impl<'a> Visit<'a> for PropsDeclarations<'_, '_> {
@@ -613,13 +617,13 @@ impl<'a> Visit<'a> for PropsDeclarations<'_, '_> {
                     if !kinds.other && (kinds.props || kinds.derived) {
                         match pattern {
                             BindingPattern::BindingIdentifier(id) => {
-                                self.values.extend(id.symbol_id.get().map(|id| (id, kinds.derived)));
+                                self.values.extend(id.symbol_id.get());
                             }
                             _ if !kinds.derived && !kinds.omits => {}
                             pattern => {
                                 let mut bound = Vec::new();
                                 bound_symbols(pattern, &mut bound);
-                                self.values.extend(bound.into_iter().map(|symbol| (symbol, true)));
+                                self.values.extend(bound);
                             }
                         }
                     }
@@ -7537,12 +7541,7 @@ pub fn filter_usage_scan(
                                 // scan; decided before de-duplication so its usage
                                 // never takes a system usage's slot.
                                 let custom_owned = custom.is_some_and(|c| c.contains(&attr.name));
-                                for value in attr
-                                    .static_value
-                                    .iter()
-                                    .chain(attr.enumerable_values.iter())
-                                    .filter(|_| !custom_owned)
-                                {
+                                for value in attr.class_values().filter(|_| !custom_owned) {
                                     let dedup_key = format!(
                                         "{}:{}",
                                         attr.name,
