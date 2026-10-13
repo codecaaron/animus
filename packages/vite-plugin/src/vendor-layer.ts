@@ -1,4 +1,5 @@
 import {
+  consumerLayers,
   createVendorReporter,
   vendorCssUnit,
 } from '@animus-ui/extract/pipeline';
@@ -81,6 +82,7 @@ export function vendorLayerPlugin(ctx: PluginContext): Plugin {
     strict: ctx.options.strict,
     info: (line) => ctx.log(line),
   });
+  const consumer = consumerLayers(ctx.options.layers);
   return {
     name: 'animus-extract:vendor-layer',
     transform: {
@@ -101,14 +103,12 @@ export function vendorLayerPlugin(ctx: PluginContext): Plugin {
         }
         const file = id.split('?')[0]!;
         const shown = ctx.rootDir ? relative(ctx.rootDir, file) : file;
-        const delivered = vendorCssUnit(
-          code,
-          file,
-          shown,
-          ctx.stylesheetPlan,
-          'layer',
-          report
-        );
+        const delivered = vendorCssUnit(code, file, shown, {
+          plan: ctx.stylesheetPlan,
+          imports: 'layer',
+          consumer,
+          report,
+        });
         // The layer opens on the body's first line: lines keep their numbers.
         return delivered === code ? null : { code: delivered, map: null };
       },

@@ -154,7 +154,9 @@ export interface AnimusExtractOptions {
   staticCss?: StaticCssConfig;
   /**
    * Full `@layer` declaration order; must contain every `anm-*` layer as a
-   * subsequence in its required order. Consumer layers may interleave.
+   * subsequence in its required order (`anm-vendor` first, prepended when
+   * absent). Consumer layers may interleave, and a stylesheet's top-level
+   * `@layer` block of one stays outside `anm-vendor`, at its declared place.
    */
   layers?: string[];
   /**

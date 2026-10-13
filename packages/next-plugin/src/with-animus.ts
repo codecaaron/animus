@@ -442,6 +442,7 @@ export function withAnimus(
             root: rootDir,
             strict: options.strict,
             diagnostics: options.diagnostics,
+            layers: options.layers,
           },
         });
         if (wrapping === 0) {

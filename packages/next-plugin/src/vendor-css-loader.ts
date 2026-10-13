@@ -1,4 +1,5 @@
 import {
+  consumerLayers,
   createVendorReporter,
   vendorCssUnit,
 } from '@animus-ui/extract/pipeline';
@@ -16,6 +17,9 @@ interface VendorCssLoaderOptions {
   root: string;
   strict?: boolean;
   diagnostics?: DiagnosticLevels;
+  /** The host's `layers` option: blocks of the consumer layers it names
+   *  stay outside the vendor layer. */
+  layers?: string[];
 }
 
 /** The source map the previous loader handed on, passed through as is:
@@ -66,13 +70,11 @@ export default function vendorCssLoader(
     key = sessionKey(options.build, options.root);
     keys.set(keyId, key);
   }
-  const code = vendorCssUnit(
-    source,
-    file,
-    relative(options.root, file),
-    getStylesheetPlan(key),
-    'keep',
-    report
-  );
+  const code = vendorCssUnit(source, file, relative(options.root, file), {
+    plan: getStylesheetPlan(key),
+    imports: 'keep',
+    consumer: consumerLayers(options.layers),
+    report,
+  });
   this.callback(null, code, map);
 }

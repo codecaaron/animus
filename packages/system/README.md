@@ -129,6 +129,12 @@ place. Inside the layer, specificity and order decide as usual. An
 `optOut` file keeps its own cascade position and is reported
 (`animus.vendor.opt-out`).
 
+A consumer layer the bundler plugin's `layers` option names keeps its
+meaning: a stylesheet's top-level `@layer utilities { … }` block, when
+`utilities` is listed, stays outside `anm-vendor` and takes its declared
+place, above or below Animus's layers. Unlisted layers and unlayered CSS
+are wrapped.
+
 The layer holds back normal declarations only. A vendor `!important`
 becomes stronger in a lower layer, and keyframe animations and transitions
 override normal declarations in any layer: both are kept as written and

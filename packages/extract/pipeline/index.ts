@@ -35,6 +35,7 @@ export {
   type ResolvedStylesheetPlan,
 } from './stylesheet-plan';
 export {
+  consumerLayers,
   createVendorReporter,
   vendorCoverageNotice,
   vendorCssUnit,

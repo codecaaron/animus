@@ -77,8 +77,10 @@ export interface AnimusNextOptions {
   /** @internal Absolute path of a loader module registered in place of this
    *  package's own; feeds the needBuild loader-chain predicate. */
   loaderPath?: string;
-  /** Full `@layer` declaration order, emitted as-is. Must contain the seven
-   *  `anm-*` layers as a subsequence; consumer layers may be interleaved. */
+  /** Full `@layer` declaration order. Must contain the `anm-*` layers as a
+   *  subsequence (`anm-vendor` first, prepended when absent); consumer
+   *  layers may be interleaved, and a stylesheet's top-level `@layer` block
+   *  of one stays outside `anm-vendor`, at its declared place. */
   layers?: string[];
   /** The module extracted terminals import their factories from; default
    *  `@animus-ui/system/runtime`. `@animus-ui/system` also supplies every

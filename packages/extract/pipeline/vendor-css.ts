@@ -6,7 +6,11 @@
  */
 import { tokenize } from '@animus-ui/properties';
 
-import { VENDOR_LAYER } from './assemble-stylesheet';
+import {
+  ANIMUS_LAYERS,
+  resolveLayerOrder,
+  VENDOR_LAYER,
+} from './assemble-stylesheet';
 import { contentHash } from './content-hash';
 import {
   effectiveLevel,
@@ -34,12 +38,33 @@ export type VendorImportMode =
   | 'keep';
 
 /** A top-level statement or rule: its at-keyword (`''` for a rule), its
- *  span, and the tokens before its `;` or block, whitespace left out. */
+ *  span, the tokens before its `;` or block, whitespace left out, and
+ *  whether it has a block. */
 interface TopLevel {
   name: string;
   start: number;
   end: number;
   prelude: CssToken[];
+  block: boolean;
+}
+
+/** The host's `layers` option as the wrapper reads it, when it names layers
+ *  of the consumer's own: their full order, and their names. */
+export interface ConsumerLayers {
+  order: readonly string[];
+  names: ReadonlySet<string>;
+}
+
+/** The consumer layers a host's `layers` option names, or null when it
+ *  names none. Throws as `resolveLayerOrder` does on an invalid order. */
+export function consumerLayers(
+  layers: readonly string[] | undefined
+): ConsumerLayers | null {
+  if (!layers) return null;
+  const order = resolveLayerOrder(layers);
+  const animus = new Set<string>(ANIMUS_LAYERS);
+  const names = new Set(order.filter((name) => !animus.has(name)));
+  return names.size > 0 ? { order, names } : null;
 }
 
 /** The statements a stylesheet must keep at its top level. */
@@ -75,7 +100,14 @@ function topLevel(tokens: CssToken[]): TopLevel[] {
       }
     }
     if (at >= tokens.length) break;
-    items.push({ name, start: first.start, end: tokens[at]!.end, prelude });
+    const block = tokens[at]!.type === '}';
+    items.push({
+      name,
+      start: first.start,
+      end: tokens[at]!.end,
+      prelude,
+      block,
+    });
     index = at + 1;
   }
   return items;
@@ -128,11 +160,29 @@ function isIcss(item: TopLevel): boolean {
   );
 }
 
+/** A top-level `@layer` block of a layer the host's `layers` option names,
+ *  or of one nested in it. */
+function isConsumerLayer(
+  item: TopLevel,
+  consumer: ConsumerLayers | null
+): boolean {
+  const [name] = item.prelude;
+  return (
+    consumer !== null &&
+    item.name === 'layer' &&
+    item.block &&
+    name?.type === 'ident' &&
+    consumer.names.has(name.value)
+  );
+}
+
 /** Text a stylesheet must hold for the wrapper to read its tokens: a
- *  leading at-rule, CSS Modules interchange rules, or a word naming an
- *  effect the layer cannot hold back. */
+ *  leading at-rule, CSS Modules interchange rules, a layer block when the
+ *  host names consumer layers, or a word naming an effect the layer cannot
+ *  hold back. */
 const LEADS_WITH_AT_RULE = /^(?:\s|\/\*[\s\S]*?\*\/)*@/;
 const HAS_ICSS = /:(?:export|import)\b/;
+const HAS_LAYER = /@layer\b/i;
 const MAY_HAVE_EFFECTS = /important|keyframes|animation|transition/i;
 
 const ANIMATION_PROPERTIES = new Set([
@@ -240,17 +290,25 @@ export interface WrappedVendorCss {
  * layer. Its leading `@charset`, `@import` and `@namespace` statements stay
  * at the top, as they must; its leading `@layer` name lists and every rule
  * move inside, so its own layers nest under the vendor layer in their order.
- * A CSS Module's top-level `:export` and `:import` rules stay at the top
- * level, after the layer. Every line keeps its number: a moved statement or
- * rule leaves its line breaks, and the layer opens on the line the body
- * begins. Only a sheet that may hold one of these is tokenized.
+ * Two kinds of top-level rule stay outside the layer: a CSS Module's
+ * `:export` and `:import` rules, after it, and a `@layer` block of a layer
+ * the host's `layers` option names, where it is written, so it takes that
+ * layer's declared place. A sheet with such a block declares the host's
+ * full order first, so it holds even when the sheet loads before Animus's.
+ * Every line keeps its number: a moved statement or rule leaves its line
+ * breaks, and the layer opens on the line the body begins. Only a sheet that
+ * may hold one of these is tokenized.
  */
 export function wrapVendorCss(
   css: string,
   file: string,
-  imports: VendorImportMode
+  imports: VendorImportMode,
+  consumer: ConsumerLayers | null = null
 ): WrappedVendorCss {
-  const structured = LEADS_WITH_AT_RULE.test(css) || HAS_ICSS.test(css);
+  const structured =
+    LEADS_WITH_AT_RULE.test(css) ||
+    HAS_ICSS.test(css) ||
+    (consumer !== null && HAS_LAYER.test(css));
   const effects = MAY_HAVE_EFFECTS.test(css);
   const tokens = structured || effects ? tokenize(css) : [];
   const items = structured ? topLevel(tokens) : [];
@@ -258,7 +316,7 @@ export function wrapVendorCss(
   let cursor = 0;
   const moved: string[] = [];
   for (const item of items) {
-    if (!LEADING.has(item.name)) break;
+    if (!LEADING.has(item.name) || item.block) break;
     top += css.slice(cursor, item.start);
     const text = css.slice(item.start, item.end);
     if (item.name === 'layer') {
@@ -274,18 +332,43 @@ export function wrapVendorCss(
   // From the end, so earlier offsets hold.
   let body = css.slice(cursor);
   const icss: string[] = [];
-  for (const item of items.filter(isIcss).reverse()) {
+  const kept: TopLevel[] = [];
+  for (const item of items.slice().reverse()) {
+    if (item.start < cursor) break;
     const text = css.slice(item.start, item.end);
-    icss.unshift(text);
+    let replacement: string;
+    if (isIcss(item)) {
+      icss.unshift(text);
+      replacement = text.replace(/[^\n]/g, '');
+    } else if (isConsumerLayer(item, consumer)) {
+      kept.push(item);
+      replacement = `}${text}@layer ${VENDOR_LAYER} {`;
+    } else {
+      continue;
+    }
     body =
       body.slice(0, item.start - cursor) +
-      text.replace(/[^\n]/g, '') +
+      replacement +
       body.slice(item.end - cursor);
   }
+  if (kept.length > 0) {
+    // After a leading `@charset`, which must come first.
+    const at = items[0]?.name === 'charset' ? items[0].end : 0;
+    top = `${top.slice(0, at)}@layer ${consumer!.order.join(', ')};${top.slice(at)}`;
+  }
   const after = icss.map((text) => `${text}\n`).join('');
+  // A kept layer's effects are its own, not the vendor layer's.
+  const wrapped = kept.length
+    ? tokens.filter(
+        (token) =>
+          !kept.some(
+            (item) => token.start >= item.start && token.end <= item.end
+          )
+      )
+    : tokens;
   return {
     code: `${top}@layer ${VENDOR_LAYER} {${moved.join(' ')}${body}\n}\n${after}`,
-    diagnostics: effects ? effectDiagnostics(css, tokens, file) : [],
+    diagnostics: effects ? effectDiagnostics(css, wrapped, file) : [],
   };
 }
 
@@ -318,6 +401,14 @@ export function createVendorReporter(
   };
 }
 
+/** What a host wraps its CSS units with. */
+export interface VendorHost {
+  plan: ResolvedStylesheetPlan | null;
+  imports: VendorImportMode;
+  consumer: ConsumerLayers | null;
+  report: VendorReporter;
+}
+
 /**
  * One compiled CSS unit as a host delivers it: unchanged when the system
  * opts its file out (reported), otherwise in the vendor layer, its effects
@@ -328,15 +419,13 @@ export function vendorCssUnit(
   css: string,
   file: string,
   shown: string,
-  plan: ResolvedStylesheetPlan | null,
-  imports: VendorImportMode,
-  report: VendorReporter
+  { plan, imports, consumer, report }: VendorHost
 ): string {
   if (plan?.optOut.has(file)) {
     report(file, '', [vendorOptOutNotice(shown)]);
     return css;
   }
-  const wrapped = wrapVendorCss(css, shown, imports);
+  const wrapped = wrapVendorCss(css, shown, imports, consumer);
   report(file, css, wrapped.diagnostics);
   return wrapped.code;
 }
