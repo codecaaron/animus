@@ -21,7 +21,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{js_quoted, module_export_name, stub_key};
 
-fn source_type(path: &str) -> SourceType {
+pub(crate) fn source_type(path: &str) -> SourceType {
     SourceType::from_path(Path::new(path))
         .unwrap_or_else(|_| SourceType::mjs())
         .with_module(true)
@@ -57,9 +57,9 @@ fn export_read(refs: &ModuleRefs, key: &str, name: &str) -> String {
 /// Every module in evaluation order: depth-first post-order from the entry,
 /// following imports and re-exports in source order, then any module not
 /// reached, in path order.
-pub(crate) fn evaluation_order(modules: &FxHashMap<String, LinkedModule>, entry_path: &str) -> Vec<String> {
+pub(crate) fn evaluation_order(modules: &FxHashMap<String, Vec<String>>, entry_path: &str) -> Vec<String> {
     let requests = |path: &str| -> Vec<String> {
-        modules[path].requests.iter().filter(|target| modules.contains_key(*target)).cloned().collect()
+        modules[path].iter().filter(|target| modules.contains_key(*target)).cloned().collect()
     };
     let mut paths: Vec<&String> = modules.keys().collect();
     paths.sort();
@@ -210,12 +210,31 @@ pub(crate) struct LinkedModule {
     /// The range in `body` of each reference to an imported binding, and the
     /// local name the module refers to it by.
     pub import_refs: Vec<(usize, usize, String)>,
+    /// The body as text and import reads, which [`LinkedModule::render`]
+    /// writes out: an import read may be retargeted after linking without
+    /// reading the module again.
+    pieces: Vec<Piece>,
+}
+
+/// What an imported binding reads: export `name` of the module registered
+/// as `from`, or that module's export object.
+enum Cell {
+    Export { from: String, name: String },
+    Namespace { from: String },
+}
+
+enum Piece {
+    Text(String),
+    /// A reference to an imported binding: a write throws, as a read-only
+    /// binding's does; a shorthand property keeps its key.
+    Read { cell: std::rc::Rc<Cell>, write: bool, shorthand: Option<String>, local: String },
 }
 
 struct Edit {
     start: usize,
     end: usize,
     text: String,
+    read: Option<Piece>,
 }
 
 /// Where a named import reads: the module and export name a route through
@@ -223,12 +242,47 @@ struct Edit {
 /// through the module it names.
 pub(crate) type Retarget<'r> = &'r dyn Fn(&str, &str) -> Option<(String, String)>;
 
+impl LinkedModule {
+    /// Writes the body and its import ranges, each import read reading where
+    /// `retarget` says, or through the module it names.
+    pub fn render(&mut self, refs: &ModuleRefs, retarget: Retarget<'_>) {
+        self.body.clear();
+        self.import_refs.clear();
+        for piece in &self.pieces {
+            match piece {
+                Piece::Text(text) => self.body.push_str(text),
+                Piece::Read { cell, write, shorthand, local } => {
+                    let cell = match &**cell {
+                        Cell::Export { from, name } => match retarget(from, name) {
+                            Some((module, export)) => export_read(refs, &module, &export),
+                            None => export_read(refs, from, name),
+                        },
+                        Cell::Namespace { from } => module_ref(refs, from),
+                    };
+                    // `(0, …)`: a read in any expression position, and a call
+                    // through it gets no `this`, as an imported function's does.
+                    let read = if *write {
+                        format!("__modules['#import'](() => {cell}).value")
+                    } else {
+                        format!("(0, {cell})")
+                    };
+                    let start = self.body.len();
+                    if let Some(key) = shorthand {
+                        let _ = write!(self.body, "{key}: ");
+                    }
+                    self.body.push_str(&read);
+                    self.import_refs.push((start, self.body.len(), local.clone()));
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn rewrite_module_for_linking(
     source: &str,
     canonical_path: &str,
     specifier_map: &FxHashMap<(String, String), String>,
     refs: &ModuleRefs,
-    retarget: Retarget<'_>,
 ) -> Result<LinkedModule, String> {
     let allocator = Allocator::default();
     let ParserReturn { program, .. } =
@@ -277,12 +331,13 @@ pub(crate) fn rewrite_module_for_linking(
         link: String::new(),
         body: String::new(),
         import_refs: Vec::new(),
+        pieces: Vec::new(),
     };
     let mut local_exports: Vec<(String, String)> = Vec::new();
     let default_name = default_binding_name(scoping);
     let mut remove = |edits: &mut Vec<Edit>, start: u32, end: u32| {
         removed.push((start as usize, end as usize));
-        edits.push(Edit { start: start as usize, end: end as usize, text: String::new() });
+        edits.push(Edit { start: start as usize, end: end as usize, text: String::new(), read: None });
     };
 
     for stmt in &program.body {
@@ -298,7 +353,7 @@ pub(crate) fn rewrite_module_for_linking(
                         ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
                             let local = &namespace.local;
                             import_targets.insert(local.name.to_string(), ExportTarget::Namespace { from: from.clone() });
-                            imported.insert(local.symbol_id(), module_ref(refs, &from));
+                            imported.insert(local.symbol_id(), std::rc::Rc::new(Cell::Namespace { from: from.clone() }));
                             continue;
                         }
                     };
@@ -308,11 +363,7 @@ pub(crate) fn rewrite_module_for_linking(
                         local.name.to_string(),
                         ExportTarget::Indirect { from: from.clone(), name: name.clone() },
                     );
-                    let read = match retarget(&from, &name) {
-                        Some((module, export)) => export_read(refs, &module, &export),
-                        None => export_read(refs, &from, &name),
-                    };
-                    imported.insert(local.symbol_id(), read);
+                    imported.insert(local.symbol_id(), std::rc::Rc::new(Cell::Export { from: from.clone(), name: name.clone() }));
                 }
                 remove(&mut edits, decl.span.start, decl.span.end);
             }
@@ -331,6 +382,7 @@ pub(crate) fn rewrite_module_for_linking(
                     start: decl.span.start as usize,
                     end: decl.declaration.span().start as usize,
                     text: String::new(),
+                    read: None,
                 });
                 collect_declaration_export_names(&decl.declaration, &mut local_exports);
             }
@@ -342,7 +394,7 @@ pub(crate) fn rewrite_module_for_linking(
             }
             Statement::ExportDefaultDeclaration(decl) => {
                 let start = decl.declaration.span().start;
-                let prefix = Edit { start: decl.span.start as usize, end: start as usize, text: String::new() };
+                let prefix = Edit { start: decl.span.start as usize, end: start as usize, text: String::new(), read: None };
                 match &decl.declaration {
                     ExportDefaultDeclarationKind::FunctionDeclaration(function) => match &function.id {
                         Some(id) => local_exports.push(("default".to_string(), id.name.to_string())),
@@ -352,6 +404,7 @@ pub(crate) fn rewrite_module_for_linking(
                                 start: function.params.span.start as usize,
                                 end: function.params.span.start as usize,
                                 text: format!(" {default_name}"),
+                                read: None,
                             });
                             let _ = writeln!(
                                 module.link,
@@ -381,13 +434,14 @@ pub(crate) fn rewrite_module_for_linking(
                         edits.push(Edit { text: format!("const {default_name} = {opening}"), ..prefix });
                         if anonymous {
                             let end = decl.declaration.span().end as usize;
-                            edits.push(Edit { start: end, end, text: " }.default".to_string() });
+                            edits.push(Edit { start: end, end, text: " }.default".to_string(), read: None });
                         }
                         if matches!(kind, ExportDefaultDeclarationKind::ClassDeclaration(_)) {
                             edits.push(Edit {
                                 start: decl.span.end as usize,
                                 end: decl.span.end as usize,
                                 text: ";".to_string(),
+                                read: None,
                             });
                         }
                         local_exports.push(("default".to_string(), default_name.clone()));
@@ -417,7 +471,6 @@ pub(crate) fn rewrite_module_for_linking(
     }
 
     // Each import reference's edit, and the local name it refers to.
-    let mut refs: FxHashMap<(usize, usize), &str> = FxHashMap::default();
     for (&symbol, cell) in &imported {
         for reference in scoping.get_resolved_references(symbol) {
             let at = reference.scope_id();
@@ -431,23 +484,20 @@ pub(crate) fn rewrite_module_for_linking(
                 continue;
             }
             // An imported binding is read-only: writing it throws when the
-            // write runs, as Node throws, and the module still loads.
-            // `(0, …)`: a read in any expression position, and a call through
-            // it gets no `this`, as an imported function's does.
-            let read = if reference.is_write() {
-                format!("__modules['#import'](() => {cell}).value")
-            } else {
-                format!("(0, {cell})")
+            // write runs, as Node throws, and the module still loads. A
+            // shorthand property's span is its name's.
+            let shorthand = match semantic.nodes().parent_kind(node) {
+                AstKind::ObjectProperty(property) if property.shorthand => Some(source[start..end].to_string()),
+                AstKind::AssignmentTargetPropertyIdentifier(_) => Some(source[start..end].to_string()),
+                _ => None,
             };
-            // A shorthand property's span is its name's.
-            let text = match semantic.nodes().parent_kind(node) {
-                AstKind::ObjectProperty(property) if property.shorthand => format!("{}: {}", &source[start..end], read),
-                AstKind::AssignmentTargetPropertyIdentifier(_) => format!("{}: {}", &source[start..end], read),
-                _ => read,
+            let read = Piece::Read {
+                cell: std::rc::Rc::clone(cell),
+                write: reference.is_write(),
+                shorthand,
+                local: scoping.symbol_name(symbol).to_string(),
             };
-            let edit = Edit { start, end, text };
-            refs.insert((start, end), scoping.symbol_name(symbol));
-            edits.push(edit);
+            edits.push(Edit { start, end, text: String::new(), read: Some(read) });
         }
     }
 
@@ -455,16 +505,13 @@ pub(crate) fn rewrite_module_for_linking(
     // replacement there.
     edits.sort_by_key(|edit| (edit.start, edit.end));
     let mut at = 0;
-    for edit in &edits {
-        module.body.push_str(&source[at..edit.start]);
-        let start = module.body.len();
-        module.body.push_str(&edit.text);
-        if let Some(local) = refs.get(&(edit.start, edit.end)) {
-            module.import_refs.push((start, module.body.len(), (*local).to_string()));
-        }
+    for edit in edits {
+        module.pieces.push(Piece::Text(source[at..edit.start].to_string()));
+        module.pieces.push(edit.read.unwrap_or(Piece::Text(edit.text)));
         at = edit.end;
     }
-    module.body.push_str(&source[at..]);
+    module.pieces.push(Piece::Text(source[at..].to_string()));
+    module.render(refs, &|_, _| None);
     Ok(module)
 }
 
@@ -516,6 +563,37 @@ fn collect_binding_names(
         oxc::ast::ast::BindingPattern::AssignmentPattern(assign) => {
             collect_binding_names(&assign.left, exports);
         }
+    }
+}
+
+/// An open answer with each star of a stub closed: the stub supplies `name`
+/// when it has that name (`has`), or when neither an analysed branch nor
+/// another stub has it. One terminal resolves, two are ambiguous.
+pub(crate) fn close_stub_stars(
+    mut known: Vec<crate::module_table::Terminal<String>>,
+    openings: Vec<crate::module_table::Opening>,
+    name: &str,
+    has: impl Fn(&str) -> bool,
+) -> crate::module_table::ExportLookup<String> {
+    use crate::module_table::{ExportLookup, OpeningReason, Terminal};
+    let provided = !known.is_empty()
+        || openings.iter().any(|opening| matches!(&opening.reason, OpeningReason::OutsideStar(stub) if has(stub)));
+    for opening in openings {
+        match opening.reason {
+            OpeningReason::OutsideStar(stub) if provided && !has(&stub) => {}
+            OpeningReason::OutsideStar(stub) => {
+                let terminal = Terminal::External { module: stub, export: Some(name.to_string()) };
+                if !known.contains(&terminal) {
+                    known.push(terminal);
+                }
+            }
+            OpeningReason::UnresolvedRequest(_) => {}
+        }
+    }
+    match known.len() {
+        0 => ExportLookup::Absent,
+        1 => ExportLookup::Resolved(known.remove(0)),
+        _ => ExportLookup::Ambiguous(known),
     }
 }
 
@@ -597,29 +675,10 @@ impl<'a> Linker<'a> {
     /// branch nor another stub has it. One terminal resolves, two are
     /// ambiguous.
     pub(crate) fn resolve(&self, module: usize, name: &str) -> crate::module_table::ExportLookup<String> {
-        use crate::module_table::{ExportLookup, OpeningReason, Terminal};
+        use crate::module_table::ExportLookup;
         match self.table.resolve_export(module, name) {
-            ExportLookup::Incomplete { mut known, openings } => {
-                let has = |stub: &String| self.stubs[stub].contains(name);
-                let provided = !known.is_empty()
-                    || openings.iter().any(|opening| matches!(&opening.reason, OpeningReason::OutsideStar(stub) if has(stub)));
-                for opening in openings {
-                    match opening.reason {
-                        OpeningReason::OutsideStar(stub) if provided && !has(&stub) => {}
-                        OpeningReason::OutsideStar(stub) => {
-                            let terminal = Terminal::External { module: stub, export: Some(name.to_string()) };
-                            if !known.contains(&terminal) {
-                                known.push(terminal);
-                            }
-                        }
-                        OpeningReason::UnresolvedRequest(_) => {}
-                    }
-                }
-                match known.len() {
-                    0 => ExportLookup::Absent,
-                    1 => ExportLookup::Resolved(known.remove(0)),
-                    _ => ExportLookup::Ambiguous(known),
-                }
+            ExportLookup::Incomplete { known, openings } => {
+                close_stub_stars(known, openings, name, |stub| self.stubs[stub].contains(name))
             }
             lookup => lookup,
         }
@@ -725,5 +784,6 @@ pub(crate) fn routed_module(
         link: String::new(),
         body: String::new(),
         import_refs: Vec::new(),
+        pieces: Vec::new(),
     }
 }

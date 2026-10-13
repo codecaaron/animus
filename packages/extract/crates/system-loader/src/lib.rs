@@ -878,14 +878,11 @@ fn build_bundle(selection: &bounded::Selection) -> Result<(String, BundleLayout)
         .iter()
         .map(|(path, record)| (path.clone(), linked::routed_module(record, path, specifier_map)))
         .collect();
-    let rewrite = |retarget: linked::Retarget<'_>| -> Result<FxHashMap<String, linked::LinkedModule>, String> {
-        let mut modules = FxHashMap::with_capacity_and_hasher(paths.len(), Default::default());
-        for path in &paths {
-            let module = linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map, &refs, retarget)?;
-            modules.insert((*path).clone(), module);
-        }
-        Ok(modules)
-    };
+    let mut modules: FxHashMap<String, linked::LinkedModule> =
+        FxHashMap::with_capacity_and_hasher(paths.len(), Default::default());
+    for path in &paths {
+        modules.insert((*path).clone(), linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map, &refs)?);
+    }
     // Each module's own export names: the getters its object always has.
     let local_names = |module: &linked::LinkedModule| -> FxHashSet<String> {
         module
@@ -895,13 +892,12 @@ fn build_bundle(selection: &bounded::Selection) -> Result<(String, BundleLayout)
             .map(|(name, _)| name.clone())
             .collect()
     };
-    let unlinked = rewrite(&|_, _| None)?;
-    let linker = linked::Linker::with_routes(&unlinked, &routed, stub_exports);
+    let linker = linked::Linker::with_routes(&modules, &routed, stub_exports);
     // A retained module's object holds its own exports and the names asked
     // of it, so an import of any other name reads where its route ends.
     let own: FxHashMap<String, FxHashSet<String>> =
-        unlinked.iter().map(|(path, module)| (path.clone(), local_names(module))).collect();
-    let modules = rewrite(&|from, name| {
+        modules.iter().map(|(path, module)| (path.clone(), local_names(module))).collect();
+    let retarget = |from: &str, name: &str| {
         if own.get(from).is_some_and(|names| names.contains(name)) {
             return None;
         }
@@ -913,21 +909,16 @@ fn build_bundle(selection: &bounded::Selection) -> Result<(String, BundleLayout)
             },
             _ => None,
         }
-    })?;
+    };
+    for module in modules.values_mut() {
+        module.render(&refs, &retarget);
+    }
     // Evaluation order follows every request of every module read, routed
     // ones included, so a module behind a barrel runs where the barrel's
     // order puts it; only retained modules run.
-    let mut ordered: FxHashMap<String, linked::LinkedModule> = routed;
-    ordered.extend(modules.iter().map(|(path, module)| (path.clone(), linked::LinkedModule {
-        exports: Vec::new(),
-        stars: Vec::new(),
-        imports: Vec::new(),
-        requests: module.requests.clone(),
-        link: String::new(),
-        body: String::new(),
-        import_refs: Vec::new(),
-    })));
-    let read_order = linked::evaluation_order(&ordered, entry_path);
+    let requests: FxHashMap<String, Vec<String>> =
+        modules.iter().chain(routed.iter()).map(|(path, module)| (path.clone(), module.requests.clone())).collect();
+    let read_order = linked::evaluation_order(&requests, entry_path);
     let order: Vec<String> = read_order.iter().filter(|path| modules.contains_key(*path)).cloned().collect();
     let held = |path: &str, name: &str| {
         own.get(path).is_some_and(|names| names.contains(name))
@@ -1827,7 +1818,6 @@ pub fn load_system_module_reading(
     context: &ResolutionContext,
     reads: &mut LoadReads,
 ) -> Result<SystemConfig, String> {
-    let _ = root_dir;
     let entry_path = fs::canonicalize(system_path)
         .map_err(|e| format!("failed to canonicalize '{}': {}", system_path, e))?
         .to_string_lossy()
@@ -1895,7 +1885,7 @@ mod tests {
         let refs: linked::ModuleRefs = FxHashMap::default();
         let mut modules = FxHashMap::default();
         for (path, source) in source_map {
-            modules.insert(path.clone(), linked::rewrite_module_for_linking(source, path, specifier_map, &refs, &|_, _| None)?);
+            modules.insert(path.clone(), linked::rewrite_module_for_linking(source, path, specifier_map, &refs)?);
         }
         let linker = linked::Linker::with_routes(&modules, &FxHashMap::default(), stub_exports);
         let asked = source_map

@@ -20,10 +20,10 @@ use oxc::ast::ast::{
 use oxc::ast::AstKind;
 use oxc::parser::Parser;
 use oxc::semantic::SemanticBuilder;
-use oxc::span::SourceType;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::module_table::{ExportLookup, Import, ImportName, ModuleRecord, ModuleTable, OpeningReason, Request, Terminal};
+use crate::linked::source_type;
 use crate::{
     absent_relative_candidates, asset_import_reason, is_runtime_stub_specifier, looks_like_commonjs, module_export_name,
     real_path_string, resolution, resolve_bare_specifier_observed, resolve_relative, strip_typescript_module, stub_key,
@@ -110,10 +110,15 @@ pub(crate) struct Loader<'c> {
     type_exports: FxHashMap<String, FxHashSet<String>>,
     asked: FxHashMap<String, FxHashSet<String>>,
     table: Option<Linked>,
-    /// The nearest `package.json` name of each directory asked.
-    package_names: FxHashMap<std::path::PathBuf, Option<String>>,
-    /// The owner package directories, once the audit has asked.
-    owners: Option<FxHashSet<std::path::PathBuf>>,
+    /// The nearest `package.json` of each directory asked: its directory and
+    /// name.
+    packages: FxHashMap<std::path::PathBuf, (Option<std::path::PathBuf>, Option<String>)>,
+    /// The owner package directories, once the audit has found them.
+    owners: FxHashSet<std::path::PathBuf>,
+    /// Each binding's class, as root inference found it.
+    classes: FxHashMap<(String, String), Class>,
+    /// Whether each binding holds an Animus value, as traced.
+    traced: FxHashMap<(String, String), bool>,
 }
 
 /// The table over every acquired module, with its key order.
@@ -135,8 +140,10 @@ impl<'c> Loader<'c> {
             type_exports: FxHashMap::default(),
             asked: FxHashMap::default(),
             table: None,
-            package_names: FxHashMap::default(),
-            owners: None,
+            packages: FxHashMap::default(),
+            owners: FxHashSet::default(),
+            classes: FxHashMap::default(),
+            traced: FxHashMap::default(),
         }
     }
 
@@ -311,6 +318,10 @@ impl<'c> Loader<'c> {
         let mut retained: Vec<String> = self.modules.iter().filter(|(_, module)| module.retained).map(|(path, _)| path.clone()).collect();
         retained.sort();
         for path in retained {
+            // A module that never names the method makes no registration.
+            if !self.modules[&path].raw.contains("registerGlobalStyles") {
+                continue;
+            }
             let source = self.modules[&path].raw.clone();
             let allocator = Allocator::default();
             let program = Parser::new(&allocator, &source, source_type(&path)).parse().program;
@@ -354,15 +365,9 @@ impl<'c> Loader<'c> {
     /// export of that binding: the one named `prefer`, else the first.
     fn declared_export(&mut self, module: &str, program: &Program<'_>, local: &str, prefer: &str) -> Result<Option<(String, String)>, String> {
         let (declaring, binding) = match declaration(program, local) {
-            Some(Decl::Import { spec, name: Some(name) }) => match self.target(module, &spec) {
-                Target::Module(path) => {
-                    self.acquire(&path)?;
-                    match self.terminal(&path, &name)? {
-                        Some(terminal) => terminal,
-                        None => return Ok(None),
-                    }
-                }
-                _ => return Ok(None),
+            Some(Decl::Import { spec, name: Some(name) }) => match self.imported(module, &spec, &name)? {
+                Some(terminal) => terminal,
+                None => return Ok(None),
             },
             Some(Decl::Import { .. }) | None => return Ok(None),
             Some(_) => (module.to_string(), local.to_string()),
@@ -381,8 +386,8 @@ impl<'c> Loader<'c> {
     fn unlinked(&mut self, importer: &str, module: &str, name: &str, lookup: ExportLookup<String>) -> Result<(), String> {
         use crate::module_table::{LINK_ABSENT_IMPORT, LINK_AMBIGUOUS_IMPORT};
         // A type a TypeScript module exports, imported without `type`: the
-        // strip erases it, so it links to nothing and fails nothing. A
-        // routed module's types are read from its source as written.
+        // strip erases it, so it links to nothing and fails nothing. Its
+        // types are read from its source as written.
         if matches!(lookup, ExportLookup::Absent) && is_typescript(module) {
             if !self.type_exports.contains_key(module) {
                 let types = type_only_export_names(&self.modules[module].raw, module);
@@ -520,20 +525,14 @@ impl<'c> Loader<'c> {
         if self.modules[path].retained {
             return Ok(());
         }
-        let raw = self.modules[path].raw.clone();
-        let source = if is_typescript(path) {
-            let types = type_only_export_names(&raw, path);
-            if !types.is_empty() {
-                self.type_exports.insert(path.to_string(), types);
-            }
-            strip_typescript_module(&raw, path)?
-        } else {
-            raw
-        };
-        let module = self.modules.get_mut(path).expect("acquired above");
-        module.record = record_of(&source, path);
-        module.source = source;
-        module.retained = true;
+        // Plain JavaScript runs as read, so its record stands.
+        if is_typescript(path) {
+            let source = strip_typescript_module(&self.modules[path].raw, path)?;
+            let module = self.modules.get_mut(path).expect("acquired above");
+            module.record = record_of(&source, path);
+            module.source = source;
+        }
+        self.modules.get_mut(path).expect("acquired above").retained = true;
         self.table = None;
         Ok(())
     }
@@ -582,7 +581,7 @@ impl<'c> Loader<'c> {
                     Target::Module(target) => target,
                 };
                 self.acquire(&target)?;
-                if package_dir(Path::new(&target)) != package_dir(Path::new(path)) {
+                if self.package_dir(Path::new(&target)) != self.package_dir(Path::new(path)) {
                     needs.push(Need::Companions(target.clone()));
                 }
                 match name {
@@ -617,27 +616,16 @@ impl<'c> Loader<'c> {
             let index: FxHashMap<String, usize> = keys.iter().enumerate().map(|(at, key)| (key.clone(), at)).collect();
             let mut records = Vec::with_capacity(keys.len());
             for key in &keys {
-                let record = self.modules[key].record.clone();
-                let mut requests: Vec<Request> = Vec::with_capacity(record.requests.len());
-                for spec in &record.requests {
-                    requests.push(match self.target(key, spec) {
-                        Target::Module(path) => match index.get(&path) {
-                            Some(&at) => Request::Module(at),
-                            None => Request::Unresolved(format!("{PENDING}{path}")),
-                        },
-                        Target::Stub(stub) => Request::Outside(stub),
-                        Target::Failed(reason) => Request::Unresolved(format!("{FAILED}{reason}")),
-                    });
-                }
-                records.push(ModuleRecord {
-                    requests,
-                    imports: record.imports,
-                    local_exports: record.local_exports,
-                    indirect_exports: record.indirect_exports,
-                    namespace_exports: record.namespace_exports,
-                    star_exports: record.star_exports,
-                    default_cells: record.default_cells,
-                });
+                let specs = self.modules[key].record.requests.clone();
+                let mut targets = specs.iter().map(|spec| self.target(key, spec)).collect::<Vec<_>>().into_iter();
+                records.push(self.modules[key].record.resolved(|_| match targets.next().expect("one target per request") {
+                    Target::Module(path) => match index.get(&path) {
+                        Some(&at) => Request::Module(at),
+                        None => Request::Unresolved(format!("{PENDING}{path}")),
+                    },
+                    Target::Stub(stub) => Request::Outside(stub),
+                    Target::Failed(reason) => Request::Unresolved(format!("{FAILED}{reason}")),
+                }));
             }
             self.table = Some(Linked { table: ModuleTable::new(records), keys, index });
         }
@@ -648,9 +636,15 @@ impl<'c> Loader<'c> {
     /// until no route is pending. A star of a stub supplies the name when no
     /// analysed branch does.
     fn lookup(&mut self, module: &str, name: &str) -> Result<ExportLookup<String>, String> {
+        self.settle(|loader| loader.lookup_now(module, name))
+    }
+
+    /// `answer`, asked again after reading each module it waits on, until it
+    /// waits on none.
+    fn settle<T>(&mut self, mut answer: impl FnMut(&mut Self) -> Result<T, Vec<String>>) -> Result<T, String> {
         loop {
-            match self.lookup_now(module, name) {
-                Ok(lookup) => return Ok(lookup),
+            match answer(self) {
+                Ok(answered) => return Ok(answered),
                 Err(pending) => {
                     for path in pending {
                         self.acquire(&path)?;
@@ -668,7 +662,7 @@ impl<'c> Loader<'c> {
         let ExportLookup::Incomplete { known, openings } = lookup else { return Ok(lookup) };
         let pending = pending_of(&openings);
         if pending.is_empty() {
-            return Ok(close_stub_stars(known, openings, name));
+            return Ok(close_stub_stars(known, openings, name, &self.stub_exports));
         }
         Err(pending)
     }
@@ -676,16 +670,7 @@ impl<'c> Loader<'c> {
     /// Every export name of `module`, reading star targets until the list is
     /// closed.
     fn exported_names(&mut self, module: &str) -> Result<Vec<String>, String> {
-        loop {
-            match self.names_now(module) {
-                Ok(names) => return Ok(names),
-                Err(pending) => {
-                    for path in pending {
-                        self.acquire(&path)?;
-                    }
-                }
-            }
-        }
+        self.settle(|loader| loader.names_now(module))
     }
 
     /// Every export name of `module` against the table as read so far, or
@@ -758,19 +743,26 @@ impl<'c> Loader<'c> {
         })
     }
 
-    /// The class of binding `local` declared in `module`.
+    /// The class of binding `local` declared in `module`, once per load.
     fn class_of_binding(&mut self, module: &str, local: &str, depth: usize) -> Result<Class, String> {
-        let source = self.modules[module].raw.clone();
-        let allocator = Allocator::default();
-        let program = Parser::new(&allocator, &source, source_type(module)).parse().program;
-        let class = match declaration(&program, local) {
+        let key = (module.to_string(), local.to_string());
+        if let Some(class) = self.classes.get(&key) {
+            return Ok(class.clone());
+        }
+        let class = self.parsed(module, |loader, program| loader.classify_binding(module, program, local, depth))?;
+        self.classes.insert(key, class.clone());
+        Ok(class)
+    }
+
+    fn classify_binding(&mut self, module: &str, program: &Program<'_>, local: &str, depth: usize) -> Result<Class, String> {
+        let class = match declaration(program, local) {
             None => Class::Unknown(format!("no declaration of '{local}'")),
             Some(Decl::NotSystem) => Class::NotSystem,
-            Some(Decl::Init(init)) => self.class_of_expression(module, &program, init, depth)?,
-            Some(Decl::Assigned(values)) if values.len() == 1 => self.class_of_expression(module, &program, values[0], depth)?,
+            Some(Decl::Init(init)) => self.class_of_expression(module, program, init, depth)?,
+            Some(Decl::Assigned(values)) if values.len() == 1 => self.class_of_expression(module, program, values[0], depth)?,
             Some(Decl::Assigned(_)) => Class::Unknown(format!("'{local}' is assigned more than once")),
             Some(Decl::Destructured { key, from }) => {
-                if non_sealing_method(&key) && self.animus_value(module, &program, from, depth)? {
+                if non_sealing_method(&key) && self.animus_value(module, program, from, depth)? {
                     Class::NotSystem
                 } else {
                     Class::Unknown(format!("'{local}' is destructured from a value not traced to Animus"))
@@ -788,7 +780,7 @@ impl<'c> Loader<'c> {
                 Target::Failed(_) => Class::Unknown(format!("'{local}' is imported from an unresolved module")),
             },
         };
-        if class == Class::Object && written_after(&program, local) {
+        if class == Class::Object && written_after(program, local) {
             return Ok(Class::Unknown(format!("'{local}' is an object written after its declaration")));
         }
         // A system created here is known by this declaration; one an alias
@@ -905,15 +897,14 @@ impl<'c> Loader<'c> {
             Some(Decl::Import { spec, name: Some(name) }) => {
                 non_sealing_function(&name) && self.animus_module(module, &spec)?
                     || non_sealing_method(&name) && {
-                        match self.target(module, &spec) {
-                            Target::Module(path) => {
-                                self.acquire(&path)?;
-                                match self.terminal(&path, &name)? {
-                                    Some((at, binding)) => self.animus_binding_destructured(&at, &binding, depth + 1)?,
-                                    None => false,
+                        match self.imported(module, &spec, &name)? {
+                            Some((at, binding)) => self.parsed(&at, |loader, program| match declaration(program, &binding) {
+                                Some(Decl::Destructured { key, from }) => {
+                                    Ok(non_sealing_method(&key) && loader.animus_value(&at, program, from, depth + 1)?)
                                 }
-                            }
-                            _ => false,
+                                _ => Ok(false),
+                            })?,
+                            None => false,
                         }
                     }
             }
@@ -922,44 +913,35 @@ impl<'c> Loader<'c> {
         })
     }
 
-    /// Whether `binding` in `module` is a method destructured from an Animus
-    /// value.
-    fn animus_binding_destructured(&mut self, module: &str, binding: &str, depth: usize) -> Result<bool, String> {
-        let source = self.modules[module].raw.clone();
-        let allocator = Allocator::default();
-        let program = Parser::new(&allocator, &source, source_type(module)).parse().program;
-        Ok(match declaration(&program, binding) {
-            Some(Decl::Destructured { key, from }) => non_sealing_method(&key) && self.animus_value(module, &program, from, depth)?,
-            _ => false,
-        })
-    }
-
-    /// Whether binding `local` of `module` holds an Animus value.
+    /// Whether binding `local` of `module` holds an Animus value, once per
+    /// load.
     fn animus_binding(&mut self, module: &str, local: &str, depth: usize) -> Result<bool, String> {
-        let source = self.modules[module].raw.clone();
-        let allocator = Allocator::default();
-        let program = Parser::new(&allocator, &source, source_type(module)).parse().program;
-        self.animus_local(module, &program, local, depth)
+        let key = (module.to_string(), local.to_string());
+        if let Some(&traced) = self.traced.get(&key) {
+            return Ok(traced);
+        }
+        let traced = self.parsed(module, |loader, program| loader.animus_local(module, program, local, depth))?;
+        self.traced.insert(key, traced);
+        Ok(traced)
     }
 
-    /// Whether property `key` of the object literal `binding` of `module`
-    /// holds an Animus value.
-    fn animus_property(&mut self, module: &str, binding: &str, key: &str, depth: usize) -> Result<bool, String> {
+    /// `run` over `module`'s source as read, parsed.
+    fn parsed<T>(&mut self, module: &str, run: impl FnOnce(&mut Self, &Program<'_>) -> Result<T, String>) -> Result<T, String> {
         let source = self.modules[module].raw.clone();
         let allocator = Allocator::default();
         let program = Parser::new(&allocator, &source, source_type(module)).parse().program;
-        let value = match declaration(&program, binding) {
-            Some(Decl::Init(Expression::ObjectExpression(literal))) => literal.properties.iter().find_map(|property| match property {
-                ObjectPropertyKind::ObjectProperty(property) if !property.computed && property.key.static_name().as_deref() == Some(key) => {
-                    Some(&property.value)
-                }
-                _ => None,
-            }),
-            _ => None,
-        };
-        match value {
-            Some(value) => self.animus_value(module, &program, value, depth + 1),
-            None => self.animus_local(module, &program, binding, depth + 1),
+        run(self, &program)
+    }
+
+    /// The (module, binding) an import of `name` from `spec`, written in
+    /// `module`, reads, when it resolves to a local binding.
+    fn imported(&mut self, module: &str, spec: &str, name: &str) -> Result<Option<(String, String)>, String> {
+        match self.target(module, spec) {
+            Target::Module(path) => {
+                self.acquire(&path)?;
+                self.terminal(&path, name)
+            }
+            _ => Ok(None),
         }
     }
 
@@ -976,17 +958,14 @@ impl<'c> Loader<'c> {
             }
             Some(Decl::Destructured { from, .. }) => self.animus_value(module, program, from, depth + 1)?,
             Some(Decl::Import { spec, name }) => {
-                if self.animus_module(module, &spec)? {
-                    true
-                } else if let (Target::Module(path), Some(name)) = (self.target(module, &spec), name) {
-                    self.acquire(&path)?;
-                    match self.terminal(&path, &name)? {
-                        Some((at, binding)) => self.animus_binding(&at, &binding, depth + 1)?,
+                self.animus_module(module, &spec)?
+                    || match name {
+                        Some(name) => match self.imported(module, &spec, &name)? {
+                            Some((at, binding)) => self.animus_binding(&at, &binding, depth + 1)?,
+                            None => false,
+                        },
                         None => false,
                     }
-                } else {
-                    false
-                }
             }
             Some(Decl::NotSystem) | None => false,
         })
@@ -1015,17 +994,7 @@ impl<'c> Loader<'c> {
             expression => match expression.as_member_expression() {
                 Some(member) => {
                     let property = member.static_property_name().and_then(|key| match member.object().get_inner_expression() {
-                        Expression::Identifier(object) => match declaration(program, &object.name) {
-                            Some(Decl::Init(Expression::ObjectExpression(literal))) => literal.properties.iter().find_map(|property| match property {
-                                ObjectPropertyKind::ObjectProperty(property)
-                                    if !property.computed && property.key.static_name().as_deref() == Some(key) =>
-                                {
-                                    Some(&property.value)
-                                }
-                                _ => None,
-                            }),
-                            _ => None,
-                        },
+                        Expression::Identifier(object) => literal_property(program, &object.name, key),
                         _ => None,
                     });
                     match property {
@@ -1040,15 +1009,12 @@ impl<'c> Loader<'c> {
                                 _ => None,
                             };
                             match imported {
-                                Some((spec, name, key)) => match self.target(module, &spec) {
-                                    Target::Module(path) => {
-                                        self.acquire(&path)?;
-                                        match self.terminal(&path, &name)? {
-                                            Some((at, binding)) => self.animus_property(&at, &binding, &key, depth + 1)?,
-                                            None => false,
-                                        }
-                                    }
-                                    _ => false,
+                                Some((spec, name, key)) => match self.imported(module, &spec, &name)? {
+                                    Some((at, binding)) => self.parsed(&at, |loader, program| match literal_property(program, &binding, &key) {
+                                        Some(value) => loader.animus_value(&at, program, value, depth + 1),
+                                        None => loader.animus_local(&at, program, &binding, depth + 1),
+                                    })?,
+                                    None => false,
                                 },
                                 None => self.animus_value(module, program, member.object(), depth + 1)?,
                             }
@@ -1065,7 +1031,7 @@ impl<'c> Loader<'c> {
     /// modules whose bodies never run, and, transitively, owned modules they
     /// import. Third-party code is not read. An audit never fails the load.
     fn audit(&mut self, entry: &str, root: &str) {
-        let owners = self.owner_dirs(entry);
+        self.find_owners(entry);
         let runs = |modules: &FxHashMap<String, Module>, path: &str| modules.get(path).is_some_and(|module| module.retained);
         let mut queue: VecDeque<String> = VecDeque::new();
         let mut paths: Vec<String> = self.modules.keys().cloned().collect();
@@ -1083,7 +1049,7 @@ impl<'c> Loader<'c> {
         }
         let mut seen: FxHashSet<String> = FxHashSet::default();
         while let Some(path) = queue.pop_front() {
-            if !seen.insert(path.clone()) || runs(&self.modules, &path) || !self.owned(&path, &owners) {
+            if !seen.insert(path.clone()) || runs(&self.modules, &path) || !self.owned(&path) {
                 continue;
             }
             let source = match self.modules.get(&path) {
@@ -1114,6 +1080,10 @@ impl<'c> Loader<'c> {
     /// traced. A same-named method of a third-party value is not one.
     fn audit_source(&mut self, path: &str, source: &str, root: &str) {
         const REGISTRATIONS: [&str; 2] = ["registerGlobalStyles", "registerKeyframes"];
+        // A module that never names a registration method makes none.
+        if !REGISTRATIONS.iter().any(|method| source.contains(method)) {
+            return;
+        }
         let allocator = Allocator::default();
         let parsed = Parser::new(&allocator, source, source_type(path)).parse();
         if !parsed.diagnostics.is_empty() {
@@ -1122,7 +1092,6 @@ impl<'c> Loader<'c> {
         }
         let program = parsed.program;
         let semantic = SemanticBuilder::new().with_build_nodes(true).build(&program).semantic;
-        let scoping = semantic.scoping();
         for node in semantic.nodes().iter() {
             let AstKind::CallExpression(call) = node.kind() else { continue };
             // The method and the value it is called on, as far as the call
@@ -1195,7 +1164,6 @@ impl<'c> Loader<'c> {
             };
             self.reads.findings.push(finding);
         }
-        let _ = scoping;
     }
 
     fn incomplete(&mut self, path: &str, why: &str) {
@@ -1235,31 +1203,25 @@ impl<'c> Loader<'c> {
             return false;
         }
         let Target::Module(target) = self.target(path, &spec) else { return false };
-        let owners = self.owners.clone().unwrap_or_default();
-        !self.owned(&target, &owners) && self.package_name(Path::new(&target)).as_deref() != Some("@animus-ui/system")
+        !self.owned(&target) && self.package_name(Path::new(&target)).as_deref() != Some("@animus-ui/system")
     }
 
     /// The package directories whose code is owned: the entry's package and
     /// the session's declared workspaces.
-    fn owner_dirs(&mut self, entry: &str) -> FxHashSet<std::path::PathBuf> {
-        let mut owners: FxHashSet<std::path::PathBuf> = self
-            .context
-            .workspaces
-            .values()
-            .map(|dir| std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone()))
-            .collect();
-        owners.extend(package_dir(Path::new(entry)));
-        self.owners = Some(owners.clone());
-        owners
+    fn find_owners(&mut self, entry: &str) {
+        let mut owners: FxHashSet<std::path::PathBuf> =
+            self.context.workspaces.values().map(|dir| resolution::real_path(dir.clone())).collect();
+        owners.extend(self.package_dir(Path::new(entry)));
+        self.owners = owners;
     }
 
     /// Whether `path` is owned code: in an owner package, or in a source kit
     /// (a package declaring the `animus` source condition), wherever it is
     /// installed. Each manifest that decides it is read evidence.
-    fn owned(&mut self, path: &str, owners: &FxHashSet<std::path::PathBuf>) -> bool {
-        let Some(dir) = package_dir(Path::new(path)) else { return false };
+    fn owned(&mut self, path: &str) -> bool {
+        let Some(dir) = self.package_dir(Path::new(path)) else { return false };
         self.reads.read.insert(dir.join("package.json").to_string_lossy().to_string());
-        owners.contains(&dir) || crate::declares_kit_source(&dir)
+        self.owners.contains(&dir) || crate::declares_kit_source(&dir)
     }
 
     /// Whether `spec`, written in `module`, names the `@animus-ui/system`
@@ -1273,28 +1235,43 @@ impl<'c> Loader<'c> {
         Ok(self.package_name(Path::new(&path)).as_deref() == Some("@animus-ui/system"))
     }
 
+    /// The name in the nearest `package.json` above `file`.
     fn package_name(&mut self, file: &Path) -> Option<String> {
-        let mut dir = file.parent()?.to_path_buf();
+        self.package_of(file).1
+    }
+
+    /// The directory of the nearest `package.json` above `file`.
+    fn package_dir(&mut self, file: &Path) -> Option<std::path::PathBuf> {
+        self.package_of(file).0
+    }
+
+    /// The nearest `package.json` above `file`: its directory and name, each
+    /// directory walked once per load.
+    fn package_of(&mut self, file: &Path) -> (Option<std::path::PathBuf>, Option<String>) {
+        let Some(start) = file.parent() else { return (None, None) };
+        let mut dir = start.to_path_buf();
         let mut walked = Vec::new();
-        let name = loop {
-            if let Some(name) = self.package_names.get(&dir) {
-                break name.clone();
+        let found = loop {
+            if let Some(found) = self.packages.get(&dir) {
+                break found.clone();
             }
             walked.push(dir.clone());
             let manifest = dir.join("package.json");
-            if let Ok(text) = std::fs::read_to_string(&manifest) {
-                break serde_json::from_str::<serde_json::Value>(&text)
+            if manifest.is_file() {
+                let name = std::fs::read_to_string(&manifest)
                     .ok()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
                     .and_then(|json| json.get("name").and_then(|name| name.as_str()).map(str::to_string));
+                break (Some(dir.clone()), name);
             }
             if !dir.pop() {
-                break None;
+                break (None, None);
             }
         };
         for dir in walked {
-            self.package_names.insert(dir, name.clone());
+            self.packages.insert(dir, found.clone());
         }
-        name
+        found
     }
 }
 
@@ -1304,9 +1281,7 @@ impl<'c> Loader<'c> {
 fn refuse_unsupported(semantic: &oxc::semantic::Semantic<'_>, source: &str, path: &str) -> Result<(), String> {
     use oxc::span::GetSpan;
     let at = |offset: u32| {
-        let before = &source[..offset as usize];
-        let line = before.matches('\n').count() + 1;
-        let column = before.rsplit('\n').next().map_or(0, |text| text.chars().count()) + 1;
+        let (line, column) = line_column(source, offset);
         format!("{path}:{line}:{column}")
     };
     let scoping = semantic.scoping();
@@ -1465,6 +1440,19 @@ fn declaration<'a, 'p>(program: &'a Program<'p>, local: &str) -> Option<Decl<'a,
     None
 }
 
+/// Property `key` of the module-level object literal `binding`.
+fn literal_property<'a, 'p>(program: &'a Program<'p>, binding: &str, key: &str) -> Option<&'a Expression<'p>> {
+    match declaration(program, binding) {
+        Some(Decl::Init(Expression::ObjectExpression(literal))) => literal.properties.iter().find_map(|property| match property {
+            ObjectPropertyKind::ObjectProperty(property) if !property.computed && property.key.static_name().as_deref() == Some(key) => {
+                Some(&property.value)
+            }
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
 /// The values `local` is assigned at module level.
 fn assignments<'a, 'p>(program: &'a Program<'p>, local: &str) -> Vec<&'a Expression<'p>> {
     program
@@ -1535,41 +1523,22 @@ fn pending_of(openings: &[crate::module_table::Opening]) -> Vec<String> {
         .collect()
 }
 
-/// An open answer with no pending route: a star of a stub supplies the name
-/// when no analysed branch has it.
-fn close_stub_stars(mut known: Vec<Terminal<String>>, openings: Vec<crate::module_table::Opening>, name: &str) -> ExportLookup<String> {
+/// An open answer with no pending route, its stub stars closed as the
+/// linker closes them: a request that resolved to nothing usable keeps it
+/// open, for its reason.
+fn close_stub_stars(
+    known: Vec<Terminal<String>>,
+    openings: Vec<crate::module_table::Opening>,
+    name: &str,
+    stubs: &FxHashMap<String, FxHashSet<String>>,
+) -> ExportLookup<String> {
     let failed = openings
         .iter()
         .any(|opening| matches!(&opening.reason, OpeningReason::UnresolvedRequest(marker) if marker.starts_with(FAILED)));
     if failed && known.is_empty() {
         return ExportLookup::Incomplete { known, openings };
     }
-    if known.is_empty() {
-        if let Some(stub) = openings.iter().find_map(|opening| match &opening.reason {
-            OpeningReason::OutsideStar(stub) => Some(stub.clone()),
-            OpeningReason::UnresolvedRequest(_) => None,
-        }) {
-            known.push(Terminal::External { module: stub, export: Some(name.to_string()) });
-        }
-    }
-    match known.len() {
-        0 => ExportLookup::Absent,
-        1 => ExportLookup::Resolved(known.remove(0)),
-        _ => ExportLookup::Ambiguous(known),
-    }
-}
-
-/// The directory of the nearest `package.json` above `file`.
-fn package_dir(file: &Path) -> Option<std::path::PathBuf> {
-    let mut dir = file.parent()?.to_path_buf();
-    loop {
-        if dir.join("package.json").is_file() {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
+    crate::linked::close_stub_stars(known, openings, name, |stub| stubs.get(stub).is_some_and(|names| names.contains(name)))
 }
 
 /// A byte offset's 1-based line and column (in characters).
@@ -1582,10 +1551,6 @@ fn line_column(source: &str, offset: u32) -> (usize, usize) {
 
 fn is_typescript(path: &str) -> bool {
     [".ts", ".tsx", ".mts", ".cts", ".jsx"].iter().any(|extension| path.ends_with(extension))
-}
-
-fn source_type(path: &str) -> SourceType {
-    SourceType::from_path(Path::new(path)).unwrap_or_else(|_| SourceType::mjs()).with_module(true)
 }
 
 /// A module's runtime imports and exports from its syntax, requests by
