@@ -12,7 +12,7 @@ import type { Rolldown } from 'vite';
 const root = mkdtempSync(join(tmpdir(), 'layergate-vite-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-const files: Record<string, string> = {
+const files = {
   'package.json': '{"name":"app","private":true,"type":"module"}',
   'index.html': '<!doctype html><script type="module" src="/main.js"></script>',
   'node_modules/owned/package.json': '{"name":"owned","version":"1.0.0"}',
@@ -23,7 +23,7 @@ const files: Record<string, string> = {
   'styles/declared.css': '.declared{color:red}\n',
   'styles/app.css': '.app-own{color:red}\n',
   'styles/x.module.css': '.moduled{color:red}\n',
-};
+} satisfies Record<string, string>;
 for (const [path, text] of Object.entries(files)) {
   mkdirSync(dirname(join(root, path)), { recursive: true });
   writeFileSync(join(root, path), text);
@@ -31,6 +31,7 @@ for (const [path, text] of Object.entries(files)) {
 
 async function builtCss(main: string, options: LayergateOptions): Promise<string> {
   writeFileSync(join(root, 'main.js'), main);
+  // SAFETY: a build with no watcher and one environment returns one output.
   const output = (await build({
     root,
     logLevel: 'silent',
