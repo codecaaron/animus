@@ -5,6 +5,7 @@
  * `node_modules` path, where an installed source kit lives).
  */
 
+import { isExcludedPackageRelativePath } from '@animus-ui/extract/pipeline';
 import { sep } from 'path';
 
 export type WatchIgnoreEntry = string | RegExp;
@@ -121,7 +122,9 @@ const comparable =
     ? (path: string) => path.toLowerCase()
     : (path: string) => path;
 
-/** Whether a path is one of `directories` or lies under one. A prefix test:
+/** Whether a path is one of `directories` or lies under one where a kit's
+ *  sources can live: never in the kit's own `node_modules` or another path
+ *  ingestion excludes, which stay as the host decides. A prefix test:
  *  webpack's watcher asks for every path it watches. */
 export function withinDirectories(
   directories: readonly string[]
@@ -131,6 +134,10 @@ export function withinDirectories(
   );
   return (path) => {
     const key = comparable(path) + sep;
-    return prefixes.some((prefix) => key.startsWith(prefix));
+    const prefix = prefixes.find((candidate) => key.startsWith(candidate));
+    return (
+      prefix !== undefined &&
+      !isExcludedPackageRelativePath(key.slice(prefix.length))
+    );
   };
 }
