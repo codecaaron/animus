@@ -262,11 +262,14 @@ thread_local! {
 /// directory's listing is read the first time the pass checks it and
 /// answers every later check in that pass. A limit: a file another process
 /// writes to that directory after it is listed is not seen until the next
-/// pass. A real path is never stale: where a directory the pass joined a
-/// real path through was relinked during it, or an entry it listed became
-/// a link or was one when [`read_source`] read it, `run` runs again with
-/// every real path read from the disk, so `run` must start afresh each
-/// time. A nested scope shares the open one.
+/// pass. Where a directory the pass joined a real path through was
+/// relinked during it, or an entry it listed became a link or was one when
+/// [`read_source`] read it, `run` runs again with every real path read from
+/// the disk, so `run` must start afresh each time. Another limit: an
+/// ancestor directory or a `package.json` relinked and restored between two
+/// reads of one pass is not detected. A load during such changes has no
+/// defined answer, and watch mode reloads, since each such path is a
+/// recorded dependency. A nested scope shares the open one.
 pub fn with_listing_cache<T>(mut run: impl FnMut() -> T) -> T {
     if PASS.with(|pass| pass.borrow().is_some()) {
         return run();
