@@ -9384,16 +9384,19 @@ mod tests {
         }
         let links = crate::link::ProjectLinks::link(&files, inputs);
         judge_object_handoffs(&mut files, inputs, &links);
-        let changes = member_changes(&files, inputs);
+        let changes = member_changes(&files, inputs, &links);
         run_with_system_floor(&files, &order, inputs, "animus", total_system_floor, changes)
     }
 
     /// The relation of what may change in `files`, holding the member
     /// tables' changes alone.
-    fn member_changes(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> crate::flow::ValueEffects {
-        let links = crate::link::ProjectLinks::link(files, inputs);
+    fn member_changes(
+        files: &BTreeMap<String, FileFacts>,
+        inputs: &CssInputs,
+        links: &crate::link::ProjectLinks,
+    ) -> crate::flow::ValueEffects {
         let mut flow = crate::flow::FlowBuilder::new();
-        crate::family_members::record_member_changes(files, inputs, &links, &mut flow);
+        crate::family_members::record_member_changes(files, inputs, links, &mut flow);
         flow.close()
     }
 
@@ -10914,9 +10917,11 @@ mod tests {
         legacy.usage_enriched = None;
 
         let order = vec!["a.tsx".to_string()];
+        let inputs = test_inputs();
         let out = |facts| {
             let files = BTreeMap::from([("a.tsx".to_string(), facts)]);
-            run(&files, &order, &test_inputs(), "animus", member_changes(&files, &test_inputs()))
+            let links = crate::link::ProjectLinks::link(&files, &inputs);
+            run(&files, &order, &inputs, "animus", member_changes(&files, &inputs, &links))
         };
         let (enriched_out, legacy_out) = (out(enriched), out(legacy));
 

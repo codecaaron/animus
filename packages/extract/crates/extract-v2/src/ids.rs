@@ -28,6 +28,10 @@ pub fn content_hash(input: &str) -> String {
     format!("{:08x}", fnv1a(FNV_OFFSET, input) as u32)
 }
 
+/// The prefix of the class names the engine generates. A host's own prefix
+/// is applied to them afterwards, through its name map.
+pub const CLASS_PREFIX: &str = "animus";
+
 /// `{prefix}-{binding}-{hash}`.
 pub fn make_class_name(binding: &str, hash_input: &str, prefix: &str) -> String {
     format!("{}-{}-{}", prefix, binding, content_hash(hash_input))

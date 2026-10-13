@@ -90,10 +90,6 @@ pub struct EngineOptions {
     pub property_records_json: Option<String>,
 }
 
-/// The prefix of the class names the engine generates. A host's own prefix
-/// is applied to them afterwards, through its name map.
-const CLASS_PREFIX: &str = "animus";
-
 struct ResolvedOptions {
     runtime_import: String,
     css_module_id: String,
@@ -1323,7 +1319,11 @@ impl ExtractEngine {
             lowered_by_file.iter().map(|(path, lowered)| (path.clone(), std::sync::Arc::clone(&lowered.readings))).collect();
         let mut readings_of = |file: &str| readings_by_file.get(file).cloned().unwrap_or_default();
         // One relation of what may change, closed once: style statics' uses
-        // and the member tables', read from the structural facts.
+        // and the member tables', read from the structural facts. Both record
+        // some of the same openings (unread imports, namespace re-exports,
+        // runtime loads) in their own words, and a reader names the first
+        // recorded: the member tables record first, so each reader says what
+        // it said with a relation of its own.
         let mut flow = crate::flow::FlowBuilder::new();
         crate::family_members::record_member_changes(&structural_by_file, &self.opts.css_inputs, &links, &mut flow);
         record_style_changes(
@@ -1500,7 +1500,7 @@ impl ExtractEngine {
                 .expect("Pass A must record complete local statics for every file");
             let mut file_facts = facts::extract_file_facts_from_static_maps(
                 ast,
-                CLASS_PREFIX,
+                crate::ids::CLASS_PREFIX,
                 local_statics,
                 local_usage_statics,
                 extra,
@@ -1525,7 +1525,7 @@ impl ExtractEngine {
             &self.facts,
             &self.order,
             &self.opts.css_inputs,
-            CLASS_PREFIX,
+            crate::ids::CLASS_PREFIX,
             changes,
         );
         // Only the engine holds the sources a diagnostic's line and column
@@ -1618,7 +1618,7 @@ impl ExtractEngine {
         let replacements = assemble::assemble_replacements(
             &path,
             file_facts,
-            CLASS_PREFIX,
+            crate::ids::CLASS_PREFIX,
             Some(&file_payloads),
             &self.opts.css_inputs.group_registry,
         )

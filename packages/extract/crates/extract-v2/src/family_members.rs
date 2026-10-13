@@ -293,7 +293,7 @@ pub(crate) struct ObjectMembers<'f> {
     building: FxHashSet<Object>,
     /// What the uses in the analysed modules may change: the analysis's one
     /// closed relation, which a collector only recording has not yet.
-    changed: Option<ValueEffects>,
+    changes: Option<ValueEffects>,
 }
 
 /// Records into `flow` what the uses in `files` may change of the objects
@@ -328,7 +328,7 @@ impl<'f> ObjectMembers<'f> {
             objects: FxHashMap::default(),
             tables: FxHashMap::default(),
             building: FxHashSet::default(),
-            changed: None,
+            changes: None,
         }
     }
 
@@ -691,13 +691,13 @@ impl<'f> ObjectMembers<'f> {
     /// Answers from `changes`, the analysis's one relation, closed already
     /// with this collector's changes among others' (`record_member_changes`).
     pub(crate) fn with_changes(mut self, changes: ValueEffects) -> Self {
-        self.changed = Some(changes);
+        self.changes = Some(changes);
         self
     }
 
     /// What the uses in the analysed modules may change.
-    pub(crate) fn changes(&mut self) -> &ValueEffects {
-        self.changed.as_ref().expect("member tables answer from the analysis's closed relation")
+    pub(crate) fn changes(&self) -> &ValueEffects {
+        self.changes.as_ref().expect("member tables answer from the analysis's closed relation")
     }
 
     /// The first use in the analysed modules that may change `object`, said
