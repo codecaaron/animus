@@ -2248,7 +2248,7 @@ mod tests {
         }];
 
         let css = generate_css(&components, &test_breakpoints());
-        assert!(css.contains("@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;"));
+        assert!(css.contains("@layer anm-vendor, anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;"));
         assert!(css.contains("@layer anm-base {"));
         assert!(css.contains(".animus-Box-abcd1234 {"));
         assert!(css.contains("padding: 0;"));
@@ -2417,7 +2417,7 @@ mod tests {
     #[test]
     fn layer_declaration_order() {
         let css = generate_css(&[], &test_breakpoints());
-        assert!(css.starts_with("@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;"));
+        assert!(css.starts_with("@layer anm-vendor, anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;"));
     }
 
     use crate::theme::{FlatTheme, PropConfig, PropConfigMap};

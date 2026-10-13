@@ -98,6 +98,7 @@ export function publishRecord(
     packageReadRecord: null,
     replacementEpoch: '',
     externalPackageDirs: [],
+    stylesheetPlan: null,
     externalSourceEntries: new Map(),
     externalSourceSideEffects: new Map(),
     ...state.publication,

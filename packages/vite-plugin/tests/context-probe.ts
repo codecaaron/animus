@@ -54,6 +54,7 @@ export function publicationWith(
 ): SessionPublication {
   return {
     manifest: makeManifest(),
+    stylesheetPlan: null,
     manifestJson: '{}',
     analysisGlobalCss: '',
     analysisComponentCss: '',

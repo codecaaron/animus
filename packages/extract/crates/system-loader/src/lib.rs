@@ -2750,6 +2750,33 @@ export const ds = tokens;
         );
     }
 
+    /// Contract: the record's stylesheet plan reaches the wire as written,
+    /// in order; a record without one carries none.
+    #[test]
+    fn sealed_record_carries_its_stylesheet_plan() {
+        let dir = scratch_dir("vocab-stylesheets");
+        let entry = dir.join("entry.ts");
+        let record = TWO_COLLECTION_RECORD.replacen(
+            "collisions: [],",
+            "collisions: [],\n stylesheets: { version: 1, vendor: ['pkg/a.css', './b.css'], vendorOptOut: ['./c.css'] },",
+            1,
+        );
+        write_fixture(&entry, &sealed_system_fixture(&record));
+        let plan = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default())
+            .expect("sealed system must load")
+            .stylesheet_plan;
+        write_fixture(&entry, &sealed_system_fixture(TWO_COLLECTION_RECORD));
+        let none = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default())
+            .expect("sealed system must load")
+            .stylesheet_plan;
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(
+            plan.as_deref(),
+            Some(r#"{"version":1,"vendor":["pkg/a.css","./b.css"],"vendorOptOut":["./c.css"]}"#)
+        );
+        assert_eq!(none, None);
+    }
+
     #[test]
     fn exported_but_unregistered_collection_does_not_carry() {
         let dir = scratch_dir("vocab-unregistered");

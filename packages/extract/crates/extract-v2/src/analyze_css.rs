@@ -9724,7 +9724,7 @@ mod tests {
             out.sheets.base
         );
         assert!(
-            out.css.starts_with("@layer anm-global, anm-base"),
+            out.css.starts_with("@layer anm-vendor, anm-global, anm-base"),
             "{}",
             out.css
         );

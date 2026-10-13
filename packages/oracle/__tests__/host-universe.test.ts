@@ -56,6 +56,7 @@ describe('createAnimusHost — the style universe over the emitted artifacts', (
 
   it('ranks sub-layers below the unlayered content of their parent', () => {
     expect(universe.layerOrder).toEqual([
+      'anm-vendor',
       'anm-global',
       'anm-base',
       'anm-variants/standalone',

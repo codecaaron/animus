@@ -210,7 +210,9 @@ describe('assembleStylesheet', () => {
       componentCss: '@layer anm-base { .btn { color: red; } }',
     });
 
-    const layerDeclIdx = result.indexOf('@layer anm-global, anm-base,');
+    const layerDeclIdx = result.indexOf(
+      '@layer anm-vendor, anm-global, anm-base,'
+    );
     const variableIdx = result.indexOf(':root');
     const globalIdx = result.indexOf('@layer anm-global { body');
     const componentIdx = result.indexOf('@layer anm-base { .btn');
@@ -225,11 +227,11 @@ describe('assembleStylesheet', () => {
     const result = assembleStylesheet({
       variableCss: ':root { --x: 1; }',
       componentCss:
-        '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n@layer anm-base { .a { } }',
+        '@layer anm-vendor, anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n@layer anm-base { .a { } }',
     });
 
     const declarations = result.match(
-      /@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;/g
+      /@layer anm-vendor, anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;/g
     );
     expect(declarations).toHaveLength(1);
   });
@@ -294,7 +296,7 @@ describe('assembleStylesheet split + post-processing', () => {
       .filter(Boolean)
       .join('\n');
 
-    expect(output).toMatch(/^@layer\s+anm-global/);
+    expect(output).toMatch(/^@layer\s+anm-vendor,\s*anm-global/);
     expect(output.indexOf(':root')).toBeLessThan(
       output.indexOf('@layer anm-global {')
     );

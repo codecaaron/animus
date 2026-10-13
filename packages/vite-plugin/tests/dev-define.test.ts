@@ -9,7 +9,7 @@ type ConfigHookCall = OmitThisParameter<ConfigHook>;
 
 describe('__ANIMUS_DEV__ define', () => {
   const runConfigHook = (command: ConfigEnv['command']) => {
-    const hook = animusExtract({ system: './src/ds.ts' }).config;
+    const hook = animusExtract({ system: './src/ds.ts' })[0].config;
     if (hook === undefined || 'handler' in hook) {
       throw new Error('expected a plain function `config` hook');
     }

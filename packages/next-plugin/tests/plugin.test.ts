@@ -499,12 +499,12 @@ describe('production run (full pipeline)', () => {
 
     const css = readFileSync(artifactPath(root, plugin, 'styles.css'), 'utf-8');
     expect(css).toContain(
-      '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;'
+      '@layer anm-vendor, anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;'
     );
     expect(css).toContain(':root{--anm-space-1: 4px}');
     expect(css).toMatch(/@layer anm-global\s*\{\s*body\s*\{\s*margin:\s*0/);
     expect(css).toMatch(/\.btn\s*\{\s*margin:\s*8px/);
-    expect(css.indexOf('@layer anm-global,')).toBe(0);
+    expect(css.indexOf('@layer anm-vendor, anm-global,')).toBe(0);
     expect(css.indexOf(':root')).toBeLessThan(
       css.search(/@layer anm-global\s*\{/)
     );
@@ -565,7 +565,7 @@ describe('production run (full pipeline)', () => {
     await runHandlers[0](compiler);
 
     const css = readFileSync(artifactPath(root, plugin, 'styles.css'), 'utf-8');
-    expect(css.indexOf('@layer anm-global,')).toBe(0);
+    expect(css.indexOf('@layer anm-vendor, anm-global,')).toBe(0);
     expect(css).toContain(':root{--anm-space-1: 4px}');
     expect(css).toContain('.btn{margin:8px}');
     expect(css).toContain('@layer anm-global{body{margin:0}}');

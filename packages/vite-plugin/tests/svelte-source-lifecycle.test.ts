@@ -514,7 +514,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     }).toEqual({
       clears: clearsBeforeReset + 1,
       warnings: [expect.stringContaining(`SVELTE_PARSE_ERROR ${usagePath}`)],
-      invalidatedCount: 3,
+      invalidatedCount: 4,
       hotMessages: [{ type: 'full-reload' }],
       transformError: null,
       transformedPaths: [definitionPath],

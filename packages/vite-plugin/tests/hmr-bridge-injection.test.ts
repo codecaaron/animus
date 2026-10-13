@@ -95,7 +95,7 @@ describe('bridge delivery via transformIndexHtml', () => {
 
 describe('the wired hook delivers the bridge', () => {
   test('the real plugin hook returns the bridge tag in its dev default state', async () => {
-    const plugin = animusExtract({ system: './ds.ts' });
+    const [plugin] = animusExtract({ system: './ds.ts' });
     const hook = plugin.transformIndexHtml;
 
     if (hook === undefined || !('handler' in hook)) {

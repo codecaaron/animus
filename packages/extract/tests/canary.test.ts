@@ -76,10 +76,11 @@ describe('assembleStylesheet: anm- layer names', () => {
   test('default produces anm- prefixed layer declaration', () => {
     const css = assemble({});
     expect(css).toContain(
-      '@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;'
+      '@layer anm-vendor, anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;'
     );
   });
 
+  // A list written before the vendor layer existed takes it first.
   test('custom layers with TW interleaving', () => {
     const css = assemble({
       layers: [
@@ -95,7 +96,7 @@ describe('assembleStylesheet: anm- layer names', () => {
       ],
     });
     expect(css).toContain(
-      '@layer base, anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom, utilities;'
+      '@layer anm-vendor, base, anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom, utilities;'
     );
   });
 
@@ -114,7 +115,7 @@ describe('assembleStylesheet: anm- layer names', () => {
       ],
     });
     expect(css).toContain(
-      '@layer reset, anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom, overrides;'
+      '@layer anm-vendor, reset, anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom, overrides;'
     );
   });
 });
@@ -132,7 +133,7 @@ describe('assembleStylesheet: split mode', () => {
 
   test('declaration contains @layer statement, not in body', () => {
     const { declaration, body } = assemble({ ...opts, split: true });
-    expect(declaration).toContain('@layer anm-global, anm-base');
+    expect(declaration).toContain('@layer anm-vendor, anm-global, anm-base');
     expect(body).not.toMatch(/^@layer\s+[\w-]+(\s*,\s*[\w-]+)*\s*;/m);
   });
 

@@ -425,4 +425,25 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
     expect(recordOf(sealed).legacyVerbs).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
   });
+
+  // Contract: the vendor stylesheets ride the same linear registration onto
+  // the sealed record, in declaration order, appended across calls; an
+  // extended kit's are not inherited, and a pattern is rejected.
+  it('registerVendorStyles records the declared and opted-out files in order', () => {
+    const sealed = createSystem()
+      .build()
+      .registerVendorStyles(['pkg/a.css', './b.css'], { optOut: ['./c.css'] })
+      .registerVendorStyles(['./d.css', 'pkg/a.css'])
+      .seal();
+    expect(recordOf(sealed).stylesheets).toEqual({
+      version: 1,
+      vendor: ['pkg/a.css', './b.css', './d.css'],
+      vendorOptOut: ['./c.css'],
+    });
+    const extended = createSystem().extend(sealed).build().seal();
+    expect(recordOf(extended).stylesheets).toBeUndefined();
+    expect(() =>
+      createSystem().build().registerVendorStyles(['./css/*.css'])
+    ).toThrow(/name each file exactly/);
+  });
 });

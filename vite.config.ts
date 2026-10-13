@@ -37,6 +37,7 @@ const typescriptTestTargets = [
   'packages/extract/tests/svelte-source-adapter.test.ts',
   'packages/extract/tests/svelte-source-origin.test.ts',
   'packages/extract/tests/tsconfig-paths.test.ts',
+  'packages/extract/tests/vendor-css.test.ts',
   'packages/extract/tests/vocabulary-witness-diagnostics.test.ts',
   'packages/extract/tests/watch-keys.test.ts',
   'scripts/verify/owner-graph.test.ts',

@@ -101,7 +101,7 @@ test('an installed kit leaves the dependency optimizer and SSR externals, and it
     ].join('\n')
   );
 
-  const hook = animusExtract({ system: './src/ds.ts' }).config;
+  const hook = animusExtract({ system: './src/ds.ts' })[0].config;
   if (hook === undefined || 'handler' in hook) {
     throw new Error('expected a plain function `config` hook');
   }

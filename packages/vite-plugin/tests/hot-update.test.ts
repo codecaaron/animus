@@ -803,6 +803,7 @@ function observedContext(root: string) {
     const publication: SessionPublication = {
       manifest,
       manifestJson: JSON.stringify(manifest),
+      stylesheetPlan: null,
       analysisGlobalCss: '',
       analysisComponentCss: '',
       styles: '',

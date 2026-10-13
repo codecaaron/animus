@@ -299,7 +299,7 @@ describe('engine handle lifetime', () => {
     const root = makeTempRoot('animus-vite-engine-');
 
     // The config hook's kit lookup runs before the root resolves.
-    const config = animusExtract({ system: './ds.ts' }).config;
+    const config = animusExtract({ system: './ds.ts' })[0].config;
     if (config === undefined || 'handler' in config) {
       throw new Error('animusExtract declares its config hook as a method');
     }
