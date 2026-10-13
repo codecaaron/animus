@@ -140,8 +140,16 @@ export function transformWithManifest(args: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   engineApi: () => any;
   opts: LoaderPolicyOptions;
+  /** The system's registered vendor stylesheets, absolute: the root entry
+   *  imports them right after Animus's stylesheet, before its own. */
+  declaredStylesheets?: readonly string[];
 }): string {
   const { source, filename, manifestJson, engineApi, opts } = args;
+  const rootImports =
+    CSS_IMPORT_STATEMENT +
+    (args.declaredStylesheets ?? [])
+      .map((file) => `import ${JSON.stringify(file)};\n`)
+      .join('');
   const isRootEntry = isCssImportTarget(filename, opts.cssImportTarget);
 
   try {
@@ -171,12 +179,12 @@ export function transformWithManifest(args: {
       if (code.startsWith("'use client'") || code.startsWith('"use client"')) {
         const nl = code.indexOf('\n');
         if (nl === -1) {
-          code = `${code}\n${CSS_IMPORT_STATEMENT}`;
+          code = `${code}\n${rootImports}`;
         } else {
-          code = `${code.slice(0, nl + 1)}${CSS_IMPORT_STATEMENT}${code.slice(nl + 1)}`;
+          code = `${code.slice(0, nl + 1)}${rootImports}${code.slice(nl + 1)}`;
         }
       } else {
-        code = `${CSS_IMPORT_STATEMENT}${code}`;
+        code = `${rootImports}${code}`;
       }
     }
 

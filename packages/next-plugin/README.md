@@ -134,6 +134,7 @@ Two rules either way:
 - Emits extracted CSS as a separate asset with `@layer` ordering
 - Post-processes the emitted sheet with Lightning CSS — autoprefixed for your `targets` (browserslist query; defaults to the project config), minified in production (`minify` overrides)
 - Works with both App Router and Pages Router
+- Wraps every stylesheet webpack compiles that Animus did not produce — package and app CSS, CSS Modules — in the `anm-vendor` layer below Animus's layers, and loads the sheets the system registers with `registerVendorStyles` first, from the root layout and `pages/_app`. Turbopack does not wrap them yet, and says so once per build (`animus.vendor.coverage`); `next build --webpack` does
 - Supports RSC — no runtime style injection means server components work out of the box
 
 ## License

@@ -30,6 +30,7 @@ import {
   RESOLVED_COMPONENTS_ID,
   RESOLVED_CSS_ID,
   RESOLVED_SYSTEM_PROPS_ID,
+  RESOLVED_VENDOR_STYLES_ID,
   VIRTUAL_CSS_ID,
   VIRTUAL_SYSTEM_PROPS_ID,
 } from './constants';
@@ -45,6 +46,7 @@ import type {
   HostExtensionPolicy,
   HostLoadExpander,
   ProjectManifest,
+  ResolvedStylesheetPlan,
   SystemConfig,
 } from '@animus-ui/extract/pipeline';
 import type {
@@ -153,6 +155,12 @@ export class PluginContext {
 
   get system(): SystemConfig {
     return this.served?.system ?? this.unpublishedSystem;
+  }
+
+  /** The system's vendor stylesheets, as the served publication resolved
+   *  them; null when it registers none. */
+  get stylesheetPlan(): ResolvedStylesheetPlan | null {
+    return this.served?.stylesheetPlan ?? null;
   }
 
   get reverseProvenance(): Record<string, string[]> {
@@ -663,6 +671,7 @@ export class PluginContext {
       RESOLVED_CSS_ID,
       RESOLVED_COMPONENTS_ID,
       RESOLVED_SYSTEM_PROPS_ID,
+      RESOLVED_VENDOR_STYLES_ID,
     ]) {
       const mod = server.moduleGraph.getModuleById(moduleId);
       if (mod) server.moduleGraph.invalidateModule(mod);

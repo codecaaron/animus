@@ -49,6 +49,9 @@ export interface SystemConfig {
   /** Coded witness entries from the sealed system's registration record —
    *  the witness channel, since the evaluation host's console is a no-op. */
   vocabularyWitnessesJson?: string | null;
+  /** The stylesheet plan the system registers, `{ version, vendor,
+   *  vendorOptOut }`, as written in its file; null when it has none. */
+  stylesheetPlanJson?: string | null;
   /** Canonical absolute paths of every module the loader evaluated (sorted;
    *  runtime stubs excluded) — the system-reload membership set. */
   dependencies?: string[];
@@ -231,6 +234,7 @@ export function loadSystemConfig(
     globalStyleBlocksJson: config.globalStyleBlocks || null,
     keyframesJson: config.keyframesBlocks || null,
     vocabularyWitnessesJson: config.vocabularyWitnesses || null,
+    stylesheetPlanJson: config.stylesheetPlan || null,
     dependencies: config.dependencies ?? [],
     missing: config.missing ?? [],
     sourceThemeManifestsJson: config.sourceThemeManifests || null,

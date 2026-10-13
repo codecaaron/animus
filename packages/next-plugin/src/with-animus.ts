@@ -10,9 +10,12 @@ import {
   outputExclusion,
   resolveMode,
   sourceKitDependencies,
+  createVendorReporter,
   turbopackExtensionPolicy,
+  vendorCoverageNotice,
 } from '@animus-ui/extract/pipeline';
 import {
+  ANIMUS_ARTIFACT_DIR,
   createBuildId,
   ExtractionSession,
   requireEngine,
@@ -21,11 +24,20 @@ import {
   stylesPath,
   systemPropsPath,
 } from '@animus-ui/extract/session';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'fs';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
-import { resolveAnimusLoaderPath } from './loader-path';
+import {
+  resolveAnimusLoaderPath,
+  resolveVendorCssLoaderPath,
+} from './loader-path';
 import { ANIMUS_CSS_MODULE_ID, AnimusWebpackPlugin } from './plugin';
 import { sameDirectory } from './same-directory';
 import {
@@ -63,6 +75,8 @@ interface WebpackRule {
   exclude?: RegExp | ((path: string) => boolean);
   enforce?: string;
   use?: WebpackLoaderUse[];
+  oneOf?: WebpackRule[];
+  rules?: WebpackRule[];
 }
 
 interface WebpackConfig {
@@ -420,10 +434,76 @@ export function withAnimus(
           ],
         });
 
+        const wrapping = insertVendorCssLoader(config.module.rules, {
+          loader: resolveVendorCssLoaderPath(),
+          options: {
+            animusArtifacts: realpathSync(join(rootDir, ANIMUS_ARTIFACT_DIR)),
+            build,
+            root: rootDir,
+            strict: options.strict,
+            diagnostics: options.diagnostics,
+          },
+        });
+        if (wrapping === 0) {
+          vendorCoverage(
+            options,
+            'webpack',
+            'none of its CSS rules runs css-loader, where Animus wraps them'
+          );
+        }
+
         return config;
       },
     };
   };
+}
+
+/** webpack's css-loader, Next's bundled copy included: by path, as Next
+ *  writes its rules. */
+const CSS_LOADER = /[\\/]css-loader[\\/]/;
+
+/**
+ * Runs the vendor loader in every CSS rule, nested ones included, just
+ * before css-loader: after PostCSS or Sass compile a unit, before css-loader
+ * turns it into a module and the extract or style loader delivers it.
+ * Every stylesheet the build loads passes one of these rules: the app's, a
+ * package's, a CSS Module's. Returns how many rules run it.
+ */
+function insertVendorCssLoader(
+  rules: readonly WebpackRule[],
+  vendorLoader: WebpackLoaderUse
+): number {
+  let inserted = 0;
+  // A rule list may hold `false` or `null` placeholders.
+  for (const rule of rules.filter(Boolean)) {
+    inserted += insertVendorCssLoader(rule.oneOf ?? [], vendorLoader);
+    inserted += insertVendorCssLoader(rule.rules ?? [], vendorLoader);
+    // A rule's `use` can also be one loader or a function of the module:
+    // Next's CSS rules write a list.
+    if (!Array.isArray(rule.use)) continue;
+    const at = rule.use.findIndex((entry) => CSS_LOADER.test(entry.loader));
+    if (at === -1) continue;
+    if (!rule.use.includes(vendorLoader)) {
+      rule.use.splice(at + 1, 0, vendorLoader);
+    }
+    inserted += 1;
+  }
+  return inserted;
+}
+
+/** Reports, once per process, a host that leaves stylesheets unwrapped. */
+const coverageReported = new Set<string>();
+function vendorCoverage(
+  options: AnimusNextOptions,
+  host: string,
+  why: string
+): void {
+  if (coverageReported.has(host)) return;
+  coverageReported.add(host);
+  createVendorReporter((line) => console.warn(`[animus] ${line}`), {
+    levels: options.diagnostics,
+    strict: options.strict,
+  })(host, why, [vendorCoverageNotice(host, why)]);
 }
 
 /** The part of webpack's resolve data the kit redirect reads and writes. */
@@ -495,6 +575,11 @@ function turbopackConfig<Config extends NextOwnedConfig>(
   build: string,
   appRoot: string
 ): TurbopackNextConfig<Config> {
+  vendorCoverage(
+    options,
+    'Turbopack',
+    "Turbopack's CSS pipeline has no interception Animus uses yet, and the sheets the system registers with registerVendorStyles are not loaded; the webpack build (`next build --webpack`) wraps and loads them"
+  );
   // Turbopack's extension order as Next merges it: `turbopack`, else the
   // legacy `experimental.turbo`; its documented default without either.
   const resolveExtensions =

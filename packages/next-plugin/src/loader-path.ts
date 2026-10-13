@@ -20,3 +20,11 @@ export function resolveLoaderPath(
 export function resolveAnimusLoaderPath(): string {
   return resolveLoaderPath(__dirname, ['loader.mjs'], 'loader.ts');
 }
+
+export function resolveVendorCssLoaderPath(): string {
+  return resolveLoaderPath(
+    __dirname,
+    ['vendor-css-loader.mjs'],
+    'vendor-css-loader.ts'
+  );
+}

@@ -70,6 +70,7 @@ export {
   getAnalysisStartedPromise,
   getAnalyzedHashes,
   getManifestJson,
+  getStylesheetPlan,
   getReplacementEpoch,
   getSessionArtifactDir,
   getSharedCss,

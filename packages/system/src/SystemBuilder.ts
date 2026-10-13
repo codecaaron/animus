@@ -218,6 +218,18 @@ export interface VocabularyLegacyVerbEntry {
 }
 
 /**
+ * The stylesheets a system declares for the vendor layer, as written in its
+ * file: package specifiers, or paths relative to it. Hosts resolve them.
+ */
+export interface StylesheetPlan {
+  readonly version: 1;
+  /** Loaded first in the vendor layer, in this order, imported or not. */
+  readonly vendor: readonly string[];
+  /** Left out of the vendor layer, each keeping its own cascade position. */
+  readonly vendorOptOut: readonly string[];
+}
+
+/**
  * The registration record a sealed system carries, in declaration order.
  * The loader reads registered collections exclusively from here.
  */
@@ -227,6 +239,8 @@ export interface VocabularyRecord {
   readonly globalStyles: readonly VocabularyGlobalStyleEntry[];
   readonly collisions: readonly VocabularyCollisionEntry[];
   readonly legacyVerbs: readonly VocabularyLegacyVerbEntry[];
+  /** Present when the system registers vendor stylesheets. */
+  readonly stylesheets?: StylesheetPlan;
 }
 
 /** ONE name-space across both kinds: a global-style block and a keyframes
@@ -427,6 +441,18 @@ export interface SystemBundle<
         [K in Extract<keyof M, Vocab>]: VocabularyNameCollision<K & string>;
       }
   ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab | (keyof M & string)>;
+  /**
+   * Stylesheets Animus did not produce that the app loads first, in the
+   * `anm-vendor` layer below every Animus layer, in this order: package
+   * specifiers (`'react-grid-layout/css/styles.css'`) or paths relative to
+   * this file. Every other stylesheet the host compiles is wrapped in the
+   * same layer after them. `optOut` names exact files that keep their own
+   * cascade position. Registration is linear; a later call appends.
+   */
+  registerVendorStyles(
+    sheets: readonly string[],
+    options?: { optOut?: readonly string[] }
+  ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab>;
   seal(): SealedSystemInstance<PropReg, GroupReg, Conds, Sels, Vocab>;
 }
 
@@ -1380,14 +1406,12 @@ export class SystemBuilder<
     const makeBundle = (
       entries: readonly VocabularyEntryState[],
       collisions: readonly VocabularyCollisionEntry[],
-      localCallCount: number
+      localCallCount: number,
+      stylesheets: Omit<StylesheetPlan, 'version'>
     ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
       let consumedBy: 'register' | 'seal' | undefined;
 
-      const registerEntries = (
-        label: string,
-        incoming: VocabularyEntryInput[]
-      ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
+      const assertOpen = (label: string): void => {
         if (consumedBy === 'seal') {
           throw new Error(
             `${label}: this system is already sealed — registration ` +
@@ -1401,6 +1425,13 @@ export class SystemBuilder<
               'final bundle.'
           );
         }
+      };
+
+      const registerEntries = (
+        label: string,
+        incoming: VocabularyEntryInput[]
+      ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
+        assertOpen(label);
         const merged = mergeVocabularyEntries(
           entries,
           collisions,
@@ -1411,8 +1442,47 @@ export class SystemBuilder<
         return makeBundle(
           merged.entries,
           merged.collisions,
-          localCallCount + 1
+          localCallCount + 1,
+          stylesheets
         );
+      };
+
+      const registerVendorStyles = (
+        sheets: readonly string[],
+        options?: { optOut?: readonly string[] }
+      ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
+        const label = 'registerVendorStyles';
+        const files = (list: unknown, what: string): string[] => {
+          if (!Array.isArray(list)) {
+            throw new TypeError(`${label}: ${what} must be an array of files.`);
+          }
+          for (const file of list) {
+            if (typeof file !== 'string' || file.trim() === '') {
+              throw new TypeError(
+                `${label}: ${what} names ${JSON.stringify(file)}, not a file.`
+              );
+            }
+            if (/[*?{}[\]]/.test(file)) {
+              throw new TypeError(
+                `${label}: ${what} names "${file}" — name each file exactly; ` +
+                  'patterns are not read.'
+              );
+            }
+          }
+          return list as string[];
+        };
+        const vendor = files(sheets, 'the vendor list');
+        const optOut = files(options?.optOut ?? [], 'optOut');
+        assertOpen(label);
+        // A later call appends; a file already listed keeps its place.
+        const appended = (held: readonly string[], added: string[]) => [
+          ...new Set([...held, ...added]),
+        ];
+        consumedBy = 'register';
+        return makeBundle(entries, collisions, localCallCount, {
+          vendor: appended(stylesheets.vendor, vendor),
+          vendorOptOut: appended(stylesheets.vendorOptOut, optOut),
+        });
       };
 
       const registerKeyframes = (
@@ -1549,6 +1619,16 @@ export class SystemBuilder<
                 })
               )
           ),
+          ...(stylesheets.vendor.length > 0 ||
+          stylesheets.vendorOptOut.length > 0
+            ? {
+                stylesheets: Object.freeze({
+                  version: 1 as const,
+                  vendor: Object.freeze(stylesheets.vendor),
+                  vendorOptOut: Object.freeze(stylesheets.vendorOptOut),
+                }),
+              }
+            : {}),
         });
 
         const sealed = mintInstance() as SealedSystemInstance<
@@ -1566,7 +1646,11 @@ export class SystemBuilder<
         });
         // Runtime-only stub, absent from the sealed TYPE: registering on a
         // sealed instance names the sealed state, not "not a function".
-        for (const member of ['registerKeyframes', 'registerGlobalStyles']) {
+        for (const member of [
+          'registerKeyframes',
+          'registerGlobalStyles',
+          'registerVendorStyles',
+        ]) {
           Object.defineProperty(sealed, member, {
             value: (): never => {
               throw new Error(
@@ -1587,14 +1671,18 @@ export class SystemBuilder<
         createKeyframes,
         registerKeyframes,
         registerGlobalStyles,
+        registerVendorStyles,
         seal,
       } as SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab>;
     };
 
+    // Vendor stylesheets are the app's own: an extended source's are not
+    // inherited.
     return makeBundle(
       this.#vocabularyRegistry.map((entry) => ({ ...entry })),
       [...this.#vocabularyCollisions],
-      0
+      0,
+      { vendor: [], vendorOptOut: [] }
     );
   }
 }

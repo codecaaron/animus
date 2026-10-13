@@ -2,6 +2,7 @@ import {
   analysedOutputs,
   BUILT_IN_EXTENSION_POLICY,
   builtInAssetClassification,
+  createVendorReporter,
   DiagnosticFailure,
   droppedExtensionMessage,
   ENGINE_TRANSFORM_EXTENSIONS,
@@ -17,6 +18,7 @@ import {
   rollupExtensionPolicy,
   rollupOutputTargets,
   servedFiles,
+  vendorCoverageNotice,
   viteAssetClassification,
   viteExtensionPolicy,
   viteHostExpander,
@@ -589,8 +591,21 @@ export const unpluginFactory: UnpluginFactory<
     meta.framework === 'esbuild' ||
     meta.framework === 'vite';
 
+  // Each plugin instance states once that it does not wrap stylesheets.
+  let vendorCoverageNoticed = false;
+
   async function startPipeline(): Promise<void> {
     signalPipelineStarted();
+    if (!vendorCoverageNoticed) {
+      vendorCoverageNoticed = true;
+      const host = `${meta.framework} (unplugin)`;
+      const why =
+        'the unplugin hosts have no stylesheet interception yet, and the sheets the system registers with registerVendorStyles are not loaded';
+      createVendorReporter((line) => console.warn(`[animus] ${line}`), {
+        levels: options.diagnostics,
+        strict: options.strict,
+      })(host, why, [vendorCoverageNotice(host, why)]);
+    }
     // A webpack compile that ended without done or failed (it restarts one
     // an edit invalidated, and skips both) left its Session joined and its
     // claim held: retire it before this run claims the build again. A

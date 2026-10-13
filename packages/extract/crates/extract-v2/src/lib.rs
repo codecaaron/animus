@@ -106,6 +106,9 @@ pub struct NapiSystemConfig {
     /// Vocabulary witnesses as a JSON array of coded entries; hosts surface
     /// each as a diagnostic keyed by its `code`. Absent when there are none.
     pub vocabulary_witnesses: Option<String>,
+    /// The system's stylesheet plan as JSON, `{ version, vendor,
+    /// vendorOptOut }`, as written in its file; absent when it has none.
+    pub stylesheet_plan: Option<String>,
     /// Canonical absolute paths of every module evaluated for the system, and
     /// of each `package.json` that selected one, sorted; the entry is
     /// included, runtime stubs are not.
@@ -162,6 +165,7 @@ pub fn load_system_module(
         global_style_blocks: config.global_style_blocks,
         keyframes_blocks: config.keyframes_blocks,
         vocabulary_witnesses: config.vocabulary_witnesses,
+        stylesheet_plan: config.stylesheet_plan,
         dependencies: config.dependencies,
         missing: Some(config.missing),
         source_theme_manifests: config.source_theme_manifests,

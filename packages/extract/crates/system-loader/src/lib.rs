@@ -61,6 +61,9 @@ pub struct SystemConfig {
     /// Coded witness entries from the sealed registration record, as one JSON
     /// array — the host shims console away, so this is the only channel.
     pub vocabulary_witnesses: Option<String>,
+    /// The record's stylesheet plan, `{ version, vendor, vendorOptOut }`, as
+    /// written in the system file; `None` when it registers none.
+    pub stylesheet_plan: Option<String>,
     /// Sorted canonical paths of every module evaluated for this system, entry
     /// included and runtime stubs excluded, and of each `package.json` that
     /// selected one; plugins use it as the reload set.
@@ -1514,7 +1517,7 @@ fn extract_system_config<'js>(
                 .to_string(),
         );
     }
-    let (keyframes_blocks, global_style_blocks, vocabulary_witnesses) =
+    let VocabularyWires { keyframes_blocks, global_style_blocks, vocabulary_witnesses, stylesheet_plan } =
         extract_vocabulary_record(ctx, &system_obj)?;
 
     Ok(SystemConfig {
@@ -1534,6 +1537,7 @@ fn extract_system_config<'js>(
         global_style_blocks,
         keyframes_blocks,
         vocabulary_witnesses,
+        stylesheet_plan,
         // Populated by load_system_module from the resolved module graph;
         // execute_bundle only sees the assembled bundle text.
         dependencies: Vec::new(),
@@ -1807,9 +1811,13 @@ fn find_exports_with_method<'js>(
     found
 }
 
-/// Keyframes blocks, global-style blocks, and the coded witness array, in
-/// that order; each `None` when empty.
-type VocabularyWires = (Option<String>, Option<String>, Option<String>);
+/// What the registration record carries, each `None` when empty.
+struct VocabularyWires {
+    keyframes_blocks: Option<String>,
+    global_style_blocks: Option<String>,
+    vocabulary_witnesses: Option<String>,
+    stylesheet_plan: Option<String>,
+}
 
 /// Insertion order is preserved end to end: `Object.fromEntries` plus
 /// `JSON.stringify` in the context, `preserve_order` on the Rust side.
@@ -1873,6 +1881,7 @@ fn extract_vocabulary_record<'js>(
     globalStyleCount: globalStyles.length,
     globalStyles: Object.fromEntries(globalStyles.map((entry) => [entry.name, blockOf(entry)])),
     witnesses: collisions.concat(legacyVerbs),
+    stylesheets: record.stylesheets ?? null,
   });
 })()"#;
     let _ = ctx.globals().set("__sys_ref", system_obj.clone());
@@ -1924,7 +1933,11 @@ fn extract_vocabulary_record<'js>(
         }
         _ => None,
     };
-    Ok((keyframes_blocks, global_style_blocks, vocabulary_witnesses))
+    let stylesheet_plan = parsed
+        .get("stylesheets")
+        .filter(|plan| plan.is_object())
+        .map(|plan| serde_json::to_string(plan).unwrap_or_default());
+    Ok(VocabularyWires { keyframes_blocks, global_style_blocks, vocabulary_witnesses, stylesheet_plan })
 }
 
 fn list_export_keys(namespace: &Object<'_>) -> Vec<String> {

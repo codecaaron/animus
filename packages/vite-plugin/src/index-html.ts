@@ -1,11 +1,13 @@
 import { BRIDGE_SCRIPT_SRC } from './constants';
+import { vendorStylesTags } from './vendor-layer';
 
 import type { PluginContext } from './context';
 import type { HtmlTagDescriptor } from 'vite';
 
 /**
  * Vite serializes one `head-prepend` bucket in array order, so the bootstrap
- * script precedes the layer declaration and every stylesheet reference.
+ * script precedes the layer declaration, which precedes the module loading
+ * the registered vendor stylesheets and every stylesheet reference.
  */
 export function buildIndexHtmlTags(ctx: PluginContext): HtmlTagDescriptor[] {
   const tags: HtmlTagDescriptor[] = [];
@@ -28,6 +30,8 @@ export function buildIndexHtmlTags(ctx: PluginContext): HtmlTagDescriptor[] {
       injectTo: 'head-prepend',
     });
   }
+
+  tags.push(...vendorStylesTags(ctx));
 
   // Dev only, never gated on a publication: index.html can be served before
   // the first analysis, and a document missing the tag stays unstyled.

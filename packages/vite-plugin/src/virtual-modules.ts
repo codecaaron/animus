@@ -11,10 +11,12 @@ import {
   RESOLVED_COMPONENTS_ID,
   RESOLVED_CSS_ID,
   RESOLVED_SYSTEM_PROPS_ID,
+  RESOLVED_VENDOR_STYLES_ID,
   VIRTUAL_BRIDGE_ID,
   VIRTUAL_COMPONENTS_ID,
   VIRTUAL_CSS_ID,
   VIRTUAL_SYSTEM_PROPS_ID,
+  VIRTUAL_VENDOR_STYLES_ID,
 } from './constants';
 import { postProcessCss } from './css';
 
@@ -39,6 +41,7 @@ export function resolveVirtualId(
   if (id === VIRTUAL_COMPONENTS_ID) return RESOLVED_COMPONENTS_ID;
   if (id === VIRTUAL_BRIDGE_ID) return RESOLVED_BRIDGE_ID;
   if (id === VIRTUAL_SYSTEM_PROPS_ID) return RESOLVED_SYSTEM_PROPS_ID;
+  if (id === VIRTUAL_VENDOR_STYLES_ID) return RESOLVED_VENDOR_STYLES_ID;
 
   // Redirect external DS package imports to their source entry
   // so Vite serves .ts files (transformable) instead of .mjs dist files.
@@ -75,6 +78,16 @@ export function loadVirtualModule(
     });
     return css;
   };
+
+  if (id === RESOLVED_VENDOR_STYLES_ID) {
+    // Each import is the module an app's own import of the file names, so
+    // the stylesheet is delivered once, here, first.
+    const vendor = ctx.stylesheetPlan?.vendor ?? [];
+    return (
+      vendor.map((file) => `import ${JSON.stringify(file)};\n`).join('') ||
+      'export {};\n'
+    );
+  }
 
   if (id === RESOLVED_CSS_ID) {
     if (!ctx.isProd && ctx.storedManifest) {

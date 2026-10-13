@@ -15,6 +15,7 @@ import { PluginContext } from './context';
 import { cancelSystemReload, handleHotUpdate } from './hmr';
 import { buildIndexHtmlTags } from './index-html';
 import { transformSource } from './transform';
+import { vendorLayerPlugin, withVendorStylesImport } from './vendor-layer';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
 
 import type {
@@ -172,7 +173,12 @@ type AnimusExtractOptionRecord = {
   [Key in keyof AnimusExtractOptions]: AnimusExtractOptions[Key];
 };
 
-export function animusExtract(options: AnimusExtractOptions): Plugin {
+/**
+ * The extraction plugin, and the vendor-layer plugin that wraps every
+ * stylesheet Vite compiles that Animus did not produce: it must run after
+ * Vite's CSS plugin, which the extraction plugin runs before.
+ */
+export function animusExtract(options: AnimusExtractOptions): [Plugin, Plugin] {
   // The option type excludes 'v1', but a raw runtime value still reaches here.
   assertSupportedEngine(options.engine);
   // Warn, never throw: an extra key must not kill Vite config loading during
@@ -196,7 +202,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
   const ctx = new PluginContext(options);
 
-  return {
+  const extraction: Plugin = {
     name: 'animus-extract',
     enforce: 'pre',
 
@@ -287,8 +293,12 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       return loadVirtualModule(ctx, id);
     },
 
-    transform(code, id) {
-      return transformSource(ctx, code, id);
+    async transform(code, id) {
+      return withVendorStylesImport(
+        ctx,
+        code,
+        await transformSource(ctx, code, id)
+      );
     },
 
     transformIndexHtml: {
@@ -302,6 +312,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       return handleHotUpdate(ctx, this.environment, hmr);
     },
   };
+  return [extraction, vendorLayerPlugin(ctx)];
 }
 
 export default animusExtract;

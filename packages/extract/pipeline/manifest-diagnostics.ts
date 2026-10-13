@@ -431,6 +431,19 @@ export const PROPERTY_LEGACY_TOKEN_COLLISION =
  *  name. */
 export const PROPERTY_TOKEN_COLLISION = 'animus.property.token-collision';
 
+/** `!important` in a stylesheet the vendor layer wraps: a lower layer makes
+ *  an important declaration stronger, not weaker. Kept, and reported. */
+export const VENDOR_IMPORTANT = 'animus.vendor.important';
+/** Keyframes, animations and transitions in a wrapped stylesheet: animated
+ *  values override normal declarations in any layer. Kept, and reported. */
+export const VENDOR_ANIMATION = 'animus.vendor.animation';
+/** A host whose stylesheets Animus does not wrap in the vendor layer: they
+ *  keep their own cascade position. */
+export const VENDOR_COVERAGE = 'animus.vendor.coverage';
+/** A stylesheet the system opts out of the vendor layer: it keeps its own
+ *  cascade position, and can override Animus's styles. */
+export const VENDOR_OPT_OUT = 'animus.vendor.opt-out';
+
 /**
  * A lost or unreadable configured input, or a classified unsupported Animus
  * declaration, is `error` — what `--strict` refuses; degradation that still
@@ -467,6 +480,10 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [PREFIX_NAME_CONFLICT, 'error'],
   [PROPERTY_LEGACY_TOKEN_COLLISION, 'warn'],
   [PROPERTY_TOKEN_COLLISION, 'error'],
+  [VENDOR_IMPORTANT, 'warn'],
+  [VENDOR_ANIMATION, 'warn'],
+  [VENDOR_COVERAGE, 'warn'],
+  [VENDOR_OPT_OUT, 'warn'],
 ]);
 
 /** An unlisted code is `warn`: a witness kind from a newer system package

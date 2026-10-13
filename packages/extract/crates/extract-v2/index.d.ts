@@ -190,6 +190,11 @@ export interface NapiSystemConfig {
    */
   vocabularyWitnesses?: string
   /**
+   * The system's stylesheet plan as JSON, `{ version, vendor,
+   * vendorOptOut }`, as written in its file; absent when it has none.
+   */
+  stylesheetPlan?: string
+  /**
    * Canonical absolute paths of every module evaluated for the system, and
    * of each `package.json` that selected one, sorted; the entry is
    * included, runtime stubs are not.

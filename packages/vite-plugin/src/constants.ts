@@ -20,6 +20,11 @@ export const RESOLVED_BRIDGE_ID = `\0${VIRTUAL_BRIDGE_ID}`;
 export const BRIDGE_SCRIPT_SRC = `/@id/${VIRTUAL_BRIDGE_ID}`;
 
 export const VIRTUAL_SYSTEM_PROPS_ID = `${VIRTUAL_PREFIX}system-props`;
+
+/** The module importing the system's registered vendor stylesheets, in
+ *  order: what an app loads before any stylesheet of its own. */
+export const VIRTUAL_VENDOR_STYLES_ID = `${VIRTUAL_PREFIX}vendor-styles.js`;
+export const RESOLVED_VENDOR_STYLES_ID = `\0${VIRTUAL_VENDOR_STYLES_ID}`;
 export const RESOLVED_SYSTEM_PROPS_ID = `\0${VIRTUAL_SYSTEM_PROPS_ID}`;
 
 // The default exclusion set is owned by the shared pipeline core; this is a

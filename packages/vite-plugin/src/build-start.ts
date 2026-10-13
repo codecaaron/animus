@@ -1,6 +1,6 @@
 import {
   assembleStylesheet,
-  validateLayerOrder,
+  resolveLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
 import { basename, dirname } from 'path';
@@ -26,8 +26,8 @@ export async function runBuildStart(
   ctx.assetResolutionFailures.clear();
 
   if (ctx.options.layers) {
-    validateLayerOrder(ctx.options.layers);
-    ctx.log(`Custom layers: [${ctx.options.layers.join(', ')}]`);
+    const layers = resolveLayerOrder(ctx.options.layers);
+    ctx.log(`Custom layers: [${layers.join(', ')}]`);
   }
 
   // System load, discovery, package collection and analysis are the

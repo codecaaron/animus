@@ -67,6 +67,7 @@ export interface StyleUniverseProvider {
 }
 
 export const ANIMUS_LAYER_ORDER: readonly string[] = [
+  'anm-vendor',
   'anm-global',
   'anm-base',
   'anm-variants',

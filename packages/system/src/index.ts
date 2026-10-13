@@ -30,6 +30,7 @@ export type {
   RegistrySnapshot,
   SealedSystemInstance,
   SerializedConfig,
+  StylesheetPlan,
   SystemBuilderStage,
   SystemBundle,
   SystemInstance,

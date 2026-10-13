@@ -90,6 +90,8 @@ import {
   walkPackageSources,
   writeAssetCopy,
   pruneStaleAssets,
+  readStylesheetPlan,
+  resolveStylesheetPlan,
   surfaceManifestDiagnostics,
   systemLoadReads,
 } from '../pipeline/index';
@@ -161,6 +163,7 @@ import type {
   HostExtensionPolicy,
   HostLoadExpander,
   KitDescriptorRecord,
+  ResolvedStylesheetPlan,
 } from '../pipeline/index';
 import type { ExtractFactsResult } from '../pipeline/source-ingestion';
 import type { SessionResolutionContext } from './resolve-packages';
@@ -378,6 +381,12 @@ export interface WatchPlan {
 }
 
 /** One published generation, as a host serving from memory reads it. */
+/** The last stylesheet plan the session resolved, by the plan it read. */
+interface StylesheetPlanCache {
+  json: string | null;
+  plan: ResolvedStylesheetPlan | null;
+}
+
 export interface SessionPublication {
   manifest: ProjectManifest;
   manifestJson: string;
@@ -404,6 +413,9 @@ export interface SessionPublication {
   externalPackageDirs: string[];
   externalSourceEntries: Map<string, string>;
   externalSourceSideEffects: Map<string, boolean>;
+  /** The system's vendor stylesheets, resolved from its file; null when it
+   *  registers none. */
+  stylesheetPlan: ResolvedStylesheetPlan | null;
 }
 
 /** How an attempt ended, for a host that redelivers modules itself. */
@@ -2837,11 +2849,35 @@ export class ExtractionSession {
       ),
       packageReadRecord: this.packageReadRecord,
       replacementEpoch: epoch,
+      stylesheetPlan: this.resolvedStylesheetPlan(system),
     };
 
     bt.total = this.elapsed(pipelineStart);
     logBuildTimings(bt, manifest?.timing, (msg) => this.log(msg), this.verbose);
   }
+
+  /** The system's vendor stylesheets resolved from its file, once per
+   *  plan the system carries. */
+  private resolvedStylesheetPlan(
+    system: SystemConfig
+  ): ResolvedStylesheetPlan | null {
+    const json = system.stylesheetPlanJson ?? null;
+    if (json !== this.stylesheetPlanCache.json) {
+      const plan = readStylesheetPlan(json);
+      this.stylesheetPlanCache = {
+        json,
+        plan:
+          plan &&
+          resolveStylesheetPlan(
+            plan,
+            resolve(this.rootDir ?? '', this.options.system)
+          ),
+      };
+    }
+    return this.stylesheetPlanCache.plan;
+  }
+
+  private stylesheetPlanCache: StylesheetPlanCache = { json: null, plan: null };
 
   /** Open a status attempt (attemptId increments once per burst — a
    *  debouncing pre-write and the analysis that follows share one id). */

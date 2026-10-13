@@ -102,6 +102,39 @@ The registration key must equal the export name, because the extractor
 resolves `motion.pulse` references by that name. Keyframes and global-style
 blocks share one vocabulary namespace.
 
+### Vendor stylesheets
+
+Every stylesheet Animus did not produce — a package's CSS imported from
+JavaScript, the app's own global CSS, a CSS Module — is wrapped in one
+`anm-vendor` cascade layer, below every Animus layer, so its normal
+declarations lose to your components' styles whatever their specificity.
+Keep importing them as before. To load some first, in a fixed order, even
+where nothing imports them, register them on the bundle:
+
+```tsx
+export const ds = bundle
+  .registerGlobalStyles({ globalStyles })
+  .registerVendorStyles(
+    ['react-grid-layout/css/styles.css', './styles/vendor-adjustments.css'],
+    { optOut: ['./styles/intentional-unlayered.css'] }
+  )
+  .seal();
+```
+
+Entries are package files or paths relative to the system file, named
+exactly. Registered sheets come first in the vendor layer, in this order;
+every other stylesheet follows in the order the app imports it, and a
+registered sheet the app also imports is delivered once, at its registered
+place. Inside the layer, specificity and order decide as usual. An
+`optOut` file keeps its own cascade position and is reported
+(`animus.vendor.opt-out`).
+
+The layer holds back normal declarations only. A vendor `!important`
+becomes stronger in a lower layer, and keyframe animations and transitions
+override normal declarations in any layer: both are kept as written and
+reported (`animus.vendor.important`, `animus.vendor.animation`), never
+removed, and never fail a build.
+
 To build on a published design-system kit, start either chain with
 `.extend()` — it merges the kit's registries and tokens into yours (kit as
 base, your later calls win on conflict), and the extraction pipeline

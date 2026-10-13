@@ -5,6 +5,7 @@ export type {
 export {
   ANIMUS_LAYERS,
   assembleStylesheet,
+  resolveLayerOrder,
   stripLeadingLayerDeclaration,
   validateLayerOrder,
 } from './assemble-stylesheet';
@@ -28,6 +29,17 @@ export {
 export type { AssetCopy } from './asset-copies';
 export { pruneStaleAssets, writeAssetCopy } from './asset-copies';
 export { contentHash } from './content-hash';
+export {
+  readStylesheetPlan,
+  resolveStylesheetPlan,
+  type ResolvedStylesheetPlan,
+} from './stylesheet-plan';
+export {
+  createVendorReporter,
+  vendorCoverageNotice,
+  vendorCssUnit,
+  type VendorReporter,
+} from './vendor-css';
 export {
   assertRuntimeImportSuppliesTerminals,
   DEFAULT_RUNTIME_IMPORT,

@@ -6,7 +6,11 @@ import { createV2EngineApi, stableStringify } from '../pipeline/index';
 
 import type { PackageReadRecord } from '../pipeline/alias-agreement';
 import type { AnimusCoreOptions } from '../pipeline/core-options';
-import type { EngineApi, V2ExtractEngine } from '../pipeline/index';
+import type {
+  EngineApi,
+  ResolvedStylesheetPlan,
+  V2ExtractEngine,
+} from '../pipeline/index';
 
 /**
  * A build's shared state lives in one registry on `globalThis`, keyed by its
@@ -45,6 +49,8 @@ export interface RegistryPublication {
   /** Specifier → its source entry's side effects; absent leaves the
    *  bundler's own classification. */
   externalSourceSideEffects: Map<string, boolean>;
+  /** The system's vendor stylesheets, resolved; null when it has none. */
+  stylesheetPlan: ResolvedStylesheetPlan | null;
 }
 
 /** Commits the build's publication, the one write of everything below. */
@@ -61,6 +67,12 @@ function publicationOf(key: SessionKey): RegistryPublication | null {
 
 export function getManifestJson(key: SessionKey): string | null {
   return publicationOf(key)?.manifestJson ?? null;
+}
+
+export function getStylesheetPlan(
+  key: SessionKey
+): ResolvedStylesheetPlan | null {
+  return publicationOf(key)?.stylesheetPlan ?? null;
 }
 
 /**

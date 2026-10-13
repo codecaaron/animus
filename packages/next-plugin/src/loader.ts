@@ -4,6 +4,7 @@ import {
   getAnalyzedHashes,
   getManifestJson,
   getSessionArtifactDir,
+  getStylesheetPlan,
   replacementEpochPath,
   sessionKey,
 } from '@animus-ui/extract/session';
@@ -87,6 +88,7 @@ export default function animusLoader(
     manifestJson,
     engineApi: () => engineApi(key),
     opts,
+    declaredStylesheets: getStylesheetPlan(key)?.vendor,
   });
   const watching = this.mode !== 'production';
   if (!watching || this.addDependency === undefined) return code;
