@@ -1115,9 +1115,10 @@ pub(crate) fn config_only<'i>(files: &BTreeMap<String, FileFacts>, inputs: &'i C
                 }
             }
             // A runtime load reaches what it may load: a literal's module, a
-            // closed expansion's, or, open, every module.
+            // closed expansion's, however many modules it lists, or, open,
+            // every module. Only Flow needs the load-set bound.
             for load in &ff.module_loads {
-                let reached: Vec<String> = match load_reach(file, load, files, inputs) {
+                let reached: Vec<String> = match load_reach_within(file, load, files, inputs, usize::MAX) {
                     LoadReach::Modules(modules) => modules.into_iter().cloned().collect(),
                     LoadReach::Any(_) => files.keys().cloned().collect(),
                 };
@@ -3397,6 +3398,17 @@ pub(crate) fn load_reach<'f, T>(
     files: &'f BTreeMap<String, T>,
     inputs: &CssInputs,
 ) -> LoadReach<'f> {
+    load_reach_within(file, load, files, inputs, LOAD_SET_LIMIT)
+}
+
+/// `load_reach`, with `bound` in place of the load-set bound.
+fn load_reach_within<'f, T>(
+    file: &str,
+    load: &crate::loads::ModuleLoad,
+    files: &'f BTreeMap<String, T>,
+    inputs: &CssInputs,
+    bound: usize,
+) -> LoadReach<'f> {
     if let crate::loads::LoadTarget::Specifier(_) = load.target {
         return LoadReach::Modules(loaded_modules(file, load, files, inputs));
     }
@@ -3406,7 +3418,7 @@ pub(crate) fn load_reach<'f, T>(
         .flat_map(|evidence| &evidence.expansions)
         .find(|expansion| expansion.importer == file && expansion.start == load.start);
     let Some(expansion) = expansion.filter(|expansion| expansion.closed) else {
-        if let Some(reach) = declared_reach(file, load, files, inputs) {
+        if let Some(reach) = declared_reach(file, load, files, inputs, bound) {
             return reach;
         }
         return LoadReach::Any("which may load any module, and the host lists no closed expansion of it".to_string());
@@ -3419,7 +3431,7 @@ pub(crate) fn load_reach<'f, T>(
             _ => return LoadReach::Any(format!("which may load {}, a module the analysis does not read", expanded.path)),
         }
     }
-    if modules.len() > LOAD_SET_LIMIT {
+    if modules.len() > bound {
         return LoadReach::Any(format!("which may load any of {} modules", modules.len()));
     }
     LoadReach::Modules(modules)
@@ -3433,6 +3445,7 @@ fn declared_reach<'f, T>(
     load: &crate::loads::ModuleLoad,
     files: &'f BTreeMap<String, T>,
     inputs: &CssInputs,
+    bound: usize,
 ) -> Option<LoadReach<'f>> {
     let enclosing = load.enclosing_function.as_deref()?;
     let site = inputs.analysis_context.closed_dynamic_imports.iter().find(|site| {
@@ -3442,7 +3455,7 @@ fn declared_reach<'f, T>(
         ClosedTargets::BuildChunks => {
             let chunks = inputs.build_chunks.get()?;
             let modules: Vec<&'f String> = chunks.iter().filter_map(|chunk| files.get_key_value(chunk).map(|(key, _)| key)).collect();
-            if modules.len() > LOAD_SET_LIMIT {
+            if modules.len() > bound {
                 return Some(LoadReach::Any(format!(
                     "declared closed over the build's chunks, which are {} modules, more than the bound",
                     modules.len()
@@ -7710,9 +7723,10 @@ fn run_with_system_floor(
     // user can see why pruning stopped.
     let mut exports_by_module: FxHashMap<&String, Vec<String>> = FxHashMap::default();
     for (path, ff) in files {
-        let mut sites: BTreeMap<(usize, &str), std::collections::BTreeSet<String>> = BTreeMap::new();
+        let mut sites: BTreeMap<(usize, &str), (&crate::loads::LoadTarget, std::collections::BTreeSet<String>)> =
+            BTreeMap::new();
         for load in &ff.module_loads {
-            let opened = sites.entry((load.line, load.call.as_str())).or_default();
+            let (_, opened) = sites.entry((load.line, load.call.as_str())).or_insert((&load.target, Default::default()));
             for module in loaded_modules(path, load, files, inputs) {
                 let ids = exports_by_module.entry(module).or_insert_with(|| {
                     exported_component_ids(module, files, inputs, links, &evaluated_ids)
@@ -7720,21 +7734,33 @@ fn run_with_system_floor(
                 opened.extend(ids.iter().cloned());
             }
         }
-        for ((line, call), opened) in sites {
+        for ((line, call), (target, opened)) in sites {
             if opened.len() > WIDE_MODULE_LOAD_LIMIT {
-                diagnostics.push(diagnostic(
-                    path,
-                    call,
-                    "warn",
-                    format!(
-                        "this call can load {} components, so each keeps every \
-                         variant and state option it declares — write the specifier \
-                         literally so only what it loads keeps its options",
+                use crate::loads::LoadTarget;
+                // The advice names what made the load wide: a literal
+                // specifier names one module that exports them all.
+                let message = match target {
+                    LoadTarget::Specifier(_) => format!(
+                        "this call loads a module that exports {} components, and usage is \
+                         not followed into a module loaded at runtime, so each keeps every \
+                         variant and state option it declares — load the components it \
+                         renders from a smaller module so only those keep their options",
                         opened.len()
                     ),
-                    Some(WIDE_MODULE_LOAD),
-                )
-                .on_line(line));
+                    LoadTarget::Context { .. } | LoadTarget::Glob(_) => format!(
+                        "this call can load {} components, so each keeps every variant and \
+                         state option it declares — narrow its pattern so only what it loads \
+                         keeps its options",
+                        opened.len()
+                    ),
+                    LoadTarget::Prefix(_) | LoadTarget::Unknown => format!(
+                        "this call can load {} components, so each keeps every variant and \
+                         state option it declares — write the specifier literally so only \
+                         what it loads keeps its options",
+                        opened.len()
+                    ),
+                };
+                diagnostics.push(diagnostic(path, call, "warn", message, Some(WIDE_MODULE_LOAD)).on_line(line));
             }
             escaped_ids.extend(opened);
         }

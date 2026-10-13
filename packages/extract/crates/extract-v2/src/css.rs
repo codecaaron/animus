@@ -287,6 +287,18 @@ impl ComponentCss {
     /// The variant rules in the order they are written: each rule's
     /// selector class and styles.
     pub fn variant_rules(&self) -> Vec<(String, &ResolvedStyles)> {
+        self.ordered_variant_rules()
+            .into_iter()
+            .map(|(variant, option, styles)| {
+                let suffix = option.unwrap_or("default");
+                (format!("{}--{}-{}", self.class_name, variant.prop, suffix), styles)
+            })
+            .collect()
+    }
+
+    /// Each variant rule in the order it is written: its axis, its option
+    /// (`None` for the axis's default rule) and its styles.
+    pub fn ordered_variant_rules(&self) -> Vec<(&VariantCss, Option<&str>, &ResolvedStyles)> {
         let natural = natural_variant_order(&self.variants);
         let mut written: FxHashSet<(&str, Option<&str>)> = FxHashSet::default();
         let mut rules = Vec::new();
@@ -300,11 +312,11 @@ impl ComponentCss {
             }) else {
                 continue;
             };
-            if !written.insert((variant.prop.as_str(), option.as_ref().map(|_| name.as_str()))) {
+            let option = option.as_ref().map(|_| name.as_str());
+            if !written.insert((variant.prop.as_str(), option)) {
                 continue;
             }
-            let suffix = if option.is_some() { name.as_str() } else { "default" };
-            rules.push((format!("{}--{}-{}", self.class_name, variant.prop, suffix), styles));
+            rules.push((variant, option, styles));
         }
         rules
     }
@@ -772,34 +784,45 @@ pub fn generate_composed_variant_css<'a>(
                 continue;
             };
 
+            // The shared axes' rules follow the child's own rule order, so an
+            // extension's own options win inside the family as they do
+            // outside it.
+            let rules: Vec<_> = child_css
+                .ordered_variant_rules()
+                .into_iter()
+                .filter(|(variant, _, _)| family.shared_keys.contains(&variant.prop))
+                .collect();
             let mut output = String::new();
-            for shared_key in family.shared_keys {
-                let Some(variant) = child_css
-                    .variants
-                    .iter()
-                    .find(|v| v.prop == *shared_key)
-                else {
-                    continue;
-                };
-
-                for (option_name, styles) in &variant.options {
+            for (at, &(variant, option, styles)) in rules.iter().enumerate() {
+                if let Some(option_name) = option {
                     write_composed_rule_pair(
                         &mut output,
                         family.root_class,
                         child_class,
-                        shared_key,
+                        &variant.prop,
                         option_name,
                         styles,
                         breakpoints,
                     );
                 }
-
+                // The root's default takes the place of the child's default
+                // rule, or follows the axis's last option when the child
+                // writes none.
+                let default_here = match option {
+                    None => true,
+                    Some(_) => {
+                        let axis = |(other, _, _): &&(&VariantCss, Option<&str>, &ResolvedStyles)| other.prop == variant.prop;
+                        !rules[at + 1..].iter().any(|rule| axis(&rule))
+                            && !rules.iter().any(|rule| axis(&rule) && rule.1.is_none())
+                    }
+                };
+                if !default_here {
+                    continue;
+                }
                 let Some(default_styles) = root_css
-                    .and_then(|root| root.variants.iter().find(|v| v.prop == *shared_key))
+                    .and_then(|root| root.variants.iter().find(|v| v.prop == variant.prop))
                     .and_then(|root_variant| root_variant.default_option.as_deref())
-                    .and_then(|default_name| {
-                        variant.options.iter().find(|(n, _)| n == default_name)
-                    })
+                    .and_then(|default_name| variant.options.iter().find(|(n, _)| n == default_name))
                     .map(|(_, styles)| styles)
                 else {
                     continue;
@@ -808,7 +831,7 @@ pub fn generate_composed_variant_css<'a>(
                     &mut output,
                     family.root_class,
                     child_class,
-                    shared_key,
+                    &variant.prop,
                     default_styles,
                     breakpoints,
                 );
