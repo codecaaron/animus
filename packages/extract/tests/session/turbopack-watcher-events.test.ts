@@ -159,12 +159,14 @@ describe('startTurbopackWatcher', () => {
   }, 30000);
 
   /** The OS watcher, inotify on Linux: an installed kit's admitted root
-   *  reports its edits, and a sibling package it never admitted does not. */
+   *  reports its edits; neither the kit's own dependencies nor a sibling
+   *  package it never admitted do. */
   test('an installed kit root under node_modules reports its edits', async () => {
     const root = createProject();
     const installed = join(root, 'node_modules', '@kits', 'ui', 'src');
     const sibling = join(root, 'node_modules', '@kits', 'other', 'src');
-    for (const dir of [installed, sibling]) {
+    const dependency = join(installed, 'node_modules', 'dep');
+    for (const dir of [installed, sibling, dependency]) {
       mkdirSync(join(dir, 'components'), { recursive: true });
       writeFileSync(join(dir, 'components', 'Badge.tsx'), BUTTON_SOURCE);
     }
@@ -191,10 +193,12 @@ describe('startTurbopackWatcher', () => {
             join(installed, 'components', 'Badge.tsx'),
             `export const B = ${stamp++};\n`
           );
-          writeFileSync(
-            join(sibling, 'components', 'Badge.tsx'),
-            `export const B = ${stamp++};\n`
-          );
+          for (const dir of [sibling, dependency]) {
+            writeFileSync(
+              join(dir, 'components', 'Badge.tsx'),
+              `export const B = ${stamp++};\n`
+            );
+          }
           expect(reported(join(installed, 'components', 'Badge.tsx'))).toBe(
             true
           );
@@ -203,6 +207,7 @@ describe('startTurbopackWatcher', () => {
       );
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(reported(join(sibling, 'components', 'Badge.tsx'))).toBe(false);
+      expect(reported(join(dependency, 'components', 'Badge.tsx'))).toBe(false);
     } finally {
       watcher.close();
     }

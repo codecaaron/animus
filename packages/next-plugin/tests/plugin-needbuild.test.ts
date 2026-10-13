@@ -369,6 +369,11 @@ describe('watchOptions.ignored gains the replacements-epoch artifact path (desig
       );
       // A sibling whose name extends the root's is not under it.
       expect(matcher(`${kitRoot}-old/Badge.tsx`)).toBe(true);
+      // The kit's own dependencies stay as the host decides.
+      expect(matcher(join(kitRoot, 'node_modules'))).toBe(true);
+      expect(matcher(join(kitRoot, 'node_modules', 'dep', 'index.js'))).toBe(
+        true
+      );
       expect(matcher(epochPathFor(root, plugin))).toBe(true);
     }
   });

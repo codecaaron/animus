@@ -45,7 +45,7 @@ const watchers: FakeWatcher[] = [];
 const failDirs = new Set<string>();
 
 // SAFETY: `fs.watch` has four overloads, so no single signature is
-// assignable; the seam is called as watchFn(root, { recursive: true }, cb).
+// assignable; the seam is called as watchFn(dir, { recursive }, cb).
 const fakeWatch = ((
   dir: string,
   opts?: WatchOptions | null,
@@ -125,11 +125,15 @@ afterEach(() => {
 });
 
 describe('external root registration (design D4)', () => {
+  /** An admitted root is watched directory by directory, never descending
+   *  into node_modules: a recursive watch would register the kit's own
+   *  dependencies too (on Linux, one watch per file). */
   test('an admitted root under node_modules is watched; nothing else there is', async () => {
     const { root, kitA } = createTree();
     const installed = join(root, 'node_modules', '@kits', 'ui', 'src');
     const sibling = join(root, 'node_modules', '@kits', 'other', 'src');
-    for (const dir of [installed, sibling]) {
+    const nested = join(installed, 'node_modules', 'dep');
+    for (const dir of [join(installed, 'components'), sibling, nested]) {
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, 'Button.tsx'), 'export const B = 1;\n');
     }
@@ -138,17 +142,30 @@ describe('external root registration (design D4)', () => {
     const handle = start(session, root);
     try {
       const registered = new Map(calls.map((c) => [c.dir, c.recursive]));
-      expect(registered.get(kitA)).toBe(true);
-      expect(registered.get(installed)).toBe(true);
-      // Only the admitted root: not the package tree, not a sibling.
+      expect(registered.get(kitA)).toBe(false);
+      expect(registered.get(installed)).toBe(false);
+      // The admitted root and its source directories: not the package tree,
+      // not a sibling, not the kit's own dependencies.
       expect(
-        calls.map((c) => c.dir).filter((dir) => dir.includes('node_modules'))
-      ).toEqual([installed]);
+        calls
+          .map((c) => c.dir)
+          .filter((dir) => dir.includes('node_modules'))
+          .sort()
+      ).toEqual([installed, join(installed, 'components')]);
 
-      watcherFor(installed)!.trigger('Button.tsx');
+      watcherFor(join(installed, 'components'))!.trigger('Button.tsx');
       await vi.waitFor(() =>
-        expect(allModified(updates)).toContain(join(installed, 'Button.tsx'))
+        expect(allModified(updates)).toContain(
+          join(installed, 'components', 'Button.tsx')
+        )
       );
+
+      // A directory created later is watched; a nested node_modules is not.
+      const created = join(installed, 'forms');
+      mkdirSync(join(created, 'node_modules'), { recursive: true });
+      watcherFor(installed)!.trigger('forms');
+      expect(watcherFor(created)).toBeDefined();
+      expect(watcherFor(join(created, 'node_modules'))).toBeUndefined();
     } finally {
       handle!.close();
     }
