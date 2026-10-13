@@ -1841,3 +1841,84 @@ void (<ExtendedBadge label="hi" />);
 }
 
 void TypeTests;
+
+// ---------------------------------------------------------------------------
+// Ordered name sets. Conditions, selectors, vocabulary and a theme's emitted
+// scales ride as ordered object sets, so emitted declarations keep their
+// order. Every public generic that took a union of names still takes one.
+// ---------------------------------------------------------------------------
+
+import type {
+  RegistryBrand,
+  SealedSystemInstance,
+  SystemBuilder,
+  SystemBundle,
+  SystemInstance,
+  ThemeBuilder,
+} from '../src';
+
+function OrderedNameSets() {
+  // A theme's emitted scales written as a union, as before the sets.
+  type _ThemeUnion = ThemeBuilder<{}, 'colors'>;
+
+  // `__emitted` is an internal marker: an ordered set, no longer a tuple.
+  const emittedTheme = createTheme()
+    .addScale({ name: 'space', values: { 1: '4px' }, emit: true })
+    .addColors({ ink: '#000' })
+    .build();
+  type _EmittedSet = Assert<
+    IsExact<typeof emittedTheme.__emitted, { space: true; colors: true }>
+  >;
+  // @ts-expect-error — the marker is a set: it has no tuple index
+  type _EmittedTuple = (typeof emittedTheme.__emitted)[0];
+
+  const built = createSystem()
+    .addConditions({ _dense: '@media (max-width: 400px)' })
+    .addSelectors({ _kid: '& > *' })
+    .build();
+  const sealed = built.registerKeyframes({}).seal();
+
+  // Unions and sets annotate the same built system.
+  type Props =
+    typeof built.system extends SystemInstance<infer P, any> ? P : never;
+  type Groups =
+    typeof built.system extends SystemInstance<Props, infer G> ? G : never;
+  const asUnion: SystemInstance<Props, Groups, '_dense', '_kid'> = built.system;
+  const asSet: SystemInstance<Props, Groups, { _dense: true }, { _kid: true }> =
+    built.system;
+  type _UnionConds = Assert<IsExact<ConditionsOf<typeof asUnion>, '_dense'>>;
+  type _SetSels = Assert<IsExact<SelectorsOf<typeof asSet>, '_kid'>>;
+
+  const sealedUnion: SealedSystemInstance<
+    Props,
+    Groups,
+    '_dense',
+    '_kid',
+    never
+  > = sealed;
+  type _SealedConds = Assert<
+    IsExact<ConditionsOf<typeof sealedUnion>, '_dense'>
+  >;
+  type _BundleUnion = SystemBundle<Props, Groups, '_dense', '_kid', 'pulse'>;
+  type _BuilderUnion = SystemBuilder<
+    {},
+    {},
+    '_dense',
+    '_kid',
+    'inherit',
+    'pulse'
+  >;
+  type _BrandUnion = Assert<
+    IsExact<ConditionsOf<RegistryBrand<'_dense', '_kid'>>, '_dense'>
+  >;
+
+  // Extending through a union annotation admits its conditions; its
+  // vocabulary is unknown, so erased.
+  const extended = createSystem().extend(asUnion).build().seal();
+  type _ExtendedConds = Assert<
+    IsExact<ConditionsOf<typeof extended>, '_dense'>
+  >;
+  type _ExtendedVocab = Assert<IsExact<VocabularyOf<typeof extended>, never>>;
+}
+
+void OrderedNameSets;
