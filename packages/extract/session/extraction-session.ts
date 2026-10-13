@@ -3434,7 +3434,7 @@ export class ExtractionSession {
 
   /** Resolve an asset specifier through the shared resolver, with one
    *  last resort: a discovered source entry's package root. */
-  resolveAssetSpecifier(specifier: string): string | null {
+  private resolveAssetSpecifier(specifier: string): string | null {
     const resolved = resolveAssetFile(
       specifier,
       this.rootDir!,

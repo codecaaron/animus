@@ -2,8 +2,8 @@ import {
   assembleStylesheet,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
-import { readFileSync } from 'fs';
-import { basename, dirname } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { basename, dirname, join } from 'path';
 
 import { sweepAbandonedCopyDirs } from './asset-copy-dirs';
 
@@ -14,6 +14,24 @@ import type { HostResolve } from '@animus-ui/extract/pipeline';
  * `resolveSpecifier` maps a specifier to an absolute id. `emitAsset` is
  * present in build only, where `asset()` files become Rollup assets.
  */
+/** Vite's resolver refuses a file its package's exports leave out, naming
+ *  the package it reached, after any alias. */
+const NOT_EXPORTED =
+  /"\.\/([^"]+)" is not exported under the conditions \[[^\]]*\] from package (.+?) \(see exports field/;
+
+/**
+ * The file an `asset()` specifier names when its package's exports leave it
+ * out, as a source kit's often do: the subpath in the package Vite's
+ * resolver reached, so an alias keeps its target. Any other resolver
+ * failure is rethrown.
+ */
+function unexportedAssetFile(error: Error): string | null {
+  const refused = NOT_EXPORTED.exec(String(error?.message));
+  if (refused === null) throw error;
+  const file = join(refused[2]!, refused[1]!);
+  return existsSync(file) ? file : null;
+}
+
 export async function runBuildStart(
   ctx: PluginContext,
   resolveSpecifier: HostResolve,
@@ -60,13 +78,8 @@ export async function runBuildStart(
   if (ctx.assetCopyDir !== null)
     sweepAbandonedCopyDirs(dirname(ctx.assetCopyDir));
   for (const specifier of assetSpecifiers) {
-    // Vite's resolver first, then the Session's, which also reaches a
-    // source kit's files through its package root. Vite's throws for a
-    // subpath its package's exports leave out.
     const resolvedPath =
-      (await resolveSpecifier(specifier).catch(() => null)) ??
-      ctx.session?.resolveAssetSpecifier(specifier) ??
-      null;
+      await resolveSpecifier(specifier).catch(unexportedAssetFile);
     if (!resolvedPath) {
       ctx.assetFallback(
         specifier,
