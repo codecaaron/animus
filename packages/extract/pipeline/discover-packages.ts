@@ -295,6 +295,47 @@ function isHostPackageRoot(dir: string, rootDir: string): boolean {
   );
 }
 
+/**
+ * The package instance `file`, a host's answer, belongs to (spec §2.2 A4),
+ * given the package `located` as Node finds it: the nearest manifest above
+ * the file, unless that manifest names no package or holds the project (a
+ * dependency cache's answer), where the located package stands in. A
+ * manifest nested below the located package (a published
+ * `dist/lib/package.json` carrying the package's name) is part of it, not
+ * its root: the root is the located directory, spelled as the host spells
+ * the file. Only where the file's own real path lies inside it: a file
+ * linked out of the package is not its file. With no file, the located
+ * package.
+ */
+export function packageInstanceOf(
+  file: string | null,
+  located: string | null,
+  rootDir: string
+): string | null {
+  let resolvedRoot = file ? findPackageRoot(file) : null;
+  if (
+    resolvedRoot &&
+    located &&
+    file &&
+    realPath(resolvedRoot) !== located &&
+    isPathWithinRoot(located, realPath(file))
+  ) {
+    while (
+      realPath(resolvedRoot) !== located &&
+      resolvedRoot !== dirname(resolvedRoot)
+    ) {
+      resolvedRoot = dirname(resolvedRoot);
+    }
+    if (realPath(resolvedRoot) !== located) resolvedRoot = located;
+  }
+  return resolvedRoot &&
+    (!located ||
+      isHostPackageRoot(resolvedRoot, rootDir) ||
+      realPath(resolvedRoot) === located)
+    ? resolvedRoot
+    : located || resolvedRoot;
+}
+
 function realPath(path: string): string {
   try {
     return realpathSync(path);
@@ -737,37 +778,10 @@ export async function collectExternalPackageSources(opts: {
     // from where the nearest manifest can be the application's own. Then,
     // and for a source-only kit with no runtime entry to resolve, the package
     // is found as Node finds it, and its condition names the entry.
-    // A manifest nested below the package Node locates (a published
-    // `dist/lib/package.json` carrying the package's name) is part of the
-    // package, not its root: the root is the located directory, spelled as
-    // the host spells the entry. Only where the entry's own real path lies
-    // inside it: an entry linked out of the package is not its file.
-    let resolvedRoot = absEntry ? findPackageRoot(absEntry) : null;
     const locatedRoot =
       packageName &&
       locatePackage(packageName, opts.locateFrom?.(specifier) ?? rootDir);
-    if (
-      resolvedRoot &&
-      locatedRoot &&
-      absEntry &&
-      realPath(resolvedRoot) !== locatedRoot &&
-      isPathWithinRoot(locatedRoot, realPath(absEntry))
-    ) {
-      while (
-        realPath(resolvedRoot) !== locatedRoot &&
-        resolvedRoot !== dirname(resolvedRoot)
-      ) {
-        resolvedRoot = dirname(resolvedRoot);
-      }
-      if (realPath(resolvedRoot) !== locatedRoot) resolvedRoot = locatedRoot;
-    }
-    const pkgRoot =
-      resolvedRoot &&
-      (!locatedRoot ||
-        isHostPackageRoot(resolvedRoot, rootDir) ||
-        realPath(resolvedRoot) === locatedRoot)
-        ? resolvedRoot
-        : locatedRoot || resolvedRoot;
+    const pkgRoot = packageInstanceOf(absEntry, locatedRoot || null, rootDir);
     // The host's file lies in no package, and not in the located one: the
     // bundle may render another module than the one read. A dependency
     // cache lies under node_modules and holds the located package's build.

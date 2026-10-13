@@ -5,6 +5,7 @@ import {
   bareSpecifierPackageName,
   findPackageRoot,
   isPackageSpecifier,
+  packageInstanceOf,
 } from './discover-packages';
 import {
   ALIAS_MISMATCH,
@@ -144,7 +145,11 @@ export function packageInstanceFinding(
   if (readRoot === undefined) return null;
   const file = physical(resolved);
   if (record.holds(file)) return null;
-  const instance = physical(findPackageRoot(file));
+  // The instance as discovery names it: a nested manifest, or a dependency
+  // cache's, is the instance read, whose unanalysed file is still reported.
+  const instance = physical(
+    packageInstanceOf(file, readRoot, record.rootDir) ?? findPackageRoot(file)
+  );
   const redirected = record.redirected.has(specifier);
   const shown = (path: string): string =>
     relative(record.rootDir, path).split(sep).join(posix.sep);

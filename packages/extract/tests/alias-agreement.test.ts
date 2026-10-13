@@ -222,4 +222,76 @@ describe('package instances', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // Contract: a host answer inside the package read is that instance, even
+  // under a nested manifest carrying the package's name (`dist/lib`), and so
+  // is a dev server's dependency-cache copy of it (`node_modules/.vite/
+  // deps`). Neither is reported as another instance, and neither goes quiet:
+  // an unredirected one that declares builder chains is still
+  // unread-package-instance, an error, since the browser would render it
+  // unstyled (the optimizer's copy served past the transform).
+  test('a nested manifest or a dependency cache copy is the instance read, still reported', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'animus-package-identity-'))
+    );
+    const read = join(root, 'node_modules', 'kit');
+    const write = (path: string, source: string) => {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), source);
+    };
+    write('package.json', '{"name":"app"}');
+    write('node_modules/kit/package.json', '{"name":"kit"}');
+    write('node_modules/kit/dist/index.js', 'export const Box = 1;\n');
+    write('node_modules/kit/dist/lib/package.json', '{"name":"kit"}');
+    write('node_modules/kit/dist/lib/index.js', 'builder\n');
+    write('node_modules/.vite/deps/kit.js', 'builder\n');
+    const compare = (resolved: string) =>
+      compareAliases({
+        rootDir: root,
+        fileEntries: [
+          { path: 'src/App.tsx', source: 'a', hash: 'a' },
+          { path: 'node_modules/kit/dist/index.js', source: 'b', hash: 'b' },
+        ],
+        pathAliasesJson: null,
+        order: undefined,
+        readings: {},
+        moduleSpecifiers: () =>
+          JSON.stringify({ files: { 'src/App.tsx': ['kit'] } }),
+        resolve: async (specifier) => (specifier === 'kit' ? resolved : null),
+        cache: new AliasAgreementCache(),
+        packages: packageReadRecord({
+          rootDir: root,
+          roots: { kit: read },
+          redirected: new Set(),
+          analysed: ['src/App.tsx', 'node_modules/kit/dist/index.js'],
+          rendersBuilder: (file) =>
+            file.endsWith(join('lib', 'index.js')) || file.endsWith('kit.js'),
+        }),
+      }).then(({ findings }) =>
+        findings.map(({ code, kind, message }) => ({
+          code,
+          kind,
+          readInstance: message.includes('that it does not analyse'),
+          anotherInstance: message.includes('in another instance'),
+        }))
+      );
+    const reported = [
+      {
+        code: 'animus.discovery.unread-package-instance',
+        kind: 'error',
+        readInstance: true,
+        anotherInstance: false,
+      },
+    ];
+    try {
+      expect({
+        nestedManifest: await compare(join(read, 'dist', 'lib', 'index.js')),
+        dependencyCache: await compare(
+          join(root, 'node_modules', '.vite', 'deps', 'kit.js')
+        ),
+      }).toEqual({ nestedManifest: reported, dependencyCache: reported });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
