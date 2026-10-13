@@ -305,6 +305,8 @@ struct Flow {
 pub struct FlowBuilder {
     changes: Vec<Change>,
     openings: Vec<Opening>,
+    /// Each opening recorded, by reason, region and site.
+    opened: rustc_hash::FxHashSet<(ReasonId, Region, String)>,
     flows: Vec<Flow>,
     exports: BTreeMap<ObjectId, BTreeSet<(String, String)>>,
     recorded: usize,
@@ -325,7 +327,12 @@ impl FlowBuilder {
         self.recorded += 1;
     }
 
+    /// Something the analysis cannot close. The same opening recorded again,
+    /// by another relation's reading of the same module, adds nothing.
     pub fn open(&mut self, reason: ReasonId, exposure: Region, site: String) {
+        if !self.opened.insert((reason, exposure.clone(), site.clone())) {
+            return;
+        }
         self.openings.push(Opening { reason, exposure, site, order: self.recorded });
         self.recorded += 1;
     }

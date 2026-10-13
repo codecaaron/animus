@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 
 use crate::identity::LocalId;
 use crate::link::ProjectLinks;
-use crate::loads::LoadKind;
 use crate::usage_facts::{handed_on, ReadingsOf};
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
 use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, OpeningReason, Request, Terminal};
@@ -464,14 +463,6 @@ struct StyleModule {
     facts: crate::usage_facts::StyleObjectFacts,
     /// See `FileFacts::written_namespaces`.
     written_namespaces: crate::usage_facts::WrittenNamespaces,
-    namespace_exports: BTreeMap<String, String>,
-    loads: Vec<crate::loads::ModuleLoad>,
-    /// The modules its `import` and `export … from` declarations load.
-    imports: Vec<String>,
-    /// How it runs code from a string, which can load any module.
-    dynamic_code: Option<&'static str>,
-    /// How it lets a loader escape, which can load any module.
-    loader_escape: Option<&'static str>,
 }
 
 /// Whether a static may be an object: an object or array, the `asset`
@@ -505,12 +496,14 @@ fn holds_object(value: &crate::static_value::StaticValue, path: &[String]) -> bo
 /// runtime load of a module unsettles every static it exports. Statics
 /// stored in an unstable object, or read from an unstable binding, are
 /// unstable too.
+#[allow(clippy::too_many_arguments)]
 fn record_style_changes(
     style: &BTreeMap<String, StyleModule>,
     modules: &ModuleFacts,
     links: &ProjectLinks,
     lowered: &BTreeMap<String, crate::link::Lowered>,
     files: &BTreeMap<String, rustc_hash::FxHashMap<String, crate::static_value::StaticValue>>,
+    structural: &BTreeMap<String, facts::FileFacts>,
     inputs: &analyze_css::CssInputs,
     readings_of: &mut ReadingsOf<'_>,
     flow: &mut crate::flow::FlowBuilder,
@@ -731,16 +724,6 @@ fn record_style_changes(
             flow.open(ReasonId::OpaqueStar, Region::of(RegionAtom::AllExports), reason.to_string());
         }
     };
-    // An unread package may re-export any module; one installed from a
-    // registry, only the modules it can reach.
-    let open_unread = |flow: &mut FlowBuilder, unread: crate::link::Unread, reason: String| match unread {
-        crate::link::Unread::Registry(reaches) => {
-            for target in &reaches {
-                hand_on(flow, target, &reason);
-            }
-        }
-        unread => flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason),
-    };
     for (file, module) in style {
         // The declarations a use's name stands for that hold an object: a
         // namespace's member, every export of a namespace used whole, or
@@ -821,77 +804,14 @@ fn record_style_changes(
         for (namespace, (subject, used)) in &module.written_namespaces {
             let Some(Request::Outside(identity)) = namespace_of(file, namespace) else { continue };
             if let Some(unread) = crate::link::unread_package(&identity, files, inputs) {
-                open_unread(flow, unread, said(file, subject, used));
+                crate::link::open_unread(flow, unread, &said(file, subject, used), &mut |flow, target, reason| {
+                    hand_on(flow, target, reason)
+                });
             }
         }
-        let reexports = module
-            .namespace_exports
-            .iter()
-            .map(|(name, spec)| (spec, format!("as the namespace {name}")));
-        // A module the analysis cannot find runs when this one imports it,
-        // bindings or not, and may re-export any static.
-        for spec in &module.imports {
-            if let Some(unread @ crate::link::Unread::Missing) = crate::link::unread_source(file, spec, files, inputs) {
-                let reason = format!("{file} imports {spec}, and {}", unread.clause());
-                flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
-            }
-        }
-        for (spec, how) in reexports {
-            if let Some(unread) = crate::link::unread_source(file, spec, files, inputs) {
-                let reason = format!("{file} hands on {spec} {how}, and {}", unread.clause());
-                open_unread(flow, unread, reason);
-                continue;
-            }
-            let Some(target) = analyze_css::resolve_import_source(file, spec, files, inputs) else {
-                continue;
-            };
-            hand_on(flow, &target, &format!("{file} hands on {target} {how}"));
-        }
-        // A runtime load hands on every module it may load: the one a
-        // literal names, or each one a template, a context or a glob may
-        // reach, up to the bound.
-        analyze_css::note_build_chunks(
-            style.iter().flat_map(|(path, module)| module.loads.iter().map(move |load| (path.as_str(), load))),
-            files,
-            inputs,
-        );
-        // A glob of several patterns is one call: judged once.
-        let mut calls = std::collections::BTreeSet::new();
-        for load in &module.loads {
-            if !calls.insert(load.start) && !matches!(load.target, crate::loads::LoadTarget::Specifier(_)) {
-                continue;
-            }
-            if let crate::loads::LoadTarget::Specifier(spec) = &load.target {
-                if let Some(unread) = crate::link::unread_source(file, spec, files, inputs) {
-                    let reason = format!("{file} hands on {spec} at runtime, and {}", unread.clause());
-                    open_unread(flow, unread, reason);
-                    continue;
-                }
-            }
-            let targets = match analyze_css::load_reach(file, load, files, inputs) {
-                analyze_css::LoadReach::Modules(targets) => targets,
-                analyze_css::LoadReach::Any(why) => {
-                    let reason = format!("{file} loads {} at runtime on line {}, {why}", load.call, load.line);
-                    flow.open(ReasonId::UnexpandedHostLoad, Region::of(RegionAtom::AllExports), reason);
-                    continue;
-                }
-            };
-            for target in targets {
-                hand_on(flow, target, &format!("{file} hands on {target} at runtime"));
-            }
-        }
-        // Code from a string can `import()` any module and change what it
-        // exports.
-        if let Some(how) = module.dynamic_code {
-            let reason = format!("{file} {how}, so code from a string can load and change any module");
-            flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), reason);
-        }
-        // An escaped loader can load any module under a name the analysis
-        // never sees.
-        if let Some(how) = module.loader_escape {
-            let reason = format!("{file} {how}, so it can load any module and change what it exports");
-            flow.open(ReasonId::OpaqueEffect, Region::of(RegionAtom::AllExports), reason);
-        }
+        crate::link::record_module_openings(file, &structural[file], structural, inputs, flow, &mut |flow, target, reason| {
+            hand_on(flow, target, reason)
+        });
     }
     // A static stored in an object, or read from a binding, may change with
     // it.
@@ -1291,20 +1211,6 @@ impl ExtractEngine {
                     } else {
                         crate::usage_facts::written_namespaces(program, &lowered_by_file[&ast.path].scoping)
                     },
-                    namespace_exports: crate::usage_facts::collect_namespace_exports(module),
-                    loads: lowered_by_file[&ast.path]
-                        .loads
-                        .iter()
-                        .filter_map(|load| load.module_load(ast.source()))
-                        .collect(),
-                    imports: lowered_by_file[&ast.path]
-                        .loads
-                        .iter()
-                        .filter(|load| matches!(load.kind, LoadKind::Import { runtime: true, .. } | LoadKind::Reexport { runtime: true }))
-                        .filter_map(|load| load.specifier().map(str::to_string))
-                        .collect(),
-                    dynamic_code: lowered_by_file[&ast.path].dynamic_code,
-                    loader_escape: lowered_by_file[&ast.path].loader_escape,
                 },
             );
         }
@@ -1318,20 +1224,22 @@ impl ExtractEngine {
         let readings_by_file: BTreeMap<String, crate::usage_facts::ParamReadings> =
             lowered_by_file.iter().map(|(path, lowered)| (path.clone(), std::sync::Arc::clone(&lowered.readings))).collect();
         let mut readings_of = |file: &str| readings_by_file.get(file).cloned().unwrap_or_default();
-        // One relation of what may change, closed once: style statics' uses
-        // and the member tables', read from the structural facts. Both record
-        // some of the same openings (unread imports, namespace re-exports,
-        // runtime loads) in their own words, and a reader names the first
-        // recorded: the member tables record first, so each reader says what
-        // it said with a relation of its own.
+        // What may change, as the member tables and the style statics each
+        // judge it: a relation of each, since a call the member tables must
+        // assume changes an object (`styles(preset)`) only reads a static.
+        // Both record a module's openings through one recorder, in the same
+        // words.
+        let mut member_flow = crate::flow::FlowBuilder::new();
+        crate::family_members::record_member_changes(&structural_by_file, &self.opts.css_inputs, &links, &mut member_flow);
+        let member_changes = member_flow.close();
         let mut flow = crate::flow::FlowBuilder::new();
-        crate::family_members::record_member_changes(&structural_by_file, &self.opts.css_inputs, &links, &mut flow);
         record_style_changes(
             &style_modules,
             &imports_by_file,
             &links,
             &lowered_by_file,
             &statics_by_file,
+            &structural_by_file,
             &self.opts.css_inputs,
             &mut readings_of,
             &mut flow,
@@ -1339,8 +1247,11 @@ impl ExtractEngine {
         let changes = flow.close();
         #[cfg(test)]
         OPENINGS.with(|openings| {
-            *openings.borrow_mut() =
-                changes.closure().openings.iter().map(|opening| (opening.reason, opening.site.clone())).collect();
+            *openings.borrow_mut() = [&member_changes, &changes]
+                .iter()
+                .flat_map(|changes| &changes.closure().openings)
+                .map(|opening| (opening.reason, opening.site.clone()))
+                .collect();
         });
         for ((file, local), (reason, uncertainty)) in unstable_style_statics(&changes, &statics_by_file) {
             if statics_by_file.get_mut(&file).and_then(|statics| statics.remove(&local)).is_some() {
@@ -1526,7 +1437,7 @@ impl ExtractEngine {
             &self.order,
             &self.opts.css_inputs,
             crate::ids::CLASS_PREFIX,
-            changes,
+            member_changes,
         );
         // Only the engine holds the sources a diagnostic's line and column
         // are read from.
@@ -3156,7 +3067,7 @@ export const App = () => <Box tone="red" />;
     /// of a module the analysis cannot find) may turn what it emitted into
     /// a reported loss, but never prunes more, drops a style or a component
     /// without a finding naming it, changes a static value, makes a
-    /// component static, removes an import, or loses an opening of the one
+    /// component static, removes an import, or loses an opening from either
     /// relation of what may change (check 6, by kind and site).
     #[test]
     fn adding_opacity_never_shrinks_emission() {
@@ -3409,7 +3320,7 @@ export const App = () => <Box tone="red" />;
             .collect();
         assert_eq!(
             dropped,
-            ["chain dropped: stage 'styles' evaluation failed — styles eval failed: spread of all.ts hands on barrel.ts as the namespace all"],
+            ["chain dropped: stage 'styles' evaluation failed — styles eval failed: spread of all.ts re-exports barrel.ts as the namespace all"],
             "{manifest}"
         );
     }

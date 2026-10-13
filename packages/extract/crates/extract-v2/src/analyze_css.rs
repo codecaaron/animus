@@ -3060,8 +3060,8 @@ fn shed_unresolved_aliases(
 }
 
 /// The CSS of `files`, its member tables answering from `changes`: the
-/// analysis's one relation of what may change, closed already with the
-/// member tables' changes in it (`record_member_changes`).
+/// member tables' relation of what may change, closed already
+/// (`record_member_changes`).
 pub fn run(
     files: &BTreeMap<String, FileFacts>,
     order: &[String],
