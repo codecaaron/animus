@@ -7606,6 +7606,70 @@ pub fn filter_usage_scan(
     result
 }
 
+/// The Animus builder's methods and terminals.
+const BUILDER_METHODS: [&str; 10] =
+    ["styles", "variant", "compound", "states", "system", "props", "extend", "asElement", "asComponent", "asClass"];
+
+/// The `@animus-ui/system` functions that declare system styles.
+const STYLE_DECLARING_IMPORTS: [&str; 3] = ["createSystem", "createGlobalStyles", "createKeyframes"];
+
+/// A reference to the Animus builder in a file analyzed for usage only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BuilderReference {
+    /// 1-based position of the member or import.
+    pub line: usize,
+    pub column: usize,
+    /// The builder method, or the imported function.
+    pub name: String,
+}
+
+/// Every reference to the Animus builder `program` makes: a member whose
+/// property is a builder method, read or called, static or through a
+/// literal key, and an import of a style-declaring `@animus-ui/system`
+/// function under any local name. Strings, templates and comments hold
+/// none. A key built at runtime (`ds['sty' + 'les']`) is not seen.
+pub(crate) fn builder_references(program: &Program<'_>) -> Vec<(Span, String)> {
+    struct References(Vec<(Span, String)>);
+    impl<'a> Visit<'a> for References {
+        fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
+            if BUILDER_METHODS.contains(&member.property.name.as_str()) {
+                self.0.push((member.property.span, member.property.name.to_string()));
+            }
+            oxc::ast_visit::walk::walk_static_member_expression(self, member);
+        }
+        fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
+            let key = match &member.expression {
+                Expression::StringLiteral(key) => Some(key.value.as_str()),
+                Expression::TemplateLiteral(key) if key.expressions.is_empty() => {
+                    key.quasis.first().and_then(|quasi| quasi.value.cooked.as_ref()).map(|cooked| cooked.as_str())
+                }
+                _ => None,
+            };
+            if let Some(key) = key.filter(|key| BUILDER_METHODS.contains(key)) {
+                self.0.push((member.expression.span(), key.to_string()));
+            }
+            oxc::ast_visit::walk::walk_computed_member_expression(self, member);
+        }
+        fn visit_import_declaration(&mut self, import: &oxc::ast::ast::ImportDeclaration<'a>) {
+            if import.source.value == "@animus-ui/system" {
+                for specifier in import.specifiers.iter().flatten() {
+                    if let ImportDeclarationSpecifier::ImportSpecifier(named) = specifier {
+                        let imported = named.imported.name();
+                        if STYLE_DECLARING_IMPORTS.contains(&imported.as_str()) {
+                            self.0.push((named.span, imported.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut references = References(Vec::new());
+    references.visit_program(program);
+    // The walk meets an outer member before the chain inside it.
+    references.0.sort_by_key(|(span, _)| span.start);
+    references.0
+}
+
 /// Each `createSystem(…)` call whose callee no import, declaration or
 /// parameter binds in any enclosing scope. The system loader evaluates a
 /// system file without auto-imports, so the name is undefined there.

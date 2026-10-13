@@ -36,13 +36,7 @@ export function isEngineTransformExtension(path: string): boolean {
 
 /** An MDX file as usage analysis reads it, or why MDX would reject it. */
 export type MdxUsageSourceResult =
-  | {
-      kind: 'ok';
-      source: string;
-      /** Each Animus builder call the file makes, wherever it is written,
-       *  as `line N: callee(`; MDX declares no styles. */
-      builderCalls: string[];
-    }
+  | { kind: 'ok'; source: string }
   | { kind: 'error'; error: string };
 
 /** The list items and block quotes a line's content can sit in. */
@@ -97,10 +91,6 @@ const BACKTICKS = /`+/y;
 const TAG_NAME = /[^\s/>{]*/y;
 /** A JSX tag an expression renders. */
 const EXPRESSION_TAG = /<([A-Za-z_$][\w$.]*)/g;
-/** An Animus builder call, through any binding or member: the builder's
- *  methods and terminals, and the functions that declare system styles. */
-const BUILDER_CALL =
-  /([\w$.]*)\s*\.\s*(?:styles|variant|compound|states|system|props|extend|asElement|asComponent|asClass)\s*\(|\b(create(?:System|GlobalStyles|Keyframes))\s*\(/g;
 
 /** The names an ESM block declares: its imports' local names and the
  *  bindings its exports declare. */
@@ -322,20 +312,14 @@ export function mdxUsageSource(
   filename: string
 ): MdxUsageSourceResult {
   try {
-    return { kind: 'ok', ...mdxToTsx(source, filename) };
+    return { kind: 'ok', source: mdxToTsx(source, filename) };
   } catch (err) {
     if (!(err instanceof MdxSyntaxError)) throw err;
     return { kind: 'error', error: err.message };
   }
 }
 
-/** An MDX file as TSX, and the builder calls it makes. */
-interface MdxUsage {
-  source: string;
-  builderCalls: string[];
-}
-
-function mdxToTsx(source: string, filename: string): MdxUsage {
+function mdxToTsx(source: string, filename: string): string {
   const lines = source.split('\n');
   const esm = lines.map(() => false);
   const inline = lines.map(() => false);
@@ -399,12 +383,6 @@ function mdxToTsx(source: string, filename: string): MdxUsage {
     while (offset > lineEnd) lineEnd += lines[++tagRow]!.length + 1;
     tags[tagRow]!.push(name);
   }
-  // Read before the wrappers below are added: only what the file writes.
-  const builderCalls = out.flatMap((text, index) =>
-    [...text.matchAll(BUILDER_CALL)].map(
-      (match) => `line ${index + 1}: ${match[0].replace(/\s+/g, '')}`
-    )
-  );
 
   // Each run of non-ESM lines renders in a component of its own.
   const declared = declaredNames(
@@ -467,8 +445,5 @@ function mdxToTsx(source: string, filename: string): MdxUsage {
     layout !== -1
       ? `return ${wrapped};`
       : `const { wrapper: MDXLayout } = props.components || {}; return MDXLayout ? ${wrapped} : <>${content}</>;`;
-  return {
-    source: `${out.join('\n')}\nexport default function MDXContent(props = {}) { ${render} }\n/* @mdx-source: ${filename} */\n`,
-    builderCalls,
-  };
+  return `${out.join('\n')}\nexport default function MDXContent(props = {}) { ${render} }\n/* @mdx-source: ${filename} */\n`;
 }

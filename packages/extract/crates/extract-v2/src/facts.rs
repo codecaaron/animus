@@ -608,6 +608,10 @@ pub struct FileFacts {
     /// resolves: a system file's root that can only fail where it loads.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unbound_create_system_calls: Vec<(usize, usize)>,
+    /// In MDX's TSX view, every reference to the Animus builder: MDX is
+    /// analyzed for the components it renders, and declares no styles.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub builder_references: Vec<crate::usage_facts::BuilderReference>,
     /// The parser stopped at an unrecoverable error and yielded no chains,
     /// imports or exports: these facts describe nothing of the file.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -1093,6 +1097,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         captured_transform_bindings: BTreeSet::new(),
         parse_diagnostics: ast.diagnostics.clone(),
         unbound_create_system_calls: Vec::new(),
+        builder_references: Vec::new(),
         parse_panicked: ast.panicked,
     }
 }
@@ -1763,6 +1768,18 @@ pub(crate) fn extract_file_facts_from_static_maps(
             .into_iter()
             .map(|span| line_column(source, span.start))
             .collect(),
+        // Only MDX is read for usage alone; elsewhere the builder is the point.
+        builder_references: if ast.path.ends_with(".mdx.tsx") {
+            crate::usage_facts::builder_references(program)
+                .into_iter()
+                .map(|(span, name)| {
+                    let (line, column) = line_column(source, span.start);
+                    crate::usage_facts::BuilderReference { line, column, name }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
         ..structural
     }
 }

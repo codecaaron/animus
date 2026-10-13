@@ -125,6 +125,9 @@ export interface ExtractFileFacts {
   /** 1-based `[line, column]` of each `createSystem(…)` call no binding
    *  resolves; absent when there is none. */
   unboundCreateSystemCalls?: Array<[number, number]>;
+  /** In MDX's TSX view, each reference to the Animus builder; absent when
+   *  there is none. */
+  builderReferences?: Array<{ line: number; column: number; name: string }>;
 }
 
 export interface ExtractFactsResult {
@@ -609,16 +612,6 @@ export async function ingestSourceEntries(
       });
       continue;
     }
-    // MDX is read for the components it renders: a style it declares,
-    // wherever it is written, has no route to the stylesheet.
-    if (result.builderCalls.length > 0) {
-      diagnostics.push({
-        code: 'SOURCE_MDX_STYLE_DECLARATION',
-        message: `calls the Animus builder (${result.builderCalls.join('; ')}); MDX is analyzed for the components it renders only. Move the declaration to a .ts or .tsx file and import it.`,
-        originalPath: original.path,
-      });
-      continue;
-    }
     addAdaptedEntries(original.path, [
       { path: `${original.path}.tsx`, source: result.source },
     ]);
@@ -633,12 +626,19 @@ export async function ingestSourceEntries(
   const abortedParses: AbortedParse[] = [];
   for (const [analysisPath, file] of Object.entries(facts.files)) {
     const originalPath = analysisOwner.get(analysisPath) ?? analysisPath;
-    // A chain the call scan cannot name (a builder method read into a
-    // binding first) still shows in the native facts.
-    if (extension(originalPath) === '.mdx' && file.chains.length > 0) {
+    // MDX is read for the components it renders: a style it declares,
+    // wherever and however it is written, has no route to the stylesheet.
+    const references = file.builderReferences ?? [];
+    if (
+      extension(originalPath) === '.mdx' &&
+      (references.length > 0 || file.chains.length > 0)
+    ) {
+      const named = references.length
+        ? references.map(({ line, name }) => `line ${line}: ${name}`)
+        : file.chains.map((chain) => chain.descriptor.binding);
       diagnostics.push({
         code: 'SOURCE_MDX_STYLE_DECLARATION',
-        message: `declares Animus styles (${file.chains.map((chain) => chain.descriptor.binding).join(', ')}); MDX is analyzed for the components it renders only. Move the declaration to a .ts or .tsx file and import it.`,
+        message: `references the Animus builder (${named.join('; ')}); MDX is analyzed for the components it renders only. Move the declaration to a .ts or .tsx file and import it.`,
         originalPath,
       });
     }
