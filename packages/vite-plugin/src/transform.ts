@@ -4,7 +4,7 @@ import {
   isEngineTransformExtension,
   isPathWithinRoot,
 } from '@animus-ui/extract/pipeline';
-import { relative } from 'path';
+import { extname, relative } from 'path';
 
 import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
 import { invalidateFileModules } from './module-invalidation';
@@ -111,7 +111,12 @@ export async function transformSource(
     if (
       !ctx.isProd &&
       session !== null &&
-      !session.heldSources.has(relativePath)
+      !session.heldSources.has(relativePath) &&
+      // A project file the sources exclude, or whose extension they don't
+      // list, is never analysed: submitting it is an empty attempt.
+      (isExternalPkg ||
+        (ctx.extensionsSet.has(extname(id)) &&
+          !ctx.excludeMatcher.matches(id, relativePath)))
     ) {
       let outcomes: ObservedOutcome[] = [];
       try {

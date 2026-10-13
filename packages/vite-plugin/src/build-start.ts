@@ -60,7 +60,13 @@ export async function runBuildStart(
   if (ctx.assetCopyDir !== null)
     sweepAbandonedCopyDirs(dirname(ctx.assetCopyDir));
   for (const specifier of assetSpecifiers) {
-    const resolvedPath = await resolveSpecifier(specifier);
+    // Vite's resolver first, then the Session's, which also reaches a
+    // source kit's files through its package root. Vite's throws for a
+    // subpath its package's exports leave out.
+    const resolvedPath =
+      (await resolveSpecifier(specifier).catch(() => null)) ??
+      ctx.session?.resolveAssetSpecifier(specifier) ??
+      null;
     if (!resolvedPath) {
       ctx.assetFallback(
         specifier,

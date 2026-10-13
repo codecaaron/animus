@@ -2218,6 +2218,8 @@ export class ExtractionSession {
       externalSourceEntries: this.externalSourceEntries,
       externalSourceSideEffects: this.externalSourceSideEffects,
       externalPackageDirs: this.externalPackageDirs,
+      externalLinkedDirs: this.externalLinkedDirs,
+      externalOutputDirs: this.externalOutputDirs,
       ingestionFailureDiagnostics: this.ingestionFailureDiagnostics,
     };
   }
@@ -2444,6 +2446,8 @@ export class ExtractionSession {
         try {
           rawHash = contentHash(readFileSync(abs, 'utf-8'));
         } catch {
+          // Queued as a file event, whose read reports the failure.
+          modified.add(abs);
           continue;
         }
         // A file read again after a failed read re-queues even unchanged,
@@ -3430,7 +3434,7 @@ export class ExtractionSession {
 
   /** Resolve an asset specifier through the shared resolver, with one
    *  last resort: a discovered source entry's package root. */
-  private resolveAssetSpecifier(specifier: string): string | null {
+  resolveAssetSpecifier(specifier: string): string | null {
     const resolved = resolveAssetFile(
       specifier,
       this.rootDir!,

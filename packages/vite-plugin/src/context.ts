@@ -6,7 +6,6 @@ import {
   DEFAULT_EXTENSIONS,
   findSheetAssetSpecifiers,
   parseFilesJson,
-  resolveAssetFile,
   resolveVerbosity,
   runStructuralSelfCheck,
   substituteSheetAssets,
@@ -636,11 +635,7 @@ export class PluginContext {
           this.assetUrlBySpecifier.delete(specifier);
         }
         if (this.assetUrlBySpecifier.has(specifier)) continue;
-        const resolved = resolveAssetFile(
-          specifier,
-          this.rootDir,
-          this.pathAliasesJson
-        );
+        const resolved = this.session?.resolveAssetSpecifier(specifier);
         if (resolved) {
           this.assetUrlBySpecifier.set(
             specifier,
