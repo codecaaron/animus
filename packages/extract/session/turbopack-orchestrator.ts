@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync, watch } from 'fs';
+import { existsSync, lstatSync, readdirSync, statSync, watch } from 'fs';
 import { dirname, join, relative } from 'path';
 
 import {
@@ -94,7 +94,8 @@ function watchTree(
       const abs = name == null ? dir : join(dir, name.toString());
       if (excluded(abs)) return;
       try {
-        follow(abs);
+        if (name == null) reconcile(dir);
+        else follow(abs);
       } catch (err) {
         onError(err);
         return;
@@ -108,22 +109,45 @@ function watchTree(
       if (entry.isDirectory()) add(join(dir, entry.name));
     }
   };
-  // A created directory is watched; a removed one, and all under it, closed.
-  const follow = (abs: string): void => {
-    let isDirectory = false;
-    try {
-      isDirectory = statSync(abs).isDirectory();
-    } catch {}
-    if (isDirectory) {
-      add(abs);
-      return;
-    }
+  // Closes every watched directory at or under `path` but those in `keep`.
+  const drop = (path: string, keep?: ReadonlySet<string>): void => {
     for (const [dir, watcher] of [...watchers]) {
-      if (dir !== root && isPathWithinRoot(abs, dir)) {
+      if (dir !== root && isPathWithinRoot(path, dir) && !keep?.has(dir)) {
         watcher.close();
         watchers.delete(dir);
       }
     }
+  };
+  // A created directory is watched; a removed one, and all under it, closed.
+  // A link is never followed, as the initial walk follows none.
+  const follow = (abs: string): void => {
+    let isDirectory = false;
+    try {
+      isDirectory = lstatSync(abs).isDirectory();
+    } catch {}
+    if (isDirectory) add(abs);
+    else drop(abs);
+  };
+  // `dir` and the directories under it as the initial walk finds them.
+  const collect = (dir: string, into: Set<string>): void => {
+    into.add(dir);
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const child = join(dir, entry.name);
+      if (entry.isDirectory() && !excluded(child)) collect(child, into);
+    }
+  };
+  // An event naming no entry: the subtree is read again, so created
+  // directories are watched and removed ones closed.
+  const reconcile = (dir: string): void => {
+    const live = new Set<string>();
+    try {
+      collect(dir, live);
+    } catch {
+      drop(dir);
+      return;
+    }
+    for (const path of live) add(path);
+    drop(dir, live);
   };
   const close = (): void => {
     closed = true;

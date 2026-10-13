@@ -129,9 +129,11 @@ const comparable =
 export function withinDirectories(
   directories: readonly string[]
 ): (path: string) => boolean {
-  const prefixes = directories.map((dir) =>
-    comparable(dir.endsWith(sep) ? dir : dir + sep)
-  );
+  // Deepest first: a root admitted inside another decides by its own
+  // exclusions, as ingestion does.
+  const prefixes = directories
+    .map((dir) => comparable(dir.endsWith(sep) ? dir : dir + sep))
+    .sort((a, b) => b.length - a.length);
   return (path) => {
     const key = comparable(path) + sep;
     const prefix = prefixes.find((candidate) => key.startsWith(candidate));
