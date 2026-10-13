@@ -13,7 +13,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 source "$ROOT/scripts/verify/_preconditions.sh"
 
-PKGS=(properties system extract vite-plugin next-plugin cli unplugin)
+PKGS=(properties system extract layergate vite-plugin next-plugin cli unplugin)
 require_bun_install
 RESOLUTION=$(bun scripts/verify/packed-graph.ts resolve "$@")
 MODE=$(printf '%s\n' "$RESOLUTION" | awk -F '\t' '$1 == "mode" { print $2 }')
@@ -123,7 +123,7 @@ echo "[verify:packed] recursive installed package graph ok"
 
 # ── 5. Load proof: ESM + CJS + the engine ───────────────────────────
 (cd "$STAGING" && node --input-type=module -e "
-  for (const p of ['@animus-ui/properties','@animus-ui/system','@animus-ui/vite-plugin','@animus-ui/next-plugin','@animus-ui/extract','@animus-ui/unplugin','@animus-ui/unplugin/rollup']) {
+  for (const p of ['@animus-ui/properties','@animus-ui/system','@animus-ui/vite-plugin','@animus-ui/next-plugin','@animus-ui/extract','@animus-ui/unplugin','@animus-ui/unplugin/rollup','@animus-ui/layergate','@animus-ui/layergate/vite']) {
     const m = await import(p);
     if (!m || Object.keys(m).length === 0) throw new Error('empty ESM module: ' + p);
   }

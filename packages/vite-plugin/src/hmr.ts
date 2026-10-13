@@ -11,7 +11,7 @@ import { RESOLVED_COMPONENTS_ID, RESOLVED_SYSTEM_PROPS_ID } from './constants';
 import { invalidateFileModules } from './module-invalidation';
 import { reconcileSourceCorpus } from './rediscovery';
 import { applyPublished, changesOf, mergePublished } from './session-outcomes';
-import { applyDevBridgeImport, extendingFiles } from './transform';
+import { applyDeliveryImports, extendingFiles } from './transform';
 
 import type { ObservedOutcome, PluginContext } from './context';
 import type { HotUpdateResult } from './hot-update-events';
@@ -297,7 +297,7 @@ function isPresentationOnlyEdit(
     const { transformFile } = ctx.engineApi();
     const fresh = transformFile(source, scannerRelPath, ctx.storedManifestJson);
     if (!fresh.hasComponents) return false;
-    return contentHash(applyDevBridgeImport(fresh.code)) === servedHash;
+    return contentHash(applyDeliveryImports(ctx, fresh.code)) === servedHash;
   } catch {
     return false;
   }

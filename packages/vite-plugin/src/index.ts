@@ -14,6 +14,7 @@ import { applyResolvedConfig } from './config';
 import { PluginContext } from './context';
 import { cancelSystemReload, handleHotUpdate } from './hmr';
 import { buildIndexHtmlTags } from './index-html';
+import { quarantineHooks } from './quarantine';
 import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
 import { kitWatchNegations } from './watch-ignored';
@@ -24,9 +25,11 @@ import type {
   SourceKitDependency,
   StaticCssConfig,
 } from '@animus-ui/extract/pipeline';
+import type { AnimusQuarantineOptions } from './quarantine';
 import type { Plugin } from 'vite';
 
 export { discoverFiles } from '@animus-ui/extract/pipeline';
+export type { AnimusQuarantineOptions } from './quarantine';
 
 /** The optimizer would prebundle an installed kit past the transform: a
  *  source kit from its compiled entry, and a compiled kit with its builder
@@ -176,6 +179,15 @@ export interface AnimusExtractOptions {
    * `<script data-animus-bootstrap>`; `cspHash` is for the host's own policy.
    */
   appearanceBootstrap?: { code: string; cspHash: string };
+  /**
+   * Load third-party stylesheets into `anm-vendor`, a layer below every
+   * Animus layer, so their normal rules never beat Animus's. Needs
+   * `@animus-ui/layergate`. `sheets` are delivered with Animus's stylesheet,
+   * ahead of it; `dependencies` also covers `.css` your modules import from
+   * packages; `optOut` keeps a file's own rules outside the layer. App CSS
+   * and CSS Modules are left alone.
+   */
+  quarantine?: AnimusQuarantineOptions;
 }
 
 type AnimusExtractOptionRecord = {
@@ -190,7 +202,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   const optionRecord: AnimusExtractOptionRecord = options;
   assertKnownOptionKeys(
     optionRecord,
-    ['verify', 'appearanceBootstrap'],
+    ['verify', 'appearanceBootstrap', 'quarantine'],
     [
       {
         key: 'root',
@@ -204,7 +216,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     }
   );
 
-  const ctx = new PluginContext(options);
+  // `quarantine` puts `anm-vendor` first in the layer order Animus's own
+  // stylesheet declares, whichever stylesheet the page loads first.
+  const vendor = options.quarantine ? quarantineHooks(options.quarantine, options.layers) : null;
+  const ctx = new PluginContext(vendor ? { ...options, layers: vendor.order } : options);
 
   return {
     name: 'animus-extract',
@@ -233,28 +248,32 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       return { define, ...config, ...watched };
     },
 
-    configureServer(server) {
+    async configureServer(server) {
+      await vendor?.run('configureServer', this, server);
       ctx.devServer = server;
       // System deps can load before the server exists; workspace paths
       // outside the root get no watcher events unless registered here.
       ctx.registerSystemWatchPaths();
     },
 
-    configResolved(config) {
+    async configResolved(config) {
       applyResolvedConfig(ctx, config);
+      await vendor?.run('configResolved', this, config);
     },
 
     // The end of a build, and of a dev server, which Vite ends the same way:
     // the last open environment build retires the context's Session and
     // engine. buildEnd runs once per build, failed ones included; closeBundle
     // can run twice for a failed one.
-    buildEnd() {
+    async buildEnd() {
+      await vendor?.run('buildEnd', this);
       if (!ctx.builds.end(this.environment ?? ctx.builds.single)) return;
       cancelSystemReload(ctx);
       ctx.close();
     },
 
     async buildStart() {
+      await vendor?.run('buildStart', this);
       await ctx.builds.open(this.environment ?? ctx.builds.single);
       await runBuildStart(
         ctx,
@@ -271,7 +290,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       );
     },
 
-    async resolveId(id, importer) {
+    async resolveId(id, importer, resolveOptions) {
+      const owned = await vendor?.run('resolveId', this, id, importer, resolveOptions);
+      if (owned) return owned as string;
       const virtual = resolveVirtualId(ctx, id);
       if (virtual !== null || !id.startsWith('.') || importer === undefined) {
         return virtual;
@@ -301,7 +322,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       return { ...resolved, moduleSideEffects: true };
     },
 
-    load(id) {
+    async load(id) {
+      const loaded = await vendor?.run('load', this, id);
+      if (loaded) return loaded as string | { code: string };
       return loadVirtualModule(ctx, id);
     },
 
@@ -317,6 +340,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     async hotUpdate(hmr) {
+      const vendorModules = await vendor?.run('hotUpdate', this, hmr);
+      if (vendorModules) return vendorModules as typeof hmr.modules;
       return handleHotUpdate(ctx, this.environment, hmr);
     },
   };
