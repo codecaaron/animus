@@ -49,6 +49,12 @@ export interface Sheet {
   important: number[];
   keyframes: number[];
   animations: number[];
+  /** Offsets of `@import` rules past the leading statements, which a
+   *  browser ignores. */
+  ignoredImports: number[];
+  /** The layer names each top-level `@layer` rule creates, as written, by
+   *  offset; an anonymous block names none. */
+  layers: Array<{ at: number; names: string[] }>;
 }
 
 const skippable = (token: Token) =>
@@ -167,7 +173,11 @@ export function readSheet(css: string): Sheet {
     important: [],
     keyframes: [],
     animations: [],
+    ignoredImports: [],
+    layers: [],
   };
+  // A byte-order mark is no content.
+  if (css.charCodeAt(0) === 0xfeff) sheet.removed.push([0, 1]);
   // The leading statements a stylesheet keeps at its top level; the first
   // other rule starts the body.
   let index = significant(tokens, 0);
@@ -194,10 +204,34 @@ export function readSheet(css: string): Sheet {
     index = significant(tokens, end);
     leading = index;
   }
-  // URLs and effects, past the removed leading statements.
+  // URLs, effects and top-level layers, past the removed leading
+  // statements.
   let previous: Token | undefined;
+  let depth = 0;
   for (let at = 0; at < tokens.length; at++) {
     const token = tokens[at]!;
+    if (token.type === '{') depth += 1;
+    else if (token.type === '}' && depth > 0) depth -= 1;
+    else if (depth === 0 && token.type === 'at-keyword') {
+      const name = token.value.toLowerCase();
+      if (name === 'layer') {
+        let to = at + 1;
+        while (
+          to < tokens.length &&
+          tokens[to]!.type !== '{' &&
+          tokens[to]!.type !== ';'
+        )
+          to += 1;
+        const text = css.slice(token.end, tokens[to]?.start ?? css.length);
+        const names = text
+          .split(',')
+          .map((part) => part.trim())
+          .filter(Boolean);
+        sheet.layers.push({ at: token.start, names });
+      } else if (name === 'import' && at >= leading) {
+        sheet.ignoredImports.push(token.start);
+      }
+    }
     if (
       at < leading &&
       sheet.removed.some(
@@ -225,13 +259,13 @@ export function readSheet(css: string): Sheet {
           });
       } else if (fn === 'image-set' || fn === '-webkit-image-set') {
         const close = closing(tokens, at);
-        let depth = 0;
+        let nesting = 0;
         for (let inner = at + 1; inner < close; inner++) {
           const candidate = tokens[inner]!;
           if (candidate.type === '(' || candidate.type === 'function')
-            depth += 1;
-          else if (candidate.type === ')') depth -= 1;
-          else if (depth === 0 && candidate.type === 'string') {
+            nesting += 1;
+          else if (candidate.type === ')') nesting -= 1;
+          else if (nesting === 0 && candidate.type === 'string') {
             sheet.urls.push({
               start: candidate.start,
               end: candidate.end,

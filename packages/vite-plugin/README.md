@@ -118,7 +118,8 @@ animusExtract({
 });
 ```
 
-`sheets` arrive with Animus's stylesheet, so no extra import is needed.
+`sheets` arrive with the modules that import Animus's stylesheet (every
+module with an extracted component), so no extra import is needed.
 `!important` declarations and animations still win, and are reported. App
 CSS and CSS Modules are left alone.
 

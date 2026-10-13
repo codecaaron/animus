@@ -265,6 +265,11 @@ export function tokenize(css: string): Token[] {
     tokens.push({ type: 'ident', start, end: at, value });
   };
 
+  // A byte-order mark the decoder left in is no content.
+  if (css.charCodeAt(0) === 0xfeff) {
+    at = 1;
+    tokens.push({ type: 'whitespace', start: 0, end: 1, value: '' });
+  }
   while (at < css.length) {
     const start = at;
     const c = css[at]!;

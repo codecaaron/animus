@@ -48,6 +48,9 @@ export interface CompileOptions {
   /** Whether `file`'s own text goes into the quarantine layer; false for a
    *  file opted out, which still loads, outside it. */
   quarantined(file: string): boolean;
+  /** The directory generated names are relative to, so they are the same
+   *  on every machine: the project root. Default: the root file's. */
+  base?: string;
   /** Parsed files by path, read and filled by the compile. */
   cache?: Map<string, ParsedSheet>;
 }
@@ -144,9 +147,24 @@ function remoteImport(url: string, frames: Frame[]): string {
     supports.length > 0
       ? ` supports(${supports.map((text) => `(${text})`).join(' and ')})`
       : '',
-    media.length > 0 ? ` ${media.at(-1)}` : '',
+    media.length > 0 ? ` ${combinedMedia(media)}` : '',
     ';',
   ].join('');
+}
+
+/** Media conditions on the way to an import, as one: joined when each is a
+ *  bare condition (`(min-width: 1px)`), otherwise the innermost. */
+function combinedMedia(media: string[]): string {
+  return media.every((text) => text.startsWith('(') && !text.includes(','))
+    ? media.join(' and ')
+    : media.at(-1)!;
+}
+
+/** The layer names `frames` nest, outermost first. */
+function layerPath(frames: Frame[]): string[] {
+  return frames
+    .filter((frame) => frame.kind === 'layer')
+    .flatMap((frame) => frame.text.split('.'));
 }
 
 export async function compileUnit(
@@ -165,7 +183,14 @@ export async function compileUnit(
     | null
   >();
   const remote: string[] = [];
-  const emitted = new Set<string>();
+  /** Every layer path, in the order the original cascade first creates it. */
+  const created: string[] = [];
+  const create = (path: string[]) => {
+    for (let depth = 1; depth <= path.length; depth++) {
+      const name = path.slice(0, depth).join('.');
+      if (!created.includes(name)) created.push(name);
+    }
+  };
 
   const report = (
     code: string,
@@ -183,12 +208,15 @@ export async function compileUnit(
     });
   };
 
-  /** A stable private name for the anonymous layer an import site creates:
-   *  unique per importing file and import, and the same on every machine. */
-  const anonymousName = (importer: string, index: number) => () => {
-    const site = `${relative(deliveryDir, importer).split(sep).join('/')}\0${index}`;
-    return `layergate-anonymous-${createHash('sha256').update(site).digest('hex').slice(0, 10)}`;
-  };
+  /** A stable private name for the anonymous layer an import occurrence
+   *  creates: from the unit and the chain of imports that reaches it from
+   *  the root, so each occurrence, of the same file too, gets its own, and
+   *  the same on every machine. */
+  const unit = relative(options.base ?? deliveryDir, root)
+    .split(sep)
+    .join('/');
+  const anonymousName = (occurrence: string) => () =>
+    `layergate-anonymous-${createHash('sha256').update(`${unit}\0${occurrence}`).digest('hex').slice(0, 10)}`;
 
   /** What a file holds that the layer cannot hold back, or that layergate
    *  cannot place, reported once per file. */
@@ -207,6 +235,15 @@ export async function compileUnit(
     effect(sheet.important, 'layergate.important', '!important declaration(s)');
     effect(sheet.keyframes, 'layergate.animation', '@keyframes rule(s)');
     effect(sheet.animations, 'layergate.animation', 'animation declaration(s)');
+    for (const at of sheet.ignoredImports) {
+      report(
+        'layergate.ignored-import',
+        'warning',
+        '@import after other rules is ignored by browsers, and layergate leaves it as written',
+        file,
+        at
+      );
+    }
     if (sheet.namespaces.length > 0) {
       report(
         'layergate.namespace',
@@ -284,28 +321,46 @@ export async function compileUnit(
     });
   };
 
-  const visit = async (file: string, frames: Frame[], stack: string[]) => {
-    const key = `${file}\0${frames.map(open).join('')}`;
-    if (emitted.has(key)) return;
-    emitted.add(key);
+  /** Emits `file` as one occurrence: `frames` are the conditions its import
+   *  chain puts it under, `stack` the files on that chain, `occurrence` the
+   *  chain's import indexes. A file imported twice is emitted at each
+   *  import, as a browser applies it at each. */
+  const visit = async (
+    file: string,
+    frames: Frame[],
+    stack: string[],
+    occurrence: string
+  ) => {
     const entry = await load(file);
     if (!entry) return;
     const own: Frame[] = options.quarantined(file)
       ? [{ kind: 'layer', text: options.layer }, ...frames]
       : frames;
+    const ownPath = layerPath(own);
+    const createLayers = (from: number, to: number) => {
+      for (const { at, names } of entry.sheet.layers) {
+        if (at >= from && at < to)
+          for (const name of names) create([...ownPath, ...name.split('.')]);
+      }
+    };
+    create(ownPath);
     // What precedes the last import (layer statements and comments), each
     // import's stylesheet, then the rest.
     const split = entry.sheet.imports.at(-1)?.end ?? 0;
+    createLayers(0, split);
     emit(file, own, 0, split);
     for (const [index, statement] of entry.sheet.imports.entries()) {
-      const added = importFrames(statement, anonymousName(file, index));
+      const added = importFrames(
+        statement,
+        anonymousName(`${occurrence}/${index}`)
+      );
       if (isRemote(statement.url)) {
         const media = [...own, ...added].filter(
           (frame) => frame.kind === 'media'
         ).length;
         const kept =
           media > 1
-            ? `; of its ${media} media conditions only the innermost is kept`
+            ? `; its ${media} media conditions are joined where each is a bare condition, else only the innermost is kept`
             : '';
         report(
           'layergate.remote',
@@ -314,6 +369,7 @@ export async function compileUnit(
           file,
           statement.start
         );
+        create(layerPath([...own, ...added]));
         remote.push(remoteImport(statement.url, [...own, ...added]));
         continue;
       }
@@ -339,17 +395,26 @@ export async function compileUnit(
           statement.start
         );
       } else {
-        await visit(child, [...frames, ...added], [...stack, child]);
+        await visit(
+          child,
+          [...frames, ...added],
+          [...stack, child],
+          `${occurrence}/${index}`
+        );
       }
     }
+    createLayers(split, entry.text.length);
     emit(file, own, split, entry.text.length);
   };
 
-  await visit(root, [], [root]);
+  await visit(root, [], [root], '');
 
   bundle.prepend(
     [
       `@layer ${options.order.join(', ')};\n`,
+      // Hoisted imports create their layers first; the original order is
+      // declared ahead of them.
+      ...(remote.length > 0 ? [`@layer ${created.join(', ')};\n`] : []),
       ...remote.map((line) => `${line}\n`),
     ].join('')
   );

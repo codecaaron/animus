@@ -49,9 +49,12 @@ import 'virtual:layergate';
 | `dependencies` | Also own the `.css` a JS module imports from a package other than your app: `true` for every package, or package names. Default: none.                     |
 | `optOut`       | Files inside an owned stylesheet whose own rules stay outside the layer. Exact specifiers or paths, never globs.                                           |
 
-Any import of an owned stylesheet, by any spelling, gets the same single
-copy. Vite's own CSS pipeline then processes it once: PostCSS, minification,
-injection and extraction. Fonts and images keep resolving, because
+A JS module's import of an owned stylesheet, by any spelling, gets the same
+single copy, and the declared sheets always come first, in their declared
+order, whichever owned stylesheet the app imports first. Vite's own CSS
+pipeline then processes each one once: PostCSS, minification, injection and
+extraction. A nested `@import` of a package resolves as a CSS import does,
+through its `style` entry. Fonts and images keep resolving, because
 layergate rewrites a relative `url()` to resolve from the delivered file.
 Edits to an owned file, nested imports and files under `node_modules`
 included, hot-update in place.
@@ -87,6 +90,11 @@ Font, keyframe and property names are global, whatever their layer.
 ## Not yet
 
 - CSS Modules, Sass, Less and Stylus are left to Vite.
+- An app stylesheet's own `@import` of an owned file is inlined by Vite
+  itself, which never asks plugins, so that copy stays unlayered. Import
+  owned stylesheets from JS, or list them in `sheets`.
+- Each owned stylesheet is finished on its own: a file two of them import
+  appears in both.
 - App CSS is left alone unless you list it in `sheets`. CSS that loads
   before `virtual:layergate`, or another tool's layer order statement that
   comes first, can still place your layers after `vendor`.
@@ -98,8 +106,9 @@ Font, keyframe and property names are global, whatever their layer.
 
 ## Core API
 
-`compileUnit(root, { layer, order, resolve, read, quarantined, cache })`
+`compileUnit(root, { layer, order, resolve, read, quarantined, base, cache })`
 compiles one stylesheet graph with the host's resolver and file reader, and
 returns the finished CSS, a source map, the files read and the diagnostics.
-`cache` keeps parsed files between compiles; drop a file's entry when it
-changes. The Vite adapter is built on it.
+`base` is the directory generated layer names are relative to (the project
+root), so they are the same on every machine. `cache` keeps parsed files
+between compiles; drop a file's entry when it changes. The Vite adapter is built on it.

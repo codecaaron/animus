@@ -1,16 +1,19 @@
 /**
  * The Vite adapter. layergate owns the load of each selected stylesheet:
  * a declared sheet, or (opted in) a `.css` a JS module imports from another
- * package. Each resolves to one id, `<realpath>?layergate`, whatever the
+ * package. Each loads as one id, `<realpath>?layergate`, whatever the
  * spelling that reached it, and its load is the finished stylesheet, with
  * no local `@import` left, which Vite's own CSS pipeline then processes
- * once: PostCSS, minification, injection or extraction. App CSS, CSS
- * Modules and special requests (`?inline`, `?url`, `?raw`) stay Vite's.
+ * once: PostCSS, minification, injection or extraction. A JS module's
+ * import of one reaches it through a proxy that imports the declared
+ * sheets first, so they keep their declared order wherever the app
+ * imports an owned sheet first. App CSS, CSS Modules and special requests
+ * (`?inline`, `?url`, `?raw`) stay Vite's.
  */
 import { existsSync, readFileSync, realpathSync, watch } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { isCSSRequest, normalizePath } from 'vite';
+import { basename, dirname, join } from 'node:path';
+import { createIdResolver, isCSSRequest, normalizePath } from 'vite';
 
 import { compileUnit } from './compile';
 import { resolvePlan } from './plan';
@@ -27,6 +30,13 @@ const ENTRY_ID = 'virtual:layergate';
 const ORDER_ID = 'virtual:layergate/order.css';
 const RESOLVED_ENTRY = `\0${ENTRY_ID}`;
 const RESOLVED_ORDER = `\0${ORDER_ID}`;
+/** A JS module's import of an owned sheet: the declared sheets, then it.
+ *  Its id names the file encoded and ends in `.js`, so Vite never takes it
+ *  for a stylesheet. */
+const PROXY = '\0layergate-proxy:';
+const proxyId = (file: string) => `${PROXY}${encodeURIComponent(file)}.js`;
+const proxiedFile = (id: string) =>
+  decodeURIComponent(id.slice(PROXY.length, -'.js'.length));
 
 const PLAIN_CSS = /\.css$/;
 const MODULE_CSS = /\.module\.css$/;
@@ -67,15 +77,17 @@ function packageOf(
   return found;
 }
 
-/** The file a resolved id names, through symlinks, with forward slashes. */
-function fileOf(id: string): string {
-  const file = id.split('?')[0]!;
+/** A path through symlinks, with forward slashes. */
+function real(path: string): string {
   try {
-    return normalizePath(realpathSync(file));
+    return normalizePath(realpathSync(path));
   } catch {
-    return normalizePath(file);
+    return normalizePath(path);
   }
 }
+
+/** The file a resolved id names, through symlinks, with forward slashes. */
+const fileOf = (id: string) => real(id.split('?')[0]!);
 
 function format(diagnostic: LayergateDiagnostic): string {
   const where = diagnostic.file
@@ -89,33 +101,79 @@ export function layergate(options: LayergateOptions = {}) {
   let root = process.cwd();
   let app: PackageInfo | null = null;
   const packages = new Map<string, PackageInfo | null>();
+  /** `@import` inside an owned sheet resolves as Vite resolves a CSS
+   *  import: the `style` field and condition, CSS files only. */
+  let resolveCss: ReturnType<typeof createIdResolver> | undefined;
   /** Declared sheets, in order. */
   let declared: string[] = [];
   let optedOut = new Set<string>();
-  /** Each file read → the owned ids whose finished stylesheet holds it. */
+  /** Each owned id → the files its finished stylesheet read, and each file
+   *  → the owned ids that read it. */
+  const filesByUnit = new Map<string, Set<string>>();
   const unitsByFile = new Map<string, Set<string>>();
   /** Parsed files, kept until they change. */
   const parsed = new Map<string, ParsedSheet>();
   let server: ViteDevServer | undefined;
   /** Vite's watcher ignores node_modules, so an owned file there is
-   *  watched here and its change handed to Vite's own HMR. */
+   *  watched here, its change handed to Vite's own HMR. A deleted file's
+   *  directory is watched until the file returns. */
   const watchers = new Map<string, FSWatcher>();
+  const unwatch = (file: string) => {
+    watchers.get(file)?.close();
+    watchers.delete(file);
+  };
   const watchInstalled = (file: string) => {
     if (!server || watchers.has(file) || !file.includes('/node_modules/'))
       return;
-    const changed = (event: string) => {
-      server?.watcher.emit('change', file);
-      // An atomic save replaces the file; watch the new one.
-      if (event === 'rename') {
-        watchers.get(file)?.close();
-        watchers.delete(file);
-        if (existsSync(file)) watchInstalled(file);
-      }
-    };
     try {
-      watchers.set(file, watch(file, changed));
+      if (existsSync(file)) {
+        watchers.set(
+          file,
+          watch(file, (event) => {
+            server?.watcher.emit('change', file);
+            // An atomic save or a deletion replaces the watched file.
+            if (event === 'rename') {
+              unwatch(file);
+              watchInstalled(file);
+            }
+          })
+        );
+      } else {
+        watchers.set(
+          file,
+          watch(dirname(file), (_event, name) => {
+            if (name !== basename(file) || !existsSync(file)) return;
+            unwatch(file);
+            watchInstalled(file);
+            server?.watcher.emit('change', file);
+          })
+        );
+      }
     } catch {
-      // A file that vanished before it could be watched has nothing to report.
+      // A directory that vanished has nothing to report.
+    }
+  };
+
+  /** Records the files `id`'s finished stylesheet read, forgetting and
+   *  unwatching what it no longer reads. */
+  const reconcile = (id: string, files: readonly string[]) => {
+    const current = new Set(files);
+    for (const file of filesByUnit.get(id) ?? []) {
+      if (current.has(file)) continue;
+      const units = unitsByFile.get(file);
+      units?.delete(id);
+      if (units?.size === 0) {
+        unitsByFile.delete(file);
+        parsed.delete(file);
+        unwatch(file);
+      }
+    }
+    filesByUnit.set(id, current);
+    for (const file of current) {
+      let units = unitsByFile.get(file);
+      if (!units) unitsByFile.set(file, (units = new Set()));
+      units.add(id);
+      watchInstalled(file);
     }
   };
 
@@ -133,7 +191,16 @@ export function layergate(options: LayergateOptions = {}) {
 
     configResolved(config) {
       root = config.root;
-      app = packageOf(root, packages);
+      // By realpath, as owned files are: a root reached through a symlink
+      // (`resolve.preserveSymlinks`) is still the app.
+      app = packageOf(real(root), packages);
+      resolveCss = createIdResolver(config, {
+        extensions: ['.css'],
+        mainFields: ['style'],
+        conditions: ['style', 'development|production'],
+        tryIndex: false,
+        preferRelative: true,
+      });
     },
 
     configureServer(devServer) {
@@ -141,8 +208,7 @@ export function layergate(options: LayergateOptions = {}) {
     },
 
     buildEnd() {
-      for (const watcher of watchers.values()) watcher.close();
-      watchers.clear();
+      for (const file of [...watchers.keys()]) unwatch(file);
     },
 
     async buildStart() {
@@ -176,7 +242,7 @@ export function layergate(options: LayergateOptions = {}) {
     async resolveId(source, importer, resolveOptions) {
       if (source === ENTRY_ID) return RESOLVED_ENTRY;
       if (source === ORDER_ID) return RESOLVED_ORDER;
-      if (source.endsWith(OWNED)) return source;
+      if (source.endsWith(OWNED) || source.startsWith(PROXY)) return source;
       // Only a plain `.css` request from a JS module, when the plan owns
       // anything: a CSS file's own `@import` is Vite's, or inside a graph
       // layergate already owns.
@@ -191,7 +257,7 @@ export function layergate(options: LayergateOptions = {}) {
       if (!resolved || resolved.external) return null;
       const file = fileOf(resolved.id);
       if (!PLAIN_CSS.test(file) || MODULE_CSS.test(file)) return null;
-      return owns(file) ? file + OWNED : null;
+      return owns(file) ? proxyId(file) : null;
     },
 
     async load(id) {
@@ -201,27 +267,28 @@ export function layergate(options: LayergateOptions = {}) {
           .join('\n');
       }
       if (id === RESOLVED_ORDER) return `@layer ${plan.order.join(', ')};\n`;
+      if (id.startsWith(PROXY)) {
+        const request = proxiedFile(id) + OWNED;
+        return `import ${JSON.stringify(ENTRY_ID)};\nimport ${JSON.stringify(request)};\n`;
+      }
       if (!id.endsWith(OWNED)) return null;
+      const environment = this.environment;
       const unit = await compileUnit(id.slice(0, -OWNED.length), {
         layer: plan.layer,
         order: plan.order,
+        base: root,
         resolve: async (specifier, from) => {
-          const resolved = await this.resolve(specifier, from, {
-            skipSelf: true,
-          });
-          return resolved && !resolved.external ? fileOf(resolved.id) : null;
+          const resolved = await resolveCss?.(environment, specifier, from);
+          return resolved && PLAIN_CSS.test(fileOf(resolved))
+            ? fileOf(resolved)
+            : null;
         },
         read: (file) => readFile(file, 'utf8'),
         quarantined: (file) => !optedOut.has(file),
         cache: parsed,
       });
-      for (const file of unit.files) {
-        this.addWatchFile(file);
-        watchInstalled(file);
-        let units = unitsByFile.get(file);
-        if (!units) unitsByFile.set(file, (units = new Set()));
-        units.add(id);
-      }
+      for (const file of unit.files) this.addWatchFile(file);
+      reconcile(id, unit.files);
       for (const diagnostic of unit.diagnostics) {
         const message = format(diagnostic);
         if (diagnostic.severity === 'error') this.error(message);
