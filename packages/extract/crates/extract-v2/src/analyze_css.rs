@@ -4131,7 +4131,9 @@ fn routed_values<'u>(
                 }
             }
         }
-        if member_expr_bindings.contains_key(tag) {
+        // Only a root the module binds reads the module's object: a parameter
+        // or a nested binding of that name is another value.
+        if member_expr_bindings.contains_key(tag) || !binds_at_module_scope(origin) {
             continue;
         }
         // An element or a `createElement` call of a bound member, or an
@@ -4153,6 +4155,13 @@ fn routed_values<'u>(
         }
     }
     routed
+}
+
+/// Whether a tag's root, bound at `origin`, is a binding of the module: an
+/// import or a top-level binding, or unknown when the facts were collected
+/// without the file's scopes.
+fn binds_at_module_scope(origin: Option<TagOrigin>) -> bool {
+    origin.is_none_or(|origin| matches!(origin, TagOrigin::Import | TagOrigin::TopLevel))
 }
 
 /// A tag a module renders, as an element or by `createElement`: the name or
@@ -4462,9 +4471,8 @@ fn identity_uncertainty_diagnostics(
                 let (class, mut reason) = uncertain_tag_reason(file, ff, tag, origin, files, inputs, links);
                 // A member tag, or a facade's own tag, of an object that named
                 // a component when it was built but may have changed since.
-                if let Some(crate::family_members::Member::Unstable(component, why)) =
-                    objects.of_tag(file, tag, tag.contains('.'))
-                {
+                let read = binds_at_module_scope(origin).then(|| objects.of_tag(file, tag, tag.contains('.'))).flatten();
+                if let Some(crate::family_members::Member::Unstable(component, why)) = read {
                     let (component_file, binding) = component.rsplit_once("::").unwrap_or(("", &component));
                     let object = tag.rsplit_once('.').map_or(tag, |(object, _)| object);
                     reason = format!(
