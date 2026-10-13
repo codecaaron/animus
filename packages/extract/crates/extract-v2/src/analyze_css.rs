@@ -14139,8 +14139,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "if (props.p && typeof props.p === 'object' && `${props.p}` !== props.p._) {}",
             "const f = props.mutate; f(props.onPress);",
         ] {
-            assert!(!slot(body, renders[0]), "{body}");
-            assert!(!slot(body, renders[1]), "{body}");
+            for render in renders {
+                assert!(!slot(body, render), "{body} {render}");
+            }
         }
         // A spread at the render opens the target.
         let (sizes, _, _) = wrapper_kept(
@@ -14829,9 +14830,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// imported one, the root of an `Object.assign` facade built on a
     /// function component, a function component a facade literal holds
     /// inline. A same-module wrapper rendered by `createElement` is followed
-    /// as JSX is. A prop
-    /// a pattern on every route consumes, and a name a parameter shadows,
-    /// warn nothing.
+    /// as JSX is. A prop a pattern on every route consumes, and a name a
+    /// parameter shadows, warn nothing.
     #[test]
     fn every_unfollowed_wrapper_shape_warns_at_its_use() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";

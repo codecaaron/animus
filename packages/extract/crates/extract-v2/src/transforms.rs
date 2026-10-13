@@ -826,6 +826,21 @@ mod tests {
         assert!(transform.diagnostics.is_empty());
     }
 
+    /// Contract: a callback that renders an element (written as JSX, or as
+    /// a `createElement` call the parse reads as one) names its component
+    /// and the values it passes; outside ones make it not self-contained.
+    #[test]
+    fn an_element_in_a_callback_names_what_it_renders() {
+        let transform = extract_one(
+            r#"const outer = 1;
+const icon = createTransform('icon', (value) => <Icon size={outer}>{value}</Icon>);"#,
+        );
+        assert!(!transform.valid);
+        for name in ["Icon", "outer"] {
+            assert!(transform.diagnostics.iter().any(|d| d.contains(&format!("'{name}'"))), "{name}: {:?}", transform.diagnostics);
+        }
+    }
+
     #[test]
     fn standard_for_loop_still_rejects_real_external_symbol() {
         let transform = extract_one(
