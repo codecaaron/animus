@@ -193,6 +193,9 @@ pub enum UsageFact {
         /// Byte offset of the member.
         #[serde(skip)]
         at: u32,
+        /// Assigned to, or `Object.assign`'s target; otherwise read.
+        #[serde(skip)]
+        written: bool,
     },
     /// `cloneElement(child, …)` of an element usage cannot name: the
     /// overrides can reach any component.
@@ -982,6 +985,7 @@ pub(crate) fn collect_enriched_usage(
     let mut collector = FactCollector {
         facts: Vec::new(),
         source: program.source_text,
+        writing: false,
         static_values,
         scoping: scoping.as_ref().filter(|_| !static_values.is_empty()),
         enrich: true,
@@ -5273,6 +5277,8 @@ struct FactCollector<'a, 's> {
     facts: Vec<UsageFact>,
     /// The file's text: whether an element is written as JSX or as a call.
     source: &'a str,
+    /// Inside what an assignment or `Object.assign` writes.
+    writing: bool,
     static_values: crate::eval::Statics<'s>,
     scoping: Option<&'s Scoping>,
     enrich: bool,
@@ -6014,6 +6020,13 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
         oxc::ast_visit::walk::walk_computed_member_expression(self, member);
     }
 
+    fn visit_assignment_expression(&mut self, assignment: &oxc::ast::ast::AssignmentExpression<'a>) {
+        let outer = std::mem::replace(&mut self.writing, true);
+        self.visit_assignment_target(&assignment.left);
+        self.writing = outer;
+        self.visit_expression(&assignment.right);
+    }
+
     fn visit_jsx_element(&mut self, element: &oxc::ast::ast::JSXElement<'a>) {
         self.record_element(&element.opening_element, &element.children);
         // An attribute value can hold JSX too, which is a use like a child.
@@ -6047,6 +6060,18 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        // `Object.assign(X.defaultProps, …)` writes X's defaults.
+        if let (Expression::StaticMemberExpression(callee), Some(Argument::StaticMemberExpression(target))) =
+            (&call.callee, call.arguments.first())
+        {
+            let object_assign = callee.property.name == "assign"
+                && matches!(&callee.object, Expression::Identifier(object) if object.name == "Object");
+            if object_assign && target.property.name == "defaultProps" {
+                let outer = std::mem::replace(&mut self.writing, true);
+                self.record_default_props(&target.object, target.span.start);
+                self.writing = outer;
+            }
+        }
         if self.react.calls(&call.callee, "createElement") {
             if let Some(first_arg) = call.arguments.first() {
                 let (ident, member, identity_uncertain) = match first_arg {
@@ -6097,7 +6122,8 @@ impl<'a> FactCollector<'a, '_> {
             _ => return,
         };
         let origin = self.origin_of(root);
-        self.facts.push(UsageFact::DefaultProps { tag, origin, at });
+        let written = self.writing;
+        self.facts.push(UsageFact::DefaultProps { tag, origin, at, written });
     }
 
     /// A `cloneElement` call: its overrides count for the cloned element's
@@ -6851,6 +6877,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
     let mut collector = FactCollector {
         facts: Vec::new(),
         source: program.source_text,
+        writing: false,
         static_values,
         scoping: None,
         enrich: false,
@@ -7409,10 +7436,14 @@ pub fn filter_usage_scan(
             // React gives every render the default props it leaves out: no
             // option of the component is proven unused. A name that is no
             // extracted component is someone else's.
-            UsageFact::DefaultProps { tag, origin, at } => {
-                // A component usage cannot name may be extracted: its
-                // defaults reach renders unseen.
+            UsageFact::DefaultProps { tag, origin, at, written } => {
+                // A component usage cannot name may be extracted: defaults
+                // written to it reach renders unseen. Reading one changes
+                // nothing (React's own code reads them).
                 let Some((tag_name, resolved_binding)) = resolve_tag(tag, *origin, member_expr_bindings) else {
+                    if !*written {
+                        continue;
+                    }
                     let name = match tag {
                         TagFact::Member(path) => path,
                         TagFact::Ident(name) => name,
