@@ -9,7 +9,7 @@
   "type": "module",
   "scripts": {
     "oracle": "bun run src/cli.ts",
-    "compile": "tsc --noEmit"
+    "compile": "bun check"
   },
   "devDependencies": {
     "@animus-ui/extract": "workspace:*",

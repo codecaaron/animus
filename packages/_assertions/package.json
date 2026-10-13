@@ -10,7 +10,7 @@
   "scripts": {
     "build": "bun run build:ts",
     "build:ts": "tsdown && tsc -p tsconfig.build.json",
-    "compile": "tsc --noEmit"
+    "compile": "bun check"
   },
   "dependencies": {}
 }
