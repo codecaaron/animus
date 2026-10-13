@@ -7,6 +7,11 @@ import type {
 export interface AnimusNextOptions {
   /** Path to a module exporting a SystemInstance from `@animus-ui/system`. */
   system: string;
+  /** The system's export name in the `system` module. The loader runs only
+   *  what that export reaches, and finds it itself when exactly one export
+   *  is a sealed system (`.seal()`) and every other export is plainly not
+   *  one; otherwise it asks for this option by name. */
+  systemExport?: string;
   /** The app's directory, for a `next` run from another directory. Next
    *  passes no dir to a config module, so the app's root is the current
    *  directory without it. Its source kits and analysis read this root; under

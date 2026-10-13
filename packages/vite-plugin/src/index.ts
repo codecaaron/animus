@@ -72,6 +72,11 @@ async function sourceKitConfig(
 export interface AnimusExtractOptions {
   /** Path to a module exporting a SystemInstance from `@animus-ui/system`. */
   system: string;
+  /** The system's export name in the `system` module. The loader runs only
+   *  what that export reaches, and finds it itself when exactly one export
+   *  is a sealed system (`.seal()`) and every other export is plainly not
+   *  one; otherwise it asks for this option by name. */
+  systemExport?: string;
   /**
    * Module specifier for extracted runtime factories, default
    * `@animus-ui/system/runtime`, as every adapter emits. `@animus-ui/system`

@@ -434,6 +434,7 @@ impl<'c> Loader<'c> {
         let program = Parser::new(&allocator, &source, source_type(path)).parse().program;
         let semantic = SemanticBuilder::new().with_build_nodes(true).build(&program).semantic;
         let scoping = semantic.scoping();
+        refuse_unsupported(&semantic, &source, path)?;
         let mut needs = Vec::new();
         for stmt in &program.body {
             let Statement::ImportDeclaration(decl) = stmt else { continue };
@@ -905,6 +906,49 @@ impl<'c> Loader<'c> {
         }
         name
     }
+}
+
+/// Refuses, with its location, construction a retained module cannot run
+/// as selected: direct `eval` and `with`, which read bindings the selection
+/// cannot see, and top-level `await`, which the loader does not run.
+fn refuse_unsupported(semantic: &oxc::semantic::Semantic<'_>, source: &str, path: &str) -> Result<(), String> {
+    use oxc::span::GetSpan;
+    let at = |offset: u32| {
+        let before = &source[..offset as usize];
+        let line = before.matches('\n').count() + 1;
+        let column = before.rsplit('\n').next().map_or(0, |text| text.chars().count()) + 1;
+        format!("{path}:{line}:{column}")
+    };
+    let scoping = semantic.scoping();
+    for node in semantic.nodes().iter() {
+        let refused = match node.kind() {
+            AstKind::CallExpression(call) => match &call.callee {
+                // Direct when `eval` names no binding the module declares.
+                Expression::Identifier(callee)
+                    if callee.name == "eval" && scoping.get_reference(callee.reference_id()).symbol_id().is_none() =>
+                {
+                    Some(("direct `eval`", call.span.start))
+                }
+                _ => None,
+            },
+            AstKind::WithStatement(with) => Some(("a `with` statement", with.span.start)),
+            AstKind::AwaitExpression(await_expression)
+                if semantic.nodes().ancestor_kinds(node.id()).all(|kind| !kind.is_function_like()) =>
+            {
+                Some(("top-level `await`", await_expression.span().start))
+            }
+            _ => None,
+        };
+        if let Some((what, offset)) = refused {
+            return Err(format!(
+                "{} uses {what}, which the system loader cannot run: it loads only what the system reaches, and \
+                 this reads bindings or runs work it cannot see. Move it out of the module the system reads \
+                 (animus.system.unsupported-construction)",
+                at(offset)
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A builder method that never seals: its result is not a system.

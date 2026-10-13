@@ -514,6 +514,7 @@ function digestOf<Key extends keyof AnimusCoreOptions>(
  */
 const OPTION_CLASSES = {
   system: digestOf('system'),
+  systemExport: digestOf('systemExport'),
   exclude: digestOf('exclude'),
   extensions: digestOf('extensions'),
   strict: digestOf('strict'),

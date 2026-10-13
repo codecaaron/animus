@@ -2233,6 +2233,7 @@ export class ExtractionSession {
   private loadSystemUnder(context: SessionResolutionContext): SystemConfig {
     return loadSystemConfig(() => this.engine(), {
       systemPath: resolve(this.rootDir!, this.options.system),
+      systemExport: this.options.systemExport,
       rootDir: this.rootDir!,
       prefix: this.options.prefix,
       prefixContextualVars: this.options.prefixContextualVars,

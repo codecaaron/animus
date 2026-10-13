@@ -52,6 +52,11 @@ export function resolveVerbosity(
 export interface AnimusCoreOptions {
   /** Path to a module exporting a SystemInstance from `@animus-ui/system`. */
   system: string;
+  /** The system's export name in the `system` module. The loader runs only
+   *  what that export reaches, and finds it itself when exactly one export
+   *  is a sealed system (`.seal()`) and every other export is plainly not
+   *  one; otherwise it asks for this option by name. */
+  systemExport?: string;
   /**
    * Replaces the replaceable defaults, never the structural ones. Patterns
    * with `*`/`?` are globs on the root-relative path; others are substrings.
@@ -116,6 +121,7 @@ export interface AnimusCoreOptions {
 
 export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'system',
+  'systemExport',
   'exclude',
   'extensions',
   'strict',

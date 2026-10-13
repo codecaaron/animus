@@ -103,6 +103,7 @@ export function systemLoadReads<Thrown>(error: Thrown): SystemLoadReads {
 function evaluateSystemModule(
   engine: Pick<EngineApi, 'loadSystemModule' | 'extractFacts'>,
   systemPath: string,
+  systemExport: string | undefined,
   rootDir: string,
   conditions: readonly string[] | undefined,
   workspaces: WorkspacePackages | undefined,
@@ -112,7 +113,7 @@ function evaluateSystemModule(
     return engine.loadSystemModule(
       systemPath,
       rootDir,
-      undefined,
+      systemExport,
       conditions,
       workspaces,
       extensions && extensionPolicyJson(extensions)
@@ -140,6 +141,8 @@ export function loadSystemConfig(
   engineApi: () => any,
   opts: {
     systemPath: string;
+    /** The system's export name; the loader infers it when absent. */
+    systemExport?: string;
     rootDir: string;
     prefix?: string;
     prefixContextualVars?: boolean;
@@ -156,6 +159,7 @@ export function loadSystemConfig(
   const config = evaluateSystemModule(
     engineApi(),
     opts.systemPath,
+    opts.systemExport,
     opts.rootDir,
     opts.conditions,
     opts.workspaces,

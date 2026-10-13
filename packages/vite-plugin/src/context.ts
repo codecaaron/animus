@@ -339,6 +339,7 @@ export class PluginContext {
     const session = new ExtractionSession(
       {
         system: options.system,
+        systemExport: options.systemExport,
         exclude: options.exclude,
         extensions: options.extensions,
         strict: options.strict,
