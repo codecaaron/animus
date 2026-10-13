@@ -112,12 +112,16 @@ impl ExtensionPolicy {
             .chain(appended.iter().map(|extension| format!("{base}{extension}")))
             .chain(appended.iter().map(|extension| format!("{base}{index}{extension}")))
             .collect();
-        for (emitted, node_sources) in &self.node_next {
-            if let Some(stem) = base.strip_suffix(emitted.as_str()) {
-                candidates.extend(
-                    node_sources.iter().filter(|source| admitted(source)).map(|source| format!("{stem}{source}")),
-                );
-            }
+        // The extension the base's own name ends with, from its last dot,
+        // and the first entry equal to it: one rule for the loader and the
+        // analysis, whatever entries a host's table holds.
+        let name = &base[base.rfind(['/', '\\']).map_or(0, |slash| slash + 1)..];
+        let emitted = name.rfind('.').map_or("", |dot| &name[dot..]);
+        let stem = &base[..base.len() - emitted.len()];
+        if let Some((_, node_sources)) = self.node_next.iter().find(|(from, _)| from == emitted) {
+            candidates.extend(
+                node_sources.iter().filter(|source| admitted(source)).map(|source| format!("{stem}{source}")),
+            );
         }
         candidates
     }
@@ -475,6 +479,34 @@ pub fn lexical(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Contract: an emitted NodeNext extension is the final extension of the
+    /// base's name, and the first table entry equal to it supplies its
+    /// sources, as the analysis reads a host's table: an entry spanning two
+    /// extensions (`.foo.js`) never matches, and a repeated one adds
+    /// nothing. The policy accepts any table, so a host's answer must not
+    /// change with the entries' overlap.
+    #[test]
+    fn an_emitted_extension_is_the_names_last_and_the_first_entry_wins() {
+        let table = |node_next: &[(&str, &[&str])]| ExtensionPolicy {
+            appended: Vec::new(),
+            node_next: node_next
+                .iter()
+                .map(|(from, to)| (from.to_string(), to.iter().map(|s| s.to_string()).collect()))
+                .collect(),
+            alias: Vec::new(),
+        };
+        let node_next = |policy: &ExtensionPolicy, base: &str| policy.candidates(base)[1..].to_vec();
+        let overlapping = table(&[(".foo.js", &[".tsx"]), (".js", &[".ts"])]);
+        assert_eq!(node_next(&overlapping, "lib/Thing.foo.js"), ["lib/Thing.foo.ts"]);
+        let duplicated = table(&[(".js", &[".ts"]), (".js", &[".tsx"])]);
+        assert_eq!(node_next(&duplicated, "lib/Thing.js"), ["lib/Thing.ts"]);
+        let built_in = extension_policy();
+        assert_eq!(
+            built_in.candidates("./x.mjs")[1 + 2 * built_in.appended.len()..].to_vec(),
+            ["./x.mts"]
+        );
+    }
 
     /// Contract: one resolution pass lists each directory once, however many
     /// candidates it checks in it, and answers each exactly as an unshared
