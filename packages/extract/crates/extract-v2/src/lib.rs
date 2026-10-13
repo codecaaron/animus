@@ -228,9 +228,10 @@ pub fn resolve_specifier(
     extension_policy_json: Option<String>,
 ) -> NapiResolvedSpecifier {
     // One call lists each directory it checks once, as a system load does.
-    NapiResolvedSpecifier::from(animus_system_loader::resolution::with_listing_cache(|| {
-        resolution_context(conditions, workspaces, extension_policy_json)
-            .and_then(|context| animus_system_loader::resolve_specifier(&specifier, &from_dir, &context))
+    NapiResolvedSpecifier::from(resolution_context(conditions, workspaces, extension_policy_json).and_then(|context| {
+        animus_system_loader::resolution::with_listing_cache(|| {
+            animus_system_loader::resolve_specifier(&specifier, &from_dir, &context)
+        })
     }))
 }
 
@@ -298,8 +299,8 @@ pub fn resolve_kit_source_root(
     package_dir: Option<String>,
 ) -> String {
     // One call lists each directory it checks once, as a system load does.
-    let found = animus_system_loader::resolution::with_listing_cache(|| {
-        resolution_context(conditions, workspaces, extension_policy_json).and_then(|context| {
+    let found = resolution_context(conditions, workspaces, extension_policy_json).and_then(|context| {
+        animus_system_loader::resolution::with_listing_cache(|| {
             animus_system_loader::resolve_kit_source_root(
                 &specifier,
                 &from_dir,

@@ -47,8 +47,10 @@ dependencies = [
 name = "animus-system-loader"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "oxc",
  "rquickjs",
+ "rustc-hash",
  "serde",
  "serde_json",
 ]

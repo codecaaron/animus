@@ -43,7 +43,6 @@ export declare function diagnosticCodes(): string
 export declare function discoverChains(fileEntriesJson: string): string
 
 export interface EngineOptions {
-  prefix?: string
   runtimeImport?: string
   cssModuleId?: string
   systemPropsModuleId?: string

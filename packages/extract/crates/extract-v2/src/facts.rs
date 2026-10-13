@@ -1340,7 +1340,7 @@ fn default_export_chain(program: &Program<'_>, source: &str, start: u32) -> Defa
 }
 
 pub fn extract_file_facts(ast: &OwnedAst) -> FileFacts {
-    extract_file_facts_with_prefix(ast, "animus")
+    extract_file_facts_with_prefix(ast, crate::ids::CLASS_PREFIX)
 }
 
 pub fn extract_file_facts_with_prefix(ast: &OwnedAst, prefix: &str) -> FileFacts {

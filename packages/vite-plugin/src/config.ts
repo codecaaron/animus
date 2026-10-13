@@ -7,7 +7,7 @@ import {
   viteHostExpander,
   viteOutputTargets,
 } from '@animus-ui/extract/pipeline';
-import { join, resolve } from 'path';
+import { isAbsolute, join, resolve } from 'path';
 import { isFileLoadingAllowed } from 'vite';
 
 import { processCopyDir } from './asset-copy-dirs';
@@ -78,6 +78,11 @@ export function applyResolvedConfig(
   const pairs: Parameters<typeof buildPathAliasesJson>[0] = [];
   for (const entry of config.resolve.alias) {
     if (entry.find instanceof RegExp) continue;
+    // A bare target (`react` → `preact/compat`) aliases a package, not a
+    // path: the resolver's package resolution follows it.
+    if (!isAbsolute(entry.replacement) && !entry.replacement.startsWith('.')) {
+      continue;
+    }
     pairs.push({
       pattern: entry.find,
       target: entry.replacement,

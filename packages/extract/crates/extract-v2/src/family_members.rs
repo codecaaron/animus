@@ -13,7 +13,6 @@ use crate::analyze_css::{
     declared_export, namespace_path_module, resolve_declaration, resolve_import_source, CssInputs,
 };
 use crate::facts::{FacadeEntry, FileFacts};
-use crate::loads::LoadTarget;
 use crate::flow::{AbsenceQuery, ChangeKind, Coverage, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom, ValueEffects};
 use animus_system_loader::module_table::{ExportLookup, ImportName, OpeningReason, Request, Terminal};
 
@@ -722,6 +721,7 @@ impl<'f> ObjectMembers<'f> {
         let files = self.files;
         let inputs = self.inputs;
         let mut flow = FlowBuilder::new();
+        crate::analyze_css::note_build_chunks(files, inputs);
         // Each object a module exports, under each name it exports it as.
         let modules: Vec<String> = files.keys().cloned().collect();
         for module in &modules {
@@ -799,93 +799,24 @@ impl<'f> ObjectMembers<'f> {
                 let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
                 let reason = format!("{subject} {} in {module}{line}", used.what);
                 if let Some(unread) = crate::link::unread_package(&identity, files, inputs) {
-                    self.open_unread(&mut flow, unread, &reason);
+                    crate::link::open_unread(&mut flow, unread, &reason, &mut |flow, target, reason| {
+                        self.namespace_reach(target).record(flow, self.families, Vec::new(), reason)
+                    });
                 }
             }
-            for (name, spec) in &ff.namespace_exports {
-                if let Some(unread) = crate::link::unread_source(module, spec, files, inputs) {
-                    let reason = format!("{module} re-exports {spec} as the namespace {name}, and {}", unread.clause());
-                    self.open_unread(&mut flow, unread, &reason);
-                    continue;
-                }
-                let Some(target) = resolve_import_source(module, spec, files, inputs) else {
-                    continue;
-                };
-                let reason = format!("{module} re-exports {target} as the namespace {name}");
-                self.namespace_reach(&target).record(&mut flow, self.families, Vec::new(), &reason);
-            }
-            // A module the analysis cannot find runs when this one loads it
-            // by declaration, bindings or not, and may re-export any object.
-            for import in &ff.runtime_imports {
-                let LoadTarget::Specifier(spec) = &import.target else { continue };
-                if let Some(unread @ crate::link::Unread::Missing) = crate::link::unread_source(module, spec, files, inputs) {
-                    let reason = format!("{module} imports {spec} on line {}, and {}", import.line, unread.clause());
-                    flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
-                }
-            }
-            crate::analyze_css::note_build_chunks(
-                files.iter().flat_map(|(path, facts)| facts.module_loads.iter().map(move |load| (path.as_str(), load))),
-                files,
-                inputs,
-            );
-            // A glob of several patterns is one call: judged once.
-            let mut calls = std::collections::BTreeSet::new();
-            for load in &ff.module_loads {
-                if !calls.insert(load.start) && !matches!(load.target, LoadTarget::Specifier(_)) {
-                    continue;
-                }
-                if let LoadTarget::Specifier(spec) = &load.target {
-                    if let Some(unread) = crate::link::unread_source(module, spec, files, inputs) {
-                        let reason =
-                            format!("{module} loads {spec} at runtime on line {}, and {}", load.line, unread.clause());
-                        self.open_unread(&mut flow, unread, &reason);
-                    }
-                }
-                let targets = match crate::analyze_css::load_reach(module, load, files, inputs) {
-                    crate::analyze_css::LoadReach::Modules(targets) => targets,
-                    crate::analyze_css::LoadReach::Any(why) => {
-                        let reason = format!("{module} loads {} at runtime on line {}, {why}", load.call, load.line);
-                        flow.open(ReasonId::UnexpandedHostLoad, Region::of(RegionAtom::AllExports), reason);
-                        continue;
-                    }
-                };
-                for target in targets {
-                    let reason = format!("{module} loads {target} at runtime on line {}", load.line);
-                    self.namespace_reach(target).record(&mut flow, self.families, Vec::new(), &reason);
-                }
-            }
-            // Code from a string can `import()` any module and change what
-            // it exports.
-            if let Some(how) = ff.dynamic_code {
-                let reason = format!("{module} {how}, so code from a string can load and change any module");
-                flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), reason);
-            }
-            // An escaped loader can load any module under a name the
-            // analysis never sees.
-            if let Some(how) = ff.loader_escape {
-                let reason = format!("{module} {how}, so it can load any module and change what it exports");
-                flow.open(ReasonId::OpaqueEffect, Region::of(RegionAtom::AllExports), reason);
-            }
+            crate::link::record_module_openings(module, ff, files, inputs, &mut flow, &mut |flow, target, reason| {
+                self.namespace_reach(target).record(flow, self.families, Vec::new(), reason)
+            });
         }
-        flow.close()
+        let changed = flow.close();
+        #[cfg(test)]
+        crate::engine::note_openings("member tables", &changed);
+        changed
     }
 
     /// What `module`'s namespace may hold: each object it exports and,
     /// where an open route leaves an export or the module's names
     /// incomplete, every exported object.
-    /// Opens what an unread module may reach: any module, or for a package
-    /// installed from a registry, the modules it can reach.
-    fn open_unread(&mut self, flow: &mut FlowBuilder, unread: crate::link::Unread, reason: &str) {
-        match unread {
-            crate::link::Unread::Registry(reaches) => {
-                for target in &reaches {
-                    self.namespace_reach(target).record(flow, self.families, Vec::new(), reason);
-                }
-            }
-            unread => flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason.to_string()),
-        }
-    }
-
     fn namespace_reach(&mut self, module: &str) -> Reach {
         let mut reach = Reach::default();
         let Some(index) = self.links.module(module) else { return reach };

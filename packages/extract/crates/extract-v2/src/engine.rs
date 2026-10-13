@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 
 use crate::identity::LocalId;
 use crate::link::ProjectLinks;
-use crate::loads::LoadKind;
 use crate::usage_facts::{handed_on, ReadingsOf};
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
 use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, OpeningReason, Request, Terminal};
@@ -55,7 +54,6 @@ struct AnalyzeResult<'a> {
 #[napi(object)]
 #[derive(Default)]
 pub struct EngineOptions {
-    pub prefix: Option<String>,
     pub runtime_import: Option<String>,
     pub css_module_id: Option<String>,
     pub system_props_module_id: Option<String>,
@@ -92,7 +90,6 @@ pub struct EngineOptions {
 }
 
 struct ResolvedOptions {
-    prefix: String,
     runtime_import: String,
     css_module_id: String,
     system_props_module_id: String,
@@ -466,31 +463,52 @@ struct StyleModule {
     facts: crate::usage_facts::StyleObjectFacts,
     /// See `FileFacts::written_namespaces`.
     written_namespaces: crate::usage_facts::WrittenNamespaces,
-    namespace_exports: BTreeMap<String, String>,
-    loads: Vec<crate::loads::ModuleLoad>,
-    /// The modules its `import` and `export … from` declarations load.
-    imports: Vec<String>,
-    /// How it runs code from a string, which can load any module.
-    dynamic_code: Option<&'static str>,
-    /// How it lets a loader escape, which can load any module.
-    loader_escape: Option<&'static str>,
 }
 
-/// Each module-scope static that a use anywhere in the analysis may change
-/// before a style reads it, keyed by its module and local name, with the
-/// first such use said as a clause: `preset is passed to decorate() in
-/// a.tsx on line 4`. A namespace re-export or a runtime load of a module
-/// unsettles every static it exports. Statics stored in an unstable object,
-/// or read from an unstable binding, are unstable too.
-fn unstable_style_statics(
+/// Whether a static may be an object: an object or array, the `asset`
+/// function, or what evaluation could not settle. No use can change a
+/// primitive.
+fn object_like(value: &crate::static_value::StaticValue) -> bool {
+    use crate::static_value::StaticValue;
+    matches!(
+        value,
+        StaticValue::Object(_) | StaticValue::Array(_) | StaticValue::AssetFunction { .. } | StaticValue::Unevaluated(_)
+    )
+}
+
+/// Whether a declaration's value at a path may be an object.
+fn holds_object(value: &crate::static_value::StaticValue, path: &[String]) -> bool {
+    use crate::static_value::StaticValue;
+    let Some((key, rest)) = path.split_first() else { return object_like(value) };
+    match value {
+        StaticValue::Object(entries) if key == crate::flow::ANY_MEMBER => {
+            entries.iter().any(|(_, value)| holds_object(value, rest))
+        }
+        StaticValue::Array(items) if key == crate::flow::ANY_MEMBER => items.iter().any(|value| holds_object(value, rest)),
+        StaticValue::Object(_) | StaticValue::Array(_) => value.get(key).is_some_and(|value| holds_object(value, rest)),
+        other => object_like(other),
+    }
+}
+
+/// Records into `flow` what a use anywhere in the analysis may change of
+/// the module-scope statics styles read, each said as a clause: `preset is
+/// passed to decorate() in a.tsx on line 4`. A namespace re-export or a
+/// runtime load of a module unsettles every static it exports. Statics
+/// stored in an unstable object, or read from an unstable binding, are
+/// unstable too.
+#[allow(clippy::too_many_arguments)]
+fn record_style_changes(
     style: &BTreeMap<String, StyleModule>,
     modules: &ModuleFacts,
     links: &ProjectLinks,
     lowered: &BTreeMap<String, crate::link::Lowered>,
     files: &BTreeMap<String, rustc_hash::FxHashMap<String, crate::static_value::StaticValue>>,
+    structural: &BTreeMap<String, facts::FileFacts>,
     inputs: &analyze_css::CssInputs,
     readings_of: &mut ReadingsOf<'_>,
-) -> BTreeMap<(String, String), (String, crate::flow::Uncertainty)> {
+    flow: &mut crate::flow::FlowBuilder,
+) {
+    analyze_css::note_build_chunks(structural, inputs);
     // The declarations a binding names: itself or, for `export default
     // X`'s cell, X, whose object the cell shares, through each binding X's
     // import may be.
@@ -585,16 +603,6 @@ fn unstable_style_statics(
         found.dedup();
         found.into_iter().flat_map(declarations).collect()
     };
-    // Whether a static may be an object: an object or array, the `asset`
-    // function, or what evaluation could not settle. No use can change a
-    // primitive.
-    let object_like = |value: &crate::static_value::StaticValue| {
-        use crate::static_value::StaticValue;
-        matches!(
-            value,
-            StaticValue::Object(_) | StaticValue::Array(_) | StaticValue::AssetFunction { .. } | StaticValue::Unevaluated(_)
-        )
-    };
     // A call to a function that returns its argument hands the argument to
     // the `const` it initializes, which holds it from then on.
     let callee_of = |file: &str, handoff: &crate::usage_facts::Handoff| {
@@ -634,26 +642,8 @@ fn unstable_style_statics(
         Some(_) => false,
         None => holders.contains(&(file.clone(), local.clone())),
     };
-    // Whether a declaration's value at a path may be an object: by its
-    // static, or, with none, as a holder may.
-    fn holds_object(value: &crate::static_value::StaticValue, path: &[String], object_like: &dyn Fn(&crate::static_value::StaticValue) -> bool) -> bool {
-        use crate::static_value::StaticValue;
-        let Some((key, rest)) = path.split_first() else { return object_like(value) };
-        match value {
-            StaticValue::Object(entries) if key == crate::flow::ANY_MEMBER => {
-                entries.iter().any(|(_, value)| holds_object(value, rest, object_like))
-            }
-            StaticValue::Array(items) if key == crate::flow::ANY_MEMBER => {
-                items.iter().any(|value| holds_object(value, rest, object_like))
-            }
-            StaticValue::Object(_) | StaticValue::Array(_) => {
-                value.get(key).is_some_and(|value| holds_object(value, rest, object_like))
-            }
-            other => object_like(other),
-        }
-    }
     let may_hold_object = |(file, local): &(String, String), path: &[String]| match files.get(file).and_then(|statics| statics.get(local)) {
-        Some(value) => holds_object(value, path, &object_like),
+        Some(value) => holds_object(value, path),
         None => true,
     };
     // The paths of the members of a declaration's object at `at` that pass
@@ -692,9 +682,8 @@ fn unstable_style_statics(
         let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
         format!("{name} {} in {file}{line}", used.what)
     };
-    use crate::flow::{AbsenceQuery, ChangeKind, Coverage, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom};
+    use crate::flow::{ChangeKind, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom};
     let object = |(file, local): (String, String)| ObjectId { module: file, binding: local };
-    let mut flow = FlowBuilder::new();
     // Each object a module exports, under each name it exports it as.
     for (module, path) in links.paths.iter().enumerate() {
         for name in links.table.exported_names(module).names {
@@ -735,16 +724,6 @@ fn unstable_style_statics(
         if !names.complete() {
             flow.open(ReasonId::OpaqueStar, Region::of(RegionAtom::AllExports), reason.to_string());
         }
-    };
-    // An unread package may re-export any module; one installed from a
-    // registry, only the modules it can reach.
-    let open_unread = |flow: &mut FlowBuilder, unread: crate::link::Unread, reason: String| match unread {
-        crate::link::Unread::Registry(reaches) => {
-            for target in &reaches {
-                hand_on(flow, target, &reason);
-            }
-        }
-        unread => flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason),
     };
     for (file, module) in style {
         // The declarations a use's name stands for that hold an object: a
@@ -803,7 +782,7 @@ fn unstable_style_statics(
             // A namespace used whole may change anything its module exports,
             // as the member tables read it.
             if let Some(Request::Module(target)) = namespace_of(file, name).filter(|_| !name.contains('.')) {
-                hand_on(&mut flow, &links.paths[target], &said(file, name, used));
+                hand_on(flow, &links.paths[target], &said(file, name, used));
                 continue;
             }
             for target in targets_of(name) {
@@ -826,77 +805,14 @@ fn unstable_style_statics(
         for (namespace, (subject, used)) in &module.written_namespaces {
             let Some(Request::Outside(identity)) = namespace_of(file, namespace) else { continue };
             if let Some(unread) = crate::link::unread_package(&identity, files, inputs) {
-                open_unread(&mut flow, unread, said(file, subject, used));
+                crate::link::open_unread(flow, unread, &said(file, subject, used), &mut |flow, target, reason| {
+                    hand_on(flow, target, reason)
+                });
             }
         }
-        let reexports = module
-            .namespace_exports
-            .iter()
-            .map(|(name, spec)| (spec, format!("as the namespace {name}")));
-        // A module the analysis cannot find runs when this one imports it,
-        // bindings or not, and may re-export any static.
-        for spec in &module.imports {
-            if let Some(unread @ crate::link::Unread::Missing) = crate::link::unread_source(file, spec, files, inputs) {
-                let reason = format!("{file} imports {spec}, and {}", unread.clause());
-                flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
-            }
-        }
-        for (spec, how) in reexports {
-            if let Some(unread) = crate::link::unread_source(file, spec, files, inputs) {
-                let reason = format!("{file} hands on {spec} {how}, and {}", unread.clause());
-                open_unread(&mut flow, unread, reason);
-                continue;
-            }
-            let Some(target) = analyze_css::resolve_import_source(file, spec, files, inputs) else {
-                continue;
-            };
-            hand_on(&mut flow, &target, &format!("{file} hands on {target} {how}"));
-        }
-        // A runtime load hands on every module it may load: the one a
-        // literal names, or each one a template, a context or a glob may
-        // reach, up to the bound.
-        analyze_css::note_build_chunks(
-            style.iter().flat_map(|(path, module)| module.loads.iter().map(move |load| (path.as_str(), load))),
-            files,
-            inputs,
-        );
-        // A glob of several patterns is one call: judged once.
-        let mut calls = std::collections::BTreeSet::new();
-        for load in &module.loads {
-            if !calls.insert(load.start) && !matches!(load.target, crate::loads::LoadTarget::Specifier(_)) {
-                continue;
-            }
-            if let crate::loads::LoadTarget::Specifier(spec) = &load.target {
-                if let Some(unread) = crate::link::unread_source(file, spec, files, inputs) {
-                    let reason = format!("{file} hands on {spec} at runtime, and {}", unread.clause());
-                    open_unread(&mut flow, unread, reason);
-                    continue;
-                }
-            }
-            let targets = match analyze_css::load_reach(file, load, files, inputs) {
-                analyze_css::LoadReach::Modules(targets) => targets,
-                analyze_css::LoadReach::Any(why) => {
-                    let reason = format!("{file} loads {} at runtime on line {}, {why}", load.call, load.line);
-                    flow.open(ReasonId::UnexpandedHostLoad, Region::of(RegionAtom::AllExports), reason);
-                    continue;
-                }
-            };
-            for target in targets {
-                hand_on(&mut flow, target, &format!("{file} hands on {target} at runtime"));
-            }
-        }
-        // Code from a string can `import()` any module and change what it
-        // exports.
-        if let Some(how) = module.dynamic_code {
-            let reason = format!("{file} {how}, so code from a string can load and change any module");
-            flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), reason);
-        }
-        // An escaped loader can load any module under a name the analysis
-        // never sees.
-        if let Some(how) = module.loader_escape {
-            let reason = format!("{file} {how}, so it can load any module and change what it exports");
-            flow.open(ReasonId::OpaqueEffect, Region::of(RegionAtom::AllExports), reason);
-        }
+        crate::link::record_module_openings(file, &structural[file], structural, inputs, flow, &mut |flow, target, reason| {
+            hand_on(flow, target, reason)
+        });
     }
     // A static stored in an object, or read from a binding, may change with
     // it.
@@ -946,16 +862,25 @@ fn unstable_style_statics(
             }
         }
     }
-    let effects = flow.close();
+}
+
+/// Each module-scope static that `changes` says may change before a style
+/// reads it, keyed by its module and local name, with the first such change
+/// said as a clause.
+fn unstable_style_statics(
+    changes: &crate::flow::ValueEffects,
+    files: &BTreeMap<String, rustc_hash::FxHashMap<String, crate::static_value::StaticValue>>,
+) -> BTreeMap<(String, String), (String, crate::flow::Uncertainty)> {
+    use crate::flow::{AbsenceQuery, ChangeKind, Coverage, ObjectId};
     let mut unstable = BTreeMap::new();
     for (file, statics) in files {
         for (local, value) in statics {
             let query = AbsenceQuery::Stable(ObjectId::new(file, local), Vec::new());
-            if let Coverage::Exposed(mut exposures) = effects.covers(&query) {
+            if let Coverage::Exposed(mut exposures) = changes.covers(&query) {
                 // A primitive handed on cannot change the object.
                 exposures.retain(|exposure| match exposure {
                     crate::flow::Exposure::Changed(change) if change.kind == ChangeKind::Escape => {
-                        holds_object(value, &change.path, &object_like)
+                        holds_object(value, &change.path)
                     }
                     _ => true,
                 });
@@ -1038,7 +963,6 @@ impl ExtractEngine {
             .map_err(napi::Error::from_reason)?;
         Ok(ExtractEngine {
             opts: ResolvedOptions {
-                prefix: o.prefix.unwrap_or_else(|| "animus".to_string()),
                 runtime_import: o
                     .runtime_import
                     .unwrap_or_else(|| "@animus-ui/system".to_string()),
@@ -1288,20 +1212,6 @@ impl ExtractEngine {
                     } else {
                         crate::usage_facts::written_namespaces(program, &lowered_by_file[&ast.path].scoping)
                     },
-                    namespace_exports: crate::usage_facts::collect_namespace_exports(module),
-                    loads: lowered_by_file[&ast.path]
-                        .loads
-                        .iter()
-                        .filter_map(|load| load.module_load(ast.source()))
-                        .collect(),
-                    imports: lowered_by_file[&ast.path]
-                        .loads
-                        .iter()
-                        .filter(|load| matches!(load.kind, LoadKind::Import { runtime: true, .. } | LoadKind::Reexport { runtime: true }))
-                        .filter_map(|load| load.specifier().map(str::to_string))
-                        .collect(),
-                    dynamic_code: lowered_by_file[&ast.path].dynamic_code,
-                    loader_escape: lowered_by_file[&ast.path].loader_escape,
                 },
             );
         }
@@ -1315,15 +1225,28 @@ impl ExtractEngine {
         let readings_by_file: BTreeMap<String, crate::usage_facts::ParamReadings> =
             lowered_by_file.iter().map(|(path, lowered)| (path.clone(), std::sync::Arc::clone(&lowered.readings))).collect();
         let mut readings_of = |file: &str| readings_by_file.get(file).cloned().unwrap_or_default();
-        for ((file, local), (reason, uncertainty)) in unstable_style_statics(
+        // What may change of the statics styles read. The member tables keep
+        // a relation of their own, since a call they must assume changes an
+        // object (`styles(preset)`) only reads a static; both record a
+        // module's openings through one recorder, in the same words.
+        let mut flow = crate::flow::FlowBuilder::new();
+        record_style_changes(
             &style_modules,
             &imports_by_file,
             &links,
             &lowered_by_file,
             &statics_by_file,
+            &structural_by_file,
             &self.opts.css_inputs,
             &mut readings_of,
-        ) {
+            &mut flow,
+        );
+        let changes = flow.close();
+        #[cfg(test)]
+        OPENINGS.with(|openings| openings.borrow_mut().clear());
+        #[cfg(test)]
+        note_openings("style statics", &changes);
+        for ((file, local), (reason, uncertainty)) in unstable_style_statics(&changes, &statics_by_file) {
             if statics_by_file.get_mut(&file).and_then(|statics| statics.remove(&local)).is_some() {
                 // Only a value the binding had before const initializers read
                 // other consts is held; one derived from them is not.
@@ -1481,7 +1404,7 @@ impl ExtractEngine {
                 .expect("Pass A must record complete local statics for every file");
             let mut file_facts = facts::extract_file_facts_from_static_maps(
                 ast,
-                &self.opts.prefix,
+                crate::ids::CLASS_PREFIX,
                 local_statics,
                 local_usage_statics,
                 extra,
@@ -1506,7 +1429,7 @@ impl ExtractEngine {
             &self.facts,
             &self.order,
             &self.opts.css_inputs,
-            &self.opts.prefix,
+            crate::ids::CLASS_PREFIX,
         );
         // Only the engine holds the sources a diagnostic's line and column
         // are read from.
@@ -1598,7 +1521,7 @@ impl ExtractEngine {
         let replacements = assemble::assemble_replacements(
             &path,
             file_facts,
-            &self.opts.prefix,
+            crate::ids::CLASS_PREFIX,
             Some(&file_payloads),
             &self.opts.css_inputs.group_registry,
         )
@@ -1802,6 +1725,23 @@ impl ExtractEngine {
 
         Ok(serde_json::json!({ "code": code, "hasComponents": true }).to_string())
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The last analysis's openings on this thread, by relation, kind and
+    /// site.
+    static OPENINGS: std::cell::RefCell<std::collections::BTreeSet<(&'static str, crate::flow::ReasonId, String)>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+}
+
+/// Adds the openings of `relation`, closed, to the analysis's, for check 6.
+#[cfg(test)]
+pub(crate) fn note_openings(relation: &'static str, changes: &crate::flow::ValueEffects) {
+    OPENINGS.with(|openings| {
+        let mut openings = openings.borrow_mut();
+        openings.extend(changes.closure().openings.iter().map(|opening| (relation, opening.reason, opening.site.clone())));
+    });
 }
 
 #[cfg(test)]
@@ -2984,6 +2924,7 @@ export const App = () => <Box tone="red" />;
         lost_properties: std::collections::BTreeSet<(String, String, String)>,
         pruned: std::collections::BTreeSet<(String, String, String)>,
         removed_imports: std::collections::BTreeSet<(String, String)>,
+        openings: std::collections::BTreeSet<(&'static str, crate::flow::ReasonId, String)>,
     }
 
     fn emission(files: &[(String, String)]) -> Emission {
@@ -3064,6 +3005,7 @@ export const App = () => <Box tone="red" />;
             let removed = specifiers(source).into_iter().filter(|specifier| !kept.contains(specifier));
             out.removed_imports.extend(removed.map(|specifier| (path.clone(), specifier)));
         }
+        out.openings = super::OPENINGS.with(|openings| openings.borrow().clone());
         out
     }
 
@@ -3117,6 +3059,7 @@ export const App = () => <Box tone="red" />;
         found.extend(
             head.removed_imports.difference(&base.removed_imports).map(|import| format!("import {import:?} newly removed")),
         );
+        found.extend(base.openings.difference(&head.openings).map(|opening| format!("opening {opening:?} lost")));
         found
     }
 
@@ -3126,7 +3069,9 @@ export const App = () => <Box tone="red" />;
     /// of a module the analysis cannot find) may turn what it emitted into
     /// a reported loss, but never prunes more, drops a style or a component
     /// without a finding naming it, changes a static value, makes a
-    /// component static, or removes an import.
+    /// component static, removes an import, or loses an opening from the
+    /// style statics' or the member tables' relation of what may change
+    /// (check 6, by relation, kind and site).
     #[test]
     fn adding_opacity_never_shrinks_emission() {
         let file = |path: &str, source: &str| (path.to_string(), source.to_string());
@@ -3153,6 +3098,9 @@ export const App = () => <Box tone="red" />;
                  const Root = ds.styles({ ...pad }).asElement('div');\n\
                  export const Card = compose({ Root }, { name: 'Card', shared: {} });\n",
             ),
+            // An opening of a module no style reads, for check 6 to keep.
+            file("misc.ts", "export const other = { a: 1 };\n"),
+            file("hand.ts", "import * as misc from './misc';\nglobalThis.keep?.(misc);\n"),
             file(
                 "app.tsx",
                 "import { Base, Box } from './kit';\nimport { Held, HeldChild } from './held';\nimport { Fam } from './fam';\n\
@@ -3176,7 +3124,15 @@ export const App = () => <Box tone="red" />;
             base.pruned.len(),
             base.lost_properties.len(),
         ];
-        assert!(channels.iter().all(|count| *count > 0) && !base.removed_imports.is_empty(), "{base:?}");
+        // Each relation has an opening to keep, compared within that relation.
+        let opens = |relation| base.openings.iter().any(|(of, ..)| *of == relation);
+        assert!(
+            channels.iter().all(|count| *count > 0)
+                && !base.removed_imports.is_empty()
+                && opens("style statics")
+                && opens("member tables"),
+            "{base:?}"
+        );
         for injected in injections {
             let mut files = project.clone();
             files.push(file("opaque.ts", &injected));
@@ -3372,7 +3328,7 @@ export const App = () => <Box tone="red" />;
             .collect();
         assert_eq!(
             dropped,
-            ["chain dropped: stage 'styles' evaluation failed — styles eval failed: spread of all.ts hands on barrel.ts as the namespace all"],
+            ["chain dropped: stage 'styles' evaluation failed — styles eval failed: spread of all.ts re-exports barrel.ts as the namespace all"],
             "{manifest}"
         );
     }

@@ -14,7 +14,9 @@ use oxc::syntax::module_record::{
 
 use crate::analyze_css::{expand_alias, resolve_import_source, CssInputs};
 use crate::facts::FileFacts;
+use crate::flow::{FlowBuilder, ReasonId, Region, RegionAtom};
 use crate::identity::{BindingKind, BindingTable, IdentityInput, LocalId, ModuleId};
+use crate::loads::LoadTarget;
 use oxc::semantic::{Scoping, SemanticBuilder};
 use rustc_hash::FxHashSet;
 
@@ -300,6 +302,97 @@ impl Unread {
             Unread::Package | Unread::Registry(_) => crate::flow::ReasonId::SkippedSource,
             Unread::Missing => crate::flow::ReasonId::UnresolvedSpecifier,
         }
+    }
+}
+
+/// Records into `flow` what `module`'s loads may change, said the same way
+/// whichever relation records it: a namespace re-export, an import of a
+/// module the analysis cannot find, a runtime load, or code that can load
+/// any module. `hand_on` records what handing on an analysed module whole
+/// may change.
+pub(crate) fn record_module_openings(
+    module: &str,
+    ff: &FileFacts,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    flow: &mut FlowBuilder,
+    hand_on: &mut dyn FnMut(&mut FlowBuilder, &str, &str),
+) {
+    for (name, spec) in &ff.namespace_exports {
+        if let Some(unread) = unread_source(module, spec, files, inputs) {
+            let reason = format!("{module} re-exports {spec} as the namespace {name}, and {}", unread.clause());
+            open_unread(flow, unread, &reason, hand_on);
+            continue;
+        }
+        if let Some(target) = resolve_import_source(module, spec, files, inputs) {
+            hand_on(flow, &target, &format!("{module} re-exports {target} as the namespace {name}"));
+        }
+    }
+    // A module the analysis cannot find runs when this one loads it by
+    // declaration, bindings or not, and may re-export anything.
+    for import in &ff.runtime_imports {
+        let LoadTarget::Specifier(spec) = &import.target else { continue };
+        if let Some(unread @ Unread::Missing) = unread_source(module, spec, files, inputs) {
+            let reason = format!("{module} imports {spec} on line {}, and {}", import.line, unread.clause());
+            flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+        }
+    }
+    // A runtime load hands on every module it may load: the one a literal
+    // names, or each one a template, a context or a glob may reach, up to
+    // the bound. A glob of several patterns is one call: judged once.
+    let mut calls = std::collections::BTreeSet::new();
+    for load in &ff.module_loads {
+        if !calls.insert(load.start) && !matches!(load.target, LoadTarget::Specifier(_)) {
+            continue;
+        }
+        if let LoadTarget::Specifier(spec) = &load.target {
+            if let Some(unread) = unread_source(module, spec, files, inputs) {
+                let reason = format!("{module} loads {spec} at runtime on line {}, and {}", load.line, unread.clause());
+                open_unread(flow, unread, &reason, hand_on);
+                continue;
+            }
+        }
+        match crate::analyze_css::load_reach(module, load, files, inputs) {
+            crate::analyze_css::LoadReach::Modules(targets) => {
+                for target in targets {
+                    hand_on(flow, target, &format!("{module} loads {target} at runtime on line {}", load.line));
+                }
+            }
+            crate::analyze_css::LoadReach::Any(why) => {
+                let reason = format!("{module} loads {} at runtime on line {}, {why}", load.call, load.line);
+                flow.open(ReasonId::UnexpandedHostLoad, Region::of(RegionAtom::AllExports), reason);
+            }
+        }
+    }
+    // Code from a string can `import()` any module and change what it
+    // exports.
+    if let Some(how) = ff.dynamic_code {
+        let reason = format!("{module} {how}, so code from a string can load and change any module");
+        flow.open(ReasonId::DynamicCode, Region::of(RegionAtom::AllExports), reason);
+    }
+    // An escaped loader can load any module under a name the analysis never
+    // sees.
+    if let Some(how) = ff.loader_escape {
+        let reason = format!("{module} {how}, so it can load any module and change what it exports");
+        flow.open(ReasonId::OpaqueEffect, Region::of(RegionAtom::AllExports), reason);
+    }
+}
+
+/// Opens what an unread module may reach: any module, or for a package
+/// installed from a registry, the modules it can reach, each handed on.
+pub(crate) fn open_unread(
+    flow: &mut FlowBuilder,
+    unread: Unread,
+    reason: &str,
+    hand_on: &mut dyn FnMut(&mut FlowBuilder, &str, &str),
+) {
+    match unread {
+        Unread::Registry(reaches) => {
+            for target in &reaches {
+                hand_on(flow, target, reason);
+            }
+        }
+        unread => flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason.to_string()),
     }
 }
 
