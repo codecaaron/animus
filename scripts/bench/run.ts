@@ -22,11 +22,15 @@
 // Usage:
 //   bun scripts/bench/run.ts [--candidate <animus checkout>]
 //     [--candidate-release <diagnostic version>] [--row <name>]...
+//     [--confirm <file>]
 // The candidate defaults to this checkout. Its native binary and package
 // dists must be built (release profile); a diagnostic release from
 // releases.json is measured as a labelled candidate, never as the reference.
 // Exits 0 when every row passes; 1 otherwise. The full receipt is written to
-// .bench/receipts/.
+// .bench/receipts/. With --confirm, the rows that failed or are unqualified,
+// whose ratio another runner's CPU may move, are written to <file> (space-
+// separated, empty when every row passes) for a second runner to measure;
+// nothing is written when a row is invalid, which no runner can confirm.
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -509,6 +513,7 @@ function main(): void {
       candidate: { type: 'string' },
       'candidate-release': { type: 'string' },
       row: { type: 'string', multiple: true },
+      confirm: { type: 'string' },
     },
   });
   if (
@@ -694,6 +699,16 @@ function main(): void {
     if (row.reason !== undefined) console.log(`            ${row.reason}`);
   }
   console.log(`receipt: ${receiptPath}`);
+  if (
+    values.confirm !== undefined &&
+    results.every((result) => result.outcome !== 'invalid')
+  ) {
+    const unpassed = results.filter((result) => result.outcome !== 'pass');
+    writeFileSync(
+      values.confirm,
+      unpassed.map((result) => result.row).join(' ')
+    );
+  }
   if (results.some((result) => result.outcome !== 'pass')) process.exitCode = 1;
 }
 

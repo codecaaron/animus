@@ -421,6 +421,8 @@ jobs:
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
       (github.event_name == 'workflow_dispatch' && inputs.publish_packages == true)
     runs-on: ubuntu-latest
+    outputs:
+      rows: ${{ steps.gate.outputs.rows }}
     steps:
       - uses: actions/checkout@v7
 
@@ -446,14 +448,76 @@ jobs:
       - name: Fetch the pinned reference release
         run: bun scripts/bench/prepare.ts
 
+      # A row's ratio moves with the runner's CPU, so a row that fails or is
+      # unqualified here is measured again on a fresh runner (bench-confirm);
+      # an invalid row, or a run that does not finish, fails here.
       - name: Speed gate
-        run: bunx vp run verify:bench
+        id: gate
+        run: |
+          bun scripts/bench/run.ts --confirm "$RUNNER_TEMP/confirm" || [ -s "$RUNNER_TEMP/confirm" ]
+          echo "rows=$(cat "$RUNNER_TEMP/confirm")" >> "$GITHUB_OUTPUT"
 
       - name: Upload lane receipts
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: receipts-bench
+          path: .bench/receipts/
+          include-hidden-files: true
+          if-no-files-found: error
+
+  # The rows the speed gate did not pass, measured again on a fresh runner:
+  # the release proceeds only when each passes here. It runs wherever the
+  # gate does, and with nothing to confirm, no step runs.
+  bench-confirm:
+    needs: [build-extract, bench]
+    runs-on: ubuntu-latest
+    env:
+      ROWS: ${{ needs.bench.outputs.rows }}
+    steps:
+      - uses: actions/checkout@v7
+        if: env.ROWS != ''
+
+      - uses: actions/setup-node@v7
+        if: env.ROWS != ''
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        if: env.ROWS != ''
+        with:
+          bun-version-file: .tool-versions
+
+      - name: Download v2 linux binary
+        if: env.ROWS != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: napi-v2-x86_64-unknown-linux-gnu
+          path: packages/extract/crates/extract-v2/
+
+      - if: env.ROWS != ''
+        run: bun install
+
+      - name: Build TS
+        if: env.ROWS != ''
+        run: bunx vp run build:ts
+
+      - name: Fetch the pinned reference release
+        if: env.ROWS != ''
+        run: bun scripts/bench/prepare.ts
+
+      - name: Confirm the rows on a fresh runner
+        if: env.ROWS != ''
+        run: |
+          rows=()
+          for row in $ROWS; do rows+=(--row "$row"); done
+          bun scripts/bench/run.ts "${rows[@]}"
+
+      - name: Upload lane receipts
+        if: always() && env.ROWS != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: receipts-bench-confirm
           path: .bench/receipts/
           include-hidden-files: true
           if-no-files-found: error
@@ -521,6 +585,7 @@ jobs:
         verify-vite,
         verify-packed,
         bench,
+        bench-confirm,
       ]
     if: >-
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||

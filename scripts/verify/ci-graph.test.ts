@@ -68,11 +68,12 @@ const verificationDependencies = [
   'verify-packed',
 ];
 /** A release no longer waits on the Worker builds, which run only on an
- *  explicit dispatch, and waits on the speed gate, which runs only where a
- *  release publishes. */
+ *  explicit dispatch, and waits on the speed gate and its confirmation on a
+ *  second runner, which run only where a release publishes. */
 const releaseDependencies = [
   ...verificationDependencies.filter((job) => job !== 'verify-workers'),
   'bench',
+  'bench-confirm',
 ];
 /** Worker builds and deploys run only on a dispatch that asks for them. */
 const workerDispatch =
@@ -189,6 +190,7 @@ describe('parsed CI graph', () => {
       'verify-workers',
       'verify-packed',
       'bench',
+      'bench-confirm',
       'deploy-workers',
       'release',
     ]);
@@ -220,6 +222,10 @@ describe('parsed CI graph', () => {
         runsOn: 'ubuntu-latest',
       },
       bench: { needs: ['build-extract'], runsOn: 'ubuntu-latest' },
+      'bench-confirm': {
+        needs: ['build-extract', 'bench'],
+        runsOn: 'ubuntu-latest',
+      },
       'deploy-workers': {
         needs: verificationDependencies,
         runsOn: 'ubuntu-latest',
@@ -326,6 +332,7 @@ describe('parsed CI graph', () => {
       'verify-workers',
       'verify-packed',
       'bench',
+      'bench-confirm',
     ];
 
     for (const jobName of preparedLanes) {
@@ -353,9 +360,21 @@ describe('parsed CI graph', () => {
     expect(
       namedStep(jobs.bench, 'Fetch the pinned reference release').run
     ).toBe('bun scripts/bench/prepare.ts');
-    expect(namedStep(jobs.bench, 'Speed gate').run).toBe(
-      'bunx vp run verify:bench'
-    );
+    // A row that does not pass on the gate's runner is measured again on a
+    // fresh one, and the release waits on that second verdict.
+    expect(commandLines(namedStep(jobs.bench, 'Speed gate').run)).toEqual([
+      'bun scripts/bench/run.ts --confirm "$RUNNER_TEMP/confirm" || [ -s "$RUNNER_TEMP/confirm" ]',
+      'echo "rows=$(cat "$RUNNER_TEMP/confirm")" >> "$GITHUB_OUTPUT"',
+    ]);
+    expect(jobs.bench).toMatchObject({
+      outputs: { rows: '${{ steps.gate.outputs.rows }}' },
+    });
+    expect(jobs['bench-confirm'].env).toEqual({
+      ROWS: '${{ needs.bench.outputs.rows }}',
+    });
+    expect(
+      namedStep(jobs['bench-confirm'], 'Confirm the rows on a fresh runner').run
+    ).toContain('bun scripts/bench/run.ts "${rows[@]}"');
     expect(namedStep(jobs['verify-vite'], 'Vite consumer lane').run).toBe(
       'bunx vp run @animus-ui/vite-app#verify:build\n' +
         'bunx vp run @animus-ui/vite-app#verify:assert\n' +
@@ -380,6 +399,7 @@ describe('parsed CI graph', () => {
       'verify-vite': ['receipts-vite', 'e2e/vite-app/.receipts/'],
       'verify-packed': ['receipts-packed', 'e2e/packed-app/.staging/receipts/'],
       bench: ['receipts-bench', '.bench/receipts/'],
+      'bench-confirm': ['receipts-bench-confirm', '.bench/receipts/'],
     } as const;
     for (const [jobName, [name, path]] of Object.entries(receipts)) {
       const upload = namedStep(jobs[jobName], 'Upload lane receipts');
