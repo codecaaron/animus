@@ -79,8 +79,10 @@ impl OwnedAst {
                     diagnostics.push(d.to_string());
                 }
                 panicked = ret.fatal_error;
+                let mut program = ret.program;
+                crate::lower_create_element::lower_create_element(&owner.allocator, &mut program);
                 DependentProgram {
-                    program: ret.program,
+                    program,
                     module_record: ret.module_record,
                 }
             },

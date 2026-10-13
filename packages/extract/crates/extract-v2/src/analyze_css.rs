@@ -4533,12 +4533,13 @@ fn identity_uncertainty_diagnostics(
         let Some(ff) = files.get(*file) else {
             continue;
         };
-        let (tag, create_element, origin, at, shared_name) = match site {
+        // Whether the use is written as a call: it is named as written.
+        let (tag, written_as_call, origin, at, shared_name) = match site {
             UncertainIdentity::Tag(site) => {
-                (site.tag.as_deref(), site.create_element, site.origin, Some(site.at), false)
+                (site.tag.as_deref(), site.written_as_call, site.origin, Some(site.at), false)
             }
             UncertainIdentity::Unattributed(name) => match first_site_of(ff, name) {
-                Some((create_element, origin, at)) => (Some(name.as_str()), create_element, origin, Some(at), true),
+                Some((written_as_call, origin, at)) => (Some(name.as_str()), written_as_call, origin, Some(at), true),
                 None => (Some(name.as_str()), false, None, None, true),
             },
         };
@@ -4553,7 +4554,7 @@ fn identity_uncertainty_diagnostics(
                 "receives a component chosen at runtime".to_string(),
             ),
             Some(tag) => {
-                let spelling = match create_element {
+                let spelling = match written_as_call {
                     true => format!("createElement({tag})"),
                     false => format!("<{tag}>"),
                 };
@@ -4628,12 +4629,14 @@ fn identity_uncertainty_diagnostics(
 
 /// The first element or `createElement` call naming `name`: whether it is a
 /// call, the origin of its name, and its offset.
+/// The first use of `name`: whether it is written as a call, its origin
+/// and offset.
 fn first_site_of(ff: &FileFacts, name: &str) -> Option<(bool, Option<TagOrigin>, u32)> {
     ff.usage_for_analysis().iter().find_map(|fact| match fact {
-        UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), span, origin, .. }
+        UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), span, origin, written_as_call, .. }
             if tag == name =>
         {
-            Some((false, *origin, span.0))
+            Some((*written_as_call, *origin, span.0))
         }
         UsageFact::CreateElement { ident: Some(tag), at, origin, .. }
         | UsageFact::CreateElement { member: Some(tag), at, origin, .. }

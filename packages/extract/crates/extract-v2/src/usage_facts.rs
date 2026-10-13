@@ -121,6 +121,8 @@ pub struct UncertainTag {
     /// argument that names nothing (`createElement(pick())`).
     pub tag: Option<String>,
     pub create_element: bool,
+    /// Written as a `createElement` call, whatever the analysis reads it as.
+    pub written_as_call: bool,
     pub origin: Option<TagOrigin>,
     /// Byte offset of the element or call.
     pub at: u32,
@@ -143,6 +145,10 @@ pub enum UsageFact {
         /// Collected with the file's scopes only.
         #[serde(skip)]
         origin: Option<TagOrigin>,
+        /// Written as a `createElement` call, which the parse reads as this
+        /// element: a diagnostic names it as written.
+        #[serde(skip)]
+        written_as_call: bool,
     },
     /// createElement(X, ...) / React.createElement(X, ...): the first
     /// argument as a raw name or dotted key (None = unattributable form).
@@ -962,6 +968,7 @@ pub(crate) fn collect_enriched_usage(
         .unwrap_or_default();
     let mut collector = FactCollector {
         facts: Vec::new(),
+        source: program.source_text,
         static_values,
         scoping: scoping.as_ref().filter(|_| !static_values.is_empty()),
         enrich: true,
@@ -5251,6 +5258,8 @@ fn rendered_in_place<'b, 'a: 'b>(
 
 struct FactCollector<'a, 's> {
     facts: Vec<UsageFact>,
+    /// The file's text: whether an element is written as JSX or as a call.
+    source: &'a str,
     static_values: crate::eval::Statics<'s>,
     scoping: Option<&'s Scoping>,
     enrich: bool,
@@ -5486,6 +5495,7 @@ impl<'a> FactCollector<'a, '_> {
             spread,
             span: (elem.span.start, elem.span.end),
             origin,
+            written_as_call: self.source.as_bytes().get(elem.span.start as usize) != Some(&b'<'),
         });
     }
 }
@@ -6654,7 +6664,7 @@ impl ReactNames {
         }
     }
 
-    fn from_imports(program: &Program<'_>, scoping: &Scoping) -> Self {
+    pub(crate) fn from_imports(program: &Program<'_>, scoping: &Scoping) -> Self {
         let mut names = Self {
             functions: FxHashMap::default(),
             namespaces: FxHashSet::default(),
@@ -6705,7 +6715,7 @@ impl ReactNames {
     }
 
     /// Whether `callee` calls the runtime's `function`.
-    fn calls(&self, callee: &Expression<'_>, function: &str) -> bool {
+    pub(crate) fn calls(&self, callee: &Expression<'_>, function: &str) -> bool {
         match callee {
             Expression::Identifier(id) => self.functions.get(id.name.as_str()) == Some(&function),
             Expression::StaticMemberExpression(member) => {
@@ -6723,6 +6733,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
     let static_values = crate::eval::Statics::empty();
     let mut collector = FactCollector {
         facts: Vec::new(),
+        source: program.source_text,
         static_values,
         scoping: None,
         enrich: false,
@@ -7278,12 +7289,13 @@ pub fn filter_usage_scan(
 
     for fact in facts {
         match fact {
-            UsageFact::Element { tag, attrs, spread, span, origin } => {
+            UsageFact::Element { tag, attrs, spread, span, origin, written_as_call } => {
                 let uncertain = |result: &mut UsageScanResult, name: &str| {
                     result.identity_uncertain = true;
                     result.uncertain_tags.push(UncertainTag {
                         tag: Some(name.to_string()),
                         create_element: false,
+                        written_as_call: *written_as_call,
                         origin: *origin,
                         at: span.0,
                     });
@@ -7462,6 +7474,7 @@ pub fn filter_usage_scan(
                     result.uncertain_tags.push(UncertainTag {
                         tag: tag.cloned(),
                         create_element: true,
+                        written_as_call: true,
                         origin: *origin,
                         at: *at,
                     });
