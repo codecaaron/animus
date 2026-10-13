@@ -62,13 +62,15 @@ pub struct KitSourceRoot {
 /// from `from_dir` as `resolve_bare_specifier` locates it. `host_entry` is
 /// the file the host resolves for the specifier, where one does: it is the
 /// runtime entry, and with neither it nor a source entry for the specifier,
-/// no host imports it.
+/// no host imports it. `analysed_extensions`, the analysis's extensions, are what a
+/// `src/` entry is guessed with.
 pub fn resolve_kit_source_root(
     specifier: &str,
     from_dir: &str,
     context: &ResolutionContext,
     host_entry: Option<&str>,
     package_dir: Option<&str>,
+    analysed_extensions: Option<&[String]>,
 ) -> Result<KitSourceRoot, String> {
     let (name, subpath) = split_specifier(specifier);
     let manifest = match package_dir {
@@ -224,6 +226,19 @@ pub fn resolve_kit_source_root(
     if src.is_dir() {
         found.rule = KitSourceRule::Src;
         found.root = Some(display(&src));
+        // The specifier's entry, and the package root's for a subpath, each
+        // spelled exactly below `src/`.
+        let below = subpath.trim_start_matches('/');
+        let stem = display(&resolution::lexical(&src.join(if below.is_empty() { "index" } else { below })));
+        if let Some(file) = guess_entry(context, &stem, analysed_extensions, &src) {
+            found.entries.push((entry_key.clone(), file));
+        }
+        if !below.is_empty() {
+            let stem = display(&src.join("index"));
+            if let Some(file) = guess_entry(context, &stem, analysed_extensions, &src) {
+                found.entries.push((".".to_string(), file));
+            }
+        }
         return Ok(found);
     }
 
@@ -334,6 +349,20 @@ fn exact_entries(exports: Option<&serde_json::Value>) -> Vec<(String, serde_json
 fn is_typescript_source(path: &str) -> bool {
     [".ts", ".tsx", ".mts", ".cts"].iter().any(|extension| path.ends_with(extension))
         && ![".d.ts", ".d.mts", ".d.cts"].iter().any(|declaration| path.ends_with(declaration))
+}
+
+/// The file a `src/` guess finds for `base`: its candidates through the
+/// policy, restricted to `sources`, each spelled exactly below `within`. A
+/// candidate found only under another spelling ends the guess with none.
+fn guess_entry(context: &ResolutionContext, base: &str, sources: Option<&[String]>, within: &Path) -> Option<String> {
+    for candidate in context.extensions.candidates_among(base, sources, true) {
+        match resolution::see_within(within, &candidate) {
+            resolution::Seen::File => return Some(candidate),
+            resolution::Seen::CaseOnly(_) => return None,
+            resolution::Seen::Missing => {}
+        }
+    }
+    None
 }
 
 /// The deepest directory holding every entry's file.

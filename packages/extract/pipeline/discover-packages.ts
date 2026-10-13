@@ -126,35 +126,25 @@ export function bareSpecifierPackageName(specifier: string): string {
     : segments[0];
 }
 
-function sourceEntryForSpecifier(
-  specifier: string,
+/** A local include's file below the package's `src/`, which has no
+ *  package specifier for the kit-source table to read: the include
+ *  itself, spelled exactly below the root. A guess, not a resolution: a
+ *  file differing only in case is no guess. */
+function localSourceEntry(
+  include: string,
   srcDir: string,
   extensionsSet: ReadonlySet<string>,
   rootDir: string,
   policy: ExtensionOrder | undefined
 ): string | null {
-  // A guess, not a resolution: a file differing only in case is no guess.
-  // Only the names below the root, or below `src/`, are checked.
-  if (isAbsolute(specifier)) {
-    const probed = probeAbsolutePathSpecifier(
-      specifier,
-      extensionsSet,
-      rootDir,
-      policy
-    );
-    if (probed.kind !== 'found') return null;
-    return isPathWithinRoot(srcDir, probed.path) ? probed.path : null;
-  }
-  const packageName = bareSpecifierPackageName(specifier);
-  const subpath = specifier.slice(packageName.length + 1);
-  const sourceStem = join(srcDir, subpath || 'index');
   const probed = probeAbsolutePathSpecifier(
-    sourceStem,
+    include,
     extensionsSet,
-    srcDir,
+    rootDir,
     policy
   );
-  return probed.kind === 'found' ? probed.path : null;
+  if (probed.kind !== 'found') return null;
+  return isPathWithinRoot(srcDir, probed.path) ? probed.path : null;
 }
 
 /** The package's parsed `package.json`, or null when it cannot be read. */
@@ -221,7 +211,8 @@ export interface KitSourceSelection {
 export type KitSourceRootResolver = (
   specifier: string,
   packageDir: string,
-  hostEntry: string | null
+  hostEntry: string | null,
+  sources?: ReadonlySet<string>
 ) => KitSourceSelection | null;
 
 /** Where a package is installed: the package `name` located from
@@ -255,7 +246,7 @@ export function nativeKitSourceRoot(
   policyJson: string
 ): KitSourceRootResolver {
   const native = engine.resolveKitSourceRoot;
-  return (specifier, packageDir, hostEntry) => {
+  return (specifier, packageDir, hostEntry, sources) => {
     if (native === undefined) {
       throw new Error(
         'the native engine does not expose resolveKitSourceRoot, which kit discovery needs — rebuild @animus-ui/extract'
@@ -269,7 +260,8 @@ export function nativeKitSourceRoot(
         workspaces,
         policyJson,
         hostEntry ?? undefined,
-        packageDir
+        packageDir,
+        sources === undefined ? undefined : [...sources]
       ),
       'resolveKitSourceRoot'
     );
@@ -800,7 +792,7 @@ export async function collectExternalPackageSources(opts: {
     // entry's directory. The host's entry stays the runtime entry.
     const selection =
       packageName && pkgRoot
-        ? kitSourceRoot(specifier, pkgRoot, absEntry)
+        ? kitSourceRoot(specifier, pkgRoot, absEntry, extensionsSet)
         : null;
     if (selection?.unresolved) {
       absEntry = null;
@@ -857,13 +849,7 @@ export async function collectExternalPackageSources(opts: {
         condition && packageName
           ? condition.entries.some(([entry]) => entry === entryKey)
           : selection?.rule === 'src' &&
-            sourceEntryForSpecifier(
-              specifier,
-              join(pkgRoot, 'src'),
-              extensionsSet,
-              rootDir,
-              extensions
-            ) !== null;
+            selection.entries.some(([entry]) => entry === entryKey);
       if (!redirected) {
         outcomes.push({
           specifier,
@@ -952,13 +938,17 @@ export async function collectExternalPackageSources(opts: {
       dirExtensions[srcDir] = [...extensionsSet];
       onPackageResolved?.(specifier, srcDir);
 
-      const srcEntry = sourceEntryForSpecifier(
-        specifier,
-        srcDir,
-        extensionsSet,
-        rootDir,
-        extensions
-      );
+      // The table's guess for a package specifier; a local include's own.
+      const srcEntry = packageName
+        ? (selection?.entries.find(([entry]) => entry === entryKey)?.[1] ??
+          null)
+        : localSourceEntry(
+            specifier,
+            srcDir,
+            extensionsSet,
+            rootDir,
+            extensions
+          );
       if (srcEntry) {
         packageMap[specifier] = relative(rootDir, srcEntry);
         const replaced = absEntry;
@@ -971,13 +961,8 @@ export async function collectExternalPackageSources(opts: {
       // no root key the src redirect is bypassed and untransformed dist ships.
       if (packageName) {
         if (packageName !== specifier && !(packageName in packageMap)) {
-          const rootEntry = sourceEntryForSpecifier(
-            packageName,
-            srcDir,
-            extensionsSet,
-            rootDir,
-            extensions
-          );
+          const rootEntry =
+            selection?.entries.find(([entry]) => entry === '.')?.[1] ?? null;
           if (rootEntry) {
             packageMap[packageName] = relative(rootDir, rootEntry);
             await redirect(packageName, rootEntry, pkgRoot, () =>

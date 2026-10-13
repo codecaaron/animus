@@ -376,6 +376,7 @@ pub fn declares_kit_source(package_dir: String) -> bool {
 /// imports the specifier. `package_dir` is the package discovery located,
 /// where it located one.
 #[napi]
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_kit_source_root(
     specifier: String,
     from_dir: String,
@@ -384,6 +385,7 @@ pub fn resolve_kit_source_root(
     extension_policy_json: Option<String>,
     host_entry: Option<String>,
     package_dir: Option<String>,
+    sources: Option<Vec<String>>,
 ) -> String {
     // One call lists each directory it checks once, as a system load does.
     let found = resolution_context(conditions, workspaces, extension_policy_json).and_then(|context| {
@@ -394,6 +396,7 @@ pub fn resolve_kit_source_root(
                 &context,
                 host_entry.as_deref(),
                 package_dir.as_deref(),
+                sources.as_deref(),
             )
         })
     });

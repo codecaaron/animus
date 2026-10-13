@@ -253,7 +253,7 @@ export declare function probeFile(candidates: Array<string>, within?: string | u
  * imports the specifier. `package_dir` is the package discovery located,
  * where it located one.
  */
-export declare function resolveKitSourceRoot(specifier: string, fromDir: string, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null, hostEntry?: string | undefined | null, packageDir?: string | undefined | null): string
+export declare function resolveKitSourceRoot(specifier: string, fromDir: string, conditions?: Array<string> | undefined | null, workspaces?: Record<string, string> | undefined | null, extensionPolicyJson?: string | undefined | null, hostEntry?: string | undefined | null, packageDir?: string | undefined | null, sources?: Array<string> | undefined | null): string
 
 /**
  * Resolves `specifier` from `from_dir` as the system loader resolves its
