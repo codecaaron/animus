@@ -96,6 +96,9 @@ impl OwnedAst {
         }
     }
 
+    /// The parsed program, with each React `createElement` call over a
+    /// component read as the JSX element it creates
+    /// (`lower_create_element`); source text and spans are as written.
     pub fn program(&self) -> &Program<'_> {
         &self.cell.borrow_dependent().program
     }

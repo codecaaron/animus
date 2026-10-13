@@ -5495,7 +5495,7 @@ impl<'a> FactCollector<'a, '_> {
             spread,
             span: (elem.span.start, elem.span.end),
             origin,
-            written_as_call: self.source.as_bytes().get(elem.span.start as usize) != Some(&b'<'),
+            written_as_call: crate::lower_create_element::written_as_call(self.source, elem.span.start),
         });
     }
 }
@@ -6102,7 +6102,7 @@ fn static_member_path(member: &oxc::ast::ast::StaticMemberExpression<'_>) -> Opt
 }
 
 /// The identifier a static member chain starts with: `ui` in `ui.Kit.Item`.
-fn static_member_root<'b, 'a>(
+pub(crate) fn static_member_root<'b, 'a>(
     member: &'b oxc::ast::ast::StaticMemberExpression<'a>,
 ) -> Option<&'b IdentifierReference<'a>> {
     match &member.object {

@@ -4627,10 +4627,8 @@ fn identity_uncertainty_diagnostics(
     std::iter::once(summary).chain(records.into_iter().map(|(.., record)| record)).collect()
 }
 
-/// The first element or `createElement` call naming `name`: whether it is a
-/// call, the origin of its name, and its offset.
-/// The first use of `name`: whether it is written as a call, its origin
-/// and offset.
+/// The first element or `createElement` call naming `name`: whether it is
+/// written as a call, the origin of its name, and its offset.
 fn first_site_of(ff: &FileFacts, name: &str) -> Option<(bool, Option<TagOrigin>, u32)> {
     ff.usage_for_analysis().iter().find_map(|fact| match fact {
         UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), span, origin, written_as_call, .. }

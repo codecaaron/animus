@@ -14,7 +14,7 @@ use oxc::ast::ast::{
 use oxc::ast::builder::AstBuilder;
 use oxc::ast_visit::VisitMut;
 use oxc::span::GetSpan;
-use crate::usage_facts::ReactNames;
+use crate::usage_facts::{is_absent, static_member_root, ReactNames};
 
 /// Lowers every call of the runtime's `createElement` (as usage analysis
 /// recognizes it) whose component is a capitalized name or a member path.
@@ -23,18 +23,27 @@ pub(crate) fn lower_create_element<'a>(allocator: &'a Allocator, program: &mut P
     if !program.source_text.contains("createElement") {
         return;
     }
+    // Which calls are React's depends on the file's bindings: one build of
+    // its scopes, before the parse is final.
     let scoping = oxc::semantic::SemanticBuilder::new().build(program).semantic.into_scoping();
     let names = ReactNames::from_imports(program, &scoping);
-    let mut lowering = Lowering { builder: AstBuilder::new(allocator), names };
+    let mut lowering = Lowering { builder: AstBuilder::new(allocator), names, scoping: &scoping };
     lowering.visit_program(program);
 }
 
-struct Lowering<'a> {
-    builder: AstBuilder<'a>,
-    names: ReactNames,
+/// Whether the element at `start` is written as a `createElement` call the
+/// parse lowered, not as JSX: a diagnostic names it as written.
+pub(crate) fn written_as_call(source: &str, start: u32) -> bool {
+    source.as_bytes().get(start as usize) != Some(&b'<')
 }
 
-impl<'a> VisitMut<'a> for Lowering<'a> {
+struct Lowering<'a, 's> {
+    builder: AstBuilder<'a>,
+    names: ReactNames,
+    scoping: &'s oxc::semantic::Scoping,
+}
+
+impl<'a> VisitMut<'a> for Lowering<'a, '_> {
     fn visit_expression(&mut self, expression: &mut Expression<'a>) {
         if let Expression::CallExpression(call) = expression {
             if self.lowerable(call) {
@@ -48,7 +57,7 @@ impl<'a> VisitMut<'a> for Lowering<'a> {
     }
 }
 
-impl<'a> Lowering<'a> {
+impl<'a> Lowering<'a, '_> {
     /// A call JSX can write: a runtime's `createElement` over a capitalized
     /// name or a member path, with no spread among its arguments before
     /// the children.
@@ -58,7 +67,7 @@ impl<'a> Lowering<'a> {
         }
         let component = match call.arguments.first() {
             Some(Argument::Identifier(id)) => id.name.chars().next().is_some_and(char::is_uppercase),
-            Some(Argument::StaticMemberExpression(member)) => jsx_member_path(member),
+            Some(Argument::StaticMemberExpression(member)) => static_member_root(member).is_some(),
             _ => false,
         };
         component && !matches!(call.arguments.get(1), Some(Argument::SpreadElement(_)))
@@ -96,14 +105,17 @@ impl<'a> Lowering<'a> {
     /// and its spreads as spread attributes, in order; any other entry (a
     /// computed key, a method, an accessor) as a spread of an object holding
     /// just it. Anything but an object literal is one spread, and an absent
-    /// value none.
+    /// value none; parentheses and type-only wrappers are looked through.
     fn attributes(&self, props: Expression<'a>) -> oxc::allocator::Vec<'a, JSXAttributeItem<'a>> {
         let mut items = oxc::allocator::Vec::new_in(&self.builder);
-        let props = match props {
-            Expression::NullLiteral(_) => return items,
-            Expression::Identifier(id) if id.name == "undefined" => return items,
-            props => props,
-        };
+        // `null` passes no props, as an absent value does.
+        if is_absent(&props, Some(self.scoping)) {
+            return items;
+        }
+        let props = unwrapped(props);
+        if matches!(props, Expression::NullLiteral(_)) {
+            return items;
+        }
         let Expression::ObjectExpression(object) = props else {
             items.push(JSXAttributeItem::new_spread_attribute(props.span(), props, &self.builder));
             return items;
@@ -156,19 +168,23 @@ impl<'a> Lowering<'a> {
             Expression::StaticMemberExpression(inner) => {
                 JSXMemberExpressionObject::MemberExpression(self.jsx_member(inner.unbox()))
             }
-            _ => unreachable!("jsx_member_path checked the path"),
+            _ => unreachable!("static_member_root checked the path"),
         };
         let property = JSXIdentifier::new(member.property.span, member.property.name, &self.builder);
         JSXMemberExpression::boxed(member.span, object, property, &self.builder)
     }
 }
 
-/// A member path JSX can name: identifiers joined by dots.
-fn jsx_member_path(member: &StaticMemberExpression<'_>) -> bool {
-    match &member.object {
-        Expression::Identifier(_) => true,
-        Expression::StaticMemberExpression(inner) => jsx_member_path(inner),
-        _ => false,
+/// `expression` without its parentheses and type-only wrappers, which leave
+/// its value as it is.
+fn unwrapped(expression: Expression<'_>) -> Expression<'_> {
+    match expression {
+        Expression::ParenthesizedExpression(inner) => unwrapped(inner.unbox().expression),
+        Expression::TSAsExpression(inner) => unwrapped(inner.unbox().expression),
+        Expression::TSSatisfiesExpression(inner) => unwrapped(inner.unbox().expression),
+        Expression::TSNonNullExpression(inner) => unwrapped(inner.unbox().expression),
+        Expression::TSTypeAssertion(inner) => unwrapped(inner.unbox().expression),
+        expression => expression,
     }
 }
 

@@ -260,7 +260,69 @@ fn collect_references_from_expr(
             // The operand is a SimpleAssignmentTarget, not an Expression;
             // an `i++` target is already a local binding.
         }
+        // An element names its component and holds expressions; the parse
+        // also reads a `createElement` call as the element it creates.
+        Expression::JSXElement(element) => collect_references_from_element(element, validation),
+        Expression::JSXFragment(fragment) => {
+            collect_references_from_children(&fragment.children, validation);
+        }
         _ => {}
+    }
+}
+
+fn collect_references_from_element(
+    element: &oxc::ast::ast::JSXElement<'_>,
+    validation: &mut ReferenceValidation<'_>,
+) {
+    use oxc::ast::ast::{JSXAttributeItem, JSXAttributeValue, JSXElementName, JSXMemberExpressionObject};
+    match &element.opening_element.name {
+        JSXElementName::IdentifierReference(ident) => validation.collect_identifier(ident),
+        JSXElementName::MemberExpression(member) => {
+            let mut object = &member.object;
+            while let JSXMemberExpressionObject::MemberExpression(inner) = object {
+                object = &inner.object;
+            }
+            if let JSXMemberExpressionObject::IdentifierReference(ident) = object {
+                validation.collect_identifier(ident);
+            }
+        }
+        _ => {}
+    }
+    for attribute in &element.opening_element.attributes {
+        match attribute {
+            JSXAttributeItem::Attribute(attribute) => match &attribute.value {
+                Some(JSXAttributeValue::ExpressionContainer(container)) => {
+                    if let Some(expression) = container.expression.as_expression() {
+                        collect_references_from_expr(expression, validation);
+                    }
+                }
+                Some(JSXAttributeValue::Element(inner)) => collect_references_from_element(inner, validation),
+                Some(JSXAttributeValue::Fragment(inner)) => collect_references_from_children(&inner.children, validation),
+                _ => {}
+            },
+            JSXAttributeItem::SpreadAttribute(spread) => collect_references_from_expr(&spread.argument, validation),
+        }
+    }
+    collect_references_from_children(&element.children, validation);
+}
+
+fn collect_references_from_children(
+    children: &[oxc::ast::ast::JSXChild<'_>],
+    validation: &mut ReferenceValidation<'_>,
+) {
+    use oxc::ast::ast::JSXChild;
+    for child in children {
+        match child {
+            JSXChild::ExpressionContainer(container) => {
+                if let Some(expression) = container.expression.as_expression() {
+                    collect_references_from_expr(expression, validation);
+                }
+            }
+            JSXChild::Spread(spread) => collect_references_from_expr(&spread.expression, validation),
+            JSXChild::Element(element) => collect_references_from_element(element, validation),
+            JSXChild::Fragment(fragment) => collect_references_from_children(&fragment.children, validation),
+            JSXChild::Text(_) => {}
+        }
     }
 }
 
