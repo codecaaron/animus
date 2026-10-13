@@ -45,6 +45,7 @@ pub(super) fn validate_self_contained(
     transform_name: &str,
     diagnostics: &mut Vec<String>,
     scoping: &Scoping,
+    source: &str,
 ) -> bool {
     // A concise arrow's body is its result expression.
     let (statements, result, callback_span) = match callback {
@@ -58,7 +59,7 @@ pub(super) fn validate_self_contained(
         },
         _ => return true,
     };
-    let invalid = collect_invalid_references_from_body(statements, result, callback_span, scoping);
+    let invalid = collect_invalid_references_from_body(statements, result, callback_span, scoping, source);
     report_invalid_references(&invalid, transform_name, diagnostics)
 }
 
@@ -66,6 +67,9 @@ struct ReferenceValidation<'s> {
     scoping: &'s Scoping,
     callback_span: Span,
     invalid_names: FxHashSet<String>,
+    /// The file's text: an element the parse lowered from a `createElement`
+    /// call still references the function it calls.
+    source: &'s str,
 }
 
 impl ReferenceValidation<'_> {
@@ -101,11 +105,13 @@ fn collect_invalid_references_from_body(
     result: Option<&Expression<'_>>,
     callback_span: Span,
     scoping: &Scoping,
+    source: &str,
 ) -> FxHashSet<String> {
     let mut validation = ReferenceValidation {
         scoping,
         callback_span,
         invalid_names: FxHashSet::default(),
+        source,
     };
     for stmt in stmts {
         collect_references_from_statement(stmt, &mut validation);
@@ -275,6 +281,17 @@ fn collect_references_from_element(
     validation: &mut ReferenceValidation<'_>,
 ) {
     use oxc::ast::ast::{JSXAttributeItem, JSXAttributeValue, JSXElementName, JSXMemberExpressionObject};
+    // Written as a call, its `createElement` (or `React`) is a reference the
+    // parse took out: the lowering only reads calls of a function from
+    // outside, which the delivered source still makes.
+    let start = element.span.start as usize;
+    if crate::lower_create_element::written_as_call(validation.source, element.span.start) {
+        let callee = validation.source[start..].split('(').next().unwrap_or_default();
+        let root = callee.split('.').next().unwrap_or_default().trim();
+        if !root.is_empty() {
+            validation.invalid_names.insert(root.to_string());
+        }
+    }
     match &element.opening_element.name {
         JSXElementName::IdentifierReference(ident) => validation.collect_identifier(ident),
         JSXElementName::MemberExpression(member) => {

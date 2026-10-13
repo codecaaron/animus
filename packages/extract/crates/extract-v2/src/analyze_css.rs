@@ -3993,7 +3993,7 @@ fn spread_wrapper_targets(
             .iter()
             .filter_map(|fact| match fact {
                 UsageFact::Element { span, .. } => Some((*span, fact)),
-                UsageFact::CreateElement { .. } | UsageFact::CloneUnknown { .. } => None,
+                UsageFact::CreateElement { .. } | UsageFact::CloneUnknown { .. } | UsageFact::DefaultProps { .. } => None,
             })
             .collect(),
         memo: FxHashMap::default(),

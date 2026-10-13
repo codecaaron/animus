@@ -355,11 +355,19 @@ type OrderedOmit<T, K> = { [P in keyof T as P extends K ? never : P]: T[P] };
 
 type MergeRecord<Base, Incoming> = OrderedOmit<Base, keyof Incoming> & Incoming;
 
-/** An object type keyed by each name in `Names`, in the tuple's order: a
- *  `Record` over `Names[number]` would print in the type checker's order. */
-type NamedKeys<Names extends readonly string[], Value> = {
-  [I in keyof Names as I extends `${number}` ? Names[I] : never]: Value;
-};
+/** An object type keyed by each name in `Names`. A literal tuple keys it
+ *  in the tuple's order: a `Record` over `Names[number]` would print in the
+ *  type checker's order. Any other array keeps that `Record`. */
+type NamedKeys<
+  Names extends readonly string[],
+  Value,
+> = number extends Names['length']
+  ? Record<Names[number], Value>
+  : {
+      -readonly [
+        I in keyof Names as I extends `${number}` ? Names[I] : never
+      ]: Value;
+    };
 
 /** The scales a theme emits as CSS variables, as an object type whose keys
  *  print in the order the scales were added: a union of their names would

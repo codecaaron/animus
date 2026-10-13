@@ -254,7 +254,7 @@ fn try_extract_transform(
     let mut diagnostics = Vec::new();
     let valid = callback_arg
         .as_expression()
-        .is_none_or(|callback| validate_self_contained(callback, &name, &mut diagnostics, scoping));
+        .is_none_or(|callback| validate_self_contained(callback, &name, &mut diagnostics, scoping, source));
 
     let js_source = if valid {
         match strip_typescript(callback_source) {

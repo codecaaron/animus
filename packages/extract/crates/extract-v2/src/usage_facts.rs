@@ -181,6 +181,14 @@ pub enum UsageFact {
         #[serde(skip)]
         origin: Option<TagOrigin>,
     },
+    /// A reference to a component's `defaultProps`, which React reads as
+    /// the props a render leaves out: usage cannot list them.
+    DefaultProps {
+        tag: TagFact,
+        /// Collected with the file's scopes only.
+        #[serde(skip)]
+        origin: Option<TagOrigin>,
+    },
     /// `cloneElement(child, …)` of an element usage cannot name: the
     /// overrides can reach any component.
     CloneUnknown {
@@ -5305,7 +5313,7 @@ struct PendingClone {
 
 impl<'a> FactCollector<'a, '_> {
     /// Records one element's usage fact.
-    fn record_element(&mut self, elem: &JSXOpeningElement<'a>) {
+    fn record_element(&mut self, elem: &JSXOpeningElement<'a>, children: &[oxc::ast::ast::JSXChild<'a>]) {
         let (tag, root) = match &elem.name {
             JSXElementName::Identifier(id) => (TagFact::Ident(id.name.to_string()), None),
             JSXElementName::IdentifierReference(id) => (TagFact::Ident(id.name.to_string()), Some(&**id)),
@@ -5489,6 +5497,10 @@ impl<'a> FactCollector<'a, '_> {
                 });
             }
         }
+        // The element's children are its `children` prop, written after every
+        // attribute: they replace a `children` attribute or one a spread
+        // delivers.
+        attrs.extend(children_attribute(children));
         self.facts.push(UsageFact::Element {
             tag,
             attrs,
@@ -5498,6 +5510,65 @@ impl<'a> FactCollector<'a, '_> {
             written_as_call: crate::lower_create_element::written_as_call(self.source, elem.span.start),
         });
     }
+}
+
+/// The `children` prop an element's children write, if it has any: a single
+/// text on one line or a single string literal as itself, and anything else
+/// as a value usage cannot list. Text of whitespace and line breaks, and an
+/// empty `{}`, are no children, as in JSX.
+fn children_attribute(children: &[oxc::ast::ast::JSXChild<'_>]) -> Option<AttrFact> {
+    use oxc::ast::ast::{JSXChild, JSXExpression};
+    let written: Vec<&JSXChild<'_>> = children
+        .iter()
+        .filter(|child| match child {
+            JSXChild::Text(text) => !(text.value.trim().is_empty() && text.value.contains('\n')),
+            JSXChild::ExpressionContainer(container) => {
+                !matches!(container.expression, JSXExpression::EmptyExpression(_))
+            }
+            _ => true,
+        })
+        .collect();
+    let first = written.first()?;
+    let at = first.span().start;
+    let end = written.last().map_or(at, |child| child.span().end);
+    let literal = match written.as_slice() {
+        [JSXChild::Text(text)] if !text.value.contains('\n') => Some(text.value.to_string()),
+        [JSXChild::ExpressionContainer(container)] => match container.expression.as_expression().map(crate::chain_walk::unwrap_type_assertions) {
+            Some(Expression::StringLiteral(literal)) => Some(literal.value.to_string()),
+            _ => None,
+        },
+        _ => None,
+    };
+    Some(match literal {
+        Some(value) => AttrFact {
+            name: "children".to_string(),
+            variant_class: value.clone(),
+            static_value: Some(Value::String(value)),
+            enumerable_values: Vec::new(),
+            dynamic: false,
+            dynamic_kind: None,
+            dynamic_span: None,
+            skip: false,
+            literal: true,
+            conditions: Some(BTreeSet::from([BASE_CONDITION.to_string()])),
+            optional: false,
+            at,
+        },
+        None => AttrFact {
+            name: "children".to_string(),
+            variant_class: "__dynamic__".to_string(),
+            static_value: None,
+            enumerable_values: Vec::new(),
+            dynamic: true,
+            dynamic_kind: Some(DynamicExpressionKind::Other),
+            dynamic_span: Some(crate::jsx_scan::UsageSpan { start: at, end }),
+            skip: false,
+            literal: false,
+            conditions: None,
+            optional: false,
+            at,
+        },
+    })
 }
 
 /// The entries a spread argument writes when every branch it can take is an
@@ -5914,10 +5985,31 @@ fn literal_value(expression: &Expression<'_>) -> Option<Value> {
 }
 
 impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
-    fn visit_jsx_opening_element(&mut self, elem: &JSXOpeningElement<'a>) {
-        self.record_element(elem);
+    fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
+        if member.property.name == "defaultProps" {
+            self.record_default_props(&member.object);
+        }
+        oxc::ast_visit::walk::walk_static_member_expression(self, member);
+    }
+
+    fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
+        let key = match &member.expression {
+            Expression::StringLiteral(key) => Some(key.value.as_str()),
+            Expression::TemplateLiteral(key) if key.expressions.is_empty() => {
+                key.quasis.first().and_then(|quasi| quasi.value.cooked.as_ref()).map(|cooked| cooked.as_str())
+            }
+            _ => None,
+        };
+        if key == Some("defaultProps") {
+            self.record_default_props(&member.object);
+        }
+        oxc::ast_visit::walk::walk_computed_member_expression(self, member);
+    }
+
+    fn visit_jsx_element(&mut self, element: &oxc::ast::ast::JSXElement<'a>) {
+        self.record_element(&element.opening_element, &element.children);
         // An attribute value can hold JSX too, which is a use like a child.
-        oxc::ast_visit::walk::walk_jsx_opening_element(self, elem);
+        oxc::ast_visit::walk::walk_jsx_element(self, element);
     }
 
     fn visit_variable_declaration(&mut self, declaration: &oxc::ast::ast::VariableDeclaration<'a>) {
@@ -5983,6 +6075,23 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
 }
 
 impl<'a> FactCollector<'a, '_> {
+    /// `X.defaultProps` read or written: React gives X's renders those props
+    /// wherever they leave one out.
+    fn record_default_props(&mut self, object: &Expression<'a>) {
+        let (tag, root) = match object.get_inner_expression() {
+            Expression::Identifier(id) => (TagFact::Ident(id.name.to_string()), &**id),
+            Expression::StaticMemberExpression(member) => {
+                match (static_member_path(member), static_member_root(member)) {
+                    (Some(path), Some(root)) => (TagFact::Member(path), root),
+                    _ => return,
+                }
+            }
+            _ => return,
+        };
+        let origin = self.origin_of(root);
+        self.facts.push(UsageFact::DefaultProps { tag, origin });
+    }
+
     /// A `cloneElement` call: its overrides count for the cloned element's
     /// component when the first argument is a JSX element or a `const`
     /// bound to one, and for any component otherwise.
@@ -7289,6 +7398,20 @@ pub fn filter_usage_scan(
 
     for fact in facts {
         match fact {
+            // React gives every render the default props it leaves out: no
+            // option of the component is proven unused. A name that is no
+            // extracted component is someone else's.
+            UsageFact::DefaultProps { tag, origin } => {
+                let Some((tag_name, resolved_binding)) = resolve_tag(tag, *origin, member_expr_bindings) else {
+                    continue;
+                };
+                let Some(config) = component_configs.get(tag_name) else {
+                    continue;
+                };
+                let binding = resolved_binding.clone().unwrap_or_else(|| tag_name.to_string());
+                result.open_components.insert(binding.clone());
+                record_unwritten_options(&mut result, &mut fully_open, &binding, config, &FxHashSet::default(), true);
+            }
             UsageFact::Element { tag, attrs, spread, span, origin, written_as_call } => {
                 let uncertain = |result: &mut UsageScanResult, name: &str| {
                     result.identity_uncertain = true;
