@@ -76,8 +76,8 @@ async function buildWithUnlinkedKit(
       _fromDir: string,
       workspaces?: Record<string, string>
     ) => workspaces?.[name] ?? null,
-    // The stand-in table: `src/` where the kit has one, else its runtime
-    // entry's directory.
+    // The stand-in table: `src/` where the kit has one, with its index as
+    // the root entry, else its runtime entry's directory.
     resolveKitSourceRoot: (
       _specifier: string,
       _fromDir: string,
@@ -93,7 +93,11 @@ async function buildWithUnlinkedKit(
           ? {
               rule: 'src',
               root: src,
-              entries: [],
+              entries: ['.ts', '.tsx']
+                .map((extension) => join(src, `index${extension}`))
+                .filter((file) => existsSync(file))
+                .slice(0, 1)
+                .map((file) => ['.', file]),
               invalid: [],
               unresolved: null,
             }

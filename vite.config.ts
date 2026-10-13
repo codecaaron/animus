@@ -46,7 +46,10 @@ const typescriptTestTargets = [
   'scripts/verify/extract-test-enumeration.test.ts',
 ] as const;
 const typescriptTestTargetArguments = typescriptTestTargets.join(' ');
-const typescriptTestCommand = `bunx vp test run ${typescriptTestTargetArguments}`;
+// Source ingestion and discovery probe files through the native engine, so
+// the TS targets need a fresh v2 NAPI binary, checked before they run.
+const requireNapiV2 = 'bash scripts/verify/with-fresh-napi.sh';
+const typescriptTestCommand = `${requireNapiV2} bunx vp test run ${typescriptTestTargetArguments}`;
 const typescriptCoverageExclusions = [
   '**/dist/**',
   'legacy/**',
@@ -375,7 +378,7 @@ export default defineConfig({
         cache: false,
       },
       'verify:coverage:ts': {
-        command: `bunx vitest run ${typescriptTestTargetArguments} --coverage.enabled --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/ts ${typescriptCoverageExclusionArguments}`,
+        command: `${requireNapiV2} bunx vitest run ${typescriptTestTargetArguments} --coverage.enabled --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/ts ${typescriptCoverageExclusionArguments}`,
         cache: false,
       },
       'verify:coverage:e2e': {

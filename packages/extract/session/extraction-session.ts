@@ -34,7 +34,7 @@ import {
   assembleStylesheet,
   buildPathAliasesJson,
   buildSystemPropsModule,
-  BUILT_IN_EXTENSION_POLICY,
+  builtInExtensionPolicy,
   builtInAssetClassification,
   clearEngineCache,
   collectExternalPackageSources,
@@ -488,9 +488,15 @@ export class ExtractionSession {
   private configInputHashes = new Map<string, string>();
   /** The host's export conditions, in its order, for the system loader. */
   conditions: readonly string[] = [];
+  private hostExtensionPolicy: HostExtensionPolicy | undefined;
   /** The host's extension order, as its adapter captured it; the built-in
    *  policy where no host resolves. */
-  extensionPolicy: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
+  get extensionPolicy(): HostExtensionPolicy {
+    return this.hostExtensionPolicy ?? builtInExtensionPolicy();
+  }
+  set extensionPolicy(policy: HostExtensionPolicy) {
+    this.hostExtensionPolicy = policy;
+  }
   /** Which files the host serves as assets (spec §2.2 A8); the built-in
    *  classification where no host's can be read. */
   assetClassification: HostAssetClassification =
