@@ -3468,15 +3468,12 @@ fn declared_reach<'f, T>(
 
 /// Fills `inputs.build_chunks` once, from every module's loads: each
 /// analysed module a literal `import()` names.
-pub(crate) fn note_build_chunks<'l, T>(
-    loads: impl Iterator<Item = (&'l str, &'l crate::loads::ModuleLoad)>,
-    files: &BTreeMap<String, T>,
-    inputs: &CssInputs,
-) {
+pub(crate) fn note_build_chunks(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) {
     if inputs.analysis_context.closed_dynamic_imports.is_empty() || inputs.build_chunks.get().is_some() {
         return;
     }
     let mut chunks = BTreeSet::new();
+    let loads = files.iter().flat_map(|(path, ff)| ff.module_loads.iter().map(move |load| (path.as_str(), load)));
     for (file, load) in loads {
         if load.dynamic_import && matches!(load.target, crate::loads::LoadTarget::Specifier(_)) {
             chunks.extend(loaded_modules(file, load, files, inputs).into_iter().cloned());
@@ -8858,11 +8855,7 @@ fn run_with_system_floor(
     }
     // Each computed import() a declaration closes, recorded as the
     // assumption it is; a declaration that closes none is reported.
-    note_build_chunks(
-        files.iter().flat_map(|(path, ff)| ff.module_loads.iter().map(move |load| (path.as_str(), load))),
-        files,
-        inputs,
-    );
+    note_build_chunks(files, inputs);
     for site in &inputs.analysis_context.closed_dynamic_imports {
         let closed: Vec<&crate::loads::ModuleLoad> = files
             .get(&site.importer)
