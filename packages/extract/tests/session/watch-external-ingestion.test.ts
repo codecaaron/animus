@@ -142,6 +142,63 @@ export const system = createSystem({}).extend(kit);
     expect(lastAnalyzedSource(kitButtonKey)).toBe(BUTTON_STYLE_EDIT);
   });
 
+  /** A kit in the app's own node_modules aliasing a project file: the file
+   *  stays the project's, under the project's exclusions and identity. */
+  const installedKitAliasing = (
+    projectFile: string,
+    exclude?: (app: string) => string[]
+  ) => {
+    const { app } =
+      createKitWorkspace(`import { createSystem } from '@animus-ui/system';
+import kit from '../node_modules/@kits/ui/src/index.ts';
+export const system = createSystem({}).extend(kit);
+`);
+    const kit = join(app, 'node_modules', '@kits', 'ui');
+    mkdirSync(join(kit, 'src'), { recursive: true });
+    writeFileSync(join(kit, 'package.json'), '{"name":"@kits/ui"}');
+    writeFileSync(join(kit, 'src', 'index.ts'), "export * from './Button';\n");
+    writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_SOURCE);
+    writeFileSync(join(app, 'src', projectFile), BUTTON_SOURCE);
+    const alias = join(kit, 'src', projectFile);
+    symlinkSync(join(app, 'src', projectFile), alias);
+    const session = makeSession(app, exclude ? { exclude: exclude(app) } : {});
+    return { app, alias, session };
+  };
+
+  test('an alias to an excluded project file stays excluded', async () => {
+    const { session, alias } = installedKitAliasing('Excluded.tsx', (app) => [
+      join(app, 'src', 'Excluded.tsx'),
+    ]);
+    await session.runFullPipeline();
+    expect(lastAnalyzedPaths()).not.toContain(join('src', 'Excluded.tsx'));
+
+    writeFileSync(alias, BUTTON_STYLE_EDIT);
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([alias]),
+      removedFiles: new Set(),
+    });
+    expect(lastAnalyzedPaths()).not.toContain(join('src', 'Excluded.tsx'));
+  });
+
+  test('a project file deleted through a kit alias leaves the analysis', async () => {
+    const { app, session, alias } = installedKitAliasing('Real.tsx');
+    await session.runFullPipeline();
+    // Reported through the alias once, so the identity records its spelling.
+    writeFileSync(alias, BUTTON_STYLE_EDIT);
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set([alias]),
+      removedFiles: new Set(),
+    });
+    expect(lastAnalyzedPaths()).toContain(join('src', 'Real.tsx'));
+
+    rmSync(join(app, 'src', 'Real.tsx'));
+    await session.handleWatchUpdate({
+      modifiedFiles: new Set(),
+      removedFiles: new Set([alias]),
+    });
+    expect(lastAnalyzedPaths()).not.toContain(join('src', 'Real.tsx'));
+  });
+
   test('symlink alias and canonical spellings collapse to one source identity', async () => {
     const { parent, app, kit } = createKitWorkspace();
     const alias = join(parent, 'link-ui');
