@@ -16,6 +16,7 @@ import { cancelSystemReload, handleHotUpdate } from './hmr';
 import { buildIndexHtmlTags } from './index-html';
 import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
+import { kitWatchNegations } from './watch-ignored';
 
 import type {
   ClosedDynamicImport,
@@ -38,6 +39,8 @@ export { discoverFiles } from '@animus-ui/extract/pipeline';
 interface SourceKitConfig {
   optimizeDeps: { exclude: string[]; include: string[] };
   ssr: { noExternal: string[] };
+  /** The installed kits' directories. */
+  roots: string[];
 }
 
 async function sourceKitConfig(
@@ -66,6 +69,7 @@ async function sourceKitConfig(
     // and Node loads its runtime dist past the transform, so the server
     // renders what the client, served through it, does not.
     ssr: { noExternal: names },
+    roots: [...kits.values()].map((kit) => kit.root),
   };
 }
 
@@ -218,7 +222,15 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         resolve(root, options.system),
         ctx.kitEngine()
       );
-      return kits ? { define, ...kits } : { define };
+      if (!kits) return { define };
+      const { roots, ...config } = kits;
+      // Vite's watcher ignores every installed kit; these are appended to
+      // the user's own ignored, and a disabled watcher stays disabled.
+      const watched =
+        env.command === 'serve' && userConfig.server?.watch !== null
+          ? { server: { watch: { ignored: kitWatchNegations(roots) } } }
+          : {};
+      return { define, ...config, ...watched };
     },
 
     configureServer(server) {
