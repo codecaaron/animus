@@ -57,35 +57,17 @@ fn export_read(refs: &ModuleRefs, key: &str, name: &str) -> String {
 /// Every module in evaluation order: depth-first post-order from the entry,
 /// following imports and re-exports in source order, then any module not
 /// reached, in path order.
-pub(crate) fn evaluation_order(
-    specifier_map: &HashMap<(String, String), String>,
-    source_map: &HashMap<String, String>,
-    entry_path: &str,
-) -> Vec<String> {
+pub(crate) fn evaluation_order(modules: &HashMap<String, LinkedModule>, entry_path: &str) -> Vec<String> {
     let requests = |path: &str| -> Vec<String> {
-        let allocator = Allocator::default();
-        let ParserReturn { program, .. } =
-            Parser::new(&allocator, &source_map[path], source_type(path)).parse();
-        program
-            .body
-            .iter()
-            .filter_map(|stmt| match stmt {
-                Statement::ImportDeclaration(decl) => Some(decl.source.value.as_str()),
-                Statement::ExportFromDeclaration(decl) => Some(decl.source.value.as_str()),
-                Statement::ExportAllDeclaration(decl) => Some(decl.source.value.as_str()),
-                _ => None,
-            })
-            .map(|spec| module_key(path, spec, specifier_map))
-            .filter(|target| source_map.contains_key(target))
-            .collect()
+        modules[path].requests.iter().filter(|target| modules.contains_key(*target)).cloned().collect()
     };
-    let mut paths: Vec<&String> = source_map.keys().collect();
+    let mut paths: Vec<&String> = modules.keys().collect();
     paths.sort();
     let mut seen: HashSet<String> = HashSet::new();
     let mut order: Vec<String> = Vec::new();
     // Iterative, so a deep graph cannot overflow the stack.
     for root in std::iter::once(entry_path).chain(paths.iter().map(|path| path.as_str())) {
-        if !source_map.contains_key(root) || !seen.insert(root.to_string()) {
+        if !modules.contains_key(root) || !seen.insert(root.to_string()) {
             continue;
         }
         let mut stack: Vec<(String, Vec<String>, usize)> = vec![(root.to_string(), requests(root), 0)];
@@ -123,8 +105,78 @@ pub(crate) enum ExportTarget {
 /// destructuring read and short-circuit as Node does, and only the write
 /// itself throws. The key names no module, and it is not enumerable, so
 /// scans over `__modules` skip it.
+///
+/// The other keys hold what the bundle writes as data, which QuickJS reads
+/// far faster than it compiles the same statements: `'#fields'` splits a
+/// string of length-prefixed fields ([`push_field`]), `'#register'` registers
+/// each module's export object, and `'#reads'` defines export getters that
+/// each read a module's export or export object ([`ModuleReads`]). `'#run'`
+/// holds each module's generator, by its place in `__modules['#']`.
 pub(crate) const PRELUDE: &str = "Object.defineProperty(__modules, '#import', { value: (read) => ({ get value() { return read(); }, \
-     set value(_) { throw new TypeError('Assignment to constant variable.'); } }) });\n";
+     set value(_) { throw new TypeError('Assignment to constant variable.'); } }) });\n\
+     Object.defineProperty(__modules, '#fields', { value: (data) => { const fields = []; \
+     for (let at = 0; at < data.length;) { const colon = data.indexOf(':', at); \
+     const end = colon + 1 + Number(data.slice(at, colon)); fields.push(data.slice(colon + 1, end)); at = end; } \
+     return fields; } });\n\
+     Object.defineProperty(__modules, '#register', { value: (places, data) => { const keys = __modules['#fields'](data); \
+     for (let i = 0; i < places.length; i++) __modules['#'][places[i]] = __modules[keys[i]] = {}; } });\n\
+     Object.defineProperty(__modules, '#reads', { value: (ns, data) => { const fields = __modules['#fields'](data); \
+     for (let i = 0; i < fields.length; i += 4) { const kind = fields[i + 1], read = fields[i + 3]; \
+     const at = kind[0] === '#' ? Number(fields[i + 2]) : fields[i + 2]; \
+     const get = kind[0] === '#' \
+     ? (kind[1] === '*' ? () => __modules['#'][at] : () => __modules['#'][at][read]) \
+     : (kind[1] === '*' ? () => __modules[at] : () => __modules[at][read]); \
+     Object.defineProperty(ns, fields[i], { enumerable: true, get }); } } });\n\
+     Object.defineProperty(__modules, '#run', { value: [] });\n";
+
+/// Appends `field` to a `'#fields'` string: its length in UTF-16 code units,
+/// as JavaScript counts it, a colon, then the field. No character needs
+/// escaping, so a field may hold any name or path.
+pub(crate) fn push_field(data: &mut String, field: &str) {
+    let _ = write!(data, "{}:{}", field.encode_utf16().count(), field);
+}
+
+/// What an export getter returns.
+pub(crate) enum Getter {
+    /// A binding the module declares, which only its own scope can read.
+    Local(String),
+    /// Export `name` of the module registered as `module`, or with no name
+    /// that module's export object.
+    Module { module: String, name: Option<String> },
+}
+
+/// A run of [`Getter::Module`] getters for one export object, as the data a
+/// `'#reads'` call takes: four fields each, the export name, a kind (`#` for
+/// a module named by its place in `__modules['#']`, `@` for one named by its
+/// key, then `.` to read an export or `*` for the export object), the module
+/// and the export it reads.
+#[derive(Default)]
+pub(crate) struct ModuleReads(String);
+
+impl ModuleReads {
+    pub fn push(&mut self, refs: &ModuleRefs, export: &str, module: &str, name: Option<&str>) {
+        let place = refs.get(module).map(|at| at.to_string());
+        let kind = match (&place, name) {
+            (Some(_), Some(_)) => "#.",
+            (Some(_), None) => "#*",
+            (None, Some(_)) => "@.",
+            (None, None) => "@*",
+        };
+        push_field(&mut self.0, export);
+        push_field(&mut self.0, kind);
+        push_field(&mut self.0, place.as_deref().unwrap_or(module));
+        push_field(&mut self.0, name.unwrap_or(""));
+    }
+
+    /// Writes the run as one `'#reads'` call on `exports`, an export object
+    /// expression, and starts a new run.
+    pub fn flush(&mut self, bundle: &mut String, exports: &str) {
+        if !self.0.is_empty() {
+            let _ = writeln!(bundle, "__modules['#reads']({exports}, '{}');", js_quoted(&self.0));
+            self.0.clear();
+        }
+    }
+}
 
 /// A name for the module's own binding of its default export that the
 /// module neither declares nor reads: a name it uses may not be taken.
@@ -146,6 +198,9 @@ pub(crate) struct LinkedModule {
     pub stars: Vec<String>,
     /// Each named or default import: its module and the name.
     pub imports: Vec<(String, String)>,
+    /// The module each import and re-export declaration names, in source
+    /// order: the edges evaluation order follows.
+    pub requests: Vec<String>,
     /// Statements that run at link time, before the export getters: an
     /// anonymous default function's name.
     pub link: String,
@@ -202,6 +257,17 @@ pub(crate) fn rewrite_module_for_linking(
         exports: Vec::new(),
         stars: Vec::new(),
         imports: Vec::new(),
+        requests: program
+            .body
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Statement::ImportDeclaration(decl) => Some(decl.source.value.as_str()),
+                Statement::ExportFromDeclaration(decl) => Some(decl.source.value.as_str()),
+                Statement::ExportAllDeclaration(decl) => Some(decl.source.value.as_str()),
+                _ => None,
+            })
+            .map(key)
+            .collect(),
         link: String::new(),
         body: String::new(),
         import_refs: Vec::new(),
@@ -457,7 +523,6 @@ pub(crate) struct Linker<'a> {
     /// Each TypeScript module's type-only export names, which its stripped
     /// record no longer holds.
     type_exports: &'a HashMap<String, HashSet<String>>,
-    refs: &'a ModuleRefs,
 }
 
 impl<'a> Linker<'a> {
@@ -465,7 +530,6 @@ impl<'a> Linker<'a> {
         modules: &HashMap<String, LinkedModule>,
         stubs: &'a HashMap<String, HashSet<String>>,
         type_exports: &'a HashMap<String, HashSet<String>>,
-        refs: &'a ModuleRefs,
     ) -> Self {
         use crate::module_table::{Import, ImportName, ModuleRecord, ModuleTable, Request};
         let mut keys: Vec<String> = modules.keys().cloned().collect();
@@ -515,7 +579,7 @@ impl<'a> Linker<'a> {
             record.requests = requests;
             records.push(record);
         }
-        Self { table: ModuleTable::new(records), keys, index, stubs, type_exports, refs }
+        Self { table: ModuleTable::new(records), keys, index, stubs, type_exports }
     }
 
     /// Export `name` of `module`, with each open star of a stub closed: the
@@ -551,10 +615,10 @@ impl<'a> Linker<'a> {
         }
     }
 
-    /// The expression that reads `terminal` directly: a module's own getter
-    /// for the binding (the export name it was asked for, when that name
-    /// reads it), a namespace's export object, or a stub's property.
-    fn read(&self, terminal: &crate::module_table::Terminal<String>, asked: &str) -> Option<String> {
+    /// What reads `terminal` directly: a module's own getter for the binding
+    /// (the export name it was asked for, when that name reads it), a
+    /// namespace's export object, or a stub's property.
+    fn read(&self, terminal: &crate::module_table::Terminal<String>, asked: &str) -> Option<Getter> {
         use crate::module_table::Terminal;
         match terminal {
             Terminal::Local { module, binding } => {
@@ -564,11 +628,10 @@ impl<'a> Linker<'a> {
                     .find(|(exported, local)| exported == asked && local == binding)
                     .or_else(|| exports.iter().find(|(_, local)| local == binding))
                     .map(|(exported, _)| exported)?;
-                Some(export_read(self.refs, &self.keys[*module], name))
+                Some(Getter::Module { module: self.keys[*module].clone(), name: Some(name.clone()) })
             }
-            Terminal::Namespace(module) => Some(module_ref(self.refs, &self.keys[*module])),
-            Terminal::External { module, export: Some(name) } => Some(export_read(self.refs, module, name)),
-            Terminal::External { module, export: None } => Some(module_ref(self.refs, module)),
+            Terminal::Namespace(module) => Some(Getter::Module { module: self.keys[*module].clone(), name: None }),
+            Terminal::External { module, export } => Some(Getter::Module { module: module.clone(), name: export.clone() }),
         }
     }
 
@@ -578,7 +641,7 @@ impl<'a> Linker<'a> {
     /// reads the binding it resolves to directly, never through another
     /// module's forwarding getter. An ambiguous name is left out, as Node
     /// leaves it out of the namespace.
-    pub fn getters(&self, module: &str) -> Vec<(String, String)> {
+    pub fn getters(&self, module: &str) -> Vec<(String, Getter)> {
         use crate::module_table::{ExportLookup, OpeningReason};
         let at = self.index[module];
         let record = self.table.record(at);
@@ -598,7 +661,7 @@ impl<'a> Linker<'a> {
         let mut getters = Vec::new();
         for name in names {
             if let Some((_, local)) = record.local_exports.iter().find(|(exported, _)| *exported == name) {
-                getters.push((name, local.clone()));
+                getters.push((name, Getter::Local(local.clone())));
             } else if let ExportLookup::Resolved(terminal) = self.resolve(at, &name) {
                 if let Some(read) = self.read(&terminal, &name) {
                     getters.push((name, read));

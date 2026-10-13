@@ -1057,17 +1057,20 @@ fn offsets_to_line_numbers(bundle: &str, offsets: Vec<(usize, String)>) -> Vec<(
 /// ```js
 /// globalThis.console = globalThis.console || ...;  // host shim
 /// const __modules = {};
+/// // the `linked::PRELUDE` helpers
 /// // __module__: __stub__/react
 /// (function(){ const __exports = {}; ... __modules['__stub__/react'] = __exports; })();
-/// __modules['/path/to/dep.js'] = {};  // every module, in evaluation order
-/// __modules['/path/to/mod.js'] = {};
+/// // every module's export object, in evaluation order, by its place among
+/// // the sorted paths and its key (length-prefixed fields)
+/// __modules['#register']([1,0], '15:/path/to/dep.js15:/path/to/mod.js');
 /// // __module__: /path/to/mod.js
-/// const __linked0 = (function*(){ const __exports = __modules['/path/to/mod.js'];
-/// Object.defineProperty(__exports, 'name', { enumerable: true, get: () => name });
+/// __modules['#run'][0] = (function*(){
+/// Object.defineProperty(__modules['#'][0], 'name', { enumerable: true, get: () => name });
+/// __modules['#reads'](__modules['#'][0], '...');  // getters reading other modules
 /// yield;
 /// ... })();
-/// __linked0.next();
-/// __linked1.next();  // each module's body, in evaluation order
+/// __modules['#run'][0].next();
+/// __modules['#run'][1].next();  // each module's body, in evaluation order
 /// ```
 /// Every module's export object exists first, so the content scans that walk
 /// `__modules` meet modules in the order they ran. Each module then runs to
@@ -1114,7 +1117,6 @@ fn build_bundle(
         bundle.push_str("})();\n\n");
     }
 
-    let order = linked::evaluation_order(specifier_map, source_map, entry_path);
     let mut paths: Vec<&String> = source_map.keys().collect();
     paths.sort();
     let refs: linked::ModuleRefs = paths.iter().enumerate().map(|(at, path)| ((*path).clone(), at)).collect();
@@ -1125,21 +1127,23 @@ fn build_bundle(
     }
     // An import or re-export that links to nothing fails here, before any
     // module runs.
-    let linker = linked::Linker::new(&modules, stub_exports, type_exports, &refs);
+    let linker = linked::Linker::new(&modules, stub_exports, type_exports);
     for path in &paths {
         linker.check_links(path)?;
     }
-    let generators: HashMap<&str, String> =
-        paths.iter().enumerate().map(|(index, path)| (path.as_str(), format!("__linked{index}"))).collect();
-    let generator = |module: &str| &generators[module];
+    let order = linked::evaluation_order(&modules, entry_path);
+    let generator = |module: &str| format!("__modules['#run'][{}]", refs[module]);
 
     // The global-style and theme scans walk `__modules` in this order. Each
     // module object is also listed, by its place among the sorted paths, in
     // `__modules['#']`, which no scan enumerates.
     bundle.push_str("Object.defineProperty(__modules, '#', { value: [] });\n");
+    let mut keys = String::new();
     for path in &order {
-        let _ = writeln!(bundle, "__modules['#'][{}] = __modules['{}'] = {{}};", refs[path], js_quoted(path));
+        linked::push_field(&mut keys, path);
     }
+    let places: Vec<String> = order.iter().map(|path| refs[path].to_string()).collect();
+    let _ = writeln!(bundle, "__modules['#register']([{}], '{}');", places.join(","), js_quoted(&keys));
     bundle.push('\n');
     let mut module_spans = Vec::with_capacity(paths.len());
     let mut import_refs = Vec::new();
@@ -1149,21 +1153,30 @@ fn build_bundle(
         let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, path);
         let _ = writeln!(
             bundle,
-            "const {} = (function*(){{",
+            "{} = (function*(){{",
             generator(path),
         );
         bundle.push_str(&module.link);
         // The module's own scope declares nothing the loader adds, so any
-        // name but `__modules` is the module's to declare.
-        for (name, read) in linker.getters(path) {
-            let _ = writeln!(
-                bundle,
-                "Object.defineProperty({}, '{}', {{ enumerable: true, get: () => {} }});",
-                linked::module_ref(&refs, path),
-                js_quoted(&name),
-                read
-            );
+        // name but `__modules` is the module's to declare. Getters are
+        // defined in the namespace's order; a run of those that read another
+        // module is written as data.
+        let exports = linked::module_ref(&refs, path);
+        let mut reads = linked::ModuleReads::default();
+        for (name, getter) in linker.getters(path) {
+            match getter {
+                linked::Getter::Local(binding) => {
+                    reads.flush(&mut bundle, &exports);
+                    let _ = writeln!(
+                        bundle,
+                        "Object.defineProperty({exports}, '{}', {{ enumerable: true, get: () => {binding} }});",
+                        js_quoted(&name),
+                    );
+                }
+                linked::Getter::Module { module, name: read } => reads.push(&refs, &name, &module, read.as_deref()),
+            }
         }
+        reads.flush(&mut bundle, &exports);
         bundle.push_str("yield;\n");
         let start = bundle.len();
         bundle.push_str(&module.body);
