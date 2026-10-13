@@ -12,7 +12,6 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import { contentHash } from '../pipeline/content-hash';
-import { preprocessMdx } from '../pipeline/mdx-preprocessor';
 import { ingestSourceEntries } from '../pipeline/source-ingestion';
 import { adaptSvelteSource } from '../pipeline/svelte-source-adapter';
 import {
@@ -39,6 +38,53 @@ function resolverFacts(
 }
 
 describe('ingestSourceEntries', () => {
+  // Contract: MDX is analyzed for the components it renders only; any
+  // reference to the Animus builder in it, wherever it is written, is a
+  // fatal diagnostic, so strict builds fail on it. The native facts find
+  // the references (facts.rs pins which).
+  test('reports the builder references the native facts find in MDX', async () => {
+    const result = await ingestSourceEntries(
+      [{ path: 'src/doc.mdx', source: 'const s = ds.styles;\n\n<Box />' }],
+      {
+        extractFacts: factsExtractor({
+          'src/doc.mdx.tsx': {
+            ...emptyFacts('src/doc.mdx.tsx'),
+            builderReferences: [{ line: 1, column: 14, name: 'styles' }],
+          },
+        }),
+      }
+    );
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'SOURCE_MDX_STYLE_DECLARATION',
+        originalPath: 'src/doc.mdx',
+        message: expect.stringContaining('line 1: styles'),
+      }),
+    ]);
+  });
+
+  test('reports an MDX chain the native facts find', async () => {
+    const result = await ingestSourceEntries(
+      [
+        {
+          path: 'src/doc.mdx',
+          source: 'export const Box = make();\n\n<Box />',
+        },
+      ],
+      {
+        extractFacts: factsExtractor({
+          'src/doc.mdx.tsx': resolverFacts('src/doc.mdx.tsx', 'Box'),
+        }),
+      }
+    );
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'SOURCE_MDX_STYLE_DECLARATION',
+        message: expect.stringContaining('(Box)'),
+      }),
+    ]);
+  });
+
   test('preserves native and MDX original identity separately from parser entries', async () => {
     const mdxSource = `import { Badge } from './definition';\n\n<Badge tone="quiet" />`;
     const rawEntries = [
@@ -53,7 +99,6 @@ describe('ingestSourceEntries', () => {
 
     const result = await ingestSourceEntries(rawEntries, {
       extractFacts: factsExtractor({}, calls),
-      preprocessMdx,
       adaptSvelte: async (...args) => {
         svelteAdaptCount += 1;
         return adaptSvelteSource(...args);

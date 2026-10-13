@@ -96,6 +96,21 @@ supplies either `cspHash` or a per-request nonce. Worked App Router and Pages
 Router examples live in the
 [`@animus-ui/next-plugin` README](https://github.com/codecaaron/animus/tree/main/packages/next-plugin#appearance-bootstrap-no-fouc-color-mode).
 
+## MDX
+
+Animus reads each `.mdx` file as the JSX it renders: its imports, exports,
+tags, props and `{expressions}`. It needs no MDX compiler. A component a tag
+names, or one your provider maps markdown to (`# x` → your heading), counts
+as rendered. Markdown and code examples render nothing.
+
+MDX renders components; it declares no styles. Animus reports any reference
+to its builder in an `.mdx` file as `SOURCE_MDX_STYLE_DECLARATION`, and a
+strict build fails on it. That covers any import from `@animus-ui/system`,
+and any member named like a builder method (`styles`, `variant`,
+`compound`, `states`, `system`, `props`, `extend`, `asElement`,
+`asComponent`, `asClass`), read, called or destructured. So `{Box.styles}`
+is reported too. Declare components in `.ts` or `.tsx` files and import them.
+
 ## Important
 
 - Do **not** add React resolve aliases to `vite.config.ts` — they break the extraction transform pipeline

@@ -4,7 +4,7 @@ import { contentHash } from './content-hash';
 import { policyCandidates } from './extension-policy';
 import { parseInternalWire } from './internal-wire';
 import { SKIPPED_SOURCE_COST } from './manifest-diagnostics';
-import { preprocessMdx, type PreprocessMdxResult } from './mdx-preprocessor';
+import { mdxUsageSource, type MdxUsageSourceResult } from './mdx-preprocessor';
 import { adaptedOriginals, hostCandidate } from './probe-evidence';
 import {
   adaptSvelteSource,
@@ -125,6 +125,9 @@ export interface ExtractFileFacts {
   /** 1-based `[line, column]` of each `createSystem(…)` call no binding
    *  resolves; absent when there is none. */
   unboundCreateSystemCalls?: Array<[number, number]>;
+  /** In MDX's TSX view, each reference to the Animus builder; absent when
+   *  there is none. */
+  builderReferences?: Array<{ line: number; column: number; name: string }>;
 }
 
 export interface ExtractFactsResult {
@@ -151,8 +154,8 @@ export function isAdvisorySourceDiagnostic(
 
 export interface SourceParserDiagnostic {
   code:
-    | 'SOURCE_MDX_DEPENDENCY_MISSING'
     | 'SOURCE_MDX_PARSE_ERROR'
+    | 'SOURCE_MDX_STYLE_DECLARATION'
     | 'SOURCE_SVELTE_DEPENDENCY_MISSING';
   message: string;
   originalPath: string;
@@ -224,16 +227,20 @@ export interface CachedFileFacts {
   facts: ExtractFileFacts;
 }
 
+export interface CachedMdxSource {
+  hash: string;
+  result: MdxUsageSourceResult;
+}
+
 export interface SourceIngestionOptions {
   extractFacts(filesJson: string): string;
   /** Host-owned memo reused across passes; without it every pass re-parses
    *  the whole corpus through the native boundary. */
   factsCache?: Map<string, CachedFileFacts>;
-  /** Test seams; production callers use the module defaults. */
-  preprocessMdx?: (
-    source: string,
-    filename: string
-  ) => Promise<PreprocessMdxResult>;
+  /** Host-owned memo of each MDX original's adaptation, by path, reused
+   *  while its bytes are unchanged. */
+  mdxCache?: Map<string, CachedMdxSource>;
+  /** Test seam; production callers use the module default. */
   adaptSvelte?: typeof adaptSvelteSource;
   /** The host's extension order (spec §2.2 A2), through which a Svelte
    *  resolver's relative import is attributed; the built-in policy
@@ -519,7 +526,6 @@ export async function ingestSourceEntries(
   rawEntries: readonly RawSourceEntry[],
   options: SourceIngestionOptions
 ): Promise<SourceIngestionResult> {
-  const mdxAdapter = options.preprocessMdx ?? preprocessMdx;
   const svelteAdapter = options.adaptSvelte ?? adaptSvelteSource;
   const originalEntries = rawEntries.map((entry) => ({
     ...entry,
@@ -592,20 +598,16 @@ export async function ingestSourceEntries(
       continue;
     }
 
-    const result = await mdxAdapter(original.source, original.path);
-    if (result.kind === 'missing-dep') {
-      diagnostics.push({
-        code: 'SOURCE_MDX_DEPENDENCY_MISSING',
-        message:
-          "Install optional peer dependency '@mdx-js/mdx' to analyze opted-in MDX source.",
-        originalPath: original.path,
-      });
-      continue;
-    }
-    if (result.kind === 'error' || result.source === undefined) {
+    const cached = options.mdxCache?.get(original.path);
+    const result =
+      cached?.hash === original.hash
+        ? cached.result
+        : mdxUsageSource(original.source, original.path);
+    options.mdxCache?.set(original.path, { hash: original.hash, result });
+    if (result.kind === 'error') {
       diagnostics.push({
         code: 'SOURCE_MDX_PARSE_ERROR',
-        message: result.error ?? 'MDX preprocessing produced no source.',
+        message: result.error,
         originalPath: original.path,
       });
       continue;
@@ -615,10 +617,31 @@ export async function ingestSourceEntries(
     ]);
   }
 
+  // A deleted original's adaptation goes with it.
+  for (const path of options.mdxCache?.keys() ?? []) {
+    if (!rawOriginalPaths.has(path)) options.mdxCache!.delete(path);
+  }
+
   const facts = collectFileFacts(analysisEntries, options);
   const abortedParses: AbortedParse[] = [];
   for (const [analysisPath, file] of Object.entries(facts.files)) {
     const originalPath = analysisOwner.get(analysisPath) ?? analysisPath;
+    // MDX is read for the components it renders: a style it declares,
+    // wherever and however it is written, has no route to the stylesheet.
+    const references = file.builderReferences ?? [];
+    if (
+      extension(originalPath) === '.mdx' &&
+      (references.length > 0 || file.chains.length > 0)
+    ) {
+      const named = references.length
+        ? references.map(({ line, name }) => `line ${line}: ${name}`)
+        : file.chains.map((chain) => chain.descriptor.binding);
+      diagnostics.push({
+        code: 'SOURCE_MDX_STYLE_DECLARATION',
+        message: `references the Animus builder (${named.join('; ')}); MDX is analyzed for the components it renders only. Move the declaration to a .ts or .tsx file and import it.`,
+        originalPath,
+      });
+    }
     for (const message of file.parseDiagnostics) {
       diagnostics.push({
         code: 'SOURCE_NATIVE_PARSE_ERROR',
@@ -840,6 +863,7 @@ export interface SourceIngestor {
  */
 export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
   const factsCache = new Map<string, CachedFileFacts>();
+  const mdxCache = new Map<string, CachedMdxSource>();
   /** Non-strict dedupe: a quarantined original re-ingests on every later
    *  corpus pass, so re-warning it on each save is noise. */
   const warnedByOriginal = new Map<string, Set<string>>();
@@ -857,6 +881,7 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
       return ingestSourceEntries(entries, {
         extractFacts: extractFacts(),
         factsCache,
+        mdxCache,
         extensions: host.extensions?.(),
         rootDir: host.rootDir?.(),
       });

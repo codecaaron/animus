@@ -608,6 +608,10 @@ pub struct FileFacts {
     /// resolves: a system file's root that can only fail where it loads.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unbound_create_system_calls: Vec<(usize, usize)>,
+    /// In MDX's TSX view, every reference to the Animus builder: MDX is
+    /// analyzed for the components it renders, and declares no styles.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub builder_references: Vec<crate::usage_facts::BuilderReference>,
     /// The parser stopped at an unrecoverable error and yielded no chains,
     /// imports or exports: these facts describe nothing of the file.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -1093,6 +1097,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         captured_transform_bindings: BTreeSet::new(),
         parse_diagnostics: ast.diagnostics.clone(),
         unbound_create_system_calls: Vec::new(),
+        builder_references: Vec::new(),
         parse_panicked: ast.panicked,
     }
 }
@@ -1763,6 +1768,18 @@ pub(crate) fn extract_file_facts_from_static_maps(
             .into_iter()
             .map(|span| line_column(source, span.start))
             .collect(),
+        // Only MDX is read for usage alone; elsewhere the builder is the point.
+        builder_references: if ast.path.ends_with(".mdx.tsx") {
+            crate::usage_facts::builder_references(program)
+                .into_iter()
+                .map(|(span, name)| {
+                    let (line, column) = line_column(source, span.start);
+                    crate::usage_facts::BuilderReference { line, column, name }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
         ..structural
     }
 }
@@ -1778,6 +1795,48 @@ mod tests {
         let facts = extract_file_facts(&ast);
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
         facts
+    }
+
+    #[test]
+    fn records_every_builder_reference_in_mdx_and_none_in_strings() {
+        let references = |source: &str| {
+            let counter = ParseCounter::new(0);
+            let ast = OwnedAst::parse("doc.mdx.tsx".into(), source.into(), &counter);
+            extract_file_facts(&ast).builder_references.into_iter().map(|r| r.name).collect::<Vec<_>>()
+        };
+        // Wherever and however a builder method or style-declaring import
+        // is named, it is recorded.
+        for (source, expected) in [
+            ("export const Hidden = () => { const Box = ns.ds.styles({}).asElement('div'); return <Box />; };", vec!["styles", "asElement"]),
+            ("const el = <Panel render={() => ds.styles({})} />;", vec!["styles"]),
+            ("const s = ds.styles; s({});", vec!["styles"]),
+            ("ds['styles']({});", vec!["styles"]),
+            ("ds.styles?.({});", vec!["styles"]),
+            ("ds.styles`x`;", vec!["styles"]),
+            ("const el = <div>{ds.variant({})}</div>;", vec!["variant"]),
+            ("import { createSystem as makeSystem } from '@animus-ui/system';", vec!["import from @animus-ui/system"]),
+            ("import * as animus from '@animus-ui/system';\nanimus.createGlobalStyles({});", vec!["import from @animus-ui/system"]),
+            ("import animus from '@animus-ui/system/groups';", vec!["import from @animus-ui/system/groups"]),
+            ("const { styles: s } = ds;\ns({});", vec!["styles"]),
+            ("const { styles } = ds;", vec!["styles"]),
+            ("let s;\n({ styles: s } = ds);", vec!["styles"]),
+            ("ds\n  .styles({})\n  .asClass();", vec!["styles", "asClass"]),
+        ] {
+            assert_eq!(references(source), expected, "{source}");
+        }
+        // Text that only spells one is no reference.
+        for source in [
+            "export const example = \"ds.styles({})\";",
+            "const el = <Panel title=\"ds.styles({})\" />;",
+            "const el = <>{\"ds.styles({})\"}</>;",
+            "const el = <>{`ds.styles({})`}</>;",
+        ] {
+            assert!(references(source).is_empty(), "{source}");
+        }
+        // Outside MDX's view nothing is recorded.
+        let counter = ParseCounter::new(0);
+        let ast = OwnedAst::parse("a.tsx".into(), "ds.styles({});".into(), &counter);
+        assert!(extract_file_facts(&ast).builder_references.is_empty());
     }
 
     #[test]

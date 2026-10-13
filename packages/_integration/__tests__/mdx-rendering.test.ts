@@ -1,4 +1,4 @@
-import { preprocessMdx } from '@animus-ui/extract/pipeline';
+import { mdxUsageSource } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -27,7 +27,7 @@ describe('MDX-only-rendered component extraction', () => {
   test('[Regression guard — MDX-only rendering extracts in prod mode]', async () => {
     // The `.tsx` suffix below is load-bearing: source type comes from the
     // path extension, and a bare `.mdx` path is never scanned.
-    const result = await preprocessMdx(mdxSource, mdxRelPath);
+    const result = mdxUsageSource(mdxSource, mdxRelPath);
     expect(result.kind).toBe('ok');
     const mdxEntry = {
       path: mdxRelPath + '.tsx',

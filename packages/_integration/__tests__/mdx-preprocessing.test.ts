@@ -1,74 +1,84 @@
-import { DEFAULT_EXTENSIONS, preprocessMdx } from '@animus-ui/extract/pipeline';
+import {
+  DEFAULT_EXTENSIONS,
+  mdxUsageSource,
+} from '@animus-ui/extract/pipeline';
 import { describe, expect, test } from 'vitest';
 
 /**
- * The extract package has no vitest target, so unit coverage of its MDX
- * preprocessor lives in this tier.
+ * Contract: an MDX file is read, with no MDX compiler, as the TSX it
+ * renders. Its imports, exports, JSX tags and expressions keep their line
+ * and column; markdown, code and frontmatter are blanked, so a tag in code
+ * renders nothing. A tag the file does not import comes from the provider's
+ * components, and markdown syntax renders the provider's element components
+ * with no props of their own. MDX the host would reject is an error.
  */
+describe('mdxUsageSource', () => {
+  const doc = [
+    "import { Box } from './Box';",
+    '',
+    '# Title {meta.x}',
+    '',
+    'Some *text*, `<Box size="code" />` and <Box size="lg">**md**</Box>.',
+    '',
+    '```tsx',
+    '<Box size="fence" />',
+    '```',
+    '',
+    '- ```jsx',
+    '  <Box size="listed" />',
+    '  ```',
+    '',
+    '<Callout',
+    "  tone={'warn'}",
+    '>',
+    '  - item <Badge />',
+    '</Callout>',
+  ].join('\n');
 
-const MDX_WITH_COMPONENT = '# Hello\n\n<Box color="primary">hi there</Box>\n';
-
-describe('preprocessMdx — successful compile (kind: "ok")', () => {
-  test('compiles MDX-with-JSX to a JSX source string', async () => {
-    const result = await preprocessMdx(MDX_WITH_COMPONENT, 'usage.mdx');
-    expect(result.kind).toBe('ok');
-    expect(result.source).toEqual(expect.any(String));
-    expect((result.source ?? '').length).toBeGreaterThan(0);
-    expect(result.error).toBeUndefined();
+  test('keeps what the file renders at its own line and column', () => {
+    const { kind, source } = mdxUsageSource(doc, 'doc.mdx');
+    expect(kind).toBe('ok');
+    const lines = source!.split('\n');
+    const original = doc.split('\n');
+    expect(lines[0]).toBe(original[0]);
+    // The region's wrapper opens on the blank line after the imports.
+    for (const kept of [
+      '{meta.x}',
+      '<Box size="lg">',
+      '</Box>',
+      "tone={'warn'}",
+      '<Badge />',
+    ]) {
+      const row = original.findIndex((line) => line.includes(kept));
+      expect(lines[row]!.indexOf(kept)).toBe(original[row]!.indexOf(kept));
+    }
+    expect(source).not.toContain('size="code"');
+    expect(source).not.toContain('size="fence"');
+    expect(source).not.toContain('size="listed"');
+    expect(source).not.toContain('text');
   });
 
-  test('prepends the "@mdx-source" provenance comment with the filename', async () => {
-    const result = await preprocessMdx(MDX_WITH_COMPONENT, 'dir/deep/page.mdx');
-    expect(result.source).toMatch(
-      /^\/\* @mdx-source: dir\/deep\/page\.mdx \*\//
-    );
+  test('takes unimported tags from the provider and renders markdown through it', () => {
+    const { source } = mdxUsageSource(doc, 'doc.mdx');
+    expect(source).toContain('{ Callout, Badge } = _components');
+    expect(source).toContain('<_components.h1 />');
+    expect(source).toContain('<_components.li />');
+    expect(source).toMatch(/export default function MDXContent/);
+    expect(source).toContain('/* @mdx-source: doc.mdx */');
   });
 
-  test('emits an MDXContent component and keeps JSX (outputFormat "program", jsx: true)', async () => {
-    const result = await preprocessMdx(MDX_WITH_COMPONENT, 'usage.mdx');
-    expect(result.source).toContain('MDXContent');
-    expect(result.source).toContain('Box');
-  });
-
-  test('plain markdown (no JSX) also compiles to "ok"', async () => {
-    const result = await preprocessMdx(
-      '# Title\n\nSome **bold** copy.',
-      'md.mdx'
-    );
-    expect(result.kind).toBe('ok');
-    expect(result.source).toEqual(expect.any(String));
-  });
-
-  test('there is NO non-mdx passthrough: plain prose still runs through the compiler', async () => {
-    const result = await preprocessMdx('just some plain prose', 'plain.mdx');
-    expect(result.kind).toBe('ok');
-    expect(result.source).not.toBe('just some plain prose');
-    expect(result.source).toContain('MDXContent');
-  });
-});
-
-describe('preprocessMdx — compile failure (kind: "error")', () => {
   test.each([
-    ['unclosed JSX tag', '# X\n\n<Unclosed>\n'],
-    ['unterminated expression brace', '{'],
-    ['unparseable expression', '{ 1 + }'],
-  ])('%s -> { kind: "error", error: <message> }', async (_label, source) => {
-    const result = await preprocessMdx(source, 'broken.mdx');
+    ['unclosed element', '# X\n\n<Unclosed>\n'],
+    ['unterminated expression', '{'],
+    ['mismatched closing tag', '<A></B>'],
+  ])('%s is an error', (_label, source) => {
+    const result = mdxUsageSource(source, 'broken.mdx');
     expect(result.kind).toBe('error');
     expect(result.error).toEqual(expect.any(String));
-    expect((result.error ?? '').length).toBeGreaterThan(0);
     expect(result.source).toBeUndefined();
   });
-});
 
-describe('preprocessMdx — result shape contract (PreprocessMdxResult)', () => {
-  /** Reaching `missing-dep` needs `import('@mdx-js/mdx')` to reject; the
-   *  specifier is hardcoded and the package is installed in-repo. */
-  test.todo('returns { kind: "missing-dep" } when @mdx-js/mdx is unresolvable');
-});
-
-describe('DEFAULT_EXTENSIONS (shared source of truth)', () => {
-  test('is the frozen tuple of scanner extensions including .mdx', () => {
+  test('the default extensions include .mdx', () => {
     expect(DEFAULT_EXTENSIONS).toEqual(['.ts', '.tsx', '.js', '.jsx', '.mdx']);
   });
 });

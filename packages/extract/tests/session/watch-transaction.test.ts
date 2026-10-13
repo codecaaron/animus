@@ -57,8 +57,8 @@ async function startOwner(root: string): Promise<ExtractionSession> {
   return session;
 }
 
-/** A batch whose first entry is an `.mdx` file: the transaction suspends at
- *  the async preprocessing seam, so a concurrent entry really races it. */
+/** A batch of an `.mdx` file and a component: the transaction suspends
+ *  while it ingests them, so a concurrent entry really races it. */
 function makeSuspendingBatch(root: string): Set<string> {
   const mdxPath = join(root, 'src', 'note.mdx');
   writeFileSync(mdxPath, '# note\n');

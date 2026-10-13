@@ -1,8 +1,8 @@
 {
-  "corpusSha256": "86e0aa051e1a343741afe4b607194960dec59ed10e3fd31c34d33d031abd904f",
+  "corpusSha256": "98175374fca3e9c8f6e77aecaf85cca380275a25042d7908a3607e3bf84ca821",
   "engine": "v2",
   "mode": "development",
-  "refreshIntent": "extension-cycles-report-20261010",
+  "refreshIntent": "mdx-usage-without-compiler-20261013",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -611,7 +611,7 @@
     "integration/mdx-rendering": {
       "code": {
         "component.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\nimport { ds } from '../../setup';\n\nexport const MdxRenderedBox = createComponent('div', 'animus-MdxRenderedBox-df3bddbe', {});\n\n",
-        "usage.mdx.tsx": "/* @mdx-source: usage.mdx */\n/*@jsxRuntime automatic*/\n/*@jsxImportSource react*/\nfunction _createMdxContent(props) {\n  const _components = {\n    code: \"code\",\n    h1: \"h1\",\n    p: \"p\",\n    ...props.components\n  }, {MdxRenderedBox} = _components;\n  if (!MdxRenderedBox) _missingMdxReference(\"MdxRenderedBox\", true);\n  return <><_components.h1>{\"MDX Usage Fixture\"}</_components.h1>{\"\\n\"}<_components.p>{\"This file renders \"}<_components.code>{\"<MdxRenderedBox>\"}</_components.code>{\" from \"}<_components.code>{\".mdx\"}</_components.code>{\" only — no \"}<_components.code>{\".tsx\"}</_components.code>{\"/\"}<_components.code>{\".jsx\"}</_components.code>{\" callsite.\"}</_components.p>{\"\\n\"}<MdxRenderedBox>{\"Hello from MDX\"}</MdxRenderedBox></>;\n}\nexport default function MDXContent(props = {}) {\n  const {wrapper: MDXLayout} = props.components || ({});\n  return MDXLayout ? <MDXLayout {...props}><_createMdxContent {...props} /></MDXLayout> : _createMdxContent(props);\n}\nfunction _missingMdxReference(id, component) {\n  throw new Error(\"Expected \" + (component ? \"component\" : \"object\") + \" `\" + id + \"` to be defined: you likely forgot to import, pass, or provide it.\");\n}\n"
+        "usage.mdx.tsx": "function _MDXContent0(props) { const _components = { h1: \"h1\", p: \"p\", code: \"code\", ...props.components }, { MdxRenderedBox } = _components; return <>                   \n\n                                                                                  \n\n<MdxRenderedBox>              </MdxRenderedBox>\n<_components.h1 /><_components.p /><_components.code /></>; }\nexport default function MDXContent(props = {}) { const { wrapper: MDXLayout } = props.components || {}; return MDXLayout ? <MDXLayout {...props}><_MDXContent0 {...props} /></MDXLayout> : <><_MDXContent0 {...props} /></>; }\n/* @mdx-source: usage.mdx */\n"
       },
       "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-MdxRenderedBox-df3bddbe {\n    background-color: var(--color-primary);\n    --current-bg: var(--color-primary);\n    padding: 16;\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
       "diagnostics": [],

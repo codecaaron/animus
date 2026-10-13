@@ -105,8 +105,9 @@ pub enum TagOrigin {
     TopLevel,
     /// A parameter, or a binding inside a function or block.
     Nested,
-    /// A binding compiled MDX destructures from the components a provider
-    /// supplies (`const { Card } = _components`): matched by name, as a
+    /// A binding MDX's usage source (`mdxUsageSource`, which mirrors compiled
+    /// MDX) destructures from the components a provider supplies
+    /// (`const { Card } = _components`): matched by name, as a
     /// provider-scope component is.
     Provided,
     /// No binding in the file: a global, or nothing.
@@ -6992,8 +6993,8 @@ fn resolve_tag<'m>(
     }
 }
 
-/// The bindings compiled MDX destructures from its provider's components:
-/// `const { Card } = _components`.
+/// The bindings MDX's usage source (`mdxUsageSource`) destructures from its
+/// provider's components: `const { Card } = _components`.
 fn provided_components(program: &Program<'_>) -> FxHashSet<SymbolId> {
     struct Provided(FxHashSet<SymbolId>);
     impl<'a> Visit<'a> for Provided {
@@ -7603,6 +7604,94 @@ pub fn filter_usage_scan(
     }
 
     result
+}
+
+/// The Animus builder's methods and terminals.
+const BUILDER_METHODS: [&str; 10] =
+    ["styles", "variant", "compound", "states", "system", "props", "extend", "asElement", "asComponent", "asClass"];
+
+/// The package whose builder declares styles.
+const SYSTEM_PACKAGE: &str = "@animus-ui/system";
+
+/// A reference to the Animus builder in a file analyzed for usage only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BuilderReference {
+    /// 1-based position of the member or import.
+    pub line: usize,
+    pub column: usize,
+    /// The builder method, or the import.
+    pub name: String,
+}
+
+/// Every reference to the Animus builder `program` makes: a member whose
+/// property is a builder method, read, called or destructured, static or
+/// through a literal key, and any import from `@animus-ui/system`.
+/// Strings, templates and comments hold none. A key built at runtime
+/// (`ds['sty' + 'les']`) is not seen.
+pub(crate) fn builder_references(program: &Program<'_>) -> Vec<(Span, String)> {
+    struct References(Vec<(Span, String)>);
+    impl<'a> Visit<'a> for References {
+        fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
+            if BUILDER_METHODS.contains(&member.property.name.as_str()) {
+                self.0.push((member.property.span, member.property.name.to_string()));
+            }
+            oxc::ast_visit::walk::walk_static_member_expression(self, member);
+        }
+        fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
+            let key = match &member.expression {
+                Expression::StringLiteral(key) => Some(key.value.as_str()),
+                Expression::TemplateLiteral(key) if key.expressions.is_empty() => {
+                    key.quasis.first().and_then(|quasi| quasi.value.cooked.as_ref()).map(|cooked| cooked.as_str())
+                }
+                _ => None,
+            };
+            if let Some(key) = key.filter(|key| BUILDER_METHODS.contains(key)) {
+                self.0.push((member.expression.span(), key.to_string()));
+            }
+            oxc::ast_visit::walk::walk_computed_member_expression(self, member);
+        }
+        // MDX has no use for the system package: any import of it, named,
+        // default or namespace, reaches the builder's style declarations.
+        fn visit_import_declaration(&mut self, import: &oxc::ast::ast::ImportDeclaration<'a>) {
+            let source = import.source.value.as_str();
+            if source == SYSTEM_PACKAGE || source.strip_prefix(SYSTEM_PACKAGE).is_some_and(|rest| rest.starts_with('/')) {
+                self.0.push((import.span, format!("import from {source}")));
+            }
+        }
+        // A builder method destructured, as `const { styles: s } = ds`.
+        fn visit_binding_property(&mut self, property: &oxc::ast::ast::BindingProperty<'a>) {
+            self.method_key(&property.key);
+            oxc::ast_visit::walk::walk_binding_property(self, property);
+        }
+        fn visit_assignment_target_property_property(
+            &mut self,
+            property: &oxc::ast::ast::AssignmentTargetPropertyProperty<'a>,
+        ) {
+            self.method_key(&property.name);
+            oxc::ast_visit::walk::walk_assignment_target_property_property(self, property);
+        }
+        fn visit_assignment_target_property_identifier(
+            &mut self,
+            property: &oxc::ast::ast::AssignmentTargetPropertyIdentifier<'a>,
+        ) {
+            if BUILDER_METHODS.contains(&property.binding.name.as_str()) {
+                self.0.push((property.binding.span, property.binding.name.to_string()));
+            }
+            oxc::ast_visit::walk::walk_assignment_target_property_identifier(self, property);
+        }
+    }
+    impl References {
+        fn method_key(&mut self, key: &oxc::ast::ast::PropertyKey<'_>) {
+            if let Some(name) = key.static_name().filter(|name| BUILDER_METHODS.contains(&name.as_ref())) {
+                self.0.push((key.span(), name.to_string()));
+            }
+        }
+    }
+    let mut references = References(Vec::new());
+    references.visit_program(program);
+    // The walk meets an outer member before the chain inside it.
+    references.0.sort_by_key(|(span, _)| span.start);
+    references.0
 }
 
 /// Each `createSystem(…)` call whose callee no import, declaration or
