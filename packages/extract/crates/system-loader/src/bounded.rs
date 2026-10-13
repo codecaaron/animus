@@ -1333,8 +1333,11 @@ impl<'c> Loader<'c> {
             if declares || pnpm_declares {
                 return Some(resolution::real_path(dir));
             }
+            // The repository boundary, a directory or a worktree's file: its
+            // removal moves the boundary, so it is read evidence too.
             let git = dir.join(".git");
             if git.exists() {
+                self.reads.read.insert(git.to_string_lossy().to_string());
                 return None;
             }
             self.reads.missing.insert(git.to_string_lossy().to_string());
@@ -2377,6 +2380,49 @@ mod tests {
                 let declaring = dir.join(watched).to_string_lossy().to_string();
                 assert!(config.dependencies.contains(&declaring), "{label}: {declaring} in {:?}", config.dependencies);
             }
+        }
+    }
+
+    /// Contract: the repository boundary that stops the monorepo walk is
+    /// watched, whether `.git` is a directory or a worktree's file: removing
+    /// it lets an enclosing monorepo claim the code, so the load that
+    /// depended on it reloads and then reports what that root owns.
+    #[test]
+    fn the_repository_boundary_is_watched() {
+        for (label, boundary) in [("directory", "child/.git/HEAD"), ("worktree-file", "child/.git")] {
+            let dir = project(
+                &format!("git-boundary-{label}"),
+                &[
+                    ("package.json", "{\"name\":\"parent\",\"workspaces\":[\"**\"]}"),
+                    (boundary, "gitdir: ../.git/worktrees/child\n"),
+                    ("child/package.json", "{\"name\":\"child\",\"type\":\"module\"}"),
+                    ("child/system.ts", "import { holder } from './lib/src/index.ts';\nexport { theme } from './lib/src/index.ts';\nexport const ds = holder.bundle.seal();\n"),
+                    ("child/lib/package.json", "{\"name\":\"lib\",\"type\":\"module\"}"),
+                    ("child/lib/src/index.ts", "export * from './state';\nimport './side';\n"),
+                    ("child/lib/src/state.ts", STATE),
+                    (
+                        "child/lib/src/side.ts",
+                        "import { holder } from './state';\nholder.bundle = holder.bundle.registerGlobalStyles({ rogue: holder.bundle.createGlobalStyles({}) });\n",
+                    ),
+                ],
+            );
+            let child = dir.join("child");
+            let load = || {
+                load_system_module(&child.join("system.ts").to_string_lossy(), &child.to_string_lossy(), None, &ResolutionContext::default())
+                    .unwrap_or_else(|error| panic!("{label}: the system loads: {error}"))
+            };
+            let git = child.join(".git");
+            let bounded = load();
+            assert_eq!(findings(&bounded), [], "{label}");
+            assert!(bounded.dependencies.contains(&git.to_string_lossy().to_string()), "{label}: {:?}", bounded.dependencies);
+            if git.is_dir() {
+                fs::remove_dir_all(&git).expect("remove the boundary");
+            } else {
+                fs::remove_file(&git).expect("remove the boundary");
+            }
+            let unbounded = load();
+            let _ = fs::remove_dir_all(&dir);
+            assert_eq!(findings(&unbounded), [(crate::REGISTRATION_UNREACHED.to_string(), "side.ts".to_string(), 2)], "{label}");
         }
     }
 
