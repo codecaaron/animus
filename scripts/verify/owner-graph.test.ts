@@ -277,7 +277,10 @@ describe('root verification graph', () => {
     const tasks = rootTasks();
     const unitCommand = tasks['verify:unit:ts']?.command;
     const coverageCommand = tasks['verify:coverage:ts']?.command;
-    const unitRunner = 'bunx vp test run ';
+    // Both need a fresh native engine, which the targets probe files through.
+    const napiGate =
+      "bash -c 'source scripts/verify/_preconditions.sh && require_fresh_napi_v2' && ";
+    const unitRunner = `${napiGate}bunx vp test run `;
     const unitTargets = unitCommand?.replace(unitRunner, '');
     const coverageExclusionArguments = [
       '**/dist/**',
@@ -290,9 +293,9 @@ describe('root verification graph', () => {
       .map((pattern) => `--coverage.exclude='${pattern}'`)
       .join(' ');
 
-    expect(unitCommand).toMatch(new RegExp(`^${unitRunner}`));
+    expect(unitCommand?.startsWith(unitRunner)).toBe(true);
     expect(coverageCommand).toBe(
-      `bunx vitest run ${unitTargets} --coverage.enabled --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/ts ${coverageExclusionArguments}`
+      `${napiGate}bunx vitest run ${unitTargets} --coverage.enabled --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/ts ${coverageExclusionArguments}`
     );
     expect(tasks.verify?.dependsOn).not.toContain('verify:coverage:ts');
     expect(tasks['verify:full']?.command).not.toContain('verify:coverage:ts');

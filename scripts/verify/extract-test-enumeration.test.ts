@@ -12,8 +12,10 @@ const SESSION_TESTS_DIR = join(EXTRACT_TESTS_DIR, 'session');
 const SESSION_TESTS_TARGET = 'packages/extract/tests/session';
 
 /**
- * Absent from `verify:unit:ts` because they load the native engine and run
- * in `verify:canary`. A name here claims the file needs a NAPI binary.
+ * Absent from `verify:unit:ts` because they load the native engine
+ * themselves and run in `verify:canary`. A name here claims the file loads
+ * it directly. `verify:unit:ts` needs a fresh NAPI binary too, since its
+ * targets probe files through the engine, and checks for one before it runs.
  */
 const ENGINE_BOUND = new Set([
   'alias-agreement.test.ts',
