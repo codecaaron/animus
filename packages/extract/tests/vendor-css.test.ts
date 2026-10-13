@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { wrapVendorCss } from '../pipeline/vendor-css';
+import { consumerLayers, wrapVendorCss } from '../pipeline/vendor-css';
 
 /**
  * Contract: a stylesheet Animus did not produce is wrapped in `anm-vendor`
@@ -9,7 +9,10 @@ import { wrapVendorCss } from '../pipeline/vendor-css';
  * browser loads takes the vendor layer, nested under any it names), its
  * leading `@layer` lists move inside, a CSS Module's top-level `:export`
  * and `:import` rules stay at the top level, and `!important` and animations
- * are reported, never removed.
+ * are reported, never removed. A top-level `@layer` block of a consumer layer
+ * the host's `layers` option names stays outside the vendor layer, and the
+ * sheet declares the host's full order first, so the block takes its
+ * declared place even when the sheet loads before Animus's stylesheet.
  */
 describe('wrapVendorCss', () => {
   const sheet = [
@@ -66,5 +69,52 @@ describe('wrapVendorCss', () => {
       ['animus.vendor.important', 6, 'warn'],
       ['animus.vendor.animation', 8, 'warn'],
     ]);
+  });
+
+  it('keeps listed consumer layers outside, at their declared order', () => {
+    const consumer = consumerLayers([
+      'anm-global',
+      'anm-base',
+      'anm-variants',
+      'anm-compounds',
+      'anm-states',
+      'anm-system',
+      'anm-custom',
+      'utilities',
+    ]);
+    const css = [
+      '@layer theme {',
+      '  :root { --gap: "a  b"; }',
+      '}',
+      '@layer utilities {',
+      '  .u { color: red !important; }',
+      '}',
+      '.p { color: red; }',
+    ].join('\n');
+    const { code, diagnostics } = wrapVendorCss(
+      css,
+      'v.css',
+      'layer',
+      consumer
+    );
+    expect(code).toBe(
+      [
+        '@layer anm-vendor, anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom, utilities;@layer anm-vendor {@layer theme {',
+        '  :root { --gap: "a  b"; }',
+        '}',
+        '}@layer utilities {',
+        '  .u { color: red !important; }',
+        '}@layer anm-vendor {',
+        '.p { color: red; }',
+        '}',
+        '',
+      ].join('\n')
+    );
+    // The kept layer's importance is its own.
+    expect(diagnostics).toEqual([]);
+    // Without the option, every layer nests under the vendor layer.
+    expect(wrapVendorCss(css, 'v.css', 'layer').code).toBe(
+      `@layer anm-vendor {${css}\n}\n`
+    );
   });
 });
