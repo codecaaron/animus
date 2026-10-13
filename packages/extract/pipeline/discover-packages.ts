@@ -281,8 +281,9 @@ function isHostPackageRoot(dir: string, rootDir: string): boolean {
  * manifest nested below the located package (a published
  * `dist/lib/package.json` carrying the package's name) is part of it, not
  * its root: the root is the located directory, spelled as the host spells
- * the file. Only where the file's own real path lies inside it: a file
- * linked out of the package is not its file.
+ * the file. Only where the file's own real path lies inside it, and in no
+ * `node_modules` below it: a file linked out of the package is not its
+ * file, and a dependency installed inside it is another instance.
  */
 export function packageInstanceOf(
   file: string,
@@ -293,7 +294,10 @@ export function packageInstanceOf(
   if (
     located &&
     realPath(resolvedRoot) !== located &&
-    isPathWithinRoot(located, realPath(file))
+    isPathWithinRoot(located, realPath(file)) &&
+    // A dependency installed inside the located package is its own
+    // instance, not a nested manifest of it.
+    !relative(located, realPath(file)).split(sep).includes('node_modules')
   ) {
     while (
       realPath(resolvedRoot) !== located &&

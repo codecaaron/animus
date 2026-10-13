@@ -294,4 +294,61 @@ describe('package instances', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // Contract: a copy of the package installed in the instance read's own
+  // node_modules is another instance, never folded into it as a nested
+  // manifest: the host's answer there is reported as one, a warning where
+  // a source redirect serves the instance read, else an error.
+  test('a dependency installed inside the instance read is another instance', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'animus-nested-instance-'))
+    );
+    const read = join(root, 'node_modules', 'kit');
+    const inner = join(read, 'node_modules', 'kit');
+    const write = (path: string, source: string) => {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, source);
+    };
+    write(join(root, 'package.json'), '{"name":"app"}');
+    write(join(read, 'package.json'), '{"name":"kit","version":"1.0.0"}');
+    write(join(read, 'index.js'), 'export const Box = 1;\n');
+    write(join(inner, 'package.json'), '{"name":"kit","version":"2.0.0"}');
+    write(join(inner, 'index.js'), 'export const Box = 2;\n');
+    const compare = (redirected: string[], builder: boolean) =>
+      compareAliases({
+        rootDir: root,
+        fileEntries: [
+          { path: 'src/App.tsx', source: 'a', hash: 'a' },
+          { path: 'node_modules/kit/index.js', source: 'b', hash: 'b' },
+        ],
+        pathAliasesJson: null,
+        order: undefined,
+        readings: {},
+        moduleSpecifiers: () =>
+          JSON.stringify({ files: { 'src/App.tsx': ['kit'] } }),
+        resolve: async (specifier) =>
+          specifier === 'kit' ? join(inner, 'index.js') : null,
+        cache: new AliasAgreementCache(),
+        packages: packageReadRecord({
+          rootDir: root,
+          roots: { kit: read },
+          redirected: new Set(redirected),
+          analysed: ['src/App.tsx', 'node_modules/kit/index.js'],
+          rendersBuilder: () => builder,
+        }),
+      }).then(({ findings }) =>
+        findings.map(({ code, kind }) => `${code} ${kind}`)
+      );
+    try {
+      expect({
+        redirectedBuilder: await compare(['kit'], true),
+        unredirectedPlain: await compare([], false),
+      }).toEqual({
+        redirectedBuilder: ['animus.discovery.replaced-package-instance warn'],
+        unredirectedPlain: ['animus.discovery.unread-package-instance error'],
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
