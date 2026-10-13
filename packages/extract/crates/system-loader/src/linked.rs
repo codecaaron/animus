@@ -218,11 +218,17 @@ struct Edit {
     text: String,
 }
 
+/// Where a named import reads: the module and export name a route through
+/// re-exports ends at, when the import should read there rather than
+/// through the module it names.
+pub(crate) type Retarget<'r> = &'r dyn Fn(&str, &str) -> Option<(String, String)>;
+
 pub(crate) fn rewrite_module_for_linking(
     source: &str,
     canonical_path: &str,
     specifier_map: &FxHashMap<(String, String), String>,
     refs: &ModuleRefs,
+    retarget: Retarget<'_>,
 ) -> Result<LinkedModule, String> {
     let allocator = Allocator::default();
     let ParserReturn { program, .. } =
@@ -302,7 +308,11 @@ pub(crate) fn rewrite_module_for_linking(
                         local.name.to_string(),
                         ExportTarget::Indirect { from: from.clone(), name: name.clone() },
                     );
-                    imported.insert(local.symbol_id(), export_read(refs, &from, &name));
+                    let read = match retarget(&from, &name) {
+                        Some((module, export)) => export_read(refs, &module, &export),
+                        None => export_read(refs, &from, &name),
+                    };
+                    imported.insert(local.symbol_id(), read);
                 }
                 remove(&mut edits, decl.span.start, decl.span.end);
             }
@@ -458,7 +468,7 @@ pub(crate) fn rewrite_module_for_linking(
     Ok(module)
 }
 
-fn collect_declaration_export_names(
+pub(crate) fn collect_declaration_export_names(
     declaration: &oxc::ast::ast::Declaration<'_>,
     exports: &mut Vec<(String, String)>,
 ) {
@@ -531,13 +541,25 @@ impl<'a> Linker<'a> {
         stubs: &'a FxHashMap<String, FxHashSet<String>>,
         type_exports: &'a FxHashMap<String, FxHashSet<String>>,
     ) -> Self {
+        Self::with_routes(modules, &FxHashMap::default(), stubs, type_exports)
+    }
+
+    /// The linker over `modules`, which run, and `routed`, which are read
+    /// only for their routes: their records link, their bodies never run.
+    pub fn with_routes(
+        modules: &FxHashMap<String, LinkedModule>,
+        routed: &FxHashMap<String, LinkedModule>,
+        stubs: &'a FxHashMap<String, FxHashSet<String>>,
+        type_exports: &'a FxHashMap<String, FxHashSet<String>>,
+    ) -> Self {
+        let modules: FxHashMap<&String, &LinkedModule> = modules.iter().chain(routed.iter()).collect();
         use crate::module_table::{Import, ImportName, ModuleRecord, ModuleTable, Request};
-        let mut keys: Vec<String> = modules.keys().cloned().collect();
+        let mut keys: Vec<String> = modules.keys().map(|key| (*key).clone()).collect();
         keys.sort();
         let index: FxHashMap<String, usize> = keys.iter().enumerate().map(|(at, key)| (key.clone(), at)).collect();
         let mut records: Vec<ModuleRecord<String>> = Vec::with_capacity(keys.len());
         for key in &keys {
-            let linked = &modules[key];
+            let linked = modules[key];
             let mut requests: Vec<Request> = Vec::new();
             // Each distinct request once, numbered in first-seen order.
             let mut numbered: FxHashMap<Request, usize> = FxHashMap::default();
@@ -586,7 +608,7 @@ impl<'a> Linker<'a> {
     /// stub supplies `name` when it has that name, or when neither an analysed
     /// branch nor another stub has it. One terminal resolves, two are
     /// ambiguous.
-    fn resolve(&self, module: usize, name: &str) -> crate::module_table::ExportLookup<String> {
+    pub(crate) fn resolve(&self, module: usize, name: &str) -> crate::module_table::ExportLookup<String> {
         use crate::module_table::{ExportLookup, OpeningReason, Terminal};
         match self.table.resolve_export(module, name) {
             ExportLookup::Incomplete { mut known, openings } => {
@@ -618,7 +640,7 @@ impl<'a> Linker<'a> {
     /// What reads `terminal` directly: a module's own getter for the binding
     /// (the export name it was asked for, when that name reads it), a
     /// namespace's export object, or a stub's property.
-    fn read(&self, terminal: &crate::module_table::Terminal<String>, asked: &str) -> Option<Getter> {
+    pub(crate) fn read(&self, terminal: &crate::module_table::Terminal<String>, asked: &str) -> Option<Getter> {
         use crate::module_table::Terminal;
         match terminal {
             Terminal::Local { module, binding } => {
@@ -633,6 +655,11 @@ impl<'a> Linker<'a> {
             Terminal::Namespace(module) => Some(Getter::Module { module: self.keys[*module].clone(), name: None }),
             Terminal::External { module, export } => Some(Getter::Module { module: module.clone(), name: export.clone() }),
         }
+    }
+
+    /// The module index of `key`, when the linker holds it.
+    pub(crate) fn index_of(&self, key: &str) -> Option<usize> {
+        self.index.get(key).copied()
     }
 
     /// The getters `module`'s export object gets at link time: each export
@@ -714,5 +741,43 @@ impl<'a> Linker<'a> {
             ));
         }
         Ok(())
+    }
+}
+
+/// A routed module as the linker reads it: its record's exports, stars,
+/// imports and requests by module key, and no body, since it never runs.
+pub(crate) fn routed_module(
+    record: &crate::module_table::ModuleRecord<String, String>,
+    path: &str,
+    specifier_map: &FxHashMap<(String, String), String>,
+) -> LinkedModule {
+    use crate::module_table::ImportName;
+    let key = |request: usize| module_key(path, &record.requests[request], specifier_map);
+    let mut exports: Vec<(String, ExportTarget)> =
+        record.local_exports.iter().map(|(name, local)| (name.clone(), ExportTarget::Local(local.clone()))).collect();
+    exports.extend(
+        record
+            .indirect_exports
+            .iter()
+            .map(|(name, request, imported)| (name.clone(), ExportTarget::Indirect { from: key(*request), name: imported.clone() })),
+    );
+    exports.extend(
+        record.namespace_exports.iter().map(|(name, request)| (name.clone(), ExportTarget::Namespace { from: key(*request) })),
+    );
+    LinkedModule {
+        exports,
+        stars: record.star_exports.iter().map(|&request| key(request)).collect(),
+        imports: record
+            .imports
+            .iter()
+            .filter_map(|import| match &import.name {
+                ImportName::Name(name) => Some((key(import.request), name.clone())),
+                ImportName::Namespace => None,
+            })
+            .collect(),
+        requests: (0..record.requests.len()).map(key).collect(),
+        link: String::new(),
+        body: String::new(),
+        import_refs: Vec::new(),
     }
 }

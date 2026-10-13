@@ -15,6 +15,7 @@ use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::{Context, Function, Object, Runtime};
 use rustc_hash::{FxHashMap, FxHashSet};
 
+mod bounded;
 mod kit_source;
 mod linked;
 pub mod module_table;
@@ -1064,13 +1065,9 @@ fn offsets_to_line_numbers(bundle: &str, offsets: Vec<(usize, String)>) -> Vec<(
 /// its `yield` to link, defining its export getters; then each finishes in
 /// evaluation order. The returned [`BundleLayout`] attributes an eval failure
 /// to its module.
-fn build_bundle(
-    specifier_map: &FxHashMap<(String, String), String>,
-    source_map: &FxHashMap<String, String>,
-    stub_exports: &FxHashMap<String, FxHashSet<String>>,
-    type_exports: &FxHashMap<String, FxHashSet<String>>,
-    entry_path: &str,
-) -> Result<(String, BundleLayout), String> {
+fn build_bundle(selection: &bounded::Selection) -> Result<(String, BundleLayout), String> {
+    let bounded::Selection { specifier_map, retained: source_map, stub_exports, type_exports, entry: entry_path, .. } =
+        selection;
     let mut bundle =
         String::with_capacity(source_map.values().map(|s| s.len()).sum::<usize>() + 4096);
     // (byte offset of the marker, module label) — ascending by construction.
@@ -1107,18 +1104,62 @@ fn build_bundle(
     let mut paths: Vec<&String> = source_map.keys().collect();
     paths.sort();
     let refs: linked::ModuleRefs = paths.iter().enumerate().map(|(at, path)| ((*path).clone(), at)).collect();
-    let mut modules: FxHashMap<String, linked::LinkedModule> = FxHashMap::with_capacity_and_hasher(paths.len(), Default::default());
-    for path in &paths {
-        let module = linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map, &refs)?;
-        modules.insert((*path).clone(), module);
-    }
-    // An import or re-export that links to nothing fails here, before any
-    // module runs.
-    let linker = linked::Linker::new(&modules, stub_exports, type_exports);
-    for path in &paths {
-        linker.check_links(path)?;
-    }
-    let order = linked::evaluation_order(&modules, entry_path);
+    let routed: FxHashMap<String, linked::LinkedModule> = selection
+        .routed
+        .iter()
+        .map(|(path, record)| (path.clone(), linked::routed_module(record, path, specifier_map)))
+        .collect();
+    let rewrite = |retarget: linked::Retarget<'_>| -> Result<FxHashMap<String, linked::LinkedModule>, String> {
+        let mut modules = FxHashMap::with_capacity_and_hasher(paths.len(), Default::default());
+        for path in &paths {
+            let module = linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map, &refs, retarget)?;
+            modules.insert((*path).clone(), module);
+        }
+        Ok(modules)
+    };
+    // Each module's own export names: the getters its object always has.
+    let local_names = |module: &linked::LinkedModule| -> FxHashSet<String> {
+        module
+            .exports
+            .iter()
+            .filter(|(_, target)| matches!(target, linked::ExportTarget::Local(_)))
+            .map(|(name, _)| name.clone())
+            .collect()
+    };
+    let unlinked = rewrite(&|_, _| None)?;
+    let linker = linked::Linker::with_routes(&unlinked, &routed, stub_exports, type_exports);
+    // A retained module's object holds its own exports and the names asked
+    // of it, so an import of any other name reads where its route ends.
+    let own: FxHashMap<String, FxHashSet<String>> =
+        unlinked.iter().map(|(path, module)| (path.clone(), local_names(module))).collect();
+    let modules = rewrite(&|from, name| {
+        if own.get(from).is_some_and(|names| names.contains(name)) {
+            return None;
+        }
+        let at = linker.index_of(from)?;
+        match linker.resolve(at, name) {
+            module_table::ExportLookup::Resolved(terminal) => match linker.read(&terminal, name)? {
+                linked::Getter::Module { module, name: Some(export) } => Some((module, export)),
+                _ => None,
+            },
+            _ => None,
+        }
+    })?;
+    // Evaluation order follows every request of every module read, routed
+    // ones included, so a module behind a barrel runs where the barrel's
+    // order puts it; only retained modules run.
+    let mut ordered: FxHashMap<String, linked::LinkedModule> = routed;
+    ordered.extend(modules.iter().map(|(path, module)| (path.clone(), linked::LinkedModule {
+        exports: Vec::new(),
+        stars: Vec::new(),
+        imports: Vec::new(),
+        requests: module.requests.clone(),
+        link: String::new(),
+        body: String::new(),
+        import_refs: Vec::new(),
+    })));
+    let order: Vec<String> =
+        linked::evaluation_order(&ordered, entry_path).into_iter().filter(|path| modules.contains_key(path)).collect();
     let generator = |module: &str| format!("__modules['#run'][{}]", refs[module]);
 
     // The global-style and theme scans walk `__modules` in this order. Each
@@ -1150,7 +1191,12 @@ fn build_bundle(
         // module is written as data.
         let exports = linked::module_ref(&refs, path);
         let mut reads = linked::ModuleReads::default();
-        for (name, getter) in linker.getters(path) {
+        let asked = selection.asked.get(*path);
+        let getters = linker
+            .getters(path)
+            .into_iter()
+            .filter(|(name, _)| own[*path].contains(name) || asked.is_some_and(|asked| asked.contains(name)));
+        for (name, getter) in getters {
             match getter {
                 linked::Getter::Local(binding) => {
                     reads.flush(&mut bundle, &exports);
@@ -1942,31 +1988,32 @@ pub fn load_system_module_reading(
     context: &ResolutionContext,
     reads: &mut LoadReads,
 ) -> Result<SystemConfig, String> {
-    // One load reads each directory's listing once: the exact-case check
-    // otherwise lists a directory again for every candidate in it. The pass
-    // may run the crawl twice, so each run records its reads afresh.
-    let (resolved, crawled) = resolution::with_listing_cache(|| {
-        let mut crawled = LoadReads::default();
-        (resolve_all_deps_reading(system_path, root_dir, context, &mut crawled), crawled)
-    });
-    reads.read.extend(crawled.read);
-    reads.missing.extend(crawled.missing);
-    let (specifier_map, source_map, stub_exports, manifests, type_exports) = resolved?;
-
+    let _ = root_dir;
     let entry_path = fs::canonicalize(system_path)
         .map_err(|e| format!("failed to canonicalize '{}': {}", system_path, e))?
         .to_string_lossy()
         .to_string();
+    // One load reads each directory's listing once: the exact-case check
+    // otherwise lists a directory again for every candidate in it. The pass
+    // may run the selection twice, so each run records its reads afresh.
+    let (selected, selecting) = resolution::with_listing_cache(|| {
+        let mut loader = bounded::Loader::new(context);
+        let selected = loader.select(&entry_path, export_name);
+        (selected, loader.into_reads())
+    });
+    reads.read.extend(selecting.read);
+    reads.missing.extend(selecting.missing);
+    let selection = selected?;
 
-    let (bundle, layout) = build_bundle(&specifier_map, &source_map, &stub_exports, &type_exports, &entry_path)?;
-    let mut config = execute_bundle(&bundle, &layout, &entry_path, export_name)?;
+    let (bundle, layout) = build_bundle(&selection)?;
+    let mut config = execute_bundle(&bundle, &layout, &entry_path, Some(&selection.root))?;
     config.global_style_blocks = config
         .global_style_blocks
         .map(|blocks| sources_relative_to(&blocks, root_dir));
 
-    let mut dependencies: Vec<String> = source_map.keys().cloned().chain(manifests).collect();
-    dependencies.sort();
-    config.dependencies = dependencies;
+    // Every file the load read: a change to any of them can change what
+    // the system reaches or how its routes resolve.
+    config.dependencies = reads.read.iter().cloned().collect();
     config.missing = reads.missing.iter().cloned().collect();
 
     Ok(config)
@@ -1994,6 +2041,41 @@ fn sources_relative_to(blocks: &str, root_dir: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bundle of a graph given whole, as these tests build one: every
+    /// module runs and every export name gets its getter.
+    fn build_whole(
+        specifier_map: &FxHashMap<(String, String), String>,
+        source_map: &FxHashMap<String, String>,
+        stub_exports: &FxHashMap<String, FxHashSet<String>>,
+        type_exports: &FxHashMap<String, FxHashSet<String>>,
+        entry_path: &str,
+    ) -> Result<(String, BundleLayout), String> {
+        let refs: linked::ModuleRefs = FxHashMap::default();
+        let mut modules = FxHashMap::default();
+        for (path, source) in source_map {
+            modules.insert(path.clone(), linked::rewrite_module_for_linking(source, path, specifier_map, &refs, &|_, _| None)?);
+        }
+        let linker = linked::Linker::new(&modules, stub_exports, type_exports);
+        for path in source_map.keys() {
+            linker.check_links(path)?;
+        }
+        let asked = source_map
+            .keys()
+            .map(|path| (path.clone(), linker.getters(path).into_iter().map(|(name, _)| name).collect()))
+            .collect();
+        build_bundle(&bounded::Selection {
+            entry: entry_path.to_string(),
+            root: String::new(),
+            retained: source_map.clone(),
+            routed: FxHashMap::default(),
+            specifier_map: specifier_map.clone(),
+            stub_exports: stub_exports.clone(),
+            manifests: FxHashSet::default(),
+            type_exports: type_exports.clone(),
+            asked,
+        })
+    }
 
     fn workspace_root() -> PathBuf {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -2091,7 +2173,7 @@ export const ds = tokens;
             "console.log('hello');\nconsole.warn('warned');\nconsole.error('erred');\n",
         );
         let (bundle, _) =
-            build_bundle(&FxHashMap::default(), &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.js").unwrap();
 
         assert!(bundle.starts_with("globalThis.console"));
         eval_bundle(&bundle).expect("top-level console calls must not abort the bundle");
@@ -2112,7 +2194,7 @@ export const ds = tokens;
             "import { space as dsSpace } from 'react';\nexport const applied = dsSpace();\n",
         );
         let (bundle, _) =
-            build_bundle(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
 
         let checked = format!(
             "{bundle}\nif (typeof __modules['/entry.js'].applied !== 'object') throw new Error('dsSpace is not the noop');\n"
@@ -2141,7 +2223,7 @@ export const ds = tokens;
             "export { space as dsSpace } from 'react';\nexport * from 'react-dom';\n",
         );
         let (bundle, _) =
-            build_bundle(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
 
         let checked = format!(
             "{bundle}\nif (__modules['/entry.js'].dsSpace !== __modules['__stub__/react'].space) throw new Error('dsSpace is not the stub\\'s space');\n"
@@ -2153,7 +2235,7 @@ export const ds = tokens;
     fn export_star_never_assigns_undefined() {
         let source_map = single_module("/entry.js", "export * from 'react';\n");
         let (bundle, _) =
-            build_bundle(&FxHashMap::default(), &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.js").unwrap();
 
         // An unregistered module brings in no name.
         let checked = format!(
@@ -2172,7 +2254,7 @@ export const ds = tokens;
             ("/entry.ts".to_string(), "export * as ns from 'pkg';\n".to_string()),
             ("/canonical/pkg.ts".to_string(), "export const v = 7;\n".to_string()),
         ]);
-        let (bundle, _) = build_bundle(&resolved_map, &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.ts").unwrap();
+        let (bundle, _) = build_whole(&resolved_map, &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.ts").unwrap();
         let checked = format!("{bundle}\nif (__modules['/entry.ts'].ns.v !== 7) throw new Error('ns is not pkg');\n");
         eval_bundle(&checked).expect("`export * as ns` binds pkg's namespace");
 
@@ -2180,7 +2262,7 @@ export const ds = tokens;
             FxHashMap::from_iter([(stub_key("react"), FxHashSet::from_iter(["space".to_string()]))]);
         let source_map = single_module("/entry.js", "export * as R from 'react';\n");
         let (bundle, _) =
-            build_bundle(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
         let checked = format!(
             "{bundle}\nif (__modules['/entry.js'].R !== __modules['__stub__/react']) throw new Error('R is not the stub');\n"
         );
@@ -2204,7 +2286,7 @@ export const ds = tokens;
         ]);
 
         let (bundle, _) =
-            build_bundle(&specifier_map, &source_map, &FxHashMap::default(), &FxHashMap::default(), &entry).unwrap();
+            build_whole(&specifier_map, &source_map, &FxHashMap::default(), &FxHashMap::default(), &entry).unwrap();
 
         eval_bundle(&bundle).expect("a quoted module path must produce an evaluable bundle");
     }
@@ -2214,7 +2296,7 @@ export const ds = tokens;
         let stub_exports = FxHashMap::from_iter([(stub_key("it's-a-module"), FxHashSet::default())]);
         let source_map = single_module("/entry.js", "import x from \"it's-a-module\";\n");
         let (bundle, _) =
-            build_bundle(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &stub_exports, &FxHashMap::default(), "/entry.js").unwrap();
 
         eval_bundle(&bundle).expect("a quoted stub specifier must produce an evaluable bundle");
     }
@@ -2223,7 +2305,7 @@ export const ds = tokens;
     fn arbitrary_module_namespace_names_stay_valid_js() {
         let source_map = single_module("/entry.js", "const v = 1;\nexport { v as \"it's\" };\n");
         let (bundle, _) =
-            build_bundle(&FxHashMap::default(), &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &FxHashMap::default(), &FxHashMap::default(), "/entry.js").unwrap();
 
         eval_bundle(&bundle).expect("a quoted export name must produce an evaluable bundle");
     }
@@ -2248,9 +2330,9 @@ export const ds = tokens;
 
         let source_map = single_module("/entry.js", "const value = 1;\n");
         let (first, layout) =
-            build_bundle(&FxHashMap::default(), &source_map, &first_stubs, &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &first_stubs, &FxHashMap::default(), "/entry.js").unwrap();
         let (second, _) =
-            build_bundle(&FxHashMap::default(), &source_map, &second_stubs, &FxHashMap::default(), "/entry.js").unwrap();
+            build_whole(&FxHashMap::default(), &source_map, &second_stubs, &FxHashMap::default(), "/entry.js").unwrap();
 
         assert_eq!(first, second, "stub emission must not depend on map order");
         assert_eq!(
@@ -2281,7 +2363,7 @@ export const ds = tokens;
         let stub_exports = FxHashMap::from_iter([(stub_key("react"), FxHashSet::default())]);
 
         let (bundle, layout) =
-            build_bundle(&specifier_map, &source_map, &stub_exports, &FxHashMap::default(), "/b.js").unwrap();
+            build_whole(&specifier_map, &source_map, &stub_exports, &FxHashMap::default(), "/b.js").unwrap();
         let error = execute_bundle(&bundle, &layout, "/b.js", None)
             .expect_err("a throwing bundle must fail the load");
 
@@ -3666,13 +3748,13 @@ export const ds = tokens;
 
     #[test]
     fn a_systems_modules_evaluate_in_esm_order_and_global_styles_register_in_that_order() {
-        // Each module registers a global style as it runs. The record's order
-        // is ECMA's evaluation order, as Node and Bun run it: `c` (through
-        // `a`'s star), `a`, then `b`'s requests `d` and `x`, `b`, the entry.
-        // So the last registration for a selector wins as it would in Node.
-        // A block that `c` exports and `a` re-exports through its star is
-        // declared by `c`, the first module in that order to export it; path
-        // order would name `a.ts`.
+        // Each module that runs registers a global style. Only the modules the
+        // system reaches run, in ECMA's evaluation order as Node and Bun run
+        // them: the entry reads `declared` through `a`'s star, so `c` runs, but
+        // `a` is only a route and never runs; it reads `y` through `b`, so `d`
+        // runs, then `b`, whose bare `import './x'` is not followed; then the
+        // entry. A block that `c` exports and `a` re-exports through its star
+        // is declared by `c`.
         let dir = scratch_dir("esm-order");
         let register = |name: &str| {
             format!("import {{ register }} from './registry';\nregister('{name}', {{ body: {{ color: '{name}' }} }});\n")
@@ -3693,12 +3775,16 @@ export const ds = tokens;
         write_fixture(&dir.join("a.ts"), &format!("{}export * from './c';\n", register("a")));
         write_fixture(&dir.join("d.ts"), &format!("{}export const y = 1;\n", register("d")));
         write_fixture(&dir.join("x.ts"), &register("x"));
-        write_fixture(&dir.join("b.ts"), &format!("export {{ y }} from './d';\nimport './x';\n{}", register("b")));
+        write_fixture(
+            &dir.join("b.ts"),
+            &format!("export {{ y }} from './d';\nimport './x';\n{}export const bRan = true;\n", register("b")),
+        );
         let entry = dir.join("entry.ts");
         write_fixture(
             &entry,
             &format!(
-                "import './a';\nimport './b';\nimport {{ registered }} from './registry';\n{}{}",
+                "import {{ declared }} from './a';\nimport {{ y, bRan }} from './b';\nimport {{ registered }} from './registry';\n\
+                 export const reached = [declared, y, bRan];\n{}{}",
                 register("entry"),
                 sealed_system_fixture(
                     "{ version: 1, keyframes: [], globalStyles: registered, collisions: [], legacyVerbs: [] }"
@@ -3706,14 +3792,15 @@ export const ds = tokens;
             ),
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
+        let result =
+            load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), Some("ds"), &ResolutionContext::default());
         let _ = fs::remove_dir_all(&dir);
 
         let config = result.expect("ordered system loads");
         let blocks: serde_json::Value =
             serde_json::from_str(&config.global_style_blocks.expect("registered globals")).unwrap();
         let order: Vec<&str> = blocks.as_object().unwrap().keys().map(String::as_str).collect();
-        assert_eq!(order, ["c", "declared", "a", "d", "x", "b", "entry"]);
+        assert_eq!(order, ["c", "declared", "d", "b", "entry"]);
         assert_eq!(blocks["declared"]["source"], "c.ts", "{blocks}");
     }
 
