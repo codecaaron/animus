@@ -3059,17 +3059,13 @@ fn shed_unresolved_aliases(
     }
 }
 
-/// The CSS of `files`, its member tables answering from `changes`: the
-/// member tables' relation of what may change, closed already
-/// (`record_member_changes`).
 pub fn run(
     files: &BTreeMap<String, FileFacts>,
     order: &[String],
     inputs: &CssInputs,
     class_prefix: &str,
-    changes: crate::flow::ValueEffects,
 ) -> CssOutput {
-    run_with_system_floor(files, order, inputs, class_prefix, true, changes)
+    run_with_system_floor(files, order, inputs, class_prefix, true)
 }
 
 // Usage maps are keyed by component id (`{file}::{binding}`); bare-binding
@@ -3472,15 +3468,12 @@ fn declared_reach<'f, T>(
 
 /// Fills `inputs.build_chunks` once, from every module's loads: each
 /// analysed module a literal `import()` names.
-pub(crate) fn note_build_chunks<'l, T>(
-    loads: impl Iterator<Item = (&'l str, &'l crate::loads::ModuleLoad)>,
-    files: &BTreeMap<String, T>,
-    inputs: &CssInputs,
-) {
+pub(crate) fn note_build_chunks(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) {
     if inputs.analysis_context.closed_dynamic_imports.is_empty() || inputs.build_chunks.get().is_some() {
         return;
     }
     let mut chunks = BTreeSet::new();
+    let loads = files.iter().flat_map(|(path, ff)| ff.module_loads.iter().map(move |load| (path.as_str(), load)));
     for (file, load) in loads {
         if load.dynamic_import && matches!(load.target, crate::loads::LoadTarget::Specifier(_)) {
             chunks.extend(loaded_modules(file, load, files, inputs).into_iter().cloned());
@@ -6327,7 +6320,6 @@ fn run_with_system_floor(
     inputs: &CssInputs,
     class_prefix: &str,
     total_system_floor: bool,
-    changes: crate::flow::ValueEffects,
 ) -> CssOutput {
     let links = &crate::link::ProjectLinks::link(files, inputs);
     let breakpoints = extract_breakpoints(&inputs.theme);
@@ -7318,8 +7310,7 @@ fn run_with_system_floor(
         }
     };
     let mut object_members =
-        crate::family_members::ObjectMembers::new(files, inputs, links, &family_index, &declared_component)
-            .with_changes(changes);
+        crate::family_members::ObjectMembers::new(files, inputs, links, &family_index, &declared_component);
     // A member tag written through a facade or alias whose member is stable
     // resolves like a family member tag.
     let member_bindings: BTreeMap<String, FxHashMap<String, String>> = order
@@ -8864,11 +8855,7 @@ fn run_with_system_floor(
     }
     // Each computed import() a declaration closes, recorded as the
     // assumption it is; a declaration that closes none is reported.
-    note_build_chunks(
-        files.iter().flat_map(|(path, ff)| ff.module_loads.iter().map(move |load| (path.as_str(), load))),
-        files,
-        inputs,
-    );
+    note_build_chunks(files, inputs);
     for site in &inputs.analysis_context.closed_dynamic_imports {
         let closed: Vec<&crate::loads::ModuleLoad> = files
             .get(&site.importer)
@@ -9384,20 +9371,7 @@ mod tests {
         }
         let links = crate::link::ProjectLinks::link(&files, inputs);
         judge_object_handoffs(&mut files, inputs, &links);
-        let changes = member_changes(&files, inputs, &links);
-        run_with_system_floor(&files, &order, inputs, "animus", total_system_floor, changes)
-    }
-
-    /// The relation of what may change in `files`, holding the member
-    /// tables' changes alone.
-    fn member_changes(
-        files: &BTreeMap<String, FileFacts>,
-        inputs: &CssInputs,
-        links: &crate::link::ProjectLinks,
-    ) -> crate::flow::ValueEffects {
-        let mut flow = crate::flow::FlowBuilder::new();
-        crate::family_members::record_member_changes(files, inputs, links, &mut flow);
-        flow.close()
+        run_with_system_floor(&files, &order, inputs, "animus", total_system_floor)
     }
 
     fn test_inputs() -> CssInputs {
@@ -10917,13 +10891,18 @@ mod tests {
         legacy.usage_enriched = None;
 
         let order = vec!["a.tsx".to_string()];
-        let inputs = test_inputs();
-        let out = |facts| {
-            let files = BTreeMap::from([("a.tsx".to_string(), facts)]);
-            let links = crate::link::ProjectLinks::link(&files, &inputs);
-            run(&files, &order, &inputs, "animus", member_changes(&files, &inputs, &links))
-        };
-        let (enriched_out, legacy_out) = (out(enriched), out(legacy));
+        let enriched_out = run(
+            &BTreeMap::from([("a.tsx".to_string(), enriched)]),
+            &order,
+            &test_inputs(),
+            "animus",
+        );
+        let legacy_out = run(
+            &BTreeMap::from([("a.tsx".to_string(), legacy)]),
+            &order,
+            &test_inputs(),
+            "animus",
+        );
 
         assert_eq!(enriched_out.system_prop_map, legacy_out.system_prop_map);
         assert_eq!(enriched_out.css, legacy_out.css);

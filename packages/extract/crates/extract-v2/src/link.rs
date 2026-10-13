@@ -340,11 +340,6 @@ pub(crate) fn record_module_openings(
     // A runtime load hands on every module it may load: the one a literal
     // names, or each one a template, a context or a glob may reach, up to
     // the bound. A glob of several patterns is one call: judged once.
-    crate::analyze_css::note_build_chunks(
-        files.iter().flat_map(|(path, facts)| facts.module_loads.iter().map(move |load| (path.as_str(), load))),
-        files,
-        inputs,
-    );
     let mut calls = std::collections::BTreeSet::new();
     for load in &ff.module_loads {
         if !calls.insert(load.start) && !matches!(load.target, LoadTarget::Specifier(_)) {

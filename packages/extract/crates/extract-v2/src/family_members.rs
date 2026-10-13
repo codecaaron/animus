@@ -290,24 +290,9 @@ pub(crate) struct ObjectMembers<'f> {
     objects: FxHashMap<(String, String), Option<Object>>,
     tables: FxHashMap<Object, Rc<MemberTable>>,
     building: FxHashSet<Object>,
-    /// What the uses in the analysed modules may change: the analysis's one
-    /// closed relation, which a collector only recording has not yet.
-    changes: Option<ValueEffects>,
-}
-
-/// Records into `flow` what the uses in `files` may change of the objects
-/// member tags read (see `ObjectMembers::record_changes`), for the member
-/// tables to answer from once `flow` is closed. Objects are
-/// named by their declarations, so no component naming is needed.
-pub(crate) fn record_member_changes(
-    files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-    links: &crate::link::ProjectLinks,
-    flow: &mut FlowBuilder,
-) {
-    let families = FamilyIndex::build(files, |_, binding| binding.to_string());
-    let component = |_: &str, _: &str| -> Option<String> { None };
-    ObjectMembers::new(files, inputs, links, &families, &component).record_changes(flow);
+    /// What the uses in the analysed modules may change, closed once, on
+    /// the first question.
+    changed: Option<ValueEffects>,
 }
 
 impl<'f> ObjectMembers<'f> {
@@ -327,7 +312,7 @@ impl<'f> ObjectMembers<'f> {
             objects: FxHashMap::default(),
             tables: FxHashMap::default(),
             building: FxHashSet::default(),
-            changes: None,
+            changed: None,
         }
     }
 
@@ -687,16 +672,14 @@ impl<'f> ObjectMembers<'f> {
         table
     }
 
-    /// Answers from `changes`, the member tables' relation, closed already
-    /// (`record_member_changes`).
-    pub(crate) fn with_changes(mut self, changes: ValueEffects) -> Self {
-        self.changes = Some(changes);
-        self
-    }
-
-    /// What the uses in the analysed modules may change.
-    pub(crate) fn changes(&self) -> &ValueEffects {
-        self.changes.as_ref().expect("member tables answer from the analysis's closed relation")
+    /// What the uses in the analysed modules may change, closed once, on
+    /// the first question.
+    pub(crate) fn changes(&mut self) -> &ValueEffects {
+        if self.changed.is_none() {
+            let changed = self.changed();
+            self.changed = Some(changed);
+        }
+        self.changed.as_ref().expect("closed above")
     }
 
     /// The first use in the analysed modules that may change `object`, said
@@ -727,16 +710,18 @@ impl<'f> ObjectMembers<'f> {
         })
     }
 
-    /// Records into `flow` the changes a use in the analysed modules may make
-    /// to an object, in module and source order: a use of a binding that
-    /// holds it, a use that may write through a package's namespace, a
-    /// namespace re-export of a module exporting it, a runtime load of one,
-    /// or code run from a string. Every such use may rebind any member. The
-    /// objects are facades, families and the contexts React's
-    /// `createContext` builds, whose `Provider` a tag reads.
-    fn record_changes(&mut self, flow: &mut FlowBuilder) {
+    /// The changes a use in the analysed modules may make to an object, in
+    /// module and source order: a use of a binding that holds it, a use that
+    /// may write through a package's namespace, a namespace re-export of a
+    /// module exporting it, a runtime load of one, or code run from a
+    /// string. Every such use may rebind any member. The objects are facades,
+    /// families and the contexts React's `createContext` builds, whose
+    /// `Provider` a tag reads.
+    fn changed(&mut self) -> ValueEffects {
         let files = self.files;
         let inputs = self.inputs;
+        let mut flow = FlowBuilder::new();
+        crate::analyze_css::note_build_chunks(files, inputs);
         // Each object a module exports, under each name it exports it as.
         let modules: Vec<String> = files.keys().cloned().collect();
         for module in &modules {
@@ -802,7 +787,7 @@ impl<'f> ObjectMembers<'f> {
                 };
                 // A write to an assigned facade's target changes the facade.
                 let facades = self.facades_on(module, ff, name);
-                reach.record(flow, self.families, facades, &reason);
+                reach.record(&mut flow, self.families, facades, &reason);
             }
             // A package may re-export our objects (a linked workspace
             // package) under any name: a use that may write through its
@@ -814,15 +799,19 @@ impl<'f> ObjectMembers<'f> {
                 let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
                 let reason = format!("{subject} {} in {module}{line}", used.what);
                 if let Some(unread) = crate::link::unread_package(&identity, files, inputs) {
-                    crate::link::open_unread(flow, unread, &reason, &mut |flow, target, reason| {
+                    crate::link::open_unread(&mut flow, unread, &reason, &mut |flow, target, reason| {
                         self.namespace_reach(target).record(flow, self.families, Vec::new(), reason)
                     });
                 }
             }
-            crate::link::record_module_openings(module, ff, files, inputs, flow, &mut |flow, target, reason| {
+            crate::link::record_module_openings(module, ff, files, inputs, &mut flow, &mut |flow, target, reason| {
                 self.namespace_reach(target).record(flow, self.families, Vec::new(), reason)
             });
         }
+        let changed = flow.close();
+        #[cfg(test)]
+        crate::engine::note_openings(&changed);
+        changed
     }
 
     /// What `module`'s namespace may hold: each object it exports and,

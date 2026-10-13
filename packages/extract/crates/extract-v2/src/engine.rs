@@ -508,6 +508,7 @@ fn record_style_changes(
     readings_of: &mut ReadingsOf<'_>,
     flow: &mut crate::flow::FlowBuilder,
 ) {
+    analyze_css::note_build_chunks(structural, inputs);
     // The declarations a binding names: itself or, for `export default
     // X`'s cell, X, whose object the cell shares, through each binding X's
     // import may be.
@@ -1224,14 +1225,10 @@ impl ExtractEngine {
         let readings_by_file: BTreeMap<String, crate::usage_facts::ParamReadings> =
             lowered_by_file.iter().map(|(path, lowered)| (path.clone(), std::sync::Arc::clone(&lowered.readings))).collect();
         let mut readings_of = |file: &str| readings_by_file.get(file).cloned().unwrap_or_default();
-        // What may change, as the member tables and the style statics each
-        // judge it: a relation of each, since a call the member tables must
-        // assume changes an object (`styles(preset)`) only reads a static.
-        // Both record a module's openings through one recorder, in the same
-        // words.
-        let mut member_flow = crate::flow::FlowBuilder::new();
-        crate::family_members::record_member_changes(&structural_by_file, &self.opts.css_inputs, &links, &mut member_flow);
-        let member_changes = member_flow.close();
+        // What may change of the statics styles read. The member tables keep
+        // a relation of their own, since a call they must assume changes an
+        // object (`styles(preset)`) only reads a static; both record a
+        // module's openings through one recorder, in the same words.
         let mut flow = crate::flow::FlowBuilder::new();
         record_style_changes(
             &style_modules,
@@ -1246,13 +1243,9 @@ impl ExtractEngine {
         );
         let changes = flow.close();
         #[cfg(test)]
-        OPENINGS.with(|openings| {
-            *openings.borrow_mut() = [&member_changes, &changes]
-                .iter()
-                .flat_map(|changes| &changes.closure().openings)
-                .map(|opening| (opening.reason, opening.site.clone()))
-                .collect();
-        });
+        OPENINGS.with(|openings| openings.borrow_mut().clear());
+        #[cfg(test)]
+        note_openings(&changes);
         for ((file, local), (reason, uncertainty)) in unstable_style_statics(&changes, &statics_by_file) {
             if statics_by_file.get_mut(&file).and_then(|statics| statics.remove(&local)).is_some() {
                 // Only a value the binding had before const initializers read
@@ -1437,7 +1430,6 @@ impl ExtractEngine {
             &self.order,
             &self.opts.css_inputs,
             crate::ids::CLASS_PREFIX,
-            member_changes,
         );
         // Only the engine holds the sources a diagnostic's line and column
         // are read from.
@@ -1740,6 +1732,15 @@ thread_local! {
     /// The last analysis's openings on this thread, by kind and site.
     static OPENINGS: std::cell::RefCell<std::collections::BTreeSet<(crate::flow::ReasonId, String)>> =
         const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+}
+
+/// Adds a closed relation's openings to the analysis's, for check 6.
+#[cfg(test)]
+pub(crate) fn note_openings(changes: &crate::flow::ValueEffects) {
+    OPENINGS.with(|openings| {
+        let mut openings = openings.borrow_mut();
+        openings.extend(changes.closure().openings.iter().map(|opening| (opening.reason, opening.site.clone())));
+    });
 }
 
 #[cfg(test)]

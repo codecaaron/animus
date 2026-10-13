@@ -327,8 +327,9 @@ impl FlowBuilder {
         self.recorded += 1;
     }
 
-    /// Something the analysis cannot close. The same opening recorded again,
-    /// by another relation's reading of the same module, adds nothing.
+    /// Something the analysis cannot close. A relation holds each opening
+    /// once: the same one recorded again, as a hand-on of a module says it
+    /// for each name the module exports, adds nothing.
     pub fn open(&mut self, reason: ReasonId, exposure: Region, site: String) {
         if !self.opened.insert((reason, exposure.clone(), site.clone())) {
             return;
