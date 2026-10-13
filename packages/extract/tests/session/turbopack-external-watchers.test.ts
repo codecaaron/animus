@@ -125,18 +125,30 @@ afterEach(() => {
 });
 
 describe('external root registration (design D4)', () => {
-  test('admitted roots get recursive watchers; node_modules roots never do (G2)', () => {
+  test('an admitted root under node_modules is watched; nothing else there is', async () => {
     const { root, kitA } = createTree();
-    const embedded = join(root, 'node_modules', 'dep', 'src');
-    const { session } = makeSession(root, [kitA, embedded]);
+    const installed = join(root, 'node_modules', '@kits', 'ui', 'src');
+    const sibling = join(root, 'node_modules', '@kits', 'other', 'src');
+    for (const dir of [installed, sibling]) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'Button.tsx'), 'export const B = 1;\n');
+    }
+    const { session, updates } = makeSession(root, [kitA, installed]);
 
     const handle = start(session, root);
     try {
       const registered = new Map(calls.map((c) => [c.dir, c.recursive]));
       expect(registered.get(kitA)).toBe(true);
-      for (const dir of calls.map((c) => c.dir)) {
-        expect(dir).not.toContain('node_modules');
-      }
+      expect(registered.get(installed)).toBe(true);
+      // Only the admitted root: not the package tree, not a sibling.
+      expect(
+        calls.map((c) => c.dir).filter((dir) => dir.includes('node_modules'))
+      ).toEqual([installed]);
+
+      watcherFor(installed)!.trigger('Button.tsx');
+      await vi.waitFor(() =>
+        expect(allModified(updates)).toContain(join(installed, 'Button.tsx'))
+      );
     } finally {
       handle!.close();
     }

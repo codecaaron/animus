@@ -158,6 +158,56 @@ describe('startTurbopackWatcher', () => {
     }
   }, 30000);
 
+  /** The OS watcher, inotify on Linux: an installed kit's admitted root
+   *  reports its edits, and a sibling package it never admitted does not. */
+  test('an installed kit root under node_modules reports its edits', async () => {
+    const root = createProject();
+    const installed = join(root, 'node_modules', '@kits', 'ui', 'src');
+    const sibling = join(root, 'node_modules', '@kits', 'other', 'src');
+    for (const dir of [installed, sibling]) {
+      mkdirSync(join(dir, 'components'), { recursive: true });
+      writeFileSync(join(dir, 'components', 'Badge.tsx'), BUTTON_SOURCE);
+    }
+    const { ExtractionSession } =
+      await import('../../session/extraction-session');
+    const session = new ExtractionSession({ system: './src/system.ts' });
+    session.rootDir = root;
+    session.externalWatchRoots = [installed];
+    const handleWatchUpdate = vi
+      .spyOn(session, 'handleWatchUpdate')
+      .mockImplementation(async () => {});
+    const reported = (path: string) =>
+      handleWatchUpdate.mock.calls.some((c) => c[0].modifiedFiles?.has(path));
+
+    const watcher = startedHandle(
+      startTurbopackWatcher(session, root, { debounceMs: 20 })
+    );
+    try {
+      let stamp = 0;
+      await vi.waitFor(
+        () => {
+          // Re-armed per poll, as above: registration can lag under load.
+          writeFileSync(
+            join(installed, 'components', 'Badge.tsx'),
+            `export const B = ${stamp++};\n`
+          );
+          writeFileSync(
+            join(sibling, 'components', 'Badge.tsx'),
+            `export const B = ${stamp++};\n`
+          );
+          expect(reported(join(installed, 'components', 'Badge.tsx'))).toBe(
+            true
+          );
+        },
+        { timeout: 10000, interval: 250 }
+      );
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(reported(join(sibling, 'components', 'Badge.tsx'))).toBe(false);
+    } finally {
+      watcher.close();
+    }
+  }, 30000);
+
   test('is idempotent per process and ignores .animus writes', async () => {
     const root = createProject();
     const { ExtractionSession } =
