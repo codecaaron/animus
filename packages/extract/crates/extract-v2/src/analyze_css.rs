@@ -13009,6 +13009,50 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// Contract: inside a composed family a child's shared-axis rules follow
+    /// its own rule order, as they do outside it: an extension's own option
+    /// or default comes after what it inherits unchanged, and the root's
+    /// default rule stays with the option it selects. Both selectors weigh
+    /// the same, so order picks the winner when the root sets no props.
+    #[test]
+    fn composed_rules_follow_the_childs_rule_order() {
+        let family = |root_size: &str| {
+            format!(
+                "export const A = ds.styles({{ display: 'block' }})\n\
+                   .variant({{ prop: 'size', defaultVariant: 'sm', variants: {{ sm: {{ display: 'flex' }} }} }})\n\
+                   .variant({{ prop: 'tone', defaultVariant: 'loud', variants: {{ loud: {{ display: 'inline' }} }} }})\n\
+                   .asElement('div');\n\
+                 export const B = A.extend()\n\
+                   .variant({{ prop: 'size', defaultVariant: 'lg', variants: {{ lg: {{ display: 'inline-block' }} }} }})\n\
+                   .asElement('div');\n\
+                 export const C = B.extend().styles({{ outline: '0' }}).asElement('div');\n\
+                 export const Root = ds\n\
+                   .variant({{ prop: 'size', defaultVariant: '{root_size}', variants: {{ sm: {{ display: 'flex' }}, lg: {{ display: 'inline-block' }} }} }})\n\
+                   .variant({{ prop: 'tone', defaultVariant: 'loud', variants: {{ loud: {{ display: 'inline' }} }} }})\n\
+                   .asElement('div');\n\
+                 export const Fam = compose({{ Root, Child: C }}, {{ name: 'Fam', shared: {{ size: true, tone: true }} }});\n\
+                 export const App = () => <Fam.Root><Fam.Child /></Fam.Root>;\n"
+            )
+        };
+        // The composed rules for C, in written order, as root class suffixes.
+        let order = |root_size: &str| {
+            let source = family(root_size);
+            let out = analyze(&[("fam.tsx", source.as_str())], &test_inputs());
+            let (root, child) = (class_of(&out, "fam.tsx::Root"), class_of(&out, "fam.tsx::C"));
+            let mut found: Vec<(usize, &str)> = ["size-sm", "size-lg", "size-default", "tone-loud", "tone-default"]
+                .into_iter()
+                .filter_map(|suffix| out.sheets.variants.find(&format!(".{root}--{suffix} .{child}")).map(|at| (at, suffix)))
+                .collect();
+            found.sort();
+            found.into_iter().map(|(_, suffix)| suffix).collect::<Vec<_>>()
+        };
+        // The root's default picks the untouched inherited `sm`: it keeps
+        // `sm`'s place, before the inherited tone, so tone wins.
+        assert_eq!(order("sm"), ["size-sm", "size-default", "tone-loud", "tone-default", "size-lg"]);
+        // It picks B's own `lg`: after the inherited tone, so size wins.
+        assert_eq!(order("lg"), ["size-sm", "tone-loud", "tone-default", "size-lg", "size-default"]);
+    }
+
     #[test]
     fn compose_slots_resolve_through_local_export_renames() {
         // `const Foo = …; export { Foo as Bar }`: the slot imported as `Bar`
