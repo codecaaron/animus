@@ -3,6 +3,7 @@ import { realpathSync } from 'fs';
 import { resolve } from 'path';
 
 import { createV2EngineApi, stableStringify } from '../pipeline/index';
+import { requireNativeEngine } from '../pipeline/native-resolution';
 
 import type { PackageReadRecord } from '../pipeline/alias-agreement';
 import type { AnimusCoreOptions } from '../pipeline/core-options';
@@ -294,8 +295,7 @@ export function setWatchTransaction(
  *  own `.d.ts` is the authoritative surface for what it returns. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function requireEngine(): any {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require('@animus-ui/extract');
+  return requireNativeEngine();
 }
 
 const ENGINE_API_OVERRIDE_KEY = '__animus_engine_api_override__';

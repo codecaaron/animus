@@ -12,16 +12,6 @@ import {
 
 import { globToRegExp } from './core-options';
 import { discoverFiles } from './discover-files';
-import {
-  caseMismatchReason,
-  policyCandidates,
-  probeOnDisk,
-  seeOnDisk,
-} from './extension-policy';
-import {
-  BUILT_IN_EXTENSION_POLICY,
-  extensionPolicyJson,
-} from './host-extensions';
 import { parseInternalWire } from './internal-wire';
 import { readKitDescriptor } from './kit-descriptor';
 import {
@@ -36,15 +26,21 @@ import {
   UNPROVEN_ROOT_BINDING,
 } from './manifest-diagnostics';
 import { isEngineTransformExtension } from './mdx-preprocessor';
+import {
+  caseMismatchReason,
+  probeFile,
+  seeFile,
+  specifierCandidates,
+} from './native-resolution';
 import { isPathWithinRoot } from './source-identity';
 import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 import { declaredWorkspacePackages } from './workspace-packages';
 
 import type { EngineApi } from './engine-adapter';
-import type { ExtensionOrder, ProbedFile } from './extension-policy';
 import type { KitDescriptorRecord } from './kit-descriptor';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
+import type { ExtensionOrder, ProbedFile } from './native-resolution';
 import type {
   ExtractExportFact,
   ExtractFactsResult,
@@ -111,10 +107,10 @@ export function probeAbsolutePathSpecifier(
 ): ProbedFile {
   // `..` is taken back lexically first, as Node resolves a specifier, so
   // the path a probe returns is the path it checked.
-  return probeOnDisk(
-    policyCandidates(normalize(absSpecifier), {
+  return probeFile(
+    specifierCandidates(normalize(absSpecifier), {
       sources: extensionsSet,
-      index: join,
+      joinedIndex: true,
       policy,
     }),
     within
@@ -127,37 +123,6 @@ export function bareSpecifierPackageName(specifier: string): string {
   return specifier.startsWith('@')
     ? segments.slice(0, 2).join('/')
     : segments[0];
-}
-
-function sourceEntryForSpecifier(
-  specifier: string,
-  srcDir: string,
-  extensionsSet: ReadonlySet<string>,
-  rootDir: string,
-  policy: ExtensionOrder | undefined
-): string | null {
-  // A guess, not a resolution: a file differing only in case is no guess.
-  // Only the names below the root, or below `src/`, are checked.
-  if (isAbsolute(specifier)) {
-    const probed = probeAbsolutePathSpecifier(
-      specifier,
-      extensionsSet,
-      rootDir,
-      policy
-    );
-    if (probed.kind !== 'found') return null;
-    return isPathWithinRoot(srcDir, probed.path) ? probed.path : null;
-  }
-  const packageName = bareSpecifierPackageName(specifier);
-  const subpath = specifier.slice(packageName.length + 1);
-  const sourceStem = join(srcDir, subpath || 'index');
-  const probed = probeAbsolutePathSpecifier(
-    sourceStem,
-    extensionsSet,
-    srcDir,
-    policy
-  );
-  return probed.kind === 'found' ? probed.path : null;
 }
 
 /** The package's parsed `package.json`, or null when it cannot be read. */
@@ -224,7 +189,8 @@ export interface KitSourceSelection {
 export type KitSourceRootResolver = (
   specifier: string,
   packageDir: string,
-  hostEntry: string | null
+  hostEntry: string | null,
+  sources?: ReadonlySet<string>
 ) => KitSourceSelection | null;
 
 /** Where a package is installed: the package `name` located from
@@ -258,7 +224,7 @@ export function nativeKitSourceRoot(
   policyJson: string
 ): KitSourceRootResolver {
   const native = engine.resolveKitSourceRoot;
-  return (specifier, packageDir, hostEntry) => {
+  return (specifier, packageDir, hostEntry, sources) => {
     if (native === undefined) {
       throw new Error(
         'the native engine does not expose resolveKitSourceRoot, which kit discovery needs — rebuild @animus-ui/extract'
@@ -272,7 +238,8 @@ export function nativeKitSourceRoot(
         workspaces,
         policyJson,
         hostEntry ?? undefined,
-        packageDir
+        packageDir,
+        sources === undefined ? undefined : [...sources]
       ),
       'resolveKitSourceRoot'
     );
@@ -304,6 +271,47 @@ function isHostPackageRoot(dir: string, rootDir: string): boolean {
     manifest.name !== '' &&
     !isPathWithinRoot(realPath(dir), realPath(rootDir))
   );
+}
+
+/**
+ * The package instance `file`, a host's answer, belongs to (spec §2.2 A4),
+ * given the package `located` as Node finds it: the nearest manifest above
+ * the file, unless that manifest names no package or holds the project (a
+ * dependency cache's answer), where the located package stands in. A
+ * manifest nested below the located package (a published
+ * `dist/lib/package.json` carrying the package's name) is part of it, not
+ * its root: the root is the located directory, spelled as the host spells
+ * the file. Only where the file's own real path lies inside it, and in no
+ * `node_modules` below it: a file linked out of the package is not its
+ * file, and a dependency installed inside it is another instance.
+ */
+export function packageInstanceOf(
+  file: string,
+  located: string | null,
+  rootDir: string
+): string {
+  let resolvedRoot = findPackageRoot(file);
+  if (
+    located &&
+    realPath(resolvedRoot) !== located &&
+    isPathWithinRoot(located, realPath(file)) &&
+    // A dependency installed inside the located package is its own
+    // instance, not a nested manifest of it.
+    !relative(located, realPath(file)).split(sep).includes('node_modules')
+  ) {
+    while (
+      realPath(resolvedRoot) !== located &&
+      resolvedRoot !== dirname(resolvedRoot)
+    ) {
+      resolvedRoot = dirname(resolvedRoot);
+    }
+    if (realPath(resolvedRoot) !== located) resolvedRoot = located;
+  }
+  return !located ||
+    isHostPackageRoot(resolvedRoot, rootDir) ||
+    realPath(resolvedRoot) === located
+    ? resolvedRoot
+    : located;
 }
 
 function realPath(path: string): string {
@@ -716,6 +724,8 @@ export async function collectExternalPackageSources(opts: {
     // it, `..` taken back lexically as Node reads it: a host can answer with
     // the file's canonical spelling. The path used is the path checked.
     let caseMismatch: string | undefined;
+    // A local include's own probe, which also guesses its `src/` entry.
+    let localProbe: ProbedFile | null = null;
     if (isAbsolute(specifier)) {
       const own = probeAbsolutePathSpecifier(
         specifier,
@@ -723,8 +733,9 @@ export async function collectExternalPackageSources(opts: {
         rootDir,
         extensions
       );
+      localProbe = own;
       const hosted = absEntry === null ? null : normalize(absEntry);
-      const seen = hosted === null ? null : seeOnDisk(hosted, rootDir);
+      const seen = hosted === null ? null : seeFile(hosted, rootDir);
       const probed: ProbedFile =
         own.kind === 'case-mismatch' || hosted === null || seen === null
           ? own
@@ -748,37 +759,12 @@ export async function collectExternalPackageSources(opts: {
     // from where the nearest manifest can be the application's own. Then,
     // and for a source-only kit with no runtime entry to resolve, the package
     // is found as Node finds it, and its condition names the entry.
-    // A manifest nested below the package Node locates (a published
-    // `dist/lib/package.json` carrying the package's name) is part of the
-    // package, not its root: the root is the located directory, spelled as
-    // the host spells the entry. Only where the entry's own real path lies
-    // inside it: an entry linked out of the package is not its file.
-    let resolvedRoot = absEntry ? findPackageRoot(absEntry) : null;
     const locatedRoot =
       packageName &&
       locatePackage(packageName, opts.locateFrom?.(specifier) ?? rootDir);
-    if (
-      resolvedRoot &&
-      locatedRoot &&
-      absEntry &&
-      realPath(resolvedRoot) !== locatedRoot &&
-      isPathWithinRoot(locatedRoot, realPath(absEntry))
-    ) {
-      while (
-        realPath(resolvedRoot) !== locatedRoot &&
-        resolvedRoot !== dirname(resolvedRoot)
-      ) {
-        resolvedRoot = dirname(resolvedRoot);
-      }
-      if (realPath(resolvedRoot) !== locatedRoot) resolvedRoot = locatedRoot;
-    }
-    const pkgRoot =
-      resolvedRoot &&
-      (!locatedRoot ||
-        isHostPackageRoot(resolvedRoot, rootDir) ||
-        realPath(resolvedRoot) === locatedRoot)
-        ? resolvedRoot
-        : locatedRoot || resolvedRoot;
+    const pkgRoot = absEntry
+      ? packageInstanceOf(absEntry, locatedRoot || null, rootDir)
+      : locatedRoot || null;
     // The host's file lies in no package, and not in the located one: the
     // bundle may render another module than the one read. A dependency
     // cache lies under node_modules and holds the located package's build.
@@ -803,7 +789,7 @@ export async function collectExternalPackageSources(opts: {
     // entry's directory. The host's entry stays the runtime entry.
     const selection =
       packageName && pkgRoot
-        ? kitSourceRoot(specifier, pkgRoot, absEntry)
+        ? kitSourceRoot(specifier, pkgRoot, absEntry, extensionsSet)
         : null;
     if (selection?.unresolved) {
       absEntry = null;
@@ -826,8 +812,11 @@ export async function collectExternalPackageSources(opts: {
       report(packageName, pkgRoot, condition);
     }
     const entryKey = packageName && `.${specifier.slice(packageName.length)}`;
-    absEntry ??=
-      condition?.entries.find(([entry]) => entry === entryKey)?.[1] ?? null;
+    // The file the table names for an entry (a condition's entries are the
+    // table's).
+    const tableEntry = (key: string | null): string | null =>
+      selection?.entries.find(([entry]) => entry === key)?.[1] ?? null;
+    absEntry ??= condition ? tableEntry(entryKey) : null;
     if (!absEntry || !pkgRoot) {
       const record: ExternalPackageOutcome = {
         specifier,
@@ -857,16 +846,8 @@ export async function collectExternalPackageSources(opts: {
 
     if (requireSourceEntry?.(specifier)) {
       const redirected =
-        condition && packageName
-          ? condition.entries.some(([entry]) => entry === entryKey)
-          : selection?.rule === 'src' &&
-            sourceEntryForSpecifier(
-              specifier,
-              join(pkgRoot, 'src'),
-              extensionsSet,
-              rootDir,
-              extensions
-            ) !== null;
+        (Boolean(condition && packageName) || selection?.rule === 'src') &&
+        tableEntry(entryKey) !== null;
       if (!redirected) {
         outcomes.push({
           specifier,
@@ -933,7 +914,7 @@ export async function collectExternalPackageSources(opts: {
       packageMap[specifier] ??= relative(rootDir, absEntry);
       // An entry whose source target is invalid is read from its runtime
       // target, which the condition's source root does not hold.
-      if (!condition.entries.some(([entry]) => entry === entryKey)) {
+      if (tableEntry(entryKey) === null) {
         ingestOutput(absEntry);
       }
       if (condition.root) {
@@ -955,13 +936,15 @@ export async function collectExternalPackageSources(opts: {
       dirExtensions[srcDir] = [...extensionsSet];
       onPackageResolved?.(specifier, srcDir);
 
-      const srcEntry = sourceEntryForSpecifier(
-        specifier,
-        srcDir,
-        extensionsSet,
-        rootDir,
-        extensions
-      );
+      // The table's guess for a package specifier; a local include's own
+      // file where it lies below `src/`. A guess, not a resolution: a file
+      // differing only in case is no guess.
+      const srcEntry = packageName
+        ? tableEntry(entryKey)
+        : localProbe?.kind === 'found' &&
+            isPathWithinRoot(srcDir, localProbe.path)
+          ? localProbe.path
+          : null;
       if (srcEntry) {
         packageMap[specifier] = relative(rootDir, srcEntry);
         const replaced = absEntry;
@@ -974,13 +957,7 @@ export async function collectExternalPackageSources(opts: {
       // no root key the src redirect is bypassed and untransformed dist ships.
       if (packageName) {
         if (packageName !== specifier && !(packageName in packageMap)) {
-          const rootEntry = sourceEntryForSpecifier(
-            packageName,
-            srcDir,
-            extensionsSet,
-            rootDir,
-            extensions
-          );
+          const rootEntry = tableEntry('.');
           if (rootEntry) {
             packageMap[packageName] = relative(rootDir, rootEntry);
             await redirect(packageName, rootEntry, pkgRoot, () =>
@@ -1172,7 +1149,8 @@ export async function systemKitDependencies(
           : dirname(importer),
         [],
         workspaces,
-        extensionPolicyJson(BUILT_IN_EXTENSION_POLICY)
+        // The engine's own policy, which it reads without one.
+        undefined
       )?.path ?? null,
     undefined,
     kitMembers
@@ -1507,7 +1485,7 @@ async function resolveModuleFile(
 ): Promise<{ file: string } | { why: string; caseMismatch?: true }> {
   const unresolved = { why: `'${specifier}' could not be resolved` };
   if (specifier.startsWith('.')) {
-    const probed = probeOnDisk(
+    const probed = probeFile(
       relativeSourceCandidates(importer, specifier, extensions),
       dirname(importer)
     );

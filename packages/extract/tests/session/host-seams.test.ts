@@ -77,8 +77,8 @@ export const system = createSystem({}).extend(kit);
     }),
     resolveSpecifier: requireResolveSpecifier,
     locatePackage: (name: string) => (name === '@kits/ui' ? kit : null),
-    // The stand-in table: the kit's `src/`, which a loader-only kit needs
-    // as its source entry.
+    // The stand-in table: the kit's `src/`, and its index as the guessed
+    // entry, which a loader-only kit needs as its source entry.
     resolveKitSourceRoot: (
       _specifier: string,
       _fromDir: string,
@@ -91,7 +91,7 @@ export const system = createSystem({}).extend(kit);
       JSON.stringify({
         rule: 'src',
         root: join(packageDir ?? '', 'src'),
-        entries: [],
+        entries: [['.', join(packageDir ?? '', 'src', 'index.ts')]],
         invalid: [],
         unresolved: null,
       }),

@@ -1,6 +1,5 @@
 import {
   analysedOutputs,
-  BUILT_IN_EXTENSION_POLICY,
   builtInAssetClassification,
   DiagnosticFailure,
   droppedExtensionMessage,
@@ -544,7 +543,7 @@ export const unpluginFactory: UnpluginFactory<
   let hostConditions: readonly string[] = [];
   /** The bundler's extension order, as its resolved configuration holds
    *  it; the built-in policy for a host none is read from (Rolldown). */
-  let hostExtensions: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
+  let hostExtensions: HostExtensionPolicy | undefined;
   let hostAssets: HostAssetClassification =
     builtInAssetClassification('noHost');
   /** How the bundler expands computed loads (spec §6.3); none where its
@@ -640,7 +639,7 @@ export const unpluginFactory: UnpluginFactory<
       session.driverLabel = 'animus-unplugin';
       session.rootDir = root;
       session.conditions = hostConditions;
-      session.extensionPolicy = hostExtensions;
+      if (hostExtensions) session.extensionPolicy = hostExtensions;
       session.assetClassification = hostAssets;
       session.loadExpander = hostLoadExpander;
       session.hostResolve = hostResolver;

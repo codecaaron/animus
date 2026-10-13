@@ -54,7 +54,8 @@ require_fresh_napi_v2() {
     echo "ERROR: v2 NAPI binary missing. Run: vp run build:extract-v2" >&2
     return 1
   fi
-  local newest_input
+  # Fail closed: an input find cannot read leaves freshness unknown.
+  local newest_input find_status=0
   newest_input=$(find \
     packages/extract/crates/extract-v2/src \
     packages/extract/crates/extract-v2/build.rs \
@@ -65,7 +66,11 @@ require_fresh_napi_v2() {
     packages/extract/crates/system-loader/Cargo.toml \
     packages/extract/crates/system-loader/Cargo.lock \
     packages/extract/crates/system-loader/rust-toolchain.toml \
-    -type f -newer "$napi_binary" -print -quit 2>/dev/null || true)
+    -type f -newer "$napi_binary" -print -quit) || find_status=$?
+  if [ "$find_status" -ne 0 ]; then
+    echo "ERROR: could not check the v2 NAPI binary's freshness: reading its Rust inputs failed (find exit $find_status). Run: vp run build:extract-v2" >&2
+    return 1
+  fi
   if [ -n "$newest_input" ]; then
     echo "ERROR: host v2 NAPI binary stale: $napi_binary (Rust input newer: $newest_input). Run: vp run build:extract-v2" >&2
     return 1
