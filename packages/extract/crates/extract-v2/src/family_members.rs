@@ -810,7 +810,7 @@ impl<'f> ObjectMembers<'f> {
         }
         let changed = flow.close();
         #[cfg(test)]
-        crate::engine::note_openings(&changed);
+        crate::engine::note_openings("member tables", &changed);
         changed
     }
 

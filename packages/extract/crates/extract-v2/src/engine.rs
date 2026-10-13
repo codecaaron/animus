@@ -1245,7 +1245,7 @@ impl ExtractEngine {
         #[cfg(test)]
         OPENINGS.with(|openings| openings.borrow_mut().clear());
         #[cfg(test)]
-        note_openings(&changes);
+        note_openings("style statics", &changes);
         for ((file, local), (reason, uncertainty)) in unstable_style_statics(&changes, &statics_by_file) {
             if statics_by_file.get_mut(&file).and_then(|statics| statics.remove(&local)).is_some() {
                 // Only a value the binding had before const initializers read
@@ -1729,17 +1729,18 @@ impl ExtractEngine {
 
 #[cfg(test)]
 thread_local! {
-    /// The last analysis's openings on this thread, by kind and site.
-    static OPENINGS: std::cell::RefCell<std::collections::BTreeSet<(crate::flow::ReasonId, String)>> =
+    /// The last analysis's openings on this thread, by relation, kind and
+    /// site.
+    static OPENINGS: std::cell::RefCell<std::collections::BTreeSet<(&'static str, crate::flow::ReasonId, String)>> =
         const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
-/// Adds a closed relation's openings to the analysis's, for check 6.
+/// Adds the openings of `relation`, closed, to the analysis's, for check 6.
 #[cfg(test)]
-pub(crate) fn note_openings(changes: &crate::flow::ValueEffects) {
+pub(crate) fn note_openings(relation: &'static str, changes: &crate::flow::ValueEffects) {
     OPENINGS.with(|openings| {
         let mut openings = openings.borrow_mut();
-        openings.extend(changes.closure().openings.iter().map(|opening| (opening.reason, opening.site.clone())));
+        openings.extend(changes.closure().openings.iter().map(|opening| (relation, opening.reason, opening.site.clone())));
     });
 }
 
@@ -2923,7 +2924,7 @@ export const App = () => <Box tone="red" />;
         lost_properties: std::collections::BTreeSet<(String, String, String)>,
         pruned: std::collections::BTreeSet<(String, String, String)>,
         removed_imports: std::collections::BTreeSet<(String, String)>,
-        openings: std::collections::BTreeSet<(crate::flow::ReasonId, String)>,
+        openings: std::collections::BTreeSet<(&'static str, crate::flow::ReasonId, String)>,
     }
 
     fn emission(files: &[(String, String)]) -> Emission {
@@ -3068,8 +3069,9 @@ export const App = () => <Box tone="red" />;
     /// of a module the analysis cannot find) may turn what it emitted into
     /// a reported loss, but never prunes more, drops a style or a component
     /// without a finding naming it, changes a static value, makes a
-    /// component static, removes an import, or loses an opening from either
-    /// relation of what may change (check 6, by kind and site).
+    /// component static, removes an import, or loses an opening from the
+    /// style statics' or the member tables' relation of what may change
+    /// (check 6, by relation, kind and site).
     #[test]
     fn adding_opacity_never_shrinks_emission() {
         let file = |path: &str, source: &str| (path.to_string(), source.to_string());
@@ -3122,8 +3124,13 @@ export const App = () => <Box tone="red" />;
             base.pruned.len(),
             base.lost_properties.len(),
         ];
+        // Each relation has an opening to keep, compared within that relation.
+        let opens = |relation| base.openings.iter().any(|(of, ..)| *of == relation);
         assert!(
-            channels.iter().all(|count| *count > 0) && !base.removed_imports.is_empty() && !base.openings.is_empty(),
+            channels.iter().all(|count| *count > 0)
+                && !base.removed_imports.is_empty()
+                && opens("style statics")
+                && opens("member tables"),
             "{base:?}"
         );
         for injected in injections {
