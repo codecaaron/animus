@@ -14011,6 +14011,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "R['defaultProps'] = { size: 'lg' };\nexport const App = () => <R />;",
             // Through a namespace, resolved as a render's member tag is.
             "import * as ui from './r';\nui.R.defaultProps = { size: 'lg' };\nexport const App = () => <R />;",
+            "Object.assign(R.defaultProps, { size: 'lg' });\nexport const App = () => <R />;",
         ] {
             let (sizes, states, _) = wrapper_kept(app);
             assert_eq!((sizes, states), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{app}");
@@ -14026,6 +14027,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "{:?}",
             out.diagnostics
         );
+        // Reading an unknown component's defaults changes nothing: React's
+        // own code does it.
+        let app = "import { R } from './r';\nfunction create(e) { return e && e.defaultProps; }\nexport const App = () => <R size=\"sm\" />;\n";
+        let out = analyze(&[("r.tsx", WRAPPED), ("app.tsx", app)], &test_inputs());
+        assert!(!out.diagnostics.iter().any(|d| d.message.contains("defaultProps")), "{:?}", out.diagnostics);
     }
 
     /// A same-module wrapper that forwards its props by spread stands in for
