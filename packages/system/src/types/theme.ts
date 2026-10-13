@@ -48,14 +48,17 @@ export type CSSColorValue =
   | (string & {});
 
 /**
- * Scale names emitted as CSS variables. The `colors` fallback covers augmented
- * `Theme` interfaces, which carry no `__emitted` tuple.
+ * Scale names emitted as CSS variables: the keys of a built theme's
+ * `__emitted` set, or the union an earlier theme's tuple holds. The `colors`
+ * fallback covers augmented `Theme` interfaces, which carry no `__emitted`.
  */
 export type EmittedScales<T> = T extends { __emitted: [infer E extends string] }
   ? E & keyof TokenScales<T>
-  : 'colors' extends keyof TokenScales<T>
-    ? 'colors'
-    : never;
+  : T extends { __emitted: infer Set extends Record<string, true> }
+    ? keyof Set & keyof TokenScales<T>
+    : 'colors' extends keyof TokenScales<T>
+      ? 'colors'
+      : never;
 
 export type EmittedTokenPaths<T> = keyof LiteralPaths<
   Pick<TokenScales<T>, EmittedScales<T>>,

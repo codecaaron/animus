@@ -345,7 +345,28 @@ function validateColors(colors: Record<string, unknown>): void {
 /** Identity mapping that caches the type, preventing TS2589 depth growth. */
 export type Flatten<T> = { [K in keyof T]: T[K] };
 
-type MergeRecord<Base, Incoming> = Omit<Base, keyof Incoming> & Incoming;
+/**
+ * `T` without the keys `K`, its other keys in `T`'s own order. `Omit` maps
+ * over a `keyof` union instead, so an emitted declaration lists the keys in
+ * the type checker's order, which follows the order files were checked in
+ * and changes between builds.
+ */
+type OrderedOmit<T, K> = { [P in keyof T as P extends K ? never : P]: T[P] };
+
+type MergeRecord<Base, Incoming> = OrderedOmit<Base, keyof Incoming> & Incoming;
+
+/** An object type keyed by each name in `Names`, in the tuple's order: a
+ *  `Record` over `Names[number]` would print in the type checker's order. */
+type NamedKeys<Names extends readonly string[], Value> = {
+  [I in keyof Names as I extends `${number}` ? Names[I] : never]: Value;
+};
+
+/** The scales a theme emits as CSS variables, as an object type whose keys
+ *  print in the order the scales were added: a union of their names would
+ *  print in the type checker's order. */
+type EmittedSet = Record<string, true>;
+type NoEmitted = Record<never, true>;
+type WithEmitted<Set, Added> = { [K in keyof (Set & Added)]: true };
 
 /**
  * Var NAMES across all scales. Derives from the already-inferred `Vars`, so it
@@ -360,11 +381,12 @@ type ContextualVarNames<Vars> = {
 type ThemeScaleKeys<T> = Exclude<keyof T & string, ThemeStructuralKey>;
 
 /** Theme data plus boundary members, non-enumerable at runtime. */
-type BuiltTheme<T, Emitted extends string> = {
+type BuiltTheme<T, Emitted extends EmittedSet> = {
   [K in keyof T]: T[K];
 } & {
-  /** Tuple wrapper prevents never-distribution. Non-enumerable at runtime. */
-  readonly __emitted: [Emitted];
+  /** The emitted scales, in the order they were added. Non-enumerable at
+   *  runtime. */
+  readonly __emitted: Emitted;
   manifest: ThemeManifest;
   serialize(): SerializedTheme;
   /** Dot-path token → `var()` ref, or the raw value if not emitted. */
@@ -578,7 +600,7 @@ type MergeDeclarationScales<Base, Over> = Flatten<{
 type WithDeclarationScales<Merged, Scales> = [keyof Scales] extends [never]
   ? Merged
   : Flatten<
-      Omit<Merged, '__declarationScales'> &
+      OrderedOmit<Merged, '__declarationScales'> &
         Record<'__declarationScales', Scales>
     >;
 
@@ -611,10 +633,13 @@ type MergeThemeData<Base, Source> = Flatten<
 >;
 
 type EmittedThemeScalesOf<Source> = Source extends {
-  readonly __emitted: [infer Emitted extends string];
+  // A theme declared before the set: a tuple holding a union of names.
+  readonly __emitted: [infer Names extends string];
 }
-  ? Emitted
-  : never;
+  ? Record<Names, true>
+  : Source extends { readonly __emitted: infer Emitted extends EmittedSet }
+    ? Emitted
+    : NoEmitted;
 
 type ExtendedThemeSourceOf<Source> = Source extends {
   system: { toConfig(...args: never[]): unknown };
@@ -720,7 +745,7 @@ function reseedStateFromManifest(
 
 export class ThemeBuilder<
   T extends Record<string, unknown> = Record<string, unknown>,
-  Emitted extends string = never,
+  Emitted extends EmittedSet = NoEmitted,
   Stage extends ThemeBuilderStage = 'inherit',
 > {
   // Without a member referencing Stage, 'inherit' and 'extend' builders are
@@ -744,7 +769,7 @@ export class ThemeBuilder<
     const nextTheme = merge(deepCopyPlain(this._state.theme), { breakpoints });
     // Omit replaces EmptyTheme's Record<string, number> with literal keys; the
     // index signature would otherwise widen keyof breakpoints to string.
-    type Merged = Omit<T, 'breakpoints'> &
+    type Merged = OrderedOmit<T, 'breakpoints'> &
       Record<'breakpoints', { [K in keyof BP]: BP[K] }>;
     type Next = { [K in keyof Merged]: Merged[K] };
     return new ThemeBuilder<Next, Emitted, 'extend'>(
@@ -786,7 +811,7 @@ export class ThemeBuilder<
           DeclarationScalesOfTheme<ThemeSourceOf<Source>>
         >
       >,
-      Emitted | EmittedThemeScalesOf<ThemeSourceOf<Source>>,
+      WithEmitted<Emitted, EmittedThemeScalesOf<ThemeSourceOf<Source>>>,
       Stage
     >(copyState(this._state, nextTheme));
     next._state.declarationScales = overlayDeclarationScales(
@@ -817,7 +842,7 @@ export class ThemeBuilder<
         DeclarationScalesOfTheme<T>
       >
     >,
-    Emitted | EmittedThemeScalesOf<ExtendedThemeSourceOf<Source>>,
+    WithEmitted<Emitted, EmittedThemeScalesOf<ExtendedThemeSourceOf<Source>>>,
     'inherit'
   > {
     const themeHalf: Record<string, unknown> = isLibraryBundle(source)
@@ -902,7 +927,7 @@ export class ThemeBuilder<
           DeclarationScalesOfTheme<T>
         >
       >,
-      Emitted | EmittedThemeScalesOf<ExtendedThemeSourceOf<Source>>,
+      WithEmitted<Emitted, EmittedThemeScalesOf<ExtendedThemeSourceOf<Source>>>,
       'inherit'
     >(copyState(this._state, nextTheme));
     next._state.extendProvenance = provenance;
@@ -967,12 +992,14 @@ export class ThemeBuilder<
     const nextTheme = merge(deepCopyPlain(this._state.theme), { colors });
     type ExistingColors = T extends { colors: infer Existing } ? Existing : {};
     type Next = Flatten<
-      Omit<T, 'colors'> &
+      OrderedOmit<T, 'colors'> &
         Record<'colors', Flatten<MergeRecord<ExistingColors, NextColors>>>
     >;
-    const next = new ThemeBuilder<Next, Emitted | 'colors', 'extend'>(
-      copyState(this._state, nextTheme)
-    );
+    const next = new ThemeBuilder<
+      Next,
+      WithEmitted<Emitted, Record<'colors', true>>,
+      'extend'
+    >(copyState(this._state, nextTheme));
     next._state.emittedScales.add('colors');
     return next;
   }
@@ -1041,7 +1068,7 @@ export class ThemeBuilder<
 
     type ColorsWithModes = (T extends { colors: infer C } ? C : unknown) &
       AliasKeys;
-    type Merged = Omit<T, 'colors'> & Record<'colors', ColorsWithModes>;
+    type Merged = OrderedOmit<T, 'colors'> & Record<'colors', ColorsWithModes>;
     type Next = { [K in keyof Merged]: Merged[K] };
     return new ThemeBuilder<Next, Emitted, 'extend'>(
       copyState(this._state, nextTheme)
@@ -1086,12 +1113,14 @@ export class ThemeBuilder<
         [name]: values,
       });
     }
-    type NextEmitted = Emit extends true ? Emitted | Key : Emitted;
+    type NextEmitted = Emit extends true
+      ? WithEmitted<Emitted, Record<Key, true>>
+      : Emitted;
     type ExistingScale = Key extends keyof T ? T[Key] : {};
     type NextScale = Replace extends true
       ? NewScale
       : Flatten<MergeRecord<ExistingScale, NewScale>>;
-    type Next = Flatten<Omit<T, Key> & Record<Key, NextScale>>;
+    type Next = Flatten<OrderedOmit<T, Key> & Record<Key, NextScale>>;
     const next = new ThemeBuilder<Next, NextEmitted, 'extend'>(
       copyState(this._state, nextTheme)
     );
@@ -1147,10 +1176,11 @@ export class ThemeBuilder<
       ? { [K in keyof Values]: Values[K] }
       : Flatten<MergeRecord<ExistingValues, Values>>;
     type NextScales = Flatten<
-      Omit<ExistingScales, Key> & Record<Key, NextValues>
+      OrderedOmit<ExistingScales, Key> & Record<Key, NextValues>
     >;
     type Next = Flatten<
-      Omit<T, '__declarationScales'> & Record<'__declarationScales', NextScales>
+      OrderedOmit<T, '__declarationScales'> &
+        Record<'__declarationScales', NextScales>
     >;
     const next = new ThemeBuilder<Next, Emitted, 'extend'>(
       copyState(this._state, this._state.theme)
@@ -1187,7 +1217,7 @@ export class ThemeBuilder<
     type WithPhantoms = {
       [K in keyof T]: K extends keyof Vars
         ? Vars[K] extends readonly string[]
-          ? T[K] & Record<Vars[K][number], `var(--${string})`>
+          ? T[K] & NamedKeys<Vars[K], `var(--${string})`>
           : T[K]
         : T[K];
     };
@@ -1227,7 +1257,7 @@ export class ThemeBuilder<
       [key]: updateFn(this._state.theme[key as string] as T[Key]),
     });
     type NextScale = Flatten<MergeRecord<T[Key], ReturnType<Fn>>>;
-    type Next = Flatten<Omit<T, Key> & Record<Key, NextScale>>;
+    type Next = Flatten<OrderedOmit<T, Key> & Record<Key, NextScale>>;
     return new ThemeBuilder<Next, Emitted, 'extend'>(
       copyState(this._state, nextTheme)
     );
