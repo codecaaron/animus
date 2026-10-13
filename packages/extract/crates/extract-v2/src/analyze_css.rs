@@ -3301,6 +3301,8 @@ fn written_member_tags(ff: &FileFacts) -> std::collections::BTreeSet<&str> {
         .filter_map(|fact| match fact {
             UsageFact::Element { tag: TagFact::Member(path), .. } => Some(path.as_str()),
             UsageFact::CreateElement { member: Some(path), .. } => Some(path.as_str()),
+            // Its defaults reach its renders: resolved as a render's tag is.
+            UsageFact::DefaultProps { tag: TagFact::Member(path), .. } => Some(path.as_str()),
             _ => None,
         })
         .collect()
@@ -4534,13 +4536,13 @@ fn identity_uncertainty_diagnostics(
             continue;
         };
         // Whether the use is written as a call: it is named as written.
-        let (tag, written_as_call, origin, at, shared_name) = match site {
+        let (tag, written_as_call, default_props, origin, at, shared_name) = match site {
             UncertainIdentity::Tag(site) => {
-                (site.tag.as_deref(), site.written_as_call, site.origin, Some(site.at), false)
+                (site.tag.as_deref(), site.written_as_call, site.default_props, site.origin, Some(site.at), false)
             }
             UncertainIdentity::Unattributed(name) => match first_site_of(ff, name) {
-                Some((written_as_call, origin, at)) => (Some(name.as_str()), written_as_call, origin, Some(at), true),
-                None => (Some(name.as_str()), false, None, None, true),
+                Some((written_as_call, origin, at)) => (Some(name.as_str()), written_as_call, false, origin, Some(at), true),
+                None => (Some(name.as_str()), false, false, None, None, true),
             },
         };
         let key = tag.unwrap_or("createElement(…)").to_string();
@@ -4554,9 +4556,10 @@ fn identity_uncertainty_diagnostics(
                 "receives a component chosen at runtime".to_string(),
             ),
             Some(tag) => {
-                let spelling = match written_as_call {
-                    true => format!("createElement({tag})"),
-                    false => format!("<{tag}>"),
+                let spelling = match (default_props, written_as_call) {
+                    (true, _) => format!("{tag}.defaultProps"),
+                    (false, true) => format!("createElement({tag})"),
+                    (false, false) => format!("<{tag}>"),
                 };
                 let (class, mut reason) = uncertain_tag_reason(file, ff, tag, origin, files, inputs, links);
                 if shared_name {

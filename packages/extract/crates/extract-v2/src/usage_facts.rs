@@ -123,6 +123,8 @@ pub struct UncertainTag {
     pub create_element: bool,
     /// Written as a `createElement` call, whatever the analysis reads it as.
     pub written_as_call: bool,
+    /// The tag's `defaultProps`, not a render of it.
+    pub default_props: bool,
     pub origin: Option<TagOrigin>,
     /// Byte offset of the element or call.
     pub at: u32,
@@ -188,6 +190,9 @@ pub enum UsageFact {
         /// Collected with the file's scopes only.
         #[serde(skip)]
         origin: Option<TagOrigin>,
+        /// Byte offset of the member.
+        #[serde(skip)]
+        at: u32,
     },
     /// `cloneElement(child, …)` of an element usage cannot name: the
     /// overrides can reach any component.
@@ -5532,7 +5537,10 @@ fn children_attribute(children: &[oxc::ast::ast::JSXChild<'_>]) -> Option<AttrFa
     let at = first.span().start;
     let end = written.last().map_or(at, |child| child.span().end);
     let literal = match written.as_slice() {
-        [JSXChild::Text(text)] if !text.value.contains('\n') => Some(text.value.to_string()),
+        // An entity (`&#109;`) reads as another character at runtime.
+        [JSXChild::Text(text)] if !text.value.contains('\n') && !text.value.contains('&') => {
+            Some(text.value.to_string())
+        }
         [JSXChild::ExpressionContainer(container)] => match container.expression.as_expression().map(crate::chain_walk::unwrap_type_assertions) {
             Some(Expression::StringLiteral(literal)) => Some(literal.value.to_string()),
             _ => None,
@@ -5987,7 +5995,7 @@ fn literal_value(expression: &Expression<'_>) -> Option<Value> {
 impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
     fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
         if member.property.name == "defaultProps" {
-            self.record_default_props(&member.object);
+            self.record_default_props(&member.object, member.span.start);
         }
         oxc::ast_visit::walk::walk_static_member_expression(self, member);
     }
@@ -6001,7 +6009,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
             _ => None,
         };
         if key == Some("defaultProps") {
-            self.record_default_props(&member.object);
+            self.record_default_props(&member.object, member.span.start);
         }
         oxc::ast_visit::walk::walk_computed_member_expression(self, member);
     }
@@ -6077,7 +6085,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
 impl<'a> FactCollector<'a, '_> {
     /// `X.defaultProps` read or written: React gives X's renders those props
     /// wherever they leave one out.
-    fn record_default_props(&mut self, object: &Expression<'a>) {
+    fn record_default_props(&mut self, object: &Expression<'a>, at: u32) {
         let (tag, root) = match object.get_inner_expression() {
             Expression::Identifier(id) => (TagFact::Ident(id.name.to_string()), &**id),
             Expression::StaticMemberExpression(member) => {
@@ -6089,7 +6097,7 @@ impl<'a> FactCollector<'a, '_> {
             _ => return,
         };
         let origin = self.origin_of(root);
-        self.facts.push(UsageFact::DefaultProps { tag, origin });
+        self.facts.push(UsageFact::DefaultProps { tag, origin, at });
     }
 
     /// A `cloneElement` call: its overrides count for the cloned element's
@@ -7401,8 +7409,23 @@ pub fn filter_usage_scan(
             // React gives every render the default props it leaves out: no
             // option of the component is proven unused. A name that is no
             // extracted component is someone else's.
-            UsageFact::DefaultProps { tag, origin } => {
+            UsageFact::DefaultProps { tag, origin, at } => {
+                // A component usage cannot name may be extracted: its
+                // defaults reach renders unseen.
                 let Some((tag_name, resolved_binding)) = resolve_tag(tag, *origin, member_expr_bindings) else {
+                    let name = match tag {
+                        TagFact::Member(path) => path,
+                        TagFact::Ident(name) => name,
+                    };
+                    result.identity_uncertain = true;
+                    result.uncertain_tags.push(UncertainTag {
+                        tag: Some(name.clone()),
+                        create_element: false,
+                        written_as_call: false,
+                        default_props: true,
+                        origin: *origin,
+                        at: *at,
+                    });
                     continue;
                 };
                 let Some(config) = component_configs.get(tag_name) else {
@@ -7419,6 +7442,7 @@ pub fn filter_usage_scan(
                         tag: Some(name.to_string()),
                         create_element: false,
                         written_as_call: *written_as_call,
+                        default_props: false,
                         origin: *origin,
                         at: span.0,
                     });
@@ -7598,6 +7622,7 @@ pub fn filter_usage_scan(
                         tag: tag.cloned(),
                         create_element: true,
                         written_as_call: true,
+                        default_props: false,
                         origin: *origin,
                         at: *at,
                     });
