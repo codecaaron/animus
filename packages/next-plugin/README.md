@@ -128,6 +128,21 @@ Two rules either way:
   you add to the script tag. The full CSP footguns are documented in the
   [`@animus-ui/vite-plugin` README](https://github.com/codecaaron/animus/tree/main/packages/vite-plugin#content-security-policy).
 
+## MDX
+
+Animus reads each `.mdx` file as the JSX it renders: its imports, exports,
+tags, props and `{expressions}`. It needs no MDX compiler. A component a tag
+names, or one your provider maps markdown to (`# x` → your heading), counts
+as rendered. Markdown and code examples render nothing.
+
+MDX renders components; it declares no styles. Animus reports any reference
+to its builder in an `.mdx` file as `SOURCE_MDX_STYLE_DECLARATION`, and a
+strict build fails on it. That covers any import from `@animus-ui/system`,
+and any member named like a builder method (`styles`, `variant`,
+`compound`, `states`, `system`, `props`, `extend`, `asElement`,
+`asComponent`, `asClass`), read, called or destructured. So `{Box.styles}`
+is reported too. Declare components in `.ts` or `.tsx` files and import them.
+
 ## What It Does
 
 - Transforms `@animus-ui/system` builder chains into static CSS (webpack loader or Turbopack loader rule)

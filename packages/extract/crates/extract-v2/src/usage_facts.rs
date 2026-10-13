@@ -7610,8 +7610,8 @@ pub fn filter_usage_scan(
 const BUILDER_METHODS: [&str; 10] =
     ["styles", "variant", "compound", "states", "system", "props", "extend", "asElement", "asComponent", "asClass"];
 
-/// The `@animus-ui/system` functions that declare system styles.
-const STYLE_DECLARING_IMPORTS: [&str; 3] = ["createSystem", "createGlobalStyles", "createKeyframes"];
+/// The package whose builder declares styles.
+const SYSTEM_PACKAGE: &str = "@animus-ui/system";
 
 /// A reference to the Animus builder in a file analyzed for usage only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -7619,15 +7619,15 @@ pub struct BuilderReference {
     /// 1-based position of the member or import.
     pub line: usize,
     pub column: usize,
-    /// The builder method, or the imported function.
+    /// The builder method, or the import.
     pub name: String,
 }
 
 /// Every reference to the Animus builder `program` makes: a member whose
-/// property is a builder method, read or called, static or through a
-/// literal key, and an import of a style-declaring `@animus-ui/system`
-/// function under any local name. Strings, templates and comments hold
-/// none. A key built at runtime (`ds['sty' + 'les']`) is not seen.
+/// property is a builder method, read, called or destructured, static or
+/// through a literal key, and any import from `@animus-ui/system`.
+/// Strings, templates and comments hold none. A key built at runtime
+/// (`ds['sty' + 'les']`) is not seen.
 pub(crate) fn builder_references(program: &Program<'_>) -> Vec<(Span, String)> {
     struct References(Vec<(Span, String)>);
     impl<'a> Visit<'a> for References {
@@ -7650,16 +7650,40 @@ pub(crate) fn builder_references(program: &Program<'_>) -> Vec<(Span, String)> {
             }
             oxc::ast_visit::walk::walk_computed_member_expression(self, member);
         }
+        // MDX has no use for the system package: any import of it, named,
+        // default or namespace, reaches the builder's style declarations.
         fn visit_import_declaration(&mut self, import: &oxc::ast::ast::ImportDeclaration<'a>) {
-            if import.source.value == "@animus-ui/system" {
-                for specifier in import.specifiers.iter().flatten() {
-                    if let ImportDeclarationSpecifier::ImportSpecifier(named) = specifier {
-                        let imported = named.imported.name();
-                        if STYLE_DECLARING_IMPORTS.contains(&imported.as_str()) {
-                            self.0.push((named.span, imported.to_string()));
-                        }
-                    }
-                }
+            let source = import.source.value.as_str();
+            if source == SYSTEM_PACKAGE || source.strip_prefix(SYSTEM_PACKAGE).is_some_and(|rest| rest.starts_with('/')) {
+                self.0.push((import.span, format!("import from {source}")));
+            }
+        }
+        // A builder method destructured, as `const { styles: s } = ds`.
+        fn visit_binding_property(&mut self, property: &oxc::ast::ast::BindingProperty<'a>) {
+            self.method_key(&property.key);
+            oxc::ast_visit::walk::walk_binding_property(self, property);
+        }
+        fn visit_assignment_target_property_property(
+            &mut self,
+            property: &oxc::ast::ast::AssignmentTargetPropertyProperty<'a>,
+        ) {
+            self.method_key(&property.name);
+            oxc::ast_visit::walk::walk_assignment_target_property_property(self, property);
+        }
+        fn visit_assignment_target_property_identifier(
+            &mut self,
+            property: &oxc::ast::ast::AssignmentTargetPropertyIdentifier<'a>,
+        ) {
+            if BUILDER_METHODS.contains(&property.binding.name.as_str()) {
+                self.0.push((property.binding.span, property.binding.name.to_string()));
+            }
+            oxc::ast_visit::walk::walk_assignment_target_property_identifier(self, property);
+        }
+    }
+    impl References {
+        fn method_key(&mut self, key: &oxc::ast::ast::PropertyKey<'_>) {
+            if let Some(name) = key.static_name().filter(|name| BUILDER_METHODS.contains(&name.as_ref())) {
+                self.0.push((key.span(), name.to_string()));
             }
         }
     }

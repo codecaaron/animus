@@ -95,8 +95,8 @@ export interface AnimusExtractOptions {
   exclude?: string[];
   /**
    * Replaces the default extension list entirely. `.mdx` is read for the
-   * components it renders, with no MDX compiler; a style it declares is an
-   * error.
+   * components it renders, with no MDX compiler; any reference to the
+   * builder in it is an error (see the README's MDX section).
    */
   extensions?: string[];
   /**
