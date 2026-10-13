@@ -130,21 +130,26 @@ impl ExtensionPolicy {
         // the rest.
         let aliased = self.alias.iter().any(|(emitted, _)| base.ends_with(emitted.as_str()));
         if !aliased {
-            match see(base) {
-                Seen::File => return Probe::Found(base.to_string()),
-                Seen::CaseOnly(actual) => return Probe::CaseMismatch { candidate: base.to_string(), actual },
-                Seen::Missing => {}
+            match probe_candidates([base.to_string()], &see) {
+                Probe::Absent => {}
+                found => return found,
             }
         }
-        for candidate in self.candidates(base).into_iter().skip(usize::from(!aliased)) {
-            match see(&candidate) {
-                Seen::File => return Probe::Found(candidate),
-                Seen::CaseOnly(actual) => return Probe::CaseMismatch { candidate, actual },
-                Seen::Missing => {}
-            }
-        }
-        Probe::Absent
+        probe_candidates(self.candidates(base).into_iter().skip(usize::from(!aliased)), see)
     }
+}
+
+/// The first of `candidates` that `see` finds, in order. A candidate found
+/// only under another case ends the probe as a mismatch.
+pub fn probe_candidates(candidates: impl IntoIterator<Item = String>, see: impl Fn(&str) -> Seen) -> Probe {
+    for candidate in candidates {
+        match see(&candidate) {
+            Seen::File => return Probe::Found(candidate),
+            Seen::CaseOnly(actual) => return Probe::CaseMismatch { candidate, actual },
+            Seen::Missing => {}
+        }
+    }
+    Probe::Absent
 }
 
 /// Why `subject` names no file: `candidate`, the file it would load, is

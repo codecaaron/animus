@@ -355,14 +355,10 @@ fn is_typescript_source(path: &str) -> bool {
 /// policy, restricted to `sources`, each spelled exactly below `within`. A
 /// candidate found only under another spelling ends the guess with none.
 fn guess_entry(context: &ResolutionContext, base: &str, sources: Option<&[String]>, within: &Path) -> Option<String> {
-    for candidate in context.extensions.candidates_among(base, sources, true) {
-        match resolution::see_within(within, &candidate) {
-            resolution::Seen::File => return Some(candidate),
-            resolution::Seen::CaseOnly(_) => return None,
-            resolution::Seen::Missing => {}
-        }
-    }
-    None
+    resolution::probe_candidates(context.extensions.candidates_among(base, sources, true), |candidate| {
+        resolution::see_within(within, candidate)
+    })
+    .found()
 }
 
 /// The deepest directory holding every entry's file.

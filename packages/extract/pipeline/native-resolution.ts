@@ -6,6 +6,8 @@
  * caller.
  */
 
+import type * as NativeEngine from '../crates/extract-v2/index';
+
 /** An extension order: what a specifier's base is tried with, in order. */
 export interface ExtensionOrder {
   /** Appended to the base, then to `{base}/index`. */
@@ -40,47 +42,49 @@ export type ProbedFile =
   | { kind: 'case-mismatch'; candidate: string; actual: string }
   | { kind: 'absent' };
 
-interface NativeResolution {
-  builtInExtensionPolicy(): string;
-  specifierCandidates(
-    base: string,
-    extensionPolicyJson?: string,
-    sources?: string[],
-    joinedIndex?: boolean
-  ): string[];
-  seeFile(
-    candidate: string,
-    within?: string
-  ): { kind: string; actual?: string | null };
-  probeFile(
-    candidates: string[],
-    within?: string
-  ): {
-    kind: string;
-    path?: string | null;
-    candidate?: string | null;
-    actual?: string | null;
-  };
-}
+type NativeResolution = Pick<
+  typeof NativeEngine,
+  'builtInExtensionPolicy' | 'specifierCandidates' | 'seeFile' | 'probeFile'
+>;
 
-let loaded: NativeResolution | undefined;
+let loaded: typeof NativeEngine | undefined;
 
-function native(): NativeResolution {
+/** The native engine module, loaded once: the one place the pipeline and
+ *  the session require it. */
+export function requireNativeEngine(): typeof NativeEngine {
   // SAFETY: the package's own native entry, whose generated `index.d.ts`
-  // declares these functions with these signatures.
+  // declares this module.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  loaded ??= require('@animus-ui/extract') as NativeResolution;
+  loaded ??= require('@animus-ui/extract') as typeof NativeEngine;
   return loaded;
 }
 
-let builtIn: ExtensionOrder | undefined;
+function native(): NativeResolution {
+  return requireNativeEngine();
+}
 
 /** The built-in extension policy, as the system loader holds it. */
-export function builtInExtensionOrder(): ExtensionOrder {
+export function readBuiltInExtensionOrder(): ExtensionOrder {
   // SAFETY: the engine serializes its own ExtensionPolicy, whose fields are
   // these.
-  builtIn ??= JSON.parse(native().builtInExtensionPolicy()) as ExtensionOrder;
-  return builtIn;
+  return JSON.parse(native().builtInExtensionPolicy()) as ExtensionOrder;
+}
+
+const policyJsonCache = new WeakMap<ExtensionOrder, string>();
+
+/** The policy as the system loader reads it (`ExtensionPolicy`), encoded
+ *  once per policy object. */
+export function extensionPolicyJson(policy: ExtensionOrder): string {
+  let json = policyJsonCache.get(policy);
+  if (json === undefined) {
+    json = JSON.stringify({
+      appended: policy.appended,
+      nodeNext: policy.nodeNext,
+      alias: policy.alias,
+    });
+    policyJsonCache.set(policy, json);
+  }
+  return json;
 }
 
 /** The files `base` can name, in policy order: itself, with each appended
@@ -103,7 +107,7 @@ export function specifierCandidates(
   const { sources, joinedIndex, policy } = options;
   return native().specifierCandidates(
     base,
-    policy === undefined ? undefined : policyJson(policy),
+    policy === undefined ? undefined : extensionPolicyJson(policy),
     sources === undefined ? undefined : [...sources],
     joinedIndex
   );
@@ -115,21 +119,19 @@ export function specifierCandidates(
  *  before opening it. */
 export function seeFile(candidate: string, within?: string): SeenFile {
   const seen = native().seeFile(candidate, within);
-  if (seen.kind === 'file') return { kind: 'file' };
-  if (seen.kind === 'case-only') {
-    return { kind: 'case-only', actual: seen.actual ?? candidate };
-  }
-  return { kind: 'missing' };
+  // SAFETY: the engine sets `actual` on every `case-only` answer.
+  if (seen.kind === 'case-only')
+    return { kind: 'case-only', actual: seen.actual! };
+  return seen.kind === 'file' ? { kind: 'file' } : { kind: 'missing' };
 }
 
 /** The first of `candidates` the filesystem holds, spelled exactly below
  *  `within` when given; a candidate found only under another case ends the
  *  probe as a mismatch. */
-export function probeFile(
-  candidates: readonly string[],
-  within?: string
-): ProbedFile {
-  const probed = native().probeFile([...candidates], within);
+export function probeFile(candidates: string[], within?: string): ProbedFile {
+  const probed = native().probeFile(candidates, within);
+  // SAFETY: the engine sets `path` on every `found` answer, and `candidate`
+  // and `actual` on every `case-mismatch` one.
   if (probed.kind === 'found') return { kind: 'found', path: probed.path! };
   if (probed.kind === 'case-mismatch') {
     return {
@@ -139,14 +141,6 @@ export function probeFile(
     };
   }
   return { kind: 'absent' };
-}
-
-function policyJson(policy: ExtensionOrder): string {
-  return JSON.stringify({
-    appended: policy.appended,
-    nodeNext: policy.nodeNext,
-    alias: policy.alias,
-  });
 }
 
 /** Why `subject` names no file: the file it would load is spelled otherwise

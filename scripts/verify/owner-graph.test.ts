@@ -278,8 +278,7 @@ describe('root verification graph', () => {
     const unitCommand = tasks['verify:unit:ts']?.command;
     const coverageCommand = tasks['verify:coverage:ts']?.command;
     // Both need a fresh native engine, which the targets probe files through.
-    const napiGate =
-      "bash -c 'source scripts/verify/_preconditions.sh && require_fresh_napi_v2' && ";
+    const napiGate = 'bash scripts/verify/with-fresh-napi.sh ';
     const unitRunner = `${napiGate}bunx vp test run `;
     const unitTargets = unitCommand?.replace(unitRunner, '');
     const coverageExclusionArguments = [

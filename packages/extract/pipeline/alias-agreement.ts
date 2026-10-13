@@ -3,7 +3,6 @@ import { isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
 import {
   bareSpecifierPackageName,
-  findPackageRoot,
   isPackageSpecifier,
   packageInstanceOf,
 } from './discover-packages';
@@ -147,9 +146,7 @@ export function packageInstanceFinding(
   if (record.holds(file)) return null;
   // The instance as discovery names it: a nested manifest, or a dependency
   // cache's, is the instance read, whose unanalysed file is still reported.
-  const instance = physical(
-    packageInstanceOf(file, readRoot, record.rootDir) ?? findPackageRoot(file)
-  );
+  const instance = physical(packageInstanceOf(file, readRoot, record.rootDir));
   const redirected = record.redirected.has(specifier);
   const shown = (path: string): string =>
     relative(record.rootDir, path).split(sep).join(posix.sep);

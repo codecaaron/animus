@@ -1,4 +1,4 @@
-import { builtInExtensionOrder } from './native-resolution';
+import { readBuiltInExtensionOrder } from './native-resolution';
 
 import type { ExtensionOrder } from './native-resolution';
 
@@ -20,10 +20,15 @@ export interface HostExtensionPolicy extends ExtensionOrder {
   readonly resolverVersion: string;
 }
 
+export { extensionPolicyJson } from './native-resolution';
+
+let builtIn: HostExtensionPolicy | undefined;
+
 /** Animus's own order, where no host resolver configuration exists: the
  *  system loader's, read from the native engine when first asked. */
 export function builtInExtensionPolicy(): HostExtensionPolicy {
-  return { ...builtInExtensionOrder(), resolverVersion: 'built-in' };
+  builtIn ??= { ...readBuiltInExtensionOrder(), resolverVersion: 'built-in' };
+  return builtIn;
 }
 
 type Substitutions = HostExtensionPolicy['nodeNext'];
@@ -234,13 +239,4 @@ export function rollupExtensionPolicy(
       ? 'built-in (hostOptionUnreadable: rollup-node-resolve)'
       : 'built-in (hostOptionUnreadable: rollup resolver plugins)',
   };
-}
-
-/** The policy as the system loader reads it (`ExtensionPolicy`). */
-export function extensionPolicyJson(policy: HostExtensionPolicy): string {
-  return JSON.stringify({
-    appended: policy.appended,
-    nodeNext: policy.nodeNext,
-    alias: policy.alias,
-  });
 }

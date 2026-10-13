@@ -318,23 +318,18 @@ pub struct NapiProbedFile {
 
 #[napi]
 pub fn probe_file(candidates: Vec<String>, within: Option<String>) -> NapiProbedFile {
-    use animus_system_loader::resolution::Seen;
+    use animus_system_loader::resolution::{probe_candidates, see_within, Probe};
     let within = std::path::PathBuf::from(within.unwrap_or_default());
-    for candidate in candidates {
-        match animus_system_loader::resolution::see_within(&within, &candidate) {
-            Seen::File => return NapiProbedFile { kind: "found".into(), path: Some(candidate), candidate: None, actual: None },
-            Seen::CaseOnly(actual) => {
-                return NapiProbedFile {
-                    kind: "case-mismatch".into(),
-                    path: None,
-                    candidate: Some(candidate),
-                    actual: Some(actual),
-                };
-            }
-            Seen::Missing => {}
-        }
+    match probe_candidates(candidates, |candidate| see_within(&within, candidate)) {
+        Probe::Found(path) => NapiProbedFile { kind: "found".into(), path: Some(path), candidate: None, actual: None },
+        Probe::CaseMismatch { candidate, actual } => NapiProbedFile {
+            kind: "case-mismatch".into(),
+            path: None,
+            candidate: Some(candidate),
+            actual: Some(actual),
+        },
+        Probe::Absent => NapiProbedFile { kind: "absent".into(), path: None, candidate: None, actual: None },
     }
-    NapiProbedFile { kind: "absent".into(), path: None, candidate: None, actual: None }
 }
 
 /// A fast fingerprint of the bytes at `path` (foldhash, 64 bits, hex), for
