@@ -159,6 +159,9 @@ pub(crate) struct Loader<'c> {
     packages: FxHashMap<std::path::PathBuf, (Option<std::path::PathBuf>, Option<String>)>,
     /// The owner package directories, once the audit has found them.
     owners: FxHashSet<std::path::PathBuf>,
+    /// The monorepo the entry's package belongs to, as its package manager
+    /// declares it; every package it names is owned too.
+    workspace: Option<Workspace>,
     /// Whether the audit is running: it reads no third-party package.
     auditing: bool,
     /// Each binding's class, as root inference found it.
@@ -190,6 +193,7 @@ impl<'c> Loader<'c> {
             table: None,
             packages: FxHashMap::default(),
             owners: FxHashSet::default(),
+            workspace: None,
             auditing: false,
             classes: FxHashMap::default(),
             traced: FxHashMap::default(),
@@ -1288,22 +1292,66 @@ impl<'c> Loader<'c> {
         });
     }
 
-    /// The package directories whose code is owned: the entry's package and
-    /// the session's declared workspaces.
+    /// The package directories whose code is owned: the entry's package,
+    /// the session's declared workspaces, and the packages of the monorepo
+    /// the entry's package belongs to.
     fn find_owners(&mut self, entry: &str) {
         let mut owners: FxHashSet<std::path::PathBuf> =
             self.context.workspaces.values().map(|dir| resolution::real_path(dir.clone())).collect();
-        owners.extend(self.package_dir(Path::new(entry)));
+        let package = self.package_dir(Path::new(entry));
+        owners.extend(package.clone());
         self.owners = owners;
+        self.workspace = package.and_then(|package| self.find_workspace(&package));
     }
 
-    /// Whether `path` is owned code: in an owner package, or in a source kit
-    /// (a package declaring the `animus` source condition), wherever it is
-    /// installed. Each manifest that decides it is read evidence.
+    /// The workspace root above `package`, found as package managers find
+    /// it: the nearest directory, from the package up, whose `package.json`
+    /// declares `workspaces` (a list, or `{ packages }`) or that holds a
+    /// `pnpm-workspace.yaml`. Each file probed is read evidence, or watched
+    /// for its creation where absent.
+    fn find_workspace(&mut self, package: &Path) -> Option<Workspace> {
+        let mut dir = package.to_path_buf();
+        loop {
+            let manifest = dir.join("package.json");
+            if manifest.is_file() {
+                self.reads.read.insert(manifest.to_string_lossy().to_string());
+                let patterns = std::fs::read_to_string(&manifest)
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                    .and_then(|json| {
+                        let declared = json.get("workspaces")?;
+                        let list = declared.get("packages").unwrap_or(declared).as_array()?;
+                        Some(list.iter().filter_map(|entry| entry.as_str().map(str::to_string)).collect::<Vec<_>>())
+                    });
+                if let Some(patterns) = patterns {
+                    return Some(Workspace::new(&dir, &patterns));
+                }
+            } else {
+                self.reads.missing.insert(manifest.to_string_lossy().to_string());
+            }
+            let pnpm = dir.join("pnpm-workspace.yaml");
+            if pnpm.is_file() {
+                self.reads.read.insert(pnpm.to_string_lossy().to_string());
+                let text = std::fs::read_to_string(&pnpm).unwrap_or_default();
+                return Some(Workspace::new(&dir, &pnpm_packages(&text)));
+            }
+            self.reads.missing.insert(pnpm.to_string_lossy().to_string());
+            if !dir.pop() {
+                return None;
+            }
+        }
+    }
+
+    /// Whether `path` is owned code: in an owner package, in a package of
+    /// the entry's monorepo, or in a source kit (a package declaring the
+    /// `animus` source condition), wherever it is installed. Each manifest
+    /// that decides it is read evidence.
     fn owned(&mut self, path: &str) -> bool {
         let Some(dir) = self.package_dir(Path::new(path)) else { return false };
         self.reads.read.insert(dir.join("package.json").to_string_lossy().to_string());
-        self.owners.contains(&dir) || crate::declares_kit_source(&dir)
+        self.owners.contains(&dir)
+            || self.workspace.as_ref().is_some_and(|workspace| workspace.names(&dir))
+            || crate::declares_kit_source(&dir)
     }
 
     /// Whether `spec`, written in `module`, names the `@animus-ui/system`
@@ -1889,6 +1937,101 @@ fn record_from(program: &Program<'_>) -> ModuleRecord<String, String> {
     record
 }
 
+/// A monorepo's declared packages: its root, and its workspace patterns as
+/// package managers read them (`*` within a segment, `**` across segments,
+/// a leading `!` excluding).
+struct Workspace {
+    root: std::path::PathBuf,
+    patterns: Vec<(bool, Vec<String>)>,
+}
+
+impl Workspace {
+    fn new(root: &Path, patterns: &[String]) -> Self {
+        let patterns = patterns
+            .iter()
+            .map(|pattern| {
+                let (excluded, pattern) = match pattern.strip_prefix('!') {
+                    Some(rest) => (true, rest),
+                    None => (false, pattern.as_str()),
+                };
+                let segments = pattern
+                    .trim_start_matches("./")
+                    .split('/')
+                    .filter(|segment| !segment.is_empty() && *segment != ".")
+                    .map(str::to_string)
+                    .collect();
+                (excluded, segments)
+            })
+            .collect();
+        Self { root: resolution::real_path(root.to_path_buf()), patterns }
+    }
+
+    /// Whether the package at `dir` is one the workspace declares: below
+    /// its root, in no `node_modules`, matched by a pattern and excluded by
+    /// none.
+    fn names(&self, dir: &Path) -> bool {
+        let dir = resolution::real_path(dir.to_path_buf());
+        let Ok(relative) = dir.strip_prefix(&self.root) else { return false };
+        let segments: Vec<String> = relative.iter().map(|segment| segment.to_string_lossy().to_string()).collect();
+        if segments.is_empty() || segments.iter().any(|segment| segment == "node_modules") {
+            return false;
+        }
+        let matching = |excluded: bool| {
+            self.patterns.iter().any(|(negated, pattern)| *negated == excluded && glob_segments(pattern, &segments))
+        };
+        matching(false) && !matching(true)
+    }
+}
+
+/// Whether `path`'s segments match `pattern`'s: `**` any run of segments,
+/// and `*` or `?` within one.
+fn glob_segments(pattern: &[String], path: &[String]) -> bool {
+    match pattern.split_first() {
+        None => path.is_empty(),
+        Some((first, rest)) if first == "**" => (0..=path.len()).any(|skip| glob_segments(rest, &path[skip..])),
+        Some((first, rest)) => {
+            path.split_first().is_some_and(|(segment, tail)| glob_segment(first, segment) && glob_segments(rest, tail))
+        }
+    }
+}
+
+fn glob_segment(pattern: &str, text: &str) -> bool {
+    let (pattern, text): (Vec<char>, Vec<char>) = (pattern.chars().collect(), text.chars().collect());
+    fn matches(pattern: &[char], text: &[char]) -> bool {
+        match pattern.split_first() {
+            None => text.is_empty(),
+            Some(('*', rest)) => (0..=text.len()).any(|skip| matches(rest, &text[skip..])),
+            Some(('?', rest)) => !text.is_empty() && matches(rest, &text[1..]),
+            Some((c, rest)) => text.first() == Some(c) && matches(rest, &text[1..]),
+        }
+    }
+    matches(&pattern, &text)
+}
+
+/// The `packages` list of a `pnpm-workspace.yaml`: the items under its
+/// top-level `packages:` key, unquoted.
+fn pnpm_packages(text: &str) -> Vec<String> {
+    let mut packages = Vec::new();
+    let mut inside = false;
+    for line in text.lines() {
+        let content = line.split(" #").next().unwrap_or("").trim_end();
+        if content.trim().is_empty() || content.trim_start().starts_with('#') {
+            continue;
+        }
+        if !content.starts_with([' ', '\t', '-']) {
+            inside = content.trim() == "packages:";
+            continue;
+        }
+        if let Some(item) = content.trim_start().strip_prefix('-').filter(|_| inside) {
+            let item = item.trim().trim_matches(|c| c == '\'' || c == '"');
+            if !item.is_empty() {
+                packages.push(item.to_string());
+            }
+        }
+    }
+    packages
+}
+
 #[cfg(test)]
 mod tests {
     //! The bounded loader's contract: a load runs only what the exported
@@ -2212,6 +2355,49 @@ mod tests {
             ]
         );
         assert!(!config.dependencies.iter().any(|path| path.ends_with("analytics/index.js")), "{:?}", config.dependencies);
+    }
+
+    /// Contract: the audit's owned code includes every package of the
+    /// monorepo the system's package belongs to, as its package manager
+    /// declares it at the repository root (`workspaces`, or
+    /// `pnpm-workspace.yaml`), not only the workspaces the app's own manifest
+    /// lists: an unreached registration in a sibling workspace package is
+    /// reported, as it is in the app. The declaring files are watched.
+    #[test]
+    fn the_audit_owns_the_monorepos_declared_packages() {
+        for (label, declaration) in [
+            ("workspaces", ("package.json", "{\"name\":\"monorepo\",\"private\":true,\"workspaces\":[\"apps/*\",\"packages/*\"]}")),
+            ("pnpm", ("pnpm-workspace.yaml", "packages:\n  - 'apps/*'\n  - \"packages/*\"\n")),
+        ] {
+            let dir = project(
+                &format!("monorepo-{label}"),
+                &[
+                    declaration,
+                    ("apps/web/package.json", "{\"name\":\"web\",\"type\":\"module\"}"),
+                    ("apps/web/system.ts", "import { holder } from '@acme/styles';\nexport { theme } from '@acme/styles';\nexport const ds = holder.bundle.seal();\n"),
+                    ("packages/styles/package.json", "{\"name\":\"@acme/styles\",\"type\":\"module\",\"exports\":\"./src/index.ts\"}"),
+                    ("packages/styles/src/index.ts", "export * from './state';\nimport './side';\n"),
+                    ("packages/styles/src/state.ts", STATE),
+                    (
+                        "packages/styles/src/side.ts",
+                        "import { holder } from './state';\nholder.bundle = holder.bundle.registerGlobalStyles({ rogue: holder.bundle.createGlobalStyles({ body: { color: 'red' } }) });\n",
+                    ),
+                ],
+            );
+            fs::create_dir_all(dir.join("node_modules/@acme")).expect("scope dir");
+            std::os::unix::fs::symlink(dir.join("packages/styles"), dir.join("node_modules/@acme/styles")).expect("link the workspace");
+            let app = dir.join("apps/web");
+            let config = load_system_module(
+                &app.join("system.ts").to_string_lossy(),
+                &app.to_string_lossy(),
+                None,
+                &ResolutionContext::default(),
+            );
+            let _ = fs::remove_dir_all(&dir);
+            let config = config.expect("the system loads");
+            assert_eq!(findings(&config), [(crate::REGISTRATION_UNREACHED.to_string(), "side.ts".to_string(), 2)], "{label}");
+            assert!(config.dependencies.iter().any(|path| path.ends_with(declaration.0)), "{label}: {:?}", config.dependencies);
+        }
     }
 
     /// Contract: what a load reads is what it watches: the modules it ran,

@@ -1,1 +1,16 @@
-[]
+[
+  {
+    "row": "loader:large-closure",
+    "fixture": "large-closure",
+    "baseline": "a309af4d92359633e307204f4293d86653cea56c0d8755b2c6b94f01c2c5e727",
+    "candidate": "599d3eb58c71d3386942d2868cf18c53dfd4d23831371e10f0ec01fe3f3a58b3",
+    "reason": "The audit owns the packages of the monorepo the system's package belongs to, found as package managers find it: the load reads the manifest declaring the workspaces, this repository's root package.json, so 14 paths become 15. The config is identical (configDigest unchanged). (macOS)"
+  },
+  {
+    "row": "loader:showcase",
+    "fixture": "showcase",
+    "baseline": "95fc5b12200e61508b6db6f47ee25d8707bcb728e3fb80786e564582bc8b7d12",
+    "candidate": "d6faa34ecdd5c8219150f256577597879abd7f011a423c292b1fd1465ad4deee",
+    "reason": "The audit owns the packages of the monorepo the system's package belongs to, found as package managers find it: the load reads the manifest declaring the workspaces, this repository's root package.json, so 20 paths become 21. The config is identical (configDigest unchanged). (macOS)"
+  }
+]
