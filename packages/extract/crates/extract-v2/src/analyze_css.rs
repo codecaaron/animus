@@ -13993,6 +13993,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         ] {
             assert!(kept(app).contains(&"lg"), "{app}: {:?}", kept(app));
         }
+        // An entity reads as another character at runtime: `&#109;d` is md.
+        assert!(kept("export const App = () => <R>&#109;d</R>;").contains(&"md"));
         // Children usage cannot list keep every option.
         assert_eq!(kept("export const App = ({ x }) => <R>{x}</R>;"), vec!["sm", "md", "lg"]);
     }
@@ -14007,12 +14009,23 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "R.defaultProps = { size: 'lg' };\nexport const App = () => <R />;",
             "R.defaultProps.size = 'lg';\nexport const App = () => <R />;",
             "R['defaultProps'] = { size: 'lg' };\nexport const App = () => <R />;",
+            // Through a namespace, resolved as a render's member tag is.
+            "import * as ui from './r';\nui.R.defaultProps = { size: 'lg' };\nexport const App = () => <R />;",
         ] {
             let (sizes, states, _) = wrapper_kept(app);
             assert_eq!((sizes, states), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{app}");
         }
         let (sizes, _, _) = wrapper_kept("class Other {}\nOther.defaultProps = { size: 'lg' };\nexport const App = () => <R size=\"sm\" />;");
         assert_eq!(sizes, vec!["sm"]);
+        // One usage cannot name is reported as an uncertain identity, as an
+        // unresolved render's tag is: never skipped silently.
+        let app = "import { R } from './r';\nconst x = make();\nx.R.defaultProps = { size: 'lg' };\nexport const App = () => <R size=\"sm\" />;\n";
+        let out = analyze(&[("r.tsx", WRAPPED), ("app.tsx", app)], &test_inputs());
+        assert!(
+            out.diagnostics.iter().any(|d| d.code.as_deref() == Some(IDENTITY_UNCERTAIN_TAG) && d.message.contains("x.R.defaultProps")),
+            "{:?}",
+            out.diagnostics
+        );
     }
 
     /// A same-module wrapper that forwards its props by spread stands in for
