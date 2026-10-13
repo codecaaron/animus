@@ -3,7 +3,8 @@ name: Bench
 # Manual speed-gate runs that never publish: builds each listed commit's
 # Linux x64 binary and dists in turn and runs that commit's verify:bench
 # against the pinned reference release, all on one runner, so commits are
-# compared on the same hardware. Each commit's receipt is uploaded under
+# compared on the same hardware; a commit older than verify:bench is measured
+# with this workflow's harness. Each commit's receipt is uploaded under
 # its position and ref, so a ref may repeat as a drift control. With
 # `profile`, each commit's binary keeps its symbols and its large-closure
 # load is also profiled, and those reports are uploaded beside its receipt.
@@ -107,6 +108,10 @@ jobs:
             # bun keeps an earlier ref's packages as "no changes". The reference
             # tarballs and cargo targets carry over.
             git clean -ffdxq -e .bench -e target
+            if [ ! -f scripts/bench/run.ts ]; then
+              # Older than verify:bench: measured with this workflow's harness.
+              git checkout "$GITHUB_SHA" -- scripts/bench scripts/consumers/measure.ts
+            fi
             bun install
             (
               cd packages/extract/crates/extract-v2
