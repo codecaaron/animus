@@ -1841,3 +1841,28 @@ void (<ExtendedBadge label="hi" />);
 }
 
 void TypeTests;
+
+// ---------------------------------------------------------------------------
+// ThemeBuilder's emitted scales: an ordered set since 0.1.31, and still a
+// union of scale names when written by hand, as before.
+// ---------------------------------------------------------------------------
+
+import type { ThemeBuilder } from '../src';
+
+function EmittedScaleNames() {
+  type _Union = ThemeBuilder<{}, 'colors'>;
+  type _UnionOfTwo = ThemeBuilder<{}, 'colors' | 'space'>;
+
+  // `__emitted` is an internal marker: an ordered set, with no tuple index.
+  const emittedTheme = createTheme()
+    .addScale({ name: 'space', values: { 1: '4px' }, emit: true })
+    .addColors({ ink: '#000' })
+    .build();
+  type _EmittedSet = Assert<
+    IsExact<typeof emittedTheme.__emitted, { space: true; colors: true }>
+  >;
+  // @ts-expect-error — the marker is a set: it has no tuple index
+  type _EmittedTuple = (typeof emittedTheme.__emitted)[0];
+}
+
+void EmittedScaleNames;
