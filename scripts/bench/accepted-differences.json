@@ -10,7 +10,7 @@
     "row": "analysis:showcase",
     "fixture": "showcase-analysis",
     "baseline": "452de4fd5f738d7e359116149ed3aa77632b3337b647b70dc7e37472d4dc7c71",
-    "candidate": "72a29e78ca8f54da76c53958cc1f9bd0a56214527602b088d8cafa27159ce3c5",
-    "reason": "createElement over a component is read as the JSX it creates (T6(c)): Drawer.tsx's createElement(DrawerContext.Provider, ...) is now recorded as an element in the file facts the manifest carries. The census replay of the same showcase graph against main shows CSS, transformed code and diagnostics identical; only those file facts differ."
+    "candidate": "7bcac328dd2172789d1112c3170dac58009a29cc2ede92bcc30e6bfd292e1e22",
+    "reason": "createElement over a component is read as the JSX it creates, and an element's children are recorded as its children prop (T6(c)): the file facts the manifest carries record Drawer.tsx's createElement(DrawerContext.Provider, ...) as an element and every element's children. The census replay of the same showcase graph against main shows CSS, transformed code and diagnostics identical; only those file facts differ."
   }
 ]
