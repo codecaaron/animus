@@ -364,7 +364,8 @@ describe('parsed CI graph', () => {
     // fresh one, and the release waits on that second verdict.
     expect(commandLines(namedStep(jobs.bench, 'Speed gate').run)).toEqual([
       'bun scripts/bench/run.ts --confirm "$RUNNER_TEMP/confirm" || [ -s "$RUNNER_TEMP/confirm" ]',
-      'echo "rows=$(cat "$RUNNER_TEMP/confirm")" >> "$GITHUB_OUTPUT"',
+      'rows=$(cat "$RUNNER_TEMP/confirm")',
+      'echo "rows=$rows" >> "$GITHUB_OUTPUT"',
     ]);
     expect(jobs.bench).toMatchObject({
       outputs: { rows: '${{ steps.gate.outputs.rows }}' },

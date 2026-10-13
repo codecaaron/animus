@@ -1943,9 +1943,15 @@ pub fn load_system_module_reading(
     reads: &mut LoadReads,
 ) -> Result<SystemConfig, String> {
     // One load reads each directory's listing once: the exact-case check
-    // otherwise lists a directory again for every candidate in it.
-    let (specifier_map, source_map, stub_exports, manifests, type_exports) =
-        resolution::with_listing_cache(|| resolve_all_deps_reading(system_path, root_dir, context, reads))?;
+    // otherwise lists a directory again for every candidate in it. The pass
+    // may run the crawl twice, so each run records its reads afresh.
+    let (resolved, crawled) = resolution::with_listing_cache(|| {
+        let mut crawled = LoadReads::default();
+        (resolve_all_deps_reading(system_path, root_dir, context, &mut crawled), crawled)
+    });
+    reads.read.extend(crawled.read);
+    reads.missing.extend(crawled.missing);
+    let (specifier_map, source_map, stub_exports, manifests, type_exports) = resolved?;
 
     let entry_path = fs::canonicalize(system_path)
         .map_err(|e| format!("failed to canonicalize '{}': {}", system_path, e))?
