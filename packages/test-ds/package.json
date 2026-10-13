@@ -25,7 +25,7 @@
   "scripts": {
     "build": "bun run build:ts",
     "build:ts": "tsdown && tsc -p tsconfig.build.json && rm -f dist/dev-types.d.ts dist/dev-types.d.ts.map",
-    "compile": "tsc --noEmit"
+    "compile": "bun check"
   },
   "dependencies": {
     "@animus-ui/system": "workspace:*"

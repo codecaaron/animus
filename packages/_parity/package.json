@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "parity": "bun run src/cli.ts",
-    "compile": "tsc --noEmit"
+    "compile": "bun check"
   },
   "dependencies": {},
   "devDependencies": {
