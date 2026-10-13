@@ -14956,6 +14956,28 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert!(DIAGNOSTIC_CODES.iter().any(|(code, _)| *code == UNATTRIBUTED_SYSTEM_PROPS));
     }
 
+    /// Contract: a member tag whose root a parameter or a nested binding
+    /// shadows is not the imported object's member: it routes nothing, and
+    /// its record names no component of the import's, whether the import is
+    /// an unproven object or one holding a wrapper.
+    #[test]
+    fn a_shadowed_member_root_is_not_the_imported_object() {
+        let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
+        for fam in [
+            "import { Box } from './recipe';\nexport const Fam = { Box };\nregister(Fam);\n",
+            "import { Box } from './recipe';\nconst Wrap = (props) => <Box {...props} />;\nexport const Fam = { Box: Wrap };\n",
+        ] {
+            for app in [
+                "import { Fam } from './fam';\nexport const App = () => { const Fam = { Box: () => null }; return <Fam.Box marginInlineStart={8} />; };\n",
+                "import { Fam } from './fam';\nexport const App = ({ Fam }) => <Fam.Box marginInlineStart={8} />;\n",
+            ] {
+                let out = analyze_with_logical_space(&[("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app)]);
+                assert!(!routed(&out), "{fam}{app}: {:?}", out.system_prop_map);
+                assert!(unproven(&out).is_empty(), "{fam}{app}: {:?}", out.diagnostics);
+            }
+        }
+    }
+
     /// Contract: a routed value its class declines is reported where the
     /// render writes it, as on the component itself, so retiring
     /// `animus.usage.unattributed-system-props` hides no declined value.
