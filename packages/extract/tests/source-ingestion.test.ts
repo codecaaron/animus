@@ -12,7 +12,6 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import { contentHash } from '../pipeline/content-hash';
-import { preprocessMdx } from '../pipeline/mdx-preprocessor';
 import { ingestSourceEntries } from '../pipeline/source-ingestion';
 import { adaptSvelteSource } from '../pipeline/svelte-source-adapter';
 import {
@@ -39,6 +38,32 @@ function resolverFacts(
 }
 
 describe('ingestSourceEntries', () => {
+  // Contract: MDX is analyzed for the components it renders only; a style
+  // it declares is a fatal diagnostic, so strict builds fail on it.
+  test('reports an MDX file that declares styles', async () => {
+    const result = await ingestSourceEntries(
+      [
+        {
+          path: 'src/doc.mdx',
+          source:
+            "export const Box = ds.styles({}).asElement('div');\n\n<Box />",
+        },
+      ],
+      {
+        extractFacts: factsExtractor({
+          'src/doc.mdx.tsx': resolverFacts('src/doc.mdx.tsx', 'Box'),
+        }),
+      }
+    );
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'SOURCE_MDX_STYLE_DECLARATION',
+        originalPath: 'src/doc.mdx',
+        message: expect.stringContaining('(Box)'),
+      }),
+    ]);
+  });
+
   test('preserves native and MDX original identity separately from parser entries', async () => {
     const mdxSource = `import { Badge } from './definition';\n\n<Badge tone="quiet" />`;
     const rawEntries = [
@@ -53,7 +78,6 @@ describe('ingestSourceEntries', () => {
 
     const result = await ingestSourceEntries(rawEntries, {
       extractFacts: factsExtractor({}, calls),
-      preprocessMdx,
       adaptSvelte: async (...args) => {
         svelteAdaptCount += 1;
         return adaptSvelteSource(...args);

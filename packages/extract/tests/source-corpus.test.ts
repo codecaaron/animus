@@ -105,9 +105,9 @@ describe('createSourceCorpus', () => {
 
   test.each([
     {
-      code: 'SOURCE_MDX_DEPENDENCY_MISSING' as const,
+      code: 'SOURCE_MDX_STYLE_DECLARATION' as const,
       originalPath: 'src/Doc.mdx',
-      message: "Install optional peer dependency '@mdx-js/mdx'",
+      message: 'declares Animus styles (Box)',
     },
     {
       code: 'SOURCE_MDX_PARSE_ERROR' as const,
