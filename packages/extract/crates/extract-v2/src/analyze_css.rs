@@ -14297,7 +14297,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             let fam = format!("import {{ Box }} from './recipe';\nexport const Fam = {{ Box }};\n{more}");
             let out = analyze_with_logical_space(&[("recipe.tsx", recipe), ("fam.tsx", fam.as_str()), ("app.tsx", app)]);
             let warned: Vec<bool> =
-                unattributed(&out).iter().map(|d| callee.is_some_and(|c| d.message.contains(&format!("(Fam is passed to {c}() in fam.tsx")))).collect();
+                unproven(&out).iter().map(|d| callee.is_some_and(|c| d.message.contains(&format!("(Fam is passed to {c}() in fam.tsx")))).collect();
             match callee {
                 None => assert!(warned.is_empty(), "{more}: {:?}", out.diagnostics),
                 Some(_) => assert_eq!(warned, [true], "{more}: {:?}", out.diagnostics),
@@ -14352,7 +14352,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ("mutate.tsx", mutate),
                 ("app.tsx", app),
             ]);
-            let warned = unattributed(&out).len();
+            let warned = unproven(&out).len();
             assert_eq!(warned, usize::from(warns), "{mutate}: {:?}", out.diagnostics);
         }
     }
@@ -14392,7 +14392,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             let mut files = vec![("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app)];
             files.extend_from_slice(more);
             let out = analyze_with_logical_space(&files);
-            assert_eq!(unattributed(&out).len(), usize::from(warns), "{more:?}: {:?}", out.diagnostics);
+            assert_eq!(unproven(&out).len(), usize::from(warns), "{more:?}: {:?}", out.diagnostics);
         }
     }
 
@@ -14445,7 +14445,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 &[("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("mutate.ts", mutate)],
                 &inputs,
             );
-            assert_eq!(unattributed(&out).len(), usize::from(warns), "{mutate}: {:?}", out.diagnostics);
+            assert_eq!(unproven(&out).len(), usize::from(warns), "{mutate}: {:?}", out.diagnostics);
         }
     }
 
@@ -14468,7 +14468,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             let paths: Vec<String> = (0..pages).map(|page| format!("pages/p{page}.js")).collect();
             let mut files = vec![("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("loader.ts", loader)];
             files.extend(paths.iter().map(|path| (path.as_str(), "export const page = 1;\n")));
-            unattributed(&analyze(&files, &inputs)).iter().map(|d| d.message.clone()).collect()
+            unproven(&analyze(&files, &inputs)).iter().map(|d| d.message.clone()).collect()
         };
         // Without the host's expansion, any computed load may load any module.
         for loader in [
@@ -14538,7 +14538,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             let files = [("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("chunk.ts", chunk), ("router.ts", router), ("view.js", view)];
             let out = analyze(&files, &inputs);
             let codes = out.diagnostics.iter().filter_map(|d| d.code.clone()).filter(|code| code.starts_with("animus.load.")).collect();
-            (unattributed(&out).is_empty(), codes)
+            (unproven(&out).is_empty(), codes)
         };
         let plain = "export const View = 1;\n";
         // Undeclared, the retry may load any module, so Fam's members are unknown.
@@ -14611,7 +14611,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ])
         );
         let files = [("recipe.tsx", recipe), ("fam.tsx", fam), ("app.tsx", app), ("loader.ts", loader)];
-        let warned = |inputs: &CssInputs| unattributed(&analyze(&files, inputs)).len();
+        let warned = |inputs: &CssInputs| unproven(&analyze(&files, inputs)).len();
         assert!(warned(&logical_space_inputs()) > 0);
         let mut inputs = logical_space_inputs();
         let expansions = listed.as_array().unwrap().iter().map(|load| HostExpansion {
@@ -14643,7 +14643,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ("runner.ts", runner),
                 ("app.tsx", app),
             ]);
-            let warned: Vec<&str> = unattributed(&out).iter().map(|d| d.message.as_str()).collect();
+            let warned: Vec<&str> = unproven(&out).iter().map(|d| d.message.as_str()).collect();
             match reason {
                 Some(reason) => assert!(
                     warned.len() == 1
@@ -14714,7 +14714,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 (path, loader),
                 ("app.tsx", app),
             ]);
-            let warned: Vec<&str> = unattributed(&out).iter().map(|d| d.message.as_str()).collect();
+            let warned: Vec<&str> = unproven(&out).iter().map(|d| d.message.as_str()).collect();
             match reason {
                 Some(reason) => assert!(
                     warned.len() == 1
@@ -14726,19 +14726,29 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
-    fn unattributed(out: &CssOutput) -> Vec<&CssDiagnostic> {
+    /// The verbose records of member tags, or facades' own tags, whose
+    /// object extraction cannot prove unchanged since it was built.
+    fn unproven(out: &CssOutput) -> Vec<&CssDiagnostic> {
         out.diagnostics
             .iter()
-            .filter(|d| d.code.as_deref() == Some(UNATTRIBUTED_SYSTEM_PROPS))
+            .filter(|d| {
+                d.code.as_deref() == Some(IDENTITY_UNCERTAIN_TAG) && d.message.contains("cannot prove unchanged")
+            })
             .collect()
     }
 
-    /// A wrapper that loses a prop is the binding the module table resolves
+    /// Whether a `marginInlineStart={8}` the fixture writes took its static
+    /// class.
+    fn routed(out: &CssOutput) -> bool {
+        out.system_prop_map.get("marginInlineStart").is_some_and(|values| values.contains_key("8"))
+    }
+
+    /// A wrapper that routes a prop is the binding the module table resolves
     /// the import to: one exported under another name is found, an import
     /// two stars make ambiguous names no wrapper, and the resolved binding
     /// is never swapped for another that an export spells like it.
     #[test]
-    fn a_wrapper_that_loses_props_is_found_as_the_module_table_resolves_it() {
+    fn a_routing_wrapper_is_found_as_the_module_table_resolves_it() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
         let wrapper = |name: &str| {
             format!(
@@ -14755,8 +14765,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("index.ts", "export * from './one';\n"),
             ("app.tsx", app),
         ]);
-        let warned: Vec<_> = unattributed(&renamed).iter().map(|d| d.dropped.as_deref()).collect();
-        assert_eq!(warned, [Some("marginInlineStart")], "{:?}", renamed.diagnostics);
+        assert!(routed(&renamed), "{:?}", renamed.system_prop_map);
         let ambiguous = analyze_with_logical_space(&[
             ("recipe.tsx", recipe),
             ("one.tsx", one.as_str()),
@@ -14764,7 +14773,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("index.ts", "export * from './one';\nexport * from './two';\n"),
             ("app.tsx", app),
         ]);
-        assert!(unattributed(&ambiguous).is_empty(), "{:?}", ambiguous.diagnostics);
+        assert!(!routed(&ambiguous), "{:?}", ambiguous.system_prop_map);
         // The resolved binding is the wrapper itself, never the binding an
         // export of the same spelling names.
         let crossed = "import { Box } from './recipe';\n\
@@ -14777,23 +14786,23 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("index.ts", "export * from './one';\n"),
             ("app.tsx", app),
         ]);
-        let warned: Vec<_> = unattributed(&crossed).iter().map(|d| d.dropped.as_deref()).collect();
-        assert_eq!(warned, [Some("marginInlineStart")], "{:?}", crossed.diagnostics);
+        assert!(routed(&crossed), "{:?}", crossed.system_prop_map);
     }
 
-    /// Each wrapper shape the attribution does not follow warns once, at the
-    /// use: a wrapper reached through `export *`, one that destructures its
-    /// props in its body, a function declaration, one with two rest routes
-    /// of which one still carries the prop, one rendered by `createElement`,
-    /// a function component held by a facade object, one spreading what a
-    /// call it passes its props to returns, a same-module wrapper of an
-    /// imported one, the root of an `Object.assign` facade built on a
-    /// function component, a function component a facade literal holds
-    /// inline. A same-module wrapper rendered by `createElement` is followed
-    /// as JSX is. A prop a pattern on every route consumes, and a name a
-    /// parameter shadows, warn nothing.
+    /// Contract: a value a render passes through a wrapper shape the
+    /// attribution does not follow takes the static class of the component
+    /// the route reaches: a wrapper reached through `export *`, one that
+    /// destructures its props in its body, a function declaration, one with
+    /// two rest routes of which one still carries the prop, one rendered by
+    /// `createElement`, a function component held by a facade object, one
+    /// spreading what a call it passes its props to returns, a same-module
+    /// wrapper of an imported one, the root of an `Object.assign` facade
+    /// built on a function component, a function component a facade literal
+    /// holds inline. A same-module wrapper rendered by `createElement` is
+    /// followed as JSX is. A prop a pattern on every route consumes, and a
+    /// name a parameter shadows, route nothing.
     #[test]
-    fn every_unfollowed_wrapper_shape_warns_at_its_use() {
+    fn every_unfollowed_wrapper_shape_routes_its_values() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
         let wrapper = "import { Box } from './recipe';\nexport const Top = (props) => <Box {...props} />;\n";
         let rendered = "import { Top } from './wrapper';\nexport const App = () => <Top marginInlineStart={8} />;\n";
@@ -14805,89 +14814,78 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let written = created.replace("createElement(Top, { marginInlineStart: 8 })", "<Top marginInlineStart={8} />");
         let out = analyze_with_logical_space(&[("recipe.tsx", recipe), ("app.tsx", created)]);
         let as_jsx = analyze_with_logical_space(&[("recipe.tsx", recipe), ("app.tsx", written.as_str())]);
-        let warned = |out: &CssOutput| -> Vec<(String, Option<u32>, Option<String>)> {
-            unattributed(out).iter().map(|d| (d.file.clone(), d.offset, d.dropped.clone())).collect()
-        };
-        assert_eq!(warned(&out), warned(&as_jsx), "{:?}", out.diagnostics);
+        assert!(routed(&out), "{:?}", out.system_prop_map);
         assert_eq!(out.css, as_jsx.css);
-        let cases: [(&str, &str, &str, Option<&str>); 12] = [
-            ("index.ts", "export * from './wrapper';\n", "import { Top } from './index';\nexport const App = () => <Top marginInlineStart={8} />;\n", Some("<Top")),
+        let cases: [(&str, &str, &str, bool); 12] = [
+            ("index.ts", "export * from './wrapper';\n", "import { Top } from './index';\nexport const App = () => <Top marginInlineStart={8} />;\n", true),
             (
                 "wrapper.tsx",
                 "import { Box } from './recipe';\nexport const Top = (props) => { const { children, ...rest } = props; return <Box {...rest}>{children}</Box>; };\n",
                 rendered,
-                Some("<Top"),
+                true,
             ),
             (
                 "wrapper.tsx",
                 "import { Box } from './recipe';\nexport function Top(props) { const { children, ...rest } = props; return <Box {...rest} />; }\n",
                 rendered,
-                Some("<Top"),
+                true,
             ),
             (
                 "wrapper.tsx",
                 "import { Box } from './recipe';\nexport const Top = (props) => { const { marginInlineStart, ...a } = props; const { children, ...b } = props; return <><Box {...a} /><Box {...b} /></>; };\n",
                 rendered,
-                Some("<Top"),
+                true,
             ),
             (
                 "wrapper.tsx",
                 "import { Box } from './recipe';\nexport const Top = ({ marginInlineStart, ...props }) => { const { children, ...rest } = props; return <Box {...rest} />; };\n",
                 rendered,
-                None,
+                false,
             ),
-            ("index.ts", "export {};\n", "import { createElement } from 'react';\nimport { Top } from './wrapper';\nexport const App = () => createElement(Top, { marginInlineStart: 8 });\n", Some("createElement(Top")),
-            ("index.ts", "export {};\n", "import { createElement } from 'react';\nimport { Top } from './wrapper';\nexport const App = ({ Top }) => createElement(Top, { marginInlineStart: 8 });\n", None),
+            ("index.ts", "export {};\n", "import { createElement } from 'react';\nimport { Top } from './wrapper';\nexport const App = () => createElement(Top, { marginInlineStart: 8 });\n", true),
+            ("index.ts", "export {};\n", "import { createElement } from 'react';\nimport { Top } from './wrapper';\nexport const App = ({ Top }) => createElement(Top, { marginInlineStart: 8 });\n", false),
             (
                 "facade.tsx",
                 "import { Box } from './recipe';\nimport { Top } from './wrapper';\nexport const Identity = { Body: Box, Media: Top };\n",
-                "import { Identity } from './facade';\nexport const App = () => <><Identity.Body marginInlineStart={8} /><Identity.Media marginInlineStart={8} /></>;\n",
-                Some("<Identity.Media"),
+                "import { Identity } from './facade';\nexport const App = () => <><Identity.Body /><Identity.Media marginInlineStart={8} /></>;\n",
+                true,
             ),
             (
                 "index.ts",
                 "export {};\n",
                 "import { Top } from './wrapper';\nconst TopOfTop = (props) => <Top {...props} />;\nexport const App = () => <TopOfTop marginInlineStart={8} />;\n",
-                Some("<TopOfTop"),
+                true,
             ),
             (
                 "facade.tsx",
                 "import { Box } from './recipe';\nfunction Held(props) { return <Box {...props} />; }\nexport const Facade = Object.assign(Held, { Item: Held });\n",
                 "import { Facade } from './facade';\nexport const App = () => <Facade marginInlineStart={8} />;\n",
-                Some("<Facade"),
+                true,
             ),
             (
                 "facade.tsx",
                 "import { Box } from './recipe';\nfunction FieldInput(props) { const [styling, behavior] = splitProps(props, KEYS); return <Box size=\"sm\" {...styling}>{behavior.children}</Box>; }\nexport const Field = { Input: FieldInput };\n",
                 "import { Field } from './facade';\nexport const App = () => <Field.Input marginInlineStart={8} />;\n",
-                Some("<Field.Input"),
+                true,
             ),
             (
                 "wrapper.tsx",
                 "import { Box } from './recipe';\nexport const Top = ({ children, ...props }) => { const styling = pick(props); return <Box {...styling}>{children}</Box>; };\n",
                 rendered,
-                Some("<Top"),
+                true,
             ),
         ];
-        for (path, module, app, use_site) in cases {
+        for (path, module, app, routes) in cases {
             let mut entries = vec![("recipe.tsx", recipe), (path, module), ("app.tsx", app)];
             if path != "wrapper.tsx" {
                 entries.push(("wrapper.tsx", wrapper));
             }
             let out = analyze_with_logical_space(&entries);
-            let warned: Vec<_> = unattributed(&out).iter().map(|d| (d.file.as_str(), d.offset, d.dropped.as_deref())).collect();
-            let expected: Vec<_> = use_site
-                .map(|site| ("app.tsx", Some(app.find(site).unwrap() as u32), Some("marginInlineStart")))
-                .into_iter()
-                .collect();
-            assert_eq!(warned, expected, "{module}{app}: {:?}", out.diagnostics);
+            assert_eq!(routed(&out), routes, "{module}{app}: {:?}", out.system_prop_map);
         }
         let held = "import { Box } from './recipe';\nexport const Facade = { Item: (props) => <Box {...props} /> };\n";
         // As an element, or by `createElement`.
-        for (render, site) in [
-            ("<Facade.Item marginInlineStart={8} />", "<Facade.Item"),
-            ("createElement(Facade.Item, { marginInlineStart: 8 })", "createElement(Facade.Item"),
-        ] {
+        for render in ["<Facade.Item marginInlineStart={8} />", "createElement(Facade.Item, { marginInlineStart: 8 })"] {
             let app = format!(
                 "import {{ createElement }} from 'react';\nimport {{ Facade }} from './barrel';\nexport const App = () => {render};\n"
             );
@@ -14897,46 +14895,44 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ("barrel.ts", "export * from './held';\n"),
                 ("app.tsx", app.as_str()),
             ]);
-            let warned: Vec<_> = unattributed(&out).iter().map(|d| (d.file.as_str(), d.offset, d.dropped.as_deref())).collect();
-            let at = app.find(site).unwrap() as u32;
-            assert_eq!(warned, [("app.tsx", Some(at), Some("marginInlineStart"))], "{render}: {:?}", out.diagnostics);
+            assert!(routed(&out), "{render}: {:?}", out.system_prop_map);
         }
-        // A spread of what a call returns warns that it may forward, for
-        // every name the call's result binds; a spread of the props says
-        // it forwards them. Contract: a conditional props split is
-        // attributed like a rest spread, alternative by alternative.
-        let routes: [(&str, Option<&str>); 9] = [
-            ("const [styling = {}] = splitProps(props, KEYS); return <Box {...styling} />;", Some("may forward")),
-            ("const { styling = {} } = splitProps(props, KEYS); return <Box {...styling} />;", Some("may forward")),
-            ("const { part: { styling } } = splitProps(props, KEYS); return <Box {...styling} />;", Some("may forward")),
-            ("const styling = pick(props); return <Box {...styling} />;", Some("may forward")),
-            ("let styling = pick(props); styling = {}; return <Box {...styling} />;", Some("may forward")),
-            ("return <Box {...props} />;", Some("forwards them by spread")),
+        // A spread of what a call returns may forward the props, for every
+        // name the call's result binds, as a spread of the props does.
+        // Contract: a conditional props split is attributed like a rest
+        // spread, alternative by alternative.
+        let routes: [(&str, bool); 9] = [
+            ("const [styling = {}] = splitProps(props, KEYS); return <Box {...styling} />;", true),
+            ("const { styling = {} } = splitProps(props, KEYS); return <Box {...styling} />;", true),
+            ("const { part: { styling } } = splitProps(props, KEYS); return <Box {...styling} />;", true),
+            ("const styling = pick(props); return <Box {...styling} />;", true),
+            ("let styling = pick(props); styling = {}; return <Box {...styling} />;", true),
+            ("return <Box {...props} />;", true),
             (
                 "const [legend, styling] = visible ? splitProps(props, KEYS) : [{}, props]; return <Box {...styling} />;",
-                Some("may forward"),
+                true,
             ),
             // The spread reads its own binding, which only shares the name.
-            ("const styling = visible ? props : {}; return ((styling) => <Box {...styling} />)({});", None),
+            ("const styling = visible ? props : {}; return ((styling) => <Box {...styling} />)({});", false),
             // Only a falsy `false` reaches the spread.
-            ("const styling = false && props; return <Box {...styling} />;", None),
+            ("const styling = false && props; return <Box {...styling} />;", false),
         ];
-        for (body, how) in routes {
+        for (body, routes) in routes {
             let wrapper = format!(
                 "import {{ Box }} from './recipe';\nconst pick = ({{ marginInlineStart, ...rest }}) => rest;\n\
                  export const Top = (props) => {{ {body} }};\n"
             );
             let out = analyze_with_logical_space(&[("recipe.tsx", recipe), ("wrapper.tsx", &wrapper), ("app.tsx", rendered)]);
-            let messages: Vec<_> = unattributed(&out).iter().map(|d| d.message.as_str()).collect();
-            match how {
-                Some(how) => assert!(matches!(messages.as_slice(), [one] if one.contains(how)), "{body}: {messages:?}"),
-                None => assert!(messages.is_empty(), "{body}: {messages:?}"),
-            }
+            assert_eq!(routed(&out), routes, "{body}: {:?}", out.system_prop_map);
         }
     }
 
+    /// Contract: a value a render routes to an extracted component through
+    /// a declaration usage attribution misses takes the component's static
+    /// class, and `animus.usage.unattributed-system-props`, retired, stays
+    /// known, so configuration naming it stays valid.
     #[test]
-    fn system_props_on_a_tag_that_resolves_to_no_component_warn_once() {
+    fn a_routed_value_takes_its_class_and_the_retired_code_stays_known() {
         let recipe = "export const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
         let out = analyze_with_logical_space(&[
             ("recipe.tsx", recipe),
@@ -14946,34 +14942,45 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                  export const Button = (props) => <ButtonRecipe {...props} />;\n",
             ),
             ("index.ts", "export { Button } from './wrapper';\n"),
-            (
-                "app.tsx",
-                "import { Button } from './index';\n\
-                 export const App = () => <><Button marginInlineStart={8} /><Button marginInlineStart={8} /></>;\n",
-            ),
+            ("app.tsx", "import { Button } from './index';\nexport const App = () => <Button marginInlineStart={8} />;\n"),
         ]);
-        let warnings = unattributed(&out);
-        assert_eq!(warnings.len(), 1, "{:?}", out.diagnostics);
-        let warning = warnings[0];
-        assert_eq!(warning.severity.as_deref(), Some("warn"));
-        assert_eq!(warning.file, "app.tsx");
-        assert_eq!(warning.component, "Button");
-        for named in ["Button in wrapper.tsx", "marginInlineStart"] {
-            assert!(warning.message.contains(named), "missing {named}: {}", warning.message);
-        }
-        // The printed line already leads with the file and the tag.
-        assert!(!warning.message.contains("app.tsx"), "{}", warning.message);
+        assert!(routed(&out), "{:?}", out.system_prop_map);
+        assert!(DIAGNOSTIC_CODES.iter().any(|(code, _)| *code == UNATTRIBUTED_SYSTEM_PROPS));
+    }
+
+    /// Contract: a routed value its class declines is reported where the
+    /// render writes it, as on the component itself, so retiring
+    /// `animus.usage.unattributed-system-props` hides no declined value.
+    #[test]
+    fn a_routed_value_its_class_declines_is_reported_at_the_render() {
+        let mut inputs = test_inputs();
+        inputs.config.get_mut("p").unwrap().strict = Some(true);
+        let app = "import { Top } from './wrapper';\nexport const App = () => <Top p={999} />;\n";
+        let out = analyze(
+            &[
+                ("recipe.tsx", "export const Box = ds.system({ space: true }).asElement('div');\n"),
+                ("wrapper.tsx", "import { Box } from './recipe';\nexport const Top = (props) => <Box {...props} />;\n"),
+                ("app.tsx", app),
+            ],
+            &inputs,
+        );
+        let located: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some(STRICT_TOKEN_MISS))
+            .map(|d| (d.file.as_str(), d.offset, d.dropped.as_deref()))
+            .collect();
+        assert_eq!(located, [("app.tsx", app.find("<Top").map(|at| at as u32), Some("999"))], "{:#?}", out.diagnostics);
     }
 
     #[test]
-    fn renamed_recipes_warn_but_resolved_assigned_and_outside_tags_do_not() {
+    fn renamed_and_assigned_recipes_route_their_values_but_outside_tags_do_not() {
         let recipe = "const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
         // `Object.assign(R, …)` returns `R`, so the tag resolves to it.
         let assigned = format!("{recipe}export const Button = Object.assign(ButtonRecipe, {{ Icon: ButtonRecipe }});\n");
         let app = "import { Button } from './recipe';\nexport const App = () => <Button marginInlineStart={8} />;\n";
         let out = analyze_with_logical_space(&[("recipe.tsx", assigned.as_str()), ("app.tsx", app)]);
-        assert!(unattributed(&out).is_empty(), "{:?}", out.diagnostics);
-        assert!(out.system_prop_map.values().any(|map| map.contains_key("8")), "{:?}", out.system_prop_map);
+        assert!(routed(&out), "{:?}", out.system_prop_map);
         for (declaration, tag) in [
             ("export const Button = ButtonRecipe;", "Button"),
             (
@@ -14984,31 +14991,31 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             let source = format!("{recipe}{declaration}\n");
             let app = format!("import {{ Button }} from './recipe';\nexport const App = () => <{tag} marginInlineStart={{8}} />;\n");
             let out = analyze_with_logical_space(&[("recipe.tsx", source.as_str()), ("app.tsx", app.as_str())]);
-            assert_eq!(unattributed(&out).len(), 1, "{declaration}: {:?}", out.diagnostics);
+            assert!(routed(&out), "{declaration}: {:?}", out.system_prop_map);
         }
         let recipe = "export const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
         for app in [
-            "import { ButtonRecipe as Button } from './recipe';\nexport const App = () => <Button marginInlineStart={8} />;\n",
             "import { Dialog } from '@ark-ui/react';\nexport const App = () => <Dialog marginInlineStart={8} />;\n",
             "import { Dialog } from '@ark-ui/react';\nexport const App = () => <Dialog.Content marginInlineStart={8} />;\n",
-            "import { Button } from './wrapper';\nexport const App = () => <Button onClick={go} />;\n",
+            "import { Button } from './wrapper';\nexport const App = () => <Button marginInlineStart={8} />;\n",
         ] {
             let out = analyze_with_logical_space(&[
                 ("recipe.tsx", recipe),
                 ("wrapper.tsx", "export const Button = (props) => <button {...props} />;\n"),
                 ("app.tsx", app),
             ]);
-            assert!(unattributed(&out).is_empty(), "{app}: {:?}", out.diagnostics);
+            assert!(!routed(&out), "{app}: {:?}", out.system_prop_map);
         }
     }
 
     /// `Object.assign(Root, { Row })` renders as `Root`, so a facade whose
     /// members mutation evidence proves keeps both tags' static props; an
-    /// unproven facade keeps its root and warns once for the member. Two
+    /// unproven facade keeps its root, routes the member's values to the
+    /// component it was built with, and records the member as unproven. Two
     /// spellings of one target are one target, and an `Object` the module
     /// binds is not the built-in.
     #[test]
-    fn assigned_callable_facades_keep_attribution_or_warn_per_use() {
+    fn assigned_callable_facades_keep_attribution_or_route_per_use() {
         let parts = "const Root = ds.system({ space: true }).asElement('section');\n\
                      const Row = ds.system({ space: true }).asElement('div');\n";
         let compose = "const Fam = compose({ Root, Row }, { shared: {} });\n";
@@ -15033,7 +15040,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         ] {
             for out in run(&facade) {
                 assert_eq!(keys(&out), ["16", "8"], "{facade}");
-                assert!(unattributed(&out).is_empty(), "{facade}: {:?}", out.diagnostics);
+                assert!(unproven(&out).is_empty(), "{facade}: {:?}", out.diagnostics);
             }
         }
         for facade in [
@@ -15044,10 +15051,10 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "export const RecordTable = Object.assign(Root, { Root, Row });\nRecordTable.Row = Root;\n".to_string(),
         ] {
             for out in run(&facade) {
-                assert_eq!(keys(&out), ["8"], "{facade}");
-                let warnings = unattributed(&out);
-                assert_eq!(warnings.len(), 1, "{facade}: {:?}", out.diagnostics);
-                assert_eq!(warnings[0].component, "RecordTable.Row", "{facade}");
+                assert_eq!(keys(&out), ["16", "8"], "{facade}");
+                let unproven = unproven(&out);
+                assert_eq!(unproven.len(), 1, "{facade}: {:?}", out.diagnostics);
+                assert_eq!(unproven[0].component, "<RecordTable.Row>", "{facade}");
             }
         }
         let shadowed = "const Object = { assign: () => Row };\nexport const RecordTable = Object.assign(Root, { Root, Row });\n";
@@ -15057,9 +15064,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     #[test]
-    fn wrappers_that_spread_their_props_warn_only_for_props_they_do_not_name() {
+    fn wrappers_that_spread_their_props_route_only_props_they_do_not_name() {
         let recipe = "export const ButtonRecipe = ds.styles({}).system({ space: true }).asElement('button');\n";
-        for (wrapper, usage, warns) in [
+        for (wrapper, usage, routes) in [
             (
                 "export const Button = ({ tone, ...rest }) => <ButtonRecipe {...rest} />;",
                 "<Button tone=\"loud\" marginInlineStart={8} />",
@@ -15088,16 +15095,16 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ("wrapper.tsx", source.as_str()),
                 ("app.tsx", app.as_str()),
             ]);
-            assert_eq!(unattributed(&out).len(), usize::from(warns), "{wrapper}: {:?}", out.diagnostics);
+            assert_eq!(routed(&out), routes, "{wrapper}: {:?}", out.system_prop_map);
         }
     }
 
     /// A spread reaches the recipe, but only props it takes as system props
-    /// are lost: a variant prop, or a system prop it does not enable, works or
-    /// was never styling.
+    /// are routed: a variant prop, or a system prop it does not enable, works
+    /// or was never styling.
     #[test]
-    fn spread_wrappers_warn_only_for_system_props_their_recipe_takes() {
-        for (recipe, usage, warns) in [
+    fn spread_wrappers_route_only_system_props_their_recipe_takes() {
+        for (recipe, usage, routes) in [
             (
                 "export const ButtonRecipe = ds.variant({ prop: 'size', variants: { sm: {}, lg: {} } }).system({ space: true }).asElement('button');",
                 "<Button size=\"sm\" />",
@@ -15123,9 +15130,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ),
                 ("app.tsx", app.as_str()),
             ]);
-            let warnings = unattributed(&out);
-            assert_eq!(warnings.len(), usize::from(warns), "{recipe} {usage}: {:?}", out.diagnostics);
-            assert!(warnings.iter().all(|w| !w.message.contains("size")), "{:?}", warnings);
+            assert_eq!(routed(&out), routes, "{recipe} {usage}: {:?}", out.system_prop_map);
+            assert!(!out.system_prop_map.contains_key("size"), "{:?}", out.system_prop_map);
         }
     }
 
@@ -15150,11 +15156,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ),
                 ("app.tsx", "import { Button } from './wrapper';\nexport const App = () => <Button marginInlineStart={8} />;\n"),
             ]);
-            let warnings = unattributed(&out);
-            assert_eq!(warnings.len(), 1, "{barrel}: {:?}", out.diagnostics);
-            for named in ["Button in wrapper.tsx", "ButtonRecipe"] {
-                assert!(warnings[0].message.contains(named), "{barrel}: {}", warnings[0].message);
-            }
+            assert!(routed(&out), "{barrel}: {:?}", out.system_prop_map);
         }
     }
 
@@ -15170,52 +15172,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ("wrapper.tsx", wrapper),
                 ("app.tsx", "import { Button } from './wrapper';\nexport const App = () => <Button marginInlineStart={8} />;\n"),
             ]);
-            assert!(unattributed(&out).is_empty(), "{wrapper}: {:?}", out.diagnostics);
+            assert!(!routed(&out), "{wrapper}: {:?}", out.system_prop_map);
         }
-    }
-
-    /// The showcase's CopyButton, Drawer and Tooltip: function components
-    /// that name the passed prop and spread nothing into what they render.
-    #[test]
-    fn components_that_name_their_props_never_warn() {
-        let out = analyze_with_logical_space(&[
-            (
-                "copy-button.tsx",
-                "const CopyButtonBase = ds.styles({}).variant({ prop: 'size', variants: { sm: {}, md: {} } }).asElement('button');\n\
-                 export function CopyButton({ text, size = 'sm' }) {\n\
-                   return <CopyButtonBase type=\"button\" size={size}>{text}</CopyButtonBase>;\n\
-                 }\n",
-            ),
-            (
-                "drawer.tsx",
-                "const DrawerPanel = ds.styles({}).variant({ prop: 'position', variants: { left: {}, right: {} } }).asElement('div');\n\
-                 export const DrawerSlots = compose({ Root: DrawerPanel }, { shared: { position: true } });\n\
-                 export function Drawer({ open, position = 'left', children }) {\n\
-                   if (!open) return null;\n\
-                   return createPortal(createElement(DrawerSlots.Root, { position }, children), document.body);\n\
-                 }\n",
-            ),
-            (
-                "tooltip.tsx",
-                "const TooltipRoot = ds.styles({}).variant({ prop: 'size', variants: { sm: {}, lg: {} } }).asElement('span');\n\
-                 const TooltipFamily = composeWithContext({ Root: TooltipRoot }, { shared: { size: true }, name: 'Tooltip' });\n\
-                 export const Tooltip = forwardRef(({ children, content, size = 'sm' }, ref) => (\n\
-                   <TooltipFamily.Root ref={ref} size={size}>{children}</TooltipFamily.Root>\n\
-                 ));\n",
-            ),
-            (
-                "app.tsx",
-                "import { CopyButton } from './copy-button';\n\
-                 import { Drawer } from './drawer';\n\
-                 import { Tooltip } from './tooltip';\n\
-                 export const App = () => <>\n\
-                   <CopyButton text=\"x\" size=\"md\" />\n\
-                   <Drawer open position=\"right\" />\n\
-                   <Tooltip content=\"x\" size=\"lg\" />\n\
-                 </>;\n",
-            ),
-        ]);
-        assert!(unattributed(&out).is_empty(), "{:?}", out.diagnostics);
     }
 
     /// `a.tsx` and `b.tsx` each export a `Card` family (and `b.tsx` a
