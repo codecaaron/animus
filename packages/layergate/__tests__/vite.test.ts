@@ -29,7 +29,10 @@ for (const [path, text] of Object.entries(files)) {
   writeFileSync(join(root, path), text);
 }
 
-async function builtCss(main: string, options: LayergateOptions): Promise<string> {
+async function builtCss(
+  main: string,
+  options: LayergateOptions
+): Promise<string> {
   writeFileSync(join(root, 'main.js'), main);
   // SAFETY: a build with no watcher and one environment returns one output.
   const output = (await build({
@@ -40,7 +43,10 @@ async function builtCss(main: string, options: LayergateOptions): Promise<string
     build: { write: false, minify: false },
   })) as Rolldown.RolldownOutput;
   return output.output
-    .filter((item): item is Rolldown.OutputAsset => item.type === 'asset' && item.fileName.endsWith('.css'))
+    .filter(
+      (item): item is Rolldown.OutputAsset =>
+        item.type === 'asset' && item.fileName.endsWith('.css')
+    )
     .map((asset) => String(asset.source))
     .join('\n');
 }
@@ -55,8 +61,11 @@ function layerOf(css: string, selector: string): string | null {
     if (css[index] === '}') depth += 1;
     else if (css[index] === '{') {
       if (depth === 0) {
-        const head = css.slice(css.lastIndexOf('\n', index - 1) + 1, index).trim();
-        if (head.startsWith('@layer')) return head.slice('@layer'.length).trim();
+        const head = css
+          .slice(css.lastIndexOf('\n', index - 1) + 1, index)
+          .trim();
+        if (head.startsWith('@layer'))
+          return head.slice('@layer'.length).trim();
       } else depth -= 1;
     }
   }
