@@ -14,7 +14,7 @@ import { applyResolvedConfig } from './config';
 import { PluginContext } from './context';
 import { cancelSystemReload, handleHotUpdate } from './hmr';
 import { buildIndexHtmlTags } from './index-html';
-import { quarantineHooks } from './quarantine';
+import { quarantinePlugin } from './quarantine-plugin';
 import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
 import { kitWatchNegations } from './watch-ignored';
@@ -218,7 +218,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
   // `quarantine` puts `anm-vendor` first in the layer order Animus's own
   // stylesheet declares, whichever stylesheet the page loads first.
-  const vendor = options.quarantine ? quarantineHooks(options.quarantine, options.layers) : null;
+  const vendor = options.quarantine ? quarantinePlugin(options.quarantine, options.layers) : null;
   const ctx = new PluginContext(vendor ? { ...options, layers: vendor.order } : options);
 
   return {
@@ -249,7 +249,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     async configureServer(server) {
-      await vendor?.run('configureServer', this, server);
+      await (await vendor?.plugin())?.configureServer.call(this, server);
       ctx.devServer = server;
       // System deps can load before the server exists; workspace paths
       // outside the root get no watcher events unless registered here.
@@ -258,7 +258,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
     async configResolved(config) {
       applyResolvedConfig(ctx, config);
-      await vendor?.run('configResolved', this, config);
+      (await vendor?.plugin())?.configResolved.call(this, config);
     },
 
     // The end of a build, and of a dev server, which Vite ends the same way:
@@ -266,14 +266,14 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     // engine. buildEnd runs once per build, failed ones included; closeBundle
     // can run twice for a failed one.
     async buildEnd() {
-      await vendor?.run('buildEnd', this);
+      (await vendor?.plugin())?.buildEnd.call(this);
       if (!ctx.builds.end(this.environment ?? ctx.builds.single)) return;
       cancelSystemReload(ctx);
       ctx.close();
     },
 
     async buildStart() {
-      await vendor?.run('buildStart', this);
+      await (await vendor?.plugin())?.buildStart.call(this);
       await ctx.builds.open(this.environment ?? ctx.builds.single);
       await runBuildStart(
         ctx,
@@ -291,8 +291,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     async resolveId(id, importer, resolveOptions) {
-      const owned = await vendor?.run('resolveId', this, id, importer, resolveOptions);
-      if (owned) return owned as string;
+      const owned = await (await vendor?.plugin())?.resolveId.call(this, id, importer, resolveOptions);
+      if (owned) return owned;
       const virtual = resolveVirtualId(ctx, id);
       if (virtual !== null || !id.startsWith('.') || importer === undefined) {
         return virtual;
@@ -323,8 +323,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     async load(id) {
-      const loaded = await vendor?.run('load', this, id);
-      if (loaded) return loaded as string | { code: string };
+      const loaded = await (await vendor?.plugin())?.load.call(this, id);
+      if (loaded) return loaded;
       return loadVirtualModule(ctx, id);
     },
 
@@ -340,8 +340,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     async hotUpdate(hmr) {
-      const vendorModules = await vendor?.run('hotUpdate', this, hmr);
-      if (vendorModules) return vendorModules as typeof hmr.modules;
+      const vendorModules = (await vendor?.plugin())?.hotUpdate.call(this, hmr);
+      if (vendorModules) return vendorModules;
       return handleHotUpdate(ctx, this.environment, hmr);
     },
   };

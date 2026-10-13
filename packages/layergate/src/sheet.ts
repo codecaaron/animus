@@ -60,9 +60,14 @@ function significant(tokens: Token[], at: number, to = tokens.length): number {
   return at;
 }
 
-/** The statement or block rule starting at `index`: the index past its
- *  `;` or closing `}` (or the end), and whether it has a block. */
-function statementEnd(tokens: Token[], index: number): { end: number; block: boolean } {
+/** Where a statement or block rule ends: the index past its `;` (or the
+ *  end), and whether it has a block, whose end is not sought. */
+interface StatementEnd {
+  end: number;
+  block: boolean;
+}
+
+function statementEnd(tokens: Token[], index: number): StatementEnd {
   let depth = 0;
   for (let at = index; at < tokens.length; at++) {
     const type = tokens[at]!.type;

@@ -56,7 +56,7 @@ export function resolvePlan(options: LayergateOptions = {}): LayergatePlan {
     layer,
     order,
     sheets: options.sheets ?? [],
-    dependencies: typeof dependencies === 'boolean' ? dependencies : new Set(dependencies),
+    dependencies: dependencies === true || dependencies === false ? dependencies : new Set(dependencies),
     optOut,
   };
 }

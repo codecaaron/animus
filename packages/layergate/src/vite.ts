@@ -48,8 +48,9 @@ function packageOf(dir: string, cache: Map<string, PackageInfo | null>): Package
     }
     visited.push(current);
     try {
-      const manifest = JSON.parse(readFileSync(join(current, 'package.json'), 'utf8')) as { name?: unknown };
-      found = { dir: current, name: typeof manifest.name === 'string' ? manifest.name : '' };
+      // SAFETY: a package.json, whose `name`, when present, is a string.
+      const { name } = JSON.parse(readFileSync(join(current, 'package.json'), 'utf8')) as { name?: string };
+      found = { dir: current, name: name ?? '' };
       break;
     } catch {
       const parent = dirname(current);
@@ -78,7 +79,7 @@ function format(diagnostic: LayergateDiagnostic): string {
   return `[layergate] ${where}${diagnostic.message} [${diagnostic.code}]`;
 }
 
-export function layergate(options: LayergateOptions = {}): Plugin {
+export function layergate(options: LayergateOptions = {}) {
   const plan = resolvePlan(options);
   let root = process.cwd();
   let app: PackageInfo | null = null;
@@ -150,8 +151,8 @@ export function layergate(options: LayergateOptions = {}): Plugin {
         return files;
       };
       declared = await resolveAll(plan.sheets, 'sheets');
-      const module = declared.find((file) => MODULE_CSS.test(file));
-      if (module) this.error(`[layergate] sheets: ${module} is a CSS Module; layergate does not own CSS Modules yet`);
+      const cssModule = declared.find((file) => MODULE_CSS.test(file));
+      if (cssModule) this.error(`[layergate] sheets: ${cssModule} is a CSS Module; layergate does not own CSS Modules yet`);
       optedOut = new Set(await resolveAll(plan.optOut, 'optOut'));
     },
 
@@ -215,14 +216,17 @@ export function layergate(options: LayergateOptions = {}): Plugin {
       const graph = this.environment.moduleGraph;
       const affected: EnvironmentModuleNode[] = [];
       for (const id of units) {
-        const module = graph.getModuleById(id);
-        if (!module) continue;
-        graph.invalidateModule(module);
-        affected.push(module);
+        const node = graph.getModuleById(id);
+        if (!node) continue;
+        graph.invalidateModule(node);
+        affected.push(node);
       }
       return [...modules, ...affected];
     },
-  };
+  } satisfies Plugin;
 }
+
+/** The plugin `layergate()` returns, its hooks typed as written. */
+export type LayergatePlugin = ReturnType<typeof layergate>;
 
 export default layergate;
