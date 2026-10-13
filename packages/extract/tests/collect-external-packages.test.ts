@@ -22,7 +22,7 @@ import {
   staleDistIncludesMessage,
 } from '../pipeline/discover-packages';
 import {
-  BUILT_IN_EXTENSION_POLICY,
+  builtInExtensionPolicy,
   extensionPolicyJson,
 } from '../pipeline/host-extensions';
 import {
@@ -46,7 +46,7 @@ const kitSourceRoot = (rootDir: string, conditions: readonly string[] = []) =>
     rootDir,
     conditions,
     {},
-    extensionPolicyJson(BUILT_IN_EXTENSION_POLICY)
+    extensionPolicyJson(builtInExtensionPolicy())
   );
 
 const tempRoots: string[] = [];
@@ -1540,7 +1540,7 @@ test.each([
           root,
           [],
           workspaces,
-          extensionPolicyJson(BUILT_IN_EXTENSION_POLICY)
+          extensionPolicyJson(builtInExtensionPolicy())
         ),
         locatePackage: nativePackageLocator(native, workspaces),
       }

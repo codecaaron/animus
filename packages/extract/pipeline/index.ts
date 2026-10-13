@@ -195,7 +195,7 @@ export type { SystemConfig, SystemLoadReads } from './system-config';
 export { loadSystemConfig, systemLoadReads } from './system-config';
 export type { HostExtensionPolicy } from './host-extensions';
 export {
-  BUILT_IN_EXTENSION_POLICY,
+  builtInExtensionPolicy,
   esbuildExtensionPolicy,
   extensionPolicyJson,
   rollupExtensionPolicy,

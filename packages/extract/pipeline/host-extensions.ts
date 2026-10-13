@@ -1,4 +1,4 @@
-import { EXTENSION_POLICY } from './extension-policy';
+import { builtInExtensionOrder } from './native-resolution';
 
 import type { ExtensionOrder } from './native-resolution';
 
@@ -20,13 +20,11 @@ export interface HostExtensionPolicy extends ExtensionOrder {
   readonly resolverVersion: string;
 }
 
-/** Animus's own order, where no host resolver configuration exists. */
-export const BUILT_IN_EXTENSION_POLICY: HostExtensionPolicy = {
-  appended: EXTENSION_POLICY.appended,
-  nodeNext: EXTENSION_POLICY.nodeNext,
-  alias: [],
-  resolverVersion: 'built-in',
-};
+/** Animus's own order, where no host resolver configuration exists: the
+ *  system loader's, read from the native engine when first asked. */
+export function builtInExtensionPolicy(): HostExtensionPolicy {
+  return { ...builtInExtensionOrder(), resolverVersion: 'built-in' };
+}
 
 type Substitutions = HostExtensionPolicy['nodeNext'];
 
@@ -80,7 +78,7 @@ export function viteExtensionPolicy(
     extensions.some((ext, i) => ext !== HOST_DEFAULT_EXTENSIONS.vite[i]);
   if (configured) {
     return {
-      ...BUILT_IN_EXTENSION_POLICY,
+      ...builtInExtensionPolicy(),
       resolverVersion:
         'built-in (hostOptionUnreadable: vite configured extensions)',
     };
@@ -130,7 +128,7 @@ export function webpackExtensionPolicy(
   ];
   if (aliasValues.some((value) => !Array.isArray(value))) {
     return {
-      ...BUILT_IN_EXTENSION_POLICY,
+      ...builtInExtensionPolicy(),
       resolverVersion: 'built-in (hostOptionUnreadable: string extensionAlias)',
     };
   }
@@ -145,7 +143,7 @@ export function webpackExtensionPolicy(
     extendsBase(resolve.extensions)
   ) {
     return {
-      ...BUILT_IN_EXTENSION_POLICY,
+      ...builtInExtensionPolicy(),
       resolverVersion: `built-in (hostOptionUnreadable: ${host}${version ? `@${version}` : ''} defaults)`,
     };
   }
@@ -231,7 +229,7 @@ export function rollupExtensionPolicy(
   usesNodeResolve: boolean
 ): HostExtensionPolicy {
   return {
-    ...BUILT_IN_EXTENSION_POLICY,
+    ...builtInExtensionPolicy(),
     resolverVersion: usesNodeResolve
       ? 'built-in (hostOptionUnreadable: rollup-node-resolve)'
       : 'built-in (hostOptionUnreadable: rollup resolver plugins)',

@@ -1,9 +1,9 @@
 //! The order in which a relative or aliased specifier's candidate files are
 //! tried: one policy, through which both the system loader and the
 //! extractor resolve, so a specifier names the same file for a system's
-//! evaluation and for an analysis. `extension_policy.json` is generated from
-//! `EXTENSION_POLICY` in `packages/extract/pipeline/extension-policy.ts`,
-//! which source ingestion reads (`node packages/extract/scripts/extension-policy.ts --write`).
+//! evaluation and for an analysis. `extension_policy.json` holds the order;
+//! the TypeScript pipeline reads it through the engine's
+//! `builtInExtensionPolicy`, so every resolver tries the same files.
 
 use std::cell::{OnceCell, RefCell};
 use std::ffi::OsString;
@@ -36,7 +36,7 @@ pub fn extension_policy() -> &'static ExtensionPolicy {
     static POLICY: OnceLock<ExtensionPolicy> = OnceLock::new();
     POLICY.get_or_init(|| {
         serde_json::from_str(include_str!("extension_policy.json"))
-            .expect("extension_policy.json is generated valid JSON")
+            .expect("extension_policy.json is valid JSON")
     })
 }
 

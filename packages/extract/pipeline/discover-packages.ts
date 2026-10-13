@@ -12,10 +12,7 @@ import {
 
 import { globToRegExp } from './core-options';
 import { discoverFiles } from './discover-files';
-import {
-  BUILT_IN_EXTENSION_POLICY,
-  extensionPolicyJson,
-} from './host-extensions';
+import { builtInExtensionPolicy, extensionPolicyJson } from './host-extensions';
 import { parseInternalWire } from './internal-wire';
 import { readKitDescriptor } from './kit-descriptor';
 import {
@@ -1169,7 +1166,7 @@ export async function systemKitDependencies(
           : dirname(importer),
         [],
         workspaces,
-        extensionPolicyJson(BUILT_IN_EXTENSION_POLICY)
+        extensionPolicyJson(builtInExtensionPolicy())
       )?.path ?? null,
     undefined,
     kitMembers

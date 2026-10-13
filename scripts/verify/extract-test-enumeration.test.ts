@@ -20,6 +20,7 @@ const ENGINE_BOUND = new Set([
   'canary.test.ts',
   'collect-external-packages.test.ts',
   'discover-packages.test.ts',
+  'extension-policy.test.ts',
   'kit-publication.test.ts',
   'property-diagnostics.test.ts',
   'prefix-contextual-vars.test.ts',
