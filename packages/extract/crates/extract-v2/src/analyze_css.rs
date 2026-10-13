@@ -11332,8 +11332,7 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
     /// A direct `createElement` call on an extracted component records the
     /// literal system props JSX records for the same element, so they take
     /// static classes, through parentheses and type-only wrappers and past an
-    /// absent breakpoint; props usage cannot read get a coded warning, never
-    /// a parameter that shares the component's name.
+    /// absent breakpoint; props it spreads are the element's spread.
     #[test]
     fn create_element_records_literal_system_props_as_jsx_does() {
         let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
@@ -11360,9 +11359,16 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             assert!(keys(&by_call).is_some(), "{call}");
             assert_eq!(unread(&by_call), 0, "{call}");
         }
-        for call in ["createElement(Box, props)", "createElement(Box, { ...props, p: 8 })"] {
-            let out = analyzed(&format!("export const App = (props) => {call};\n"));
-            assert_eq!(unread(&out), 1, "{call}");
+        // Props it spreads are the element's spread, as in JSX: no warning
+        // of its own.
+        for (call, jsx) in [
+            ("createElement(Box, props)", "<Box {...props} />"),
+            ("createElement(Box, { ...props, p: 8 })", "<Box {...props} p={8} />"),
+        ] {
+            let by_call = analyzed(&format!("export const App = (props) => {call};\n"));
+            let by_jsx = analyzed(&format!("export const App = (props) => {jsx};\n"));
+            assert_eq!(keys(&by_call), keys(&by_jsx), "{call}");
+            assert_eq!(unread(&by_call), 0, "{call}");
         }
         let shadowed = analyzed("export const App = ({ Box, props }) => createElement(Box, props);\n");
         assert_eq!(unread(&shadowed), 0);
@@ -11700,7 +11706,8 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             ("export const App = () => createElement(Box, { p: 8 });", &[]),
             ("export const App = ({ n }) => createElement(Box, { p: n });", &["p"]),
             ("export const App = ({ props }) => createElement(Box, props);", &["p"]),
-            ("function F({ as, ...rest }) { return createElement(Box, { ...rest, id: 'x' }); }\nexport const App = () => <F p={8} />;", &["p"]),
+            // The wrapper is followed, as its JSX is: `p` is the literal its render passes.
+            ("function F({ as, ...rest }) { return createElement(Box, { ...rest, id: 'x' }); }\nexport const App = () => <F p={8} />;", &[]),
             ("function F({ as, ...rest }) { rest.p = 1; return createElement(Box, { ...rest }); }\nexport const App = () => <F />;", &["p"]),
         ];
         for (app, want) in cases {
@@ -13939,6 +13946,31 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         )
     }
 
+    /// Contract (owner ruling, 2026-10-13): `createElement(Component, props)`
+    /// is the JSX it compiles to. A wrapper that renders an extracted
+    /// component through it keeps exactly what the same wrapper written in
+    /// JSX keeps: a rest spread, a spread of the props, a listed key beside
+    /// a spread, and an object held in a local all agree.
+    #[test]
+    fn create_element_wrappers_keep_what_their_jsx_keeps() {
+        let ce = "import { createElement } from 'react';\n";
+        for (call, jsx) in [
+            ("const Button = ({ size, ...rest }) => createElement(R, { ...rest });", "const Button = ({ size, ...rest }) => <R {...rest} />;"),
+            ("const Button = ({ size, ...rest }) => createElement(R, { ...rest, 'data-x': '1' });", "const Button = ({ size, ...rest }) => <R {...rest} data-x=\"1\" />;"),
+            ("const Button = (props) => createElement(R, props);", "const Button = (props) => <R {...props} />;"),
+            ("const Button = (props) => React.createElement(R, { size: 'sm', ...props });", "const Button = (props) => <R size=\"sm\" {...props} />;"),
+            ("const Button = ({ size, ...rest }) => { const p = { ...rest }; return createElement(R, p); };", "const Button = ({ size, ...rest }) => { const p = { ...rest }; return <R {...p} />; };"),
+        ] {
+            let render = "\nexport const App = () => <><Button size=\"lg\" active /><Button /></>;";
+            let by_call = wrapper_kept(&format!("{ce}import React from 'react';\n{call}{render}"));
+            let by_jsx = wrapper_kept(&format!("{jsx}{render}"));
+            assert_eq!(by_call, by_jsx, "{call}");
+        }
+        // The first, followed, prunes what no render reaches.
+        let (sizes, states, _) = wrapper_kept(&format!("{ce}const Button = ({{ size, ...rest }}) => createElement(R, {{ ...rest }});\nexport const App = () => <Button size=\"lg\" active />;"));
+        assert_eq!((sizes, states), (vec!["md"], vec!["active"]));
+    }
+
     /// A same-module wrapper that forwards its props by spread stands in for
     /// its target: its renders count as the target's, so options reached
     /// only through it prune.
@@ -14103,14 +14135,14 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 assert!(slot(body, render), "{body} {render}");
             }
         }
-        // An element render follows the wrapper; a `createElement` call does
-        // not.
+        // A `createElement` call is the element it creates: both follow the
+        // wrapper.
         for body in [
             "if (props.p && typeof props.p === 'object' && `${props.p}` !== props.p._) {}",
             "const f = props.mutate; f(props.onPress);",
         ] {
             assert!(!slot(body, renders[0]), "{body}");
-            assert!(slot(body, renders[1]), "{body}");
+            assert!(!slot(body, renders[1]), "{body}");
         }
         // A spread at the render opens the target.
         let (sizes, _, _) = wrapper_kept(
@@ -14798,7 +14830,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// call it passes its props to returns, a same-module wrapper of an
     /// imported one, the root of an `Object.assign` facade built on a
     /// function component, a function component a facade literal holds
-    /// inline, and a same-module wrapper rendered by `createElement`. A prop
+    /// inline. A same-module wrapper rendered by `createElement` is followed
+    /// as JSX is. A prop
     /// a pattern on every route consumes, and a name a parameter shadows,
     /// warn nothing.
     #[test]
@@ -14809,11 +14842,16 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let created = "import { createElement } from 'react';\nimport { Box } from './recipe';\n\
                        const Top = (props) => <Box {...props} />;\n\
                        export const App = () => createElement(Top, { marginInlineStart: 8 });\n";
+        // A same-module wrapper rendered by `createElement` is followed as
+        // the element it creates is.
+        let written = created.replace("createElement(Top, { marginInlineStart: 8 })", "<Top marginInlineStart={8} />");
         let out = analyze_with_logical_space(&[("recipe.tsx", recipe), ("app.tsx", created)]);
-        let warned: Vec<_> = unattributed(&out).iter().map(|d| (d.file.as_str(), d.offset, d.dropped.as_deref())).collect();
-        let at = created.find("createElement(Top").unwrap() as u32;
-        assert_eq!(warned, [("app.tsx", Some(at), Some("marginInlineStart"))], "{:?}", out.diagnostics);
-        assert!(!out.css.contains("margin-inline-start: 0.5rem;"), "{}", out.css);
+        let as_jsx = analyze_with_logical_space(&[("recipe.tsx", recipe), ("app.tsx", written.as_str())]);
+        let warned = |out: &CssOutput| -> Vec<(String, Option<u32>, Option<String>)> {
+            unattributed(out).iter().map(|d| (d.file.clone(), d.offset, d.dropped.clone())).collect()
+        };
+        assert_eq!(warned(&out), warned(&as_jsx), "{:?}", out.diagnostics);
+        assert_eq!(out.css, as_jsx.css);
         let cases: [(&str, &str, &str, Option<&str>); 12] = [
             ("index.ts", "export * from './wrapper';\n", "import { Top } from './index';\nexport const App = () => <Top marginInlineStart={8} />;\n", Some("<Top")),
             (
@@ -16924,7 +16962,8 @@ export const App = () => <main><Card inl={10} shut={10} tone="lg">text</Card></m
             ("", "export { Card };\nexport const App = () => <><Card inl={10} /></>;\n", none),
             ("", "export default Card;\n", both),
             ("", "export const App = () => <><Card inl={10} /></>;\nexport const Alias = Card;\n", both),
-            ("", "export const App = () => createElement(Card, { inl: 10 });\n", both),
+            // A `createElement` call is the element it creates.
+            ("", "export const App = () => createElement(Card, { inl: 10 });\n", none),
             ("", "export const App = () => <><Card inl={10} /></>;\nexport const peek = () => eval('Card');\n", both),
             ("", "export const App = () => <Card inl={10} />;\n", none),
             ("", "export const App = () => <Layout><Card inl={10} /></Layout>;\n", both),

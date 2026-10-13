@@ -8238,9 +8238,10 @@ mod tests {
         let open = (vec![pair("shape", "__dynamic__")], vec!["loading".to_string()]);
         let defaults = (vec![pair("shape", "__default__")], vec![]);
         assert_eq!(option_usages("const e = createElement(Skel, props);"), open);
+        // A spread after a listed key can override it, as in JSX.
         assert_eq!(
             option_usages("const e = createElement(Skel, { shape: 'line', ...rest });"),
-            open
+            option_usages("const e = <Skel shape=\"line\" {...rest} />;")
         );
         assert_eq!(option_usages("const e = createElement(Skel);"), defaults);
         assert_eq!(option_usages("const e = createElement(Skel, null);"), defaults);
