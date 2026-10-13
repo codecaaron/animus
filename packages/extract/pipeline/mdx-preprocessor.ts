@@ -36,28 +36,41 @@ export function isEngineTransformExtension(path: string): boolean {
 
 /** An MDX file as usage analysis reads it, or why MDX would reject it. */
 export type MdxUsageSourceResult =
-  | { kind: 'ok'; source: string }
+  | {
+      kind: 'ok';
+      source: string;
+      /** Each Animus builder call the file makes, wherever it is written,
+       *  as `line N: callee(`; MDX declares no styles. */
+      builderCalls: string[];
+    }
   | { kind: 'error'; error: string };
+
+/** The list items and block quotes a line's content can sit in. */
+const CONTAINER = String.raw`(?:[ \t]*(?:[-*+]|\d{1,9}[.)]|>)[ \t]+)*[ \t]*`;
+const block = (pattern: string, flags = 'm') =>
+  new RegExp(`^${CONTAINER}${pattern}`, flags);
 
 const TABLE_ROW = /^ {0,3}\|?.*\|.*$/m;
 const TABLE_DELIMITER = /^ {0,3}\|?\s*:?-+:?\s*\|/m;
 
 /** The elements markdown syntax renders, each through the provider's
  *  component of that name when it supplies one: blocks, then paragraphs,
- *  then inline elements, the order compiled MDX renders them in. */
+ *  then inline elements, the order compiled MDX renders them in. A list or
+ *  quote can hold any block. */
 const MARKDOWN_ELEMENTS: ReadonlyArray<[string, RegExp]> = [
-  ['h1', /^ {0,3}#(?:\s|$)/m],
-  ['h2', /^ {0,3}##(?:\s|$)/m],
-  ['h3', /^ {0,3}###(?:\s|$)/m],
-  ['h4', /^ {0,3}####(?:\s|$)/m],
-  ['h5', /^ {0,3}#####(?:\s|$)/m],
-  ['h6', /^ {0,3}######(?:\s|$)/m],
-  ['blockquote', /^ {0,3}>/m],
-  ['ul', /^ {0,3}[-*+]\s/m],
-  ['ol', /^ {0,3}\d{1,9}[.)]\s/m],
-  ['li', /^ {0,3}(?:[-*+]|\d{1,9}[.)])\s/m],
-  ['hr', /^ {0,3}([-*_])(?: *\1){2,} *$/m],
-  ['pre', /^ {0,3}(?:`{3,}|~{3,})/m],
+  // `===` and `---` under a line are setext headings.
+  ['h1', new RegExp(`^${CONTAINER}#(?:\\s|$)|^ {0,3}=+[ \\t]*$`, 'm')],
+  ['h2', new RegExp(`^${CONTAINER}##(?:\\s|$)|^ {0,3}-+[ \\t]*$`, 'm')],
+  ['h3', block('###(?:\\s|$)')],
+  ['h4', block('####(?:\\s|$)')],
+  ['h5', block('#####(?:\\s|$)')],
+  ['h6', block('######(?:\\s|$)')],
+  ['blockquote', /^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*>/m],
+  ['ul', block('[-*+]\\s')],
+  ['ol', block('\\d{1,9}[.)]\\s')],
+  ['li', block('(?:[-*+]|\\d{1,9}[.)])\\s')],
+  ['hr', block('([-*_])(?: *\\1){2,} *$')],
+  ['pre', block('(?:`{3,}|~{3,})')],
   // GFM, when the host's MDX uses it.
   ['table', TABLE_ROW],
   ['thead', TABLE_DELIMITER],
@@ -66,7 +79,8 @@ const MARKDOWN_ELEMENTS: ReadonlyArray<[string, RegExp]> = [
   ['th', TABLE_DELIMITER],
   ['td', TABLE_ROW],
   ['p', /\S/],
-  ['a', /\]\(|\]\[/],
+  // Inline, full and collapsed links, and the definitions shortcut ones use.
+  ['a', /\]\(|\]\[|^ {0,3}\[[^\]]+\]:/m],
   ['img', /!\[/],
   ['em', /(?:^|[^*])\*[^*\s]|(?:^|[^_\w])_[^_\s]/m],
   ['strong', /\*\*|__/],
@@ -74,13 +88,19 @@ const MARKDOWN_ELEMENTS: ReadonlyArray<[string, RegExp]> = [
   ['del', /~~/],
 ];
 
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const FENCE = block('(`{3,}|~{3,})', '');
 const ESM = /^(?:import|export)(?:[\s{*]|$)/;
 const TAG_START = /[A-Za-z_$>/]/;
 /** Where inline text stops being plain markdown. */
 const INLINE_SPECIAL = /[\\`{<]/g;
 const BACKTICKS = /`+/y;
 const TAG_NAME = /[^\s/>{]*/y;
+/** A JSX tag an expression renders. */
+const EXPRESSION_TAG = /<([A-Za-z_$][\w$.]*)/g;
+/** An Animus builder call, through any binding or member: the builder's
+ *  methods and terminals, and the functions that declare system styles. */
+const BUILDER_CALL =
+  /([\w$.]*)\s*\.\s*(?:styles|variant|compound|states|system|props|extend|asElement|asComponent|asClass)\s*\(|\b(create(?:System|GlobalStyles|Keyframes))\s*\(/g;
 
 /** The names an ESM block declares: its imports' local names and the
  *  bindings its exports declare. */
@@ -124,8 +144,12 @@ function expressionEnd(source: string, start: number): number {
   while (at < source.length) {
     const char = source[at]!;
     if (char === '"' || char === "'") {
-      at = source.indexOf(char, at + 1);
-      if (at === -1) break;
+      at += 1;
+      while (at < source.length && source[at] !== char) {
+        if (source[at] === '\\') at += 1;
+        at += 1;
+      }
+      if (at >= source.length) break;
     } else if (char === '`') {
       at += 1;
       while (at < source.length && source[at] !== '`') {
@@ -253,7 +277,11 @@ function scanInline(text: string, filename: string): InlineScan {
       const close = text.indexOf(run, at + run.length);
       drop(close === -1 ? at + run.length : close + run.length);
     } else if (char === '{') {
-      keep(expressionEnd(text, at));
+      const end = expressionEnd(text, at);
+      for (const match of text.slice(at, end).matchAll(EXPRESSION_TAG)) {
+        tags.push([match[1]!, at + match.index]);
+      }
+      keep(end);
     } else if (char === '<' && TAG_START.test(text[at + 1] ?? '')) {
       const tag = tagAt(text, at);
       if (tag.closing) {
@@ -294,14 +322,20 @@ export function mdxUsageSource(
   filename: string
 ): MdxUsageSourceResult {
   try {
-    return { kind: 'ok', source: mdxToTsx(source, filename) };
+    return { kind: 'ok', ...mdxToTsx(source, filename) };
   } catch (err) {
     if (!(err instanceof MdxSyntaxError)) throw err;
     return { kind: 'error', error: err.message };
   }
 }
 
-function mdxToTsx(source: string, filename: string): string {
+/** An MDX file as TSX, and the builder calls it makes. */
+interface MdxUsage {
+  source: string;
+  builderCalls: string[];
+}
+
+function mdxToTsx(source: string, filename: string): MdxUsage {
   const lines = source.split('\n');
   const esm = lines.map(() => false);
   const inline = lines.map(() => false);
@@ -324,7 +358,10 @@ function mdxToTsx(source: string, filename: string): string {
     const fence = FENCE.exec(current);
     if (fence) {
       const marker = fence[1]!;
-      const close = new RegExp(`^ {0,3}${marker[0]}{${marker.length},}\\s*$`);
+      // Closed at any indent, as one inside a list item or a quote is.
+      const close = new RegExp(
+        `^(?:[ \\t]*>)*[ \\t]*${marker[0]}{${marker.length},}\\s*$`
+      );
       // A fence renders `pre` and `code`, whichever marker opens it.
       markdown[line] = '```';
       line += 1;
@@ -343,21 +380,31 @@ function mdxToTsx(source: string, filename: string): string {
     }
   }
 
-  for (const [from, to] of runs(lines.length, (row) => inline[row]!)) {
-    const scan = scanInline(lines.slice(from, to + 1).join('\n'), filename);
-    const kept = scan.kept.split('\n');
-    const written = scan.markdown.split('\n');
-    for (let row = from; row <= to; row++) {
-      out[row] = kept[row - from]!;
-      markdown[row] = written[row - from]!;
-    }
-    let row = from;
-    let lineEnd = lines[from]!.length;
-    for (const [name, offset] of scan.tags) {
-      while (offset > lineEnd) lineEnd += lines[++row]!.length + 1;
-      tags[row]!.push(name);
-    }
+  // One inline scan over the whole file, every other line blanked: an
+  // element can hold a fence.
+  const scan = scanInline(
+    lines.map((text, row) => (inline[row] ? text : blank(text))).join('\n'),
+    filename
+  );
+  const kept = scan.kept.split('\n');
+  const written = scan.markdown.split('\n');
+  for (let row = 0; row < lines.length; row++) {
+    if (!inline[row]) continue;
+    out[row] = kept[row]!;
+    markdown[row] = written[row]!;
   }
+  let tagRow = 0;
+  let lineEnd = lines[0]!.length;
+  for (const [name, offset] of scan.tags) {
+    while (offset > lineEnd) lineEnd += lines[++tagRow]!.length + 1;
+    tags[tagRow]!.push(name);
+  }
+  // Read before the wrappers below are added: only what the file writes.
+  const builderCalls = out.flatMap((text, index) =>
+    [...text.matchAll(BUILDER_CALL)].map(
+      (match) => `line ${index + 1}: ${match[0].replace(/\s+/g, '')}`
+    )
+  );
 
   // Each run of non-ESM lines renders in a component of its own.
   const declared = declaredNames(
@@ -420,5 +467,8 @@ function mdxToTsx(source: string, filename: string): string {
     layout !== -1
       ? `return ${wrapped};`
       : `const { wrapper: MDXLayout } = props.components || {}; return MDXLayout ? ${wrapped} : <>${content}</>;`;
-  return `${out.join('\n')}\nexport default function MDXContent(props = {}) { ${render} }\n/* @mdx-source: ${filename} */\n`;
+  return {
+    source: `${out.join('\n')}\nexport default function MDXContent(props = {}) { ${render} }\n/* @mdx-source: ${filename} */\n`,
+    builderCalls,
+  };
 }

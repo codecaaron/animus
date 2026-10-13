@@ -609,6 +609,16 @@ export async function ingestSourceEntries(
       });
       continue;
     }
+    // MDX is read for the components it renders: a style it declares,
+    // wherever it is written, has no route to the stylesheet.
+    if (result.builderCalls.length > 0) {
+      diagnostics.push({
+        code: 'SOURCE_MDX_STYLE_DECLARATION',
+        message: `calls the Animus builder (${result.builderCalls.join('; ')}); MDX is analyzed for the components it renders only. Move the declaration to a .ts or .tsx file and import it.`,
+        originalPath: original.path,
+      });
+      continue;
+    }
     addAdaptedEntries(original.path, [
       { path: `${original.path}.tsx`, source: result.source },
     ]);
@@ -623,8 +633,8 @@ export async function ingestSourceEntries(
   const abortedParses: AbortedParse[] = [];
   for (const [analysisPath, file] of Object.entries(facts.files)) {
     const originalPath = analysisOwner.get(analysisPath) ?? analysisPath;
-    // MDX is read for the components it renders: a style it declares has no
-    // route to the stylesheet.
+    // A chain the call scan cannot name (a builder method read into a
+    // binding first) still shows in the native facts.
     if (extension(originalPath) === '.mdx' && file.chains.length > 0) {
       diagnostics.push({
         code: 'SOURCE_MDX_STYLE_DECLARATION',
