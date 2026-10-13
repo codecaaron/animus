@@ -67,18 +67,6 @@ describe('mdxUsageSource', () => {
     expect(source).toContain('/* @mdx-source: doc.mdx */');
   });
 
-  test('lists every builder call, wherever it is written', () => {
-    const result = mdxUsageSource(
-      "import { ds } from './ds';\n\nexport const make = () => ds.styles({}).asElement('div');\n\n<Show when={() => ns.Card.extend()} />\n",
-      'calls.mdx'
-    );
-    expect(result.kind === 'ok' && result.builderCalls).toEqual([
-      'line 3: ds.styles(',
-      'line 3: .asElement(',
-      'line 5: ns.Card.extend(',
-    ]);
-  });
-
   test.each([
     ['unclosed element', '# X\n\n<Unclosed>\n'],
     ['unterminated expression', '{'],

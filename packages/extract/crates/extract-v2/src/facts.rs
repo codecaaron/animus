@@ -1798,6 +1798,43 @@ mod tests {
     }
 
     #[test]
+    fn records_every_builder_reference_in_mdx_and_none_in_strings() {
+        let references = |source: &str| {
+            let counter = ParseCounter::new(0);
+            let ast = OwnedAst::parse("doc.mdx.tsx".into(), source.into(), &counter);
+            extract_file_facts(&ast).builder_references.into_iter().map(|r| r.name).collect::<Vec<_>>()
+        };
+        // Wherever and however a builder method or style-declaring import
+        // is named, it is recorded.
+        for (source, expected) in [
+            ("export const Hidden = () => { const Box = ns.ds.styles({}).asElement('div'); return <Box />; };", vec!["styles", "asElement"]),
+            ("const el = <Panel render={() => ds.styles({})} />;", vec!["styles"]),
+            ("const s = ds.styles; s({});", vec!["styles"]),
+            ("ds['styles']({});", vec!["styles"]),
+            ("ds.styles?.({});", vec!["styles"]),
+            ("ds.styles`x`;", vec!["styles"]),
+            ("const el = <div>{ds.variant({})}</div>;", vec!["variant"]),
+            ("import { createSystem as makeSystem } from '@animus-ui/system';", vec!["createSystem"]),
+            ("ds\n  .styles({})\n  .asClass();", vec!["styles", "asClass"]),
+        ] {
+            assert_eq!(references(source), expected, "{source}");
+        }
+        // Text that only spells one is no reference.
+        for source in [
+            "export const example = \"ds.styles({})\";",
+            "const el = <Panel title=\"ds.styles({})\" />;",
+            "const el = <>{\"ds.styles({})\"}</>;",
+            "const el = <>{`ds.styles({})`}</>;",
+        ] {
+            assert!(references(source).is_empty(), "{source}");
+        }
+        // Outside MDX's view nothing is recorded.
+        let counter = ParseCounter::new(0);
+        let ast = OwnedAst::parse("a.tsx".into(), "ds.styles({});".into(), &counter);
+        assert!(extract_file_facts(&ast).builder_references.is_empty());
+    }
+
+    #[test]
     fn records_only_create_system_calls_no_binding_resolves() {
         let calls = |source: &str| facts_for(source).unbound_create_system_calls;
         // A bare call, at its callee.

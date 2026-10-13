@@ -39,31 +39,26 @@ function resolverFacts(
 
 describe('ingestSourceEntries', () => {
   // Contract: MDX is analyzed for the components it renders only; any
-  // Animus builder call in it, wherever it is written, is a fatal
-  // diagnostic, so strict builds fail on it.
-  test.each([
-    [
-      'inside an exported function, through a namespace',
-      "import * as ns from './defs'\n\nexport const Hidden = () => {\n  const Box = ns.ds.styles({ zIndex: 437 }).asElement('div');\n  return <Box />;\n}\n\n<Hidden />",
-      'line 4: ns.ds.styles(',
-    ],
-    [
-      'inside a JSX prop',
-      "import { ds } from './defs'\n\n<Panel render={() => { const B = ds.styles({}).asElement('div'); return <B />; }} />",
-      'line 3: ds.styles(',
-    ],
-  ])('reports an MDX builder call %s', async (_where, source, call) => {
+  // reference to the Animus builder in it, wherever it is written, is a
+  // fatal diagnostic, so strict builds fail on it. The native facts find
+  // the references (facts.rs pins which).
+  test('reports the builder references the native facts find in MDX', async () => {
     const result = await ingestSourceEntries(
-      [{ path: 'src/doc.mdx', source }],
+      [{ path: 'src/doc.mdx', source: 'const s = ds.styles;\n\n<Box />' }],
       {
-        extractFacts: factsExtractor({}),
+        extractFacts: factsExtractor({
+          'src/doc.mdx.tsx': {
+            ...emptyFacts('src/doc.mdx.tsx'),
+            builderReferences: [{ line: 1, column: 14, name: 'styles' }],
+          },
+        }),
       }
     );
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
         code: 'SOURCE_MDX_STYLE_DECLARATION',
         originalPath: 'src/doc.mdx',
-        message: expect.stringContaining(call),
+        message: expect.stringContaining('line 1: styles'),
       }),
     ]);
   });
