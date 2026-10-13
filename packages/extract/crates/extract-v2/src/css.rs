@@ -287,6 +287,18 @@ impl ComponentCss {
     /// The variant rules in the order they are written: each rule's
     /// selector class and styles.
     pub fn variant_rules(&self) -> Vec<(String, &ResolvedStyles)> {
+        self.ordered_variant_rules()
+            .into_iter()
+            .map(|(variant, option, styles)| {
+                let suffix = option.unwrap_or("default");
+                (format!("{}--{}-{}", self.class_name, variant.prop, suffix), styles)
+            })
+            .collect()
+    }
+
+    /// Each variant rule in the order it is written: its axis, its option
+    /// (`None` for the axis's default rule) and its styles.
+    pub fn ordered_variant_rules(&self) -> Vec<(&VariantCss, Option<&str>, &ResolvedStyles)> {
         let natural = natural_variant_order(&self.variants);
         let mut written: FxHashSet<(&str, Option<&str>)> = FxHashSet::default();
         let mut rules = Vec::new();
@@ -300,11 +312,11 @@ impl ComponentCss {
             }) else {
                 continue;
             };
-            if !written.insert((variant.prop.as_str(), option.as_ref().map(|_| name.as_str()))) {
+            let option = option.as_ref().map(|_| name.as_str());
+            if !written.insert((variant.prop.as_str(), option)) {
                 continue;
             }
-            let suffix = if option.is_some() { name.as_str() } else { "default" };
-            rules.push((format!("{}--{}-{}", self.class_name, variant.prop, suffix), styles));
+            rules.push((variant, option, styles));
         }
         rules
     }
@@ -772,46 +784,42 @@ pub fn generate_composed_variant_css<'a>(
                 continue;
             };
 
+            // The shared axes' rules follow the child's own rule order, so an
+            // extension's own options win inside the family as they do
+            // outside it. The root's default selects one of the child's
+            // options, so its rule closes the run of that axis's rules that
+            // holds the option, wherever the child's own default rule sits:
+            // within a run only one rule can apply.
             let mut output = String::new();
-            for shared_key in family.shared_keys {
-                let Some(variant) = child_css
-                    .variants
-                    .iter()
-                    .find(|v| v.prop == *shared_key)
-                else {
-                    continue;
-                };
-
-                for (option_name, styles) in &variant.options {
-                    write_composed_rule_pair(
-                        &mut output,
-                        family.root_class,
-                        child_class,
-                        shared_key,
-                        option_name,
-                        styles,
-                        breakpoints,
-                    );
+            let mut pending: Option<(&str, &ResolvedStyles)> = None;
+            let rules = child_css
+                .ordered_variant_rules()
+                .into_iter()
+                .filter(|(variant, _, _)| family.shared_keys.contains(&variant.prop));
+            for (variant, option, styles) in rules {
+                let Some(option_name) = option else { continue };
+                if let Some((prop, default_styles)) = pending.filter(|(prop, _)| *prop != variant.prop) {
+                    write_composed_default_inheritance_rule(&mut output, family.root_class, child_class, prop, default_styles, breakpoints);
+                    pending = None;
                 }
-
-                let Some(default_styles) = root_css
-                    .and_then(|root| root.variants.iter().find(|v| v.prop == *shared_key))
-                    .and_then(|root_variant| root_variant.default_option.as_deref())
-                    .and_then(|default_name| {
-                        variant.options.iter().find(|(n, _)| n == default_name)
-                    })
-                    .map(|(_, styles)| styles)
-                else {
-                    continue;
-                };
-                write_composed_default_inheritance_rule(
+                write_composed_rule_pair(
                     &mut output,
                     family.root_class,
                     child_class,
-                    shared_key,
-                    default_styles,
+                    &variant.prop,
+                    option_name,
+                    styles,
                     breakpoints,
                 );
+                let root_default = root_css
+                    .and_then(|root| root.variants.iter().find(|v| v.prop == variant.prop))
+                    .and_then(|root_variant| root_variant.default_option.as_deref());
+                if root_default == Some(option_name) {
+                    pending = Some((&variant.prop, styles));
+                }
+            }
+            if let Some((prop, default_styles)) = pending {
+                write_composed_default_inheritance_rule(&mut output, family.root_class, child_class, prop, default_styles, breakpoints);
             }
             if !output.is_empty() {
                 rules_by_child.push((child_class, output));

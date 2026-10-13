@@ -555,6 +555,18 @@ declare const STAGE_BRAND: unique symbol;
  */
 export type SystemBuilderStage = 'inherit' | 'extend';
 
+/**
+ * A group's entry in the group registry: the names of the props it adds,
+ * given as the keys of `Props`. `addGroup` passes an object type, so an
+ * emitted declaration lists them in the group's own order. A `keyof` union
+ * would print in the type checker's order, which changes with the order it
+ * checked files in, and so from one declaration build to the next.
+ */
+export type PropGroup<Name extends string, Props> = Record<
+  Name,
+  (keyof Props)[]
+>;
+
 function orderedPropertiesEqual(
   existing: Prop['properties'],
   incoming: Prop['properties']
@@ -1154,7 +1166,7 @@ export class SystemBuilder<
     authored: Conf
   ): SystemBuilder<
     PropReg & Conf,
-    GroupReg & Record<Name, (keyof Conf)[]>,
+    GroupReg & PropGroup<Name, { [Prop in keyof Conf]: true }>,
     Conds,
     Sels,
     'extend',
@@ -1199,12 +1211,12 @@ export class SystemBuilder<
     const nextProps = { ...this.#propRegistry, ...config };
     const newGroup = {
       [name]: Object.keys(config),
-    } as Record<Name, (keyof Conf)[]>;
+    } as PropGroup<Name, { [Prop in keyof Conf]: true }>;
     const nextGroups = { ...this.#groupRegistry, ...newGroup };
 
     return new SystemBuilder<
       PropReg & Conf,
-      GroupReg & Record<Name, (keyof Conf)[]>,
+      GroupReg & PropGroup<Name, { [Prop in keyof Conf]: true }>,
       Conds,
       Sels,
       'extend',

@@ -20,7 +20,7 @@ source "$ROOT/scripts/verify/_preconditions.sh"
 
 require_bun_install
 
-node_modules/.bin/tsc -p packages/system/__tests__/tsconfig.test-d.json --noEmit
+bun check -p packages/system/__tests__/tsconfig.test-d.json
 
 require_fresh_package_dist system
 require_fresh_package_dist test-ds

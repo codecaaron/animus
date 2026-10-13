@@ -1242,7 +1242,7 @@ pub(crate) fn module_binds(program: &Program<'_>, name: &str) -> bool {
         Declaration::TSEnumDeclaration(decl) => decl.id.name == name,
         Declaration::TSImportEqualsDeclaration(decl) => decl.id.name == name,
         Declaration::TSNamespaceDeclaration(decl) => decl.id.name == name,
-        Declaration::TSExternalModuleDeclaration(decl) => decl.id.value == name,
+        // `declare module 'x' {}` names a module, and binds nothing.
         _ => false,
     };
     program.body.iter().any(|stmt| match stmt {

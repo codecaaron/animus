@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# verify:compile — tsc --noEmit across all packages.
+# verify:compile — each package's `compile`: `bun check`, which reports the
+# errors tsc does, except the showcase on tsc, where bun check types a
+# variant's numeric keys as numbers and tsc does not.
 # Reads source; no dist/ precondition.
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

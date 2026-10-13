@@ -32,18 +32,29 @@ const LOCAL_PROTOCOLS = ['file:', 'link:', 'workspace:', 'portal:'];
  *  absence. */
 type Stamps = Map<string, string>;
 
+/** A file's stamp, or its absence, and a `package.json`'s text, from the
+ *  same read. */
+interface FileRead {
+  stamp: string;
+  text?: string;
+}
+
 /** A `package.json` by its bytes: a registry tarball's files carry one
  *  fixed modification time, so a swap of the same size keeps it. A lockfile
  *  by its size and modification time, which a write changes. */
-function stampOf(path: string): string {
+function read(path: string): FileRead {
   try {
     if (path.endsWith('package.json')) {
-      return createHash('sha256').update(readFileSync(path)).digest('hex');
+      const bytes = readFileSync(path);
+      return {
+        stamp: createHash('sha256').update(bytes).digest('hex'),
+        text: bytes.toString('utf-8'),
+      };
     }
     const { size, mtimeMs } = statSync(path);
-    return `${size}:${mtimeMs}`;
+    return { stamp: `${size}:${mtimeMs}` };
   } catch {
-    return 'absent';
+    return { stamp: 'absent' };
   }
 }
 
@@ -67,11 +78,80 @@ interface Decision {
 
 const decisions = new Map<string, Decision>();
 
-function unchanged(stamps: Stamps): boolean {
-  for (const [path, stamp] of stamps) {
-    if (stampOf(path) !== stamp) return false;
+/** One call's reads, shared by its decisions, as one snapshot: each file is
+ *  read once, and each installed package's local dependencies are walked
+ *  once, with the files the walk read. Registry packages share most of
+ *  their dependencies, so a decision of its own each walked them again. */
+class Reads {
+  readonly #files = new Map<string, FileRead>();
+  readonly #manifests = new Map<string, Manifest | null>();
+  readonly #walks = new Map<
+    string,
+    { roots: string[] | null; files: Set<string> }
+  >();
+
+  file(path: string): FileRead {
+    let found = this.#files.get(path);
+    if (found === undefined) {
+      found = read(path);
+      this.#files.set(path, found);
+    }
+    return found;
   }
-  return true;
+
+  unchanged(stamps: Stamps): boolean {
+    for (const [path, stamp] of stamps) {
+      if (this.file(path).stamp !== stamp) return false;
+    }
+    return true;
+  }
+
+  /** `installed`'s local dependencies, adding the files their walk read to
+   *  `files`. */
+  localDependencies(installed: string, files: Set<string>): string[] | null {
+    let walk = this.#walks.get(installed);
+    if (walk === undefined) {
+      const walked = new Set<string>();
+      walk = {
+        roots: localDependencies(installed, this.tracked(walked)),
+        files: walked,
+      };
+      this.#walks.set(installed, walk);
+    }
+    for (const path of walk.files) files.add(path);
+    return walk.roots;
+  }
+
+  /** Lookups that add each file they read to `files`. */
+  tracked(files: Set<string>): Lookups {
+    return {
+      exists: (path) => {
+        files.add(path);
+        return this.file(path).stamp !== 'absent';
+      },
+      manifest: (dir) => {
+        const path = join(dir, 'package.json');
+        files.add(path);
+        let found = this.#manifests.get(path);
+        if (found === undefined) {
+          const { text } = this.file(path);
+          try {
+            // SAFETY: a package.json is a JSON object; only its dependency maps are read.
+            found = text === undefined ? null : (JSON.parse(text) as Manifest);
+          } catch {
+            found = null;
+          }
+          this.#manifests.set(path, found);
+        }
+        return found;
+      },
+    };
+  }
+}
+
+interface Lookups {
+  exists(path: string): boolean;
+  manifest(dir: string): Manifest | null;
 }
 
 type Manifest = {
@@ -104,6 +184,7 @@ export function registryPackages(
       listed,
     ]);
   }
+  const reads = new Reads();
   const result: RegistryPackage[] = [];
   for (const [identity, instances] of byIdentity) {
     const key = [
@@ -114,8 +195,8 @@ export function registryPackages(
       ),
     ].join('\n');
     let decision = decisions.get(key);
-    if (decision === undefined || !unchanged(decision.stamps)) {
-      decision = decide(root, instances);
+    if (decision === undefined || !reads.unchanged(decision.stamps)) {
+      decision = decide(root, instances, reads);
       decisions.set(key, decision);
     }
     if (decision.roots === null) continue;
@@ -132,60 +213,40 @@ export function registryPackages(
 /** One package's registry decision from the filesystem, with the stamp of
  *  every file it read or looked for and of each lockfile at or above the
  *  root. */
-function decide(root: string, instances: readonly PreparedPackage[]): Decision {
-  const stamps: Stamps = new Map();
+function decide(
+  root: string,
+  instances: readonly PreparedPackage[],
+  reads: Reads
+): Decision {
+  const files = new Set<string>();
   for (let dir = root; ; dir = dirname(dir)) {
-    for (const lockfile of LOCKFILES) {
-      const path = join(dir, lockfile);
-      stamps.set(path, stampOf(path));
-    }
+    for (const lockfile of LOCKFILES) files.add(join(dir, lockfile));
     if (dirname(dir) === dir) break;
   }
-  const exists = (path: string): boolean => {
-    const stamp = stampOf(path);
-    stamps.set(path, stamp);
-    return stamp !== 'absent';
-  };
-  const manifests = new Map<string, Manifest | null>();
-  const manifest = (dir: string): Manifest | null => {
-    let found = manifests.get(dir);
-    if (found === undefined) {
-      const path = join(dir, 'package.json');
-      stamps.set(path, stampOf(path));
-      try {
-        // SAFETY: a package.json is a JSON object; only its dependency maps are read.
-        found = JSON.parse(readFileSync(path, 'utf-8')) as Manifest;
-      } catch {
-        found = null;
-      }
-      manifests.set(dir, found);
-    }
-    return found;
-  };
+  const lookups = reads.tracked(files);
+  const decided = (roots: string[] | null): Decision => ({
+    stamps: new Map([...files].map((path) => [path, reads.file(path).stamp])),
+    roots,
+  });
   const roots = new Set<string>();
-  const reachedRoots = new Map<string, string[] | null>();
   for (const { importer, specifier } of instances) {
     const name = bareSpecifierPackageName(specifier);
     const from = dirname(
       isAbsolute(importer) ? importer : resolve(root, importer)
     );
-    const installed = installedPackage(name, from, exists);
+    const installed = installedPackage(name, from, lookups.exists);
     if (
       installed === null ||
       !insideNodeModules(installed) ||
-      declaredLocally(name, from, manifest)
+      declaredLocally(name, from, lookups.manifest)
     ) {
-      return { stamps, roots: null };
+      return decided(null);
     }
-    let reached = reachedRoots.get(installed);
-    if (reached === undefined) {
-      reached = localDependencies(installed, manifest, exists);
-      reachedRoots.set(installed, reached);
-    }
-    if (reached === null) return { stamps, roots: null };
+    const reached = reads.localDependencies(installed, files);
+    if (reached === null) return decided(null);
     for (const local of reached) roots.add(local);
   }
-  return { stamps, roots: [...roots] };
+  return decided([...roots]);
 }
 
 /** The real directory of package `name` as Node resolves it from `from`:
@@ -238,8 +299,7 @@ function declaredLocally(
  *  null past the bound. */
 function localDependencies(
   installed: string,
-  manifest: (dir: string) => Manifest | null,
-  exists: (path: string) => boolean
+  { manifest, exists }: Lookups
 ): string[] | null {
   const local = new Set<string>();
   const seen = new Set<string>([installed]);

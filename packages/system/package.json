@@ -85,7 +85,7 @@
   "scripts": {
     "build": "bun run build:ts",
     "build:ts": "tsdown",
-    "compile": "tsc --noEmit"
+    "compile": "bun check"
   },
   "dependencies": {
     "@animus-ui/properties": "workspace:*",
