@@ -41,22 +41,32 @@ export function resolvePlan(options: LayergateOptions = {}): LayergatePlan {
   }
   const order = options.order ?? [layer];
   for (const name of order) {
-    if (!LAYER_NAME.test(name)) throw new LayergateConfigError(`order: "${name}" is not a layer name`);
+    if (!LAYER_NAME.test(name))
+      throw new LayergateConfigError(`order: "${name}" is not a layer name`);
   }
   const duplicate = order.find((name, index) => order.indexOf(name) !== index);
-  if (duplicate) throw new LayergateConfigError(`order: "${duplicate}" appears twice`);
+  if (duplicate)
+    throw new LayergateConfigError(`order: "${duplicate}" appears twice`);
   if (!order.includes(layer)) {
-    throw new LayergateConfigError(`order must include the quarantine layer "${layer}"`);
+    throw new LayergateConfigError(
+      `order must include the quarantine layer "${layer}"`
+    );
   }
   const optOut = options.optOut ?? [];
   const glob = optOut.find((entry) => /[*?[\]{}]/.test(entry));
-  if (glob) throw new LayergateConfigError(`optOut: "${glob}" is a pattern; list exact files`);
+  if (glob)
+    throw new LayergateConfigError(
+      `optOut: "${glob}" is a pattern; list exact files`
+    );
   const dependencies = options.dependencies ?? false;
   return {
     layer,
     order,
     sheets: options.sheets ?? [],
-    dependencies: dependencies === true || dependencies === false ? dependencies : new Set(dependencies),
+    dependencies:
+      dependencies === true || dependencies === false
+        ? dependencies
+        : new Set(dependencies),
     optOut,
   };
 }

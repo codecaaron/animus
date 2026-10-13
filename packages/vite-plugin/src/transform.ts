@@ -7,8 +7,8 @@ import {
 import { extname, relative } from 'path';
 
 import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
-import { LAYERGATE_ENTRY_ID } from './quarantine';
 import { invalidateFileModules } from './module-invalidation';
+import { LAYERGATE_ENTRY_ID } from './quarantine';
 import { droppedExtensions, reconcileSourceCorpus } from './rediscovery';
 import { applyPublished, changesOf, mergePublished } from './session-outcomes';
 

@@ -52,7 +52,10 @@ export interface Sheet {
 }
 
 const skippable = (token: Token) =>
-  token.type === 'whitespace' || token.type === 'comment' || token.type === 'cdo' || token.type === 'cdc';
+  token.type === 'whitespace' ||
+  token.type === 'comment' ||
+  token.type === 'cdo' ||
+  token.type === 'cdc';
 
 /** The index of the first significant token at or after `at`, before `to`. */
 function significant(tokens: Token[], at: number, to = tokens.length): number {
@@ -74,7 +77,8 @@ function statementEnd(tokens: Token[], index: number): StatementEnd {
     if (type === '(' || type === '[' || type === 'function') depth += 1;
     else if ((type === ')' || type === ']') && depth > 0) depth -= 1;
     else if (depth === 0 && type === ';') return { end: at + 1, block: false };
-    else if (depth === 0 && type === '{') return { end: tokens.length, block: true };
+    else if (depth === 0 && type === '{')
+      return { end: tokens.length, block: true };
   }
   return { end: tokens.length, block: false };
 }
@@ -92,7 +96,12 @@ function closing(tokens: Token[], index: number): number {
 
 /** An `@import`'s URL, layer, supports and media, from the tokens after
  *  its at-keyword (`from`) through its `;` (`to`, exclusive). */
-function readImport(css: string, tokens: Token[], from: number, to: number): ImportStatement | null {
+function readImport(
+  css: string,
+  tokens: Token[],
+  from: number,
+  to: number
+): ImportStatement | null {
   const start = tokens[from - 1]!.start;
   const last = tokens[to - 1]!;
   const end = last.end;
@@ -103,7 +112,10 @@ function readImport(css: string, tokens: Token[], from: number, to: number): Imp
   if (target.type === 'string' || target.type === 'url') {
     url = target.value;
     at += 1;
-  } else if (target.type === 'function' && target.value.toLowerCase() === 'url') {
+  } else if (
+    target.type === 'function' &&
+    target.value.toLowerCase() === 'url'
+  ) {
     const close = closing(tokens, at);
     const inner = tokens[significant(tokens, at + 1, close)];
     if (inner?.type !== 'string') return null;
@@ -116,9 +128,15 @@ function readImport(css: string, tokens: Token[], from: number, to: number): Imp
   if (token?.type === 'ident' && token.value.toLowerCase() === 'layer') {
     layer = { kind: 'anonymous' };
     at += 1;
-  } else if (token?.type === 'function' && token.value.toLowerCase() === 'layer') {
+  } else if (
+    token?.type === 'function' &&
+    token.value.toLowerCase() === 'layer'
+  ) {
     const close = closing(tokens, at);
-    layer = { kind: 'named', name: css.slice(token.end, tokens[close]!.start).trim() };
+    layer = {
+      kind: 'named',
+      name: css.slice(token.end, tokens[close]!.start).trim(),
+    };
     at = close + 1;
   }
   let supports: string | null = null;
@@ -132,13 +150,24 @@ function readImport(css: string, tokens: Token[], from: number, to: number): Imp
   at = significant(tokens, at, to);
   token = tokens[at];
   const mediaEnd = last.type === ';' ? last.start : end;
-  const media = token && at < to && token.type !== ';' ? css.slice(token.start, mediaEnd).trim() : '';
+  const media =
+    token && at < to && token.type !== ';'
+      ? css.slice(token.start, mediaEnd).trim()
+      : '';
   return { start, end, url, layer, supports, media };
 }
 
 export function readSheet(css: string): Sheet {
   const tokens = tokenize(css);
-  const sheet: Sheet = { imports: [], removed: [], namespaces: [], urls: [], important: [], keyframes: [], animations: [] };
+  const sheet: Sheet = {
+    imports: [],
+    removed: [],
+    namespaces: [],
+    urls: [],
+    important: [],
+    keyframes: [],
+    animations: [],
+  };
   // The leading statements a stylesheet keeps at its top level; the first
   // other rule starts the body.
   let index = significant(tokens, 0);
@@ -146,7 +175,13 @@ export function readSheet(css: string): Sheet {
   while (index < tokens.length) {
     const token = tokens[index]!;
     const name = token.type === 'at-keyword' ? token.value.toLowerCase() : '';
-    if (name !== 'charset' && name !== 'import' && name !== 'namespace' && name !== 'layer') break;
+    if (
+      name !== 'charset' &&
+      name !== 'import' &&
+      name !== 'namespace' &&
+      name !== 'layer'
+    )
+      break;
     const { end, block } = statementEnd(tokens, index);
     if (block) break;
     const span: [number, number] = [token.start, tokens[end - 1]!.end];
@@ -163,30 +198,57 @@ export function readSheet(css: string): Sheet {
   let previous: Token | undefined;
   for (let at = 0; at < tokens.length; at++) {
     const token = tokens[at]!;
-    if (at < leading && sheet.removed.some(([from, to]) => token.start >= from && token.start < to)) continue;
+    if (
+      at < leading &&
+      sheet.removed.some(
+        ([from, to]) => token.start >= from && token.start < to
+      )
+    )
+      continue;
     if (token.type === 'url') {
-      sheet.urls.push({ start: token.start, end: token.end, url: token.value, kind: 'token' });
+      sheet.urls.push({
+        start: token.start,
+        end: token.end,
+        url: token.value,
+        kind: 'token',
+      });
     } else if (token.type === 'function') {
       const fn = token.value.toLowerCase();
       if (fn === 'url' || fn === 'src') {
         const inner = tokens[significant(tokens, at + 1, closing(tokens, at))];
-        if (inner?.type === 'string') sheet.urls.push({ start: inner.start, end: inner.end, url: inner.value, kind: 'string' });
+        if (inner?.type === 'string')
+          sheet.urls.push({
+            start: inner.start,
+            end: inner.end,
+            url: inner.value,
+            kind: 'string',
+          });
       } else if (fn === 'image-set' || fn === '-webkit-image-set') {
         const close = closing(tokens, at);
         let depth = 0;
         for (let inner = at + 1; inner < close; inner++) {
           const candidate = tokens[inner]!;
-          if (candidate.type === '(' || candidate.type === 'function') depth += 1;
+          if (candidate.type === '(' || candidate.type === 'function')
+            depth += 1;
           else if (candidate.type === ')') depth -= 1;
           else if (depth === 0 && candidate.type === 'string') {
-            sheet.urls.push({ start: candidate.start, end: candidate.end, url: candidate.value, kind: 'string' });
+            sheet.urls.push({
+              start: candidate.start,
+              end: candidate.end,
+              url: candidate.value,
+              kind: 'string',
+            });
           }
         }
       }
     } else if (token.type === 'delim' && token.value === '!') {
       const next = tokens[significant(tokens, at + 1)];
-      if (next?.type === 'ident' && next.value.toLowerCase() === 'important') sheet.important.push(token.start);
-    } else if (token.type === 'at-keyword' && /^(-[a-z]+-)?keyframes$/i.test(token.value)) {
+      if (next?.type === 'ident' && next.value.toLowerCase() === 'important')
+        sheet.important.push(token.start);
+    } else if (
+      token.type === 'at-keyword' &&
+      /^(-[a-z]+-)?keyframes$/i.test(token.value)
+    ) {
       sheet.keyframes.push(token.start);
     } else if (
       token.type === 'ident' &&

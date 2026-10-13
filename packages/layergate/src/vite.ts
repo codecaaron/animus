@@ -37,7 +37,10 @@ interface PackageInfo {
 }
 
 /** The nearest `package.json` above `dir`: its directory and name. */
-function packageOf(dir: string, cache: Map<string, PackageInfo | null>): PackageInfo | null {
+function packageOf(
+  dir: string,
+  cache: Map<string, PackageInfo | null>
+): PackageInfo | null {
   const visited: string[] = [];
   let current = dir;
   let found: PackageInfo | null = null;
@@ -49,7 +52,9 @@ function packageOf(dir: string, cache: Map<string, PackageInfo | null>): Package
     visited.push(current);
     try {
       // SAFETY: a package.json, whose `name`, when present, is a string.
-      const { name } = JSON.parse(readFileSync(join(current, 'package.json'), 'utf8')) as { name?: string };
+      const { name } = JSON.parse(
+        readFileSync(join(current, 'package.json'), 'utf8')
+      ) as { name?: string };
       found = { dir: current, name: name ?? '' };
       break;
     } catch {
@@ -96,7 +101,8 @@ export function layergate(options: LayergateOptions = {}) {
    *  watched here and its change handed to Vite's own HMR. */
   const watchers = new Map<string, FSWatcher>();
   const watchInstalled = (file: string) => {
-    if (!server || watchers.has(file) || !file.includes('/node_modules/')) return;
+    if (!server || watchers.has(file) || !file.includes('/node_modules/'))
+      return;
     const changed = (event: string) => {
       server?.watcher.emit('change', file);
       // An atomic save replaces the file; watch the new one.
@@ -141,18 +147,29 @@ export function layergate(options: LayergateOptions = {}) {
 
     async buildStart() {
       const importer = join(root, 'index.html');
-      const resolveAll = async (specifiers: readonly string[], what: string) => {
+      const resolveAll = async (
+        specifiers: readonly string[],
+        what: string
+      ) => {
         const files: string[] = [];
         for (const specifier of specifiers) {
-          const resolved = await this.resolve(specifier, importer, { skipSelf: true });
-          if (!resolved || resolved.external) this.error(`[layergate] ${what}: cannot resolve "${specifier}" from ${root}`);
+          const resolved = await this.resolve(specifier, importer, {
+            skipSelf: true,
+          });
+          if (!resolved || resolved.external)
+            this.error(
+              `[layergate] ${what}: cannot resolve "${specifier}" from ${root}`
+            );
           files.push(fileOf(resolved.id));
         }
         return files;
       };
       declared = await resolveAll(plan.sheets, 'sheets');
       const cssModule = declared.find((file) => MODULE_CSS.test(file));
-      if (cssModule) this.error(`[layergate] sheets: ${cssModule} is a CSS Module; layergate does not own CSS Modules yet`);
+      if (cssModule)
+        this.error(
+          `[layergate] sheets: ${cssModule} is a CSS Module; layergate does not own CSS Modules yet`
+        );
       optedOut = new Set(await resolveAll(plan.optOut, 'optOut'));
     },
 
@@ -164,9 +181,13 @@ export function layergate(options: LayergateOptions = {}) {
       // anything: a CSS file's own `@import` is Vite's, or inside a graph
       // layergate already owns.
       if (declared.length === 0 && plan.dependencies === false) return null;
-      if (!importer || importer.startsWith('\0') || isCSSRequest(importer)) return null;
+      if (!importer || importer.startsWith('\0') || isCSSRequest(importer))
+        return null;
       if (source.includes('?') || !PLAIN_CSS.test(source)) return null;
-      const resolved = await this.resolve(source, importer, { ...resolveOptions, skipSelf: true });
+      const resolved = await this.resolve(source, importer, {
+        ...resolveOptions,
+        skipSelf: true,
+      });
       if (!resolved || resolved.external) return null;
       const file = fileOf(resolved.id);
       if (!PLAIN_CSS.test(file) || MODULE_CSS.test(file)) return null;
@@ -185,7 +206,9 @@ export function layergate(options: LayergateOptions = {}) {
         layer: plan.layer,
         order: plan.order,
         resolve: async (specifier, from) => {
-          const resolved = await this.resolve(specifier, from, { skipSelf: true });
+          const resolved = await this.resolve(specifier, from, {
+            skipSelf: true,
+          });
           return resolved && !resolved.external ? fileOf(resolved.id) : null;
         },
         read: (file) => readFile(file, 'utf8'),

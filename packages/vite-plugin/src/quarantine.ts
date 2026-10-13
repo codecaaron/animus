@@ -7,7 +7,6 @@
  */
 import { ANIMUS_LAYERS } from '@animus-ui/extract/pipeline';
 
-
 export const VENDOR_LAYER = 'anm-vendor';
 
 /** The module delivering the layer order and the declared sheets. */
@@ -28,7 +27,9 @@ export interface AnimusQuarantineOptions {
 }
 
 /** The cascade layer order with `anm-vendor` first, unless it is listed. */
-export function withVendorLayer(layers: readonly string[] | undefined): string[] {
+export function withVendorLayer(
+  layers: readonly string[] | undefined
+): string[] {
   const order = [...(layers ?? ANIMUS_LAYERS)];
   return order.includes(VENDOR_LAYER) ? order : [VENDOR_LAYER, ...order];
 }

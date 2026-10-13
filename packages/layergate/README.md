@@ -19,9 +19,9 @@ below yours:
 ## Vite
 
 ```ts
+import { layergate } from '@animus-ui/layergate/vite';
 // vite.config.ts
 import { defineConfig } from 'vite';
-import { layergate } from '@animus-ui/layergate/vite';
 
 export default defineConfig({
   plugins: [
@@ -41,13 +41,13 @@ export default defineConfig({
 import 'virtual:layergate';
 ```
 
-| Option | Meaning |
-| --- | --- |
-| `layer` | The layer owned stylesheets go into. Default `vendor`. |
-| `order` | The full layer order every owned stylesheet declares first. It must include `layer`. Default `[layer]`. |
-| `sheets` | Stylesheets `virtual:layergate` delivers, in this order, whether or not anything else imports them: package specifiers or paths relative to the Vite root. |
-| `dependencies` | Also own the `.css` a JS module imports from a package other than your app: `true` for every package, or package names. Default: none. |
-| `optOut` | Files inside an owned stylesheet whose own rules stay outside the layer. Exact specifiers or paths, never globs. |
+| Option         | Meaning                                                                                                                                                    |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `layer`        | The layer owned stylesheets go into. Default `vendor`.                                                                                                     |
+| `order`        | The full layer order every owned stylesheet declares first. It must include `layer`. Default `[layer]`.                                                    |
+| `sheets`       | Stylesheets `virtual:layergate` delivers, in this order, whether or not anything else imports them: package specifiers or paths relative to the Vite root. |
+| `dependencies` | Also own the `.css` a JS module imports from a package other than your app: `true` for every package, or package names. Default: none.                     |
+| `optOut`       | Files inside an owned stylesheet whose own rules stay outside the layer. Exact specifiers or paths, never globs.                                           |
 
 Any import of an owned stylesheet, by any spelling, gets the same single
 copy. Vite's own CSS pipeline then processes it once: PostCSS, minification,

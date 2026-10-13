@@ -40,7 +40,10 @@ export interface CompileOptions {
   order: readonly string[];
   /** The host's CSS resolver: the absolute file `specifier` reaches from
    *  `importer`, or null. */
-  resolve(specifier: string, importer: string): Promise<string | null> | string | null;
+  resolve(
+    specifier: string,
+    importer: string
+  ): Promise<string | null> | string | null;
   read(file: string): Promise<string> | string;
   /** Whether `file`'s own text goes into the quarantine layer; false for a
    *  file opted out, which still loads, outside it. */
@@ -74,9 +77,11 @@ const open = (frame: Frame) =>
 const isRemote = (url: string) => /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(url);
 
 /** A URL that resolves the same from any stylesheet location. */
-const isLocationFree = (url: string) => url === '' || /^(?:[a-z][a-z0-9+.-]*:|\/|#|%23)/i.test(url);
+const isLocationFree = (url: string) =>
+  url === '' || /^(?:[a-z][a-z0-9+.-]*:|\/|#|%23)/i.test(url);
 
-const quoted = (url: string) => `"${url.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\a ')}"`;
+const quoted = (url: string) =>
+  `"${url.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\a ')}"`;
 
 /** `@import "x"` names a stylesheet relative to its own; a bare name that
  *  is no relative file is the package a bundler resolves. */
@@ -89,7 +94,8 @@ function candidates(url: string): string[] {
 /** Line and column (1-based) of each offset in `text`. */
 function locator(text: string) {
   const starts = [0];
-  for (let at = 0; at < text.length; at++) if (text[at] === '\n') starts.push(at + 1);
+  for (let at = 0; at < text.length; at++)
+    if (text[at] === '\n') starts.push(at + 1);
   return (offset: number) => {
     let low = 0;
     let high = starts.length - 1;
@@ -110,12 +116,18 @@ function splitSuffix(url: string): [string, string] {
 
 /** The frames an import adds, media, then supports, then layer; an
  *  anonymous layer as `anonymous`. */
-function importFrames(statement: ImportStatement, anonymous: () => string): Frame[] {
+function importFrames(
+  statement: ImportStatement,
+  anonymous: () => string
+): Frame[] {
   const frames: Frame[] = [];
   if (statement.media) frames.push({ kind: 'media', text: statement.media });
-  if (statement.supports !== null) frames.push({ kind: 'supports', text: statement.supports });
-  if (statement.layer.kind === 'named') frames.push({ kind: 'layer', text: statement.layer.name });
-  else if (statement.layer.kind === 'anonymous') frames.push({ kind: 'layer', text: anonymous() });
+  if (statement.supports !== null)
+    frames.push({ kind: 'supports', text: statement.supports });
+  if (statement.layer.kind === 'named')
+    frames.push({ kind: 'layer', text: statement.layer.name });
+  else if (statement.layer.kind === 'anonymous')
+    frames.push({ kind: 'layer', text: anonymous() });
   return frames;
 }
 
@@ -123,27 +135,52 @@ function importFrames(statement: ImportStatement, anonymous: () => string): Fram
  *  layer is every layer on its way, its supports every supports, and its
  *  media the innermost media. */
 function remoteImport(url: string, frames: Frame[]): string {
-  const of = (kind: Frame['kind']) => frames.filter((frame) => frame.kind === kind).map((frame) => frame.text);
+  const of = (kind: Frame['kind']) =>
+    frames.filter((frame) => frame.kind === kind).map((frame) => frame.text);
   const [layers, supports, media] = [of('layer'), of('supports'), of('media')];
   return [
     `@import url(${quoted(url)})`,
     layers.length > 0 ? ` layer(${layers.join('.')})` : '',
-    supports.length > 0 ? ` supports(${supports.map((text) => `(${text})`).join(' and ')})` : '',
+    supports.length > 0
+      ? ` supports(${supports.map((text) => `(${text})`).join(' and ')})`
+      : '',
     media.length > 0 ? ` ${media.at(-1)}` : '',
     ';',
   ].join('');
 }
 
-export async function compileUnit(root: string, options: CompileOptions): Promise<CompiledUnit> {
+export async function compileUnit(
+  root: string,
+  options: CompileOptions
+): Promise<CompiledUnit> {
   const deliveryDir = dirname(root);
   const bundle = new Bundle({ separator: '' });
   const diagnostics: LayergateDiagnostic[] = [];
-  const loaded = new Map<string, (ParsedSheet & { source: MagicString; locate: ReturnType<typeof locator> }) | null>();
+  const loaded = new Map<
+    string,
+    | (ParsedSheet & {
+        source: MagicString;
+        locate: ReturnType<typeof locator>;
+      })
+    | null
+  >();
   const remote: string[] = [];
   const emitted = new Set<string>();
 
-  const report = (code: string, severity: Severity, message: string, file: string, at: number) => {
-    diagnostics.push({ code, severity, message, file, ...loaded.get(file)!.locate(at) });
+  const report = (
+    code: string,
+    severity: Severity,
+    message: string,
+    file: string,
+    at: number
+  ) => {
+    diagnostics.push({
+      code,
+      severity,
+      message,
+      file,
+      ...loaded.get(file)!.locate(at),
+    });
   };
 
   /** A stable private name for the anonymous layer an import site creates:
@@ -159,13 +196,25 @@ export async function compileUnit(root: string, options: CompileOptions): Promis
     const effect = (offsets: number[], code: string, what: string) => {
       if (offsets.length === 0 || !options.quarantined(file)) return;
       const them = offsets.length === 1 ? 'it' : 'them';
-      report(code, 'warning', `${offsets.length} ${what} kept: the quarantine layer does not hold ${them} back`, file, offsets[0]!);
+      report(
+        code,
+        'warning',
+        `${offsets.length} ${what} kept: the quarantine layer does not hold ${them} back`,
+        file,
+        offsets[0]!
+      );
     };
     effect(sheet.important, 'layergate.important', '!important declaration(s)');
     effect(sheet.keyframes, 'layergate.animation', '@keyframes rule(s)');
     effect(sheet.animations, 'layergate.animation', 'animation declaration(s)');
     if (sheet.namespaces.length > 0) {
-      report('layergate.namespace', 'error', '@namespace applies to a whole stylesheet, which layergate cannot place yet', file, sheet.namespaces[0]!);
+      report(
+        'layergate.namespace',
+        'error',
+        '@namespace applies to a whole stylesheet, which layergate cannot place yet',
+        file,
+        sheet.namespaces[0]!
+      );
     }
   };
 
@@ -181,12 +230,23 @@ export async function compileUnit(root: string, options: CompileOptions): Promis
       }
       const source = new MagicString(parsed.text);
       // A file beside the finished stylesheet keeps every URL as written.
-      for (const reference of dirname(file) === deliveryDir ? [] : parsed.sheet.urls) {
+      for (const reference of dirname(file) === deliveryDir
+        ? []
+        : parsed.sheet.urls) {
         if (isLocationFree(reference.url) || isRemote(reference.url)) continue;
         const [path, suffix] = splitSuffix(reference.url);
-        const rebased = relative(deliveryDir, join(dirname(file), path)).split(sep).join('/') + suffix;
+        const rebased =
+          relative(deliveryDir, join(dirname(file), path))
+            .split(sep)
+            .join('/') + suffix;
         if (rebased === reference.url) continue;
-        source.overwrite(reference.start, reference.end, reference.kind === 'token' ? `url(${quoted(rebased)})` : quoted(rebased));
+        source.overwrite(
+          reference.start,
+          reference.end,
+          reference.kind === 'token'
+            ? `url(${quoted(rebased)})`
+            : quoted(rebased)
+        );
       }
       for (const [from, to] of parsed.sheet.removed) source.remove(from, to);
       entry = { ...parsed, source, locate: locator(parsed.text) };
@@ -216,9 +276,12 @@ export async function compileUnit(root: string, options: CompileOptions): Promis
       at = end;
     }
     if (!/\S/.test(kept + entry.text.slice(at, to))) return;
-    if (frames.length > 0) bundle.addSource({ content: new MagicString(frames.map(open).join('')) });
+    if (frames.length > 0)
+      bundle.addSource({ content: new MagicString(frames.map(open).join('')) });
     bundle.addSource({ filename: file, content: entry.source.snip(from, to) });
-    bundle.addSource({ content: new MagicString(`\n${'}\n'.repeat(frames.length)}`) });
+    bundle.addSource({
+      content: new MagicString(`\n${'}\n'.repeat(frames.length)}`),
+    });
   };
 
   const visit = async (file: string, frames: Frame[], stack: string[]) => {
@@ -227,7 +290,9 @@ export async function compileUnit(root: string, options: CompileOptions): Promis
     emitted.add(key);
     const entry = await load(file);
     if (!entry) return;
-    const own: Frame[] = options.quarantined(file) ? [{ kind: 'layer', text: options.layer }, ...frames] : frames;
+    const own: Frame[] = options.quarantined(file)
+      ? [{ kind: 'layer', text: options.layer }, ...frames]
+      : frames;
     // What precedes the last import (layer statements and comments), each
     // import's stylesheet, then the rest.
     const split = entry.sheet.imports.at(-1)?.end ?? 0;
@@ -235,9 +300,20 @@ export async function compileUnit(root: string, options: CompileOptions): Promis
     for (const [index, statement] of entry.sheet.imports.entries()) {
       const added = importFrames(statement, anonymousName(file, index));
       if (isRemote(statement.url)) {
-        const media = [...own, ...added].filter((frame) => frame.kind === 'media').length;
-        const kept = media > 1 ? `; of its ${media} media conditions only the innermost is kept` : '';
-        report('layergate.remote', 'warning', `@import "${statement.url}" stays remote, so its contents are not inspected${kept}`, file, statement.start);
+        const media = [...own, ...added].filter(
+          (frame) => frame.kind === 'media'
+        ).length;
+        const kept =
+          media > 1
+            ? `; of its ${media} media conditions only the innermost is kept`
+            : '';
+        report(
+          'layergate.remote',
+          'warning',
+          `@import "${statement.url}" stays remote, so its contents are not inspected${kept}`,
+          file,
+          statement.start
+        );
         remote.push(remoteImport(statement.url, [...own, ...added]));
         continue;
       }
@@ -247,9 +323,21 @@ export async function compileUnit(root: string, options: CompileOptions): Promis
         if (child) break;
       }
       if (!child) {
-        report('layergate.unresolved', 'error', `cannot resolve @import "${statement.url}"`, file, statement.start);
+        report(
+          'layergate.unresolved',
+          'error',
+          `cannot resolve @import "${statement.url}"`,
+          file,
+          statement.start
+        );
       } else if (stack.includes(child)) {
-        report('layergate.cycle', 'warning', `@import "${statement.url}" imports a stylesheet already being imported; skipped`, file, statement.start);
+        report(
+          'layergate.cycle',
+          'warning',
+          `@import "${statement.url}" imports a stylesheet already being imported; skipped`,
+          file,
+          statement.start
+        );
       } else {
         await visit(child, [...frames, ...added], [...stack, child]);
       }
@@ -259,10 +347,20 @@ export async function compileUnit(root: string, options: CompileOptions): Promis
 
   await visit(root, [], [root]);
 
-  bundle.prepend([`@layer ${options.order.join(', ')};\n`, ...remote.map((line) => `${line}\n`)].join(''));
+  bundle.prepend(
+    [
+      `@layer ${options.order.join(', ')};\n`,
+      ...remote.map((line) => `${line}\n`),
+    ].join('')
+  );
   for (const file of loaded.keys()) {
     if (!options.quarantined(file)) {
-      diagnostics.push({ code: 'layergate.opt-out', severity: 'info', message: `opted out: its own rules stay outside @layer ${options.layer}`, file });
+      diagnostics.push({
+        code: 'layergate.opt-out',
+        severity: 'info',
+        message: `opted out: its own rules stay outside @layer ${options.layer}`,
+        file,
+      });
     }
   }
   return {

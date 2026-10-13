@@ -19,13 +19,13 @@ import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
 import { kitWatchNegations } from './watch-ignored';
 
+import type { AnimusQuarantineOptions } from './quarantine';
 import type {
   ClosedDynamicImport,
   DiagnosticLevels,
   SourceKitDependency,
   StaticCssConfig,
 } from '@animus-ui/extract/pipeline';
-import type { AnimusQuarantineOptions } from './quarantine';
 import type { Plugin } from 'vite';
 
 export { discoverFiles } from '@animus-ui/extract/pipeline';
@@ -218,8 +218,12 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
   // `quarantine` puts `anm-vendor` first in the layer order Animus's own
   // stylesheet declares, whichever stylesheet the page loads first.
-  const vendor = options.quarantine ? quarantinePlugin(options.quarantine, options.layers) : null;
-  const ctx = new PluginContext(vendor ? { ...options, layers: vendor.order } : options);
+  const vendor = options.quarantine
+    ? quarantinePlugin(options.quarantine, options.layers)
+    : null;
+  const ctx = new PluginContext(
+    vendor ? { ...options, layers: vendor.order } : options
+  );
 
   return {
     name: 'animus-extract',
@@ -291,7 +295,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     async resolveId(id, importer, resolveOptions) {
-      const owned = await (await vendor?.plugin())?.resolveId.call(this, id, importer, resolveOptions);
+      const owned = await (
+        await vendor?.plugin()
+      )?.resolveId.call(this, id, importer, resolveOptions);
       if (owned) return owned;
       const virtual = resolveVirtualId(ctx, id);
       if (virtual !== null || !id.startsWith('.') || importer === undefined) {

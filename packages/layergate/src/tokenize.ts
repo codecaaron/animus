@@ -44,18 +44,29 @@ export interface Token {
   value: string;
 }
 
-const isNewline = (c: string | undefined) => c === '\n' || c === '\r' || c === '\f';
-const isWhitespace = (c: string | undefined) => c === ' ' || c === '\t' || isNewline(c);
-const isDigit = (c: string | undefined) => c !== undefined && c >= '0' && c <= '9';
+const isNewline = (c: string | undefined) =>
+  c === '\n' || c === '\r' || c === '\f';
+const isWhitespace = (c: string | undefined) =>
+  c === ' ' || c === '\t' || isNewline(c);
+const isDigit = (c: string | undefined) =>
+  c !== undefined && c >= '0' && c <= '9';
 const isHex = (c: string | undefined) =>
-  c !== undefined && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
+  c !== undefined &&
+  ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
 const isNameStart = (c: string | undefined) =>
-  c !== undefined && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c === '_' || c.charCodeAt(0) >= 0x80);
-const isName = (c: string | undefined) => isNameStart(c) || isDigit(c) || c === '-';
+  c !== undefined &&
+  ((c >= 'a' && c <= 'z') ||
+    (c >= 'A' && c <= 'Z') ||
+    c === '_' ||
+    c.charCodeAt(0) >= 0x80);
+const isName = (c: string | undefined) =>
+  isNameStart(c) || isDigit(c) || c === '-';
 const isNonPrintable = (c: string | undefined) => {
   if (c === undefined) return false;
   const code = c.charCodeAt(0);
-  return code <= 8 || code === 0xb || (code >= 0xe && code <= 0x1f) || code === 0x7f;
+  return (
+    code <= 8 || code === 0xb || (code >= 0xe && code <= 0x1f) || code === 0x7f
+  );
 };
 
 /** Whether the two code points at `at` start a valid escape. */
@@ -66,7 +77,12 @@ function validEscape(css: string, at: number): boolean {
 /** Whether the three code points at `at` would start an identifier. */
 function startsIdent(css: string, at: number): boolean {
   const c = css[at];
-  if (c === '-') return isNameStart(css[at + 1]) || css[at + 1] === '-' || validEscape(css, at + 1);
+  if (c === '-')
+    return (
+      isNameStart(css[at + 1]) ||
+      css[at + 1] === '-' ||
+      validEscape(css, at + 1)
+    );
   if (isNameStart(c)) return true;
   return validEscape(css, at);
 }
@@ -75,7 +91,9 @@ function startsIdent(css: string, at: number): boolean {
 function startsNumber(css: string, at: number): boolean {
   const c = css[at];
   if (c === '+' || c === '-') {
-    return isDigit(css[at + 1]) || (css[at + 1] === '.' && isDigit(css[at + 2]));
+    return (
+      isDigit(css[at + 1]) || (css[at + 1] === '.' && isDigit(css[at + 2]))
+    );
   }
   if (c === '.') return isDigit(css[at + 1]);
   return isDigit(c);
@@ -121,7 +139,11 @@ export function tokenize(css: string): Token[] {
       at += 1;
       while (isDigit(css[at])) at += 1;
     }
-    if ((css[at] === 'e' || css[at] === 'E') && (isDigit(css[at + 1]) || ((css[at + 1] === '+' || css[at + 1] === '-') && isDigit(css[at + 2])))) {
+    if (
+      (css[at] === 'e' || css[at] === 'E') &&
+      (isDigit(css[at + 1]) ||
+        ((css[at + 1] === '+' || css[at + 1] === '-') && isDigit(css[at + 2])))
+    ) {
       at += 2;
       while (isDigit(css[at])) at += 1;
     }
@@ -265,7 +287,17 @@ export function tokenize(css: string): Token[] {
         at += 1;
         tokens.push({ type: 'delim', start, end: at, value: c });
       }
-    } else if (c === '(' || c === ')' || c === '[' || c === ']' || c === '{' || c === '}' || c === ',' || c === ':' || c === ';') {
+    } else if (
+      c === '(' ||
+      c === ')' ||
+      c === '[' ||
+      c === ']' ||
+      c === '{' ||
+      c === '}' ||
+      c === ',' ||
+      c === ':' ||
+      c === ';'
+    ) {
       at += 1;
       tokens.push({ type: c, start, end: at, value: '' });
     } else if (c === '+' || c === '.') {

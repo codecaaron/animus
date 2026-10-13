@@ -48,8 +48,8 @@
     "@animus-ui/layergate": "workspace:*"
   },
   "peerDependencies": {
-    "vite": ">=8 <9",
-    "@animus-ui/layergate": "workspace:*"
+    "@animus-ui/layergate": "workspace:*",
+    "vite": ">=8 <9"
   },
   "peerDependenciesMeta": {
     "@animus-ui/layergate": {

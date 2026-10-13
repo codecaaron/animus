@@ -3,8 +3,8 @@
   "version": "0.1.1",
   "description": "Load third-party stylesheets into a cascade layer, per file, with their imports inlined and their URLs kept working",
   "keywords": [
-    "css",
     "cascade-layers",
+    "css",
     "layer",
     "vendor",
     "vite",
@@ -21,8 +21,8 @@
   "files": [
     "dist"
   ],
-  "sideEffects": false,
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
@@ -59,6 +59,9 @@
   "dependencies": {
     "magic-string": "^0.30.21"
   },
+  "devDependencies": {
+    "vite": "8.3.4"
+  },
   "peerDependencies": {
     "vite": ">=8 <9"
   },
@@ -66,9 +69,6 @@
     "vite": {
       "optional": true
     }
-  },
-  "devDependencies": {
-    "vite": "8.3.4"
   },
   "engines": {
     "node": ">=22.12.0"
