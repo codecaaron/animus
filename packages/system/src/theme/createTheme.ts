@@ -374,7 +374,16 @@ type NamedKeys<
  *  print in the type checker's order. */
 type EmittedSet = Record<string, true>;
 type NoEmitted = Record<never, true>;
-type WithEmitted<Set, Added> = { [K in keyof (Set & Added)]: true };
+/** The emitted scales as `ThemeBuilder` takes them: the ordered set, or a
+ *  union of scale names, as written before 0.1.31. */
+type EmittedNames = EmittedSet | string;
+/** A union of scale names read as the set of its members. */
+type AsEmittedSet<Names> = [Names] extends [string]
+  ? Record<Names & string, true>
+  : Names;
+type WithEmitted<Set, Added> = {
+  [K in keyof (AsEmittedSet<Set> & Added)]: true;
+};
 
 /**
  * Var NAMES across all scales. Derives from the already-inferred `Vars`, so it
@@ -389,12 +398,12 @@ type ContextualVarNames<Vars> = {
 type ThemeScaleKeys<T> = Exclude<keyof T & string, ThemeStructuralKey>;
 
 /** Theme data plus boundary members, non-enumerable at runtime. */
-type BuiltTheme<T, Emitted extends EmittedSet> = {
+type BuiltTheme<T, Emitted extends EmittedNames> = {
   [K in keyof T]: T[K];
 } & {
   /** The emitted scales, in the order they were added. Non-enumerable at
    *  runtime. */
-  readonly __emitted: Emitted;
+  readonly __emitted: AsEmittedSet<Emitted>;
   manifest: ThemeManifest;
   serialize(): SerializedTheme;
   /** Dot-path token → `var()` ref, or the raw value if not emitted. */
@@ -753,7 +762,7 @@ function reseedStateFromManifest(
 
 export class ThemeBuilder<
   T extends Record<string, unknown> = Record<string, unknown>,
-  Emitted extends EmittedSet = NoEmitted,
+  Emitted extends EmittedNames = NoEmitted,
   Stage extends ThemeBuilderStage = 'inherit',
 > {
   // Without a member referencing Stage, 'inherit' and 'extend' builders are
