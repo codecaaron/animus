@@ -3,6 +3,8 @@
  * strings, plus the authoring type surface consumers augment.
  */
 
+import type { AsNameSet, RegisteredNames, NamesIn } from './types/names';
+
 export type ConditionKind =
   | 'media'
   | 'container'
@@ -25,18 +27,22 @@ declare const SELS_BRAND: unique symbol;
  * condition (`C`) and selector (`S`) alias keys to the augmentation site.
  */
 export interface RegistryBrand<
-  C extends string = never,
-  S extends string = never,
+  C extends RegisteredNames = never,
+  S extends RegisteredNames = never,
 > {
-  readonly [CONDS_BRAND]?: C;
-  readonly [SELS_BRAND]?: S;
+  readonly [CONDS_BRAND]?: AsNameSet<C>;
+  readonly [SELS_BRAND]?: AsNameSet<S>;
 }
 
-export type ConditionsOf<Sys> =
-  Sys extends RegistryBrand<infer C, string> ? C : never;
+export type ConditionsOf<Sys> = Sys extends {
+  readonly [CONDS_BRAND]?: infer C;
+}
+  ? NamesIn<C>
+  : never;
 
-export type SelectorsOf<Sys> =
-  Sys extends RegistryBrand<string, infer S> ? S : never;
+export type SelectorsOf<Sys> = Sys extends { readonly [SELS_BRAND]?: infer S }
+  ? NamesIn<S>
+  : never;
 
 /**
  * Branded rejection for a `_` block key that no registry owns. Not a bare

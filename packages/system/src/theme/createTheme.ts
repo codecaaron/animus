@@ -45,6 +45,14 @@ import {
   walkDotPath,
 } from './utils';
 
+import type {
+  AsNameSet,
+  NameSet,
+  NoNames,
+  RegisteredNames,
+  WithNames,
+} from '../types/names';
+
 const COLOR_FUNCTION_PREFIXES = [
   'rgb(',
   'rgba(',
@@ -369,13 +377,6 @@ type NamedKeys<
       ]: Value;
     };
 
-/** The scales a theme emits as CSS variables, as an object type whose keys
- *  print in the order the scales were added: a union of their names would
- *  print in the type checker's order. */
-type EmittedSet = Record<string, true>;
-type NoEmitted = Record<never, true>;
-type WithEmitted<Set, Added> = { [K in keyof (Set & Added)]: true };
-
 /**
  * Var NAMES across all scales. Derives from the already-inferred `Vars`, so it
  * never feeds back into inference or perturbs literal-key narrowing.
@@ -389,12 +390,12 @@ type ContextualVarNames<Vars> = {
 type ThemeScaleKeys<T> = Exclude<keyof T & string, ThemeStructuralKey>;
 
 /** Theme data plus boundary members, non-enumerable at runtime. */
-type BuiltTheme<T, Emitted extends EmittedSet> = {
+type BuiltTheme<T, Emitted extends RegisteredNames> = {
   [K in keyof T]: T[K];
 } & {
   /** The emitted scales, in the order they were added. Non-enumerable at
    *  runtime. */
-  readonly __emitted: Emitted;
+  readonly __emitted: AsNameSet<Emitted>;
   manifest: ThemeManifest;
   serialize(): SerializedTheme;
   /** Dot-path token → `var()` ref, or the raw value if not emitted. */
@@ -645,9 +646,9 @@ type EmittedThemeScalesOf<Source> = Source extends {
   readonly __emitted: [infer Names extends string];
 }
   ? Record<Names, true>
-  : Source extends { readonly __emitted: infer Emitted extends EmittedSet }
+  : Source extends { readonly __emitted: infer Emitted extends NameSet }
     ? Emitted
-    : NoEmitted;
+    : NoNames;
 
 type ExtendedThemeSourceOf<Source> = Source extends {
   system: { toConfig(...args: never[]): unknown };
@@ -753,7 +754,7 @@ function reseedStateFromManifest(
 
 export class ThemeBuilder<
   T extends Record<string, unknown> = Record<string, unknown>,
-  Emitted extends EmittedSet = NoEmitted,
+  Emitted extends RegisteredNames = NoNames,
   Stage extends ThemeBuilderStage = 'inherit',
 > {
   // Without a member referencing Stage, 'inherit' and 'extend' builders are
@@ -819,7 +820,7 @@ export class ThemeBuilder<
           DeclarationScalesOfTheme<ThemeSourceOf<Source>>
         >
       >,
-      WithEmitted<Emitted, EmittedThemeScalesOf<ThemeSourceOf<Source>>>,
+      WithNames<Emitted, EmittedThemeScalesOf<ThemeSourceOf<Source>>>,
       Stage
     >(copyState(this._state, nextTheme));
     next._state.declarationScales = overlayDeclarationScales(
@@ -850,7 +851,7 @@ export class ThemeBuilder<
         DeclarationScalesOfTheme<T>
       >
     >,
-    WithEmitted<Emitted, EmittedThemeScalesOf<ExtendedThemeSourceOf<Source>>>,
+    WithNames<Emitted, EmittedThemeScalesOf<ExtendedThemeSourceOf<Source>>>,
     'inherit'
   > {
     const themeHalf: Record<string, unknown> = isLibraryBundle(source)
@@ -935,7 +936,7 @@ export class ThemeBuilder<
           DeclarationScalesOfTheme<T>
         >
       >,
-      WithEmitted<Emitted, EmittedThemeScalesOf<ExtendedThemeSourceOf<Source>>>,
+      WithNames<Emitted, EmittedThemeScalesOf<ExtendedThemeSourceOf<Source>>>,
       'inherit'
     >(copyState(this._state, nextTheme));
     next._state.extendProvenance = provenance;
@@ -1003,11 +1004,9 @@ export class ThemeBuilder<
       OrderedOmit<T, 'colors'> &
         Record<'colors', Flatten<MergeRecord<ExistingColors, NextColors>>>
     >;
-    const next = new ThemeBuilder<
-      Next,
-      WithEmitted<Emitted, Record<'colors', true>>,
-      'extend'
-    >(copyState(this._state, nextTheme));
+    const next = new ThemeBuilder<Next, WithNames<Emitted, 'colors'>, 'extend'>(
+      copyState(this._state, nextTheme)
+    );
     next._state.emittedScales.add('colors');
     return next;
   }
@@ -1121,9 +1120,7 @@ export class ThemeBuilder<
         [name]: values,
       });
     }
-    type NextEmitted = Emit extends true
-      ? WithEmitted<Emitted, Record<Key, true>>
-      : Emitted;
+    type NextEmitted = Emit extends true ? WithNames<Emitted, Key> : Emitted;
     type ExistingScale = Key extends keyof T ? T[Key] : {};
     type NextScale = Replace extends true
       ? NewScale

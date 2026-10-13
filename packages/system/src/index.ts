@@ -24,6 +24,7 @@ export type {
   GlobalStylesFactory,
   KeyframesFrameData,
   LibraryBundle,
+  LibraryBundleFor,
   PropGroup,
   RegisterableGlobalStyles,
   RegisterableKeyframes,
@@ -147,6 +148,16 @@ export type {
   ResponsiveProp,
   ThemeProps,
 } from './types/props';
+export type {
+  AliasNames,
+  AsNameSet,
+  KeyNames,
+  RegisteredNames,
+  NamesIn,
+  NameSet,
+  NoNames,
+  WithNames,
+} from './types/names';
 export type { ArrayScale, MapScale } from './types/scales';
 export type { CSSObject } from './types/shared';
 export type {

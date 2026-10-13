@@ -36,6 +36,16 @@ import {
   SystemProp,
   ThemedCSSInputProps,
 } from './types/config';
+import {
+  type AliasNames,
+  type AsNameSet,
+  type KeyNames,
+  type RegisteredNames,
+  type NamesIn,
+  type NameSet,
+  type NoNames,
+  type WithNames,
+} from './types/names';
 import { AbstractProps } from './types/props';
 
 type SerializedPropEntry =
@@ -377,18 +387,18 @@ declare const VOCABULARY_BRAND: unique symbol;
 export type SealedSystemInstance<
   PropReg extends Record<string, SystemProp>,
   GroupReg extends Record<string, (keyof PropReg)[]>,
-  Conds extends string = never,
-  Sels extends string = never,
-  Vocab extends string = never,
+  Conds extends RegisteredNames = never,
+  Sels extends RegisteredNames = never,
+  Vocab extends RegisteredNames = never,
 > = SystemInstance<PropReg, GroupReg, Conds, Sels, Vocab> & {
   getVocabularyRecord(): VocabularyRecord;
-  readonly [VOCABULARY_BRAND]?: [Vocab];
+  readonly [VOCABULARY_BRAND]?: [AsNameSet<Vocab>];
 };
 
 export type VocabularyOf<S> = S extends {
   readonly [VOCABULARY_BRAND]?: [infer V];
 }
-  ? Extract<V, string>
+  ? NamesIn<V>
   : never;
 
 /**
@@ -398,11 +408,11 @@ export type VocabularyOf<S> = S extends {
 export interface SystemBundle<
   PropReg extends Record<string, SystemProp>,
   GroupReg extends Record<string, (keyof PropReg)[]>,
-  Conds extends string = never,
-  Sels extends string = never,
-  Vocab extends string = never,
+  Conds extends RegisteredNames = never,
+  Sels extends RegisteredNames = never,
+  Vocab extends RegisteredNames = never,
 > {
-  system: SystemInstance<PropReg, GroupReg, Conds, Sels, never>;
+  system: SystemInstance<PropReg, GroupReg, Conds, Sels, NoNames>;
   createGlobalStyles: GlobalStylesFactory<PropReg>;
   createKeyframes: CreateKeyframesFactory<PropReg>;
   /**
@@ -412,9 +422,17 @@ export interface SystemBundle<
   registerKeyframes<M extends Record<string, RegisterableKeyframes>>(
     map: M &
       LiteralKeyMap<M> & {
-        [K in Extract<keyof M, Vocab>]: VocabularyNameCollision<K & string>;
+        [K in Extract<keyof M, NamesIn<Vocab>>]: VocabularyNameCollision<
+          K & string
+        >;
       }
-  ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab | (keyof M & string)>;
+  ): SystemBundle<
+    PropReg,
+    GroupReg,
+    Conds,
+    Sels,
+    WithNames<Vocab, KeyNames<M>>
+  >;
   /**
    * Keys equal the block's module-scope export name. Blocks and keyframes
    * collections share ONE vocabulary name-space. Blocks marked `unlayered`
@@ -424,9 +442,17 @@ export interface SystemBundle<
   registerGlobalStyles<M extends Record<string, RegisterableGlobalStyles>>(
     map: M &
       LiteralKeyMap<M> & {
-        [K in Extract<keyof M, Vocab>]: VocabularyNameCollision<K & string>;
+        [K in Extract<keyof M, NamesIn<Vocab>>]: VocabularyNameCollision<
+          K & string
+        >;
       }
-  ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab | (keyof M & string)>;
+  ): SystemBundle<
+    PropReg,
+    GroupReg,
+    Conds,
+    Sels,
+    WithNames<Vocab, KeyNames<M>>
+  >;
   seal(): SealedSystemInstance<PropReg, GroupReg, Conds, Sels, Vocab>;
 }
 
@@ -434,7 +460,11 @@ export interface SystemBundle<
  * Publishable bundle type whose vocabulary axis is read off the sealed
  * system; a hand-written `LibraryBundle<'…'>` axis is unchecked.
  */
-export type LibraryBundleFor<S> = LibraryBundle<VocabularyOf<S>>;
+export type LibraryBundleFor<S> = S extends {
+  readonly [VOCABULARY_BRAND]?: [infer V];
+}
+  ? LibraryBundle<Extract<V, NameSet>>
+  : LibraryBundle;
 
 const snapshotTransformBySource = new WeakMap<TransformFn, TransformFn>();
 const snapshotTransforms = new WeakSet<TransformFn>();
@@ -481,12 +511,17 @@ function snapshotTransform(source: TransformFn): TransformFn {
  * One export for both builders: `createSystem().extend()` takes the system
  * half, `createTheme().extend()` the theme half (`tokens` is accepted too).
  */
-export interface LibraryBundle<Vocab extends string = never> {
+export type LibraryBundle<Vocab extends RegisteredNames = never> =
+  LibraryBundleSet<AsNameSet<Vocab>>;
+
+/** `LibraryBundle` over its vocabulary as an ordered set, which `extend()`
+ *  infers. */
+interface LibraryBundleSet<Vocab extends NameSet> {
   system: IncludableSystem;
   theme?: unknown;
   tokens?: unknown;
   /** Phantom vocabulary axis — never present at runtime. */
-  readonly __vocabulary?: Vocab;
+  readonly __vocabulary?: [Vocab];
 }
 
 /**
@@ -521,11 +556,10 @@ declare class SourceOrigin {
 export interface ExtendSource<
   PropReg extends Record<string, SystemProp>,
   GroupReg extends Record<string, (keyof PropReg)[]>,
-  Conds extends string = never,
-  Sels extends string = never,
-  Vocab extends string = never,
->
-  extends SourceOrigin, RegistryBrand<Conds, Sels> {
+  Conds extends NameSet = NoNames,
+  Sels extends NameSet = NoNames,
+  Vocab extends NameSet = NoNames,
+> extends SourceOrigin {
   readonly [EXTEND_SOURCE_BRAND]: {
     readonly props: PropReg;
     readonly groups: GroupReg;
@@ -684,10 +718,10 @@ function normalizePropConfig<Conf extends Record<string, SystemProp>>(
 export class SystemBuilder<
   PropReg extends Record<string, SystemProp> = {},
   GroupReg extends Record<string, (keyof PropReg)[]> = {},
-  Conds extends string = never,
-  Sels extends string = never,
+  Conds extends RegisteredNames = never,
+  Sels extends RegisteredNames = never,
   Stage extends SystemBuilderStage = 'inherit',
-  Vocab extends string = never,
+  Vocab extends RegisteredNames = never,
 > {
   // Without a member referencing Stage, 'inherit' and 'extend' builders stay
   // mutually assignable and the `this`-typed `from()` gate never fires.
@@ -746,19 +780,19 @@ export class SystemBuilder<
   from<
     SrcProps extends Record<string, SystemProp>,
     SrcGroups extends Record<string, (keyof SrcProps)[]>,
-    SrcConds extends string = never,
-    SrcSels extends string = never,
+    SrcConds extends NameSet = NoNames,
+    SrcSels extends NameSet = NoNames,
   >(
     this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
     source:
-      | SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels, string>
+      | SystemInstance<SrcProps, SrcGroups, SrcConds, SrcSels, NameSet>
       | {
           system: SystemInstance<
             SrcProps,
             SrcGroups,
             SrcConds,
             SrcSels,
-            string
+            NameSet
           >;
           theme?: unknown;
           tokens?: unknown;
@@ -766,8 +800,8 @@ export class SystemBuilder<
   ): SystemBuilder<
     PropReg & SrcProps,
     GroupReg & SrcGroups,
-    Conds | SrcConds,
-    Sels | SrcSels,
+    WithNames<Conds, SrcConds>,
+    WithNames<Sels, SrcSels>,
     'inherit',
     Vocab
   >;
@@ -779,10 +813,11 @@ export class SystemBuilder<
     this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
     source: LibraryBundle<string>
   ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>;
+  // The overloads type the merged builder; the implementation leaves it open.
   from(
     this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
     source: IncludableSystem | { system?: unknown; tokens?: unknown }
-  ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab> {
+  ): object {
     const instance = isLibraryBundle(source)
       ? source.system
       : (source as IncludableSystem);
@@ -813,9 +848,9 @@ export class SystemBuilder<
   extend<
     SrcProps extends Record<string, SystemProp>,
     SrcGroups extends Record<string, (keyof SrcProps)[]>,
-    SrcConds extends string = never,
-    SrcSels extends string = never,
-    SrcVocab extends string = never,
+    SrcConds extends NameSet = NoNames,
+    SrcSels extends NameSet = NoNames,
+    SrcVocab extends NameSet = NoNames,
   >(
     this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
     source:
@@ -834,25 +869,33 @@ export class SystemBuilder<
   ): SystemBuilder<
     PropReg & SrcProps,
     GroupReg & SrcGroups,
-    Conds | SrcConds,
-    Sels | SrcSels,
+    WithNames<Conds, SrcConds>,
+    WithNames<Sels, SrcSels>,
     'inherit',
     // A source typed through the four-axis `SystemInstance` annotation has
-    // vocabulary `string`: unknown, so treated as erased, not as every name.
-    Vocab | (string extends SrcVocab ? never : SrcVocab)
+    // every name for vocabulary: unknown, so treated as erased.
+    WithNames<Vocab, string extends keyof SrcVocab ? NoNames : SrcVocab>
   >;
   /**
    * A `LibraryBundle` annotation has erased the system half's generics: the
    * runtime merge is identical, but no source types are admitted.
    */
-  extend<SrcVocab extends string = never>(
+  extend<SrcVocab extends NameSet = NoNames>(
     this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
-    source: LibraryBundle<SrcVocab>
-  ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab | SrcVocab>;
+    source: LibraryBundleSet<SrcVocab>
+  ): SystemBuilder<
+    PropReg,
+    GroupReg,
+    Conds,
+    Sels,
+    'inherit',
+    WithNames<Vocab, SrcVocab>
+  >;
+  // The overloads type the merged builder; the implementation leaves it open.
   extend(
     this: SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab>,
     source: IncludableSystem | { system?: unknown; theme?: unknown }
-  ): SystemBuilder<PropReg, GroupReg, Conds, Sels, 'inherit', Vocab> {
+  ): object {
     const instance = isLibraryBundle(source)
       ? source.system
       : (source as IncludableSystem);
@@ -1073,7 +1116,9 @@ export class SystemBuilder<
    */
   addSelectors<S extends Record<`_${string}`, string>>(
     selectors: S & {
-      [K in keyof S]: K extends BuiltInConditionAlias | NarrowedAliases<Conds>
+      [K in keyof S]: K extends
+        | BuiltInConditionAlias
+        | NarrowedAliases<NamesIn<Conds>>
         ? ReservedByConditionRegistry<K & string>
         : S[K];
     }
@@ -1081,7 +1126,7 @@ export class SystemBuilder<
     PropReg,
     GroupReg,
     Conds,
-    Sels | NarrowedAliases<Extract<keyof S, string>>,
+    WithNames<Sels, AliasNames<S>>,
     'extend',
     Vocab
   > {
@@ -1100,7 +1145,7 @@ export class SystemBuilder<
       PropReg,
       GroupReg,
       Conds,
-      Sels | NarrowedAliases<Extract<keyof S, string>>,
+      WithNames<Sels, AliasNames<S>>,
       'extend',
       Vocab
     >(
@@ -1123,14 +1168,16 @@ export class SystemBuilder<
    */
   addConditions<C extends Record<`_${string}`, AtRuleValue>>(
     conditions: C & {
-      [K in keyof C]: K extends BuiltInSelectorAlias | NarrowedAliases<Sels>
+      [K in keyof C]: K extends
+        | BuiltInSelectorAlias
+        | NarrowedAliases<NamesIn<Sels>>
         ? ReservedBySelectorRegistry<K & string>
         : C[K];
     }
   ): SystemBuilder<
     PropReg,
     GroupReg,
-    Conds | NarrowedAliases<Extract<keyof C, string>>,
+    WithNames<Conds, AliasNames<C>>,
     Sels,
     'extend',
     Vocab
@@ -1143,7 +1190,7 @@ export class SystemBuilder<
     return new SystemBuilder<
       PropReg,
       GroupReg,
-      Conds | NarrowedAliases<Extract<keyof C, string>>,
+      WithNames<Conds, AliasNames<C>>,
       Sels,
       'extend',
       Vocab
@@ -1324,7 +1371,7 @@ export class SystemBuilder<
       GroupReg,
       Conds,
       Sels,
-      never
+      NoNames
     > => {
       const animus = new Animus<PropReg, GroupReg>(
         Object.fromEntries(
@@ -1347,7 +1394,7 @@ export class SystemBuilder<
             snapshot.conditions
           );
         },
-      }) as SystemInstance<PropReg, GroupReg, Conds, Sels, never>;
+      }) as SystemInstance<PropReg, GroupReg, Conds, Sels, NoNames>;
 
       // Non-enumerable: the QuickJS capture script's discriminators walk
       // enumerable keys only.
@@ -1602,10 +1649,10 @@ export class SystemBuilder<
 export type SystemInstance<
   PropReg extends Record<string, SystemProp>,
   GroupReg extends Record<string, (keyof PropReg)[]>,
-  Conds extends string = never,
-  Sels extends string = never,
+  Conds extends RegisteredNames = never,
+  Sels extends RegisteredNames = never,
   // Unknown by default, so the four-axis annotation accepts any built system.
-  Vocab extends string = string,
+  Vocab extends RegisteredNames = string,
 > = Animus<PropReg, GroupReg> & {
   toConfig(): SerializedConfig;
   /**
@@ -1614,7 +1661,13 @@ export type SystemInstance<
    */
   getRegistrySnapshot?(): RegistrySnapshot;
 } & RegistryBrand<Conds, Sels> &
-  ExtendSource<PropReg, GroupReg, Conds, Sels, Vocab>;
+  ExtendSource<
+    PropReg,
+    GroupReg,
+    AsNameSet<Conds>,
+    AsNameSet<Sels>,
+    AsNameSet<Vocab>
+  >;
 
 export interface SerializedConfig {
   propConfig: string;
