@@ -1247,14 +1247,20 @@ export class ExtractionSession {
       for (const removedPath of changes.removedFiles) {
         let key: string;
         let owningRoot: string | null = null;
-        if (isPathWithinRoot(rootDir, removedPath)) {
+        // A kit file under the project's own node_modules resolves as the
+        // kit's, as its edits do.
+        const resolved =
+          this.sourceIdentity?.resolveDeletedSourceId(removedPath);
+        if (
+          resolved?.owningRoot == null &&
+          isPathWithinRoot(rootDir, removedPath)
+        ) {
           key = relative(rootDir, removedPath);
-        } else {
-          const resolved =
-            this.sourceIdentity?.resolveDeletedSourceId(removedPath);
-          if (!resolved) continue;
+        } else if (resolved) {
           key = resolved.sourceKey;
           owningRoot = resolved.owningRoot;
+        } else {
+          continue;
         }
         recordPrior(key);
         this.clearIngestionFailure(key);
@@ -2483,7 +2489,15 @@ export class ExtractionSession {
   ): { key: string; owningRoot: string | null } | null {
     const ext = extname(absPath);
     const rootDir = this.rootDir!;
-    if (isPathWithinRoot(rootDir, absPath)) {
+    // External paths gate on their owning root's extension set, so identity
+    // resolves first — the project set would drop a dist-only kit's edits,
+    // and its exclusions every edit to a kit installed under the project's
+    // own node_modules.
+    const external =
+      this.sourceIdentity?.containingExternalRoot(absPath) != null
+        ? this.sourceIdentity.resolveSourceId(absPath)
+        : null;
+    if (external === null && isPathWithinRoot(rootDir, absPath)) {
       if (!scan.extensionsSet.has(ext)) return null;
       const rel = relative(rootDir, absPath);
       if (scan.excludeMatcher.matches(absPath, rel)) {
@@ -2491,9 +2505,7 @@ export class ExtractionSession {
       }
       return { key: rel, owningRoot: null };
     }
-    // External paths gate on their owning root's extension set, so identity
-    // resolves first — the project set would drop a dist-only kit's edits.
-    const resolved = this.sourceIdentity?.resolveSourceId(absPath);
+    const resolved = external ?? this.sourceIdentity?.resolveSourceId(absPath);
     if (!resolved) return null;
     if (resolved.owningRoot === null) {
       // An out-of-root spelling canonicalizing INTO the project root —
