@@ -105,8 +105,9 @@ pub enum TagOrigin {
     TopLevel,
     /// A parameter, or a binding inside a function or block.
     Nested,
-    /// A binding compiled MDX destructures from the components a provider
-    /// supplies (`const { Card } = _components`): matched by name, as a
+    /// A binding MDX's usage source (`mdxUsageSource`, which mirrors compiled
+    /// MDX) destructures from the components a provider supplies
+    /// (`const { Card } = _components`): matched by name, as a
     /// provider-scope component is.
     Provided,
     /// No binding in the file: a global, or nothing.
@@ -6992,8 +6993,8 @@ fn resolve_tag<'m>(
     }
 }
 
-/// The bindings compiled MDX destructures from its provider's components:
-/// `const { Card } = _components`.
+/// The bindings MDX's usage source (`mdxUsageSource`) destructures from its
+/// provider's components: `const { Card } = _components`.
 fn provided_components(program: &Program<'_>) -> FxHashSet<SymbolId> {
     struct Provided(FxHashSet<SymbolId>);
     impl<'a> Visit<'a> for Provided {

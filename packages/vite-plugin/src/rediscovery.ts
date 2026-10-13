@@ -91,8 +91,9 @@ function parentOnDisk(
         `includes or move it under the project root.`
       : !ctx.extensionsSet.has(extname(path))
         ? `whose extension is not in the configured source extensions.`
-        : // `.mdx` ingests on its first watcher edit instead: without the
-          // optional MDX peer a folded `.mdx` is re-quarantined every pass.
+        : // `.mdx` ingests on its first watcher edit instead: a parent
+          // declared in MDX is a style declaration there, which ingestion
+          // rejects, so a folded `.mdx` is re-quarantined every pass.
           extname(path) === '.mdx' || ctx.session?.heldSources.has(relPath)
           ? null
           : undefined;
