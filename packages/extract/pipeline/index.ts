@@ -96,6 +96,7 @@ export {
   firstOwners,
   importedKitDiagnostics,
   isExcludedPackageRelativePath,
+  PACKAGE_SRC_EXCLUDES,
   probeAbsolutePathSpecifier,
   sourceKitDependencies,
   systemKitDependencies,

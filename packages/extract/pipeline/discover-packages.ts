@@ -1067,6 +1067,8 @@ export async function collectExternalPackageSources(opts: {
 
 export interface SourceKitDependency {
   name: string;
+  /** The package directory, as the locator found it. */
+  root: string;
   /** Installed under `node_modules`, not linked from a workspace. */
   installed: boolean;
   /** The kit's own `dependencies`, by name. */
@@ -1125,6 +1127,7 @@ export function sourceKitDependencies(
     return [
       {
         name,
+        root: pkgRoot,
         installed: isInstalledPackage(pkgRoot),
         dependencies: dependencyNames(readPackageManifest(pkgRoot), [
           'dependencies',
@@ -1182,6 +1185,7 @@ export async function systemKitDependencies(
   }
   return [...roots].map(([name, pkgRoot]) => ({
     name,
+    root: pkgRoot,
     installed: isInstalledPackage(pkgRoot),
     dependencies: dependencyNames(readPackageManifest(pkgRoot), [
       'dependencies',

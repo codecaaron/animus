@@ -11,6 +11,7 @@ import { dirname, join } from 'path';
 import { afterEach, expect, test } from 'vitest';
 
 import { animusExtract } from '../src/index';
+import { kitWatchNegations } from '../src/watch-ignored';
 
 import type { HookHandler, Plugin } from 'vite';
 
@@ -113,8 +114,24 @@ test('an installed kit leaves the dependency optimizer and SSR externals, and it
     },
     ssr: { noExternal: ['@acme/installed', 'compiled-kit'] },
   };
+  // Vite's watcher ignores node_modules, so a dev server watches each
+  // installed kit; a disabled watcher stays disabled.
+  const watched = kitWatchNegations([
+    join(app, 'node_modules', '@acme', 'installed'),
+    join(app, 'node_modules', 'compiled-kit'),
+  ]);
   expect(
     await config({ root: app }, { command: 'serve', mode: 'development' })
+  ).toEqual({
+    define: { __ANIMUS_DEV__: true },
+    ...kits,
+    server: { watch: { ignored: watched } },
+  });
+  expect(
+    await config(
+      { root: app, server: { watch: null } },
+      { command: 'serve', mode: 'development' }
+    )
   ).toEqual({ define: { __ANIMUS_DEV__: true }, ...kits });
   expect(
     await config({ root: app }, { command: 'build', mode: 'production' })
