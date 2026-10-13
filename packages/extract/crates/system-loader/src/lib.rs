@@ -3332,7 +3332,8 @@ export const ds = tokens;
             "export const base = { color: 'red' };\n",
         );
 
-        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), None, &ResolutionContext::default());
+        // A helper-built theme may hold anything, so the test names the system.
+        let result = load_system_module(&entry.to_string_lossy(), &dir.to_string_lossy(), Some("system"), &ResolutionContext::default());
 
         let canonical_dir = fs::canonicalize(&dir).expect("canonicalize scratch dir");
         let _ = fs::remove_dir_all(&dir);

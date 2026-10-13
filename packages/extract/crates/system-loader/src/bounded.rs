@@ -129,8 +129,10 @@ enum Class {
     /// `const` aliases of one system are one candidate.
     System(String),
     NotSystem,
-    /// An object literal: not a system unless its binding is written later.
-    Object,
+    /// A value that holds no system as written (an object, array, function,
+    /// class or element): not a system unless something writes the protocol
+    /// onto it, through its binding or an alias.
+    Value,
     Unknown(String),
 }
 
@@ -157,6 +159,8 @@ pub(crate) struct Loader<'c> {
     packages: FxHashMap<std::path::PathBuf, (Option<std::path::PathBuf>, Option<String>)>,
     /// The owner package directories, once the audit has found them.
     owners: FxHashSet<std::path::PathBuf>,
+    /// Whether the audit is running: it reads no third-party package.
+    auditing: bool,
     /// Each binding's class, as root inference found it.
     classes: FxHashMap<(String, String), Class>,
     /// Whether each binding holds an Animus value, as traced.
@@ -186,6 +190,7 @@ impl<'c> Loader<'c> {
             table: None,
             packages: FxHashMap::default(),
             owners: FxHashSet::default(),
+            auditing: false,
             classes: FxHashMap::default(),
             traced: FxHashMap::default(),
         }
@@ -717,15 +722,13 @@ impl<'c> Loader<'c> {
         let names = self.exported_names(entry)?;
         let mut candidates: Vec<(String, Vec<String>)> = Vec::new();
         let mut unknown: Vec<String> = Vec::new();
-        // `theme` and `tokens` are the companions: the loader requires each to
-        // be a built theme beside a separate system, so neither is one.
-        for name in names.into_iter().filter(|name| name != "theme" && name != "tokens") {
+        for name in names {
             match self.class_of_export(entry, &name, 0)? {
                 Class::System(origin) => match candidates.iter_mut().find(|(at, _)| *at == origin) {
                     Some((_, names)) => names.push(name),
                     None => candidates.push((origin, vec![name])),
                 },
-                Class::NotSystem | Class::Object => {}
+                Class::NotSystem | Class::Value => {}
                 Class::Unknown(why) => unknown.push(format!("'{name}' ({why})")),
             }
         }
@@ -777,6 +780,9 @@ impl<'c> Loader<'c> {
         let class = match declaration(program, local) {
             None => Class::Unknown(format!("no declaration of '{local}'")),
             Some(Decl::NotSystem) => Class::NotSystem,
+            Some(Decl::Rebound) => Class::Unknown(format!("'{local}' is reassigned where the loader cannot read its value")),
+            Some(Decl::Value) => Class::Value,
+            Some(Decl::Class(class)) => class_shape(class),
             Some(Decl::Init(init)) => self.class_of_expression(module, program, init, depth)?,
             Some(Decl::Assigned(values)) if values.len() == 1 => self.class_of_expression(module, program, values[0], depth)?,
             Some(Decl::Assigned(_)) => Class::Unknown(format!("'{local}' is assigned more than once")),
@@ -799,8 +805,15 @@ impl<'c> Loader<'c> {
                 Target::Failed(_) => Class::Unknown(format!("'{local}' is imported from an unresolved module")),
             },
         };
-        if class == Class::Object && written_after(program, local) {
-            return Ok(Class::Unknown(format!("'{local}' is an object written after its declaration")));
+        // A value is no system only when nothing writes the protocol onto it:
+        // no member write or `Object.assign`-like call through its binding
+        // or a `const` alias of it.
+        if class == Class::Value {
+            return Ok(if written_after(program, local) {
+                Class::Unknown(format!("'{local}' is written after its declaration, directly or through an alias"))
+            } else {
+                Class::NotSystem
+            });
         }
         // A system created here is known by this declaration; one an alias
         // reads keeps the declaration that created it.
@@ -827,16 +840,16 @@ impl<'c> Loader<'c> {
             | Expression::RegExpLiteral(_)
             | Expression::TemplateLiteral(_)
             | Expression::BinaryExpression(_)
-            | Expression::UnaryExpression(_)
-            | Expression::ArrowFunctionExpression(_)
+            | Expression::UnaryExpression(_) => Class::NotSystem,
+            Expression::ArrowFunctionExpression(_)
             | Expression::FunctionExpression(_)
-            | Expression::ClassExpression(_)
             | Expression::JSXElement(_)
             | Expression::JSXFragment(_)
-            | Expression::ArrayExpression(_) => Class::NotSystem,
+            | Expression::ArrayExpression(_) => Class::Value,
+            Expression::ClassExpression(class) => class_shape(class),
             Expression::ObjectExpression(object) => {
                 let key = |property: &PropertyKey<'_>| property.static_name().map(|name| name.to_string());
-                let mut class = Class::Object;
+                let mut class = Class::Value;
                 for property in &object.properties {
                     match property {
                         ObjectPropertyKind::ObjectProperty(property) => {
@@ -873,7 +886,7 @@ impl<'c> Loader<'c> {
                             return Ok(Class::Unknown("a computed method call".to_string()));
                         };
                         if builtin_array(program, expression) {
-                            return Ok(Class::NotSystem);
+                            return Ok(Class::Value);
                         }
                         if !self.animus_value(module, program, member.object(), depth + 1)? {
                             Class::Unknown(format!("a call of `.{method}()` on a value not traced to Animus"))
@@ -905,7 +918,7 @@ impl<'c> Loader<'c> {
     /// or the expression itself.
     fn class_of_value(&mut self, module: &str, program: &Program<'_>, expression: &Expression<'_>, depth: usize) -> Result<Class, String> {
         let class = self.class_of_expression(module, program, expression, depth)?;
-        Ok(if class == Class::Object { Class::NotSystem } else { class })
+        Ok(if class == Class::Value { Class::NotSystem } else { class })
     }
 
     /// Whether `local`, called, is an Animus non-sealing function: an import
@@ -970,6 +983,15 @@ impl<'c> Loader<'c> {
     /// `module`, reads, when it resolves to a local binding.
     fn imported(&mut self, module: &str, spec: &str, name: &str) -> Result<Option<(String, String)>, String> {
         match self.target(module, spec) {
+            // The audit reads no third-party package: what such an import
+            // holds stays untraced.
+            Target::Module(path)
+                if self.auditing
+                    && !self.owned(&path)
+                    && self.package_name(Path::new(&path)).as_deref() != Some("@animus-ui/system") =>
+            {
+                Ok(None)
+            }
             Target::Module(path) => {
                 self.acquire(&path)?;
                 self.terminal(&path, name)
@@ -1000,7 +1022,7 @@ impl<'c> Loader<'c> {
                         None => false,
                     }
             }
-            Some(Decl::NotSystem) | None => false,
+            Some(Decl::NotSystem | Decl::Value | Decl::Class(_) | Decl::Rebound) | None => false,
         })
     }
 
@@ -1065,6 +1087,7 @@ impl<'c> Loader<'c> {
     /// import. Third-party code is not read. An audit never fails the load.
     fn audit(&mut self, entry: &str, root: &str) {
         self.find_owners(entry);
+        self.auditing = true;
         let runs = |modules: &FxHashMap<String, Module<'_>>, path: &str| modules.get(path).is_some_and(|module| module.retained);
         let mut queue: VecDeque<String> = VecDeque::new();
         let mut paths: Vec<String> = self.modules.keys().cloned().collect();
@@ -1109,12 +1132,14 @@ impl<'c> Loader<'c> {
 
     /// The registrations `source` makes, as findings: proved when the call
     /// runs as its module evaluates and its receiver traces to an Animus
-    /// builder; unproved when it sits in a function or its receiver cannot be
-    /// traced. A same-named method of a third-party value is not one.
+    /// builder; unproved when it sits in a function, its receiver cannot be
+    /// traced (a third-party value's included), or the method is read where
+    /// the audit cannot follow it to a call (bound, passed or stored).
     fn audit_source(&mut self, path: &str, source: &str, root: &str) {
         const REGISTRATIONS: [&str; 2] = ["registerGlobalStyles", "registerKeyframes"];
-        // A module that never names a registration method makes none.
-        if !REGISTRATIONS.iter().any(|method| source.contains(method)) {
+        // A module that never names a registration method, even through an
+        // escape in an identifier, makes none.
+        if !REGISTRATIONS.iter().any(|method| source.contains(method)) && !source.contains("\\u") {
             return;
         }
         let allocator = Allocator::default();
@@ -1152,9 +1177,6 @@ impl<'c> Loader<'c> {
                 },
             };
             let Some((method, receiver)) = found else { continue };
-            if receiver.is_some_and(|receiver| self.third_party(path, &program, receiver)) {
-                continue;
-            }
             let at_top = semantic.nodes().ancestor_kinds(node.id()).all(|kind| !kind.is_function_like());
             let traced = match receiver {
                 Some(receiver) => self.animus_value(path, &program, receiver, 0).unwrap_or(false),
@@ -1197,6 +1219,58 @@ impl<'c> Loader<'c> {
             };
             self.reads.findings.push(finding);
         }
+        // A registration method read anywhere but as the callee of a call (or
+        // of its `.call`/`.apply`): bound, passed or stored, it may still be
+        // called, where the audit cannot follow.
+        let nodes = semantic.nodes();
+        let callee_of = |id: oxc::semantic::NodeId, span: oxc::span::Span| -> bool {
+            use oxc::span::GetSpan;
+            match nodes.parent_kind(id) {
+                AstKind::CallExpression(call) => call.callee.span() == span,
+                AstKind::StaticMemberExpression(outer)
+                    if outer.object.span() == span && matches!(outer.property.name.as_str(), "call" | "apply") =>
+                {
+                    let outer_id = nodes.parent_id(id);
+                    matches!(nodes.parent_kind(outer_id), AstKind::CallExpression(call) if call.callee.span() == outer.span)
+                }
+                _ => false,
+            }
+        };
+        for node in nodes.iter() {
+            let (method, span) = match node.kind() {
+                AstKind::StaticMemberExpression(member) if REGISTRATIONS.contains(&member.property.name.as_str()) => {
+                    (member.property.name.to_string(), member.span)
+                }
+                AstKind::ComputedMemberExpression(member) => match &member.expression {
+                    Expression::StringLiteral(key) if REGISTRATIONS.contains(&key.value.as_str()) => (key.value.to_string(), member.span),
+                    _ => continue,
+                },
+                AstKind::IdentifierReference(reference) => match declaration(&program, &reference.name) {
+                    Some(Decl::Destructured { key, .. }) if REGISTRATIONS.contains(&key.as_str()) => (key, reference.span),
+                    Some(Decl::Import { name: Some(name), .. }) if REGISTRATIONS.contains(&name.as_str()) => (name, reference.span),
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            if callee_of(node.id(), span) {
+                continue;
+            }
+            let (line, column) = line_column(source, span.start);
+            self.reads.findings.push(crate::LoadFinding {
+                code: crate::REGISTRATION_UNPROVED,
+                severity: "warn",
+                reason: format!(
+                    "{method} at {path}:{line}:{column} is read in code the exported system '{root}' does not reach, \
+                     and the load cannot follow it to a call, so it did not run it. If it registers into the system, \
+                     register it in the chain '{root}' is sealed from ({})",
+                    crate::REGISTRATION_UNPROVED
+                ),
+                file: path.to_string(),
+                line,
+                column,
+                method,
+            });
+        }
     }
 
     fn incomplete(&mut self, path: &str, why: &str) {
@@ -1212,31 +1286,6 @@ impl<'c> Loader<'c> {
                 crate::AUDIT_INCOMPLETE
             ),
         });
-    }
-
-    /// Whether a receiver's root binding is imported from a third-party
-    /// package: one neither owned nor `@animus-ui/system`.
-    fn third_party(&mut self, path: &str, program: &Program<'_>, receiver: &Expression<'_>) -> bool {
-        let mut root = receiver.get_inner_expression();
-        loop {
-            root = match root {
-                Expression::CallExpression(call) => match call.callee.get_inner_expression().as_member_expression() {
-                    Some(member) => member.object().get_inner_expression(),
-                    None => return false,
-                },
-                expression => match expression.as_member_expression() {
-                    Some(member) => member.object().get_inner_expression(),
-                    None => break,
-                },
-            };
-        }
-        let Expression::Identifier(identifier) = root else { return false };
-        let Some(Decl::Import { spec, .. }) = declaration(program, &identifier.name) else { return false };
-        if spec.starts_with('.') || spec.starts_with('/') {
-            return false;
-        }
-        let Target::Module(target) = self.target(path, &spec) else { return false };
-        !self.owned(&target) && self.package_name(Path::new(&target)).as_deref() != Some("@animus-ui/system")
     }
 
     /// The package directories whose code is owned: the entry's package and
@@ -1279,7 +1328,7 @@ impl<'c> Loader<'c> {
     }
 
     /// The nearest `package.json` above `file`: its directory and name, each
-    /// directory walked once per load.
+    /// directory walked once per load, every manifest probed recorded.
     fn package_of(&mut self, file: &Path) -> (Option<std::path::PathBuf>, Option<String>) {
         let Some(start) = file.parent() else { return (None, None) };
         let mut dir = start.to_path_buf();
@@ -1290,6 +1339,14 @@ impl<'c> Loader<'c> {
             }
             walked.push(dir.clone());
             let manifest = dir.join("package.json");
+            // Each manifest probed decides ownership and identity: one found is
+            // read evidence, one absent is watched for its creation.
+            let probed = manifest.to_string_lossy().to_string();
+            if !manifest.is_file() {
+                self.reads.missing.insert(probed);
+            } else {
+                self.reads.read.insert(probed);
+            }
             if manifest.is_file() {
                 let name = std::fs::read_to_string(&manifest)
                     .ok()
@@ -1372,6 +1429,24 @@ fn builtin_array(program: &Program<'_>, expression: &Expression<'_>) -> bool {
     }
 }
 
+/// A class as a value: unknown when a static member may carry the protocol
+/// (named `toConfig` or `getVocabularyRecord`, or computed), a value
+/// otherwise.
+fn class_shape(class: &oxc::ast::ast::Class<'_>) -> Class {
+    use oxc::ast::ast::ClassElement;
+    let carries = class.body.body.iter().any(|element| {
+        let (is_static, key, computed) = match element {
+            ClassElement::MethodDefinition(method) => (method.r#static, &method.key, method.computed),
+            ClassElement::PropertyDefinition(property) => (property.r#static, &property.key, property.computed),
+            ClassElement::AccessorProperty(accessor) => (accessor.r#static, &accessor.key, accessor.computed),
+            ClassElement::StaticBlock(_) => return true,
+            ClassElement::TSIndexSignature(_) => return false,
+        };
+        is_static && (computed || matches!(key.static_name().as_deref(), Some("toConfig" | "getVocabularyRecord")))
+    });
+    if carries { Class::Unknown("a class whose static members may carry the system protocol".to_string()) } else { Class::Value }
+}
+
 /// A builder method that never seals: its result is not a system.
 fn non_sealing_method(name: &str) -> bool {
     matches!(
@@ -1395,7 +1470,13 @@ enum Decl<'a, 'p> {
     Assigned(Vec<&'a Expression<'p>>),
     Destructured { key: String, from: &'a Expression<'p> },
     Import { spec: String, name: Option<String> },
-    /// A function, class or enum, or a binding with no value to classify.
+    /// A function or enum: a value, which a later write may still make one.
+    Value,
+    /// A class, by its body: a static member may carry the protocol.
+    Class(&'a oxc::ast::ast::Class<'p>),
+    /// A `let` or `var` written where its value cannot be read.
+    Rebound,
+    /// A binding with no value to classify.
     NotSystem,
 }
 
@@ -1419,12 +1500,14 @@ fn declaration<'a, 'p>(program: &'a Program<'p>, local: &str) -> Option<Decl<'a,
             Statement::ExportDeclaration(export) => &export.declaration,
             Statement::ExportDefaultDeclaration(export) => match &export.declaration {
                 ExportDefaultDeclarationKind::FunctionDeclaration(function)
-                    if function.id.as_ref().is_some_and(|id| id.name == local) =>
+                    if local == "default" || function.id.as_ref().is_some_and(|id| id.name == local) =>
                 {
-                    return Some(Decl::NotSystem)
+                    return Some(Decl::Value)
                 }
-                ExportDefaultDeclarationKind::ClassDeclaration(class) if class.id.as_ref().is_some_and(|id| id.name == local) => {
-                    return Some(Decl::NotSystem)
+                ExportDefaultDeclarationKind::ClassDeclaration(class)
+                    if local == "default" || class.id.as_ref().is_some_and(|id| id.name == local) =>
+                {
+                    return Some(Decl::Class(class))
                 }
                 kind if local == "default" => {
                     return kind.as_expression().map(Decl::Init).or(Some(Decl::NotSystem));
@@ -1441,9 +1524,15 @@ fn declaration<'a, 'p>(program: &'a Program<'p>, local: &str) -> Option<Decl<'a,
                 for declarator in &variables.declarations {
                     match &declarator.id {
                         BindingPattern::BindingIdentifier(id) if id.name == local => {
-                            return Some(match &declarator.init {
-                                Some(init) => Decl::Init(init),
-                                None => Decl::Assigned(assignments(program, local)),
+                            // A `let` or `var` written again holds each value it
+                            // is given, in turn.
+                            let later = if variables.kind.is_const() { Vec::new() } else { assignments(program, local) };
+                            if !variables.kind.is_const() && rebound(program, local, later.len()) {
+                                return Some(Decl::Rebound);
+                            }
+                            return Some(match (&declarator.init, later.is_empty()) {
+                                (Some(init), true) => Decl::Init(init),
+                                (init, _) => Decl::Assigned(init.iter().chain(later).collect()),
                             });
                         }
                         BindingPattern::ObjectPattern(pattern) => {
@@ -1461,12 +1550,12 @@ fn declaration<'a, 'p>(program: &'a Program<'p>, local: &str) -> Option<Decl<'a,
                 }
             }
             Declaration::FunctionDeclaration(function) if function.id.as_ref().is_some_and(|id| id.name == local) => {
-                return Some(Decl::NotSystem)
+                return Some(Decl::Value)
             }
             Declaration::ClassDeclaration(class) if class.id.as_ref().is_some_and(|id| id.name == local) => {
-                return Some(Decl::NotSystem)
+                return Some(Decl::Class(class))
             }
-            Declaration::TSEnumDeclaration(enumeration) if enumeration.id.name == local => return Some(Decl::NotSystem),
+            Declaration::TSEnumDeclaration(enumeration) if enumeration.id.name == local => return Some(Decl::Value),
             _ => {}
         }
     }
@@ -1494,7 +1583,8 @@ fn assignments<'a, 'p>(program: &'a Program<'p>, local: &str) -> Vec<&'a Express
         .filter_map(|stmt| match stmt {
             Statement::ExpressionStatement(statement) => match &statement.expression {
                 Expression::AssignmentExpression(assignment)
-                    if assignment.left.get_identifier_name().is_some_and(|name| name == local) =>
+                    if assignment.operator.is_assign()
+                        && assignment.left.get_identifier_name().is_some_and(|name| name == local) =>
                 {
                     Some(&assignment.right)
                 }
@@ -1505,12 +1595,42 @@ fn assignments<'a, 'p>(program: &'a Program<'p>, local: &str) -> Vec<&'a Express
         .collect()
 }
 
+/// Whether the module-level binding `local` is written anywhere other than
+/// by the `read` plain assignments at module level: in a function, by a
+/// compound or update operator, or as a destructuring target.
+fn rebound(program: &Program<'_>, local: &str, read: usize) -> bool {
+    let semantic = SemanticBuilder::new().build(program).semantic;
+    let scoping = semantic.scoping();
+    let Some(symbol) = scoping.get_root_binding(local.into()) else { return false };
+    scoping.get_resolved_references(symbol).filter(|reference| reference.is_write()).count() > read
+}
+
 /// Whether `program` writes a member of `local` at module level, or passes
 /// it first to `Object.assign`, `defineProperty`, `defineProperties` or
 /// `setPrototypeOf`.
 fn written_after(program: &Program<'_>, local: &str) -> bool {
     let semantic = SemanticBuilder::new().with_build_nodes(true).build(program).semantic;
-    let named = |expression: &Expression<'_>| matches!(expression, Expression::Identifier(id) if id.name == local);
+    // `local` and each binding that aliases it: `const alias = local`, at any
+    // depth, and aliases of those.
+    let mut aliases: FxHashSet<String> = FxHashSet::from_iter([local.to_string()]);
+    loop {
+        let before = aliases.len();
+        for node in semantic.nodes().iter() {
+            if let AstKind::VariableDeclarator(declarator) = node.kind() {
+                if let (BindingPattern::BindingIdentifier(id), Some(Expression::Identifier(init))) =
+                    (&declarator.id, declarator.init.as_ref().map(Expression::get_inner_expression))
+                {
+                    if aliases.contains(init.name.as_str()) {
+                        aliases.insert(id.name.to_string());
+                    }
+                }
+            }
+        }
+        if aliases.len() == before {
+            break;
+        }
+    }
+    let named = |expression: &Expression<'_>| matches!(expression, Expression::Identifier(id) if aliases.contains(id.name.as_str()));
     let found = semantic.nodes().iter().any(|node| match node.kind() {
         AstKind::AssignmentExpression(assignment) => assignment.left.as_member_expression().is_some_and(|member| {
             let mut object = member.object();
@@ -1557,8 +1677,9 @@ fn pending_of(openings: &[crate::module_table::Opening]) -> Vec<String> {
 }
 
 /// An open answer with no pending route, its stub stars closed as the
-/// linker closes them: a request that resolved to nothing usable keeps it
-/// open, for its reason.
+/// linker closes them. A request that resolved to nothing usable keeps it
+/// open, for its reason, whatever another branch knows: Node fails to link
+/// a star of a missing module.
 fn close_stub_stars(
     known: Vec<Terminal<String>>,
     openings: Vec<crate::module_table::Opening>,
@@ -1568,7 +1689,7 @@ fn close_stub_stars(
     let failed = openings
         .iter()
         .any(|opening| matches!(&opening.reason, OpeningReason::UnresolvedRequest(marker) if marker.starts_with(FAILED)));
-    if failed && known.is_empty() {
+    if failed {
         return ExportLookup::Incomplete { known, openings };
     }
     crate::linked::close_stub_stars(known, openings, name, |stub| stubs.get(stub).is_some_and(|names| names.contains(name)))
@@ -1909,7 +2030,7 @@ mod tests {
         for (label, rest, expected) in [
             ("helper-built", "const makeDs = () => createSystem().build().seal();\nexport const ds = makeDs();\n", Err("Name the system's export with the `systemExport` option")),
             ("proto-alias", "export const ds = createSystem().build().seal();\nexport const other = { __proto__: ds };\n", Err("'other' (an object with `__proto__`)")),
-            ("later-write", "export const ds = createSystem().build().seal();\nexport const late = {};\nlate.toConfig = ds.toConfig;\n", Err("'late' is an object written after its declaration")),
+            ("later-write", "export const ds = createSystem().build().seal();\nexport const late = {};\nlate.toConfig = ds.toConfig;\n", Err("'late' is written after its declaration")),
             ("aliases", "export const ds = createSystem().build().seal();\nexport default ds;\nexport { ds as system };\n", Ok(())),
             ("default", "export default createSystem().build().seal();\n", Ok(())),
             ("iife", "export const ds = /* @__PURE__ */ (() => createSystem().build().seal())();\n", Ok(())),
@@ -2058,8 +2179,8 @@ mod tests {
     }
 
     /// Contract: the audit reports what it can prove as an omission, and what
-    /// it cannot as unproved; it never reports a same-named method of
-    /// another API, and never reads a third-party package.
+    /// it cannot as unproved, a call on a third-party value included; it
+    /// never reads a third-party package.
     #[test]
     fn the_audit_proves_what_it_reports() {
         let side = "import { holder } from './state';\nimport { tracker } from 'analytics';\n\
@@ -2083,6 +2204,7 @@ mod tests {
             [
                 (crate::REGISTRATION_UNREACHED.to_string(), "side.ts".to_string(), 4),
                 (crate::REGISTRATION_UNPROVED.to_string(), "side.ts".to_string(), 5),
+                (crate::REGISTRATION_UNPROVED.to_string(), "side.ts".to_string(), 6),
             ]
         );
         assert!(!config.dependencies.iter().any(|path| path.ends_with("analytics/index.js")), "{:?}", config.dependencies);
@@ -2121,4 +2243,67 @@ mod tests {
         assert!(reads.findings.iter().any(|finding| finding.file.ends_with("/side.ts")), "{:?}", reads.findings);
         assert!(reads.missing.iter().any(|path| path.contains("absent-module")), "{:?}", reads.missing);
     }
+
+    /// Contract: root inference counts an export as no system only when it
+    /// proves the protocol absent, and a reassigned binding is no proof.
+    #[test]
+    fn root_inference_proves_absence_or_asks() {
+        let head = "import { createSystem, createTheme } from '@animus-ui/system';\n";
+        for (label, rest) in [
+            ("sealed-theme", "export const tokens = createTheme().build();\nexport const theme = createSystem().build().seal();\nexport const ds = createSystem().build().seal();\n"),
+            ("assigned-array", "export const ds = createSystem().build().seal();\nexport const arr = [];\nObject.assign(arr, { toConfig: ds.toConfig });\n"),
+            ("from-array", "export const ds = createSystem().build().seal();\nexport const arr = Array.from([]);\narr.toConfig = ds.toConfig;\n"),
+            ("static-class", "export const ds = createSystem().build().seal();\nexport class Other { static toConfig() { return ds.toConfig(); } }\n"),
+            ("alias-write", "export const ds = createSystem().build().seal();\nexport const other = {};\nconst alias = other;\nalias.toConfig = ds.toConfig;\n"),
+            ("reassigned", "const first = createSystem().build().seal();\nconst second = createSystem().build().seal();\nexport let ds = first;\nexport default ds;\nds = second;\nexport const theme = createTheme().build();\n"),
+        ] {
+            let dir = project(&format!("absence-{label}"), &[("system.js", &format!("{head}{rest}"))]);
+            let error = load(&dir, "system.js", None).map(|_| ()).expect_err(label);
+            assert!(error.contains("animus.system.export-uncertain"), "{label}: {error}");
+        }
+    }
+
+    /// Contract: a star of a module that cannot be found keeps the route
+    /// open, as Node fails to link it, even when another star has the name.
+    #[test]
+    fn a_missing_star_branch_fails_the_route() {
+        let dir = project(
+            "missing-star",
+            &[
+                ("barrel.js", "export * from './missing.js';\nexport * from './real.js';\n"),
+                ("real.js", "export const value = 1;\n"),
+                ("system.js", "import { createSystem, createTheme } from '@animus-ui/system';\nimport { value } from './barrel.js';\nexport const theme = createTheme().build();\nexport const ds = createSystem().build().seal();\nexport const uses = [value];\n"),
+            ],
+        );
+        let error = load(&dir, "system.js", None).map(|_| ()).expect_err("Node refuses this link");
+        assert!(error.contains("missing.js"), "{error}");
+    }
+
+    /// Contract: a registration method the audit cannot follow to a call,
+    /// bound or spelled with an escape, is reported unproved, never omitted.
+    #[test]
+    fn an_unfollowed_registration_is_unproved_not_omitted() {
+        for (label, side) in [
+            ("bound", "import { holder } from './state';\nconst register = holder.bundle.registerGlobalStyles.bind(holder.bundle);\nholder.bundle = register({});\n"),
+            ("escaped", "import { holder } from './state';\nholder.bundle = holder.bundle.\\u0072egisterGlobalStyles({});\n"),
+        ] {
+            let dir = project(&format!("unfollowed-{label}"), &[("state.ts", STATE), ("system.ts", SYSTEM), ("side.ts", side)]);
+            let config = load(&dir, "system.ts", None).expect("loads");
+            let found = findings(&config);
+            assert!(!found.is_empty() && found.iter().all(|(_, file, line)| file == "side.ts" && *line == 2), "{label}: {found:?}");
+        }
+    }
+
+    /// Contract: each manifest the ownership walk probes is watched: a
+    /// nearer `package.json` created later changes ownership and findings.
+    #[test]
+    fn a_missing_nearer_manifest_is_watched() {
+        let dir = project(
+            "nearer-manifest",
+            &[("state.ts", STATE), ("system.ts", "import { holder } from './state';\nimport './sub/side';\nexport { theme } from './state';\nexport const ds = holder.bundle.seal();\n"), ("sub/side.ts", "import { holder } from '../state';\nholder.bundle = holder.bundle.registerGlobalStyles({});\n")],
+        );
+        let config = load(&dir, "system.ts", None).expect("loads");
+        assert!(config.missing.iter().any(|path| path.ends_with("/sub/package.json")), "{:?}", config.missing);
+    }
+
 }
