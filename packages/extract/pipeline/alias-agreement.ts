@@ -19,29 +19,6 @@ import type { HostResolve } from './host-package-resolver';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type { HostReadings } from './probe-evidence';
 
-interface AliasEntry {
-  pattern: string;
-  replacement: string;
-  type: 'exact' | 'prefix';
-}
-
-/** The engine's `expand_alias`: the first entry, longest pattern first,
- *  that names `specifier`. */
-function expandAlias(
-  specifier: string,
-  aliases: readonly AliasEntry[]
-): string | undefined {
-  for (const alias of aliases) {
-    if (alias.type === 'exact' && specifier === alias.pattern) {
-      return alias.replacement;
-    }
-    if (alias.type === 'prefix' && specifier.startsWith(alias.pattern)) {
-      return `${alias.replacement}${specifier.slice(alias.pattern.length)}`;
-    }
-  }
-  return undefined;
-}
-
 /** A file's identity on disk: its real path, which follows links and
  *  takes the case the filesystem lists; the path itself where it is not
  *  there. */
@@ -221,7 +198,10 @@ export async function compareAliases(input: {
   pathAliasesJson: string | null;
   order: ExtensionOrder | undefined;
   readings: HostReadings;
-  moduleSpecifiers: (fileEntriesJson: string) => string;
+  moduleSpecifiers: (
+    fileEntriesJson: string,
+    pathAliasesJson?: string
+  ) => string;
   resolve: HostResolve;
   cache: AliasAgreementCache;
   packages?: PackageReadRecord;
@@ -237,24 +217,32 @@ export async function compareAliases(input: {
     cache.scope = scope;
     cache.byFile.clear();
   }
-  const { aliases }: { aliases: AliasEntry[] } =
-    input.pathAliasesJson === null
-      ? { aliases: [] }
-      : JSON.parse(input.pathAliasesJson);
-  if (aliases.length === 0 && Object.keys(packages?.roots ?? {}).length === 0) {
+  const aliased =
+    input.pathAliasesJson !== null &&
+    JSON.parse(input.pathAliasesJson).aliases.length > 0;
+  if (!aliased && Object.keys(packages?.roots ?? {}).length === 0) {
     return { findings: [], unavailable: 0 };
   }
   const changed = input.fileEntries.filter(
     (entry) => cache.byFile.get(entry.path)?.hash !== entry.hash
   );
-  const { files }: { files: Record<string, string[]> } =
+  // The engine's own parse and alias expansion: each file's specifiers,
+  // and the path analysis probes for each one a path alias names.
+  const {
+    files,
+    bases,
+  }: {
+    files: Record<string, string[]>;
+    bases?: Record<string, Record<string, string>>;
+  } =
     changed.length === 0
       ? { files: {} }
       : JSON.parse(
           input.moduleSpecifiers(
             JSON.stringify(
               changed.map(({ path, source }) => ({ path, source }))
-            )
+            ),
+            input.pathAliasesJson ?? undefined
           )
         );
   const analysed = new Set(input.fileEntries.map((entry) => entry.path));
@@ -330,7 +318,7 @@ export async function compareAliases(input: {
     changed.map(async ({ path, hash }) => {
       const results = await Promise.all(
         (files[path] ?? []).flatMap((specifier) => {
-          const base = expandAlias(specifier, aliases);
+          const base = bases?.[path]?.[specifier];
           if (base !== undefined) return [compare(path, specifier, base)];
           return packages !== undefined &&
             isPackageSpecifier(specifier) &&

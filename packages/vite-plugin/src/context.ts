@@ -4,9 +4,7 @@ import {
   builtInAssetClassification,
   contentHash,
   DEFAULT_EXTENSIONS,
-  DEFAULT_RUNTIME_IMPORT,
   findSheetAssetSpecifiers,
-  isPathWithinRoot,
   parseFilesJson,
   resolveAssetFile,
   resolveVerbosity,
@@ -18,6 +16,7 @@ import {
 import {
   CoalescingWindow,
   createBuildId,
+  EnvironmentBuilds,
   engineFactory,
   engineHandle,
   ExtractionSession,
@@ -51,6 +50,7 @@ import type {
 import type {
   SessionKey,
   SessionOutcome,
+  SessionPublication,
   WatchChanges,
 } from '@animus-ui/extract/session';
 import type { Logger } from 'vite';
@@ -91,19 +91,6 @@ const NO_SHEETS: AssetSheets = {
   componentCss: '',
 };
 
-/** One environment's build, as Vite hands it to a hook: the object is its
- *  identity, the name its key. */
-export interface BuildingEnvironment {
-  readonly name: string;
-}
-
-/** An environment's open build, and the promise its end settles. */
-interface OpenBuild {
-  environment: BuildingEnvironment;
-  ended: Promise<void>;
-  end(): void;
-}
-
 export class PluginContext {
   readonly options: AnimusExtractOptions;
   readonly verbose: boolean;
@@ -120,7 +107,6 @@ export class PluginContext {
   rootDir = '';
   logger: Logger | null = null;
 
-  system: SystemConfig = emptySystemConfig();
   lcssTargets: LightningTargets = {};
 
   pathAliasesJson: string | null = null;
@@ -147,42 +133,75 @@ export class PluginContext {
    *  as structural exclusions; none outside the root. Set in
    *  `configResolved`. */
   outputExcludes: string[] = [];
+  /** The Vite config file the build loaded, where it loaded one. */
+  configFiles: string[] = [];
 
-  // `null` means no analysis has published yet; a failed analysis leaves the
-  // previous manifest current instead of clearing it.
-  storedManifest: ProjectManifest | null = null;
-  storedManifestJson = '';
+  /** The Session publication this context serves, adopted whole as the
+   *  Session commits it; null until one commits, and a failed analysis
+   *  leaves the previous one served. Every view below reads it. */
+  served: SessionPublication | null = null;
+  /** What a context serves before a first publication. */
+  private readonly unpublishedSystem = emptySystemConfig();
 
-  /** The analysis sheets with their asset() placeholders. They are read
-   *  through `globalCss` and `resolvedComponentCss`, which substitute the
-   *  current asset URLs, so an edited asset changes its URL without
-   *  re-analysis. */
-  private analysisGlobalCss = '';
-  private analysisComponentCss = '';
-
-  get globalCss(): string {
-    return this.substitutedSheets().globalCss;
+  get storedManifest(): ProjectManifest | null {
+    return this.served?.manifest ?? null;
   }
 
-  set globalCss(css: string) {
-    this.analysisGlobalCss = css;
+  get storedManifestJson(): string {
+    return this.served?.manifestJson ?? '';
+  }
+
+  get system(): SystemConfig {
+    return this.served?.system ?? this.unpublishedSystem;
+  }
+
+  get reverseProvenance(): Record<string, string[]> {
+    return this.served?.manifest.reverse_provenance ?? {};
+  }
+
+  /** The exact source `virtual:animus/system-props` serves: the served
+   *  publication's, so the served bytes and the HMR change decision cannot
+   *  diverge. */
+  get systemPropsModule(): string {
+    return this.served?.systemPropsModule ?? EMPTY_SYSTEM_PROPS_MODULE;
+  }
+
+  get externalPackageDirs(): string[] {
+    return this.served?.externalPackageDirs ?? [];
+  }
+
+  /** specifier → whether its redirected source entry has side effects, from
+   *  the owning package's `sideEffects`; absent leaves Vite's default. */
+  get externalSourceSideEffects(): ReadonlyMap<string, boolean> {
+    return this.served?.externalSourceSideEffects ?? new Map();
+  }
+
+  get externalSourceEntries(): ReadonlyMap<string, string> {
+    return this.served?.externalSourceEntries ?? new Map();
+  }
+
+  /** The analysis sheets keep their asset() placeholders; these views
+   *  substitute the current asset URLs, so an edited asset changes its URL
+   *  without re-analysis. */
+  get globalCss(): string {
+    return this.substitutedSheets().globalCss;
   }
 
   get resolvedComponentCss(): string {
     return this.substitutedSheets().componentCss;
   }
 
-  set resolvedComponentCss(css: string) {
-    this.analysisComponentCss = css;
+  private analysisSheets(): AssetSheets {
+    return {
+      ...NO_SHEETS,
+      globalCss: this.served?.analysisGlobalCss ?? '',
+      componentCss: this.served?.analysisComponentCss ?? '',
+    };
   }
 
   private substitutedSheets(): ReturnType<typeof substituteSheetAssets> {
     return substituteSheetAssets(
-      {
-        ...NO_SHEETS,
-        globalCss: this.analysisGlobalCss,
-        componentCss: this.analysisComponentCss,
-      },
+      this.analysisSheets(),
       this.assetUrlBySpecifier
     );
   }
@@ -194,13 +213,6 @@ export class PluginContext {
   recordTransformOutput(relativePath: string, code: string): void {
     this.transformOutputHashes.set(relativePath, contentHash(code));
   }
-
-  reverseProvenance: Record<string, string[]> = {};
-
-  /** The exact source `virtual:animus/system-props` serves: the last
-   *  publication's, so the served bytes and the HMR change decision cannot
-   *  diverge. */
-  systemPropsModule = EMPTY_SYSTEM_PROPS_MODULE;
 
   /** Original path → hash of bytes whose parse aborted in a rejected attempt;
    *  non-empty while that rejection holds publication. Those bytes are served
@@ -239,20 +251,14 @@ export class PluginContext {
 
   assetPassComplete = false;
 
-  externalPackageDirs: string[] = [];
-  /** specifier → whether its redirected source entry has side effects, from
-   *  the owning package's `sideEffects`; absent leaves Vite's default. */
-  externalSourceSideEffects = new Map<string, boolean>();
-
-  externalSourceEntries: ReadonlyMap<string, string> = new Map();
-
+  /** The Session's last external package outcomes, for the self-verify. */
   externalPackageOutcomes: ExternalPackageOutcome[] = [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   devServer: any;
 
-  /** The Session's path lists already registered with Vite's watcher; the
-   *  Session replaces a list when it changes. */
-  private readonly watchedPathLists = new WeakSet<readonly string[]>();
+  /** The paths already registered, per watcher: a reused plugin instance
+   *  whose dev server is replaced registers everything with the new one. */
+  private readonly watchedPaths = new WeakMap<object, Set<string>>();
 
   // Per-plugin-instance engine state: two differently-configured plugins in
   // one process must not share an engine.
@@ -345,6 +351,8 @@ export class PluginContext {
         staticCss: options.staticCss,
         layers: options.layers,
         engine: options.engine,
+        runtimeImport: options.runtimeImport,
+        closedDynamicImports: options.closedDynamicImports,
         mode: this.emissionProd ? 'production' : 'development',
       },
       {
@@ -370,10 +378,12 @@ export class PluginContext {
     session.assetClassification = this.assetClassification;
     session.loadExpander = this.loadExpander;
     session.pathAliasesJson = this.pathAliasesJson;
-    session.runtimeImport = options.runtimeImport ?? DEFAULT_RUNTIME_IMPORT;
-    session.cssModuleId = VIRTUAL_CSS_ID;
-    session.systemPropsModuleId = VIRTUAL_SYSTEM_PROPS_ID;
+    session.delivery = {
+      cssModuleId: VIRTUAL_CSS_ID,
+      systemPropsModuleId: VIRTUAL_SYSTEM_PROPS_ID,
+    };
     session.structuralExclude = this.outputExcludes;
+    session.buildConfigFiles = this.configFiles;
     this.session = session;
     return session;
   }
@@ -436,63 +446,19 @@ export class PluginContext {
     return collected;
   }
 
-  /** Serves the Session's last publication: the manifest, the analysis
-   *  sheets (asset placeholders kept; Vite substitutes them), the system,
-   *  the package map and the external-package state. */
+  /** Serves the Session's last publication whole (asset placeholders
+   *  kept; Vite substitutes them). */
   adoptPublication(session: ExtractionSession): void {
-    const publication = session.publication;
-    if (publication === null) return;
-    const manifest = publication.manifest;
-    this.system = publication.system;
-    this.storedManifest = manifest;
-    this.storedManifestJson = publication.manifestJson;
-    this.globalCss = publication.analysisGlobalCss;
-    this.resolvedComponentCss = publication.analysisComponentCss;
-    this.reverseProvenance = manifest.reverse_provenance;
-    this.systemPropsModule = publication.systemPropsModule;
-    this.externalPackageDirs = session.externalPackageDirs;
-    this.externalSourceEntries = session.externalSourceEntries;
-    this.externalSourceSideEffects = session.externalSourceSideEffects;
+    if (session.publication === null) return;
+    this.served = session.publication;
     this.externalPackageOutcomes = session.lastExternalOutcomes;
     this.applyAssetSubstitutions();
   }
 
-  /** The environment a host without environments builds as. */
-  readonly singleEnvironment: BuildingEnvironment = { name: 'build' };
-
-  /** Each environment build that started and has not ended, by name. A
-   *  custom `buildApp` builds a shared plugin's environments in parallel, so
-   *  the context's build retires with the last of them, not the first. */
-  private readonly openBuilds = new Map<string, OpenBuild>();
-
-  /** Opens `environment`'s build, after any open build under its name has
-   *  ended: a builder reused while an earlier build still runs, or a second
-   *  environment under one name, builds after it rather than beside it.
-   *  Each build then ends its own generation once, in `buildEnd`. */
-  async openBuild(environment: BuildingEnvironment): Promise<void> {
-    for (;;) {
-      const open = this.openBuilds.get(environment.name);
-      if (open === undefined) break;
-      await open.ended;
-    }
-    let end = () => {};
-    const ended = new Promise<void>((settle) => {
-      end = settle;
-    });
-    this.openBuilds.set(environment.name, { environment, ended, end });
-  }
-
-  /** Ends `environment`'s open build; whether that left none open. Vite
-   *  ends each build once, in `buildEnd`, and a dev server ends only the
-   *  environments that started, so only the build that opened an entry
-   *  ends it. */
-  endBuild(environment: BuildingEnvironment): boolean {
-    const open = this.openBuilds.get(environment.name);
-    if (open === undefined || open.environment !== environment) return false;
-    this.openBuilds.delete(environment.name);
-    open.end();
-    return this.openBuilds.size === 0;
-  }
+  /** The context's environment builds: a custom `buildApp` builds a shared
+   *  plugin's environments in parallel, so the context's build retires with
+   *  the last of them, not the first. */
+  readonly builds = new EnvironmentBuilds();
 
   /** Retires this context's build when Vite closes it: the Session leaves
    *  the registry (with its manifest and watch state) and the engine handle
@@ -645,8 +611,8 @@ export class PluginContext {
   sheetAssetSpecifiers(): string[] {
     return findSheetAssetSpecifiers({
       variableCss: this.system.variableCss,
-      globalCss: this.analysisGlobalCss,
-      componentCss: this.analysisComponentCss,
+      globalCss: this.analysisSheets().globalCss,
+      componentCss: this.analysisSheets().componentCss,
     });
   }
 
@@ -708,44 +674,35 @@ export class PluginContext {
     return this.session?.isSystemDependency(absFile) ?? false;
   }
 
-  /** Watch every loader-reported dependency path, the external package
-   *  roots, and the paths the load found absent that no watched directory
-   *  covers (creating one reloads the system). Vite hard-ignores
-   *  node_modules, so dependencies installed there produce no events. A list
-   *  already registered is not added again. */
+  /** Registers the Session's watch plan with Vite's watcher, each path
+   *  once per watcher. Vite also watches its packages' own directories beside the
+   *  plan's canonical roots, and an absent path either covers (or the root
+   *  does) is left to their watch: a watch on an absent file inside a
+   *  watched directory stops that directory's events under inotify
+   *  (chokidar's non-fsevents handler). Vite hard-ignores node_modules, so
+   *  dependencies installed there produce no events. */
   registerSystemWatchPaths(): void {
     const watcher = this.devServer?.watcher;
     const session = this.session;
     if (!watcher || !session) return;
-    for (const paths of [
-      session.systemDependencyPaths,
-      session.systemMissingPaths,
-      session.externalPackageDirs,
-    ]) {
-      if (paths.length === 0 || this.watchedPathLists.has(paths)) continue;
-      this.watchedPathLists.add(paths);
-      const added =
-        paths === session.systemMissingPaths
-          ? this.uncoveredMissingPaths(paths, session.externalPackageDirs)
-          : paths;
+    const directories = [
+      ...new Set([
+        ...session.watchPlan().directories,
+        ...session.externalPackageDirs,
+      ]),
+    ];
+    const covered = this.rootDir ? [this.rootDir, ...directories] : directories;
+    const plan = session.watchPlan(covered);
+    let registered = this.watchedPaths.get(watcher);
+    if (registered === undefined) {
+      registered = new Set();
+      this.watchedPaths.set(watcher, registered);
+    }
+    for (const paths of [plan.files, plan.missing, directories]) {
+      const added = paths.filter((path) => !registered.has(path));
+      for (const path of added) registered.add(path);
       if (added.length > 0) watcher.add(added);
     }
-  }
-
-  /** The absent paths no watched directory reports a creation for. Vite's
-   *  root watch and a package root's watch already do, and a watch on an
-   *  absent file inside a watched directory stops that directory's events
-   *  under inotify (chokidar's non-fsevents handler). */
-  private uncoveredMissingPaths(
-    paths: readonly string[],
-    packageDirs: readonly string[]
-  ): string[] {
-    const watchedDirs = this.rootDir
-      ? [this.rootDir, ...packageDirs]
-      : packageDirs;
-    return paths.filter(
-      (path) => !watchedDirs.some((dir) => isPathWithinRoot(dir, path))
-    );
   }
 
   /** Invalidate the component CSS and system-props modules, then reload. The

@@ -750,8 +750,8 @@ fn collect_static_values_impl(
             Statement::VariableDeclaration(decl) if decl.kind == VariableDeclarationKind::Const => {
                 decl
             }
-            Statement::ExportNamedDeclaration(export) => {
-                if let Some(Declaration::VariableDeclaration(ref decl)) = export.declaration {
+            Statement::ExportDeclaration(export) => {
+                if let Declaration::VariableDeclaration(decl) = &export.declaration {
                     if decl.kind == VariableDeclarationKind::Const {
                         decl
                     } else {
@@ -820,8 +820,8 @@ pub(crate) fn pre_read_static(program: &Program<'_>, module: &str, name: &str, i
     let declarator = program.body.iter().find_map(|stmt| {
         let decl = match stmt {
             Statement::VariableDeclaration(decl) => decl,
-            Statement::ExportNamedDeclaration(export) => match &export.declaration {
-                Some(Declaration::VariableDeclaration(decl)) => decl,
+            Statement::ExportDeclaration(export) => match &export.declaration {
+                Declaration::VariableDeclaration(decl) => decl,
                 _ => return None,
             },
             _ => return None,
@@ -1241,7 +1241,8 @@ pub(crate) fn module_binds(program: &Program<'_>, name: &str) -> bool {
         Declaration::ClassDeclaration(class) => class.id.as_ref().is_some_and(|id| id.name == name),
         Declaration::TSEnumDeclaration(decl) => decl.id.name == name,
         Declaration::TSImportEqualsDeclaration(decl) => decl.id.name == name,
-        Declaration::TSModuleDeclaration(decl) => decl.id.name() == name,
+        Declaration::TSNamespaceDeclaration(decl) => decl.id.name == name,
+        Declaration::TSExternalModuleDeclaration(decl) => decl.id.value == name,
         _ => false,
     };
     program.body.iter().any(|stmt| match stmt {
@@ -1250,7 +1251,7 @@ pub(crate) fn module_binds(program: &Program<'_>, name: &str) -> bool {
             .iter()
             .flatten()
             .any(|spec| spec.local().name == name),
-        Statement::ExportNamedDeclaration(export) => export.declaration.as_ref().is_some_and(declares),
+        Statement::ExportDeclaration(export) => declares(&export.declaration),
         Statement::ExportDefaultDeclaration(export) => match &export.declaration {
             oxc::ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(func) => {
                 func.id.as_ref().is_some_and(|id| id.name == name)

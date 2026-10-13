@@ -367,9 +367,7 @@ fn default_export(
                 let named = id.and_then(|id| module_names.get(id.name.as_str()).copied());
                 return Some(DefaultExport::Declaration(named.unwrap_or_else(|| synthetic(export.span))));
             }
-            ModuleDeclaration::ExportNamedDeclaration(export)
-                if export.source.is_none() && !export.export_kind.is_type() =>
-            {
+            ModuleDeclaration::ExportNamedDeclaration(export) if !export.export_kind.is_type() => {
                 let alias = export.specifiers.iter().find(|specifier| {
                     !specifier.export_kind.is_type() && specifier.exported.name() == "default"
                 });

@@ -46,15 +46,19 @@ pub(super) fn validate_self_contained(
     diagnostics: &mut Vec<String>,
     scoping: &Scoping,
 ) -> bool {
-    let (statements, callback_span) = match callback {
-        Expression::ArrowFunctionExpression(arrow) => (&arrow.body.statements, arrow.span),
+    // A concise arrow's body is its result expression.
+    let (statements, result, callback_span) = match callback {
+        Expression::ArrowFunctionExpression(arrow) => match arrow.get_function_body() {
+            Some(body) => (&body.statements[..], None, arrow.span),
+            None => (&[][..], arrow.get_expression(), arrow.span),
+        },
         Expression::FunctionExpression(func) => match &func.body {
-            Some(body) => (&body.statements, func.span),
+            Some(body) => (&body.statements[..], None, func.span),
             None => return true,
         },
         _ => return true,
     };
-    let invalid = collect_invalid_references_from_body(statements, callback_span, scoping);
+    let invalid = collect_invalid_references_from_body(statements, result, callback_span, scoping);
     report_invalid_references(&invalid, transform_name, diagnostics)
 }
 
@@ -94,6 +98,7 @@ impl ReferenceValidation<'_> {
 
 fn collect_invalid_references_from_body(
     stmts: &[Statement<'_>],
+    result: Option<&Expression<'_>>,
     callback_span: Span,
     scoping: &Scoping,
 ) -> FxHashSet<String> {
@@ -104,6 +109,9 @@ fn collect_invalid_references_from_body(
     };
     for stmt in stmts {
         collect_references_from_statement(stmt, &mut validation);
+    }
+    if let Some(result) = result {
+        collect_references_from_expr(result, &mut validation);
     }
     validation.invalid_names
 }

@@ -90,7 +90,6 @@ import {
   walkPackageSources,
   writeAssetCopy,
   pruneStaleAssets,
-  engineModuleParser,
   surfaceManifestDiagnostics,
   systemLoadReads,
 } from '../pipeline/index';
@@ -133,6 +132,7 @@ import {
   joinSession,
   sessionKey,
   getOwningWatchSession,
+  claimExtractionReport,
   claimUnmatchedExcludeReport,
   getManifestJson,
   getSystemAuthority,
@@ -144,19 +144,12 @@ import {
   setSystemAuthority,
   resetAnalysisStartedPromise,
   setOwningWatchSession,
+  setPublication,
   setAnalysisStartedPromise,
-  setAnalyzedHashes,
   getSharedPackageReadRecord,
-  setSharedPackageReadRecord,
-  setManifestJson,
-  setReplacementEpoch,
   setSessionArtifactDir,
-  setSharedCss,
-  setSharedExternalDirs,
-  setSharedExternalEntries,
-  setSharedExternalSideEffects,
-  setSharedSystemProps,
   setWatchTransaction,
+  requireEngine,
 } from './singleton';
 import { logBuildTimings } from './timing';
 
@@ -362,6 +355,28 @@ function isDiskNumber<Value>(value: Value): value is Value & number {
   );
 }
 
+/** The session's own system-props file, imported by absolute path: what a
+ *  host that serves no system-props module (the CLI) delivers. */
+export const SESSION_ARTIFACT: unique symbol = Symbol(
+  'animus.session-artifact'
+);
+
+/** The modules generated code imports, as the host delivers them (spec
+ *  §12.2 row 2): each declared, the system-props one always explicitly. */
+export interface DeliveryIds {
+  /** The stylesheet module. */
+  cssModuleId: string;
+  /** A system-props module id the host serves, or the session's own file. */
+  systemPropsModuleId: string | typeof SESSION_ARTIFACT;
+}
+
+/** What a host watches for a Session (see `ExtractionSession.watchPlan`). */
+export interface WatchPlan {
+  files: string[];
+  missing: string[];
+  directories: string[];
+}
+
 /** One published generation, as a host serving from memory reads it. */
 export interface SessionPublication {
   manifest: ProjectManifest;
@@ -378,6 +393,17 @@ export interface SessionPublication {
   system: SystemConfig;
   packageMap: Record<string, string>;
   ownership: Readonly<Record<string, SourceEntryOwnership>>;
+  /** Root-relative path → hash of the bytes the analysis read, including
+   *  files that produced no entries: the loader's stale-input witness. */
+  analyzedHashes: ReadonlyMap<string, string>;
+  /** What the analysis read of the discovered packages (spec §2.2 A4). */
+  packageReadRecord: PackageReadRecord | null;
+  /** The generation's replacement epoch. */
+  replacementEpoch: string;
+  /** The external package state this generation analysed. */
+  externalPackageDirs: string[];
+  externalSourceEntries: Map<string, string>;
+  externalSourceSideEffects: Map<string, boolean>;
 }
 
 /** How an attempt ended, for a host that redelivers modules itself. */
@@ -442,9 +468,6 @@ interface AssetFingerprints {
 export class ExtractionSession {
   /** Set by the adapter before any pipeline run. */
   rootDir: string | null = null;
-  /** The module extracted terminals import their factories from; an
-   *  override must supply every terminal the analysis extracts. */
-  runtimeImport: string = DEFAULT_RUNTIME_IMPORT;
   /** A host that resolves imports itself (Vite's `this.resolve`): package
    *  discovery asks it first, the loader only for a declared workspace it
    *  cannot resolve. Null resolves through the loader alone. */
@@ -491,12 +514,12 @@ export class ExtractionSession {
   /** Physical asset files registered with the host watcher. */
   assetDependencyPaths = new Set<string>();
   private assetDependencyKeys = new Set<string>();
-  /** System-props module id override. Turbopack rejects absolute-path
-   *  imports, so its driver sets a virtual id; null injects the abs path. */
-  systemPropsModuleId: string | null = null;
-  /** The stylesheet module generated code imports; a host that serves the
-   *  stylesheet itself names its own. */
-  cssModuleId: string = ANIMUS_CSS_MODULE_ID;
+  /** What generated code imports; a host that serves its own modules
+   *  declares them before planning. */
+  delivery: DeliveryIds = {
+    cssModuleId: ANIMUS_CSS_MODULE_ID,
+    systemPropsModuleId: SESSION_ARTIFACT,
+  };
   /** Whether the analysis-inputs hydration corpus is written to disk. Only
    *  isolated loader workers replay it; an in-process loader reads memory. */
   persistAnalysisInputs = false;
@@ -574,10 +597,15 @@ export class ExtractionSession {
   get heldSources(): ReadonlyMap<string, { hash: string; source: string }> {
     return this.fileCache;
   }
-  /** The generation an emit produced, current once its ingestion
-   *  publishes. */
-  private stagedPublication: Omit<SessionPublication, 'ownership'> | null =
-    null;
+  /** The generation an emit produced, until it commits with the
+   *  ingestion's ownership and the external package state it analysed. */
+  private stagedPublication: Omit<
+    SessionPublication,
+    | 'ownership'
+    | 'externalPackageDirs'
+    | 'externalSourceEntries'
+    | 'externalSourceSideEffects'
+  > | null = null;
 
   private readonly options: SessionOptions;
   private readonly staticCssJson: string | null;
@@ -627,6 +655,33 @@ export class ExtractionSession {
   // Membership keys (lexical + canonical) for the system's evaluated module
   // files. A failed reload keeps the last set — the stale config still serves.
   private systemDependencyKeys: Set<string> = new Set();
+
+  /** What a host watches for this Session, one list for every host: the
+   *  files whose change it acts on (the system module and the modules it
+   *  read, asset() sources, the configuration inputs), the paths the system
+   *  load found absent, whose creation reloads it, and the external package
+   *  roots, watched recursively. An absent path inside `covered` (roots the
+   *  host already watches recursively) is left out: a host's recursive
+   *  watch reports its creation, and watching an absent file inside a
+   *  watched directory can stop that directory's events (inotify). */
+  watchPlan(covered: readonly string[] = []): WatchPlan {
+    const system =
+      this.rootDir === null ? [] : [resolve(this.rootDir, this.options.system)];
+    return {
+      files: [
+        ...new Set([
+          ...system,
+          ...this.systemDependencyPaths,
+          ...this.assetDependencyPaths,
+          ...this.configInputPaths,
+        ]),
+      ],
+      missing: this.systemMissingPaths.filter(
+        (path) => !covered.some((root) => isPathWithinRoot(root, path))
+      ),
+      directories: [...this.externalWatchRoots],
+    };
+  }
 
   /** Whether `path` is the system module, one of its dependencies, or a
    *  path its load found absent: a change to it reloads the system. */
@@ -741,6 +796,11 @@ export class ExtractionSession {
     return this.ingestionFailureDiagnostics.length !== before;
   }
 
+  /** The module extracted terminals import their factories from. */
+  private get runtimeImport(): string {
+    return this.options.runtimeImport ?? DEFAULT_RUNTIME_IMPORT;
+  }
+
   get sessionDir(): string {
     return sessionArtifactDir(this.rootDir!, this.sessionId);
   }
@@ -840,6 +900,12 @@ export class ExtractionSession {
    *  excluded as literal path prefixes from discovery and from package
    *  collection, whatever the user's list. */
   structuralExclude: string[] = [];
+  /** The build configuration files the host loaded, absolute: config
+   *  roots, beside the well-known tool config names, whose unanalysed
+   *  imports open nothing the app renders. */
+  buildConfigFiles: readonly string[] = [];
+  /** How long the last full pass took to load the system, in ms. */
+  systemLoadMs = 0;
 
   private scanConfigMemo: {
     excludeMatcher: ExcludeMatcher;
@@ -1151,6 +1217,7 @@ export class ExtractionSession {
       { hash: string; source: string } | null
     >();
     const priorExternalFileOwners = { ...this.externalFileOwners };
+    const priorHostSuppliedKeys = new Set(this.hostSuppliedKeys);
     const recordPrior = (key: string) => {
       if (!priorCacheEntries.has(key)) {
         priorCacheEntries.set(key, this.fileCache.get(key) ?? null);
@@ -1381,6 +1448,7 @@ export class ExtractionSession {
             else this.fileCache.set(key, prior);
           }
           this.externalFileOwners = priorExternalFileOwners;
+          this.hostSuppliedKeys = priorHostSuppliedKeys;
         }
         if (this.statusAttemptOpen) {
           this.debouncePending.clear();
@@ -1411,6 +1479,24 @@ export class ExtractionSession {
     this.heldRejection = rejection.message;
     this.onOutcome?.({ kind: 'held', abortedOriginals: rejection.originals });
     throw new AbortedParseRejection(rejection.message);
+  }
+
+  /** Holds a held full read's entries: what it read stays the held bytes,
+   *  never overwriting held host bytes with the disk's (a key the host
+   *  supplied before that this read took from disk keeps its bytes). */
+  private holdObservedEntries(
+    entries: readonly FileEntry[],
+    supplied: ReadonlySet<string>
+  ): void {
+    for (const entry of entries) {
+      const fromHost = supplied.has(entry.path);
+      if (this.hostSuppliedKeys.has(entry.path) && !fromHost) continue;
+      this.fileCache.set(entry.path, {
+        hash: entry.hash,
+        source: entry.source,
+      });
+      if (fromHost) this.hostSuppliedKeys.add(entry.path);
+    }
   }
 
   /** Held sources whose bytes the host supplied and which the disk no
@@ -1468,8 +1554,16 @@ export class ExtractionSession {
     if (staged === null) return;
     this.stagedPublication = null;
     const previous = this.publication;
-    const publication = { ...staged, ownership: result.ownership };
+    const publication: SessionPublication = {
+      ...staged,
+      ownership: result.ownership,
+      externalPackageDirs: this.externalPackageDirs,
+      externalSourceEntries: this.externalSourceEntries,
+      externalSourceSideEffects: this.externalSourceSideEffects,
+    };
     this.publication = publication;
+    // The registry is this publication's projection: one write, at commit.
+    setPublication(this.key, publication);
     this.onOutcome?.({
       kind: 'published',
       publication,
@@ -1723,6 +1817,7 @@ export class ExtractionSession {
       this.system.missing ?? []
     );
     bt.systemLoad = this.elapsed(t);
+    this.systemLoadMs = bt.systemLoad;
 
     t = this.now();
     const { excludeMatcher, extensionsSet } = this.scanConfig;
@@ -1732,6 +1827,28 @@ export class ExtractionSession {
       excludeMatcher,
       extensionsSet
     );
+    // The system load's own modules outside the root (a system file in the
+    // app root's parent, and the files of its package it reads) are analysed
+    // too, so a write they make to the root's modules is seen as any
+    // module's is. A root with no modules has nothing for them to write.
+    const systemPackageRoot = findPackageRoot(resolvedSystemPath);
+    const discovered = new Set(files);
+    const outsideRoot =
+      files.length === 0
+        ? []
+        : [resolvedSystemPath, ...this.systemDependencyPaths];
+    for (const dependency of outsideRoot) {
+      if (
+        !discovered.has(dependency) &&
+        !isPathWithinRoot(rootDir, dependency) &&
+        !dependency.split(sep).includes('node_modules') &&
+        extensionsSet.has(extname(dependency)) &&
+        findPackageRoot(dependency) === systemPackageRoot
+      ) {
+        discovered.add(dependency);
+        files.push(dependency);
+      }
+    }
     // Once per build: its first full discovery, whether or not it publishes.
     if (claimUnmatchedExcludeReport(this.key)) {
       for (const line of unmatchedExcludeLines(excludeMatcher)) {
@@ -1753,15 +1870,18 @@ export class ExtractionSession {
     // Every path the read reaches, to check that it reaches each host
     // source under its own spelling.
     const readPaths = new Set<string>();
+    // The keys whose bytes this read took from the host, committed only
+    // when the read publishes or holds: a failed read leaves the held
+    // record as it was.
+    const supplied = new Set<string>();
     for (const filePath of files) {
       const relPath = relative(rootDir, filePath);
       readPaths.add(filePath);
       let source: string;
       try {
-        const supplied = hostSources.get(filePath);
-        source = supplied ?? readFileSync(filePath, 'utf-8');
-        if (supplied === undefined) this.hostSuppliedKeys.delete(relPath);
-        else this.hostSuppliedKeys.add(relPath);
+        const hostSource = hostSources.get(filePath);
+        source = hostSource ?? readFileSync(filePath, 'utf-8');
+        if (hostSource !== undefined) supplied.add(relPath);
       } catch (err) {
         if (!isDeletedSource(err)) {
           ingestionFailures.push(unreadableSourceDiagnostic(relPath, err));
@@ -1785,12 +1905,25 @@ export class ExtractionSession {
       extensions: context.extensions,
     });
     const discoveryDiagnostics: ManifestDiagnostic[] = [];
+    const kitMembers = new Map<string, string>();
     const packageNames = await extractSystemFilePackages(
       resolvedSystemPath,
-      engineModuleParser(this.engine()),
+      // A stateless native read of the system file, like the system loader:
+      // the native module answers where a host's engine supplies none.
+      {
+        systemMembership:
+          this.engine().systemMembership ?? requireEngine().systemMembership,
+      },
       (diagnostic) => discoveryDiagnostics.push(diagnostic),
-      resolver.resolveSpecifier,
-      context.extensions
+      // The application's modules import as discovery resolves, from the
+      // root; a kit's, from its own directory, as the system loader
+      // evaluates them.
+      (specifier, importer) =>
+        findPackageRoot(importer) === systemPackageRoot
+          ? resolver.resolveSpecifier(specifier)
+          : resolver.loaderResolve(specifier, dirname(importer)),
+      context.extensions,
+      kitMembers
     );
     discoveryDiagnostics.push(
       ...importedKitDiagnostics(
@@ -1817,7 +1950,15 @@ export class ExtractionSession {
       ),
       locatePackage: nativePackageLocator(this.engine(), context.workspaces),
       specifiers: packageNames,
-      resolveSpecifier: resolver.resolveSpecifier,
+      // A package a kit's system extends is the copy that kit resolves,
+      // which the application may also have a copy of, or not reach at all.
+      resolveSpecifier: async (specifier) =>
+        kitMembers.get(specifier) ??
+        (await resolver.resolveSpecifier(specifier)),
+      locateFrom: (specifier) => {
+        const file = kitMembers.get(specifier);
+        return file === undefined ? rootDir : dirname(file);
+      },
       unresolvedReason: resolver.unresolvedReason,
       requireSourceEntry: resolver.requireSourceEntry,
       rootDir,
@@ -1959,7 +2100,9 @@ export class ExtractionSession {
       for (const entry of admitted.entries) {
         const entryPath = resolve(rootDir, entry.path);
         readPaths.add(entryPath);
-        const source = hostSources.get(entryPath) ?? entry.source;
+        const hostSource = hostSources.get(entryPath);
+        if (hostSource !== undefined) supplied.add(entry.path);
+        const source = hostSource ?? entry.source;
         rawEntries.push({
           path: entry.path,
           source,
@@ -1989,15 +2132,19 @@ export class ExtractionSession {
 
       this.beginStatusAttempt();
       let accepted: SourceIngestionResult;
+      const readEntries = this.withoutOutputSources(rawEntries);
       try {
-        accepted = await this.corpus.prepare(
-          this.withoutOutputSources(rawEntries)
-        );
+        accepted = await this.corpus.prepare(readEntries);
         this.throwOnAbortedParse(accepted);
         this.skippedSources = accepted.skippedOriginals ?? [];
         this.ingestionOpenings = accepted.openings ?? [];
         this.ingestionAdapted = adaptedOriginals(accepted.ownership);
       } catch (err) {
+        // A held full read keeps what it read, so the hold's end and its
+        // deferred reload compare against these bytes.
+        if (err instanceof AbortedParseRejection) {
+          this.holdObservedEntries(readEntries, supplied);
+        }
         this.debouncePending.clear();
         this.writeAnalysisStatus('failed', pending, String(err));
         throw err;
@@ -2021,12 +2168,7 @@ export class ExtractionSession {
       this.publishSourceIngestion(accepted, 'full', (path) =>
         rawEntries.find((entry) => entry.path === path)
       );
-
-      // External package state publishes in the same successful generation
-      // as the source projection.
-      setSharedExternalDirs(this.key, admitted.packageDirs);
-      setSharedExternalEntries(this.key, admitted.sourceEntries);
-      setSharedExternalSideEffects(this.key, admitted.sourceEntrySideEffects);
+      this.hostSuppliedKeys = supplied;
 
       this.onExternalRootsCommitted?.(this.externalWatchRoots);
 
@@ -2161,6 +2303,7 @@ export class ExtractionSession {
   close(): void {
     this.releasePublicationClaim?.();
     this.releasePublicationClaim = null;
+    this.hostSuppliedKeys.clear();
     if (this.joinedKey === null || this.participant === null) return;
     // Another participant takes over the build's analysis, never this one.
     if (getOwningWatchSession(this.joinedKey) === this) {
@@ -2444,9 +2587,11 @@ export class ExtractionSession {
       system,
       emitter: {
         runtimeImport: this.runtimeImport,
-        cssModuleId: this.cssModuleId,
+        cssModuleId: this.delivery.cssModuleId,
         systemPropsModuleId:
-          this.systemPropsModuleId ?? systemPropsPath(this.sessionDir),
+          this.delivery.systemPropsModuleId === SESSION_ARTIFACT
+            ? systemPropsPath(this.sessionDir)
+            : this.delivery.systemPropsModuleId,
       },
       pathAliasesJson: this.pathAliasesJson,
       staticCssJson: this.staticCssJson,
@@ -2479,6 +2624,30 @@ export class ExtractionSession {
           relative(this.rootDir!, dir)
         ),
         extensions: this.extensionPolicy,
+        configFiles: this.buildConfigFiles.map((file) =>
+          relative(this.rootDir!, file).split(sep).join('/')
+        ),
+        // The system file and the modules its load read are known modules
+        // wherever they sit, the root's parent included.
+        systemModules: [
+          ...new Set(
+            [
+              resolve(this.rootDir!, this.options.system),
+              ...this.systemDependencyPaths,
+            ].map((file) => relative(this.rootDir!, file).split(sep).join('/'))
+          ),
+        ],
+        closedDynamicImports: (this.options.closedDynamicImports ?? []).map(
+          (site) => ({
+            ...site,
+            importer: relative(
+              this.rootDir!,
+              resolve(this.rootDir!, site.importer)
+            )
+              .split(sep)
+              .join('/'),
+          })
+        ),
       },
     };
 
@@ -2520,14 +2689,14 @@ export class ExtractionSession {
     const manifest = result.manifest;
     this.lastComponentCount = Object.keys(manifest?.components ?? {}).length;
 
-    if (!devMode) {
-      bt.analysis =
-        (bt.jsonSerialize ?? 0) + (bt.rustExtract ?? 0) + (bt.jsonParse ?? 0);
-      if (manifest?.report) {
-        this.log(
-          `Extracted ${manifest.report.components_extracted ?? '?'}/${manifest.report.components_total ?? '?'} components (${bt.analysis}ms)`
-        );
-      }
+    const analysisMs =
+      (bt.jsonSerialize ?? 0) + (bt.rustExtract ?? 0) + (bt.jsonParse ?? 0);
+    if (!devMode) bt.analysis = analysisMs;
+    // Once per build, whichever environment analyses first.
+    if (manifest?.report && claimExtractionReport(this.key)) {
+      this.log(
+        `Extracted ${manifest.report.components_extracted ?? '?'}/${manifest.report.components_total ?? '?'} components (${analysisMs}ms)`
+      );
     }
 
     // Substitution happens before assembly so every CSS consumer receives
@@ -2582,8 +2751,6 @@ export class ExtractionSession {
       surface: 'generated runtime modules',
     });
 
-    setSharedCss(this.key, fullCss);
-
     const systemPropsContent = buildSystemPropsModule({
       systemPropMapJson: JSON.stringify(manifest?.system_prop_map ?? {}),
       groupRegistryJson: system.groupRegistryJson,
@@ -2591,32 +2758,6 @@ export class ExtractionSession {
       admittedTransforms: manifest?.admitted_transforms ?? {},
       typedSystemProps: manifest?.typed_system_props ?? [],
     });
-
-    setSharedSystemProps(this.key, systemPropsContent);
-
-    setManifestJson(this.key, result.manifestJson);
-    if (manifest) {
-      this.stagedPublication = {
-        manifest,
-        manifestJson: result.manifestJson,
-        analysisGlobalCss: sheets.globalCss,
-        analysisComponentCss: sheets.componentCss,
-        styles: fullCss,
-        systemPropsModule: systemPropsContent,
-        system,
-        packageMap,
-      };
-    }
-
-    // The analyzed-hash map publishes with the manifest — one generation,
-    // one publication; it is the loader's stale-input witness.
-    setAnalyzedHashes(
-      this.key,
-      new Map(fileEntries.map((entry) => [entry.path, entry.hash]))
-    );
-    if (this.packageReadRecord !== null) {
-      setSharedPackageReadRecord(this.key, this.packageReadRecord);
-    }
 
     // Payloads first, then the commit, then the epoch LAST and only when its
     // value moved — an epoch-woken reader never sees an uncommitted write.
@@ -2681,6 +2822,22 @@ export class ExtractionSession {
 
     this.publishAnalysisCommit(epoch, generation);
     this.publishReplacementEpoch(epoch);
+    // Staged last: an attempt that fails before here commits nothing.
+    this.stagedPublication = {
+      manifest,
+      manifestJson: result.manifestJson,
+      analysisGlobalCss: sheets.globalCss,
+      analysisComponentCss: sheets.componentCss,
+      styles: fullCss,
+      systemPropsModule: systemPropsContent,
+      system,
+      packageMap,
+      analyzedHashes: new Map(
+        fileEntries.map((entry) => [entry.path, entry.hash])
+      ),
+      packageReadRecord: this.packageReadRecord,
+      replacementEpoch: epoch,
+    };
 
     bt.total = this.elapsed(pipelineStart);
     logBuildTimings(bt, manifest?.timing, (msg) => this.log(msg), this.verbose);
@@ -2976,7 +3133,6 @@ export class ExtractionSession {
     // In memory, no artifact names the epoch and no sibling is reconciled.
     if (!this.persistArtifacts) {
       this.lastEpochValue = epoch;
-      setReplacementEpoch(this.key, epoch);
       return;
     }
     // Probe DISK, not just the memo: a sibling's reconciliation can delete
@@ -2995,7 +3151,6 @@ export class ExtractionSession {
       this.lastEpochValue = epoch;
       this.reconcileSiblingEpochs(epoch);
     }
-    setReplacementEpoch(this.key, epoch);
   }
 
   /** sessions-root listing memo, keyed by the root dir's mtime — a new or

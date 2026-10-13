@@ -79,7 +79,7 @@ impl CallbackDefinition {
         let wrapper = format!("const __callback = ({source});");
         let allocator = Allocator::default();
         let parsed = Parser::new(&allocator, &wrapper, SourceType::mjs()).parse();
-        if parsed.panicked || !parsed.diagnostics.is_empty() {
+        if parsed.fatal_error || !parsed.diagnostics.is_empty() {
             return None;
         }
         let scoping = SemanticBuilder::new().build(&parsed.program).semantic.into_scoping();
@@ -127,8 +127,8 @@ pub fn extract_transforms(
                     }
                 }
             }
-            Statement::ExportNamedDeclaration(export) => {
-                if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
+            Statement::ExportDeclaration(export) => {
+                if let Declaration::VariableDeclaration(decl) = &export.declaration {
                     for declarator in &decl.declarations {
                         if is_create_transform_declarator(
                             declarator,
@@ -389,7 +389,7 @@ pub(crate) fn admit_configured_host_reads(name: &str, source: &str) -> Result<Ve
     let wrapper = format!("const __configured = ({source});");
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, &wrapper, SourceType::mjs()).parse();
-    if parsed.panicked || !parsed.diagnostics.is_empty() {
+    if parsed.fatal_error || !parsed.diagnostics.is_empty() {
         return rejected("does not parse as strict-mode JavaScript");
     }
     let semantic = SemanticBuilder::new()

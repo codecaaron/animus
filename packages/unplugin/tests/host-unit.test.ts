@@ -53,6 +53,15 @@ describe('option validation', () => {
     );
   });
 
+  test('runtimeImport is a core option this host accepts', () => {
+    expect(
+      resolveHostOptions(
+        { system: './ds.ts', runtimeImport: '@acme/runtime' },
+        '/tmp'
+      ).options.runtimeImport
+    ).toBe('@acme/runtime');
+  });
+
   test('unknown top-level keys fail loud naming the key', () => {
     expect(() =>
       resolveHostOptions(withRuntimeHostOption('exclide', []), '/tmp')

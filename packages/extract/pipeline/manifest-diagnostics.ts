@@ -144,7 +144,7 @@ function levelFor(
 
 /** The level a record prints at: the option's entry for its code, else
  *  `error` for a hard error (an `error`-kind record) or an error-severity
- *  record under `strict`, else its own. */
+ *  record under `strict`, `info` for an `info`-kind record, else its own. */
 export function effectiveLevel(
   diagnostic: ManifestDiagnostic,
   policy: Pick<DiagnosticPolicy, 'levels' | 'strict'>
@@ -152,7 +152,9 @@ export function effectiveLevel(
   const level = levelFor(diagnostic, policy.levels);
   if (level !== undefined) return level;
   if (diagnostic.kind === 'error') return 'error';
-  if (diagnostic.severity === 'info') return 'info';
+  if (diagnostic.kind === 'info' || diagnostic.severity === 'info') {
+    return 'info';
+  }
   return policy.strict && diagnostic.severity === 'error' ? 'error' : 'warn';
 }
 
@@ -279,6 +281,12 @@ export const KIT_SYSTEM_NOT_INCLUDED = 'animus.kit.system-not-included';
 /** A system file's `createSystem` binding that discovery could not follow to
  *  Animus's factory, so it is no root. */
 export const UNPROVEN_ROOT_BINDING = 'animus.discovery.unproven-root-binding';
+
+/** A system builder, a `createSystem` chain not yet built, leaves the
+ *  bindings and chains discovery follows, so kits extended on it from there
+ *  are not read as members. */
+export const UNFOLLOWED_SYSTEM_BUILDER =
+  'animus.discovery.unfollowed-system-builder';
 
 /** A system file calls `createSystem` with no import or local binding. The
  *  system loader evaluates the file without auto-imports, where the name is
@@ -441,6 +449,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [KIT_STALE_DESCRIPTOR, 'warn'],
   [UNPROVEN_ROOT_BINDING, 'warn'],
   [UNIMPORTED_CREATE_SYSTEM, 'warn'],
+  [UNFOLLOWED_SYSTEM_BUILDER, 'warn'],
   [ALIAS_MISMATCH, 'warn'],
   [PACKAGE_MISMATCH, 'warn'],
   [SYSTEM_INSTANCE_MISMATCH, 'error'],
@@ -646,11 +655,16 @@ export function surfaceManifestDiagnostics(
     let line: string | null = null;
     const mark = level === 'info' ? 'ℹ' : '⚠';
     const message = `${diagnostic.message}${droppedSuffix(diagnostic)}`;
+    // A warn-, error- or info-kind record is about a file, not a component.
+    const located =
+      diagnostic.kind === 'warn' ||
+      diagnostic.kind === 'error' ||
+      diagnostic.kind === 'info';
     if (diagnostic.kind === 'bail') {
       line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component} not extracted: ${message}${codeSuffix(diagnostic)}`;
     } else if (diagnostic.kind === 'skip') {
       line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component}: skipped ${message}${codeSuffix(diagnostic)}`;
-    } else if (diagnostic.kind === 'warn' || diagnostic.kind === 'error') {
+    } else if (located) {
       line = `${mark} ${warnLine(diagnostic)}`;
     }
     if (line === null) continue;
@@ -659,12 +673,11 @@ export function surfaceManifestDiagnostics(
       continue;
     }
     if (level === 'error') {
-      // The error line names what the warning line names: a warn- or
-      // error-kind record's file, with or without a line.
-      const subject =
-        diagnostic.kind === 'warn' || diagnostic.kind === 'error'
-          ? `${locationOf(diagnostic)}: `
-          : locatedPrefix(diagnostic);
+      // The error line names what the warning line names: a located
+      // record's file, with or without a line.
+      const subject = located
+        ? `${locationOf(diagnostic)}: `
+        : locatedPrefix(diagnostic);
       errors.add(
         `${diagnostic.code ?? 'error'} — ${subject}${diagnostic.component}: ${message}`
       );

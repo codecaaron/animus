@@ -654,7 +654,9 @@ fn has_esm_syntax(source: &str, file_path: &str) -> bool {
         matches!(
             stmt,
             Statement::ImportDeclaration(_)
+                | Statement::ExportDeclaration(_)
                 | Statement::ExportNamedDeclaration(_)
+                | Statement::ExportFromDeclaration(_)
                 | Statement::ExportAllDeclaration(_)
                 | Statement::ExportDefaultDeclaration(_)
         )
@@ -718,25 +720,23 @@ fn extract_import_specifiers(source: &str, file_path: &str) -> Vec<ImportInfo> {
                     names,
                 });
             }
-            Statement::ExportNamedDeclaration(decl) => {
+            Statement::ExportFromDeclaration(decl) => {
                 if decl.export_kind.is_type() {
                     continue;
                 }
-                if let Some(source) = &decl.source {
-                    let names: Vec<String> = decl
-                        .specifiers
-                        .iter()
-                        .filter(|es| !es.export_kind.is_type())
-                        .map(|es| module_export_name(&es.local))
-                        .collect();
-                    if !decl.specifiers.is_empty() && names.is_empty() {
-                        continue;
-                    }
-                    imports.push(ImportInfo {
-                        specifier: source.value.to_string(),
-                        names,
-                    });
+                let names: Vec<String> = decl
+                    .specifiers
+                    .iter()
+                    .filter(|es| !es.export_kind.is_type())
+                    .map(|es| module_export_name(&es.local))
+                    .collect();
+                if !decl.specifiers.is_empty() && names.is_empty() {
+                    continue;
                 }
+                imports.push(ImportInfo {
+                    specifier: decl.source.value.to_string(),
+                    names,
+                });
             }
             Statement::ExportAllDeclaration(decl) => {
                 if decl.export_kind.is_type() {
@@ -814,6 +814,17 @@ pub fn resolve_all_deps_reading(
     // canonical path → the bare specifier that pulled in a non-workspace
     // package, so the CommonJS guard can name the import that failed.
     let mut external_modules: HashMap<String, String> = HashMap::new();
+    // Each resolved file's canonical path, read once: a closure's modules
+    // import the same file many times.
+    let mut canonical_paths: HashMap<String, String> = HashMap::new();
+    let mut canonical = |resolved: &str| -> String {
+        canonical_paths
+            .entry(resolved.to_string())
+            .or_insert_with(|| {
+                fs::canonicalize(resolved).unwrap_or_else(|_| PathBuf::from(resolved)).to_string_lossy().to_string()
+            })
+            .clone()
+    };
 
     let entry_path = fs::canonicalize(system_path)
         .map_err(|e| format!("failed to canonicalize '{}': {}", system_path, e))?
@@ -889,10 +900,7 @@ pub fn resolve_all_deps_reading(
                 ));
                 match resolution {
                     Ok(resolved) => {
-                        let canonical = fs::canonicalize(&resolved)
-                            .unwrap_or_else(|_| PathBuf::from(&resolved))
-                            .to_string_lossy()
-                            .to_string();
+                        let canonical = canonical(&resolved);
                         specifier_map
                             .insert((current_path.clone(), spec.clone()), canonical.clone());
                         if !visited.contains(&canonical) {
@@ -931,10 +939,7 @@ pub fn resolve_all_deps_reading(
                 // package into "X is not a function" in an unrelated module.
                 match resolve_bare_specifier_observed(spec, &current_dir.to_string_lossy(), context, reads) {
                     Ok((resolved, manifest)) => {
-                        let canonical = fs::canonicalize(&resolved)
-                            .unwrap_or_else(|_| PathBuf::from(&resolved))
-                            .to_string_lossy()
-                            .to_string();
+                        let canonical = canonical(&resolved);
                         let manifest = fs::canonicalize(&manifest)
                             .unwrap_or(manifest)
                             .to_string_lossy()
@@ -1052,17 +1057,20 @@ fn offsets_to_line_numbers(bundle: &str, offsets: Vec<(usize, String)>) -> Vec<(
 /// ```js
 /// globalThis.console = globalThis.console || ...;  // host shim
 /// const __modules = {};
+/// // the `linked::PRELUDE` helpers
 /// // __module__: __stub__/react
 /// (function(){ const __exports = {}; ... __modules['__stub__/react'] = __exports; })();
-/// __modules['/path/to/dep.js'] = {};  // every module, in evaluation order
-/// __modules['/path/to/mod.js'] = {};
+/// // every module's export object, in evaluation order, by its place among
+/// // the sorted paths and its key (length-prefixed fields)
+/// __modules['#register']([1,0], '15:/path/to/dep.js15:/path/to/mod.js');
 /// // __module__: /path/to/mod.js
-/// const __linked0 = (function*(){ const __exports = __modules['/path/to/mod.js'];
-/// Object.defineProperty(__exports, 'name', { enumerable: true, get: () => name });
+/// __modules['#run'][0] = (function*(){
+/// Object.defineProperty(__modules['#'][0], 'name', { enumerable: true, get: () => name });
+/// __modules['#reads'](__modules['#'][0], '...');  // getters reading other modules
 /// yield;
 /// ... })();
-/// __linked0.next();
-/// __linked1.next();  // each module's body, in evaluation order
+/// __modules['#run'][0].next();
+/// __modules['#run'][1].next();  // each module's body, in evaluation order
 /// ```
 /// Every module's export object exists first, so the content scans that walk
 /// `__modules` meet modules in the order they ran. Each module then runs to
@@ -1109,12 +1117,12 @@ fn build_bundle(
         bundle.push_str("})();\n\n");
     }
 
-    let order = linked::evaluation_order(specifier_map, source_map, entry_path);
     let mut paths: Vec<&String> = source_map.keys().collect();
     paths.sort();
+    let refs: linked::ModuleRefs = paths.iter().enumerate().map(|(at, path)| ((*path).clone(), at)).collect();
     let mut modules: HashMap<String, linked::LinkedModule> = HashMap::with_capacity(paths.len());
     for path in &paths {
-        let module = linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map)?;
+        let module = linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map, &refs)?;
         modules.insert((*path).clone(), module);
     }
     // An import or re-export that links to nothing fails here, before any
@@ -1123,14 +1131,19 @@ fn build_bundle(
     for path in &paths {
         linker.check_links(path)?;
     }
-    let generators: HashMap<&str, String> =
-        paths.iter().enumerate().map(|(index, path)| (path.as_str(), format!("__linked{index}"))).collect();
-    let generator = |module: &str| &generators[module];
+    let order = linked::evaluation_order(&modules, entry_path);
+    let generator = |module: &str| format!("__modules['#run'][{}]", refs[module]);
 
-    // The global-style and theme scans walk `__modules` in this order.
+    // The global-style and theme scans walk `__modules` in this order. Each
+    // module object is also listed, by its place among the sorted paths, in
+    // `__modules['#']`, which no scan enumerates.
+    bundle.push_str("Object.defineProperty(__modules, '#', { value: [] });\n");
+    let mut keys = String::new();
     for path in &order {
-        let _ = writeln!(bundle, "__modules['{}'] = {{}};", js_quoted(path));
+        linked::push_field(&mut keys, path);
     }
+    let places: Vec<String> = order.iter().map(|path| refs[path].to_string()).collect();
+    let _ = writeln!(bundle, "__modules['#register']([{}], '{}');", places.join(","), js_quoted(&keys));
     bundle.push('\n');
     let mut module_spans = Vec::with_capacity(paths.len());
     let mut import_refs = Vec::new();
@@ -1140,21 +1153,30 @@ fn build_bundle(
         let _ = writeln!(bundle, "{}{}", MODULE_MARKER_PREFIX, path);
         let _ = writeln!(
             bundle,
-            "const {} = (function*(){{",
+            "{} = (function*(){{",
             generator(path),
         );
         bundle.push_str(&module.link);
         // The module's own scope declares nothing the loader adds, so any
-        // name but `__modules` is the module's to declare.
-        for (name, read) in linker.getters(path) {
-            let _ = writeln!(
-                bundle,
-                "Object.defineProperty(__modules['{}'], '{}', {{ enumerable: true, get: () => {} }});",
-                js_quoted(path),
-                js_quoted(&name),
-                read
-            );
+        // name but `__modules` is the module's to declare. Getters are
+        // defined in the namespace's order; a run of those that read another
+        // module is written as data.
+        let exports = linked::module_ref(&refs, path);
+        let mut reads = linked::ModuleReads::default();
+        for (name, getter) in linker.getters(path) {
+            match getter {
+                linked::Getter::Local(binding) => {
+                    reads.flush(&mut bundle, &exports);
+                    let _ = writeln!(
+                        bundle,
+                        "Object.defineProperty({exports}, '{}', {{ enumerable: true, get: () => {binding} }});",
+                        js_quoted(&name),
+                    );
+                }
+                linked::Getter::Module { module, name: read } => reads.push(&refs, &name, &module, read.as_deref()),
+            }
         }
+        reads.flush(&mut bundle, &exports);
         bundle.push_str("yield;\n");
         let start = bundle.len();
         bundle.push_str(&module.body);
@@ -1638,7 +1660,7 @@ fn reads_shared_host_name(source: &str) -> bool {
     let wrapper = format!("const __configured = ({source});");
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, &wrapper, SourceType::mjs()).parse();
-    if parsed.panicked || !parsed.diagnostics.is_empty() {
+    if parsed.fatal_error || !parsed.diagnostics.is_empty() {
         return true;
     }
     let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
@@ -1698,7 +1720,7 @@ fn host_binding_evidence(
     let local = offset - start;
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, text, SourceType::mjs()).parse();
-    if parsed.panicked || !parsed.diagnostics.is_empty() {
+    if parsed.fatal_error || !parsed.diagnostics.is_empty() {
         return Err(inconclusive(format!("is defined in {module}, which does not parse as module code")));
     }
     let semantic = SemanticBuilder::new().with_build_nodes(true).build(&parsed.program).semantic;
@@ -1933,8 +1955,10 @@ pub fn load_system_module_reading(
     context: &ResolutionContext,
     reads: &mut LoadReads,
 ) -> Result<SystemConfig, String> {
+    // One load reads each directory's listing once: the exact-case check
+    // otherwise lists a directory again for every candidate in it.
     let (specifier_map, source_map, stub_exports, manifests, type_exports) =
-        resolve_all_deps_reading(system_path, root_dir, context, reads)?;
+        resolution::with_listing_cache(|| resolve_all_deps_reading(system_path, root_dir, context, reads))?;
 
     let entry_path = fs::canonicalize(system_path)
         .map_err(|e| format!("failed to canonicalize '{}': {}", system_path, e))?

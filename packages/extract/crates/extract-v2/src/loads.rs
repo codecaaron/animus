@@ -5,7 +5,7 @@
 //! specifier is written.
 
 use oxc::ast::ast::{
-    Argument, CallExpression, ExportNamedDeclaration, Expression, ImportDeclarationSpecifier, ImportExpression,
+    Argument, CallExpression, ExportFromDeclaration, Expression, ImportDeclarationSpecifier, ImportExpression,
     ImportOrExportKind, Program, Statement,
 };
 use oxc::ast_visit::Visit;
@@ -44,6 +44,10 @@ pub struct Load {
     pub target: LoadTarget,
     pub spelling: Spelling,
     pub span: Span,
+    /// The innermost named function the load is written in: a declaration's
+    /// name, or the binding a `const` gives a function or arrow; None at
+    /// module level or in anonymous functions only.
+    pub enclosing_function: Option<String>,
 }
 
 impl Load {
@@ -70,6 +74,7 @@ impl Load {
             line: source[..start].matches('\n').count() + 1,
             call: source[start..end].split_whitespace().collect::<Vec<_>>().join(" "),
             start: self.span.start,
+            enclosing_function: self.enclosing_function.clone(),
         }
     }
 
@@ -114,9 +119,8 @@ pub fn collect_listed(program: &Program<'_>) -> (Vec<Load>, Vec<HostLoad>) {
                     };
                 (LoadKind::Import { runtime, bindingless }, &import.source, import.span)
             }
-            Statement::ExportNamedDeclaration(export) => {
-                let Some(source) = &export.source else { continue };
-                (LoadKind::Reexport { runtime: reexport_needs_runtime(export) }, source, export.span)
+            Statement::ExportFromDeclaration(export) => {
+                (LoadKind::Reexport { runtime: reexport_needs_runtime(export) }, &export.source, export.span)
             }
             Statement::ExportAllDeclaration(export) => {
                 let runtime = export.export_kind != ImportOrExportKind::Type;
@@ -129,16 +133,17 @@ pub fn collect_listed(program: &Program<'_>) -> (Vec<Load>, Vec<HostLoad>) {
             target: LoadTarget::Specifier(source.value.to_string()),
             spelling: Spelling::String,
             span,
+            enclosing_function: None,
         });
     }
-    let mut calls = Calls { loads, listed: Vec::new(), program };
+    let mut calls = Calls { loads, listed: Vec::new(), program, functions: Vec::new(), naming: None };
     calls.visit_program(program);
     (calls.loads, calls.listed)
 }
 
 /// A type-only re-export, or one whose every named specifier is a type, is
 /// erased before anything loads.
-fn reexport_needs_runtime(export: &ExportNamedDeclaration<'_>) -> bool {
+fn reexport_needs_runtime(export: &ExportFromDeclaration<'_>) -> bool {
     export.export_kind != ImportOrExportKind::Type
         && (export.specifiers.is_empty()
             || export.specifiers.iter().any(|spec| spec.export_kind != ImportOrExportKind::Type))
@@ -156,9 +161,18 @@ struct Calls<'p, 'a> {
     loads: Vec<Load>,
     listed: Vec<HostLoad>,
     program: &'p Program<'a>,
+    /// The functions being walked, innermost last, with their names.
+    functions: Vec<Option<String>>,
+    /// The name a `const` gives the function its initialiser is.
+    naming: Option<String>,
 }
 
 impl Calls<'_, '_> {
+    /// The innermost named function being walked.
+    fn enclosing_function(&self) -> Option<String> {
+        self.functions.iter().rev().flatten().next().cloned()
+    }
+
     /// The comments written inside `span`, delimiters included: webpack's
     /// magic comments and Vite's `@vite-ignore` steer a host's expansion.
     fn comments_in(&self, span: Span) -> Vec<String> {
@@ -186,12 +200,48 @@ impl Calls<'_, '_> {
 }
 
 impl<'a> Visit<'a> for Calls<'_, 'a> {
+    fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
+        let named = match (&declarator.id, &declarator.init) {
+            (oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init))
+                if matches!(
+                    init.get_inner_expression(),
+                    Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
+                ) =>
+            {
+                Some(id.name.to_string())
+            }
+            _ => None,
+        };
+        self.naming = named;
+        oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
+        self.naming = None;
+    }
+
+    fn visit_function(&mut self, function: &oxc::ast::ast::Function<'a>, flags: oxc::syntax::scope::ScopeFlags) {
+        // A `const` names the function it holds only where it has no name
+        // of its own; either way the name is spent here.
+        let given = self.naming.take();
+        let name = function.id.as_ref().map(|id| id.name.to_string()).or(given);
+        self.functions.push(name);
+        oxc::ast_visit::walk::walk_function(self, function, flags);
+        self.functions.pop();
+    }
+
+    fn visit_arrow_function_expression(&mut self, arrow: &oxc::ast::ast::ArrowFunctionExpression<'a>) {
+        let name = self.naming.take();
+        self.functions.push(name);
+        oxc::ast_visit::walk::walk_arrow_function_expression(self, arrow);
+        self.functions.pop();
+    }
+
     fn visit_import_expression(&mut self, import: &ImportExpression<'a>) {
+        let enclosing_function = self.enclosing_function();
         self.loads.push(Load {
             kind: LoadKind::DynamicImport,
             target: load_of(&import.source),
             spelling: spelling(Some(&import.source)),
             span: import.span,
+            enclosing_function,
         });
         self.list(import.span, HostLoadKind::Import, |calls| {
             // A phase (`import.source(…)`, `import.defer(…)`) is not read.
@@ -215,7 +265,8 @@ impl<'a> Visit<'a> for Calls<'_, 'a> {
         };
         for target in call_loads(call) {
             let spelling = if require && literal.is_some() { written } else { Spelling::Other };
-            self.loads.push(Load { kind: LoadKind::Call { require }, target, spelling, span: call.span });
+            let enclosing_function = self.enclosing_function();
+            self.loads.push(Load { kind: LoadKind::Call { require }, target, spelling, span: call.span, enclosing_function });
         }
         if let Some(kind) = host_load_kind(&call.callee) {
             self.list(call.span, kind, |calls| host_args(kind, call, calls.comments_in(call.span)));
@@ -240,6 +291,8 @@ pub struct ModuleLoad {
     /// The call's byte offset in its file, which a host expansion record
     /// names it by.
     pub start: u32,
+    /// The innermost named function the call is written in.
+    pub enclosing_function: Option<String>,
 }
 
 /// What a module load names.
@@ -398,9 +451,7 @@ enum Loader {
 fn loader(callee: &Expression<'_>) -> Loader {
     let member = |object: &Expression<'_>, name: String| match object.get_inner_expression() {
         Expression::Identifier(id) if id.name == "require" => Loader::RequireMember(name),
-        Expression::MetaProperty(meta) if meta.meta.name == "import" && meta.property.name == "meta" => {
-            Loader::ImportMetaMember(name)
-        }
+        Expression::ImportMeta(_) => Loader::ImportMetaMember(name),
         _ => Loader::Other,
     };
     match callee.get_inner_expression() {

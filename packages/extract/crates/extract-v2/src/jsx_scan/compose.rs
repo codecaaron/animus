@@ -65,8 +65,8 @@ fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFa
                 }
             }
         }
-        Statement::ExportNamedDeclaration(export) => {
-            if let Some(Declaration::VariableDeclaration(var_decl)) = &export.declaration {
+        Statement::ExportDeclaration(export) => {
+            if let Declaration::VariableDeclaration(var_decl) = &export.declaration {
                 for declarator in &var_decl.declarations {
                     if let Some(init) = &declarator.init {
                         let binding_name = extract_binding_name(&declarator.id);

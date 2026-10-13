@@ -6,8 +6,9 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
 import {
@@ -22,12 +23,17 @@ import {
 import { webpackExtensionPolicy } from '../pipeline/host-extensions';
 import { KIT_SYSTEM_NOT_INCLUDED } from '../pipeline/manifest-diagnostics';
 
-import type {
-  CollectedExternalPackages,
-  ModuleRecord,
-} from '../pipeline/discover-packages';
+import type { CollectedExternalPackages } from '../pipeline/discover-packages';
 import type { ManifestDiagnostic } from '../pipeline/manifest-diagnostics';
 import type { JsonValue } from '../pipeline/tsconfig-paths';
+
+/** The native engine, whose own parse reads a system file's membership. */
+const ENGINE = {
+  systemMembership: (inputsJson: string): string =>
+    createRequire(import.meta.url)('../index-v2.js').systemMembership(
+      inputsJson
+    ),
+};
 
 const writeFixture = (contents: string): string => {
   const dir = mkdtempSync(join(tmpdir(), 'discover-packages-'));
@@ -50,7 +56,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@animus-ui/test-ds');
       expect(pkgs).not.toContain('@animus-ui/system');
     } finally {
@@ -73,7 +79,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@ds-a/core');
       expect(pkgs).toContain('@ds-b/core');
     } finally {
@@ -94,7 +100,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@animus-ui/test-ds');
     } finally {
       rmSync(path, { force: true });
@@ -122,9 +128,11 @@ describe('extractSystemFilePackages', () => {
 
     try {
       const fromConstructor = (
-        await extractSystemFilePackages(constructorForm)
+        await extractSystemFilePackages(constructorForm, ENGINE)
       ).sort();
-      const fromChain = (await extractSystemFilePackages(chainForm)).sort();
+      const fromChain = (
+        await extractSystemFilePackages(chainForm, ENGINE)
+      ).sort();
       expect(fromConstructor).toEqual(fromChain);
       expect(fromConstructor).toContain('@animus-ui/test-ds');
     } finally {
@@ -144,7 +152,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toEqual([]);
     } finally {
       rmSync(path, { force: true });
@@ -163,7 +171,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toEqual([resolve(join(path, '..'), '../sibling/src/index')]);
       expect(pkgs[0].startsWith('.')).toBe(false);
     } finally {
@@ -184,7 +192,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@animus-ui/test-ds');
       expect(pkgs).toContain(join(path, '..', 'local-system'));
       expect(pkgs).toHaveLength(2);
@@ -205,7 +213,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@scope/my-ds');
     } finally {
       rmSync(path, { force: true });
@@ -225,7 +233,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/ui-kit');
       expect(pkgs).not.toContain('@animus-ui/system');
     } finally {
@@ -248,7 +256,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@ds-a/core');
       expect(pkgs).toContain('@ds-b/core');
     } finally {
@@ -271,7 +279,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/ui-kit');
       expect(pkgs).toContain('@acme/other-kit');
     } finally {
@@ -298,7 +306,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/ui-kit');
       expect(pkgs).not.toContain('@acme/tokens-only');
     } finally {
@@ -319,7 +327,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/kit');
       expect(pkgs).not.toContain('@animus-ui/system');
     } finally {
@@ -344,7 +352,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@ds-a/core');
       expect(pkgs).toContain('@ds-b/core');
       expect(pkgs).toContain('@ds-c/core');
@@ -372,7 +380,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/ui-kit');
       expect(pkgs).not.toContain('@acme/tokens-only');
     } finally {
@@ -396,7 +404,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = (await extractSystemFilePackages(path)).sort();
+      const pkgs = (await extractSystemFilePackages(path, ENGINE)).sort();
       expect(pkgs).toEqual([
         '@acme/base',
         '@acme/ui-kit',
@@ -422,7 +430,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/ui-kit');
     } finally {
       rmSync(path, { force: true });
@@ -444,7 +452,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       expect(pkgs).toContain('@acme/ui-kit');
       expect(pkgs).toContain('@acme/other-kit');
     } finally {
@@ -462,7 +470,7 @@ describe('extractSystemFilePackages', () => {
     `);
 
     try {
-      expect(await extractSystemFilePackages(path)).toEqual([
+      expect(await extractSystemFilePackages(path, ENGINE)).toEqual([
         '@acme/ui-kit/definition',
       ]);
     } finally {
@@ -481,7 +489,7 @@ describe('extractSystemFilePackages chain-scan tolerance', () => {
   ): Promise<void> => {
     const path = writeFixture(contents);
     try {
-      const pkgs = await extractSystemFilePackages(path);
+      const pkgs = await extractSystemFilePackages(path, ENGINE);
       for (const specifier of expected) {
         expect(pkgs).toContain(specifier);
       }
@@ -490,6 +498,74 @@ describe('extractSystemFilePackages chain-scan tolerance', () => {
       rmSync(join(path, '..'), { recursive: true, force: true });
     }
   };
+
+  // The lexer's spellings the engine read keeps, each a successful build
+  // with no CSS where membership drops it.
+  test('a system stored in an object property keeps its later links', async () => {
+    await expectDiscovered(
+      `
+      import { createSystem } from '@animus-ui/system';
+      import { system as kit } from 'plain-kit/definition';
+
+      const holder = {};
+      holder.base = createSystem();
+      export const ds = holder.base.extend(kit).build().seal();
+    `,
+      ['plain-kit/definition']
+    );
+  });
+
+  test('an includes nested in the argument, before its first closing brace', async () => {
+    await expectDiscovered(
+      `
+      import { createSystem } from '@animus-ui/system';
+      import { system as kit } from 'plain-kit/definition';
+
+      export const ds = createSystem({ meta: { includes: [kit] } }).build().seal();
+    `,
+      ['plain-kit/definition']
+    );
+  });
+
+  test("a namespace import's createSystem keeps its links", async () => {
+    await expectDiscovered(
+      `
+      import * as animus from '@animus-ui/system';
+      import { system as kit } from 'plain-kit/definition';
+
+      export const ds = animus.createSystem().extend(kit).build().seal();
+    `,
+      ['plain-kit/definition']
+    );
+  });
+
+  test('a long re-export chain to createSystem is followed to the end', async () => {
+    const path = writeFixture(`
+      import { createSystem } from './barrel1';
+      import { system as kit } from 'plain-kit/definition';
+      export const ds = createSystem().extend(kit).build().seal();
+    `);
+    const dir = dirname(path);
+    for (let n = 1; n <= 40; n++) {
+      writeFileSync(
+        join(dir, `barrel${n}.ts`),
+        n === 40
+          ? `export { createSystem } from '@animus-ui/system';`
+          : `export { createSystem } from './barrel${n + 1}';`
+      );
+    }
+    const diagnostics: ManifestDiagnostic[] = [];
+    try {
+      expect(
+        await extractSystemFilePackages(path, ENGINE, (d) =>
+          diagnostics.push(d)
+        )
+      ).toEqual(['plain-kit/definition']);
+      expect(diagnostics).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   test('a line comment between the call and the first link', async () => {
     await expectDiscovered(
@@ -606,12 +682,248 @@ describe('extractSystemFilePackages chain-scan tolerance', () => {
       export const { system: ds } = base.extend(kit).build();
     `);
     try {
-      expect(await extractSystemFilePackages(path)).not.toContain(
+      expect(await extractSystemFilePackages(path, ENGINE)).not.toContain(
         '@acme/tokens-only'
       );
     } finally {
       rmSync(path, { force: true });
       rmSync(join(path, '..'), { recursive: true, force: true });
+    }
+  });
+});
+
+/** Contract: system membership is transitive and indirect. A kit another
+ *  kit's system extends, a member re-exported through local modules, and a
+ *  root held in an object literal are each members; a builder membership
+ *  cannot follow is a finding, never a silent empty membership. */
+describe('extractSystemFilePackages transitive membership', () => {
+  /** An installed kit whose `definition` is `source`, under `nodeModules`. */
+  const kit = (nodeModules: string, name: string, source: string): void => {
+    const root = join(nodeModules, name);
+    mkdirSync(join(root, 'dist'), { recursive: true });
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({
+        name,
+        exports: { './definition': './dist/definition.js' },
+      })
+    );
+    writeFileSync(join(root, 'dist', 'definition.js'), source);
+  };
+  /** Each package from the `node_modules` beside or above `importer`. */
+  const resolvePackage = (specifier: string, importer: string) => {
+    const [name] = specifier.split('/');
+    for (
+      let dir = dirname(importer);
+      dir !== dirname(dir);
+      dir = dirname(dir)
+    ) {
+      const file = join(dir, 'node_modules', name, 'dist', 'definition.js');
+      if (existsSync(file)) return file;
+    }
+    return null;
+  };
+  const NESTED = `import { createSystem } from '@animus-ui/system';
+export const ds = createSystem().build().seal();`;
+  const KIT = `import { createSystem } from '@animus-ui/system';
+import { ds as nested } from 'nested/definition';
+export const ds = createSystem().extend(nested).build().seal();`;
+
+  const read = async (
+    system: string,
+    files: Record<string, string> = {}
+  ): Promise<{ members: string[]; codes: string[] }> => {
+    const path = writeFixture(system);
+    const dir = dirname(path);
+    for (const [file, source] of Object.entries(files)) {
+      mkdirSync(dirname(join(dir, file)), { recursive: true });
+      writeFileSync(join(dir, file), source);
+    }
+    const codes: string[] = [];
+    try {
+      const members = await extractSystemFilePackages(
+        path,
+        ENGINE,
+        (diagnostic) => codes.push(diagnostic.code ?? '')
+      );
+      return { members, codes };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("a kit another kit's system extends is a member", async () => {
+    const path = writeFixture('');
+    const dir = dirname(path);
+    kit(join(dir, 'node_modules'), 'nested', NESTED);
+    kit(join(dir, 'node_modules'), 'kit', KIT);
+    writeFileSync(
+      path,
+      `import { createSystem } from '@animus-ui/system';
+import { ds as kit } from 'kit/definition';
+export const ds = createSystem().extend(kit).build().seal();`
+    );
+    try {
+      expect(
+        await extractSystemFilePackages(path, ENGINE, undefined, resolvePackage)
+      ).toEqual(['kit/definition', 'nested/definition']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a kit's own import resolves from that kit", async () => {
+    const path = writeFixture('');
+    const dir = dirname(path);
+    kit(join(dir, 'node_modules', 'kit', 'node_modules'), 'nested', NESTED);
+    kit(join(dir, 'node_modules'), 'kit', KIT);
+    writeFileSync(
+      path,
+      `import { createSystem } from '@animus-ui/system';
+import { ds as kit } from 'kit/definition';
+export const ds = createSystem().extend(kit).build().seal();`
+    );
+    const memberFiles = new Map<string, string>();
+    try {
+      expect(
+        await extractSystemFilePackages(
+          path,
+          ENGINE,
+          undefined,
+          resolvePackage,
+          undefined,
+          memberFiles
+        )
+      ).toEqual(['kit/definition', 'nested/definition']);
+      expect(memberFiles.get('nested/definition')).toBe(
+        join(
+          dir,
+          'node_modules',
+          'kit',
+          'node_modules',
+          'nested',
+          'dist',
+          'definition.js'
+        )
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a member re-exported through local modules is the package they reach', async () => {
+    const { members, codes } = await read(
+      `import { createSystem } from '@animus-ui/system';
+import { ds as kit } from './barrel';
+export const ds = createSystem().extend(kit).build().seal();`,
+      {
+        'barrel.ts': `export * from './barrel2';`,
+        'barrel2.ts': `export { system as ds } from 'plain-kit/definition';`,
+      }
+    );
+    expect(members).toEqual(['plain-kit/definition']);
+    expect(codes).toEqual([]);
+  });
+
+  test('a root held in an object literal keeps its links', async () => {
+    const { members, codes } = await read(
+      `import { createSystem } from '@animus-ui/system';
+import { system as kit } from 'plain-kit/definition';
+const roots = { ds: createSystem() };
+export const ds = roots.ds.extend(kit).build().seal();`
+    );
+    expect(members).toEqual(['plain-kit/definition']);
+    expect(codes).toEqual([]);
+  });
+
+  test('a builder membership cannot follow is a finding', async () => {
+    const { members, codes } = await read(
+      `import { createSystem } from '@animus-ui/system';
+import { system as kit } from 'plain-kit/definition';
+const wrap = (system) => system;
+const base = wrap(createSystem());
+export const ds = base.extend(kit).build().seal();`
+    );
+    expect(members).toEqual([]);
+    expect(codes).toEqual(['animus.discovery.unfollowed-system-builder']);
+  });
+
+  /** The membership of `system` beside the installed `kit` and `nested`. */
+  const readWithKits = async (
+    kitSource: string,
+    system: string,
+    nestedSource = NESTED
+  ): Promise<{ members: string[]; codes: string[] }> => {
+    const path = writeFixture(system);
+    const dir = dirname(path);
+    kit(join(dir, 'node_modules'), 'nested', nestedSource);
+    kit(join(dir, 'node_modules'), 'kit', kitSource);
+    const codes: string[] = [];
+    try {
+      const members = await extractSystemFilePackages(
+        path,
+        ENGINE,
+        (diagnostic) => codes.push(diagnostic.code ?? ''),
+        resolvePackage
+      );
+      return { members, codes };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("a namespace import's member is a member, in the system and in a kit", async () => {
+    expect(
+      await readWithKits(
+        `import { createSystem } from '@animus-ui/system';
+import * as nested from 'nested/definition';
+export const ds = createSystem().extend(nested.ds).build().seal();`,
+        `import { createSystem } from '@animus-ui/system';
+import * as kit from 'kit/definition';
+export const ds = createSystem().extend(kit.ds).build().seal();`
+      )
+    ).toEqual({ members: ['kit/definition', 'nested/definition'], codes: [] });
+  });
+
+  test("a kit whose system is its default export has that system's members", async () => {
+    expect(
+      await readWithKits(
+        `import { createSystem } from '@animus-ui/system';
+import { ds as nested } from 'nested/definition';
+export default createSystem().extend(nested).build().seal();`,
+        `import { createSystem } from '@animus-ui/system';
+import kit from 'kit/definition';
+export const ds = createSystem().extend(kit).build().seal();`
+      )
+    ).toEqual({ members: ['kit/definition', 'nested/definition'], codes: [] });
+  });
+
+  test('a holder of a builder that membership cannot follow is a finding', async () => {
+    for (const held of [
+      `const holder = {};
+holder.base = createSystem();
+export const ds = holder['base'].extend(kit).build().seal();`,
+      `const holder = { base: createSystem() };
+const { base: renamed } = holder;
+export const ds = renamed.extend(kit).build().seal();`,
+      `const holder = { base: createSystem() };
+const take = (from) => from.base;
+export const ds = take(holder).extend(kit).build().seal();`,
+      `const holder = { base: createSystem() };
+const get = () => holder.base;
+export const ds = get().extend(kit).build().seal();`,
+      `const holder = { base: createSystem() };
+const get = () => holder;
+export const ds = get().base.extend(kit).build().seal();`,
+    ]) {
+      const { members, codes } =
+        await read(`import { createSystem } from '@animus-ui/system';
+import { system as kit } from 'plain-kit/definition';
+${held}`);
+      expect(members).toEqual([]);
+      expect(new Set(codes)).toEqual(
+        new Set(['animus.discovery.unfollowed-system-builder'])
+      );
     }
   });
 });
@@ -639,45 +951,6 @@ describe('extractSystemFilePackages root bindings', () => {
         `export const d = createSystem().extend(kitD).build();`,
       ].join('\n'),
     };
-    const animus: ModuleRecord = {
-      imports: [],
-      exports: [
-        {
-          exported: 'makeSystem',
-          local: null,
-          source: '@animus-ui/system',
-          original: 'createSystem',
-        },
-      ],
-    };
-    const system: ModuleRecord = {
-      imports: [
-        { local: 'makeSystem', imported: 'makeSystem', source: './animus' },
-        {
-          local: 'createSystem',
-          imported: 'createSystem',
-          source: './factory',
-        },
-        { local: 'cs', imported: 'createSystem', source: '@acme/unresolved' },
-        { local: 'kitA', imported: 'ds', source: '@acme/a' },
-        { local: 'kitB', imported: 'ds', source: '@acme/b' },
-        { local: 'kitC', imported: 'ds', source: '@acme/c' },
-      ],
-      exports: [],
-    };
-    const records = new Map([
-      ['animus.ts', animus],
-      ['factory.ts', { imports: [], exports: [] }],
-      ['ds.ts', system],
-      [
-        'bare.ts',
-        {
-          imports: [{ local: 'kitD', imported: 'ds', source: '@acme/d' }],
-          exports: [],
-          unboundCreateSystemCalls: [[2, 18]],
-        },
-      ],
-    ]);
     for (const [name, contents] of Object.entries(files)) {
       writeFileSync(join(dir, name), contents, 'utf-8');
     }
@@ -686,7 +959,7 @@ describe('extractSystemFilePackages root bindings', () => {
     const discover = (file: string) =>
       extractSystemFilePackages(
         join(dir, file),
-        (_source, path) => records.get(basename(path)) ?? null,
+        ENGINE,
         (diagnostic) => diagnostics.push(diagnostic),
         () => null
       );

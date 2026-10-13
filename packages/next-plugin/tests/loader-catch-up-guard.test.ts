@@ -16,6 +16,7 @@ import {
 import {
   disposeTempRoots,
   makeTempRoot,
+  publishRecord,
   resetAnimusGlobals,
 } from '../../extract/tests/session/session-fixtures';
 import animusLoader from '../src/loader';
@@ -68,7 +69,7 @@ function createRoot(withArtifact: boolean) {
   state = joinSession(sessionKey(SESSION_ID, root), 'animus-next', {
     system: './src/ds.ts',
   });
-  state.manifestJson = JSON.stringify({ components: {} });
+  publishRecord(state, { manifestJson: JSON.stringify({ components: {} }) });
   setEngineFactoryLoaderForTests(() => unreachableNative);
   // An analysis of no files: every path the loader sees is outside it.
   engineApi(sessionKey(SESSION_ID, root)).analyzeProject(
@@ -124,7 +125,7 @@ describe('replacements-epoch artifact registered as a file dependency (design D2
 
     // Without an analysis the module fails rather than serve raw (SA1),
     // having registered the artifact first.
-    state.manifestJson = null;
+    state.publication = null;
     const dependencies: string[] = [];
     expect(() =>
       animusLoader.call(
@@ -169,7 +170,9 @@ describe('replacements-epoch artifact registered as a file dependency (design D2
 describe('unconditional analyzed-content-hash guard (design D4)', () => {
   test('an analyzed file whose source hash moved fails with ANIMUS_ANALYSIS_CATCHING_UP', () => {
     const { root } = createRoot(true);
-    state.analyzedHashes = new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]);
+    publishRecord(state, {
+      analyzedHashes: new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]),
+    });
     expect(() => runLoader({ root, source: NEW_SOURCE })).toThrow(
       /ANIMUS_ANALYSIS_CATCHING_UP: src\/C\.tsx/
     );
@@ -177,8 +180,10 @@ describe('unconditional analyzed-content-hash guard (design D4)', () => {
 
   test('zero-entries→first-chain: a file analyzed with no animus entries is never published raw after gaining its first chain', () => {
     const { root } = createRoot(true);
-    state.manifestJson = JSON.stringify({ components: {} });
-    state.analyzedHashes = new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]);
+    publishRecord(state, { manifestJson: JSON.stringify({ components: {} }) });
+    publishRecord(state, {
+      analyzedHashes: new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]),
+    });
     expect(() => runLoader({ root, source: NEW_SOURCE })).toThrow(
       /ANIMUS_ANALYSIS_CATCHING_UP/
     );
@@ -186,15 +191,17 @@ describe('unconditional analyzed-content-hash guard (design D4)', () => {
 
   test('a matching analyzed hash transforms/passes through normally', () => {
     const { root } = createRoot(true);
-    state.analyzedHashes = new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]);
+    publishRecord(state, {
+      analyzedHashes: new Map([['src/C.tsx', contentHash(OLD_SOURCE)]]),
+    });
     expect(runLoader({ root, source: OLD_SOURCE }).output).toBe(OLD_SOURCE);
   });
 
   test('files with no analyzed identity keep the raw passthrough', () => {
     const { root } = createRoot(true);
-    state.analyzedHashes = new Map([
-      ['src/Other.tsx', contentHash(OLD_SOURCE)],
-    ]);
+    publishRecord(state, {
+      analyzedHashes: new Map([['src/Other.tsx', contentHash(OLD_SOURCE)]]),
+    });
     expect(runLoader({ root, source: NEW_SOURCE }).output).toBe(NEW_SOURCE);
   });
 
@@ -204,10 +211,10 @@ describe('unconditional analyzed-content-hash guard (design D4)', () => {
     const fresh = new Map([['src/C.tsx', contentHash(NEW_SOURCE)]]);
     let reads = 0;
     // The build's entry is reset after every test.
-    Object.defineProperty(state, 'analyzedHashes', {
+    publishRecord(state, {});
+    Object.defineProperty(state.publication, 'analyzedHashes', {
       configurable: true,
       get: () => (reads++ === 0 ? stale : fresh),
-      set: () => {},
     });
     expect(runLoader({ root, source: NEW_SOURCE }).output).toBe(NEW_SOURCE);
     expect(reads).toBeGreaterThanOrEqual(2);

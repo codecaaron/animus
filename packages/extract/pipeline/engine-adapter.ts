@@ -8,6 +8,7 @@ import { parseFilesJson } from './source-ingestion';
 
 import type { ListedLoad } from './host-expansions';
 import type { ProbeEvidenceGatherer } from './probe-evidence';
+import type { PreparedPackage } from './registry-packages';
 import type { WorkspacePackages } from './workspace-packages';
 
 /** The stateful engine handle produced by `new native.ExtractEngine(...)`. */
@@ -36,7 +37,10 @@ export interface EngineApi {
   /** Parse-only native fact extraction used to prepare adapted sources. */
   extractFacts?: (filesJson: string) => string;
   /** Each file's run-time module specifiers, for the kit publication check. */
-  moduleSpecifiers?: (filesJson: string) => string;
+  moduleSpecifiers?: (filesJson: string, pathAliasesJson?: string) => string;
+  /** Which kits a system file's roots extend or include, from the
+   *  engine's own parse; lists the modules it needs until supplied. */
+  systemMembership?: (inputsJson: string) => string;
   /** The engine's code-to-severity table, as JSON. */
   diagnosticCodes?: () => string;
   /** A specifier resolved as the system loader resolves it, a package from
@@ -198,7 +202,9 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
       loadSystemModule: (...args: unknown[]) =>
         native.loadSystemModule(...args),
       extractFacts: (filesJson) => native.extractFacts(filesJson),
-      moduleSpecifiers: (filesJson) => native.moduleSpecifiers(filesJson),
+      moduleSpecifiers: (filesJson, pathAliasesJson) =>
+        native.moduleSpecifiers(filesJson, pathAliasesJson),
+      systemMembership: (inputsJson) => native.systemMembership(inputsJson),
       diagnosticCodes: () => native.diagnosticCodes(),
       // Absent where the native module lacks them, so callers can say so.
       resolveSpecifier:
@@ -338,11 +344,13 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
             identity: string;
             bases: string[];
             loads: ListedLoad[];
+            packages: PreparedPackage[];
           }>(engine.prepare(filesJson), 'ExtractEngine.prepare');
           evidence = probeEvidence(
             prepared.bases,
             prepared.identity,
-            prepared.loads
+            prepared.loads,
+            prepared.packages
           );
         }
         return engine.analyze(filesJson, evidence);

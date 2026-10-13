@@ -187,9 +187,6 @@ fn type_only_export_specifiers(program: &Program<'_>) -> FxHashSet<(u32, u32)> {
     let mut spans = FxHashSet::default();
     for statement in &program.body {
         let Statement::ExportNamedDeclaration(export) = statement else { continue };
-        if export.source.is_some() {
-            continue;
-        }
         for specifier in &export.specifiers {
             if export.export_kind.is_type() || specifier.export_kind.is_type() {
                 spans.insert((specifier.span.start, specifier.span.end));
@@ -237,6 +234,16 @@ pub(crate) fn named<T>(path: &str, specifier: &str, files: &BTreeMap<String, T>,
     }
 }
 
+/// Whether `specifier` may start a published package's name: a lowercase
+/// letter or digit, or a scope (`@scope/`), a prefix of every name in it.
+fn names_a_package(specifier: &str) -> bool {
+    let unscoped = |name: &str| name.chars().next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    match specifier.strip_prefix('@') {
+        Some(scoped) => scoped.split_once('/').is_some_and(|(scope, name)| unscoped(scope) && (name.is_empty() || unscoped(name))),
+        None => unscoped(specifier),
+    }
+}
+
 /// Whether `specifier` names a file by its path rather than a package: a
 /// relative or absolute POSIX path, a Windows drive or UNC path, or a
 /// `file:` URL.
@@ -269,6 +276,9 @@ pub(crate) enum Unread {
     /// A package the analysis does not hold, other than one built into
     /// Node.
     Package,
+    /// A package the host installed from a registry: it reaches only these
+    /// analysed modules (spec §6.3).
+    Registry(Vec<String>),
     /// A path that names no file the analysis holds: one it excluded, one
     /// generated later, or one in a language it does not read. A file the
     /// host reads as an opaque value imports nothing.
@@ -280,13 +290,14 @@ impl Unread {
     pub(crate) fn clause(&self) -> &'static str {
         match self {
             Unread::Package => "a package the analysis does not read may re-export any module",
+            Unread::Registry(_) => "a package installed from a registry may re-export the local modules it depends on",
             Unread::Missing => "a module the analysis cannot find may re-export any module",
         }
     }
 
     pub(crate) fn reason(&self) -> crate::flow::ReasonId {
         match self {
-            Unread::Package => crate::flow::ReasonId::SkippedSource,
+            Unread::Package | Unread::Registry(_) => crate::flow::ReasonId::SkippedSource,
             Unread::Missing => crate::flow::ReasonId::UnresolvedSpecifier,
         }
     }
@@ -301,10 +312,47 @@ pub(crate) fn unread_source<T>(
     inputs: &CssInputs,
 ) -> Option<Unread> {
     match named(path, specifier, files, inputs) {
-        Named::Package(identity) if !is_node_builtin(&identity) => Some(Unread::Package),
+        Named::Package(identity) => unread_package(&identity, files, inputs),
         Named::Nothing if !host_reads_opaque(path, specifier, inputs) => Some(Unread::Missing),
         _ => None,
     }
+}
+
+/// What the unread package `identity` may reach: nothing for one built into
+/// Node; for one the host installed from a registry, the local modules it
+/// depends on and every module a bare specifier is an alias of; anything
+/// otherwise.
+pub(crate) fn unread_package<T>(identity: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> Option<Unread> {
+    if is_node_builtin(identity) {
+        return None;
+    }
+    let registry = inputs.probe_evidence.as_ref().and_then(|evidence| {
+        evidence.registry.iter().find(|package| package.identity == identity)
+    });
+    let Some(registry) = registry else { return Some(Unread::Package) };
+    let aliased = files.keys().filter(|file| aliased_by_bare_specifier(file, &inputs.path_aliases));
+    let mut reaches: Vec<String> = registry.reaches.iter().cloned().chain(aliased.cloned()).collect();
+    reaches.sort();
+    reaches.dedup();
+    Some(Unread::Registry(reaches))
+}
+
+/// Whether an alias whose pattern a registry package's code may name, a
+/// published package's name, maps onto `file`.
+fn aliased_by_bare_specifier(file: &str, aliases: &[crate::analyze_css::AliasEntry]) -> bool {
+    aliases.iter().any(|alias| {
+        if !names_a_package(&alias.pattern) {
+            return false;
+        }
+        let target = alias.replacement.trim_start_matches("./");
+        match alias.alias_type {
+            crate::analyze_css::AliasType::Prefix => file.starts_with(target),
+            crate::analyze_css::AliasType::Exact => {
+                let base = target.rsplit_once('.').filter(|(_, ext)| !ext.contains('/')).map_or(target, |(base, _)| base);
+                file == target || file.strip_prefix(base).is_some_and(|rest| rest.starts_with('.') || rest.starts_with("/index."))
+            }
+        }
+    })
 }
 
 /// Whether the host reads what `specifier`, written in `path`, names as an
@@ -313,7 +361,16 @@ pub(crate) fn unread_source<T>(
 /// original. Without the host's reading, a file is not opaque.
 fn host_reads_opaque(path: &str, specifier: &str, inputs: &CssInputs) -> bool {
     let base = crate::analyze_css::probe_base(path, specifier, inputs);
-    let host = base.and_then(|base| inputs.probe_evidence.as_ref()?.bases.get(&base).cloned());
+    let host = base.as_ref().and_then(|base| inputs.probe_evidence.as_ref()?.bases.get(base).cloned());
+    // One of the system's own modules, which the loader evaluated, is known:
+    // the file the host opens where it answers, the base where it does not.
+    let known = match &host {
+        Some(host) => crate::analyze_css::is_system_module(&host.candidate, inputs),
+        None => base.as_deref().is_some_and(|base| crate::analyze_css::is_system_module(base, inputs)),
+    };
+    if known {
+        return true;
+    }
     matches!(
         host.and_then(|host| host.reading),
         Some(crate::analyze_css::HostReading::Asset | crate::analyze_css::HostReading::Adapted)

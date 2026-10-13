@@ -78,6 +78,12 @@ export interface AnalysisOptions {
   kitDescriptors?: readonly KitDescriptorRecord[];
 }
 
+/** The engine's wire for an `AnalysisContext`: every field present, an
+ *  absent one written `undefined`. */
+type AnalysisContextWire = {
+  [K in keyof Required<AnalysisContext>]: AnalysisContext[K];
+};
+
 /** What a host knows that the analysis cannot see. */
 export interface AnalysisContext {
   /** rootDir-relative sources ingestion skipped. Their renders are unseen,
@@ -103,6 +109,19 @@ export interface AnalysisContext {
   /** Resolver calls ingestion ended under another spelling (spec §2.2
    *  A8): openings analysis reports and never prunes past. */
   openings?: IngestionOpening[];
+  /** The configured system file and the modules its load read,
+   *  rootDir-relative: known modules wherever they sit. */
+  systemModules?: string[];
+  /** The build configuration files the host loaded, rootDir-relative:
+   *  config roots beside the well-known tool config names. */
+  configFiles?: string[];
+  /** Computed `import()`s the configuration declares closed, each importer
+   *  rootDir-relative as analysis keys it. */
+  closedDynamicImports?: Array<{
+    importer: string;
+    enclosingFunction: string;
+    targets: 'build-chunks';
+  }>;
 }
 
 /**
@@ -181,26 +200,33 @@ export function analysisContextJson(
       context?.unbundledComputedImports ||
       context?.packageDirs?.length ||
       context?.extensions ||
-      context?.openings?.length
+      context?.openings?.length ||
+      context?.systemModules?.length ||
+      context?.configFiles?.length ||
+      context?.closedDynamicImports?.length
     )
   ) {
     return undefined;
   }
-  return JSON.stringify({
+  // Every field the host knows is on the wire: one left off is a type
+  // error, not a fact the engine silently never sees.
+  const wire = {
     skippedSources: context.skippedSources ?? [],
     unbundledComputedImports: context.unbundledComputedImports ?? false,
     packageDirs: context.packageDirs ?? [],
     linkedDirs: context.linkedDirs ?? [],
     outputDirs: context.outputDirs ?? [],
-    ...(context.extensions && {
-      extensions: {
-        appended: context.extensions.appended,
-        nodeNext: context.extensions.nodeNext,
-        alias: context.extensions.alias,
-      },
-    }),
-    ...(context.openings?.length && { openings: context.openings }),
-  });
+    extensions: context.extensions && {
+      appended: context.extensions.appended,
+      nodeNext: context.extensions.nodeNext,
+      alias: context.extensions.alias,
+    },
+    openings: context.openings?.length ? context.openings : undefined,
+    systemModules: context.systemModules ?? [],
+    configFiles: context.configFiles ?? [],
+    closedDynamicImports: context.closedDynamicImports ?? [],
+  } satisfies AnalysisContextWire;
+  return JSON.stringify(wire);
 }
 
 function hasSourceThemeManifests(system: SystemConfig): boolean {

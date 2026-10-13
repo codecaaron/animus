@@ -5,7 +5,7 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { reconcileSourceCorpus } from '../src/rediscovery';
-import { makeContextProbe, published } from './context-probe';
+import { makeContextProbe, published, serve } from './context-probe';
 import { makeComponent, makeManifest } from './manifest-fixture';
 
 import type { ContextProbe } from './context-probe';
@@ -65,8 +65,10 @@ describe('reconcileSourceCorpus', () => {
         hash: 'h',
         source: 'src',
       });
-      probe.ctx.storedManifest = makeManifest({
-        missing_inputs: [absentParent('Parent', 'Parent', outcome)],
+      serve(probe.ctx, {
+        manifest: makeManifest({
+          missing_inputs: [absentParent('Parent', 'Parent', outcome)],
+        }),
       });
       probe.respond(() => [
         published(probe, {
@@ -91,7 +93,7 @@ describe('reconcileSourceCorpus', () => {
   it('does nothing when no extension was dropped', async () => {
     writeFileSync(join(root, 'New.tsx'), 'export const x = 1;\n');
     const probe = makeProbe(root);
-    probe.ctx.storedManifest = makeManifest();
+    serve(probe.ctx, { manifest: makeManifest() });
 
     expect(await reconcileSourceCorpus(probe.ctx)).toEqual([]);
     expect(probe.submissions).toEqual([]);
@@ -99,8 +101,10 @@ describe('reconcileSourceCorpus', () => {
 
   it('returns without re-analyzing when no file answers the parent', async () => {
     const probe = makeProbe(root);
-    probe.ctx.storedManifest = makeManifest({
-      missing_inputs: [absentParent('Ghost', 'Ghost')],
+    serve(probe.ctx, {
+      manifest: makeManifest({
+        missing_inputs: [absentParent('Ghost', 'Ghost')],
+      }),
     });
 
     expect(await reconcileSourceCorpus(probe.ctx)).toEqual([]);
@@ -129,8 +133,10 @@ describe('reconcileSourceCorpus', () => {
         hash: 'h',
         source: 'src',
       });
-      probe.ctx.storedManifest = makeManifest({
-        missing_inputs: [absentParent('Parent', 'Parent')],
+      serve(probe.ctx, {
+        manifest: makeManifest({
+          missing_inputs: [absentParent('Parent', 'Parent')],
+        }),
       });
       probe.respond(fail);
 
@@ -151,8 +157,10 @@ describe('reconcileSourceCorpus', () => {
    *  on the next one. */
   it('folds a parent that appears after a barren pass', async () => {
     const probe = makeProbe(root);
-    probe.ctx.storedManifest = makeManifest({
-      missing_inputs: [absentParent('Parent', 'Parent')],
+    serve(probe.ctx, {
+      manifest: makeManifest({
+        missing_inputs: [absentParent('Parent', 'Parent')],
+      }),
     });
 
     await reconcileSourceCorpus(probe.ctx);
@@ -187,8 +195,10 @@ describe('reconcileSourceCorpus', () => {
         "import { Parent } from './generated/Parent';\n" +
         "export const Fancy = Parent.extend().styles({}).asElement('div');\n",
     });
-    ctx.storedManifest = makeManifest({
-      missing_inputs: [absentParent('Parent', 'generated/Parent')],
+    serve(ctx, {
+      manifest: makeManifest({
+        missing_inputs: [absentParent('Parent', 'generated/Parent')],
+      }),
     });
 
     await reconcileSourceCorpus(probe.ctx);

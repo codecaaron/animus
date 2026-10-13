@@ -15,6 +15,7 @@ import {
 import { runBuildStart } from '../src/build-start';
 import { applyResolvedConfig } from '../src/config';
 import { PluginContext } from '../src/context';
+import { serve } from './context-probe';
 import { makeComponent, makeManifest } from './manifest-fixture';
 
 afterEach(() => {
@@ -25,11 +26,13 @@ afterEach(() => {
  *  require component CSS, so an empty sheet fails for the wrong reason. */
 function makeContext(strict: boolean): PluginContext {
   const ctx = new PluginContext({ system: './src/ds.ts', strict });
-  ctx.storedManifest = makeManifest({
-    components: { 'Button::src/Button.tsx': makeComponent('src/Button.tsx') },
+  serve(ctx, {
+    manifest: makeManifest({
+      components: { 'Button::src/Button.tsx': makeComponent('src/Button.tsx') },
+    }),
+    system: { ...ctx.system, variableCss: ':root { --color-text: #000; }' },
+    analysisComponentCss: '.animus-Button-abc { margin: 0; }',
   });
-  ctx.system.variableCss = ':root { --color-text: #000; }';
-  ctx.resolvedComponentCss = '.animus-Button-abc { margin: 0; }';
   return ctx;
 }
 

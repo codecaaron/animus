@@ -71,7 +71,7 @@ fn staged_builders<'p, 'a>(program: &'p Program<'a>) -> StagedBuilders<'p, 'a> {
                     }
                 }
             }
-            Statement::ExportNamedDeclaration(export) if export.source.is_none() => {
+            Statement::ExportNamedDeclaration(export) => {
                 for specifier in &export.specifiers {
                     if let ModuleExportName::IdentifierReference(local) = &specifier.local {
                         exported.insert(local.name.as_str());
@@ -197,8 +197,8 @@ pub fn walk_program_facts(program: &Program<'_>) -> WalkedProgram {
                     }
                 }
             }
-            Statement::ExportNamedDeclaration(export) => {
-                if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
+            Statement::ExportDeclaration(export) => {
+                if let Declaration::VariableDeclaration(decl) = &export.declaration {
                     decl.declarations.iter().for_each(&mut record);
                 }
             }
@@ -342,7 +342,7 @@ fn chain_shape(call: &CallExpression<'_>) -> Option<(String, Vec<String>)> {
 /// The name a top-level statement declares, when it declares one.
 fn statement_binding(stmt: &Statement<'_>) -> Option<String> {
     let declaration = match stmt {
-        Statement::ExportNamedDeclaration(export) => export.declaration.as_ref()?,
+        Statement::ExportDeclaration(export) => &export.declaration,
         Statement::ExportDefaultDeclaration(_) => return Some("default".to_string()),
         other => other.as_declaration()?,
     };

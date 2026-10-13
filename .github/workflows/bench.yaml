@@ -1,0 +1,143 @@
+name: Bench
+
+# Manual speed-gate runs that never publish: builds each listed commit's
+# Linux x64 binary and dists in turn and runs that commit's verify:bench
+# against the pinned reference release, all on one runner, so commits are
+# compared on the same hardware; a commit older than verify:bench is measured
+# with this workflow's harness. Each commit's receipt is uploaded under
+# its position and ref, so a ref may repeat as a drift control. With
+# `profile`, each commit's binary keeps its symbols and its large-closure
+# load is also profiled, and those reports are uploaded beside its receipt.
+# `cpu` and `attempts` start several runners and measure only on those with
+# the named CPU, since ubuntu-latest does not choose the processor.
+
+on:
+  workflow_dispatch:
+    inputs:
+      refs:
+        description: Commits to measure, space-separated, in order
+        required: true
+        type: string
+      rows:
+        description: verify:bench rows to run, space-separated (empty runs every row)
+        required: false
+        type: string
+        default: ''
+      profile:
+        description: Also profile each commit's large-closure load (perf, perf stat, strace) on an unstripped build
+        required: false
+        type: boolean
+        default: false
+      cpu:
+        description: Measure only on a runner whose CPU model contains this text (empty takes any runner)
+        required: false
+        type: string
+        default: ''
+      attempts:
+        description: JSON list naming the runners to start in parallel, e.g. [1,2,3,4]; with `cpu`, those on another CPU stop at once
+        required: false
+        type: string
+        default: '[1]'
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: ${{ fromJSON(inputs.attempts) }}
+    steps:
+      - name: Check the CPU
+        id: cpu
+        env:
+          CPU: ${{ inputs.cpu }}
+        run: |
+          model=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')
+          echo "CPU: $model"
+          if [ -z "$CPU" ] || [[ "$model" == *"$CPU"* ]]; then
+            echo "match=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$model is not $CPU; nothing measured on this runner"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.cpu.outputs.match == 'true'
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.cpu.outputs.match == 'true'
+
+      - uses: actions/setup-node@v7
+        if: steps.cpu.outputs.match == 'true'
+        with:
+          node-version-file: .tool-versions
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.cpu.outputs.match == 'true'
+        with:
+          bun-version-file: .tool-versions
+
+      - name: Measure each commit
+        if: steps.cpu.outputs.match == 'true'
+        env:
+          REFS: ${{ inputs.refs }}
+          ROWS: ${{ inputs.rows }}
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          set -euo pipefail
+          if [ "$PROFILE" = true ]; then
+            sudo apt-get install -y -qq strace linux-tools-common "linux-tools-$(uname -r)"
+            sudo sysctl -qw kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
+            export CARGO_PROFILE_RELEASE_STRIP=none
+          fi
+          receipts="$RUNNER_TEMP/receipts"
+          mkdir -p "$receipts"
+          rows=()
+          for row in $ROWS; do rows+=(--row "$row"); done
+          n=0
+          for ref in $REFS; do
+            n=$((n + 1))
+            echo "::group::$ref"
+            git checkout --force --quiet "$ref"
+            # Each ref installs from its own lockfile into empty node_modules:
+            # bun keeps an earlier ref's packages as "no changes". The reference
+            # tarballs and cargo targets carry over.
+            git clean -ffdxq -e .bench -e target
+            if [ ! -f scripts/bench/run.ts ]; then
+              # Older than verify:bench: measured with this workflow's harness.
+              git checkout "$GITHUB_SHA" -- scripts/bench scripts/consumers/measure.ts
+            fi
+            bun install
+            (
+              cd packages/extract/crates/extract-v2
+              unset RUSTUP_TOOLCHAIN
+              bunx @napi-rs/cli build --platform --no-js --release --target x86_64-unknown-linux-gnu
+            )
+            bunx vp run build:ts
+            bun scripts/bench/prepare.ts
+            rm -rf .bench/receipts
+            bun scripts/bench/run.ts "${rows[@]}" || echo "::warning::$ref did not pass verify:bench"
+            cp .bench/receipts/*.json "$receipts/$n-$ref.json"
+            if [ "$PROFILE" = true ]; then
+              closure="$PWD/.bench/fixtures/large-closure"
+              load=(node scripts/bench/runners/loader.cjs "$PWD/packages/extract" "$closure/src/system.ts" "$closure")
+              perf stat -r 9 -e task-clock,page-faults,context-switches,cycles,instructions,cache-misses,branch-misses,dTLB-load-misses -- "${load[@]}" > /dev/null 2> "$receipts/$n-$ref.stat.txt"
+              strace -f -c -o "$receipts/$n-$ref.strace.txt" -- "${load[@]}" > /dev/null
+              perf record -q -F 2999 -g -o "$RUNNER_TEMP/perf.data" -- "${load[@]}" > /dev/null
+              perf report -i "$RUNNER_TEMP/perf.data" --no-children --sort dso,symbol --stdio --percent-limit 0.3 > "$receipts/$n-$ref.perf.txt" 2> /dev/null
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Upload receipts
+        if: always() && steps.cpu.outputs.match == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: receipts-bench-refs-${{ matrix.attempt }}
+          path: ${{ runner.temp }}/receipts/
+          if-no-files-found: error

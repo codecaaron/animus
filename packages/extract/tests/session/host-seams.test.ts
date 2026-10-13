@@ -197,8 +197,9 @@ describe('a host runtime import', () => {
         ),
       })
     );
-    const session = makeSession(createProject('animus-runtime-import-'));
-    session.runtimeImport = '@acme/runtime';
+    const session = makeSession(createProject('animus-runtime-import-'), {
+      runtimeImport: '@acme/runtime',
+    });
 
     await expect(session.runFullPipeline()).rejects.toThrow(
       /runtimeImport '@acme\/runtime' is valid only when every extracted terminal is \.asClass\(\)/

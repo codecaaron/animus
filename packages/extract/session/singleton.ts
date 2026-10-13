@@ -25,12 +25,42 @@ function joined(key: SessionKey): SessionState {
   return state;
 }
 
-export function getManifestJson(key: SessionKey): string | null {
-  return findSession(key)?.manifestJson ?? null;
+/**
+ * What a build's committed publication shows its participants: one record,
+ * replaced whole when the publishing session commits, so a reader never sees
+ * one field of a generation beside another's. The getters below project it.
+ */
+export interface RegistryPublication {
+  manifestJson: string;
+  styles: string;
+  systemPropsModule: string;
+  /** Root-relative path → hash of the bytes the analysis read, including
+   *  files that produced no entries: the loader's stale-input witness. */
+  analyzedHashes: ReadonlyMap<string, string>;
+  /** What the analysis read of the discovered packages (spec §2.2 A4). */
+  packageReadRecord: PackageReadRecord | null;
+  replacementEpoch: string;
+  externalPackageDirs: string[];
+  externalSourceEntries: Map<string, string>;
+  /** Specifier → its source entry's side effects; absent leaves the
+   *  bundler's own classification. */
+  externalSourceSideEffects: Map<string, boolean>;
 }
 
-export function setManifestJson(key: SessionKey, json: string): void {
-  joined(key).manifestJson = json;
+/** Commits the build's publication, the one write of everything below. */
+export function setPublication(
+  key: SessionKey,
+  publication: RegistryPublication
+): void {
+  joined(key).publication = publication;
+}
+
+function publicationOf(key: SessionKey): RegistryPublication | null {
+  return findSession(key)?.publication ?? null;
+}
+
+export function getManifestJson(key: SessionKey): string | null {
+  return publicationOf(key)?.manifestJson ?? null;
 }
 
 /**
@@ -64,39 +94,29 @@ export function claimUnmatchedExcludeReport(key: SessionKey): boolean {
   return true;
 }
 
-export function getSharedCss(key: SessionKey): string {
-  return findSession(key)?.sharedCss ?? '';
+/** True for the build's first caller only: the one that reports what the
+ *  build extracted. */
+export function claimExtractionReport(key: SessionKey): boolean {
+  const state = joined(key);
+  if (state.extractionReported) return false;
+  state.extractionReported = true;
+  return true;
 }
 
-export function setSharedCss(key: SessionKey, css: string): void {
-  joined(key).sharedCss = css;
+export function getSharedCss(key: SessionKey): string {
+  return publicationOf(key)?.styles ?? '';
 }
 
 export function getSharedSystemProps(key: SessionKey): string {
-  return findSession(key)?.sharedSystemProps ?? '';
-}
-
-export function setSharedSystemProps(key: SessionKey, content: string): void {
-  joined(key).sharedSystemProps = content;
+  return publicationOf(key)?.systemPropsModule ?? '';
 }
 
 export function getSharedExternalDirs(key: SessionKey): string[] {
-  return findSession(key)?.externalDirs ?? [];
-}
-
-export function setSharedExternalDirs(key: SessionKey, dirs: string[]): void {
-  joined(key).externalDirs = dirs;
+  return publicationOf(key)?.externalPackageDirs ?? [];
 }
 
 export function getSharedExternalEntries(key: SessionKey): Map<string, string> {
-  return findSession(key)?.externalEntries ?? new Map();
-}
-
-export function setSharedExternalEntries(
-  key: SessionKey,
-  entries: Map<string, string>
-): void {
-  joined(key).externalEntries = entries;
+  return publicationOf(key)?.externalSourceEntries ?? new Map();
 }
 
 /** Specifier → its source entry's side effects, published with the shared
@@ -104,14 +124,7 @@ export function setSharedExternalEntries(
 export function getSharedExternalSideEffects(
   key: SessionKey
 ): Map<string, boolean> {
-  return findSession(key)?.externalSideEffects ?? new Map();
-}
-
-export function setSharedExternalSideEffects(
-  key: SessionKey,
-  sideEffects: Map<string, boolean>
-): void {
-  joined(key).externalSideEffects = sideEffects;
+  return publicationOf(key)?.externalSourceSideEffects ?? new Map();
 }
 
 /** Structural view of the target session, declared here rather than imported
@@ -147,14 +160,7 @@ export function setOwningWatchSession(
 export function getAnalyzedHashes(
   key: SessionKey
 ): ReadonlyMap<string, string> | null {
-  return findSession(key)?.analyzedHashes ?? null;
-}
-
-export function setAnalyzedHashes(
-  key: SessionKey,
-  hashes: Map<string, string>
-): void {
-  joined(key).analyzedHashes = hashes;
+  return publicationOf(key)?.analyzedHashes ?? null;
 }
 
 /** What the build's last published analysis read of the discovered
@@ -162,14 +168,7 @@ export function setAnalyzedHashes(
 export function getSharedPackageReadRecord(
   key: SessionKey
 ): PackageReadRecord | null {
-  return findSession(key)?.packageReadRecord ?? null;
-}
-
-export function setSharedPackageReadRecord(
-  key: SessionKey,
-  record: PackageReadRecord
-): void {
-  joined(key).packageReadRecord = record;
+  return publicationOf(key)?.packageReadRecord ?? null;
 }
 
 /**
@@ -208,16 +207,10 @@ export function setSessionArtifactDir(key: SessionKey, dir: string): void {
   joined(key).artifactDir = dir;
 }
 
-/**
- * Replacement epoch of the last published analysis, written AFTER the
- * manifest so an epoch reader always sees at least that generation's manifest.
- */
+/** Replacement epoch of the last published analysis: committed in the same
+ *  record as its manifest, so an epoch reader sees that generation's. */
 export function getReplacementEpoch(key: SessionKey): string | null {
-  return findSession(key)?.replacementEpoch ?? null;
-}
-
-export function setReplacementEpoch(key: SessionKey, epoch: string): void {
-  joined(key).replacementEpoch = epoch;
+  return publicationOf(key)?.replacementEpoch ?? null;
 }
 
 /**
@@ -534,6 +527,8 @@ const OPTION_CLASSES = {
   layers: digestOf('layers'),
   engine: digestOf('engine'),
   mode: digestOf('mode'),
+  runtimeImport: digestOf('runtimeImport'),
+  closedDynamicImports: digestOf('closedDynamicImports'),
   root: 'excluded',
 } as const satisfies {
   [Key in keyof AnimusCoreOptions]-?: OptionDigest<Key> | 'excluded';
@@ -573,28 +568,16 @@ export interface SessionState {
   systemAuthority: SystemAuthority | null;
   /** Releases the build's on-disk claim record; null until one is held. */
   claimRecord: (() => void) | null;
-  manifestJson: string | null;
-  sharedCss: string;
-  sharedSystemProps: string;
-  externalDirs: string[];
-  externalEntries: Map<string, string>;
-  /** Specifier → its source entry's side effects; absent leaves the
-   *  bundler's own classification. */
-  externalSideEffects: Map<string, boolean>;
-  /** Root-relative path → hash of the bytes the last published analysis
-   *  read, including files that produced no entries. */
-  analyzedHashes: Map<string, string> | null;
-  /** What the last published analysis read of the discovered packages,
-   *  which every participant checks its host's answers against. */
-  packageReadRecord: PackageReadRecord | null;
-  /** Written after the manifest, so a reader of the epoch sees at least
-   *  that generation's manifest. */
-  replacementEpoch: string | null;
+  /** The build's committed publication; null until one commits. */
+  publication: RegistryPublication | null;
   /** The artifact directory of the session's last publication. */
   artifactDir: string | null;
   /** Whether the build reported its unmatched user excludes: once, after
    *  its first full discovery, whether or not that pass publishes. */
   unmatchedExcludesReported: boolean;
+  /** Whether the build reported what it extracted: once, from its first
+   *  analysis, whichever environment ran it. */
+  extractionReported: boolean;
 }
 
 const SESSION_REGISTRY = Symbol.for('animus.session-registry.v1');
@@ -655,17 +638,10 @@ export function joinSession(
       },
       systemAuthority: null,
       claimRecord: null,
-      manifestJson: null,
-      sharedCss: '',
-      sharedSystemProps: '',
-      externalDirs: [],
-      externalEntries: new Map(),
-      externalSideEffects: new Map(),
-      analyzedHashes: null,
-      packageReadRecord: null,
-      replacementEpoch: null,
+      publication: null,
       artifactDir: null,
       unmatchedExcludesReported: false,
+      extractionReported: false,
     };
     sessions.set(id, state);
     return state;

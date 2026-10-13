@@ -12,8 +12,8 @@ npm install @animus-ui/vite-plugin @animus-ui/system
 
 ```tsx
 // vite.config.ts
-import react from '@vitejs/plugin-react';
 import { animusExtract } from '@animus-ui/vite-plugin';
+import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
 export default defineConfig({

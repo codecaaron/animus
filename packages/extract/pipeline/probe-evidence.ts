@@ -3,9 +3,11 @@ import { join, relative } from 'node:path';
 
 import { policyCandidates, seeOnDisk } from './extension-policy';
 import { hostExpansions } from './host-expansions';
+import { registryPackages } from './registry-packages';
 
 import type { ExtensionOrder } from './extension-policy';
 import type { HostLoadExpander, ListedLoad } from './host-expansions';
+import type { PreparedPackage } from './registry-packages';
 
 /** What the host's filesystem opens for one probe base (spec §2.2 A2, A8),
  *  as the engine's `HostCandidate` reads it. */
@@ -34,12 +36,14 @@ export interface HostReadings {
   expander?: HostLoadExpander;
 }
 
-/** The session's evidence for the probe bases and computed loads the
- *  engine's `prepare` names, carrying its input identity, as JSON. */
+/** The session's evidence for the probe bases, computed loads and unread
+ *  packages the engine's `prepare` names, carrying its input identity, as
+ *  JSON. */
 export type ProbeEvidenceGatherer = (
   bases: readonly string[],
   identity: string,
-  loads?: readonly ListedLoad[]
+  loads?: readonly ListedLoad[],
+  packages?: readonly PreparedPackage[]
 ) => string;
 
 let generations = 0;
@@ -124,8 +128,9 @@ export function hostCandidate(
 
 /**
  * The session's host-candidate evidence for one analysis (spec §2.3): each
- * probe base the engine's `prepare` names, as `hostCandidate` reads it, and
- * the host's expansion of each computed load it lists (spec §6.3). The
+ * probe base the engine's `prepare` names, as `hostCandidate` reads it, the
+ * host's expansion of each computed load it lists, and each unread package
+ * it lists that a registry installed (spec §6.3). The
  * evidence carries the input identity `prepare` reported, and each call is a
  * new ingest generation, so no evidence is read for other files.
  */
@@ -136,7 +141,7 @@ export function gatherProbeEvidence(
   readings: HostReadings = {}
 ): ProbeEvidenceGatherer {
   const root = realRoot(rootDir);
-  return (bases, identity, loads = []) => {
+  return (bases, identity, loads = [], packages = []) => {
     const byBase: Record<string, HostCandidate> = {};
     for (const base of bases) {
       const host = hostCandidate(
@@ -159,12 +164,14 @@ export function gatherProbeEvidence(
             readings.expander,
             readings.isAsset
           );
+    const registry = registryPackages(root, packages, analysed);
     generations += 1;
     return JSON.stringify({
       generation: generations,
       identity,
       bases: byBase,
       ...(expansions.length > 0 && { expansions }),
+      ...(registry.length > 0 && { registry }),
     });
   };
 }

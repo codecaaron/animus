@@ -42,12 +42,15 @@ function sourceKit(dir: string, dependencies: Record<string, string>): void {
   write(join(dir, 'src', 'index.ts'), 'export const Card = 1;');
 }
 
-/** The optimizer would prebundle an installed source kit from compiled
- *  code, past the transform, so the plugin excludes it and prebundles its
- *  dependencies in its place; a linked kit is source to Vite already. Dev
- *  SSR would externalize it and load its dist, so the dev server keeps it
- *  in the SSR transform; a build already reads the source. */
-test('an installed source kit leaves the dependency optimizer and dev SSR externals, and its dependencies take its place', () => {
+/** Contract: a discovered kit is never served past the transform. The
+ *  optimizer would prebundle an installed kit past it (a source kit from
+ *  compiled code, a compiled kit with its builder code raw), so the plugin
+ *  excludes every installed kit, one that declares the source condition or
+ *  one the system extends, and prebundles its dependencies in its place; a
+ *  linked kit is source to Vite already. SSR, in development and in a build,
+ *  would externalize it and load its dist, so it stays in the SSR
+ *  transform. */
+test('an installed kit leaves the dependency optimizer and SSR externals, and its dependencies take its place', async () => {
   const root = realpathSync(
     mkdtempSync(join(tmpdir(), 'animus-kit-optimize-'))
   );
@@ -76,24 +79,44 @@ test('an installed source kit leaves the dependency optimizer and dev SSR extern
     join(app, 'node_modules', 'react', 'package.json'),
     '{"main":"index.js"}'
   );
+  // A compiled kit, with no source condition: the system extends it.
+  write(
+    join(app, 'node_modules', 'compiled-kit', 'package.json'),
+    JSON.stringify({
+      name: 'compiled-kit',
+      exports: { './definition': './dist/definition.js' },
+      dependencies: { 'runtime-dep': '1.0.0' },
+    })
+  );
+  write(
+    join(app, 'node_modules', 'compiled-kit', 'dist', 'definition.js'),
+    'export const system = {};'
+  );
+  write(
+    join(app, 'src', 'ds.ts'),
+    [
+      `import { createSystem } from '@animus-ui/system';`,
+      `import { system as kit } from 'compiled-kit/definition';`,
+      `export const ds = createSystem().extend(kit).build();`,
+    ].join('\n')
+  );
 
   const hook = animusExtract({ system: './src/ds.ts' }).config;
   if (hook === undefined || 'handler' in hook) {
     throw new Error('expected a plain function `config` hook');
   }
   const config: ConfigHookCall = hook;
-  const optimizeDeps = {
-    exclude: ['@acme/installed'],
-    include: ['@acme/installed > cjs-dep'],
+  const kits = {
+    optimizeDeps: {
+      exclude: ['@acme/installed', 'compiled-kit'],
+      include: ['@acme/installed > cjs-dep', 'compiled-kit > runtime-dep'],
+    },
+    ssr: { noExternal: ['@acme/installed', 'compiled-kit'] },
   };
   expect(
-    config({ root: app }, { command: 'serve', mode: 'development' })
-  ).toEqual({
-    define: { __ANIMUS_DEV__: true },
-    optimizeDeps,
-    ssr: { noExternal: ['@acme/installed'] },
-  });
+    await config({ root: app }, { command: 'serve', mode: 'development' })
+  ).toEqual({ define: { __ANIMUS_DEV__: true }, ...kits });
   expect(
-    config({ root: app }, { command: 'build', mode: 'production' })
-  ).toEqual({ define: { __ANIMUS_DEV__: false }, optimizeDeps });
+    await config({ root: app }, { command: 'build', mode: 'production' })
+  ).toEqual({ define: { __ANIMUS_DEV__: false }, ...kits });
 });

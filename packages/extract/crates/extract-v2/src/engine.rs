@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use crate::identity::LocalId;
 use crate::link::ProjectLinks;
 use crate::loads::LoadKind;
-use crate::usage_facts::{reads_only, ReadingsOf};
+use crate::usage_facts::{handed_on, ReadingsOf};
 use crate::{analyze_css, assemble, ast_store, cross_file, emit, facts};
 use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, OpeningReason, Request, Terminal};
 
@@ -55,7 +55,6 @@ struct AnalyzeResult<'a> {
 #[napi(object)]
 #[derive(Default)]
 pub struct EngineOptions {
-    pub prefix: Option<String>,
     pub runtime_import: Option<String>,
     pub css_module_id: Option<String>,
     pub system_props_module_id: Option<String>,
@@ -91,8 +90,11 @@ pub struct EngineOptions {
     pub property_records_json: Option<String>,
 }
 
+/// The prefix of the class names the engine generates. A host's own prefix
+/// is applied to them afterwards, through its name map.
+const CLASS_PREFIX: &str = "animus";
+
 struct ResolvedOptions {
-    prefix: String,
     runtime_import: String,
     css_module_id: String,
     system_props_module_id: String,
@@ -476,6 +478,31 @@ struct StyleModule {
     loader_escape: Option<&'static str>,
 }
 
+/// Whether a static may be an object: an object or array, the `asset`
+/// function, or what evaluation could not settle. No use can change a
+/// primitive.
+fn object_like(value: &crate::static_value::StaticValue) -> bool {
+    use crate::static_value::StaticValue;
+    matches!(
+        value,
+        StaticValue::Object(_) | StaticValue::Array(_) | StaticValue::AssetFunction { .. } | StaticValue::Unevaluated(_)
+    )
+}
+
+/// Whether a declaration's value at a path may be an object.
+fn holds_object(value: &crate::static_value::StaticValue, path: &[String]) -> bool {
+    use crate::static_value::StaticValue;
+    let Some((key, rest)) = path.split_first() else { return object_like(value) };
+    match value {
+        StaticValue::Object(entries) if key == crate::flow::ANY_MEMBER => {
+            entries.iter().any(|(_, value)| holds_object(value, rest))
+        }
+        StaticValue::Array(items) if key == crate::flow::ANY_MEMBER => items.iter().any(|value| holds_object(value, rest)),
+        StaticValue::Object(_) | StaticValue::Array(_) => value.get(key).is_some_and(|value| holds_object(value, rest)),
+        other => object_like(other),
+    }
+}
+
 /// Records into `flow` what a use anywhere in the analysis may change of
 /// the module-scope statics styles read, each said as a clause: `preset is
 /// passed to decorate() in a.tsx on line 4`. A namespace re-export or a
@@ -586,23 +613,48 @@ fn record_style_changes(
         found.dedup();
         found.into_iter().flat_map(declarations).collect()
     };
-    // Whether a static may be an object: an object or array, the `asset`
-    // function, or what evaluation could not settle. No use can change a
-    // primitive.
-    let object_like = |value: &crate::static_value::StaticValue| {
-        use crate::static_value::StaticValue;
-        matches!(
-            value,
-            StaticValue::Object(_) | StaticValue::Array(_) | StaticValue::AssetFunction { .. } | StaticValue::Unevaluated(_)
-        )
+    // A call to a function that returns its argument hands the argument to
+    // the `const` it initializes, which holds it from then on.
+    let callee_of = |file: &str, handoff: &crate::usage_facts::Handoff| {
+        declared(file, &handoff.callee)
+            .map(|(callee_file, name)| (callee_file, crate::usage_facts::returned_function(&name, handoff.calls - 1)))
     };
+    // (module, the hand-off's position in its module, the holder, each path
+    // in it that holds the argument).
+    let mut held: Vec<(&str, usize, &String, Vec<Vec<String>>)> = Vec::new();
+    for (file, module) in style {
+        for (at, handoff) in module.facts.handoffs.iter().enumerate() {
+            let Some(holder) = &handoff.holder else { continue };
+            let positions = callee_of(file, handoff).and_then(|(callee_file, function)| {
+                crate::usage_facts::alias_positions(&callee_file, &function, handoff.index, 0, &declared, readings_of)
+            });
+            if let Some(positions) = positions {
+                held.push((file, at, holder, positions));
+            }
+        }
+    }
+    // The `const`s that hold an object stored in them, a static or not.
+    let holders: std::collections::BTreeSet<(String, String)> = held
+        .iter()
+        .map(|(file, _, holder, _)| (file.to_string(), holder.to_string()))
+        .chain(style.iter().flat_map(|(file, module)| {
+            module.facts.stored.iter().map(move |(_, container, ..)| (file.clone(), container.clone()))
+        }))
+        .collect();
     let mutable = |(file, local): &(String, String)| {
         files.get(file).and_then(|statics| statics.get(local)).is_some_and(object_like)
+            || holders.contains(&(file.clone(), local.clone()))
     };
-    // Whether a declaration's static holds an object among its values.
+    // Whether a declaration's static holds an object among its values; a
+    // holder with no static holds the object stored in it.
     let nested = |(file, local): &(String, String)| match files.get(file).and_then(|statics| statics.get(local)) {
         Some(crate::static_value::StaticValue::Object(entries)) => entries.iter().any(|(_, value)| object_like(value)),
-        _ => false,
+        Some(_) => false,
+        None => holders.contains(&(file.clone(), local.clone())),
+    };
+    let may_hold_object = |(file, local): &(String, String), path: &[String]| match files.get(file).and_then(|statics| statics.get(local)) {
+        Some(value) => holds_object(value, path),
+        None => true,
     };
     // The paths of the members of a declaration's object at `at` that pass
     // `keep`; the object itself when it has none or is not an object.
@@ -683,6 +735,16 @@ fn record_style_changes(
             flow.open(ReasonId::OpaqueStar, Region::of(RegionAtom::AllExports), reason.to_string());
         }
     };
+    // An unread package may re-export any module; one installed from a
+    // registry, only the modules it can reach.
+    let open_unread = |flow: &mut FlowBuilder, unread: crate::link::Unread, reason: String| match unread {
+        crate::link::Unread::Registry(reaches) => {
+            for target in &reaches {
+                hand_on(flow, target, &reason);
+            }
+        }
+        unread => flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason),
+    };
     for (file, module) in style {
         // The declarations a use's name stands for that hold an object: a
         // namespace's member, every export of a namespace used whole, or
@@ -711,21 +773,28 @@ fn record_style_changes(
         };
         // A function hands a nested object on to whatever it hands
         // members to, so only an object of primitives passes as a read.
-        for handoff in &module.facts.handoffs {
+        for (at, handoff) in module.facts.handoffs.iter().enumerate() {
+            if held.iter().any(|(held_in, held_at, ..)| *held_in == file.as_str() && *held_at == at) {
+                continue;
+            }
+            // A callee that only reads the object may still hand on members
+            // of it; one that reads a literal may hand on the object itself.
+            let handed = if handoff.nested {
+                None
+            } else {
+                callee_of(file, handoff).and_then(|(callee_file, function)| {
+                    handed_on(&callee_file, &function, handoff.index, 0, &declared, readings_of)
+                })
+            };
+            let paths = handed.unwrap_or_else(|| vec![Vec::new()]);
             for target in possible(file, &handoff.binding).into_iter().filter(|target| mutable(target)) {
-                let reads = declared(file, &handoff.callee).is_some_and(|(callee_file, callee_name)| {
-                    reads_only(&callee_file, &callee_name, handoff.index, 0, &declared, readings_of)
-                });
-                // A callee that only reads the object may still hand its
-                // nested objects on.
-                let escaped = match (reads, nested(&target)) {
-                    (true, false) => continue,
-                    (true, true) => nested_members(&target),
-                    (false, _) => vec![Vec::new()],
-                };
-                for path in escaped {
-                    let cause = said(file, &handoff.binding, &handoff.used);
-                    flow.change(object(target.clone()), path, ChangeKind::Escape, cause);
+                for below in &paths {
+                    let path: Vec<String> = handoff.at.iter().chain(below).take(crate::flow::PATH_DEPTH).cloned().collect();
+                    // Handing on a primitive cannot change the object.
+                    if may_hold_object(&target, &path) {
+                        let cause = said(file, &handoff.binding, &handoff.used);
+                        flow.change(object(target.clone()), path, ChangeKind::Escape, cause);
+                    }
                 }
             }
         }
@@ -754,8 +823,9 @@ fn record_style_changes(
         // under any name: a use that may write through its namespace may
         // reach any of them.
         for (namespace, (subject, used)) in &module.written_namespaces {
-            if matches!(namespace_of(file, namespace), Some(Request::Outside(identity)) if !crate::link::is_node_builtin(&identity)) {
-                flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), said(file, subject, used));
+            let Some(Request::Outside(identity)) = namespace_of(file, namespace) else { continue };
+            if let Some(unread) = crate::link::unread_package(&identity, files, inputs) {
+                open_unread(flow, unread, said(file, subject, used));
             }
         }
         let reexports = module
@@ -773,7 +843,7 @@ fn record_style_changes(
         for (spec, how) in reexports {
             if let Some(unread) = crate::link::unread_source(file, spec, files, inputs) {
                 let reason = format!("{file} hands on {spec} {how}, and {}", unread.clause());
-                flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+                open_unread(flow, unread, reason);
                 continue;
             }
             let Some(target) = analyze_css::resolve_import_source(file, spec, files, inputs) else {
@@ -784,6 +854,11 @@ fn record_style_changes(
         // A runtime load hands on every module it may load: the one a
         // literal names, or each one a template, a context or a glob may
         // reach, up to the bound.
+        analyze_css::note_build_chunks(
+            style.iter().flat_map(|(path, module)| module.loads.iter().map(move |load| (path.as_str(), load))),
+            files,
+            inputs,
+        );
         // A glob of several patterns is one call: judged once.
         let mut calls = std::collections::BTreeSet::new();
         for load in &module.loads {
@@ -793,7 +868,7 @@ fn record_style_changes(
             if let crate::loads::LoadTarget::Specifier(spec) = &load.target {
                 if let Some(unread) = crate::link::unread_source(file, spec, files, inputs) {
                     let reason = format!("{file} hands on {spec} at runtime, and {}", unread.clause());
-                    flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+                    open_unread(flow, unread, reason);
                     continue;
                 }
             }
@@ -825,34 +900,49 @@ fn record_style_changes(
     // A static stored in an object, or read from a binding, may change with
     // it.
     for (file, module) in style {
-        // A container's change hands out the object stored in it whole, or
-        // the members a spread copied in. A `const` built fresh (a literal,
-        // React's `createContext`) holds what it read in its members, its
-        // own slots fixed; any other may hold the very object it read.
-        let edges = module
+        // A container's change where an object sits in it reaches the
+        // object as far below; a spread's copy holds the object's members
+        // where it sits, so a change there names the member.
+        let stored = module.facts.stored.iter().map(|(stored, container, at)| (stored, Vec::new(), container, at.clone()));
+        // A call's result holds the argument at each path the callee returns
+        // it at, and the object where it sits in the argument.
+        let held_here = held.iter().filter(|(held_in, ..)| *held_in == file.as_str()).flat_map(|(_, at, holder, positions)| {
+            let handoff = &module.facts.handoffs[*at];
+            positions.iter().map(move |position| {
+                let on_at = position.iter().chain(&handoff.within).cloned().collect();
+                (&handoff.binding, handoff.at.clone(), *holder, on_at)
+            })
+        });
+        for (dependent, dependent_at, on, on_at) in stored.chain(held_here) {
+            let to = possible(file, dependent).into_iter().map(|target| (object(target), dependent_at.clone())).collect();
+            let from = possible(file, on).into_iter().map(|target| (object(target), on_at.clone())).collect();
+            flow.hold(to, from, format!("{dependent} is stored in {on}, and "));
+        }
+        // A `const` that reads a binding holds what it read where the read
+        // sits, or in its members; one that holds the binding's object
+        // there changes as far below as the object does. One with no static
+        // keeps no value a change could leave stale, and holds the objects
+        // stored in it by their own edges.
+        let derives = module
             .facts
-            .stored
+            .derives
             .iter()
-            .map(|(stored, container, copied)| (stored, container, "is stored in", *copied))
-            .chain(module.facts.derives.iter().map(|(derived, read, fresh)| (derived, read, "reads", *fresh)));
-        for (dependent, on, how, below) in edges {
-            let to = possible(file, dependent)
+            .filter(|(derived, ..)| files.get(file).is_some_and(|statics| statics.contains_key(derived)));
+        for (derived, read, at, held) in derives {
+            let to = possible(file, derived)
                 .into_iter()
                 .flat_map(|target| {
-                    // Below the members by key where its value says them,
-                    // else at any member (`[*]`).
-                    let paths = match below {
-                        true => match members_at(&target, &[], &|_| true) {
-                            whole if whole == [Vec::<String>::new()] => vec![vec!["*".to_string()]],
-                            members => members,
-                        },
-                        false => vec![Vec::new()],
-                    };
+                    let paths = if at.is_empty() && !held { members_at(&target, &[], &|_| true) } else { vec![at.clone()] };
                     paths.into_iter().map(move |path| (object(target.clone()), path))
                 })
                 .collect();
-            let from = possible(file, on).into_iter().map(object).collect();
-            flow.flow(to, from, format!("{dependent} {how} {on}, and "));
+            let from = possible(file, read).into_iter().map(|target| (object(target), Vec::new())).collect();
+            let prefix = format!("{derived} reads {read}, and ");
+            if *held {
+                flow.hold(to, from, prefix);
+            } else {
+                flow.flow(to, from, prefix);
+            }
         }
     }
 }
@@ -864,11 +954,22 @@ fn unstable_style_statics(
     changes: &crate::flow::ValueEffects,
     files: &BTreeMap<String, rustc_hash::FxHashMap<String, crate::static_value::StaticValue>>,
 ) -> BTreeMap<(String, String), (String, crate::flow::Uncertainty)> {
+    use crate::flow::{AbsenceQuery, ChangeKind, Coverage, ObjectId};
     let mut unstable = BTreeMap::new();
     for (file, statics) in files {
-        for local in statics.keys() {
-            let query = crate::flow::AbsenceQuery::Stable(crate::flow::ObjectId::new(file, local), Vec::new());
-            if let crate::flow::Coverage::Exposed(exposures) = changes.covers(&query) {
+        for (local, value) in statics {
+            let query = AbsenceQuery::Stable(ObjectId::new(file, local), Vec::new());
+            if let Coverage::Exposed(mut exposures) = changes.covers(&query) {
+                // A primitive handed on cannot change the object.
+                exposures.retain(|exposure| match exposure {
+                    crate::flow::Exposure::Changed(change) if change.kind == ChangeKind::Escape => {
+                        holds_object(value, &change.path)
+                    }
+                    _ => true,
+                });
+                if exposures.is_empty() {
+                    continue;
+                }
                 // Every exposure is what the binding is uncertain as; the
                 // first names it.
                 let uncertainty = exposures
@@ -881,6 +982,16 @@ fn unstable_style_statics(
         }
     }
     unstable
+}
+
+/// An unread package `prepare` lists, as a module names it, for the host to
+/// say how it was installed (spec §6.3).
+#[derive(serde::Serialize, PartialEq, Eq, PartialOrd, Ord)]
+struct PreparedPackage {
+    importer: String,
+    specifier: String,
+    /// As the analysis names it (see `link::Named::Package`).
+    identity: String,
 }
 
 /// A computed load `prepare` lists, with the module that makes it.
@@ -935,7 +1046,6 @@ impl ExtractEngine {
             .map_err(napi::Error::from_reason)?;
         Ok(ExtractEngine {
             opts: ResolvedOptions {
-                prefix: o.prefix.unwrap_or_else(|| "animus".to_string()),
                 runtime_import: o
                     .runtime_import
                     .unwrap_or_else(|| "@animus-ui/system".to_string()),
@@ -972,9 +1082,26 @@ impl ExtractEngine {
         );
         let mut bases = std::collections::BTreeSet::new();
         let mut loads = Vec::new();
+        let mut packages = std::collections::BTreeSet::new();
+        let analysed: BTreeMap<String, ()> = kept.iter().map(|(path, _)| (path.clone(), ())).collect();
         for ast in store.iter() {
             let (all, listed) = crate::loads::collect_listed(ast.program());
             loads.extend(listed.into_iter().map(|load| ListedLoad { importer: ast.path.clone(), load }));
+            // A package a runtime load, a re-export or a namespace import
+            // names may reach analysed modules: the host says which.
+            let namespaces = crate::usage_facts::collect_namespace_imports(ast.module_record()).into_values();
+            let opening = all
+                .iter()
+                .filter(|load| !matches!(load.kind, crate::loads::LoadKind::Import { .. }))
+                .filter_map(|load| load.specifier().map(str::to_string))
+                .chain(namespaces);
+            for spec in opening {
+                if let crate::link::Named::Package(package) = crate::link::named(&ast.path, &spec, &analysed, &self.opts.css_inputs) {
+                    if !crate::link::is_node_builtin(&package) {
+                        packages.insert(PreparedPackage { importer: ast.path.clone(), specifier: spec, identity: package });
+                    }
+                }
+            }
             for load in all {
                 if let Some(base) =
                     load.specifier().and_then(|spec| analyze_css::probe_base(&ast.path, spec, &self.opts.css_inputs))
@@ -984,8 +1111,10 @@ impl ExtractEngine {
             }
         }
         self.prepared = Some((kept, store));
-        serde_json::to_string(&serde_json::json!({ "identity": identity, "bases": bases, "loads": loads }))
-            .map_err(|e| napi::Error::from_reason(format!("probe bases: {e}")))
+        serde_json::to_string(
+            &serde_json::json!({ "identity": identity, "bases": bases, "loads": loads, "packages": packages }),
+        )
+        .map_err(|e| napi::Error::from_reason(format!("probe bases: {e}")))
     }
 
     /// Analyzes `file_entries_json`, reading `probe_evidence_json`, the
@@ -1106,8 +1235,12 @@ impl ExtractEngine {
         // a module that imports none of them and declares no object static
         // has no use to scan. `export default X` exports X's object too, and
         // an imported X may be one.
+        // A `const` may hold an object stored in it though it has no static.
+        let holder_consts: BTreeMap<&str, rustc_hash::FxHashSet<&str>> =
+            store.iter().map(|ast| (ast.path.as_str(), crate::usage_facts::holder_consts(ast.program()).collect())).collect();
         let is_object = |path: &str, local: &str| {
             matches!(statics_by_file[path].get(local), Some(crate::static_value::StaticValue::Object(_)))
+                || holder_consts[path].contains(local)
         };
         let default_object = |path: &str| {
             let bindings = &lowered_by_file[path].bindings;
@@ -1192,6 +1325,7 @@ impl ExtractEngine {
         // One relation of what may change, closed once: style statics' uses
         // and the member tables', read from the structural facts.
         let mut flow = crate::flow::FlowBuilder::new();
+        crate::family_members::record_member_changes(&structural_by_file, &self.opts.css_inputs, &links, &mut flow);
         record_style_changes(
             &style_modules,
             &imports_by_file,
@@ -1202,13 +1336,12 @@ impl ExtractEngine {
             &mut readings_of,
             &mut flow,
         );
-        {
-            let families = crate::family_members::FamilyIndex::build(&structural_by_file, |_, binding| binding.to_string());
-            let component = |_: &str, _: &str| -> Option<String> { None };
-            crate::family_members::ObjectMembers::new(&structural_by_file, &self.opts.css_inputs, &links, &families, &component)
-                .record_changes(&mut flow);
-        }
         let changes = flow.close();
+        #[cfg(test)]
+        OPENINGS.with(|openings| {
+            *openings.borrow_mut() =
+                changes.closure().openings.iter().map(|opening| (opening.reason, opening.site.clone())).collect();
+        });
         for ((file, local), (reason, uncertainty)) in unstable_style_statics(&changes, &statics_by_file) {
             if statics_by_file.get_mut(&file).and_then(|statics| statics.remove(&local)).is_some() {
                 // Only a value the binding had before const initializers read
@@ -1367,7 +1500,7 @@ impl ExtractEngine {
                 .expect("Pass A must record complete local statics for every file");
             let mut file_facts = facts::extract_file_facts_from_static_maps(
                 ast,
-                &self.opts.prefix,
+                CLASS_PREFIX,
                 local_statics,
                 local_usage_statics,
                 extra,
@@ -1388,11 +1521,11 @@ impl ExtractEngine {
 
         // Facts own every resolved reference; release the modules' scopings.
         drop(references);
-        let mut css = analyze_css::run_with_changes(
+        let mut css = analyze_css::run(
             &self.facts,
             &self.order,
             &self.opts.css_inputs,
-            &self.opts.prefix,
+            CLASS_PREFIX,
             changes,
         );
         // Only the engine holds the sources a diagnostic's line and column
@@ -1485,7 +1618,7 @@ impl ExtractEngine {
         let replacements = assemble::assemble_replacements(
             &path,
             file_facts,
-            &self.opts.prefix,
+            CLASS_PREFIX,
             Some(&file_payloads),
             &self.opts.css_inputs.group_registry,
         )
@@ -1689,6 +1822,13 @@ impl ExtractEngine {
 
         Ok(serde_json::json!({ "code": code, "hasComponents": true }).to_string())
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The last analysis's openings on this thread, by kind and site.
+    static OPENINGS: std::cell::RefCell<std::collections::BTreeSet<(crate::flow::ReasonId, String)>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
 #[cfg(test)]
@@ -2573,15 +2713,6 @@ export const App = () => <Box tone="red" />;
                 "import { createRequire } from 'node:module';\nconst name = './tokens.js';\nconst load = createRequire(import.meta.url);\nload(name).pad.padding = 9;",
                 "{ ...pad }",
             ),
-            // A container, a module-scope alias or React's context holds the
-            // object itself: a write through it changes the object.
-            ("a write through an array holding it", concat!(import_pad!(), "const list = [pad];\nlist[0].padding = 9;"), "{ ...pad }"),
-            ("a write through a module-scope alias", concat!(import_pad!(), "const alias = pad;\nalias.padding = 9;"), "{ ...pad }"),
-            (
-                "a write through a context built on it",
-                concat!(import_pad!(), "import { createContext } from 'react';\nconst Ctx = createContext(pad);\nCtx._currentValue.padding = 9;"),
-                "{ ...pad }",
-            ),
             // Code from a string can load and change any module (PF3).
             (
                 "eval loads the module",
@@ -2651,6 +2782,26 @@ export const App = () => <Box tone="red" />;
                         "import './{path}';\nimport {{ pad }} from './tokens.js';\n\
                          export const C = ds.styles({read}).asElement('div');\nexport const App = () => <C />;\n"
                     ),
+                },
+            ]);
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+            assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
+        }
+        // A concise arrow returns the member it evaluates too: a write
+        // through the call's result changes it.
+        let member_returns = [
+            ("member returned by a called arrow", "const get = () => pad.inner;\nget().padding = 9;\n"),
+            ("member returned by a then callback", "Promise.resolve().then(() => pad.inner).then((o) => { o.padding = 9; });\n"),
+        ];
+        for (row, mutation) in member_returns {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let files = serde_json::json!([
+                { "path": "tokens.js", "source": "export const pad = { inner: { padding: 4 } };\n" },
+                { "path": "mutate.js", "source": format!("import {{ pad }} from './tokens.js';\n{mutation}") },
+                {
+                    "path": "reader.tsx",
+                    "source": "import './mutate.js';\nimport { pad } from './tokens.js';\n\
+                               export const C = ds.styles({ ...pad.inner }).asElement('div');\nexport const App = () => <C />;\n",
                 },
             ]);
             let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
@@ -2860,6 +3011,7 @@ export const App = () => <Box tone="red" />;
         lost_properties: std::collections::BTreeSet<(String, String, String)>,
         pruned: std::collections::BTreeSet<(String, String, String)>,
         removed_imports: std::collections::BTreeSet<(String, String)>,
+        openings: std::collections::BTreeSet<(crate::flow::ReasonId, String)>,
     }
 
     fn emission(files: &[(String, String)]) -> Emission {
@@ -2940,6 +3092,7 @@ export const App = () => <Box tone="red" />;
             let removed = specifiers(source).into_iter().filter(|specifier| !kept.contains(specifier));
             out.removed_imports.extend(removed.map(|specifier| (path.clone(), specifier)));
         }
+        out.openings = super::OPENINGS.with(|openings| openings.borrow().clone());
         out
     }
 
@@ -2993,6 +3146,7 @@ export const App = () => <Box tone="red" />;
         found.extend(
             head.removed_imports.difference(&base.removed_imports).map(|import| format!("import {import:?} newly removed")),
         );
+        found.extend(base.openings.difference(&head.openings).map(|opening| format!("opening {opening:?} lost")));
         found
     }
 
@@ -3002,7 +3156,8 @@ export const App = () => <Box tone="red" />;
     /// of a module the analysis cannot find) may turn what it emitted into
     /// a reported loss, but never prunes more, drops a style or a component
     /// without a finding naming it, changes a static value, makes a
-    /// component static, or removes an import.
+    /// component static, removes an import, or loses an opening of the one
+    /// relation of what may change (check 6, by kind and site).
     #[test]
     fn adding_opacity_never_shrinks_emission() {
         let file = |path: &str, source: &str| (path.to_string(), source.to_string());
@@ -3029,6 +3184,9 @@ export const App = () => <Box tone="red" />;
                  const Root = ds.styles({ ...pad }).asElement('div');\n\
                  export const Card = compose({ Root }, { name: 'Card', shared: {} });\n",
             ),
+            // An opening of a module no style reads, for check 6 to keep.
+            file("misc.ts", "export const other = { a: 1 };\n"),
+            file("hand.ts", "import * as misc from './misc';\nglobalThis.keep?.(misc);\n"),
             file(
                 "app.tsx",
                 "import { Base, Box } from './kit';\nimport { Held, HeldChild } from './held';\nimport { Fam } from './fam';\n\
@@ -3052,7 +3210,10 @@ export const App = () => <Box tone="red" />;
             base.pruned.len(),
             base.lost_properties.len(),
         ];
-        assert!(channels.iter().all(|count| *count > 0) && !base.removed_imports.is_empty(), "{base:?}");
+        assert!(
+            channels.iter().all(|count| *count > 0) && !base.removed_imports.is_empty() && !base.openings.is_empty(),
+            "{base:?}"
+        );
         for injected in injections {
             let mut files = project.clone();
             files.push(file("opaque.ts", &injected));
@@ -3563,6 +3724,57 @@ export const App = () => <Box tone="red" />;
     /// A kit read from its compiled output can rename a collection's export,
     /// so its unregistered references name the kit's source condition; a
     /// project's own do not.
+    /// Contract: the configured system file and the modules its load read
+    /// are known wherever they sit. An app root in a subdirectory whose entry
+    /// imports the system from the parent (gamut's probe shape) opens
+    /// nothing: the kit's static stage inputs stay static, and pruning stays
+    /// on. Without that knowledge the import is an unanalysed opening.
+    #[test]
+    fn an_import_of_the_system_from_outside_the_root_opens_nothing() {
+        let files = serde_json::json!([
+            { "path": "tokens.ts", "source": "export const pad = { padding: 4 };\n" },
+            { "path": "card.tsx", "source": "import { pad } from './tokens';\nexport const Card = ds.styles({ ...pad }).asElement('div');\n" },
+            { "path": "main.tsx", "source": "import { system } from '../src/ds';\nimport { Card } from './card';\nexport const App = () => <Card />;\n" },
+        ])
+        .to_string();
+        let run_host = |system_modules: &str, host: &str| -> (bool, Vec<String>) {
+            let mut engine = ExtractEngine::new(Some(EngineOptions {
+                analysis_context_json: Some(format!(r#"{{"systemModules":{system_modules}}}"#)),
+                ..Default::default()
+            }))
+            .unwrap();
+            let prepared: serde_json::Value = serde_json::from_str(&engine.prepare(files.clone()).unwrap()).unwrap();
+            let evidence = serde_json::json!({
+                "generation": 1,
+                "identity": prepared["identity"],
+                "bases": { "../src/ds": { "candidate": host, "reading": "unanalysed" } },
+            });
+            let out: serde_json::Value =
+                serde_json::from_str(&engine.analyze(files.clone(), Some(evidence.to_string())).unwrap()).unwrap();
+            let codes = out["diagnostics"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|d| d["code"].as_str().map(str::to_string))
+                .filter(|code| code == "animus.chain.stage-evaluation-failed" || code == "animus.resolve.unanalysed-import")
+                .collect();
+            (out["css"].as_str().unwrap_or_default().contains("padding"), codes)
+        };
+        let run = |system_modules: &str| run_host(system_modules, "../src/ds.ts");
+        let (extracted, codes) = run("[]");
+        assert!(!extracted && codes.contains(&"animus.resolve.unanalysed-import".to_string()), "{codes:?}");
+        assert_eq!(run(r#"["../src/ds.ts","../src/theme.ts"]"#), (true, vec![]));
+        // A host that opens another file than the loader read (a stale
+        // compiled ds.js beside ds.ts) opens it as before.
+        // A host that opens another file than the loader read opens it as
+        // before: a stale compiled ds.js beside ds.ts, or ds.ts where the
+        // load read ds/index.ts.
+        for (system, host) in [(r#"["../src/ds.ts"]"#, "../src/ds.js"), (r#"["../src/ds/index.ts"]"#, "../src/ds.ts")] {
+            let (extracted, codes) = run_host(system, host);
+            assert!(!extracted && codes.contains(&"animus.resolve.unanalysed-import".to_string()), "{host}: {codes:?}");
+        }
+    }
+
     #[test]
     fn an_unregistered_reference_into_a_kits_compiled_output_names_its_source_condition() {
         let mut engine = ExtractEngine::new(Some(EngineOptions {
@@ -3858,6 +4070,228 @@ export const App = () => <Box tone="red" />;
         assert_eq!(analyze(&[("a.tsx", one), ("a.tsx?raw", two)]), Ok(2));
     }
 
+    /// Contract: a call to an admitted function that only returns its
+    /// argument is not an escape (spec §6.6 F11, F11a). The call's result
+    /// holds the argument, and a write or escape through it, or through a
+    /// function's own `const` alias of one of its members, still reaches
+    /// the argument. Each row: its name, the module that uses `pad`, and
+    /// whether `pad` still extracts.
+    #[test]
+    fn a_call_to_an_admitted_function_that_only_returns_its_argument_is_not_an_escape() {
+        const FACTORY: &str = "import { pad } from './tokens.js';\nconst define = () => (parts) => parts;\n\
+                               export const c = define()({ Part: { element: 'div', admission: { props: pad } } });\n";
+        const REFERENCE: &str = "const parts = { ...c };\n\
+                                 function text(part) { return [part.element, Object.keys(part.admission.props).join(',')].join(' '); }\n\
+                                 export function referenceText(name) { const part = parts[name]; if (part) return text(part); return ''; }\n";
+        let rows: [(&str, String, bool); 15] = [
+            ("a factory's closure returns its argument", FACTORY.to_string(), true),
+            (
+                "the factory writes its argument",
+                FACTORY.replace("(parts) => parts", "(parts) => { parts.x = 1; return parts; }"),
+                false,
+            ),
+            (
+                "the factory hands on a member of its argument",
+                FACTORY.replace("(parts) => parts", "(parts) => { register(parts.Part); return parts; }"),
+                false,
+            ),
+            ("the result is written below the argument", format!("{FACTORY}c.Part.admission.props.padding = 9;\n"), false),
+            (
+                "the result's primitive is read, then written",
+                format!("{FACTORY}export const n = c.Part.admission.props.padding;\nc.Part.admission.props.padding = 9;\n"),
+                false,
+            ),
+            ("the result is handed on", format!("{FACTORY}register(c);\n"), false),
+            (
+                "a fresh result's member that holds the argument is handed on",
+                "import { pad } from './tokens.js';\nconst id = (p) => ({ inner: p });\nexport const held = id(pad);\n\
+                 function mutate(x) { x.padding = 9; }\nmutate(held.inner);\n"
+                    .to_string(),
+                false,
+            ),
+            (
+                "a fresh result's other member is handed on",
+                "import { pad } from './tokens.js';\nconst id = (p) => ({ inner: p, other: { q: 1 } });\nexport const held = id(pad);\n\
+                 register(held.other);\n"
+                    .to_string(),
+                true,
+            ),
+            ("an uncalled function returns pad", "import { pad } from './tokens.js';\nconst get = () => pad;\n".to_string(), true),
+            (
+                "a member of a held call result that holds pad is handed on",
+                "import { pad } from './tokens.js';\nconst get = () => ({ inner: pad });\nexport const g = get();\nregister(g.inner);\n".to_string(),
+                false,
+            ),
+            (
+                "a held call result is written",
+                "import { pad } from './tokens.js';\nconst get = () => pad;\nexport const g = get();\ng.padding = 9;\n".to_string(),
+                false,
+            ),
+            ("a function's own alias only reads the member", format!("{FACTORY}{REFERENCE}"), true),
+            (
+                "the alias writes the member",
+                format!("{FACTORY}{}", REFERENCE.replace("const part = parts[name];", "const part = parts[name]; part.admission.props.padding = 9;")),
+                false,
+            ),
+            // A closure's captured uses are its own body's, path by path: one
+            // handed to unknown code still only reads a primitive member.
+            (
+                "a closure handed out captures the alias",
+                format!("{FACTORY}{}", REFERENCE.replace("const part = parts[name];", "const part = parts[name]; external(() => { log(part.element); });")),
+                true,
+            ),
+            (
+                "a closure handed out hands on the held path",
+                format!("{FACTORY}{}", REFERENCE.replace("const part = parts[name];", "const part = parts[name]; external(() => { log(part.admission); });")),
+                false,
+            ),
+        ];
+        for (row, contract, extracts) in rows {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let files = serde_json::json!([
+                { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
+                { "path": "contract.js", "source": contract },
+                {
+                    "path": "reader.tsx",
+                    "source": "import './contract.js';\nimport { pad } from './tokens.js';\n\
+                               export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+                },
+            ]);
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+            assert_eq!(out["css"].as_str().unwrap_or_default().contains("padding"), extracts, "{row}: {}", out["diagnostics"]);
+        }
+        // An object held deeper than Flow's path bound is held whole: a
+        // change anywhere around it reaches it, however deep it sits.
+        for depth in [8, 9, 12] {
+            let keys: Vec<String> = (0..depth).map(|i| format!("k{i}")).collect();
+            let nest = |inner: &str| keys.iter().rev().fold(inner.to_string(), |held, key| format!("{{ {key}: {held} }}"));
+            let path = keys.join(".");
+            let shapes = [
+                format!("const id = (p) => ({});\nexport const held = id(pad);\n", nest("p")),
+                format!("const id = () => ({});\nexport const held = id();\n", nest("pad")),
+                format!("export const held = {};\n", nest("pad")),
+            ];
+            for shape in shapes {
+                let contract = format!(
+                    "import {{ pad }} from './tokens.js';\n{shape}function mutate(x) {{ x.padding = 9; }}\nmutate(held.{path});\n"
+                );
+                let mut engine = ExtractEngine::new(None).unwrap();
+                let files = serde_json::json!([
+                    { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
+                    { "path": "contract.js", "source": contract },
+                    {
+                        "path": "reader.tsx",
+                        "source": "import './contract.js';\nimport { pad } from './tokens.js';\n\
+                                   export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+                    },
+                ]);
+                let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+                assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "depth {depth}: {contract}");
+            }
+        }
+    }
+
+    /// Contract: proven read-only uses of a held stage input are reads (the
+    /// owner's ruling for docs-style catalogs, refining spec §6.6 F10, F11a):
+    /// a module-scope `const` alias is followed, not an escape; `Object.hasOwn`
+    /// reads keys; a logical operand only tested is read; a closure's uses of
+    /// a captured binding are judged one by one, so a closure handed out
+    /// escapes only the paths its own body hands on; and `Object.entries`
+    /// results through `filter`/`map` callbacks are followed per path. A
+    /// write, a hand-on of the held path or of the whole binding, a value
+    /// built from it that escapes, or code the extractor cannot read still
+    /// refuses. Each row: its name, the docs module, and whether `pad`
+    /// extracts.
+    #[test]
+    fn proven_read_only_uses_of_a_held_stage_input_are_reads() {
+        const CONTRACT: &str = "import { pad } from './tokens.js';\n\
+            export const catalog = { Part: { element: 'div', description: 'd', admission: { name: 'P', props: pad }, \
+            props: { size: { kind: 'variant', description: 's' } } } };\n\
+            export const admissions = { P: pad };\n";
+        const ALIAS: &str = "import { catalog } from './contract.js';\nconst checked = catalog;\n\
+            export function doc(name) { const part = checked[name]; return { name, element: part.element }; }\n";
+        const HAS_OWN: &str = "import { admissions } from './contract.js';\n\
+            export const isAdmission = (name) => Object.hasOwn(admissions, name);\n";
+        const TESTED: &str = "import { catalog } from './contract.js';\n\
+            export function doc(name) { const part = catalog[name]; return part.admission && part.admission.name ? { system: part.admission.name } : {}; }\n";
+        const CLOSURE: &str = "import { catalog } from './contract.js';\n\
+            export const Pilot = ({ name }) => { const part = catalog[name]; return <Table control={(key) => <Control fact={part.props[key]} />} />; };\n";
+        const ENTRIES: &str = "import { catalog } from './contract.js';\n\
+            export const List = ({ term }) => { const parts = Object.entries(catalog).filter(([name, part]) => \
+            [name, part.description, ...Object.keys(part.props)].some((value) => value.includes(term))); \
+            return parts.map(([name, part]) => <Row key={name} text={part.description} />); };\n";
+        let closure = |body: &str| CLOSURE.replace("(key) => <Control fact={part.props[key]} />", body);
+        let rows: Vec<(&str, String, bool)> = vec![
+            ("a module-scope alias only read", ALIAS.to_string(), true),
+            ("Object.hasOwn reads keys", HAS_OWN.to_string(), true),
+            ("a logical operand only tested", TESTED.to_string(), true),
+            ("a closure handed out reads a disjoint path", CLOSURE.to_string(), true),
+            ("Object.entries results through filter and map", ENTRIES.to_string(), true),
+            ("the whole chain", format!("{ALIAS}{}", [HAS_OWN, TESTED, CLOSURE, ENTRIES].map(|m| m.lines().skip(1).collect::<Vec<_>>().join("\n")).join("\n")).replace("import { catalog } from './contract.js';", "import { catalog, admissions } from './contract.js';"), true),
+            ("the alias is written", format!("{ALIAS}checked.Part.admission.props.padding = 9;\n"), false),
+            ("hasOwn is not the global one", format!("const Object = {{ hasOwn: (o) => {{ o.P.padding = 9; }} }};\n{HAS_OWN}"), false),
+            ("the closure hands on the held path", closure("(key) => { log(part.admission); return null; }"), false),
+            ("the closure writes the held path", closure("(key) => { part.admission.props.x = 1; return null; }"), false),
+            ("the closure returns the binding", closure("() => part"), false),
+            ("the closure passes the binding whole", closure("() => register(part)"), false),
+            ("the closure returns a value holding the held path", closure("() => ({ held: part.admission })"), false),
+            ("the closure stores the held path", closure("() => { store.held = part.admission; return null; }"), false),
+            ("the closure calls through a computed member", closure("(key) => part[key]()"), false),
+            ("the closure reads arguments", closure("function (key) { log(arguments); return <Control fact={part.props[key]} />; }"), false),
+            (
+                "a filter callback writes",
+                ENTRIES.replace("[name, part.description, ...Object.keys(part.props)]", "(part.admission.props.padding = 9, [name])"),
+                false,
+            ),
+            ("the filtered entries are handed on", format!("{}register(Object.entries(catalog).filter(() => true));\n", ENTRIES), false),
+            (
+                "a function callback reaches an element through arguments",
+                format!("{ENTRIES}Object.values(catalog).forEach(function () {{ arguments[0].admission.props.padding = 9; }});\n"),
+                false,
+            ),
+            (
+                "a function callback with a parameter reaches it through arguments too",
+                format!("{ENTRIES}Object.values(catalog).forEach(function (p) {{ if (p) arguments[0].admission.props.padding = 9; }});\n"),
+                false,
+            ),
+            (
+                "an entries callback reaches the pair through arguments",
+                format!("{ENTRIES}Object.entries(catalog).forEach(function ([k, p]) {{ arguments[0][1].admission.props.padding = 9; }});\n"),
+                false,
+            ),
+            (
+                "a closure declared first hands the filtered entries on",
+                ENTRIES.replace("const parts = ", "function leak() { register(parts); }\n leak();\n const parts = "),
+                false,
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (row, docs, extracts) in rows {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let files = serde_json::json!([
+                { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
+                { "path": "contract.js", "source": CONTRACT },
+                { "path": "docs.tsx", "source": docs },
+                {
+                    "path": "reader.tsx",
+                    "source": "import './docs.tsx';\nimport { pad } from './tokens.js';\n\
+                               export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+                },
+            ]);
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+            if out["css"].as_str().unwrap_or_default().contains("padding") != extracts {
+                let why: Vec<String> = out["diagnostics"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|d| d["message"].as_str().map(str::to_string))
+                    .collect();
+                wrong.push(format!("{row} (extracts: {extracts}): {why:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
     /// Contract: analysis output is independent of the order the caller
     /// lists files in. Composed-family rules and the whole-component
     /// removal report's examples both once followed it.
@@ -3901,3 +4335,5 @@ export const App = () => <Box tone="red" />;
         }
     }
 }
+
+

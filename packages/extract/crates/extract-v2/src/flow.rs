@@ -13,6 +13,14 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The most atoms a region holds before it widens to `Top`.
 pub const REGION_ATOMS: usize = 64;
 
+/// The deepest path of a change Flow keeps: a deeper change collapses to the
+/// path above it, which reaches more. Where an object sits is never cut
+/// short, so a change that collapses above it reaches it whole.
+pub const PATH_DEPTH: usize = 8;
+
+/// The key of a member path that stands for every member: a computed key.
+pub const ANY_MEMBER: &str = "*";
+
 /// A module-scope binding's object, by its module and binding.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ObjectId {
@@ -284,8 +292,11 @@ pub enum Coverage<'e> {
 #[derive(Debug, Clone)]
 struct Flow {
     to: Vec<(ObjectId, Vec<String>)>,
-    from: Vec<ObjectId>,
+    from: Vec<(ObjectId, Vec<String>)>,
     prefix: String,
+    /// Whether `to` sits in `from` at its path, so a change below that
+    /// path reaches `to` as far below.
+    held: bool,
 }
 
 /// The facts of one analysis as they are found. It only grows; it answers
@@ -319,12 +330,22 @@ impl FlowBuilder {
         self.recorded += 1;
     }
 
-    /// Whatever may change any of `from` may change each of `to` at its
-    /// path: `to` holds or reads what `from` holds, the whole object at `[]`
-    /// or a member's value below it. Its change is said as `prefix` followed
-    /// by the clause of the first change that reaches `from`.
-    pub fn flow(&mut self, to: Vec<(ObjectId, Vec<String>)>, from: Vec<ObjectId>, prefix: String) {
-        self.flows.push(Flow { to, from, prefix });
+    /// Whatever may change any of `from` at its path may change each of
+    /// `to` at its path: `to` holds or reads what `from` holds there, the
+    /// whole object at `[]` or a member's value below it. A change at a path
+    /// above, at or below `from`'s reaches it; a change beside it does not.
+    /// Its change is said as `prefix` followed by the clause of the first
+    /// change that reaches `from`.
+    pub fn flow(&mut self, to: Vec<(ObjectId, Vec<String>)>, from: Vec<(ObjectId, Vec<String>)>, prefix: String) {
+        self.flows.push(Flow { to, from, prefix, held: false });
+    }
+
+    /// Each of `to` sits in each of `from` at its path: `from` holds it
+    /// there, by reference. A change of `from` at or above that path
+    /// reaches `to` at its own path; one below it reaches `to` as far
+    /// below its own path.
+    pub fn hold(&mut self, to: Vec<(ObjectId, Vec<String>)>, from: Vec<(ObjectId, Vec<String>)>, prefix: String) {
+        self.flows.push(Flow { to, from, prefix, held: true });
     }
 
     /// The closed facts, with changes carried along every flow until none
@@ -344,18 +365,38 @@ impl FlowBuilder {
         loop {
             let mut grew = false;
             for flow in &self.flows {
-                let Some(cause) = flow.from.iter().find_map(|object| effects.first_cause(object)) else { continue };
-                for (object, at) in &flow.to {
-                    // An exposure of only part of the object, or of a member
-                    // apart from this one, leaves room for the change the
-                    // flow carries.
-                    if !effects.exposed_at(object, at) {
-                        let order = effects.recorded;
-                        effects.recorded += 1;
-                        let cause = format!("{}{cause}", flow.prefix);
-                        let (path, kind) = (at.clone(), ChangeKind::Escape);
-                        effects.add(Change { object: object.clone(), path, kind, cause, order });
-                        grew = true;
+                // Each change that reaches `from`, with how far below its
+                // path it lies when `to` is held there.
+                let reaching: Vec<(Vec<String>, ChangeKind, String)> = if flow.held {
+                    flow.from
+                        .iter()
+                        .flat_map(|(object, at)| effects.reaching(object, at))
+                        .collect()
+                } else {
+                    flow.from
+                        .iter()
+                        .find_map(|(object, at)| effects.first_cause(object, at))
+                        // What `to` read may be another value than the one
+                        // evaluated.
+                        .map(|cause| (Vec::new(), ChangeKind::Rebind, cause))
+                        .into_iter()
+                        .collect()
+                };
+                for (below, kind, cause) in reaching {
+                    for (object, at) in &flow.to {
+                        let mut path = at.clone();
+                        path.extend(below.iter().cloned());
+                        path.truncate(PATH_DEPTH);
+                        // An exposure of only part of the object, or of a
+                        // member apart from this one, leaves room for the
+                        // change the flow carries.
+                        if !effects.exposed_at(object, &path, kind) {
+                            let order = effects.recorded;
+                            effects.recorded += 1;
+                            let cause = format!("{}{cause}", flow.prefix);
+                            effects.add(Change { object: object.clone(), path, kind, cause, order });
+                            grew = true;
+                        }
                     }
                 }
             }
@@ -368,7 +409,13 @@ impl FlowBuilder {
 
 /// Whether `prefix` is `path` or a path above it.
 fn prefix_of(prefix: &[String], path: &[String]) -> bool {
-    prefix.len() <= path.len() && prefix.iter().zip(path).all(|(a, b)| a == b)
+    prefix.len() <= path.len() && prefix.iter().zip(path).all(|(a, b)| same_key(a, b))
+}
+
+/// Whether two member keys may name one member: the same key, or either
+/// standing for any member.
+fn same_key(a: &str, b: &str) -> bool {
+    a == b || a == ANY_MEMBER || b == ANY_MEMBER
 }
 
 /// The closed facts of one analysis.
@@ -410,15 +457,45 @@ impl ValueEffects {
             })
     }
 
-    /// Whether a change of the object at `at` or above, or an opening that
-    /// reaches all of it, is already recorded.
-    fn exposed_at(&self, object: &ObjectId, at: &[String]) -> bool {
+    /// Whether a change of the object at `at` or above that says as much as
+    /// one of `kind` there, or an opening that reaches all of it, is already
+    /// recorded. Only a computed key of the recorded change stands for any
+    /// key, and an escape, which a reader may drop where only a primitive
+    /// sits, says less than any other change.
+    fn exposed_at(&self, object: &ObjectId, at: &[String], kind: ChangeKind) -> bool {
         self.wholly_exposed(object)
-            || self.changed.get(object).into_iter().flatten().any(|&index| prefix_of(&self.changes[index].path, at))
+            || self.changed.get(object).into_iter().flatten().any(|&index| {
+                let change = &self.changes[index];
+                change.path.len() <= at.len()
+                    && change.path.iter().zip(at).all(|(a, b)| a == b || a == ANY_MEMBER)
+                    && (change.kind != ChangeKind::Escape || kind == ChangeKind::Escape)
+            })
     }
 
-    fn first_cause(&self, object: &ObjectId) -> Option<String> {
-        match self.covers(&AbsenceQuery::Stable(object.clone(), Vec::new())) {
+    /// Each change or opening that reaches the object at `at`, in order,
+    /// with the part of its path below `at` and its kind there: a change
+    /// below `at` is the same change of what sits there; one at or above it,
+    /// or an opening, may hand out what sits there whole.
+    fn reaching(&self, object: &ObjectId, at: &[String]) -> Vec<(Vec<String>, ChangeKind, String)> {
+        match self.covers(&AbsenceQuery::Stable(object.clone(), at.to_vec())) {
+            Coverage::Disjoint => Vec::new(),
+            Coverage::Exposed(exposures) => exposures
+                .iter()
+                .map(|exposure| {
+                    let (below, kind) = match exposure {
+                        Exposure::Changed(change) if change.path.len() > at.len() => {
+                            (change.path[at.len()..].to_vec(), change.kind)
+                        }
+                        _ => (Vec::new(), ChangeKind::Escape),
+                    };
+                    (below, kind, exposure.cause().to_string())
+                })
+                .collect(),
+        }
+    }
+
+    fn first_cause(&self, object: &ObjectId, at: &[String]) -> Option<String> {
+        match self.covers(&AbsenceQuery::Stable(object.clone(), at.to_vec())) {
             Coverage::Disjoint => None,
             Coverage::Exposed(exposures) => Some(exposures[0].cause().to_string()),
         }
@@ -444,8 +521,8 @@ impl ValueEffects {
         let counts = |change: &Change| {
             if !slot {
                 // A change at a path reaches every path it is a prefix of,
-                // and the paths that are prefixes of it; `*` is any member.
-                return change.path.iter().zip(path).all(|(a, b)| a == b || a == "*");
+                // and the paths that are prefixes of it.
+                return change.path.iter().zip(path).all(|(a, b)| same_key(a, b));
             }
             let path = slot_of(&change.path);
             match change.kind {
@@ -495,7 +572,7 @@ impl ValueEffects {
         atoms.iter().any(|atom| match atom {
             RegionAtom::Object(target) => target == object,
             RegionAtom::Path(target, at) if slot => target == object && prefix_of(at, path),
-            RegionAtom::Path(target, at) => target == object && at.iter().zip(path).all(|(a, b)| a == b),
+            RegionAtom::Path(target, at) => target == object && at.iter().zip(path).all(|(a, b)| same_key(a, b)),
             RegionAtom::ScopeRegion(module) => object.module == *module,
             RegionAtom::ExportsOf(module) => exports.is_some_and(|names| names.iter().any(|(m, _)| m == module)),
             RegionAtom::ExportedAs(name) => exports.is_some_and(|names| names.iter().any(|(_, n)| n == name)),
@@ -623,7 +700,7 @@ mod tests {
                 let region = Region::of(RegionAtom::Path(x.clone(), vec!["a".to_string()]));
                 builder.open(ReasonId::OpaqueEffect, region, "x.a may change".to_string());
             }
-            builder.flow(vec![(x.clone(), Vec::new())], vec![y.clone()], "x reads y, and ".to_string());
+            builder.flow(vec![(x.clone(), Vec::new())], vec![(y.clone(), Vec::new())], "x reads y, and ".to_string());
             builder.close()
         };
         let member_b = AbsenceQuery::Stable(x.clone(), vec!["b".to_string()]);

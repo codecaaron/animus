@@ -49,6 +49,7 @@ export {
 } from './output-targets';
 export type {
   AnimusCoreOptions,
+  ClosedDynamicImport,
   AnimusMode,
   DriverNamespace,
   ExcludeMatcher,
@@ -97,6 +98,7 @@ export {
   isExcludedPackageRelativePath,
   probeAbsolutePathSpecifier,
   sourceKitDependencies,
+  systemKitDependencies,
   staleDistIncludesMessage,
   unresolvableIncludesMessage,
   walkPackageSources,

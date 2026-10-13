@@ -5,6 +5,9 @@
 //! `EXTENSION_POLICY` in `packages/extract/pipeline/extension-policy.ts`,
 //! which source ingestion reads (`node packages/extract/scripts/extension-policy.ts --write`).
 
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -102,7 +105,18 @@ impl ExtensionPolicy {
     /// The first candidate for `base` that `see` finds, in policy order. A
     /// candidate found only under another case ends the probe as a mismatch.
     pub fn probe(&self, base: &str, see: impl Fn(&str) -> Seen) -> Probe {
-        for candidate in self.candidates(base) {
+        // The base is the first candidate wherever no alias replaces the
+        // search, and the one most specifiers name: try it before spelling
+        // the rest.
+        let aliased = self.alias.iter().any(|(emitted, _)| base.ends_with(emitted.as_str()));
+        if !aliased {
+            match see(base) {
+                Seen::File => return Probe::Found(base.to_string()),
+                Seen::CaseOnly(actual) => return Probe::CaseMismatch { candidate: base.to_string(), actual },
+                Seen::Missing => {}
+            }
+        }
+        for candidate in self.candidates(base).into_iter().skip(usize::from(!aliased)) {
             match see(&candidate) {
                 Seen::File => return Probe::Found(candidate),
                 Seen::CaseOnly(actual) => return Probe::CaseMismatch { candidate, actual },
@@ -132,6 +146,30 @@ pub fn case_mismatch_reason(subject: &str, candidate: &str, actual: &str, remedy
 /// spelled as given, as a specifier spells only the path from its
 /// importer's directory and a manifest only the paths in its package.
 pub fn see_within(base: &Path, candidate: &str) -> Seen {
+    // A pass sees each candidate from each base once: a closure's modules
+    // import the same file from one directory many times.
+    let seen = PASS.with(|pass| {
+        pass.borrow().as_ref().and_then(|pass| pass.seen.get(base)?.get(candidate).cloned())
+    });
+    if let Some(seen) = seen {
+        return seen;
+    }
+    let seen = see_on_disk(base, candidate);
+    PASS.with(|pass| {
+        if let Some(pass) = pass.borrow_mut().as_mut() {
+            pass.seen.entry(base.to_path_buf()).or_default().insert(candidate.to_string(), seen.clone());
+        }
+    });
+    seen
+}
+
+/// [`see_within`], read from the filesystem (through the pass's listings).
+fn see_on_disk(base: &Path, candidate: &str) -> Seen {
+    see_plain(base, candidate).unwrap_or_else(|| see_lexical(base, candidate))
+}
+
+/// [`see_on_disk`] for any spelling, through its lexical form.
+fn see_lexical(base: &Path, candidate: &str) -> Seen {
     // `..` is taken back lexically, as Node and the bundlers resolve a
     // specifier before opening it, so the file checked is the file opened.
     let path = lexical(Path::new(candidate));
@@ -164,12 +202,120 @@ pub fn see_within(base: &Path, candidate: &str) -> Seen {
     Seen::File
 }
 
+/// What one resolution pass has read: each directory's entry names, and
+/// what each candidate was seen to be from each base.
+#[derive(Default)]
+struct Pass {
+    listings: HashMap<PathBuf, Option<HashSet<OsString>>>,
+    seen: HashMap<PathBuf, HashMap<String, Seen>>,
+}
+
+thread_local! {
+    /// The open [`with_listing_cache`] scope's reads; None outside one.
+    static PASS: RefCell<Option<Pass>> = const { RefCell::new(None) };
+}
+
+/// Runs `run` with each directory [`see_within`] checks listed at most once:
+/// a directory's listing is read the first time the pass checks it and
+/// answers every later check in that pass. A limit: a file another process
+/// writes to that directory after it is listed is not seen until the next
+/// pass. A nested scope shares the open one.
+pub fn with_listing_cache<T>(run: impl FnOnce() -> T) -> T {
+    if PASS.with(|pass| pass.borrow().is_some()) {
+        return run();
+    }
+    struct Close;
+    impl Drop for Close {
+        fn drop(&mut self) {
+            PASS.with(|pass| *pass.borrow_mut() = None);
+        }
+    }
+    PASS.with(|pass| *pass.borrow_mut() = Some(Pass::default()));
+    let _close = Close;
+    run()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The directories read for their listing, counted.
+    static DIRECTORY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `directory`'s entries, read from the disk.
+fn read_directory(directory: &Path) -> std::io::Result<std::fs::ReadDir> {
+    #[cfg(test)]
+    DIRECTORY_READS.with(|reads| reads.set(reads.get() + 1));
+    std::fs::read_dir(directory)
+}
+
+/// The entry names `directory` lists; None where it cannot be read.
+fn entry_names(directory: &Path) -> Option<HashSet<OsString>> {
+    read_directory(directory).ok().map(|entries| entries.flatten().map(|entry| entry.file_name()).collect())
+}
+
+/// Whether `path` is absolute and spelled with no `.`, `..` or empty
+/// segment, so its components are its `/`-separated segments as written.
+fn is_plain(path: &str) -> bool {
+    path == "/"
+        || path.starts_with('/')
+        && !path.ends_with('/')
+        && path[1..].split('/').all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+}
+
+/// [`see_on_disk`] for a plain candidate and base ([`is_plain`]), which the
+/// lexical form leaves as written: the same answer, reading each directory
+/// as a slice of the candidate rather than a path built per check. None
+/// where either is not plain.
+fn see_plain(base: &Path, candidate: &str) -> Option<Seen> {
+    let base = base.to_str()?;
+    if !is_plain(candidate) || !is_plain(base) {
+        return None;
+    }
+    if !Path::new(candidate).is_file() {
+        return Some(Seen::Missing);
+    }
+    // The segments the candidate shares with the base, from the root.
+    let mut shared = 0;
+    for (segment, base_segment) in candidate[1..].split('/').zip(base[1..].split('/')) {
+        if segment != base_segment {
+            break;
+        }
+        shared += 1 + segment.len();
+    }
+    if shared >= candidate.len() {
+        return Some(Seen::File);
+    }
+    // Each segment below them must be listed, spelled exactly, by the
+    // directory above it.
+    let mut start = shared;
+    for segment in candidate[shared + 1..].split('/') {
+        let directory = if start == 0 { "/" } else { &candidate[..start] };
+        if !lists(Path::new(directory), std::ffi::OsStr::new(segment)) {
+            let actual = std::fs::canonicalize(candidate).unwrap_or_else(|_| PathBuf::from(candidate));
+            return Some(Seen::CaseOnly(actual.to_string_lossy().to_string()));
+        }
+        start += 1 + segment.len();
+    }
+    Some(Seen::File)
+}
+
 /// Whether `directory` lists an entry spelled exactly `name`.
 fn lists(directory: &Path, name: &std::ffi::OsStr) -> bool {
     let directory = if directory.as_os_str().is_empty() { Path::new(".") } else { directory };
-    std::fs::read_dir(directory)
-        .map(|entries| entries.flatten().any(|entry| entry.file_name() == name))
-        .unwrap_or(false)
+    PASS.with(|pass| match pass.borrow_mut().as_mut() {
+        Some(Pass { listings, .. }) => {
+            if let Some(names) = listings.get(directory) {
+                return names.as_ref().is_some_and(|names| names.contains(name));
+            }
+            let names = entry_names(directory);
+            let listed = names.as_ref().is_some_and(|names| names.contains(name));
+            listings.insert(directory.to_path_buf(), names);
+            listed
+        }
+        None => read_directory(directory)
+            .map(|entries| entries.flatten().any(|entry| entry.file_name() == name))
+            .unwrap_or(false),
+    })
 }
 
 /// `path` with `.` dropped and `..` taken back, without touching the disk,
@@ -193,3 +339,73 @@ pub fn lexical(path: &Path) -> PathBuf {
 
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Contract: one resolution pass lists each directory once, however many
+    /// candidates it checks in it, and answers each exactly as an unshared
+    /// check does. Listing it per candidate made a system load over large
+    /// directories quadratic (0.1.26: 33 s against 1.2 s).
+    #[test]
+    fn a_pass_lists_each_directory_once() {
+        let dir = std::env::temp_dir().join(format!("animus-listings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("icons")).expect("create fixture");
+        for n in 0..50 {
+            std::fs::write(dir.join("icons").join(format!("Icon{n}.mjs")), "").expect("write fixture");
+        }
+        let candidates: Vec<String> = (0..50)
+            .map(|n| format!("Icon{n}.mjs"))
+            .chain(["icon0.mjs".to_string(), "Absent.mjs".to_string()])
+            .map(|name| dir.join("icons").join(name).to_string_lossy().to_string())
+            .collect();
+        let check = || candidates.iter().map(|candidate| see_within(&dir, candidate)).collect::<Vec<_>>();
+        let counted = |run: &dyn Fn() -> Vec<Seen>| {
+            DIRECTORY_READS.with(|reads| reads.set(0));
+            let seen = run();
+            (seen, DIRECTORY_READS.with(|reads| reads.get()))
+        };
+        let (unshared, unshared_reads) = counted(&check);
+        let (shared, shared_reads) = counted(&|| with_listing_cache(check));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(shared, unshared);
+        assert!(unshared[..50].iter().all(|seen| *seen == Seen::File));
+        // `dir` and `dir/icons`, for each candidate found, against once each.
+        assert_eq!(unshared_reads, 100 + if unshared[50] == Seen::Missing { 0 } else { 2 });
+        assert_eq!(shared_reads, 2);
+    }
+
+    /// Contract: the allocation-free check of a plain path answers exactly as
+    /// the lexical check, for each shape a resolution meets.
+    #[test]
+    fn a_plain_path_is_seen_as_its_lexical_form() {
+        let dir = std::env::temp_dir().join(format!("animus-plain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("pkg/esm/outlined")).expect("create fixture");
+        std::fs::write(dir.join("pkg/esm/outlined/Icon.mjs"), "").expect("write fixture");
+        std::fs::write(dir.join("pkg/esm/helper.mjs"), "").expect("write fixture");
+        let dir = std::fs::canonicalize(&dir).expect("canonical fixture");
+        let at = |path: &str| dir.join(path).to_string_lossy().to_string();
+        let bases = [dir.join("pkg/esm"), dir.join("pkg/esm/outlined"), dir.join("elsewhere"), PathBuf::from("/")];
+        let candidates = [
+            "pkg/esm/outlined/Icon.mjs",
+            "pkg/esm/helper.mjs",
+            "pkg/esm/Outlined/Icon.mjs",
+            "pkg/esm/outlined/icon.mjs",
+            "pkg/esm/outlined/Absent.mjs",
+            "pkg/esm/outlined",
+        ];
+        for base in &bases {
+            for candidate in candidates.iter().map(|candidate| at(candidate)) {
+                let plain = see_plain(base, &candidate).expect("a plain path");
+                assert_eq!(plain, see_lexical(base, &candidate), "{candidate} from {base:?}");
+            }
+            let itself = base.to_string_lossy().to_string();
+            assert_eq!(see_plain(base, &itself).expect("a plain path"), see_lexical(base, &itself));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

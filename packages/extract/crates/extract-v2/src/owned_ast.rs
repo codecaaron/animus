@@ -78,7 +78,7 @@ impl OwnedAst {
                 for d in &ret.diagnostics {
                     diagnostics.push(d.to_string());
                 }
-                panicked = ret.panicked;
+                panicked = ret.fatal_error;
                 DependentProgram {
                     program: ret.program,
                     module_record: ret.module_record,

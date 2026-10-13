@@ -7,7 +7,10 @@ import {
   sessionKey,
   setEngineFactoryLoaderForTests,
 } from '../../extract/session/singleton';
-import { resetAnimusGlobals } from '../../extract/tests/session/session-fixtures';
+import {
+  publishRecord,
+  resetAnimusGlobals,
+} from '../../extract/tests/session/session-fixtures';
 import animusLoader from '../src/loader';
 
 import type { LoaderPolicyOptions } from '../src/loader-core';
@@ -44,7 +47,7 @@ beforeEach(() => {
   const state = joinSession(sessionKey(BUILD, ROOT), 'animus-next', {
     system: './src/ds.ts',
   });
-  state.manifestJson = '{}';
+  publishRecord(state, { manifestJson: '{}' });
   setEngineFactoryLoaderForTests(() => unreachableNative);
   // An analysis of no files: every path the loader sees is outside it.
   engineApi(sessionKey(BUILD, ROOT)).analyzeProject(

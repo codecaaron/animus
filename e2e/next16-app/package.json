@@ -15,12 +15,12 @@
     "@animus-ui/next-plugin": "workspace:*",
     "@animus-ui/system": "workspace:*",
     "@animus-ui/test-ds": "workspace:*",
-    "next": "^16.3.4",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "next": "^16.4.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@animus-ui/assertions": "workspace:*",
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   }
 }

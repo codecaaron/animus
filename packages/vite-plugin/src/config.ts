@@ -49,6 +49,7 @@ export function applyResolvedConfig(
     }
   }
   ctx.outputExcludes = outputExclusions(config.root, viteOutputTargets(config));
+  ctx.configFiles = config.configFile ? [config.configFile] : [];
   // Vite substitutes the mode for its `development|production` condition.
   ctx.resolveConditions = config.resolve.conditions.map((condition) =>
     condition === 'development|production'

@@ -14,12 +14,10 @@ const typescriptTestTargets = [
   'packages/_parity/__tests__',
   'packages/oracle/__tests__',
   'packages/extract/tests/session',
-  'packages/extract/tests/alias-agreement.test.ts',
   'packages/extract/tests/asset-placeholders.test.ts',
   'packages/extract/tests/core-options.test.ts',
   'packages/extract/tests/css-keywords.test.ts',
   'packages/extract/tests/correlate-external-tokens.test.ts',
-  'packages/extract/tests/discover-packages.test.ts',
   'packages/extract/tests/dynamic-prop-config.test.ts',
   'packages/extract/tests/error-diagnostics.test.ts',
   'packages/extract/tests/files-json-decode.test.ts',
@@ -29,6 +27,7 @@ const typescriptTestTargets = [
   'packages/extract/tests/post-process-css.test.ts',
   'packages/extract/tests/property-names.test.ts',
   'packages/extract/tests/property-table.test.ts',
+  'packages/extract/tests/registry-packages.test.ts',
   'packages/extract/tests/replacement-plans.test.ts',
   'packages/extract/tests/resolve-asset.test.ts',
   'packages/extract/tests/source-identity.test.ts',
@@ -480,6 +479,10 @@ export default defineConfig({
       },
       'measure:consumers': {
         command: 'bun scripts/consumers/measure.ts',
+        cache: false,
+      },
+      'verify:bench': {
+        command: 'bun scripts/bench/run.ts',
         cache: false,
       },
 

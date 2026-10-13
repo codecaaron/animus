@@ -1,4 +1,5 @@
 import type {
+  ClosedDynamicImport,
   DiagnosticLevels,
   StaticCssConfig,
 } from '@animus-ui/extract/pipeline';
@@ -79,4 +80,12 @@ export interface AnimusNextOptions {
   /** Full `@layer` declaration order, emitted as-is. Must contain the seven
    *  `anm-*` layers as a subsequence; consumer layers may be interleaved. */
   layers?: string[];
+  /** The module extracted terminals import their factories from; default
+   *  `@animus-ui/system/runtime`. `@animus-ui/system` also supplies every
+   *  terminal; another override must supply every terminal used. */
+  runtimeImport?: string;
+  /** Computed `import()`s declared closed, by site (`importer`, relative to
+   *  the root, and `enclosingFunction`): each loads only what the build's
+   *  own literal `import()`s load, an assumption the analysis records. */
+  closedDynamicImports?: ClosedDynamicImport[];
 }

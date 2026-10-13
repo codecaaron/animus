@@ -103,3 +103,6 @@ packages/_bench/
 
 # measure:consumers reads consumer checkouts from this machine-local list
 scripts/consumers/consumers.local.json
+
+# verify:bench releases, installs, fixtures and receipts
+.bench/

@@ -220,7 +220,8 @@ fn object_id(object: &Object, families: &FamilyIndex) -> ObjectId {
 /// A namespace import of a module the analysis does not read.
 enum UnreadNamespace {
     Missing,
-    Package,
+    /// A package, by the identity the analysis names it with.
+    Package(String),
 }
 
 /// An object whose members a member tag reads.
@@ -290,9 +291,24 @@ pub(crate) struct ObjectMembers<'f> {
     objects: FxHashMap<(String, String), Option<Object>>,
     tables: FxHashMap<Object, Rc<MemberTable>>,
     building: FxHashSet<Object>,
-    /// What the uses in the analysed modules may change, closed once, on
-    /// the first question.
+    /// What the uses in the analysed modules may change: the analysis's one
+    /// closed relation, which a collector only recording has not yet.
     changed: Option<ValueEffects>,
+}
+
+/// Records into `flow` what the uses in `files` may change of the objects
+/// member tags read (see `ObjectMembers::record_changes`), so the
+/// analysis's one relation holds them before it is closed. Objects are
+/// named by their declarations, so no component naming is needed.
+pub(crate) fn record_member_changes(
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+    flow: &mut FlowBuilder,
+) {
+    let families = FamilyIndex::build(files, |_, binding| binding.to_string());
+    let component = |_: &str, _: &str| -> Option<String> { None };
+    ObjectMembers::new(files, inputs, links, &families, &component).record_changes(flow);
 }
 
 impl<'f> ObjectMembers<'f> {
@@ -672,21 +688,16 @@ impl<'f> ObjectMembers<'f> {
         table
     }
 
-    /// Answers from `changes`, a relation closed already that holds this
-    /// collector's changes among others', rather than building its own.
+    /// Answers from `changes`, the analysis's one relation, closed already
+    /// with this collector's changes among others' (`record_member_changes`).
     pub(crate) fn with_changes(mut self, changes: ValueEffects) -> Self {
         self.changed = Some(changes);
         self
     }
 
-    /// What the uses in the analysed modules may change, closed once, on
-    /// the first question.
+    /// What the uses in the analysed modules may change.
     pub(crate) fn changes(&mut self) -> &ValueEffects {
-        if self.changed.is_none() {
-            let changed = self.changed();
-            self.changed = Some(changed);
-        }
-        self.changed.as_ref().expect("closed above")
+        self.changed.as_ref().expect("member tables answer from the analysis's closed relation")
     }
 
     /// The first use in the analysed modules that may change `object`, said
@@ -717,22 +728,14 @@ impl<'f> ObjectMembers<'f> {
         })
     }
 
-    /// The changes a use in the analysed modules may make to an object, in
-    /// module and source order: a use of a binding that holds it, a use that
-    /// may write through a package's namespace, a namespace re-export of a
-    /// module exporting it, a runtime load of one, or code run from a
-    /// string. Every such use may rebind any member. The objects are facades,
-    /// families and the contexts React's `createContext` builds, whose
-    /// `Provider` a tag reads.
-    fn changed(&mut self) -> ValueEffects {
-        let mut flow = FlowBuilder::new();
-        self.record_changes(&mut flow);
-        flow.close()
-    }
-
-    /// Records into `flow` the changes `changed` names, so one relation can
-    /// hold them beside other collectors' before it is closed.
-    pub(crate) fn record_changes(&mut self, flow: &mut FlowBuilder) {
+    /// Records into `flow` the changes a use in the analysed modules may make
+    /// to an object, in module and source order: a use of a binding that
+    /// holds it, a use that may write through a package's namespace, a
+    /// namespace re-export of a module exporting it, a runtime load of one,
+    /// or code run from a string. Every such use may rebind any member. The
+    /// objects are facades, families and the contexts React's
+    /// `createContext` builds, whose `Provider` a tag reads.
+    fn record_changes(&mut self, flow: &mut FlowBuilder) {
         let files = self.files;
         let inputs = self.inputs;
         // Each object a module exports, under each name it exports it as.
@@ -760,7 +763,7 @@ impl<'f> ObjectMembers<'f> {
                     // is followed below.
                     Some((namespace, member)) => match self.unread_namespace(module, ff, namespace) {
                         Some(UnreadNamespace::Missing) => Reach::anywhere(ReasonId::UnresolvedSpecifier),
-                        Some(UnreadNamespace::Package) => Reach::default(),
+                        Some(UnreadNamespace::Package(_)) => Reach::default(),
                         None => match ff
                             .namespace_imports
                             .get(namespace)
@@ -775,7 +778,7 @@ impl<'f> ObjectMembers<'f> {
                     },
                     None => match ff.namespace_imports.get(name) {
                         Some(spec) => match self.unread_namespace(module, ff, name) {
-                            Some(UnreadNamespace::Package) => Reach::default(),
+                            Some(UnreadNamespace::Package(_)) => Reach::default(),
                             Some(UnreadNamespace::Missing) => Reach::anywhere(ReasonId::UnresolvedSpecifier),
                             None => resolve_import_source(module, spec, files, inputs)
                                 .map(|target| self.namespace_reach(&target))
@@ -806,17 +809,19 @@ impl<'f> ObjectMembers<'f> {
             // package) under any name: a use that may write through its
             // namespace may reach any of them.
             for (namespace, (subject, used)) in &ff.written_namespaces {
-                if !matches!(self.unread_namespace(module, ff, namespace), Some(UnreadNamespace::Package)) {
+                let Some(UnreadNamespace::Package(identity)) = self.unread_namespace(module, ff, namespace) else {
                     continue;
-                }
+                };
                 let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
                 let reason = format!("{subject} {} in {module}{line}", used.what);
-                flow.open(ReasonId::SkippedSource, Region::of(RegionAtom::AllExports), reason);
+                if let Some(unread) = crate::link::unread_package(&identity, files, inputs) {
+                    self.open_unread(flow, unread, &reason);
+                }
             }
             for (name, spec) in &ff.namespace_exports {
                 if let Some(unread) = crate::link::unread_source(module, spec, files, inputs) {
                     let reason = format!("{module} re-exports {spec} as the namespace {name}, and {}", unread.clause());
-                    flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+                    self.open_unread(flow, unread, &reason);
                     continue;
                 }
                 let Some(target) = resolve_import_source(module, spec, files, inputs) else {
@@ -834,6 +839,11 @@ impl<'f> ObjectMembers<'f> {
                     flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
                 }
             }
+            crate::analyze_css::note_build_chunks(
+                files.iter().flat_map(|(path, facts)| facts.module_loads.iter().map(move |load| (path.as_str(), load))),
+                files,
+                inputs,
+            );
             // A glob of several patterns is one call: judged once.
             let mut calls = std::collections::BTreeSet::new();
             for load in &ff.module_loads {
@@ -844,7 +854,7 @@ impl<'f> ObjectMembers<'f> {
                     if let Some(unread) = crate::link::unread_source(module, spec, files, inputs) {
                         let reason =
                             format!("{module} loads {spec} at runtime on line {}, and {}", load.line, unread.clause());
-                        flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+                        self.open_unread(flow, unread, &reason);
                     }
                 }
                 let targets = match crate::analyze_css::load_reach(module, load, files, inputs) {
@@ -878,6 +888,19 @@ impl<'f> ObjectMembers<'f> {
     /// What `module`'s namespace may hold: each object it exports and,
     /// where an open route leaves an export or the module's names
     /// incomplete, every exported object.
+    /// Opens what an unread module may reach: any module, or for a package
+    /// installed from a registry, the modules it can reach.
+    fn open_unread(&mut self, flow: &mut FlowBuilder, unread: crate::link::Unread, reason: &str) {
+        match unread {
+            crate::link::Unread::Registry(reaches) => {
+                for target in &reaches {
+                    self.namespace_reach(target).record(flow, self.families, Vec::new(), reason);
+                }
+            }
+            unread => flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason.to_string()),
+        }
+    }
+
     fn namespace_reach(&mut self, module: &str) -> Reach {
         let mut reach = Reach::default();
         let Some(index) = self.links.module(module) else { return reach };
@@ -941,7 +964,7 @@ impl<'f> ObjectMembers<'f> {
         match &record.requests[import.request] {
             Request::Unresolved(_) => Some(UnreadNamespace::Missing),
             Request::Outside(identity) if crate::link::is_node_builtin(identity) => None,
-            Request::Outside(_) => Some(UnreadNamespace::Package),
+            Request::Outside(identity) => Some(UnreadNamespace::Package(identity.clone())),
             Request::Module(_) => None,
         }
     }

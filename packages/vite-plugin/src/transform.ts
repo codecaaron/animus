@@ -52,11 +52,21 @@ export function extendingFiles(
 export async function transformSource(
   ctx: PluginContext,
   code: string,
-  id: string
+  requestId: string
 ): Promise<{ code: string; map: null } | null> {
   // Virtual module ids pass the `.js` extension gate, so without this guard
   // each reaches new-file detection as a cache entry no event can remove.
-  if (id.startsWith('\0') || id.startsWith(VIRTUAL_PREFIX)) return null;
+  if (requestId.startsWith('\0') || requestId.startsWith(VIRTUAL_PREFIX)) {
+    return null;
+  }
+  // Vite versions a dependency excluded from prebundling (`?v=`): the same
+  // module. Any other query (`?raw`, `?url`) reads the file as something
+  // else, which is no module to transform.
+  const query = requestId.indexOf('?');
+  if (query !== -1 && !/^v=[\w-]+$/.test(requestId.slice(query + 1))) {
+    return null;
+  }
+  const id = query === -1 ? requestId : requestId.slice(0, query);
 
   // External DS packages bypass the extension and node_modules filters:
   // published dists ship .mjs files with builder chains intact.

@@ -1,0 +1,18 @@
+{
+  "reference": "0.1.25",
+  "diagnostic": ["0.1.26"],
+  "releases": {
+    "0.1.25": {
+      "@animus-ui/properties": "sha512-3abrW3RQLv6MrRzTvQ90v7+eKbc+y1Nh0SM/dKUw6KDufitzLHcnmMG0gBtVkpMgEmfAqcHcERHKgWwLwcMglg==",
+      "@animus-ui/system": "sha512-MgRzfDFnwXakwtkhv9nutnDesyqVI9YCZNQcTP1aQsDOjDkCYmyHkvrimC4JQMM2xO+JStbcRleQ/ctKM7Bz2A==",
+      "@animus-ui/extract": "sha512-rgBkkGpTsVX+eIstQP+J/q8LJoToGCKN3WUnuigUS1RPPT7xDmrEyzRWSkvhOPZRVQk8rsxoCrbmvrk7jQu/hA==",
+      "@animus-ui/vite-plugin": "sha512-HKyiurwldQhGIsouPgTw3N4zwCkre6kZvOMXRdZ9gfY5SE/GSqA+AorztS8TmVSA2EP50G6wD2C4FJbxjhfsig=="
+    },
+    "0.1.26": {
+      "@animus-ui/properties": "sha512-4OMy3yMhjya28hiPBeKMhJszk5Rq5aPLb3TSzdD8/RDIFymMgWVw4+vmkIYlqr917Wd3OSP1OegxA6Ehs0bnpA==",
+      "@animus-ui/system": "sha512-gZAhwX63z5ZzSHpOLZ6zvnyFgCyEstSPQVVazVukbJ3IHUpzaKDwnStmZX5AwfSl5ZxxZsoITLIEXYoNi2SBgQ==",
+      "@animus-ui/extract": "sha512-vwGB1GdhJHTL5N1fVN6ASoezDi9Bfv9umITbfjBaJQluivHAJz+YHFJOEudlWEPXdJpXydsd+U7blRlJ5hDcWw==",
+      "@animus-ui/vite-plugin": "sha512-6Ct7mcgiqHjaNPdXGIhLDG+PzMPPADlnGxwhHbdc2PyELOdL6afry72TS3T7fcvksvgJMlwoWrqWlsewy+BLcg=="
+    }
+  }
+}

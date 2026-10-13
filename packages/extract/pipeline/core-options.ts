@@ -93,6 +93,16 @@ export interface AnimusCoreOptions {
   /** Full `@layer` declaration order. */
   layers?: string[];
   engine?: 'v2';
+  /** The module extracted terminals import their factories from; default
+   *  `@animus-ui/system/runtime` in every host. `@animus-ui/system` also
+   *  supplies every terminal; another override must supply every terminal
+   *  the analysis extracts. */
+  runtimeImport?: string;
+  /** Computed `import()`s declared closed, by site: each may load only
+   *  its `targets`, an assumption the analysis records and does not check.
+   *  `'build-chunks'` is the modules the build's own literal `import()`s
+   *  name. Every other computed `import()` may still load any module. */
+  closedDynamicImports?: ClosedDynamicImport[];
   /**
    * Decides emitted bytes (minify, dev diagnostics, engine devMode) and wins
    * over environment signals; never process lifecycle (watchers, HMR).
@@ -120,7 +130,40 @@ export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'engine',
   'mode',
   'root',
+  'runtimeImport',
+  'closedDynamicImports',
 ]);
+
+/** A computed `import()` declared closed: written in `importer` (relative
+ *  to the root), inside the function named `enclosingFunction`, loading only
+ *  `targets`. */
+export interface ClosedDynamicImport {
+  importer: string;
+  enclosingFunction: string;
+  targets: 'build-chunks';
+}
+
+const CLOSED_SITE_KEYS = 'enclosingFunction,importer,targets';
+
+const isClosedSite = (site: unknown): site is ClosedDynamicImport => {
+  if (Object.prototype.toString.call(site) !== '[object Object]') return false;
+  const fields = new Map(Object.entries(Object(site)));
+  const named = (key: string) => {
+    const value = fields.get(key);
+    return isString(value) && value !== '';
+  };
+  return (
+    [...fields.keys()].sort().join(',') === CLOSED_SITE_KEYS &&
+    named('importer') &&
+    named('enclosingFunction') &&
+    fields.get('targets') === 'build-chunks'
+  );
+};
+
+const isClosedDynamicImports = (
+  value: unknown
+): value is ClosedDynamicImport[] =>
+  Array.isArray(value) && value.every(isClosedSite);
 
 /** Carries a stable `name` so drivers can map it to their own config-error
  *  surface (the CLI's exit code 2). */
@@ -196,7 +239,12 @@ export function assertKnownOptionKeys<Value>(
   }
 }
 
-type CoreOptionValue = string | boolean | readonly string[] | DiagnosticLevels;
+type CoreOptionValue =
+  | string
+  | boolean
+  | readonly string[]
+  | DiagnosticLevels
+  | readonly ClosedDynamicImport[];
 
 /**
  * Options are foreign JS, so a boxed `String`/`Boolean` must not pass: a
@@ -257,6 +305,17 @@ const CORE_VALUE_GATES: ReadonlyArray<{
   { key: 'verbose', ok: isVerbose, expected: "a boolean or 'trace'" },
   { key: 'minify', ok: isBoolean, expected: 'a boolean' },
   { key: 'prefix', ok: isString, expected: 'a string' },
+  {
+    key: 'closedDynamicImports',
+    ok: isClosedDynamicImports,
+    expected:
+      "an array of { importer, enclosingFunction, targets: 'build-chunks' }",
+  },
+  {
+    key: 'runtimeImport',
+    ok: (value): value is string => isString(value) && value !== '',
+    expected: 'a module specifier',
+  },
   { key: 'prefixContextualVars', ok: isBoolean, expected: 'a boolean' },
   {
     key: 'targets',

@@ -74,6 +74,21 @@ const lockRecord = ({
 };
 
 describe('config resolution', () => {
+  // Contract: a config file's runtimeImport reaches the session's options
+  // and the projected config, as every core option does.
+  test("a config file's runtimeImport reaches the resolved options", async () => {
+    const root = makeRoot();
+    writeFileSync(
+      join(root, 'animus.config.json'),
+      JSON.stringify({ system: './src/ds.ts', runtimeImport: '@acme/runtime' })
+    );
+    const config = await resolveCliConfig({ root }, root);
+    expect(config.options.runtimeImport).toBe('@acme/runtime');
+    const projected = projectResolvedConfig(config);
+    expect(projected.runtimeImport).toBe('@acme/runtime');
+    expect(projected.provenance).toMatchObject({ runtimeImport: 'explicit' });
+  });
+
   test('flags override the config file; provenance is reported', async () => {
     const root = makeRoot();
     writeFileSync(

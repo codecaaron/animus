@@ -16,17 +16,22 @@ describe('registerSystemWatchPaths', () => {
     const ctx = new PluginContext({ system: './src/ds.ts' });
     const add = vi.fn();
     ctx.devServer = { watcher: { add } };
-    // Registration reads only these three path lists of the Session.
+    // Registration reads the Session's watch plan, over these lists.
     ctx.session = Object.assign(Object.create(ExtractionSession.prototype), {
+      rootDir: null,
+      options: { system: './src/ds.ts' },
       systemDependencyPaths: [],
       systemMissingPaths: [],
+      assetDependencyPaths: new Set<string>(),
+      configInputPaths: [],
+      externalWatchRoots: [],
       externalPackageDirs: [],
       ...paths,
     });
     return { ctx, add };
   }
 
-  it('registers loader-reported system dependency paths, once per list', () => {
+  it('registers loader-reported system dependency paths, once each', () => {
     const { ctx, add } = contextWithWatcher({
       systemDependencyPaths: ['/ws/tokens/src/theme.ts'],
     });
@@ -63,6 +68,25 @@ describe('registerSystemWatchPaths', () => {
     });
     ctx.registerSystemWatchPaths();
     expect(add).toHaveBeenCalledWith(['/ws/ui-kit/src']);
+  });
+
+  // Contract: a reused plugin instance whose dev server is replaced
+  // registers every path with the new server's watcher; the old watcher's
+  // registrations do not carry over.
+  it("registers again with a replacement server's watcher", () => {
+    const { ctx, add } = contextWithWatcher({
+      systemDependencyPaths: ['/ws/tokens/src/palette.ts'],
+      externalPackageDirs: ['/ws/ui-kit/src'],
+    });
+    ctx.registerSystemWatchPaths();
+    const addAgain = vi.fn();
+    ctx.devServer = { watcher: { add: addAgain } };
+    ctx.registerSystemWatchPaths();
+    expect(add.mock.calls).toEqual([
+      [['/ws/tokens/src/palette.ts']],
+      [['/ws/ui-kit/src']],
+    ]);
+    expect(addAgain.mock.calls).toEqual(add.mock.calls);
   });
 
   it('no-ops without a dev server', () => {

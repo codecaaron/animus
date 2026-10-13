@@ -185,7 +185,7 @@ for any host, including a hand-rolled one:
   `define`, webpack/rspack's `DefinePlugin`, and (for rollup)
   assignment-guarded token substitution in the transform.
 - The token is read as `typeof __ANIMUS_DEV__ === 'boolean' ? __ANIMUS_DEV__
-: …` — so a bundle **without** the define does not crash; it silently
+  : …` — so a bundle **without** the define does not crash; it silently
   loses every dev diagnostic. That silence is exactly how an untransformed
   app ships unstyled with green CI, which is why supplying the define is a
   host obligation, not an optimization.

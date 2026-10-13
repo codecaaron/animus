@@ -16,8 +16,10 @@ const SESSION_TESTS_TARGET = 'packages/extract/tests/session';
  * in `verify:canary`. A name here claims the file needs a NAPI binary.
  */
 const ENGINE_BOUND = new Set([
+  'alias-agreement.test.ts',
   'canary.test.ts',
   'collect-external-packages.test.ts',
+  'discover-packages.test.ts',
   'kit-publication.test.ts',
   'property-diagnostics.test.ts',
   'prefix-contextual-vars.test.ts',
