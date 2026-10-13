@@ -32,8 +32,10 @@ use crate::{
 
 /// What a load selected: the modules to run and the routes their imports
 /// take.
-#[derive(Debug)]
-pub(crate) struct Selection {
+pub(crate) struct Selection<'c> {
+    /// Each retained module's linked source, parsed and analysed once, in
+    /// the load's arena: linking reads it rather than parsing it again.
+    pub analyses: FxHashMap<String, Analysis<'c>>,
     pub entry: String,
     /// The system's export name on the entry.
     pub root: String,
@@ -53,6 +55,19 @@ pub(crate) struct Selection {
     pub global_origins: FxHashMap<String, (String, String)>,
 }
 
+impl std::fmt::Debug for Selection<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Selection").field("entry", &self.entry).field("root", &self.root).finish_non_exhaustive()
+    }
+}
+
+/// A module's linked source, parsed, with its semantic analysis.
+pub(crate) struct Analysis<'c> {
+    pub source: &'c str,
+    pub program: &'c Program<'c>,
+    pub semantic: oxc::semantic::Semantic<'c>,
+}
+
 /// What a request resolved to.
 #[derive(Clone)]
 enum Target {
@@ -62,13 +77,37 @@ enum Target {
     Failed(String),
 }
 
-struct Module {
+struct Module<'c> {
     retained: bool,
     /// The source as read.
     raw: String,
     /// The source as linked: stripped once retained.
     source: String,
     record: ModuleRecord<String, String>,
+    /// What its body reads of its imports, once read from what runs: at once
+    /// for plain JavaScript, on retaining for TypeScript.
+    usage: Option<Usage>,
+    /// What runs, parsed and analysed, once read.
+    analysis: Option<Analysis<'c>>,
+}
+
+/// What a module's body reads of its imports, by request, and the first
+/// construction the loader cannot run as selected, if any.
+#[derive(Clone)]
+struct Usage {
+    reads: Vec<(String, Read)>,
+    refused: Option<String>,
+}
+
+/// How a body reads one import binding.
+#[derive(Clone)]
+enum Read {
+    /// A named or default import, by the name its module exports.
+    Name(String),
+    /// A namespace read only through these static members.
+    Members(Vec<String>),
+    /// A namespace used whole.
+    Whole,
 }
 
 /// One unit of work: a module to retain, an export to resolve and retain
@@ -100,8 +139,11 @@ const FAILED: &str = "\u{0}failed:";
 
 pub(crate) struct Loader<'c> {
     context: &'c ResolutionContext,
+    /// The load's arena: each module's source as read is parsed into it once.
+    arena: &'c Allocator,
+    programs: FxHashMap<String, &'c Program<'c>>,
     reads: LoadReads,
-    modules: FxHashMap<String, Module>,
+    modules: FxHashMap<String, Module<'c>>,
     targets: FxHashMap<(String, String), Target>,
     /// Each module a bare specifier outside Animus resolved to, by that
     /// specifier: a CommonJS one is refused.
@@ -129,9 +171,11 @@ struct Linked {
 }
 
 impl<'c> Loader<'c> {
-    pub fn new(context: &'c ResolutionContext) -> Self {
+    pub fn new(context: &'c ResolutionContext, arena: &'c Allocator) -> Self {
         Self {
             context,
+            arena,
+            programs: FxHashMap::default(),
             reads: LoadReads::default(),
             modules: FxHashMap::default(),
             targets: FxHashMap::default(),
@@ -154,7 +198,7 @@ impl<'c> Loader<'c> {
 
     /// Selects what the system exported from `entry` reaches: `export_name`,
     /// or the export root inference names.
-    pub fn select(&mut self, entry: &str, export_name: Option<&str>) -> Result<Selection, String> {
+    pub fn select(&mut self, entry: &str, export_name: Option<&str>) -> Result<Selection<'c>, String> {
         let selected = self.select_reached(entry, export_name);
         // A failed load still reports what it found in the owned code it read.
         if selected.is_err() {
@@ -163,7 +207,7 @@ impl<'c> Loader<'c> {
         selected
     }
 
-    fn select_reached(&mut self, entry: &str, export_name: Option<&str>) -> Result<Selection, String> {
+    fn select_reached(&mut self, entry: &str, export_name: Option<&str>) -> Result<Selection<'c>, String> {
         self.retain(entry)?;
         let root = match export_name {
             Some(name) => name.to_string(),
@@ -266,7 +310,7 @@ impl<'c> Loader<'c> {
     /// Everything the entry's own imports reach, with no system root: the
     /// selection a module graph's tests read.
     #[cfg(test)]
-    pub(crate) fn reach_all(&mut self, entry: &str) -> Result<Selection, String> {
+    pub(crate) fn reach_all(&mut self, entry: &str) -> Result<Selection<'c>, String> {
         self.retain(entry)?;
         let work: VecDeque<Need> = self.reached_imports(entry)?.into();
         self.run(work)?;
@@ -275,9 +319,10 @@ impl<'c> Loader<'c> {
 
     /// The selection, with every request of every acquired module resolved
     /// to the key the linker registers it by.
-    fn selection(&mut self, entry: &str, root: String) -> Result<Selection, String> {
+    fn selection(&mut self, entry: &str, root: String) -> Result<Selection<'c>, String> {
         let mut specifier_map = FxHashMap::default();
         let mut retained = FxHashMap::default();
+        let mut analyses = FxHashMap::default();
         let mut routed = FxHashMap::default();
         let paths: Vec<String> = self.modules.keys().cloned().collect();
         for path in paths {
@@ -289,14 +334,18 @@ impl<'c> Loader<'c> {
                     }
                 }
             }
-            let module = &self.modules[&path];
+            let module = self.modules.get_mut(&path).expect("listed above");
             if module.retained {
                 retained.insert(path.clone(), module.source.clone());
+                if let Some(analysis) = module.analysis.take() {
+                    analyses.insert(path.clone(), analysis);
+                }
             } else {
                 routed.insert(path.clone(), module.record.clone());
             }
         }
         Ok(Selection {
+            analyses,
             entry: entry.to_string(),
             root,
             retained,
@@ -322,10 +371,8 @@ impl<'c> Loader<'c> {
             if !self.modules[&path].raw.contains("registerGlobalStyles") {
                 continue;
             }
-            let source = self.modules[&path].raw.clone();
-            let allocator = Allocator::default();
-            let program = Parser::new(&allocator, &source, source_type(&path)).parse().program;
-            let semantic = SemanticBuilder::new().with_build_nodes(true).build(&program).semantic;
+            let program = self.program(&path);
+            let semantic = SemanticBuilder::new().with_build_nodes(true).build(program).semantic;
             let calls: Vec<&oxc::ast::ast::CallExpression<'_>> = semantic
                 .nodes()
                 .iter()
@@ -337,7 +384,7 @@ impl<'c> Loader<'c> {
             for call in calls {
                 let Some(member) = call.callee.get_inner_expression().as_member_expression() else { continue };
                 if member.static_property_name() != Some("registerGlobalStyles")
-                    || !self.animus_value(&path, &program, member.object(), 0)?
+                    || !self.animus_value(&path, program, member.object(), 0)?
                 {
                     continue;
                 }
@@ -350,7 +397,7 @@ impl<'c> Loader<'c> {
                     else {
                         continue;
                     };
-                    let origin = self.declared_export(&path, &program, &value.name, &name)?;
+                    let origin = self.declared_export(&path, program, &value.name, &name)?;
                     let slot = origins.entry(name.to_string()).or_insert_with(|| origin.clone());
                     if *slot != origin {
                         *slot = None;
@@ -512,8 +559,11 @@ impl<'c> Loader<'c> {
                 ));
             }
         }
-        let record = record_of(&raw, path);
-        self.modules.insert(path.to_string(), Module { retained: false, source: raw.clone(), raw, record });
+        // Plain JavaScript runs as read, so one reading serves its routes and
+        // its reach.
+        let (record, usage, analysis) =
+            if is_typescript(path) { (record_of(&raw, path), None, None) } else { self.analyse(&raw, path) };
+        self.modules.insert(path.to_string(), Module { retained: false, source: raw.clone(), raw, record, usage, analysis });
         self.table = None;
         Ok(())
     }
@@ -528,8 +578,11 @@ impl<'c> Loader<'c> {
         // Plain JavaScript runs as read, so its record stands.
         if is_typescript(path) {
             let source = strip_typescript_module(&self.modules[path].raw, path)?;
+            let (record, usage, analysis) = self.analyse(&source, path);
             let module = self.modules.get_mut(path).expect("acquired above");
-            module.record = record_of(&source, path);
+            module.record = record;
+            module.usage = usage;
+            module.analysis = analysis;
             module.source = source;
         }
         self.modules.get_mut(path).expect("acquired above").retained = true;
@@ -543,66 +596,32 @@ impl<'c> Loader<'c> {
     /// that resolves to nothing usable fails the load; a bare import and an
     /// import the body never reads are not followed.
     fn reached_imports(&mut self, path: &str) -> Result<Vec<Need>, String> {
-        let source = self.modules[path].source.clone();
-        let allocator = Allocator::default();
-        let program = Parser::new(&allocator, &source, source_type(path)).parse().program;
-        let semantic = SemanticBuilder::new().with_build_nodes(true).build(&program).semantic;
-        let scoping = semantic.scoping();
-        refuse_unsupported(&semantic, &source, path)?;
+        let usage = self.modules[path].usage.clone().expect("a retained module's usage is read");
+        if let Some(refused) = usage.refused {
+            return Err(refused);
+        }
         let mut needs = Vec::new();
-        for stmt in &program.body {
-            let Statement::ImportDeclaration(decl) = stmt else { continue };
-            if decl.import_kind.is_type() {
-                continue;
-            }
-            let spec = decl.source.value.as_str();
-            for specifier in decl.specifiers.iter().flatten() {
-                let local = specifier.local();
-                let references: Vec<_> = scoping.get_resolved_references(local.symbol_id()).collect();
-                if references.is_empty() {
+        for (spec, read) in usage.reads {
+            let target = match self.target(path, &spec) {
+                Target::Failed(reason) => return Err(reason),
+                Target::Stub(key) => {
+                    let names = self.stub_exports.entry(key).or_default();
+                    if let Read::Name(name) = read {
+                        names.insert(name);
+                    }
                     continue;
                 }
-                let name = match specifier {
-                    ImportDeclarationSpecifier::ImportSpecifier(named) => {
-                        if named.import_kind.is_type() {
-                            continue;
-                        }
-                        Some(module_export_name(&named.imported))
-                    }
-                    ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => Some("default".to_string()),
-                    ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => None,
-                };
-                let target = match self.target(path, spec) {
-                    Target::Failed(reason) => return Err(reason),
-                    Target::Stub(key) => {
-                        self.stub_exports.entry(key).or_default().extend(name);
-                        continue;
-                    }
-                    Target::Module(target) => target,
-                };
-                self.acquire(&target)?;
-                if self.package_dir(Path::new(&target)) != self.package_dir(Path::new(path)) {
-                    needs.push(Need::Companions(target.clone()));
-                }
-                match name {
-                    Some(name) => needs.push(Need::Ask { importer: path.to_string(), module: target, name }),
-                    None => {
-                        // A namespace read only by static member reads reaches
-                        // those members; any other use needs it whole.
-                        let members: Option<Vec<String>> = references
-                            .iter()
-                            .map(|reference| static_member(&semantic, reference.node_id()))
-                            .collect();
-                        match members {
-                            Some(members) => needs.extend(members.into_iter().map(|name| Need::Ask {
-                                importer: path.to_string(),
-                                module: target.clone(),
-                                name,
-                            })),
-                            None => needs.push(Need::Namespace(target)),
-                        }
-                    }
-                }
+                Target::Module(target) => target,
+            };
+            self.acquire(&target)?;
+            if self.package_dir(Path::new(&target)) != self.package_dir(Path::new(path)) {
+                needs.push(Need::Companions(target.clone()));
+            }
+            let ask = |name: String| Need::Ask { importer: path.to_string(), module: target.clone(), name };
+            match read {
+                Read::Name(name) => needs.push(ask(name)),
+                Read::Members(members) => needs.extend(members.into_iter().map(ask)),
+                Read::Whole => needs.push(Need::Namespace(target)),
             }
         }
         Ok(needs)
@@ -925,12 +944,26 @@ impl<'c> Loader<'c> {
         Ok(traced)
     }
 
+    /// [`analysed`], into the load's arena.
+    fn analyse(&self, source: &str, path: &str) -> (ModuleRecord<String, String>, Option<Usage>, Option<Analysis<'c>>) {
+        analysed(self.arena, source, path)
+    }
+
     /// `run` over `module`'s source as read, parsed.
     fn parsed<T>(&mut self, module: &str, run: impl FnOnce(&mut Self, &Program<'_>) -> Result<T, String>) -> Result<T, String> {
-        let source = self.modules[module].raw.clone();
-        let allocator = Allocator::default();
-        let program = Parser::new(&allocator, &source, source_type(module)).parse().program;
-        run(self, &program)
+        let program = self.program(module);
+        run(self, program)
+    }
+
+    /// `module`'s source as read, parsed once per load.
+    fn program(&mut self, module: &str) -> &'c Program<'c> {
+        if let Some(program) = self.programs.get(module) {
+            return program;
+        }
+        let source = self.arena.alloc_str(&self.modules[module].raw);
+        let program: &'c Program<'c> = self.arena.alloc(Parser::new(self.arena, source, source_type(module)).parse().program);
+        self.programs.insert(module.to_string(), program);
+        program
     }
 
     /// The (module, binding) an import of `name` from `spec`, written in
@@ -1032,7 +1065,7 @@ impl<'c> Loader<'c> {
     /// import. Third-party code is not read. An audit never fails the load.
     fn audit(&mut self, entry: &str, root: &str) {
         self.find_owners(entry);
-        let runs = |modules: &FxHashMap<String, Module>, path: &str| modules.get(path).is_some_and(|module| module.retained);
+        let runs = |modules: &FxHashMap<String, Module<'_>>, path: &str| modules.get(path).is_some_and(|module| module.retained);
         let mut queue: VecDeque<String> = VecDeque::new();
         let mut paths: Vec<String> = self.modules.keys().cloned().collect();
         paths.sort();
@@ -1558,7 +1591,47 @@ fn is_typescript(path: &str) -> bool {
 /// name only a type declares, are left out: they name no runtime binding.
 pub(crate) fn record_of(source: &str, path: &str) -> ModuleRecord<String, String> {
     let allocator = Allocator::default();
-    let program = Parser::new(&allocator, source, source_type(path)).parse().program;
+    record_from(&Parser::new(&allocator, source, source_type(path)).parse().program)
+}
+
+/// A module's record and what its body reads of its imports, from one
+/// reading: each named or default import it references, and each namespace
+/// import by the members it reads, or whole when it uses it otherwise. An
+/// import the body never reads is left out.
+fn analysed<'c>(arena: &'c Allocator, source: &str, path: &str) -> (ModuleRecord<String, String>, Option<Usage>, Option<Analysis<'c>>) {
+    let source: &'c str = arena.alloc_str(source);
+    let program: &'c Program<'c> = arena.alloc(Parser::new(arena, source, source_type(path)).parse().program);
+    let semantic = SemanticBuilder::new().with_build_nodes(true).build(program).semantic;
+    let scoping = semantic.scoping();
+    let mut reads = Vec::new();
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(decl) = stmt else { continue };
+        if decl.import_kind.is_type() {
+            continue;
+        }
+        for specifier in decl.specifiers.iter().flatten() {
+            let references: Vec<_> = scoping.get_resolved_references(specifier.local().symbol_id()).collect();
+            if references.is_empty() {
+                continue;
+            }
+            let read = match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(named) if named.import_kind.is_type() => continue,
+                ImportDeclarationSpecifier::ImportSpecifier(named) => Read::Name(module_export_name(&named.imported)),
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => Read::Name("default".to_string()),
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => references
+                    .iter()
+                    .map(|reference| static_member(&semantic, reference.node_id()))
+                    .collect::<Option<Vec<String>>>()
+                    .map_or(Read::Whole, Read::Members),
+            };
+            reads.push((decl.source.value.to_string(), read));
+        }
+    }
+    let refused = refuse_unsupported(&semantic, source, path).err();
+    (record_from(program), Some(Usage { reads, refused }), Some(Analysis { source, program, semantic }))
+}
+
+fn record_from(program: &Program<'_>) -> ModuleRecord<String, String> {
     let mut record = ModuleRecord {
         requests: Vec::new(),
         imports: Vec::new(),

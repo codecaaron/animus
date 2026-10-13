@@ -834,7 +834,7 @@ fn offsets_to_line_numbers(bundle: &str, offsets: Vec<(usize, String)>) -> Vec<(
 /// its `yield` to link, defining its export getters; then each finishes in
 /// evaluation order. The returned [`BundleLayout`] attributes an eval failure
 /// to its module.
-fn build_bundle(selection: &bounded::Selection) -> Result<(String, BundleLayout), String> {
+fn build_bundle(selection: &bounded::Selection<'_>) -> Result<(String, BundleLayout), String> {
     let bounded::Selection { specifier_map, retained: source_map, stub_exports, entry: entry_path, .. } =
         selection;
     let mut bundle =
@@ -881,7 +881,11 @@ fn build_bundle(selection: &bounded::Selection) -> Result<(String, BundleLayout)
     let mut modules: FxHashMap<String, linked::LinkedModule> =
         FxHashMap::with_capacity_and_hasher(paths.len(), Default::default());
     for path in &paths {
-        modules.insert((*path).clone(), linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map, &refs)?);
+        let module = match selection.analyses.get(*path) {
+            Some(analysis) => linked::rewrite_analysed(analysis.source, analysis.program, &analysis.semantic, path, specifier_map, &refs)?,
+            None => linked::rewrite_module_for_linking(&source_map[*path], path, specifier_map, &refs)?,
+        };
+        modules.insert((*path).clone(), module);
     }
     // Each module's own export names: the getters its object always has.
     let local_names = |module: &linked::LinkedModule| -> FxHashSet<String> {
@@ -1825,8 +1829,9 @@ pub fn load_system_module_reading(
     // One load reads each directory's listing once: the exact-case check
     // otherwise lists a directory again for every candidate in it. The pass
     // may run the selection twice, so each run records its reads afresh.
+    let arena = Allocator::default();
     let (selected, selecting) = resolution::with_listing_cache(|| {
-        let mut loader = bounded::Loader::new(context);
+        let mut loader = bounded::Loader::new(context, &arena);
         let selected = loader.select(&entry_path, export_name);
         (selected, loader.into_reads())
     });
@@ -1893,6 +1898,7 @@ mod tests {
             .map(|path| (path.clone(), linker.getters(path).into_iter().map(|(name, _)| name).collect()))
             .collect();
         build_bundle(&bounded::Selection {
+            analyses: FxHashMap::default(),
             entry: entry_path.to_string(),
             root: String::new(),
             retained: source_map.clone(),
@@ -2210,19 +2216,21 @@ export const ds = tokens;
 
     /// What `entry`'s imports reach, read without a system root, as a
     /// load's selection reads it.
-    fn reach(entry: &Path) -> Result<bounded::Selection, String> {
+    fn reach(entry: &Path) -> Result<bounded::Selection<'static>, String> {
         reach_reading(entry).0
     }
 
-    /// [`reach`], with what it read and looked for, kept when it fails.
-    fn reach_reading(entry: &Path) -> (Result<bounded::Selection, String>, LoadReads) {
-        let context = ResolutionContext::default();
+    /// [`reach`], with what it read and looked for, kept when it fails. Its
+    /// arena lives as long as the test process.
+    fn reach_reading(entry: &Path) -> (Result<bounded::Selection<'static>, String>, LoadReads) {
+        let context: &'static ResolutionContext = Box::leak(Box::default());
+        let arena: &'static Allocator = Box::leak(Box::default());
         let entry = match fs::canonicalize(entry) {
             Ok(entry) => entry,
             Err(error) => return (Err(error.to_string()), LoadReads::default()),
         };
         resolution::with_listing_cache(|| {
-            let mut loader = bounded::Loader::new(&context);
+            let mut loader = bounded::Loader::new(context, arena);
             let selected = loader.reach_all(&entry.to_string_lossy());
             (selected, loader.into_reads())
         })

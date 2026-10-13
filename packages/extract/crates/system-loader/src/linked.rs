@@ -288,6 +288,19 @@ pub(crate) fn rewrite_module_for_linking(
     let ParserReturn { program, .. } =
         Parser::new(&allocator, source, source_type(canonical_path)).parse();
     let semantic = SemanticBuilder::new().with_build_nodes(true).build(&program).semantic;
+    rewrite_analysed(source, &program, &semantic, canonical_path, specifier_map, refs)
+}
+
+/// [`rewrite_module_for_linking`] over a program already parsed from
+/// `source` and its semantic analysis, with nodes.
+pub(crate) fn rewrite_analysed(
+    source: &str,
+    program: &oxc::ast::ast::Program<'_>,
+    semantic: &oxc::semantic::Semantic<'_>,
+    canonical_path: &str,
+    specifier_map: &FxHashMap<(String, String), String>,
+    refs: &ModuleRefs,
+) -> Result<LinkedModule, String> {
     let scoping = semantic.scoping();
     let key = |spec: &str| module_key(canonical_path, spec, specifier_map);
     // The loader reads exports and imports through `__modules`: a module may
