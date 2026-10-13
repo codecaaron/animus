@@ -38,15 +38,42 @@ function resolverFacts(
 }
 
 describe('ingestSourceEntries', () => {
-  // Contract: MDX is analyzed for the components it renders only; a style
-  // it declares is a fatal diagnostic, so strict builds fail on it.
-  test('reports an MDX file that declares styles', async () => {
+  // Contract: MDX is analyzed for the components it renders only; any
+  // Animus builder call in it, wherever it is written, is a fatal
+  // diagnostic, so strict builds fail on it.
+  test.each([
+    [
+      'inside an exported function, through a namespace',
+      "import * as ns from './defs'\n\nexport const Hidden = () => {\n  const Box = ns.ds.styles({ zIndex: 437 }).asElement('div');\n  return <Box />;\n}\n\n<Hidden />",
+      'line 4: ns.ds.styles(',
+    ],
+    [
+      'inside a JSX prop',
+      "import { ds } from './defs'\n\n<Panel render={() => { const B = ds.styles({}).asElement('div'); return <B />; }} />",
+      'line 3: ds.styles(',
+    ],
+  ])('reports an MDX builder call %s', async (_where, source, call) => {
+    const result = await ingestSourceEntries(
+      [{ path: 'src/doc.mdx', source }],
+      {
+        extractFacts: factsExtractor({}),
+      }
+    );
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'SOURCE_MDX_STYLE_DECLARATION',
+        originalPath: 'src/doc.mdx',
+        message: expect.stringContaining(call),
+      }),
+    ]);
+  });
+
+  test('reports an MDX chain the native facts find', async () => {
     const result = await ingestSourceEntries(
       [
         {
           path: 'src/doc.mdx',
-          source:
-            "export const Box = ds.styles({}).asElement('div');\n\n<Box />",
+          source: 'export const Box = make();\n\n<Box />',
         },
       ],
       {
@@ -58,7 +85,6 @@ describe('ingestSourceEntries', () => {
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
         code: 'SOURCE_MDX_STYLE_DECLARATION',
-        originalPath: 'src/doc.mdx',
         message: expect.stringContaining('(Box)'),
       }),
     ]);
