@@ -16541,6 +16541,19 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             files: vec![ExpandedFile { path: "tools/build.ts".to_string(), status: ExpandedStatus::Analysed }],
         };
         assert_eq!(run_expanded(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], &globbing, vec![expansion]), everything);
+        // A closed expansion reaches only what it lists, past the load-set
+        // bound too.
+        let pages: Vec<String> = (0..=LOAD_SET_LIMIT).map(|page| format!("pages/p{page}.ts")).collect();
+        let mut extra: Vec<(&str, &str)> = pages.iter().map(|page| (page.as_str(), "export const page = 1;\n")).collect();
+        extra.extend([("vite.config.ts", vite), ("tools/build.ts", via)]);
+        let paging = format!("const pages = import.meta.glob('./pages/*.ts');\n{app}");
+        let expansion = HostExpansion {
+            importer: "app.tsx".to_string(),
+            start: paging.find("import.meta.glob").expect("a glob") as u32,
+            closed: true,
+            files: pages.iter().map(|page| ExpandedFile { path: page.clone(), status: ExpandedStatus::Analysed }).collect(),
+        };
+        assert_eq!(run_expanded(&[], &extra, &paging, vec![expansion]), pruned);
         let open = format!("export const load = (name) => import(`./tools/${{name}}.ts`);\n{app}");
         assert_eq!(run(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], &open), everything);
     }
