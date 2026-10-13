@@ -5,5 +5,19 @@
     "baseline": "398cec66a54f59e1aad03e0567f066d2bcb278a587628ec07d2cda15a3d78f03",
     "candidate": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
     "reason": "Within a layer an extension's rules follow its ancestors': StackItem's inherited direction variant now precedes its own emphasis variant, and the minifier merges the two adjacent flex-direction:column rules into one selector list. The same rules after splitting selector lists; no property is shared, so nothing changes winner."
+  },
+  {
+    "row": "loader:large-closure",
+    "fixture": "large-closure",
+    "baseline": "eb253eed728e830d35ffb7f879e3571b399b55f69e8ed9e59e804bb5e619bf4c",
+    "candidate": "13050aa3db15856070d59d84d543dd50b2f4d8366cba7f434f42c892c075ab48",
+    "reason": "The loader runs only what the exported system reaches, and its dependencies are the files it read: the 6,252 icons and the kit behind the entry's bare import are no longer read, so the 6,265 paths become 13. The config is identical (configDigest unchanged)."
+  },
+  {
+    "row": "loader:showcase",
+    "fixture": "showcase",
+    "baseline": "a263c383a0302ff7e19483dee6602cffe766cee8ac2c2c4c878cc20fdc6f42bc",
+    "candidate": "0802b1b98e7d55f5fbe4d9e32f4c6f12fc2ca502164e0739528810a277ed23d1",
+    "reason": "The loader's dependencies are every file it read, not only the modules it ran: the barrels it routed through, the owned modules it audited for registrations and the package manifests it consulted join the list, so 15 paths become 19. The config is identical (configDigest unchanged)."
   }
 ]
