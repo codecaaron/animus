@@ -129,20 +129,94 @@ describe('compileUnit', () => {
 
   // Contract: a remote import stays remote, hoisted ahead of every rule, in
   // the layer of the file that imports it, and is reported as uninspected.
-  test('hoists a remote import into its layer', async () => {
+  // The layers keep the order the original cascade creates them in, though
+  // the hoisted import would create its own first.
+  test('hoists a remote import into its layer, keeping layer order', async () => {
     const unit = await compile(
       {
         '/p/root.css':
-          '@import "https://fonts.example/f.css" layer(fonts) print;\n.r{color:red}\n',
+          '@import "./a.css" layer(first);\n@import "https://fonts.example/f.css" layer(second) print;\n.r{color:red}\n',
+        '/p/a.css': '.a{color:blue}\n',
       },
       '/p/root.css'
     );
-    expect(unit.css.split('\n').slice(0, 2)).toEqual([
+    expect(unit.css.split('\n').slice(0, 3)).toEqual([
       '@layer vendor, app;',
-      '@import url("https://fonts.example/f.css") layer(vendor.fonts) print;',
+      '@layer vendor, vendor.first, vendor.second;',
+      '@import url("https://fonts.example/f.css") layer(vendor.second) print;',
     ]);
     expect(unit.diagnostics).toContainEqual(
       expect.objectContaining({ code: 'layergate.remote' })
+    );
+  });
+
+  // Contract: nested media conditions on a remote import's way are joined
+  // when each is a bare condition.
+  test('joins bare media conditions on a remote import', async () => {
+    const unit = await compile(
+      {
+        '/p/root.css': '@import "./m.css" (min-width: 1px);\n',
+        '/p/m.css': '@import "https://e/x.css" (max-width: 9px);\n',
+      },
+      '/p/root.css'
+    );
+    expect(unit.css).toContain(
+      '@import url("https://e/x.css") layer(vendor) (min-width: 1px) and (max-width: 9px);'
+    );
+  });
+
+  // Contract: an anonymous import layer is one per import occurrence: the
+  // same file reached by two import chains creates two layers, as in the
+  // browser (E6).
+  test('gives each import occurrence its own anonymous layer', async () => {
+    const files = {
+      '/p/root.css': '@import "./p1.css";\n@import "./p2.css";\n',
+      '/p/p1.css': '@import "./mid.css";\n',
+      '/p/p2.css': '@import "./mid.css";\n',
+      '/p/mid.css': '@import "./leaf.css" layer;\n',
+      '/p/leaf.css': '.leaf{color:red}\n',
+    };
+    const unit = await compile(files, '/p/root.css');
+    const names = [
+      ...unit.css.matchAll(/@layer (layergate-anonymous-[0-9a-f]+) \{/g),
+    ].map((match) => match[1]);
+    expect(names).toHaveLength(2);
+    expect(new Set(names).size).toBe(2);
+  });
+
+  // Contract: a stylesheet imported twice applies at each import, so the
+  // later import decides the cascade, as in the browser.
+  test('applies a repeated import at each occurrence', async () => {
+    const unit = await compile(
+      {
+        '/p/root.css':
+          '@import "./a.css";\n@import "./b.css";\n@import "./a.css";\n',
+        '/p/a.css': '.x{color:red}\n',
+        '/p/b.css': '.x{color:blue}\n',
+      },
+      '/p/root.css'
+    );
+    expect(unit.css.lastIndexOf('color:red')).toBeGreaterThan(
+      unit.css.indexOf('color:blue')
+    );
+  });
+
+  // Contract: a leading byte-order mark is no content: the imports after it
+  // are inlined and it never reaches the output. An import past other rules
+  // is reported, since a browser ignores it.
+  test('reads past a byte-order mark and reports an ignored import', async () => {
+    const unit = await compile(
+      {
+        '/p/root.css':
+          '\ufeff@import "./a.css";\n.r{color:red}\n@import "./late.css";\n',
+        '/p/a.css': '.a{color:blue}\n',
+      },
+      '/p/root.css'
+    );
+    expect(unit.css).toContain('.a{color:blue}');
+    expect(unit.css).not.toContain('\ufeff');
+    expect(unit.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'layergate.ignored-import', line: 3 })
     );
   });
 
