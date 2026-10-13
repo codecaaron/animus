@@ -178,6 +178,7 @@ export function createSourceIdentity(rootDir: string): SourceIdentity {
     },
 
     containingExternalRoot(inputPath: string): string | null {
+      if (roots.length === 0) return null;
       const lexical = path.normalize(inputPath);
       let owner: RootRecord | null = null;
       // Lexical containment first: the realpath syscall runs only when no

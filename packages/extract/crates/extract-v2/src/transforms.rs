@@ -254,7 +254,7 @@ fn try_extract_transform(
     let mut diagnostics = Vec::new();
     let valid = callback_arg
         .as_expression()
-        .is_none_or(|callback| validate_self_contained(callback, &name, &mut diagnostics, scoping));
+        .is_none_or(|callback| validate_self_contained(callback, &name, &mut diagnostics, scoping, source));
 
     let js_source = if valid {
         match strip_typescript(callback_source) {
@@ -824,6 +824,38 @@ mod tests {
 
         assert!(transform.valid, "{:?}", transform.diagnostics);
         assert!(transform.diagnostics.is_empty());
+    }
+
+    /// Contract: a callback that renders an element (written as JSX, or as
+    /// a `createElement` call the parse reads as one) names its component
+    /// and the values it passes; outside ones make it not self-contained.
+    #[test]
+    fn an_element_in_a_callback_names_what_it_renders() {
+        let transform = extract_one(
+            r#"const outer = 1;
+const icon = createTransform('icon', (value) => <Icon size={outer}>{value}</Icon>);"#,
+        );
+        assert!(!transform.valid);
+        for name in ["Icon", "outer"] {
+            assert!(transform.diagnostics.iter().any(|d| d.contains(&format!("'{name}'"))), "{name}: {:?}", transform.diagnostics);
+        }
+    }
+
+    /// Contract: the parse reads a `createElement` call as the element it
+    /// creates, but a callback making one still calls `createElement` from
+    /// outside, so it is not self-contained.
+    #[test]
+    fn a_lowered_create_element_call_is_still_an_external_reference() {
+        let source = "import { createElement } from 'react';\n\
+                      const t = createTransform('t', (v) => { function Inner() {}; return createElement(Inner, { v }); });\n";
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let ast = crate::owned_ast::OwnedAst::parse("t.tsx".into(), source.into(), &counter);
+        let transform = extract_transforms(ast.program(), ast.source(), "t.tsx", &FxHashSet::default())
+            .into_iter()
+            .next()
+            .expect("one transform");
+        assert!(!transform.valid);
+        assert!(transform.diagnostics.iter().any(|d| d.contains("'createElement'")), "{:?}", transform.diagnostics);
     }
 
     #[test]

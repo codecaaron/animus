@@ -1247,14 +1247,19 @@ export class ExtractionSession {
       for (const removedPath of changes.removedFiles) {
         let key: string;
         let owningRoot: string | null = null;
-        if (isPathWithinRoot(rootDir, removedPath)) {
-          key = relative(rootDir, removedPath);
-        } else {
-          const resolved =
-            this.sourceIdentity?.resolveDeletedSourceId(removedPath);
-          if (!resolved) continue;
+        // The identity a spelling was recorded under wins: a kit alias of a
+        // project file deletes that file, and a kit file under the
+        // project's own node_modules is the kit's. A spelling never
+        // recorded is a project file by its path.
+        const resolved =
+          this.sourceIdentity?.resolveDeletedSourceId(removedPath);
+        if (resolved) {
           key = resolved.sourceKey;
           owningRoot = resolved.owningRoot;
+        } else if (isPathWithinRoot(rootDir, removedPath)) {
+          key = relative(rootDir, removedPath);
+        } else {
+          continue;
         }
         recordPrior(key);
         this.clearIngestionFailure(key);
@@ -2218,6 +2223,8 @@ export class ExtractionSession {
       externalSourceEntries: this.externalSourceEntries,
       externalSourceSideEffects: this.externalSourceSideEffects,
       externalPackageDirs: this.externalPackageDirs,
+      externalLinkedDirs: this.externalLinkedDirs,
+      externalOutputDirs: this.externalOutputDirs,
       ingestionFailureDiagnostics: this.ingestionFailureDiagnostics,
     };
   }
@@ -2445,6 +2452,8 @@ export class ExtractionSession {
         try {
           rawHash = contentHash(readFileSync(abs, 'utf-8'));
         } catch {
+          // Queued as a file event, whose read reports the failure.
+          modified.add(abs);
           continue;
         }
         // A file read again after a failed read re-queues even unchanged,
@@ -2480,7 +2489,15 @@ export class ExtractionSession {
   ): { key: string; owningRoot: string | null } | null {
     const ext = extname(absPath);
     const rootDir = this.rootDir!;
-    if (isPathWithinRoot(rootDir, absPath)) {
+    // External paths gate on their owning root's extension set, so identity
+    // resolves first — the project set would drop a dist-only kit's edits,
+    // and its exclusions every edit to a kit installed under the project's
+    // own node_modules.
+    const external =
+      this.sourceIdentity?.containingExternalRoot(absPath) != null
+        ? this.sourceIdentity.resolveSourceId(absPath)
+        : null;
+    if (external === null && isPathWithinRoot(rootDir, absPath)) {
       if (!scan.extensionsSet.has(ext)) return null;
       const rel = relative(rootDir, absPath);
       if (scan.excludeMatcher.matches(absPath, rel)) {
@@ -2488,15 +2505,18 @@ export class ExtractionSession {
       }
       return { key: rel, owningRoot: null };
     }
-    // External paths gate on their owning root's extension set, so identity
-    // resolves first — the project set would drop a dist-only kit's edits.
-    const resolved = this.sourceIdentity?.resolveSourceId(absPath);
+    const resolved = external ?? this.sourceIdentity?.resolveSourceId(absPath);
     if (!resolved) return null;
     if (resolved.owningRoot === null) {
       // An out-of-root spelling canonicalizing INTO the project root —
       // the same consumer filters as the lexical local branch.
       if (!scan.extensionsSet.has(ext)) return null;
-      if (scan.excludeMatcher.matches(resolved.sourceKey, resolved.sourceKey)) {
+      if (
+        scan.excludeMatcher.matches(
+          resolve(rootDir, resolved.sourceKey),
+          resolved.sourceKey
+        )
+      ) {
         return null;
       }
       return { key: resolved.sourceKey, owningRoot: null };

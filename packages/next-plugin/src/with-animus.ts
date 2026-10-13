@@ -39,6 +39,7 @@ import {
 
 import type { TurbopackConfigFragment } from './turbopack-config';
 import type { AnimusNextOptions } from './types';
+import type { WatchOptions } from './watch-ignored';
 import type {
   TurbopackWatcherHandle,
   TurbopackWatchOutcome,
@@ -67,6 +68,8 @@ interface WebpackRule {
 
 interface WebpackConfig {
   plugins?: WebpackPluginEntry[];
+  /** Next's watcher reads these, not the compiler's normalized copy. */
+  watchOptions?: WatchOptions;
   resolve?: {
     alias?: Record<string, string>;
   };
@@ -278,6 +281,10 @@ export function withAnimus(
 
         config.plugins = config.plugins || [];
         config.plugins.push(plugin);
+        // Next's watcher reads this config's watch options, not the
+        // compiler's: the plugin rewrites them once webpack has validated
+        // the config, whose schema takes no matcher.
+        plugin.watchConfig(config);
 
         const DefinePlugin = context.webpack?.DefinePlugin;
         if (DefinePlugin) {

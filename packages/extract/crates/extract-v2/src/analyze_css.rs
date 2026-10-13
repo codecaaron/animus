@@ -3301,6 +3301,8 @@ fn written_member_tags(ff: &FileFacts) -> std::collections::BTreeSet<&str> {
         .filter_map(|fact| match fact {
             UsageFact::Element { tag: TagFact::Member(path), .. } => Some(path.as_str()),
             UsageFact::CreateElement { member: Some(path), .. } => Some(path.as_str()),
+            // Its defaults reach its renders: resolved as a render's tag is.
+            UsageFact::DefaultProps { tag: TagFact::Member(path), .. } => Some(path.as_str()),
             _ => None,
         })
         .collect()
@@ -3993,7 +3995,7 @@ fn spread_wrapper_targets(
             .iter()
             .filter_map(|fact| match fact {
                 UsageFact::Element { span, .. } => Some((*span, fact)),
-                UsageFact::CreateElement { .. } | UsageFact::CloneUnknown { .. } => None,
+                UsageFact::CreateElement { .. } | UsageFact::CloneUnknown { .. } | UsageFact::DefaultProps { .. } => None,
             })
             .collect(),
         memo: FxHashMap::default(),
@@ -4533,13 +4535,14 @@ fn identity_uncertainty_diagnostics(
         let Some(ff) = files.get(*file) else {
             continue;
         };
-        let (tag, create_element, origin, at, shared_name) = match site {
+        // Whether the use is written as a call: it is named as written.
+        let (tag, written_as_call, default_props, origin, at, shared_name) = match site {
             UncertainIdentity::Tag(site) => {
-                (site.tag.as_deref(), site.create_element, site.origin, Some(site.at), false)
+                (site.tag.as_deref(), site.written_as_call, site.default_props, site.origin, Some(site.at), false)
             }
             UncertainIdentity::Unattributed(name) => match first_site_of(ff, name) {
-                Some((create_element, origin, at)) => (Some(name.as_str()), create_element, origin, Some(at), true),
-                None => (Some(name.as_str()), false, None, None, true),
+                Some((written_as_call, origin, at)) => (Some(name.as_str()), written_as_call, false, origin, Some(at), true),
+                None => (Some(name.as_str()), false, false, None, None, true),
             },
         };
         let key = tag.unwrap_or("createElement(…)").to_string();
@@ -4553,9 +4556,10 @@ fn identity_uncertainty_diagnostics(
                 "receives a component chosen at runtime".to_string(),
             ),
             Some(tag) => {
-                let spelling = match create_element {
-                    true => format!("createElement({tag})"),
-                    false => format!("<{tag}>"),
+                let spelling = match (default_props, written_as_call) {
+                    (true, _) => format!("{tag}.defaultProps"),
+                    (false, true) => format!("createElement({tag})"),
+                    (false, false) => format!("<{tag}>"),
                 };
                 let (class, mut reason) = uncertain_tag_reason(file, ff, tag, origin, files, inputs, links);
                 if shared_name {
@@ -4626,14 +4630,14 @@ fn identity_uncertainty_diagnostics(
     std::iter::once(summary).chain(records.into_iter().map(|(.., record)| record)).collect()
 }
 
-/// The first element or `createElement` call naming `name`: whether it is a
-/// call, the origin of its name, and its offset.
+/// The first element or `createElement` call naming `name`: whether it is
+/// written as a call, the origin of its name, and its offset.
 fn first_site_of(ff: &FileFacts, name: &str) -> Option<(bool, Option<TagOrigin>, u32)> {
     ff.usage_for_analysis().iter().find_map(|fact| match fact {
-        UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), span, origin, .. }
+        UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), span, origin, written_as_call, .. }
             if tag == name =>
         {
-            Some((false, *origin, span.0))
+            Some((*written_as_call, *origin, span.0))
         }
         UsageFact::CreateElement { ident: Some(tag), at, origin, .. }
         | UsageFact::CreateElement { member: Some(tag), at, origin, .. }
@@ -11329,8 +11333,7 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
     /// A direct `createElement` call on an extracted component records the
     /// literal system props JSX records for the same element, so they take
     /// static classes, through parentheses and type-only wrappers and past an
-    /// absent breakpoint; props usage cannot read get a coded warning, never
-    /// a parameter that shares the component's name.
+    /// absent breakpoint; props it spreads are the element's spread.
     #[test]
     fn create_element_records_literal_system_props_as_jsx_does() {
         let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
@@ -11357,9 +11360,16 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             assert!(keys(&by_call).is_some(), "{call}");
             assert_eq!(unread(&by_call), 0, "{call}");
         }
-        for call in ["createElement(Box, props)", "createElement(Box, { ...props, p: 8 })"] {
-            let out = analyzed(&format!("export const App = (props) => {call};\n"));
-            assert_eq!(unread(&out), 1, "{call}");
+        // Props it spreads are the element's spread, as in JSX: no warning
+        // of its own.
+        for (call, jsx) in [
+            ("createElement(Box, props)", "<Box {...props} />"),
+            ("createElement(Box, { ...props, p: 8 })", "<Box {...props} p={8} />"),
+        ] {
+            let by_call = analyzed(&format!("export const App = (props) => {call};\n"));
+            let by_jsx = analyzed(&format!("export const App = (props) => {jsx};\n"));
+            assert_eq!(keys(&by_call), keys(&by_jsx), "{call}");
+            assert_eq!(unread(&by_call), 0, "{call}");
         }
         let shadowed = analyzed("export const App = ({ Box, props }) => createElement(Box, props);\n");
         assert_eq!(unread(&shadowed), 0);
@@ -11697,7 +11707,8 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             ("export const App = () => createElement(Box, { p: 8 });", &[]),
             ("export const App = ({ n }) => createElement(Box, { p: n });", &["p"]),
             ("export const App = ({ props }) => createElement(Box, props);", &["p"]),
-            ("function F({ as, ...rest }) { return createElement(Box, { ...rest, id: 'x' }); }\nexport const App = () => <F p={8} />;", &["p"]),
+            // The wrapper is followed, as its JSX is: `p` is the literal its render passes.
+            ("function F({ as, ...rest }) { return createElement(Box, { ...rest, id: 'x' }); }\nexport const App = () => <F p={8} />;", &[]),
             ("function F({ as, ...rest }) { rest.p = 1; return createElement(Box, { ...rest }); }\nexport const App = () => <F />;", &["p"]),
         ];
         for (app, want) in cases {
@@ -13936,6 +13947,93 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         )
     }
 
+    /// Contract (owner ruling, 2026-10-13): `createElement(Component, props)`
+    /// is the JSX it compiles to. A wrapper that renders an extracted
+    /// component through it keeps exactly what the same wrapper written in
+    /// JSX keeps: a rest spread, a spread of the props, a listed key beside
+    /// a spread, and an object held in a local all agree.
+    #[test]
+    fn create_element_wrappers_keep_what_their_jsx_keeps() {
+        let ce = "import { createElement } from 'react';\n";
+        for (call, jsx) in [
+            ("const Button = ({ size, ...rest }) => createElement(R, { ...rest });", "const Button = ({ size, ...rest }) => <R {...rest} />;"),
+            ("const Button = ({ size, ...rest }) => createElement(R, { ...rest, 'data-x': '1' });", "const Button = ({ size, ...rest }) => <R {...rest} data-x=\"1\" />;"),
+            ("const Button = (props) => createElement(R, props);", "const Button = (props) => <R {...props} />;"),
+            ("const Button = (props) => React.createElement(R, { size: 'sm', ...props });", "const Button = (props) => <R size=\"sm\" {...props} />;"),
+            ("const Button = ({ size, ...rest }) => { const p = { ...rest }; return createElement(R, p); };", "const Button = ({ size, ...rest }) => { const p = { ...rest }; return <R {...p} />; };"),
+        ] {
+            let render = "\nexport const App = () => <><Button size=\"lg\" active /><Button /></>;";
+            let by_call = wrapper_kept(&format!("{ce}import React from 'react';\n{call}{render}"));
+            let by_jsx = wrapper_kept(&format!("{jsx}{render}"));
+            assert_eq!(by_call, by_jsx, "{call}");
+        }
+        // The first, followed, prunes what no render reaches.
+        let (sizes, states, _) = wrapper_kept(&format!("{ce}const Button = ({{ size, ...rest }}) => createElement(R, {{ ...rest }});\nexport const App = () => <Button size=\"lg\" active />;"));
+        assert_eq!((sizes, states), (vec!["md"], vec!["active"]));
+    }
+
+    /// Contract: an element's children are its `children` prop, written
+    /// after every attribute, so they replace a `children` attribute or one
+    /// a spread delivers; `createElement`'s extra arguments are those
+    /// children. An option they write is never pruned.
+    #[test]
+    fn children_are_the_children_prop() {
+        let wrapped = WRAPPED.replace("prop: 'size'", "prop: 'children'");
+        let kept = |app: &str| -> Vec<&'static str> {
+            let source = format!("import {{ R }} from './r';\n{app}\n");
+            let out = analyze(&[("r.tsx", wrapped.as_str()), ("app.tsx", source.as_str())], &test_inputs());
+            let r = class_of(&out, "r.tsx::R");
+            ["sm", "md", "lg"].into_iter().filter(|o| out.css.contains(&format!(".{r}--children-{o}"))).collect()
+        };
+        for app in [
+            "import { createElement } from 'react';\nconst Button = (props) => createElement(R, props, 'lg');\nexport const App = () => <Button children=\"sm\" />;",
+            "const Button = (props) => <R {...props}>lg</R>;\nexport const App = () => <Button children=\"sm\" />;",
+            "export const App = () => <R children=\"sm\">lg</R>;",
+            "import { createElement } from 'react';\nexport const App = () => createElement(R, { children: 'sm' }, 'lg');",
+        ] {
+            assert!(kept(app).contains(&"lg"), "{app}: {:?}", kept(app));
+        }
+        // An entity reads as another character at runtime: `&#109;d` is md.
+        assert!(kept("export const App = () => <R>&#109;d</R>;").contains(&"md"));
+        // Children usage cannot list keep every option.
+        assert_eq!(kept("export const App = ({ x }) => <R>{x}</R>;"), vec!["sm", "md", "lg"]);
+    }
+
+    /// Contract: React gives a component's renders the `defaultProps` they
+    /// leave out, so a reference to an extracted component's `defaultProps`
+    /// keeps every option it could set; one to anything else adds nothing.
+    #[test]
+    fn default_props_keep_every_option() {
+        for app in [
+            "import { createElement } from 'react';\nR.defaultProps = { size: 'lg' };\nconst Button = (props) => createElement(R, props);\nexport const App = () => <Button />;",
+            "R.defaultProps = { size: 'lg' };\nexport const App = () => <R />;",
+            "R.defaultProps.size = 'lg';\nexport const App = () => <R />;",
+            "R['defaultProps'] = { size: 'lg' };\nexport const App = () => <R />;",
+            // Through a namespace, resolved as a render's member tag is.
+            "import * as ui from './r';\nui.R.defaultProps = { size: 'lg' };\nexport const App = () => <R />;",
+            "Object.assign(R.defaultProps, { size: 'lg' });\nexport const App = () => <R />;",
+        ] {
+            let (sizes, states, _) = wrapper_kept(app);
+            assert_eq!((sizes, states), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{app}");
+        }
+        let (sizes, _, _) = wrapper_kept("class Other {}\nOther.defaultProps = { size: 'lg' };\nexport const App = () => <R size=\"sm\" />;");
+        assert_eq!(sizes, vec!["sm"]);
+        // One usage cannot name is reported as an uncertain identity, as an
+        // unresolved render's tag is: never skipped silently.
+        let app = "import { R } from './r';\nconst x = make();\nx.R.defaultProps = { size: 'lg' };\nexport const App = () => <R size=\"sm\" />;\n";
+        let out = analyze(&[("r.tsx", WRAPPED), ("app.tsx", app)], &test_inputs());
+        assert!(
+            out.diagnostics.iter().any(|d| d.code.as_deref() == Some(IDENTITY_UNCERTAIN_TAG) && d.message.contains("x.R.defaultProps")),
+            "{:?}",
+            out.diagnostics
+        );
+        // Reading an unknown component's defaults changes nothing: React's
+        // own code does it.
+        let app = "import { R } from './r';\nfunction create(e) { return e && e.defaultProps; }\nexport const App = () => <R size=\"sm\" />;\n";
+        let out = analyze(&[("r.tsx", WRAPPED), ("app.tsx", app)], &test_inputs());
+        assert!(!out.diagnostics.iter().any(|d| d.message.contains("defaultProps")), "{:?}", out.diagnostics);
+    }
+
     /// A same-module wrapper that forwards its props by spread stands in for
     /// its target: its renders count as the target's, so options reached
     /// only through it prune.
@@ -14100,14 +14198,15 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 assert!(slot(body, render), "{body} {render}");
             }
         }
-        // An element render follows the wrapper; a `createElement` call does
-        // not.
+        // A `createElement` call is the element it creates: both follow the
+        // wrapper.
         for body in [
             "if (props.p && typeof props.p === 'object' && `${props.p}` !== props.p._) {}",
             "const f = props.mutate; f(props.onPress);",
         ] {
-            assert!(!slot(body, renders[0]), "{body}");
-            assert!(slot(body, renders[1]), "{body}");
+            for render in renders {
+                assert!(!slot(body, render), "{body} {render}");
+            }
         }
         // A spread at the render opens the target.
         let (sizes, _, _) = wrapper_kept(
@@ -14795,9 +14894,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// call it passes its props to returns, a same-module wrapper of an
     /// imported one, the root of an `Object.assign` facade built on a
     /// function component, a function component a facade literal holds
-    /// inline, and a same-module wrapper rendered by `createElement`. A prop
-    /// a pattern on every route consumes, and a name a parameter shadows,
-    /// warn nothing.
+    /// inline. A same-module wrapper rendered by `createElement` is followed
+    /// as JSX is. A prop a pattern on every route consumes, and a name a
+    /// parameter shadows, warn nothing.
     #[test]
     fn every_unfollowed_wrapper_shape_warns_at_its_use() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
@@ -14806,11 +14905,16 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let created = "import { createElement } from 'react';\nimport { Box } from './recipe';\n\
                        const Top = (props) => <Box {...props} />;\n\
                        export const App = () => createElement(Top, { marginInlineStart: 8 });\n";
+        // A same-module wrapper rendered by `createElement` is followed as
+        // the element it creates is.
+        let written = created.replace("createElement(Top, { marginInlineStart: 8 })", "<Top marginInlineStart={8} />");
         let out = analyze_with_logical_space(&[("recipe.tsx", recipe), ("app.tsx", created)]);
-        let warned: Vec<_> = unattributed(&out).iter().map(|d| (d.file.as_str(), d.offset, d.dropped.as_deref())).collect();
-        let at = created.find("createElement(Top").unwrap() as u32;
-        assert_eq!(warned, [("app.tsx", Some(at), Some("marginInlineStart"))], "{:?}", out.diagnostics);
-        assert!(!out.css.contains("margin-inline-start: 0.5rem;"), "{}", out.css);
+        let as_jsx = analyze_with_logical_space(&[("recipe.tsx", recipe), ("app.tsx", written.as_str())]);
+        let warned = |out: &CssOutput| -> Vec<(String, Option<u32>, Option<String>)> {
+            unattributed(out).iter().map(|d| (d.file.clone(), d.offset, d.dropped.clone())).collect()
+        };
+        assert_eq!(warned(&out), warned(&as_jsx), "{:?}", out.diagnostics);
+        assert_eq!(out.css, as_jsx.css);
         let cases: [(&str, &str, &str, Option<&str>); 12] = [
             ("index.ts", "export * from './wrapper';\n", "import { Top } from './index';\nexport const App = () => <Top marginInlineStart={8} />;\n", Some("<Top")),
             (
@@ -16921,7 +17025,8 @@ export const App = () => <main><Card inl={10} shut={10} tone="lg">text</Card></m
             ("", "export { Card };\nexport const App = () => <><Card inl={10} /></>;\n", none),
             ("", "export default Card;\n", both),
             ("", "export const App = () => <><Card inl={10} /></>;\nexport const Alias = Card;\n", both),
-            ("", "export const App = () => createElement(Card, { inl: 10 });\n", both),
+            // A `createElement` call is the element it creates.
+            ("", "export const App = () => createElement(Card, { inl: 10 });\n", none),
             ("", "export const App = () => <><Card inl={10} /></>;\nexport const peek = () => eval('Card');\n", both),
             ("", "export const App = () => <Card inl={10} />;\n", none),
             ("", "export const App = () => <Layout><Card inl={10} /></Layout>;\n", both),

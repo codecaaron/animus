@@ -3,8 +3,8 @@
  * module mocker cannot intercept fs builtins.
  */
 import { EventEmitter } from 'events';
-import { mkdirSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { dirname, join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { ExtractionSession } from '../../session/extraction-session';
@@ -45,7 +45,7 @@ const watchers: FakeWatcher[] = [];
 const failDirs = new Set<string>();
 
 // SAFETY: `fs.watch` has four overloads, so no single signature is
-// assignable; the seam is called as watchFn(root, { recursive: true }, cb).
+// assignable; the seam is called as watchFn(dir, { recursive }, cb).
 const fakeWatch = ((
   dir: string,
   opts?: WatchOptions | null,
@@ -125,22 +125,92 @@ afterEach(() => {
 });
 
 describe('external root registration (design D4)', () => {
-  test('admitted roots get recursive watchers; node_modules roots never do (G2)', () => {
+  /** An admitted root is watched directory by directory, never descending
+   *  into node_modules: a recursive watch would register the kit's own
+   *  dependencies too (on Linux, one watch per file). */
+  test('an admitted root under node_modules is watched; nothing else there is', async () => {
     const { root, kitA } = createTree();
-    const embedded = join(root, 'node_modules', 'dep', 'src');
-    const { session } = makeSession(root, [kitA, embedded]);
+    const installed = join(root, 'node_modules', '@kits', 'ui', 'src');
+    const sibling = join(root, 'node_modules', '@kits', 'other', 'src');
+    const nested = join(installed, 'node_modules', 'dep');
+    for (const dir of [join(installed, 'components'), sibling, nested]) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'Button.tsx'), 'export const B = 1;\n');
+    }
+    const { session, updates } = makeSession(root, [kitA, installed]);
 
     const handle = start(session, root);
     try {
       const registered = new Map(calls.map((c) => [c.dir, c.recursive]));
-      expect(registered.get(kitA)).toBe(true);
-      for (const dir of calls.map((c) => c.dir)) {
-        expect(dir).not.toContain('node_modules');
-      }
+      expect(registered.get(kitA)).toBe(false);
+      expect(registered.get(installed)).toBe(false);
+      // The admitted root and its source directories: not the package tree,
+      // not a sibling, not the kit's own dependencies.
+      expect(
+        calls
+          .map((c) => c.dir)
+          .filter((dir) => dir.includes('node_modules'))
+          .sort()
+      ).toEqual([installed, join(installed, 'components')]);
+
+      watcherFor(join(installed, 'components'))!.trigger('Button.tsx');
+      await vi.waitFor(() =>
+        expect(allModified(updates)).toContain(
+          join(installed, 'components', 'Button.tsx')
+        )
+      );
+
+      // A directory created later is watched; a nested node_modules is not.
+      const created = join(installed, 'forms');
+      mkdirSync(join(created, 'node_modules'), { recursive: true });
+      watcherFor(installed)!.trigger('forms');
+      expect(watcherFor(created)).toBeDefined();
+      expect(watcherFor(join(created, 'node_modules'))).toBeUndefined();
     } finally {
       handle!.close();
     }
     expect(watchers.every((w) => w.closed)).toBe(true);
+  });
+
+  /** A link created in a kit is a file event, never a tree to walk: the
+   *  initial walk does not follow directory links either. */
+  test('a directory link created in a kit is not followed', () => {
+    const { root, kitA } = createTree();
+    const elsewhere = join(dirname(root), 'elsewhere');
+    mkdirSync(join(elsewhere, 'deep', 'er'), { recursive: true });
+    const { session } = makeSession(root, [kitA]);
+    const handle = start(session, root);
+    try {
+      symlinkSync(elsewhere, join(kitA, 'linked'), 'dir');
+      watcherFor(kitA)!.trigger('linked');
+      expect(
+        calls
+          .map((c) => c.dir)
+          .filter((dir) => dir.startsWith(join(kitA, 'linked')))
+      ).toEqual([]);
+    } finally {
+      handle!.close();
+    }
+  });
+
+  /** A directory-level event names no entry: the directory's subtree is
+   *  read again, so created directories are watched and removed ones closed. */
+  test('a directory-level event reconciles its subtree', () => {
+    const { root, kitA } = createTree();
+    mkdirSync(join(kitA, 'old'));
+    const { session } = makeSession(root, [kitA]);
+    const handle = start(session, root);
+    try {
+      const old = watcherFor(join(kitA, 'old'));
+      expect(old).toBeDefined();
+      mkdirSync(join(kitA, 'fresh', 'inner'), { recursive: true });
+      rmSync(join(kitA, 'old'), { recursive: true });
+      watcherFor(kitA)!.trigger(null);
+      expect(watcherFor(join(kitA, 'fresh', 'inner'))).toBeDefined();
+      expect(old!.closed).toBe(true);
+    } finally {
+      handle!.close();
+    }
   });
 
   test('kit file events flow into the session change sets', async () => {

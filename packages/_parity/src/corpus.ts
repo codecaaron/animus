@@ -51,11 +51,11 @@ async function loadEntry(
 ): Promise<{ path: string; source: string }> {
   const raw = readFileSync(join(dir, file), 'utf-8');
   if (file.endsWith('.mdx')) {
-    const { preprocessMdx } = await import('@animus-ui/extract/pipeline');
-    const result = await preprocessMdx(raw, file);
+    const { mdxUsageSource } = await import('@animus-ui/extract/pipeline');
+    const result = mdxUsageSource(raw, file);
     if (result.kind !== 'ok' || result.source === undefined) {
       throw new Error(
-        `preprocessMdx failed for ${file}: ${JSON.stringify(result)}`
+        `mdxUsageSource failed for ${file}: ${JSON.stringify(result)}`
       );
     }
     return { path: file.replace(/\.mdx$/, '.mdx.tsx'), source: result.source };

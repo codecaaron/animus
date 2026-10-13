@@ -23,7 +23,9 @@ export interface AnimusNextOptions {
    *  `.spec.`; `node_modules`, `.next` and `.animus` are always excluded. */
   exclude?: string[];
   /** Extensions scanned for definitions and usages; replaces the default
-   *  `['.ts','.tsx','.js','.jsx','.mdx']`. `.mdx` needs `@mdx-js/mdx`. */
+   *  `['.ts','.tsx','.js','.jsx','.mdx']`. `.mdx` is read for the components
+   *  it renders, with no MDX compiler; any reference to the builder in it is
+   *  an error (see the README's MDX section). */
   extensions?: string[];
   /** When true, error-severity diagnostics — lost configured inputs and
    *  classified unsupported Animus declarations — and failed checks, such as

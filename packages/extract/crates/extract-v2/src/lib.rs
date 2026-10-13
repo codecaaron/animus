@@ -37,6 +37,7 @@ pub mod assemble;
 pub mod ast_store;
 pub mod emit;
 pub mod engine;
+mod lower_create_element;
 pub mod eval;
 pub mod evaluator;
 pub mod facts;

@@ -105,8 +105,9 @@ pub enum TagOrigin {
     TopLevel,
     /// A parameter, or a binding inside a function or block.
     Nested,
-    /// A binding compiled MDX destructures from the components a provider
-    /// supplies (`const { Card } = _components`): matched by name, as a
+    /// A binding MDX's usage source (`mdxUsageSource`, which mirrors compiled
+    /// MDX) destructures from the components a provider supplies
+    /// (`const { Card } = _components`): matched by name, as a
     /// provider-scope component is.
     Provided,
     /// No binding in the file: a global, or nothing.
@@ -120,6 +121,10 @@ pub struct UncertainTag {
     /// argument that names nothing (`createElement(pick())`).
     pub tag: Option<String>,
     pub create_element: bool,
+    /// Written as a `createElement` call, whatever the analysis reads it as.
+    pub written_as_call: bool,
+    /// The tag's `defaultProps`, not a render of it.
+    pub default_props: bool,
     pub origin: Option<TagOrigin>,
     /// Byte offset of the element or call.
     pub at: u32,
@@ -142,6 +147,10 @@ pub enum UsageFact {
         /// Collected with the file's scopes only.
         #[serde(skip)]
         origin: Option<TagOrigin>,
+        /// Written as a `createElement` call, which the parse reads as this
+        /// element: a diagnostic names it as written.
+        #[serde(skip)]
+        written_as_call: bool,
     },
     /// createElement(X, ...) / React.createElement(X, ...): the first
     /// argument as a raw name or dotted key (None = unattributable form).
@@ -173,6 +182,20 @@ pub enum UsageFact {
         /// Collected with the file's scopes only.
         #[serde(skip)]
         origin: Option<TagOrigin>,
+    },
+    /// A reference to a component's `defaultProps`, which React reads as
+    /// the props a render leaves out: usage cannot list them.
+    DefaultProps {
+        tag: TagFact,
+        /// Collected with the file's scopes only.
+        #[serde(skip)]
+        origin: Option<TagOrigin>,
+        /// Byte offset of the member.
+        #[serde(skip)]
+        at: u32,
+        /// Assigned to, or `Object.assign`'s target; otherwise read.
+        #[serde(skip)]
+        written: bool,
     },
     /// `cloneElement(child, …)` of an element usage cannot name: the
     /// overrides can reach any component.
@@ -961,6 +984,8 @@ pub(crate) fn collect_enriched_usage(
         .unwrap_or_default();
     let mut collector = FactCollector {
         facts: Vec::new(),
+        source: program.source_text,
+        writing: false,
         static_values,
         scoping: scoping.as_ref().filter(|_| !static_values.is_empty()),
         enrich: true,
@@ -5250,6 +5275,10 @@ fn rendered_in_place<'b, 'a: 'b>(
 
 struct FactCollector<'a, 's> {
     facts: Vec<UsageFact>,
+    /// The file's text: whether an element is written as JSX or as a call.
+    source: &'a str,
+    /// Inside what an assignment or `Object.assign` writes.
+    writing: bool,
     static_values: crate::eval::Statics<'s>,
     scoping: Option<&'s Scoping>,
     enrich: bool,
@@ -5295,7 +5324,7 @@ struct PendingClone {
 
 impl<'a> FactCollector<'a, '_> {
     /// Records one element's usage fact.
-    fn record_element(&mut self, elem: &JSXOpeningElement<'a>) {
+    fn record_element(&mut self, elem: &JSXOpeningElement<'a>, children: &[oxc::ast::ast::JSXChild<'a>]) {
         let (tag, root) = match &elem.name {
             JSXElementName::Identifier(id) => (TagFact::Ident(id.name.to_string()), None),
             JSXElementName::IdentifierReference(id) => (TagFact::Ident(id.name.to_string()), Some(&**id)),
@@ -5479,14 +5508,81 @@ impl<'a> FactCollector<'a, '_> {
                 });
             }
         }
+        // The element's children are its `children` prop, written after every
+        // attribute: they replace a `children` attribute or one a spread
+        // delivers.
+        attrs.extend(children_attribute(children));
         self.facts.push(UsageFact::Element {
             tag,
             attrs,
             spread,
             span: (elem.span.start, elem.span.end),
             origin,
+            written_as_call: crate::lower_create_element::written_as_call(self.source, elem.span.start),
         });
     }
+}
+
+/// The `children` prop an element's children write, if it has any: a single
+/// text on one line or a single string literal as itself, and anything else
+/// as a value usage cannot list. Text of whitespace and line breaks, and an
+/// empty `{}`, are no children, as in JSX.
+fn children_attribute(children: &[oxc::ast::ast::JSXChild<'_>]) -> Option<AttrFact> {
+    use oxc::ast::ast::{JSXChild, JSXExpression};
+    let written: Vec<&JSXChild<'_>> = children
+        .iter()
+        .filter(|child| match child {
+            JSXChild::Text(text) => !(text.value.trim().is_empty() && text.value.contains('\n')),
+            JSXChild::ExpressionContainer(container) => {
+                !matches!(container.expression, JSXExpression::EmptyExpression(_))
+            }
+            _ => true,
+        })
+        .collect();
+    let first = written.first()?;
+    let at = first.span().start;
+    let end = written.last().map_or(at, |child| child.span().end);
+    let literal = match written.as_slice() {
+        // An entity (`&#109;`) reads as another character at runtime.
+        [JSXChild::Text(text)] if !text.value.contains('\n') && !text.value.contains('&') => {
+            Some(text.value.to_string())
+        }
+        [JSXChild::ExpressionContainer(container)] => match container.expression.as_expression().map(crate::chain_walk::unwrap_type_assertions) {
+            Some(Expression::StringLiteral(literal)) => Some(literal.value.to_string()),
+            _ => None,
+        },
+        _ => None,
+    };
+    Some(match literal {
+        Some(value) => AttrFact {
+            name: "children".to_string(),
+            variant_class: value.clone(),
+            static_value: Some(Value::String(value)),
+            enumerable_values: Vec::new(),
+            dynamic: false,
+            dynamic_kind: None,
+            dynamic_span: None,
+            skip: false,
+            literal: true,
+            conditions: Some(BTreeSet::from([BASE_CONDITION.to_string()])),
+            optional: false,
+            at,
+        },
+        None => AttrFact {
+            name: "children".to_string(),
+            variant_class: "__dynamic__".to_string(),
+            static_value: None,
+            enumerable_values: Vec::new(),
+            dynamic: true,
+            dynamic_kind: Some(DynamicExpressionKind::Other),
+            dynamic_span: Some(crate::jsx_scan::UsageSpan { start: at, end }),
+            skip: false,
+            literal: false,
+            conditions: None,
+            optional: false,
+            at,
+        },
+    })
 }
 
 /// The entries a spread argument writes when every branch it can take is an
@@ -5903,10 +5999,38 @@ fn literal_value(expression: &Expression<'_>) -> Option<Value> {
 }
 
 impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
-    fn visit_jsx_opening_element(&mut self, elem: &JSXOpeningElement<'a>) {
-        self.record_element(elem);
+    fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
+        if member.property.name == "defaultProps" {
+            self.record_default_props(&member.object, member.span.start);
+        }
+        oxc::ast_visit::walk::walk_static_member_expression(self, member);
+    }
+
+    fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
+        let key = match &member.expression {
+            Expression::StringLiteral(key) => Some(key.value.as_str()),
+            Expression::TemplateLiteral(key) if key.expressions.is_empty() => {
+                key.quasis.first().and_then(|quasi| quasi.value.cooked.as_ref()).map(|cooked| cooked.as_str())
+            }
+            _ => None,
+        };
+        if key == Some("defaultProps") {
+            self.record_default_props(&member.object, member.span.start);
+        }
+        oxc::ast_visit::walk::walk_computed_member_expression(self, member);
+    }
+
+    fn visit_assignment_expression(&mut self, assignment: &oxc::ast::ast::AssignmentExpression<'a>) {
+        let outer = std::mem::replace(&mut self.writing, true);
+        self.visit_assignment_target(&assignment.left);
+        self.writing = outer;
+        self.visit_expression(&assignment.right);
+    }
+
+    fn visit_jsx_element(&mut self, element: &oxc::ast::ast::JSXElement<'a>) {
+        self.record_element(&element.opening_element, &element.children);
         // An attribute value can hold JSX too, which is a use like a child.
-        oxc::ast_visit::walk::walk_jsx_opening_element(self, elem);
+        oxc::ast_visit::walk::walk_jsx_element(self, element);
     }
 
     fn visit_variable_declaration(&mut self, declaration: &oxc::ast::ast::VariableDeclaration<'a>) {
@@ -5936,6 +6060,18 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+        // `Object.assign(X.defaultProps, …)` writes X's defaults.
+        if let (Expression::StaticMemberExpression(callee), Some(Argument::StaticMemberExpression(target))) =
+            (&call.callee, call.arguments.first())
+        {
+            let object_assign = callee.property.name == "assign"
+                && matches!(&callee.object, Expression::Identifier(object) if object.name == "Object");
+            if object_assign && target.property.name == "defaultProps" {
+                let outer = std::mem::replace(&mut self.writing, true);
+                self.record_default_props(&target.object, target.span.start);
+                self.writing = outer;
+            }
+        }
         if self.react.calls(&call.callee, "createElement") {
             if let Some(first_arg) = call.arguments.first() {
                 let (ident, member, identity_uncertain) = match first_arg {
@@ -5972,6 +6108,24 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
 }
 
 impl<'a> FactCollector<'a, '_> {
+    /// `X.defaultProps` read or written: React gives X's renders those props
+    /// wherever they leave one out.
+    fn record_default_props(&mut self, object: &Expression<'a>, at: u32) {
+        let (tag, root) = match object.get_inner_expression() {
+            Expression::Identifier(id) => (TagFact::Ident(id.name.to_string()), &**id),
+            Expression::StaticMemberExpression(member) => {
+                match (static_member_path(member), static_member_root(member)) {
+                    (Some(path), Some(root)) => (TagFact::Member(path), root),
+                    _ => return,
+                }
+            }
+            _ => return,
+        };
+        let origin = self.origin_of(root);
+        let written = self.writing;
+        self.facts.push(UsageFact::DefaultProps { tag, origin, at, written });
+    }
+
     /// A `cloneElement` call: its overrides count for the cloned element's
     /// component when the first argument is a JSX element or a `const`
     /// bound to one, and for any component otherwise.
@@ -6091,7 +6245,7 @@ fn static_member_path(member: &oxc::ast::ast::StaticMemberExpression<'_>) -> Opt
 }
 
 /// The identifier a static member chain starts with: `ui` in `ui.Kit.Item`.
-fn static_member_root<'b, 'a>(
+pub(crate) fn static_member_root<'b, 'a>(
     member: &'b oxc::ast::ast::StaticMemberExpression<'a>,
 ) -> Option<&'b IdentifierReference<'a>> {
     match &member.object {
@@ -6653,7 +6807,7 @@ impl ReactNames {
         }
     }
 
-    fn from_imports(program: &Program<'_>, scoping: &Scoping) -> Self {
+    pub(crate) fn from_imports(program: &Program<'_>, scoping: &Scoping) -> Self {
         let mut names = Self {
             functions: FxHashMap::default(),
             namespaces: FxHashSet::default(),
@@ -6704,7 +6858,7 @@ impl ReactNames {
     }
 
     /// Whether `callee` calls the runtime's `function`.
-    fn calls(&self, callee: &Expression<'_>, function: &str) -> bool {
+    pub(crate) fn calls(&self, callee: &Expression<'_>, function: &str) -> bool {
         match callee {
             Expression::Identifier(id) => self.functions.get(id.name.as_str()) == Some(&function),
             Expression::StaticMemberExpression(member) => {
@@ -6722,6 +6876,8 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
     let static_values = crate::eval::Statics::empty();
     let mut collector = FactCollector {
         facts: Vec::new(),
+        source: program.source_text,
+        writing: false,
         static_values,
         scoping: None,
         enrich: false,
@@ -6992,8 +7148,8 @@ fn resolve_tag<'m>(
     }
 }
 
-/// The bindings compiled MDX destructures from its provider's components:
-/// `const { Card } = _components`.
+/// The bindings MDX's usage source (`mdxUsageSource`) destructures from its
+/// provider's components: `const { Card } = _components`.
 fn provided_components(program: &Program<'_>) -> FxHashSet<SymbolId> {
     struct Provided(FxHashSet<SymbolId>);
     impl<'a> Visit<'a> for Provided {
@@ -7277,12 +7433,47 @@ pub fn filter_usage_scan(
 
     for fact in facts {
         match fact {
-            UsageFact::Element { tag, attrs, spread, span, origin } => {
+            // React gives every render the default props it leaves out: no
+            // option of the component is proven unused. A name that is no
+            // extracted component is someone else's.
+            UsageFact::DefaultProps { tag, origin, at, written } => {
+                // A component usage cannot name may be extracted: defaults
+                // written to it reach renders unseen. Reading one changes
+                // nothing (React's own code reads them).
+                let Some((tag_name, resolved_binding)) = resolve_tag(tag, *origin, member_expr_bindings) else {
+                    if !*written {
+                        continue;
+                    }
+                    let name = match tag {
+                        TagFact::Member(path) => path,
+                        TagFact::Ident(name) => name,
+                    };
+                    result.identity_uncertain = true;
+                    result.uncertain_tags.push(UncertainTag {
+                        tag: Some(name.clone()),
+                        create_element: false,
+                        written_as_call: false,
+                        default_props: true,
+                        origin: *origin,
+                        at: *at,
+                    });
+                    continue;
+                };
+                let Some(config) = component_configs.get(tag_name) else {
+                    continue;
+                };
+                let binding = resolved_binding.clone().unwrap_or_else(|| tag_name.to_string());
+                result.open_components.insert(binding.clone());
+                record_unwritten_options(&mut result, &mut fully_open, &binding, config, &FxHashSet::default(), true);
+            }
+            UsageFact::Element { tag, attrs, spread, span, origin, written_as_call } => {
                 let uncertain = |result: &mut UsageScanResult, name: &str| {
                     result.identity_uncertain = true;
                     result.uncertain_tags.push(UncertainTag {
                         tag: Some(name.to_string()),
                         create_element: false,
+                        written_as_call: *written_as_call,
+                        default_props: false,
                         origin: *origin,
                         at: span.0,
                     });
@@ -7461,6 +7652,8 @@ pub fn filter_usage_scan(
                     result.uncertain_tags.push(UncertainTag {
                         tag: tag.cloned(),
                         create_element: true,
+                        written_as_call: true,
+                        default_props: false,
                         origin: *origin,
                         at: *at,
                     });
@@ -7603,6 +7796,94 @@ pub fn filter_usage_scan(
     }
 
     result
+}
+
+/// The Animus builder's methods and terminals.
+const BUILDER_METHODS: [&str; 10] =
+    ["styles", "variant", "compound", "states", "system", "props", "extend", "asElement", "asComponent", "asClass"];
+
+/// The package whose builder declares styles.
+const SYSTEM_PACKAGE: &str = "@animus-ui/system";
+
+/// A reference to the Animus builder in a file analyzed for usage only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BuilderReference {
+    /// 1-based position of the member or import.
+    pub line: usize,
+    pub column: usize,
+    /// The builder method, or the import.
+    pub name: String,
+}
+
+/// Every reference to the Animus builder `program` makes: a member whose
+/// property is a builder method, read, called or destructured, static or
+/// through a literal key, and any import from `@animus-ui/system`.
+/// Strings, templates and comments hold none. A key built at runtime
+/// (`ds['sty' + 'les']`) is not seen.
+pub(crate) fn builder_references(program: &Program<'_>) -> Vec<(Span, String)> {
+    struct References(Vec<(Span, String)>);
+    impl<'a> Visit<'a> for References {
+        fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
+            if BUILDER_METHODS.contains(&member.property.name.as_str()) {
+                self.0.push((member.property.span, member.property.name.to_string()));
+            }
+            oxc::ast_visit::walk::walk_static_member_expression(self, member);
+        }
+        fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
+            let key = match &member.expression {
+                Expression::StringLiteral(key) => Some(key.value.as_str()),
+                Expression::TemplateLiteral(key) if key.expressions.is_empty() => {
+                    key.quasis.first().and_then(|quasi| quasi.value.cooked.as_ref()).map(|cooked| cooked.as_str())
+                }
+                _ => None,
+            };
+            if let Some(key) = key.filter(|key| BUILDER_METHODS.contains(key)) {
+                self.0.push((member.expression.span(), key.to_string()));
+            }
+            oxc::ast_visit::walk::walk_computed_member_expression(self, member);
+        }
+        // MDX has no use for the system package: any import of it, named,
+        // default or namespace, reaches the builder's style declarations.
+        fn visit_import_declaration(&mut self, import: &oxc::ast::ast::ImportDeclaration<'a>) {
+            let source = import.source.value.as_str();
+            if source == SYSTEM_PACKAGE || source.strip_prefix(SYSTEM_PACKAGE).is_some_and(|rest| rest.starts_with('/')) {
+                self.0.push((import.span, format!("import from {source}")));
+            }
+        }
+        // A builder method destructured, as `const { styles: s } = ds`.
+        fn visit_binding_property(&mut self, property: &oxc::ast::ast::BindingProperty<'a>) {
+            self.method_key(&property.key);
+            oxc::ast_visit::walk::walk_binding_property(self, property);
+        }
+        fn visit_assignment_target_property_property(
+            &mut self,
+            property: &oxc::ast::ast::AssignmentTargetPropertyProperty<'a>,
+        ) {
+            self.method_key(&property.name);
+            oxc::ast_visit::walk::walk_assignment_target_property_property(self, property);
+        }
+        fn visit_assignment_target_property_identifier(
+            &mut self,
+            property: &oxc::ast::ast::AssignmentTargetPropertyIdentifier<'a>,
+        ) {
+            if BUILDER_METHODS.contains(&property.binding.name.as_str()) {
+                self.0.push((property.binding.span, property.binding.name.to_string()));
+            }
+            oxc::ast_visit::walk::walk_assignment_target_property_identifier(self, property);
+        }
+    }
+    impl References {
+        fn method_key(&mut self, key: &oxc::ast::ast::PropertyKey<'_>) {
+            if let Some(name) = key.static_name().filter(|name| BUILDER_METHODS.contains(&name.as_ref())) {
+                self.0.push((key.span(), name.to_string()));
+            }
+        }
+    }
+    let mut references = References(Vec::new());
+    references.visit_program(program);
+    // The walk meets an outer member before the chain inside it.
+    references.0.sort_by_key(|(span, _)| span.start);
+    references.0
 }
 
 /// Each `createSystem(…)` call whose callee no import, declaration or
@@ -8136,9 +8417,10 @@ mod tests {
         let open = (vec![pair("shape", "__dynamic__")], vec!["loading".to_string()]);
         let defaults = (vec![pair("shape", "__default__")], vec![]);
         assert_eq!(option_usages("const e = createElement(Skel, props);"), open);
+        // A spread after a listed key can override it, as in JSX.
         assert_eq!(
             option_usages("const e = createElement(Skel, { shape: 'line', ...rest });"),
-            open
+            option_usages("const e = <Skel shape=\"line\" {...rest} />;")
         );
         assert_eq!(option_usages("const e = createElement(Skel);"), defaults);
         assert_eq!(option_usages("const e = createElement(Skel, null);"), defaults);

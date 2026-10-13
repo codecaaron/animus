@@ -2,8 +2,8 @@ import {
   assembleStylesheet,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
-import { readFileSync } from 'fs';
-import { basename, dirname } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { basename, dirname, isAbsolute, join } from 'path';
 
 import { sweepAbandonedCopyDirs } from './asset-copy-dirs';
 
@@ -14,6 +14,33 @@ import type { HostResolve } from '@animus-ui/extract/pipeline';
  * `resolveSpecifier` maps a specifier to an absolute id. `emitAsset` is
  * present in build only, where `asset()` files become Rollup assets.
  */
+/** Vite's resolver refuses a file its package's exports leave out, naming
+ *  the package it reached, after any alias. The message ends with that
+ *  directory twice, and both must agree: a path can itself hold the
+ *  delimiter text. */
+const NOT_EXPORTED =
+  /"\.\/([^"]+)" is not exported under the conditions \[[^\]]*\] from package (.+) \(see exports field in \2\/package\.json\)\.?$/;
+
+/**
+ * The file an `asset()` specifier names when its package's exports leave it
+ * out, as a source kit's often do: the subpath in the package Vite's
+ * resolver reached, so an alias keeps its target. Any other resolver
+ * failure, or a refusal naming no absolute package directory, is rethrown.
+ */
+export function unexportedAssetFile(error: Error): string | null {
+  const refused = NOT_EXPORTED.exec(String(error?.message));
+  const packageDir = refused?.[2];
+  if (
+    packageDir === undefined ||
+    !isAbsolute(packageDir) ||
+    !existsSync(join(packageDir, 'package.json'))
+  ) {
+    throw error;
+  }
+  const file = join(packageDir, refused![1]!);
+  return existsSync(file) ? file : null;
+}
+
 export async function runBuildStart(
   ctx: PluginContext,
   resolveSpecifier: HostResolve,
@@ -60,7 +87,8 @@ export async function runBuildStart(
   if (ctx.assetCopyDir !== null)
     sweepAbandonedCopyDirs(dirname(ctx.assetCopyDir));
   for (const specifier of assetSpecifiers) {
-    const resolvedPath = await resolveSpecifier(specifier);
+    const resolvedPath =
+      await resolveSpecifier(specifier).catch(unexportedAssetFile);
     if (!resolvedPath) {
       ctx.assetFallback(
         specifier,

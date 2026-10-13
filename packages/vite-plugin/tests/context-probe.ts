@@ -1,4 +1,7 @@
-import { createExcludeMatcher } from '@animus-ui/extract/pipeline';
+import {
+  createExcludeMatcher,
+  DEFAULT_EXTENSIONS,
+} from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
 
 import { PluginContext } from '../src/context';
@@ -225,6 +228,7 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
       options: {},
       served,
       excludeMatcher: createExcludeMatcher(undefined),
+      extensionsSet: new Set<string>(DEFAULT_EXTENSIONS),
       outputExcludes: [],
       assetCopyDir: null,
       session,

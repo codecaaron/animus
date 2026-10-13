@@ -99,8 +99,9 @@ export interface AnimusExtractOptions {
    */
   exclude?: string[];
   /**
-   * Replaces the default extension list entirely. `.mdx` needs the
-   * `@mdx-js/mdx` peer, or those files warn once and are skipped.
+   * Replaces the default extension list entirely. `.mdx` is read for the
+   * components it renders, with no MDX compiler; any reference to the
+   * builder in it is an error (see the README's MDX section).
    */
   extensions?: string[];
   /**

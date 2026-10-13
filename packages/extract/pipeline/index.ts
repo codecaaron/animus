@@ -245,12 +245,15 @@ export {
   systemLoadDiagnostics,
   vocabularyWitnessDiagnostics,
 } from './manifest-diagnostics';
-export type { DefaultExtension, PreprocessMdxResult } from './mdx-preprocessor';
+export type {
+  DefaultExtension,
+  MdxUsageSourceResult,
+} from './mdx-preprocessor';
 export {
   DEFAULT_EXTENSIONS,
   ENGINE_TRANSFORM_EXTENSIONS,
   isEngineTransformExtension,
-  preprocessMdx,
+  mdxUsageSource,
 } from './mdx-preprocessor';
 export { kitPublicationFailures } from './kit-publication';
 export { applyPrefix } from './prefix';

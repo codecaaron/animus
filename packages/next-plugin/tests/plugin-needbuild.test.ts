@@ -312,39 +312,74 @@ describe('watchOptions.ignored gains the replacements-epoch artifact path (desig
   const epochPathFor = (root: string, plugin: AnimusWebpackPlugin): string =>
     replacementEpochPath(sessionArtifactDir(root, plugin.sessionId));
 
-  test('absent ignored becomes a one-element array', () => {
-    const root = createProject();
-    const { compiler } = createCompiler(root);
-    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
-    applyPlugin(plugin, compiler);
-    expect(compiler.options.watchOptions).toEqual({
-      ignored: [epochPathFor(root, plugin)],
-    });
+  test('every ignored shape keeps ignoring what it ignored, and the epoch', () => {
+    for (const ignored of [undefined, '**/custom/**', ['**/custom/**']]) {
+      const root = createProject();
+      const { compiler } = createCompiler(root, { ignored });
+      const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
+      applyPlugin(plugin, compiler);
+      // A second plugin on the same compiler wraps once more, harmlessly.
+      applyPlugin(new AnimusWebpackPlugin(OPTIONS, { build: BUILD }), compiler);
+      const matcher = requireWatchIgnoreMatcher(compiler);
+      expect(matcher(epochPathFor(root, plugin))).toBe(true);
+      expect(matcher(join(root, 'custom', 'x.js'))).toBe(ignored !== undefined);
+      expect(matcher(join(root, 'src', 'Button.tsx'))).toBe(false);
+    }
   });
 
-  test('a string shape is preserved alongside the epoch path', () => {
-    const root = createProject();
-    const { compiler } = createCompiler(root, { ignored: '**/custom/**' });
-    const plugin = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
-    applyPlugin(plugin, compiler);
-    expect(compiler.options.watchOptions.ignored).toEqual([
-      '**/custom/**',
-      epochPathFor(root, plugin),
-    ]);
-  });
-
-  test('an array shape is appended exactly once across compilers', () => {
-    const root = createProject();
-    const { compiler } = createCompiler(root, { ignored: ['**/custom/**'] });
-    const first = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
-    const second = new AnimusWebpackPlugin(OPTIONS, { build: BUILD });
-    applyPlugin(first, compiler);
-    applyPlugin(second, compiler);
-    expect(second.sessionId).toBe(first.sessionId);
-    expect(compiler.options.watchOptions.ignored).toEqual([
-      '**/custom/**',
-      epochPathFor(root, first),
-    ]);
+  // Contract (O32): a file or directory the Session's watch plan registers
+  // is watched however the host ignores it; Next ignores every
+  // `node_modules` path, where an installed kit and its system live.
+  test('a registered dependency is watched though the host ignores node_modules', () => {
+    const hostIgnores: WatchIgnore[] = [
+      /node_modules/,
+      '**/node_modules/**',
+      ['**/node_modules/**'],
+      (path: string) => path.includes('node_modules'),
+    ];
+    for (const ignored of hostIgnores) {
+      const root = createProject();
+      const harness = createCompiler(root, { ignored });
+      const plugin = new AnimusWebpackPlugin(
+        { ...OPTIONS, system: './node_modules/kit/src/system.ts' },
+        { build: BUILD }
+      );
+      plugin.setRootDir(root);
+      // The installed kit's admitted root, as a full pass records it.
+      const kitRoot = join(root, 'node_modules', 'kit', 'src');
+      // A root admitted on its own inside the kit's dependencies.
+      const nestedRoot = join(kitRoot, 'node_modules', 'other', 'src');
+      plugin['session'].externalWatchRoots = [kitRoot, nestedRoot];
+      applyPlugin(plugin, harness.compiler);
+      const added = () => ({ add: () => {} });
+      harness.compilationHandlers.forEach((fn) =>
+        fn({
+          fileDependencies: added(),
+          missingDependencies: added(),
+          contextDependencies: added(),
+          hooks: { processAssets: { tap: () => {} } },
+        })
+      );
+      const matcher = requireWatchIgnoreMatcher(harness.compiler);
+      expect(
+        matcher(join(root, 'node_modules', 'kit', 'src', 'system.ts'))
+      ).toBe(false);
+      expect(matcher(kitRoot)).toBe(false);
+      expect(matcher(join(kitRoot, 'components', 'Badge.tsx'))).toBe(false);
+      expect(matcher(join(root, 'node_modules', 'other', 'index.js'))).toBe(
+        true
+      );
+      // A sibling whose name extends the root's is not under it.
+      expect(matcher(`${kitRoot}-old/Badge.tsx`)).toBe(true);
+      // The deepest admitted root decides, by its own exclusions.
+      expect(matcher(join(nestedRoot, 'Badge.tsx'))).toBe(false);
+      // The kit's own dependencies stay as the host decides.
+      expect(matcher(join(kitRoot, 'node_modules'))).toBe(true);
+      expect(matcher(join(kitRoot, 'node_modules', 'dep', 'index.js'))).toBe(
+        true
+      );
+      expect(matcher(epochPathFor(root, plugin))).toBe(true);
+    }
   });
 
   test('a matcher shape composes into a matcher that keeps both behaviors', () => {

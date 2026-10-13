@@ -33,5 +33,12 @@
     "baseline": "110356185d053789b6f1f57a4f003dc7192fa35866046146fc69b581d1efa607",
     "candidate": "95fc5b12200e61508b6db6f47ee25d8707bcb728e3fb80786e564582bc8b7d12",
     "reason": "The loader's dependencies are every file it read, not only the modules it ran: the barrels it routed through, the owned modules it audited for registrations and the package manifests it consulted join the list, so 15 paths become 20. The config is identical (configDigest unchanged). (macOS, whose config digest differs from Linux's)"
+  },
+  {
+    "row": "analysis:showcase",
+    "fixture": "showcase-analysis",
+    "baseline": "452de4fd5f738d7e359116149ed3aa77632b3337b647b70dc7e37472d4dc7c71",
+    "candidate": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
+    "reason": "createElement over a component is read as the JSX it creates, an element's children are recorded as its children prop, and defaultProps references are recorded (T6(c)): the file facts the manifest carries record Drawer.tsx's createElement(DrawerContext.Provider, ...) as an element, every element's children, and those references. The census replay of the same showcase graph against main shows CSS, transformed code and diagnostics identical; only those file facts differ."
   }
 ]
