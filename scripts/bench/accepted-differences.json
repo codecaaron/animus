@@ -5,5 +5,12 @@
     "baseline": "398cec66a54f59e1aad03e0567f066d2bcb278a587628ec07d2cda15a3d78f03",
     "candidate": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
     "reason": "Within a layer an extension's rules follow its ancestors': StackItem's inherited direction variant now precedes its own emphasis variant, and the minifier merges the two adjacent flex-direction:column rules into one selector list. The same rules after splitting selector lists; no property is shared, so nothing changes winner."
+  },
+  {
+    "row": "analysis:showcase",
+    "fixture": "showcase-analysis",
+    "baseline": "452de4fd5f738d7e359116149ed3aa77632b3337b647b70dc7e37472d4dc7c71",
+    "candidate": "72a29e78ca8f54da76c53958cc1f9bd0a56214527602b088d8cafa27159ce3c5",
+    "reason": "createElement over a component is read as the JSX it creates (T6(c)): Drawer.tsx's createElement(DrawerContext.Provider, ...) is now recorded as an element in the file facts the manifest carries. The census replay of the same showcase graph against main shows CSS, transformed code and diagnostics identical; only those file facts differ."
   }
 ]
