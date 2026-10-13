@@ -1,9 +1,9 @@
 //! The order in which a relative or aliased specifier's candidate files are
 //! tried: one policy, through which both the system loader and the
 //! extractor resolve, so a specifier names the same file for a system's
-//! evaluation and for an analysis. `extension_policy.json` is generated from
-//! `EXTENSION_POLICY` in `packages/extract/pipeline/extension-policy.ts`,
-//! which source ingestion reads (`node packages/extract/scripts/extension-policy.ts --write`).
+//! evaluation and for an analysis. `extension_policy.json` holds the order;
+//! the TypeScript pipeline reads it through the engine's
+//! `builtInExtensionPolicy`, so every resolver tries the same files.
 
 use std::cell::{OnceCell, RefCell};
 use std::ffi::OsString;
@@ -16,7 +16,7 @@ use rustc_hash::FxHashMap;
 /// tried: the base itself, the base with each appended extension, its
 /// `index` with each, then the NodeNext sources an emitted extension stands
 /// for, every spelling matched exactly.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionPolicy {
     /// Appended to the base, then to `{base}/index`.
@@ -36,7 +36,7 @@ pub fn extension_policy() -> &'static ExtensionPolicy {
     static POLICY: OnceLock<ExtensionPolicy> = OnceLock::new();
     POLICY.get_or_init(|| {
         serde_json::from_str(include_str!("extension_policy.json"))
-            .expect("extension_policy.json is generated valid JSON")
+            .expect("extension_policy.json is valid JSON")
     })
 }
 
@@ -80,6 +80,15 @@ impl ExtensionPolicy {
     /// literal spelling comes first, so a real `.js` neighbour wins over the
     /// `.ts` it could stand for.
     pub fn candidates(&self, base: &str) -> Vec<String> {
+        self.candidates_among(base, None, false)
+    }
+
+    /// [`candidates`](Self::candidates), trying only the extensions in
+    /// `sources` where given; under the built-in order, those of `sources`
+    /// it lacks (`.mdx`) follow its own. With `joined_index`, a base that
+    /// ends in `/` names its index without another `/`, as a path join
+    /// spells it.
+    pub fn candidates_among(&self, base: &str, sources: Option<&[String]>, joined_index: bool) -> Vec<String> {
         // A configured alias of the emitted extension, the first whose
         // suffix the base ends with, replaces the whole search (spec §2.2
         // A2), as enhanced-resolve reads it: each of its spellings is tried
@@ -91,14 +100,28 @@ impl ExtensionPolicy {
         }) {
             return sequence;
         }
-        let mut candidates: Vec<String> = std::iter::once(base.to_string())
-            .chain(self.appended.iter().map(|extension| format!("{base}{extension}")))
-            .chain(self.appended.iter().map(|extension| format!("{base}/index{extension}")))
-            .collect();
-        for (emitted, sources) in &self.node_next {
-            if let Some(stem) = base.strip_suffix(emitted.as_str()) {
-                candidates.extend(sources.iter().map(|source| format!("{stem}{source}")));
+        let admitted = |extension: &String| sources.is_none_or(|sources| sources.contains(extension));
+        let mut appended: Vec<&String> = self.appended.iter().filter(|extension| admitted(extension)).collect();
+        if let Some(sources) = sources {
+            if self.appended == extension_policy().appended {
+                appended.extend(sources.iter().filter(|source| !self.appended.contains(source)));
             }
+        }
+        let index = if joined_index && base.ends_with('/') { "index" } else { "/index" };
+        let mut candidates: Vec<String> = std::iter::once(base.to_string())
+            .chain(appended.iter().map(|extension| format!("{base}{extension}")))
+            .chain(appended.iter().map(|extension| format!("{base}{index}{extension}")))
+            .collect();
+        // The extension the base's own name ends with, from its last dot,
+        // and the first entry equal to it: one rule for the loader and the
+        // analysis, whatever entries a host's table holds.
+        let name = &base[base.rfind(['/', '\\']).map_or(0, |slash| slash + 1)..];
+        let emitted = name.rfind('.').map_or("", |dot| &name[dot..]);
+        let stem = &base[..base.len() - emitted.len()];
+        if let Some((_, node_sources)) = self.node_next.iter().find(|(from, _)| from == emitted) {
+            candidates.extend(
+                node_sources.iter().filter(|source| admitted(source)).map(|source| format!("{stem}{source}")),
+            );
         }
         candidates
     }
@@ -111,21 +134,26 @@ impl ExtensionPolicy {
         // the rest.
         let aliased = self.alias.iter().any(|(emitted, _)| base.ends_with(emitted.as_str()));
         if !aliased {
-            match see(base) {
-                Seen::File => return Probe::Found(base.to_string()),
-                Seen::CaseOnly(actual) => return Probe::CaseMismatch { candidate: base.to_string(), actual },
-                Seen::Missing => {}
+            match probe_candidates([base.to_string()], &see) {
+                Probe::Absent => {}
+                found => return found,
             }
         }
-        for candidate in self.candidates(base).into_iter().skip(usize::from(!aliased)) {
-            match see(&candidate) {
-                Seen::File => return Probe::Found(candidate),
-                Seen::CaseOnly(actual) => return Probe::CaseMismatch { candidate, actual },
-                Seen::Missing => {}
-            }
-        }
-        Probe::Absent
+        probe_candidates(self.candidates(base).into_iter().skip(usize::from(!aliased)), see)
     }
+}
+
+/// The first of `candidates` that `see` finds, in order. A candidate found
+/// only under another case ends the probe as a mismatch.
+pub fn probe_candidates(candidates: impl IntoIterator<Item = String>, see: impl Fn(&str) -> Seen) -> Probe {
+    for candidate in candidates {
+        match see(&candidate) {
+            Seen::File => return Probe::Found(candidate),
+            Seen::CaseOnly(actual) => return Probe::CaseMismatch { candidate, actual },
+            Seen::Missing => {}
+        }
+    }
+    Probe::Absent
 }
 
 /// Why `subject` names no file: `candidate`, the file it would load, is
@@ -451,6 +479,34 @@ pub fn lexical(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Contract: an emitted NodeNext extension is the final extension of the
+    /// base's name, and the first table entry equal to it supplies its
+    /// sources, as the analysis reads a host's table: an entry spanning two
+    /// extensions (`.foo.js`) never matches, and a repeated one adds
+    /// nothing. The policy accepts any table, so a host's answer must not
+    /// change with the entries' overlap.
+    #[test]
+    fn an_emitted_extension_is_the_names_last_and_the_first_entry_wins() {
+        let table = |node_next: &[(&str, &[&str])]| ExtensionPolicy {
+            appended: Vec::new(),
+            node_next: node_next
+                .iter()
+                .map(|(from, to)| (from.to_string(), to.iter().map(|s| s.to_string()).collect()))
+                .collect(),
+            alias: Vec::new(),
+        };
+        let node_next = |policy: &ExtensionPolicy, base: &str| policy.candidates(base)[1..].to_vec();
+        let overlapping = table(&[(".foo.js", &[".tsx"]), (".js", &[".ts"])]);
+        assert_eq!(node_next(&overlapping, "lib/Thing.foo.js"), ["lib/Thing.foo.ts"]);
+        let duplicated = table(&[(".js", &[".ts"]), (".js", &[".tsx"])]);
+        assert_eq!(node_next(&duplicated, "lib/Thing.js"), ["lib/Thing.ts"]);
+        let built_in = extension_policy();
+        assert_eq!(
+            built_in.candidates("./x.mjs")[1 + 2 * built_in.appended.len()..].to_vec(),
+            ["./x.mts"]
+        );
+    }
 
     /// Contract: one resolution pass lists each directory once, however many
     /// candidates it checks in it, and answers each exactly as an unshared

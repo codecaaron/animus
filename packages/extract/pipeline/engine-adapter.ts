@@ -82,7 +82,8 @@ export interface EngineApi {
     workspaces?: WorkspacePackages,
     extensionPolicyJson?: string,
     hostEntry?: string,
-    packageDir?: string
+    packageDir?: string,
+    sources?: string[]
   ) => string;
   analyzeProject: (
     filesJson: string,
@@ -245,7 +246,8 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
               workspaces,
               extensionPolicyJson,
               hostEntry,
-              packageDir
+              packageDir,
+              sources
             ) =>
               native.resolveKitSourceRoot(
                 specifier,
@@ -254,7 +256,8 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
                 workspaces,
                 extensionPolicyJson,
                 hostEntry,
-                packageDir
+                packageDir,
+                sources
               ),
       analyzeProject: (
         filesJsonRaw,

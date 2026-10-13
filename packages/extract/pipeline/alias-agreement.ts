@@ -3,8 +3,8 @@ import { isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
 import {
   bareSpecifierPackageName,
-  findPackageRoot,
   isPackageSpecifier,
+  packageInstanceOf,
 } from './discover-packages';
 import {
   ALIAS_MISMATCH,
@@ -14,9 +14,9 @@ import {
 } from './manifest-diagnostics';
 import { hostCandidate } from './probe-evidence';
 
-import type { ExtensionOrder } from './extension-policy';
 import type { HostResolve } from './host-package-resolver';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
+import type { ExtensionOrder } from './native-resolution';
 import type { HostReadings } from './probe-evidence';
 
 /** A file's identity on disk: its real path, which follows links and
@@ -144,7 +144,9 @@ export function packageInstanceFinding(
   if (readRoot === undefined) return null;
   const file = physical(resolved);
   if (record.holds(file)) return null;
-  const instance = physical(findPackageRoot(file));
+  // The instance as discovery names it: a nested manifest, or a dependency
+  // cache's, is the instance read, whose unanalysed file is still reported.
+  const instance = physical(packageInstanceOf(file, readRoot, record.rootDir));
   const redirected = record.redirected.has(specifier);
   const shown = (path: string): string =>
     relative(record.rootDir, path).split(sep).join(posix.sep);

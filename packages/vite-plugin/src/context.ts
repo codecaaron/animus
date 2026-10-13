@@ -1,6 +1,6 @@
 import {
   buildSystemPropsModule,
-  BUILT_IN_EXTENSION_POLICY,
+  builtInExtensionPolicy,
   builtInAssetClassification,
   contentHash,
   DEFAULT_EXTENSIONS,
@@ -113,9 +113,15 @@ export class PluginContext {
 
   /** Vite's export conditions, so the loader reads the files Vite serves. */
   resolveConditions: string[] = [];
+  private viteExtensionPolicy: HostExtensionPolicy | undefined;
   /** Vite's resolved extension order; the built-in policy until
    *  `configResolved`. */
-  extensionPolicy: HostExtensionPolicy = BUILT_IN_EXTENSION_POLICY;
+  get extensionPolicy(): HostExtensionPolicy {
+    return this.viteExtensionPolicy ?? builtInExtensionPolicy();
+  }
+  set extensionPolicy(policy: HostExtensionPolicy) {
+    this.viteExtensionPolicy = policy;
+  }
   /** Vite's asset classification, captured at `configResolved`. */
   assetClassification: HostAssetClassification =
     builtInAssetClassification('noHost');

@@ -1,10 +1,10 @@
 import { posix } from 'node:path';
 
 import { contentHash } from './content-hash';
-import { policyCandidates } from './extension-policy';
 import { parseInternalWire } from './internal-wire';
 import { SKIPPED_SOURCE_COST } from './manifest-diagnostics';
 import { mdxUsageSource, type MdxUsageSourceResult } from './mdx-preprocessor';
+import { specifierCandidates } from './native-resolution';
 import { adaptedOriginals, hostCandidate } from './probe-evidence';
 import {
   adaptSvelteSource,
@@ -14,7 +14,7 @@ import {
   type SvelteResolverAttributionRequest,
 } from './svelte-source-adapter';
 
-import type { ExtensionOrder } from './extension-policy';
+import type { ExtensionOrder } from './native-resolution';
 
 export interface RawSourceEntry {
   path: string;
@@ -271,7 +271,7 @@ export function relativeSourceCandidates(
   policy?: ExtensionOrder
 ): string[] {
   if (!specifier.startsWith('.')) return [];
-  return policyCandidates(
+  return specifierCandidates(
     posix.normalize(
       posix.join(posix.dirname(canonicalResolverPath(importerPath)), specifier)
     ),
