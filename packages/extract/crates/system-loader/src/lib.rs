@@ -770,9 +770,11 @@ struct BundleLayout {
     import_refs: Vec<(usize, usize, String)>,
     /// Every module the load read, run or routed, in evaluation order.
     read_order: Vec<String>,
-    /// Each routed module's export names that read a module that runs: the
-    /// name, then the module and export it reads. A routed module never runs,
-    /// so what its exports hold is read from the module each one reads.
+    /// Each module's export names its export object does not hold, that read
+    /// a module that runs: the name, then the module and export it reads. A
+    /// routed module never runs, and a retained one holds only its own and
+    /// the asked names, so what such an export holds is read from the module
+    /// it reads.
     routed_reads: FxHashMap<String, Vec<(String, String, String)>>,
 }
 
@@ -927,15 +929,22 @@ fn build_bundle(selection: &bounded::Selection) -> Result<(String, BundleLayout)
     })));
     let read_order = linked::evaluation_order(&ordered, entry_path);
     let order: Vec<String> = read_order.iter().filter(|path| modules.contains_key(*path)).cloned().collect();
+    let held = |path: &str, name: &str| {
+        own.get(path).is_some_and(|names| names.contains(name))
+            || selection.asked.get(path).is_some_and(|asked| asked.contains(name))
+    };
     let routed_reads: FxHashMap<String, Vec<(String, String, String)>> = selection
         .routed
         .keys()
+        .chain(modules.keys())
         .map(|path| {
             let reads = linker
                 .getters(path)
                 .into_iter()
                 .filter_map(|(name, getter)| match getter {
-                    linked::Getter::Module { module, name: Some(export) } if modules.contains_key(&module) => {
+                    linked::Getter::Module { module, name: Some(export) }
+                        if modules.contains_key(&module) && !held(path, &name) =>
+                    {
                         Some((name, module, export))
                     }
                     _ => None,
@@ -1110,32 +1119,37 @@ fn execute_bundle(
     })
 }
 
-/// The scanned theme manifests with each routed module's exports added, in
-/// the order the load read the modules: a routed module never runs, so each
-/// of its exports holding a built theme holds what the export it reads holds.
+/// The scanned theme manifests with each export the scan could not see
+/// added, in the order the load read the modules: a routed module never
+/// runs, and a retained one's object holds only its own and the asked names,
+/// so each other export holding a built theme holds what the export it
+/// reads holds. A module's names are in code-unit order, as its namespace
+/// lists them.
 fn with_routed_themes(scanned: &str, layout: &BundleLayout) -> String {
-    let Ok(serde_json::Value::Object(mut scanned)) = serde_json::from_str::<serde_json::Value>(scanned) else {
+    let Ok(serde_json::Value::Object(scanned)) = serde_json::from_str::<serde_json::Value>(scanned) else {
         return scanned.to_string();
     };
-    let mut manifests = serde_json::Map::new();
-    for path in &layout.read_order {
-        if let Some(themes) = scanned.remove(path) {
-            manifests.insert(path.clone(), themes);
-            continue;
-        }
-        let Some(reads) = layout.routed_reads.get(path) else { continue };
-        let mut themes = serde_json::Map::new();
-        for (name, module, export) in reads {
-            let from = manifests.get(module).or_else(|| scanned.get(module));
-            if let Some(tokens) = from.and_then(|themes| themes.get(export)) {
-                themes.insert(name.clone(), tokens.clone());
+    let themes_of = |path: &str| -> Vec<(String, serde_json::Value)> {
+        let mut themes: Vec<(String, serde_json::Value)> = scanned
+            .get(path)
+            .and_then(|themes| themes.as_object())
+            .map(|themes| themes.iter().map(|(name, tokens)| (name.clone(), tokens.clone())).collect())
+            .unwrap_or_default();
+        for (name, module, export) in layout.routed_reads.get(path).into_iter().flatten() {
+            if let Some(tokens) = scanned.get(module).and_then(|themes| themes.get(export)) {
+                themes.push((name.clone(), tokens.clone()));
             }
         }
+        themes.sort_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));
+        themes
+    };
+    let mut manifests = serde_json::Map::new();
+    for path in layout.read_order.iter().chain(scanned.keys().filter(|path| !layout.read_order.contains(path))) {
+        let themes = themes_of(path);
         if !themes.is_empty() {
-            manifests.insert(path.clone(), serde_json::Value::Object(themes));
+            manifests.insert(path.clone(), serde_json::Value::Object(themes.into_iter().collect()));
         }
     }
-    manifests.extend(scanned);
     serde_json::Value::Object(manifests).to_string()
 }
 

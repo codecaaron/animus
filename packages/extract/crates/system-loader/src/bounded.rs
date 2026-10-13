@@ -861,6 +861,9 @@ impl<'c> Loader<'c> {
                         let Some(method) = member.static_property_name() else {
                             return Ok(Class::Unknown("a computed method call".to_string()));
                         };
+                        if builtin_array(program, expression) {
+                            return Ok(Class::NotSystem);
+                        }
                         if !self.animus_value(module, program, member.object(), depth + 1)? {
                             Class::Unknown(format!("a call of `.{method}()` on a value not traced to Animus"))
                         } else if method == "seal" {
@@ -1336,6 +1339,29 @@ fn refuse_unsupported(semantic: &oxc::semantic::Semantic<'_>, source: &str, path
         }
     }
     Ok(())
+}
+
+/// Whether `expression` is an array the language builds: an array literal,
+/// `Object.keys`, `values` or `entries`, `Array.from` or `of`, or an array
+/// method that returns an array, called on one. `Object` and `Array` count
+/// only where the module does not rebind them.
+fn builtin_array(program: &Program<'_>, expression: &Expression<'_>) -> bool {
+    const RETURNS_ARRAY: [&str; 12] =
+        ["sort", "map", "filter", "slice", "concat", "flat", "flatMap", "reverse", "toSorted", "toReversed", "toSpliced", "with"];
+    match expression.get_inner_expression() {
+        Expression::ArrayExpression(_) => true,
+        Expression::CallExpression(call) => {
+            let Some(member) = call.callee.get_inner_expression().as_member_expression() else { return false };
+            let Some(method) = member.static_property_name() else { return false };
+            match member.object().get_inner_expression() {
+                Expression::Identifier(global) if declaration(program, &global.name).is_none() => {
+                    matches!((global.name.as_str(), method), ("Object", "keys" | "values" | "entries") | ("Array", "from" | "of"))
+                }
+                object => RETURNS_ARRAY.contains(&method) && builtin_array(program, object),
+            }
+        }
+        _ => false,
+    }
 }
 
 /// A builder method that never seals: its result is not a system.
@@ -1849,6 +1875,7 @@ mod tests {
             ("aliases", "export const ds = createSystem().build().seal();\nexport default ds;\nexport { ds as system };\n", Ok(())),
             ("default", "export default createSystem().build().seal();\n", Ok(())),
             ("iife", "export const ds = /* @__PURE__ */ (() => createSystem().build().seal())();\n", Ok(())),
+            ("builtin-array", "export const ds = createSystem().build().seal();\nexport const scale = Object.values({ a: 2, b: 1 }).sort();\n", Ok(())),
         ] {
             let dir = project(&format!("root-{label}"), &[("system.js", &format!("{sealed}{rest}"))]);
             match (load(&dir, "system.js", None), expected) {
@@ -1939,8 +1966,9 @@ mod tests {
     }
 
     /// Contract: the theme manifests name each built theme where main's
-    /// whole-graph load named it: through a barrel that never runs, and in a
-    /// kit whose system the app extends.
+    /// whole-graph load named it: through a barrel that never runs, through a
+    /// re-export of a module that runs, and in a kit whose system the app
+    /// extends.
     #[test]
     fn theme_manifests_keep_routed_and_kit_themes() {
         let dir = project(
@@ -1952,7 +1980,8 @@ mod tests {
                 ("node_modules/kit/src/index.ts", "export { ds as system } from './system';\nexport { referenceTokens as theme } from './theme';\n"),
                 ("node_modules/kit/src/system.ts", "import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem().build().seal();\n"),
                 ("node_modules/kit/src/theme.ts", "import { createTheme } from '@animus-ui/system';\nexport const referenceTokens = createTheme().addColors({ kit: '#000' }).build();\n"),
-                ("system.ts", "import { createSystem } from '@animus-ui/system';\nimport { system as kit } from 'kit';\nexport { theme } from './themes';\nexport const ds = createSystem().build().seal();\nexport const uses = [kit];\n"),
+                ("mixed.ts", "export const mixed = 1;\nexport { theme as mixedTheme } from './themes/leaf';\n"),
+                ("system.ts", "import { createSystem } from '@animus-ui/system';\nimport { system as kit } from 'kit';\nimport { mixed } from './mixed';\nexport { theme } from './themes';\nexport const ds = createSystem().build().seal();\nexport const uses = [kit, mixed];\n"),
             ],
         );
         let config = load(&dir, "system.ts", None).expect("loads");
@@ -1966,7 +1995,7 @@ mod tests {
                 themes.as_object().unwrap().keys().map(move |name| format!("{tail}:{name}")).collect::<Vec<_>>()
             })
             .collect();
-        for expected in ["leaf.ts<themes:theme", "index.ts<themes:theme", "theme.ts<src:referenceTokens", "index.ts<src:theme", "system.ts<"] {
+        for expected in ["leaf.ts<themes:theme", "index.ts<themes:theme", "theme.ts<src:referenceTokens", "index.ts<src:theme", "mixed.ts", "system.ts<"] {
             assert!(named.iter().any(|name| name.starts_with(expected)), "{expected} in {named:?}");
         }
     }
