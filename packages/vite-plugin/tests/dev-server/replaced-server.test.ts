@@ -33,7 +33,7 @@ interface ReplacedServerConfig {
   logLevel: 'silent';
   optimizeDeps: { noDiscovery: true; include: never[] };
   server: { middlewareMode: true; hmr: { port: number } };
-  plugins: ReturnType<typeof animusExtract>;
+  plugins: ReturnType<typeof animusExtract>[];
 }
 
 /** The plugin's resolved stylesheet id; `\0` is Vite's virtual marker. */
@@ -65,8 +65,8 @@ test("a replacement dev server watches the system's outside-root modules", async
       readFileSync(themePath, 'utf8').replace(`'${INITIAL_BRAND_HEX}'`, 'brand')
   );
 
-  // One set of plugin objects, as a host that restarts its server keeps it.
-  const plugins = animusExtract({ system: './src/ds.ts' });
+  // One plugin object, as a host that restarts its server keeps it.
+  const plugin = animusExtract({ system: './src/ds.ts' });
   const start = async (): Promise<ViteDevServer> => {
     // SAFETY: vite-plus runs Vite's server and consumes the same plugin hooks;
     // only the nominal declarations differ.
@@ -79,7 +79,7 @@ test("a replacement dev server watches the system's outside-root modules", async
       logLevel: 'silent',
       optimizeDeps: { noDiscovery: true, include: [] },
       server: { middlewareMode: true, hmr: { port: await reserveHmrPort() } },
-      plugins,
+      plugins: [plugin],
     });
     for (const url of ['/src/main.ts', '/src/Button.ts']) {
       await server.environments.client.transformRequest(url);

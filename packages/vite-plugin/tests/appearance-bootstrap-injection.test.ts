@@ -374,7 +374,7 @@ describe('Vite injection option: absent by default (G4 parity)', () => {
   });
 
   test('the real plugin hook takes the empty branch of the same builder', async () => {
-    const [plugin] = animusExtract({ system: './ds.ts' });
+    const plugin = animusExtract({ system: './ds.ts' });
     const hook = plugin.transformIndexHtml;
 
     if (hook === undefined || !('handler' in hook)) {

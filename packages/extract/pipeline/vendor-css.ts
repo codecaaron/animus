@@ -126,9 +126,14 @@ function valueEnd(prelude: CssToken[], index: number): number {
   return prelude.length - 1;
 }
 
-/** An `@import` with the vendor layer: a `layer` or `layer(x)` it names
- *  nests under it; without one, the layer follows its URL. */
-function layeredImport(css: string, statement: TopLevel): string {
+/** An `@import` with the vendor layer: a `layer(x)` it names nests under
+ *  it, and an anonymous `layer` becomes `anonymous`, a sublayer of its own;
+ *  without one, the layer follows its URL. */
+function layeredImport(
+  css: string,
+  statement: TopLevel,
+  anonymous: string
+): string {
   const { prelude, start, end } = statement;
   const target = valueEnd(prelude, 0);
   if (target >= prelude.length) return css.slice(start, end);
@@ -137,8 +142,7 @@ function layeredImport(css: string, statement: TopLevel): string {
   const named = (token: CssToken | undefined, type: string) =>
     token?.type === type && token.value.toLowerCase() === 'layer';
   if (named(layer, 'ident')) {
-    // `layer` alone is an anonymous layer: it nests as one.
-    return `${css.slice(start, layer!.start)}layer(${VENDOR_LAYER})${css.slice(layer!.end, end)}`;
+    return `${css.slice(start, layer!.start)}layer(${VENDOR_LAYER}.${anonymous})${css.slice(layer!.end, end)}`;
   }
   if (named(layer, 'function')) {
     const close = prelude[valueEnd(prelude, target + 1)]!;
@@ -183,6 +187,8 @@ function isConsumerLayer(
 const LEADS_WITH_AT_RULE = /^(?:\s|\/\*[\s\S]*?\*\/)*@/;
 const HAS_ICSS = /:(?:export|import)\b/;
 const HAS_LAYER = /@layer\b/i;
+/** An escape can spell any of these words: `@l\61 yer`. */
+const HAS_ESCAPE = /\\/;
 const MAY_HAVE_EFFECTS = /important|keyframes|animation|transition/i;
 
 const ANIMATION_PROPERTIES = new Set([
@@ -305,16 +311,19 @@ export function wrapVendorCss(
   imports: VendorImportMode,
   consumer: ConsumerLayers | null = null
 ): WrappedVendorCss {
+  const escaped = HAS_ESCAPE.test(css);
   const structured =
+    escaped ||
     LEADS_WITH_AT_RULE.test(css) ||
     HAS_ICSS.test(css) ||
     (consumer !== null && HAS_LAYER.test(css));
-  const effects = MAY_HAVE_EFFECTS.test(css);
+  const effects = escaped || MAY_HAVE_EFFECTS.test(css);
   const tokens = structured || effects ? tokenize(css) : [];
   const items = structured ? topLevel(tokens) : [];
   let top = '';
   let cursor = 0;
   const moved: string[] = [];
+  let anonymous = 0;
   for (const item of items) {
     if (!LEADING.has(item.name) || item.block) break;
     top += css.slice(cursor, item.start);
@@ -323,7 +332,12 @@ export function wrapVendorCss(
       moved.push(text.replace(/\s+/g, ' '));
       top += text.replace(/[^\n]/g, '');
     } else if (item.name === 'import' && imports === 'layer') {
-      top += layeredImport(css, item);
+      // Unique to the file and the import, so it merges with no other.
+      top += layeredImport(
+        css,
+        item,
+        `anm-anonymous-${contentHash(file).slice(0, 8)}-${anonymous++}`
+      );
     } else {
       top += text;
     }

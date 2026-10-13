@@ -1,16 +1,22 @@
 import {
   consumerLayers,
   createVendorReporter,
+  vendorCoverageNotice,
   vendorCssUnit,
 } from '@animus-ui/extract/pipeline';
 import { relative } from 'path';
 import { isCSSRequest } from 'vite';
 
-import { VIRTUAL_PREFIX, VIRTUAL_VENDOR_STYLES_ID } from './constants';
-import { afterDirectives } from './transform';
+import {
+  RESOLVED_STYLES_ENTRY_ID,
+  VIRTUAL_CSS_ID,
+  VIRTUAL_PREFIX,
+  VIRTUAL_VENDOR_STYLES_ID,
+} from './constants';
 
 import type { PluginContext } from './context';
-import type { HtmlTagDescriptor, Plugin } from 'vite';
+import type { VendorReporter } from '@animus-ui/extract/pipeline';
+import type { HtmlTagDescriptor, Plugin, ResolvedConfig } from 'vite';
 
 /** Every stylesheet language Vite's CSS plugin compiles, as its own
  *  filter matches them. */
@@ -22,9 +28,7 @@ const CSS_LANGS =
  *  pipeline. */
 const NOT_A_STYLESHEET = /[?&](?:url|raw|worker|sharedworker)\b/;
 
-/** An import of Animus's stylesheet as an app writes it. */
-const AUTHORED_STYLESHEET_IMPORT =
-  /import\s*['"]virtual:animus\/styles\.css['"]/;
+const VENDOR_LAYER_PLUGIN = 'animus-extract:vendor-layer';
 
 const VENDOR_STYLES_IMPORT = `import '${VIRTUAL_VENDOR_STYLES_ID}';`;
 
@@ -48,23 +52,60 @@ export function vendorStylesTags(ctx: PluginContext): HtmlTagDescriptor[] {
 }
 
 /**
- * An app without an index.html loads the registered vendor stylesheets
- * from the module that imports Animus's stylesheet, before anything it
- * imports. The import joins the first line after the directives, so no
- * line moves.
+ * A module's import of Animus's stylesheet, when the system registers vendor
+ * stylesheets, resolves to an entry loading those first: however the import
+ * is written or whichever plugin adds it. The entry's own import is the
+ * stylesheet.
  */
-export function withVendorStylesImport(
+export function resolveStylesEntry(
   ctx: PluginContext,
-  source: string,
-  transformed: { code: string; map: null } | null
-): { code: string; map: null } | null {
-  if (!hasDeclaredSheets(ctx) || !AUTHORED_STYLESHEET_IMPORT.test(source)) {
-    return transformed;
+  id: string,
+  importer: string | undefined
+): string | null {
+  if (
+    id !== VIRTUAL_CSS_ID ||
+    importer === undefined ||
+    importer === RESOLVED_STYLES_ENTRY_ID ||
+    isCSSRequest(importer) ||
+    importer.endsWith('.html') ||
+    !hasDeclaredSheets(ctx)
+  ) {
+    return null;
   }
-  return {
-    code: afterDirectives(transformed?.code ?? source, VENDOR_STYLES_IMPORT),
-    map: null,
-  };
+  return RESOLVED_STYLES_ENTRY_ID;
+}
+
+export function loadStylesEntry(id: string): string | null {
+  if (id !== RESOLVED_STYLES_ENTRY_ID) return null;
+  return `${VENDOR_STYLES_IMPORT}\nimport '${VIRTUAL_CSS_ID}';\n`;
+}
+
+/**
+ * Runs the vendor layer right after Vite's CSS plugin, wherever the
+ * extraction plugin sits or however a config wraps it: in the resolved
+ * plugin list, before Vite builds each environment's from it. A config that
+ * resolves again (a restarted server) gets it again.
+ */
+export function insertVendorLayer(
+  ctx: PluginContext,
+  config: ResolvedConfig
+): void {
+  // SAFETY: Vite reads each environment's plugins from this list after the
+  // configResolved hooks run, so an insertion here joins every environment.
+  const plugins = config.plugins as Plugin[];
+  if (plugins.some((plugin) => plugin.name === VENDOR_LAYER_PLUGIN)) return;
+  const report = createVendorReporter((line) => ctx.warn(line), {
+    levels: ctx.options.diagnostics,
+    strict: ctx.options.strict,
+    info: (line) => ctx.log(line),
+  });
+  const css = plugins.findIndex((plugin) => plugin.name === 'vite:css');
+  if (css === -1) {
+    const why = "its CSS plugin (vite:css) is not in the config's plugins";
+    report('Vite', why, [vendorCoverageNotice('Vite', why)]);
+    return;
+  }
+  plugins.splice(css + 1, 0, vendorLayerPlugin(ctx, report));
 }
 
 /**
@@ -76,15 +117,10 @@ export function withVendorStylesImport(
  * splitting stay as Vite makes them. A file the system opts out keeps its
  * own cascade position.
  */
-export function vendorLayerPlugin(ctx: PluginContext): Plugin {
-  const report = createVendorReporter((line) => ctx.warn(line), {
-    levels: ctx.options.diagnostics,
-    strict: ctx.options.strict,
-    info: (line) => ctx.log(line),
-  });
+function vendorLayerPlugin(ctx: PluginContext, report: VendorReporter): Plugin {
   const consumer = consumerLayers(ctx.options.layers);
   return {
-    name: 'animus-extract:vendor-layer',
+    name: VENDOR_LAYER_PLUGIN,
     transform: {
       filter: { id: CSS_LANGS },
       handler(code, id) {

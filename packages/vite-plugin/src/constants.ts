@@ -25,6 +25,9 @@ export const VIRTUAL_SYSTEM_PROPS_ID = `${VIRTUAL_PREFIX}system-props`;
  *  order: what an app loads before any stylesheet of its own. */
 export const VIRTUAL_VENDOR_STYLES_ID = `${VIRTUAL_PREFIX}vendor-styles.js`;
 export const RESOLVED_VENDOR_STYLES_ID = `\0${VIRTUAL_VENDOR_STYLES_ID}`;
+/** What an app module's import of Animus's stylesheet loads when the system
+ *  registers vendor stylesheets: those, then Animus's. */
+export const RESOLVED_STYLES_ENTRY_ID = `\0${VIRTUAL_PREFIX}styles-entry.js`;
 export const RESOLVED_SYSTEM_PROPS_ID = `\0${VIRTUAL_SYSTEM_PROPS_ID}`;
 
 // The default exclusion set is owned by the shared pipeline core; this is a

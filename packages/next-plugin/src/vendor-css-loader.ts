@@ -4,6 +4,7 @@ import {
   vendorCssUnit,
 } from '@animus-ui/extract/pipeline';
 import { getStylesheetPlan, sessionKey } from '@animus-ui/extract/session';
+import { realpathSync } from 'fs';
 import { relative, sep } from 'path';
 
 import type { DiagnosticLevels } from '@animus-ui/extract/pipeline';
@@ -37,6 +38,14 @@ interface VendorCssLoaderContext {
   callback(error: Error | null, code?: string, map?: IncomingMap): void;
 }
 
+function canonical(file: string): string {
+  try {
+    return realpathSync(file);
+  } catch {
+    return file;
+  }
+}
+
 /** A file's diagnostics print once per content, across compilers. */
 let report: ReturnType<typeof createVendorReporter> | null = null;
 const keys = new Map<string, ReturnType<typeof sessionKey>>();
@@ -55,7 +64,9 @@ export default function vendorCssLoader(
   map?: IncomingMap
 ): void {
   const options = this.getOptions();
-  const file = this.resourcePath;
+  // By real path, as the artifacts and the plan name files: a symlinked
+  // root or `resolve.symlinks: false` leaves the request's path lexical.
+  const file = canonical(this.resourcePath);
   if (file.startsWith(options.animusArtifacts + sep)) {
     this.callback(null, source, map);
     return;
@@ -70,11 +81,16 @@ export default function vendorCssLoader(
     key = sessionKey(options.build, options.root);
     keys.set(keyId, key);
   }
-  const code = vendorCssUnit(source, file, relative(options.root, file), {
-    plan: getStylesheetPlan(key),
-    imports: 'keep',
-    consumer: consumerLayers(options.layers),
-    report,
-  });
+  const code = vendorCssUnit(
+    source,
+    file,
+    relative(options.root, this.resourcePath),
+    {
+      plan: getStylesheetPlan(key),
+      imports: 'keep',
+      consumer: consumerLayers(options.layers),
+      report,
+    }
+  );
   this.callback(null, code, map);
 }

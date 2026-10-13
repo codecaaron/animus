@@ -67,8 +67,12 @@ type WebpackPluginEntry = object | false | null | undefined;
 
 interface WebpackLoaderUse {
   loader: string;
-  options?: object | string;
+  options?: LoaderOptions;
 }
+
+/** A loader's options; css-loader's `importLoaders` counts the loaders after
+ *  it that an `@import`ed stylesheet passes through. */
+type LoaderOptions = object & { importLoaders?: number };
 
 interface WebpackRule {
   test?: RegExp | ((path: string) => boolean);
@@ -412,6 +416,20 @@ export function withAnimus(
 
         const actualLoaderPath = resolveAnimusLoaderPath();
 
+        const loaderOptions = {
+          development: context.dev === true,
+          cssImportTarget: options.cssImportTarget,
+          build,
+          root: rootDir,
+        };
+        const vendorLoaderOptions = {
+          animusArtifacts: realpathSync(join(rootDir, ANIMUS_ARTIFACT_DIR)),
+          build,
+          root: rootDir,
+          strict: options.strict,
+          diagnostics: options.diagnostics,
+          layers: options.layers,
+        };
         config.module = config.module || {};
         config.module.rules = config.module.rules || [];
         config.module.rules.push({
@@ -421,29 +439,12 @@ export function withAnimus(
             return !isExternalPackageFile(filePath);
           },
           enforce: 'pre',
-          use: [
-            {
-              loader: actualLoaderPath,
-              options: {
-                development: context.dev === true,
-                cssImportTarget: options.cssImportTarget,
-                build,
-                root: rootDir,
-              },
-            },
-          ],
+          use: [{ loader: actualLoaderPath, options: loaderOptions }],
         });
 
         const wrapping = insertVendorCssLoader(config.module.rules, {
           loader: resolveVendorCssLoaderPath(),
-          options: {
-            animusArtifacts: realpathSync(join(rootDir, ANIMUS_ARTIFACT_DIR)),
-            build,
-            root: rootDir,
-            strict: options.strict,
-            diagnostics: options.diagnostics,
-            layers: options.layers,
-          },
+          options: vendorLoaderOptions,
         });
         if (wrapping === 0) {
           vendorCoverage(
@@ -468,7 +469,9 @@ const CSS_LOADER = /[\\/]css-loader[\\/]/;
  * before css-loader: after PostCSS or Sass compile a unit, before css-loader
  * turns it into a module and the extract or style loader delivers it.
  * Every stylesheet the build loads passes one of these rules: the app's, a
- * package's, a CSS Module's. Returns how many rules run it.
+ * package's, a CSS Module's. css-loader counts one more loader for an
+ * `@import`ed stylesheet, so it still passes PostCSS (or Sass) too. Returns
+ * how many rules run it.
  */
 function insertVendorCssLoader(
   rules: readonly WebpackRule[],
@@ -484,8 +487,22 @@ function insertVendorCssLoader(
     if (!Array.isArray(rule.use)) continue;
     const at = rule.use.findIndex((entry) => CSS_LOADER.test(entry.loader));
     if (at === -1) continue;
+    const cssLoader = rule.use[at]!;
     if (!rule.use.includes(vendorLoader)) {
-      rule.use.splice(at + 1, 0, vendorLoader);
+      // A copy: rules can share one options object.
+      const options = cssLoader.options ?? {};
+      rule.use.splice(
+        at,
+        1,
+        {
+          ...cssLoader,
+          options: {
+            ...options,
+            importLoaders: (options.importLoaders ?? 0) + 1,
+          },
+        },
+        vendorLoader
+      );
     }
     inserted += 1;
   }

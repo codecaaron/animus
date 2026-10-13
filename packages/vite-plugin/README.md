@@ -29,7 +29,7 @@ The `system` option points to the file that exports your built system instance. 
 2. **Dev server**: Runs extraction on startup, holds results in memory, serves CSS via virtual module
 3. **Transforms**: Resolves `__TRANSFORM__` placeholders using your system's named transform functions
 4. **Global styles**: Emits global styles (reset, base) from your exported `createGlobalStyles()` configuration
-5. **Vendor layer**: Wraps every stylesheet Vite compiles that Animus did not produce — package and app CSS, CSS Modules, `?inline` strings — in the `anm-vendor` layer below Animus's layers (see `registerVendorStyles` in `@animus-ui/system`). `animusExtract()` returns two plugins: extraction, which runs before Vite's CSS plugin, and the vendor layer, which runs after it. Registered sheets load first through `index.html`, or, in an app without one, from its root module (`app/root`, `app/layout` or `pages/_app`). Stylesheets Vite does not compile — `public/` files, external `<link>`s, styles a script inserts at runtime — are not wrapped.
+5. **Vendor layer**: Wraps every stylesheet Vite compiles that Animus did not produce — package and app CSS, CSS Modules, `?inline` strings — in the `anm-vendor` layer below Animus's layers (see `registerVendorStyles` in `@animus-ui/system`). `animusExtract()` is one plugin, which adds the vendor layer right after Vite's CSS plugin. Registered sheets load first through `index.html`, and before Animus's stylesheet wherever a module imports it. Stylesheets Vite does not compile — `public/` files, external `<link>`s, styles a script inserts at runtime — are not wrapped.
 
 ## Appearance bootstrap
 

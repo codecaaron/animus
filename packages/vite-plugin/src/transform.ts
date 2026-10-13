@@ -14,16 +14,14 @@ import { applyPublished, changesOf, mergePublished } from './session-outcomes';
 import type { ObservedOutcome, PluginContext } from './context';
 
 /**
- * `statement` after `code`'s directive prologue: above it, 'use client'
+ * The import goes after the directive prologue: above it, 'use client'
  * becomes an ordinary expression and the module loses its client marking.
  */
-export function afterDirectives(code: string, statement: string): string {
-  const prologue = /^(?:(['"])use [a-z -]+\1;?\r?\n)*/.exec(code)?.[0] ?? '';
-  return prologue + statement + code.slice(prologue.length);
-}
-
 export function applyDevBridgeImport(code: string): string {
-  return afterDirectives(code, `import '${VIRTUAL_BRIDGE_ID}';\n`);
+  const prologue = /^(?:(['"])use [a-z -]+\1;?\r?\n)*/.exec(code)?.[0] ?? '';
+  return (
+    prologue + `import '${VIRTUAL_BRIDGE_ID}';\n` + code.slice(prologue.length)
+  );
 }
 
 /** The files defining a transitive extension of a component the given
