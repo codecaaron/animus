@@ -1814,7 +1814,12 @@ mod tests {
             ("ds.styles?.({});", vec!["styles"]),
             ("ds.styles`x`;", vec!["styles"]),
             ("const el = <div>{ds.variant({})}</div>;", vec!["variant"]),
-            ("import { createSystem as makeSystem } from '@animus-ui/system';", vec!["createSystem"]),
+            ("import { createSystem as makeSystem } from '@animus-ui/system';", vec!["import from @animus-ui/system"]),
+            ("import * as animus from '@animus-ui/system';\nanimus.createGlobalStyles({});", vec!["import from @animus-ui/system"]),
+            ("import animus from '@animus-ui/system/groups';", vec!["import from @animus-ui/system/groups"]),
+            ("const { styles: s } = ds;\ns({});", vec!["styles"]),
+            ("const { styles } = ds;", vec!["styles"]),
+            ("let s;\n({ styles: s } = ds);", vec!["styles"]),
             ("ds\n  .styles({})\n  .asClass();", vec!["styles", "asClass"]),
         ] {
             assert_eq!(references(source), expected, "{source}");
