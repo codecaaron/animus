@@ -13969,6 +13969,49 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!((sizes, states), (vec!["md"], vec!["active"]));
     }
 
+    /// Contract: an element's children are its `children` prop, written
+    /// after every attribute, so they replace a `children` attribute or one
+    /// a spread delivers; `createElement`'s extra arguments are those
+    /// children. An option they write is never pruned.
+    #[test]
+    fn children_are_the_children_prop() {
+        let wrapped = WRAPPED.replace("prop: 'size'", "prop: 'children'");
+        let kept = |app: &str| -> Vec<&'static str> {
+            let source = format!("import {{ R }} from './r';\n{app}\n");
+            let out = analyze(&[("r.tsx", wrapped.as_str()), ("app.tsx", source.as_str())], &test_inputs());
+            let r = class_of(&out, "r.tsx::R");
+            ["sm", "md", "lg"].into_iter().filter(|o| out.css.contains(&format!(".{r}--children-{o}"))).collect()
+        };
+        for app in [
+            "import { createElement } from 'react';\nconst Button = (props) => createElement(R, props, 'lg');\nexport const App = () => <Button children=\"sm\" />;",
+            "const Button = (props) => <R {...props}>lg</R>;\nexport const App = () => <Button children=\"sm\" />;",
+            "export const App = () => <R children=\"sm\">lg</R>;",
+            "import { createElement } from 'react';\nexport const App = () => createElement(R, { children: 'sm' }, 'lg');",
+        ] {
+            assert!(kept(app).contains(&"lg"), "{app}: {:?}", kept(app));
+        }
+        // Children usage cannot list keep every option.
+        assert_eq!(kept("export const App = ({ x }) => <R>{x}</R>;"), vec!["sm", "md", "lg"]);
+    }
+
+    /// Contract: React gives a component's renders the `defaultProps` they
+    /// leave out, so a reference to an extracted component's `defaultProps`
+    /// keeps every option it could set; one to anything else adds nothing.
+    #[test]
+    fn default_props_keep_every_option() {
+        for app in [
+            "import { createElement } from 'react';\nR.defaultProps = { size: 'lg' };\nconst Button = (props) => createElement(R, props);\nexport const App = () => <Button />;",
+            "R.defaultProps = { size: 'lg' };\nexport const App = () => <R />;",
+            "R.defaultProps.size = 'lg';\nexport const App = () => <R />;",
+            "R['defaultProps'] = { size: 'lg' };\nexport const App = () => <R />;",
+        ] {
+            let (sizes, states, _) = wrapper_kept(app);
+            assert_eq!((sizes, states), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{app}");
+        }
+        let (sizes, _, _) = wrapper_kept("class Other {}\nOther.defaultProps = { size: 'lg' };\nexport const App = () => <R size=\"sm\" />;");
+        assert_eq!(sizes, vec!["sm"]);
+    }
+
     /// A same-module wrapper that forwards its props by spread stands in for
     /// its target: its renders count as the target's, so options reached
     /// only through it prune.

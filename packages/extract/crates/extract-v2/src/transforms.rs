@@ -841,6 +841,23 @@ const icon = createTransform('icon', (value) => <Icon size={outer}>{value}</Icon
         }
     }
 
+    /// Contract: the parse reads a `createElement` call as the element it
+    /// creates, but a callback making one still calls `createElement` from
+    /// outside, so it is not self-contained.
+    #[test]
+    fn a_lowered_create_element_call_is_still_an_external_reference() {
+        let source = "import { createElement } from 'react';\n\
+                      const t = createTransform('t', (v) => { function Inner() {}; return createElement(Inner, { v }); });\n";
+        let counter = crate::owned_ast::ParseCounter::new(0);
+        let ast = crate::owned_ast::OwnedAst::parse("t.tsx".into(), source.into(), &counter);
+        let transform = extract_transforms(ast.program(), ast.source(), "t.tsx", &FxHashSet::default())
+            .into_iter()
+            .next()
+            .expect("one transform");
+        assert!(!transform.valid);
+        assert!(transform.diagnostics.iter().any(|d| d.contains("'createElement'")), "{:?}", transform.diagnostics);
+    }
+
     #[test]
     fn standard_for_loop_still_rejects_real_external_symbol() {
         let transform = extract_one(
