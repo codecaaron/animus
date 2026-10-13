@@ -1,7 +1,10 @@
 import { existsSync, readdirSync, statSync, watch } from 'fs';
 import { dirname, join, relative } from 'path';
 
-import { isPathWithinRoot } from '../pipeline/index';
+import {
+  isExcludedPackageRelativePath,
+  isPathWithinRoot,
+} from '../pipeline/index';
 import { COALESCING_WINDOW_MS, CoalescingWindow } from './coalescing-window';
 import {
   ANIMUS_ARTIFACT_DIR,
@@ -54,6 +57,88 @@ function isIntrinsicString<Value>(value: Value): value is Value & string {
   );
 }
 
+/** A directory tree under watch; closing it closes every watcher in it. */
+interface TreeWatch {
+  close(): void;
+}
+
+/**
+ * Watches `root` and each directory under it that a kit's sources can live
+ * in, one non-recursive watcher per directory, and never descends into
+ * `node_modules` or another excluded path. A recursive watch would register
+ * its whole tree before any filter ran: on Linux, Node watches every file
+ * and directory, a kit's own dependencies included. Directories created
+ * later are added; removed ones are closed. `onPath` receives each reported
+ * path outside the excluded ones.
+ */
+function watchTree(
+  root: string,
+  watchFn: typeof watch,
+  onPath: (abs: string) => void,
+  onError: <Thrown>(err: Thrown) => void
+): TreeWatch {
+  const watchers = new Map<string, ReturnType<typeof watch>>();
+  let closed = false;
+  const excluded = (path: string): boolean => {
+    const rel = relative(root, path);
+    return (
+      rel !== '' &&
+      (isExcludedPackageRelativePath(rel) ||
+        rel.split(/[\\/]/).some((segment) => IGNORED_SEGMENTS.has(segment)))
+    );
+  };
+  const add = (dir: string): void => {
+    if (closed || watchers.has(dir) || excluded(dir)) return;
+    const watcher = watchFn(dir, { recursive: false }, (_event, name) => {
+      if (closed) return;
+      const abs = name == null ? dir : join(dir, name.toString());
+      if (excluded(abs)) return;
+      try {
+        follow(abs);
+      } catch (err) {
+        onError(err);
+        return;
+      }
+      onPath(abs);
+    });
+    watcher.on('error', onError);
+    watcher.unref?.();
+    watchers.set(dir, watcher);
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) add(join(dir, entry.name));
+    }
+  };
+  // A created directory is watched; a removed one, and all under it, closed.
+  const follow = (abs: string): void => {
+    let isDirectory = false;
+    try {
+      isDirectory = statSync(abs).isDirectory();
+    } catch {}
+    if (isDirectory) {
+      add(abs);
+      return;
+    }
+    for (const [dir, watcher] of [...watchers]) {
+      if (dir !== root && isPathWithinRoot(abs, dir)) {
+        watcher.close();
+        watchers.delete(dir);
+      }
+    }
+  };
+  const close = (): void => {
+    closed = true;
+    for (const watcher of watchers.values()) watcher.close();
+    watchers.clear();
+  };
+  try {
+    add(root);
+  } catch (err) {
+    close();
+    throw err;
+  }
+  return { close };
+}
+
 export interface TurbopackWatcherOptions {
   debounceMs?: number;
   watchFn?: typeof watch;
@@ -87,12 +172,12 @@ export function startTurbopackWatcher(
   let died = false;
   let holdingEvents = holdEvents;
 
-  const externalWatchers = new Map<string, ReturnType<typeof watch>>();
+  const externalWatchers = new Map<string, TreeWatch>();
   const dependencyWatchers = new Map<
     string,
     { watcher: ReturnType<typeof watch>; files: Set<string> }
   >();
-  let pendingOpened = new Map<string, ReturnType<typeof watch>>();
+  let pendingOpened = new Map<string, TreeWatch>();
   let capturedDuringSnapshot: string[] = [];
 
   const externalDiagnosticKey = (root: string): string =>
@@ -225,8 +310,8 @@ export function startTurbopackWatcher(
 
   const onExternalEvent = (
     root: string,
-    self: () => ReturnType<typeof watch> | undefined,
-    filename: string | Buffer | null
+    self: () => TreeWatch | undefined,
+    abs: string
   ): void => {
     if (closed) return;
     const watcher = self();
@@ -235,16 +320,6 @@ export function startTurbopackWatcher(
     const isPending =
       watcher !== undefined && pendingOpened.get(root) === watcher;
     if (!active && !isPending) return;
-    let abs: string;
-    if (filename == null) {
-      abs = root;
-    } else {
-      const rel = filename.toString();
-      if (rel.split(/[\\/]/).some((segment) => IGNORED_SEGMENTS.has(segment))) {
-        return;
-      }
-      abs = rel === '' ? root : join(root, rel);
-    }
     if (isPending && !active) {
       capturedDuringSnapshot.push(abs);
       return;
@@ -252,22 +327,23 @@ export function startTurbopackWatcher(
     enqueuePath(abs);
   };
 
-  /** Watches one admitted root recursively, an installed kit's under
-   *  node_modules too: Turbopack transforms its edits, and the loader then
-   *  waits on an analysis only this watcher schedules. Nothing else under
-   *  node_modules is watched. */
+  /** Watches one admitted root, an installed kit's under node_modules too:
+   *  Turbopack transforms its edits, and the loader then waits on an
+   *  analysis only this watcher schedules. Nothing else under node_modules
+   *  is watched, the kit's own dependencies included. */
   const openExternalWatcher = (
     root: string,
-    into: Map<string, ReturnType<typeof watch>>
+    into: Map<string, TreeWatch>
   ): void => {
     try {
-      let watcher: ReturnType<typeof watch> | undefined;
-      watcher = watchFn(root, { recursive: true }, (_event, filename) =>
-        onExternalEvent(root, () => watcher, filename)
+      let tree: TreeWatch | undefined;
+      tree = watchTree(
+        root,
+        watchFn,
+        (abs) => onExternalEvent(root, () => tree, abs),
+        (err) => degradeExternalRoot(root, err)
       );
-      watcher.on('error', (err) => degradeExternalRoot(root, err));
-      watcher.unref?.();
-      into.set(root, watcher);
+      into.set(root, tree);
       session.stickyDiagnostics?.delete(externalDiagnosticKey(root));
     } catch (err) {
       degradeExternalRoot(root, err);
