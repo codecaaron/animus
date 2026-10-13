@@ -1247,18 +1247,17 @@ export class ExtractionSession {
       for (const removedPath of changes.removedFiles) {
         let key: string;
         let owningRoot: string | null = null;
-        // A kit file under the project's own node_modules resolves as the
-        // kit's, as its edits do.
+        // The identity a spelling was recorded under wins: a kit alias of a
+        // project file deletes that file, and a kit file under the
+        // project's own node_modules is the kit's. A spelling never
+        // recorded is a project file by its path.
         const resolved =
           this.sourceIdentity?.resolveDeletedSourceId(removedPath);
-        if (
-          resolved?.owningRoot == null &&
-          isPathWithinRoot(rootDir, removedPath)
-        ) {
-          key = relative(rootDir, removedPath);
-        } else if (resolved) {
+        if (resolved) {
           key = resolved.sourceKey;
           owningRoot = resolved.owningRoot;
+        } else if (isPathWithinRoot(rootDir, removedPath)) {
+          key = relative(rootDir, removedPath);
         } else {
           continue;
         }
@@ -2511,7 +2510,12 @@ export class ExtractionSession {
       // An out-of-root spelling canonicalizing INTO the project root —
       // the same consumer filters as the lexical local branch.
       if (!scan.extensionsSet.has(ext)) return null;
-      if (scan.excludeMatcher.matches(resolved.sourceKey, resolved.sourceKey)) {
+      if (
+        scan.excludeMatcher.matches(
+          resolve(rootDir, resolved.sourceKey),
+          resolved.sourceKey
+        )
+      ) {
         return null;
       }
       return { key: resolved.sourceKey, owningRoot: null };
