@@ -1115,9 +1115,10 @@ pub(crate) fn config_only<'i>(files: &BTreeMap<String, FileFacts>, inputs: &'i C
                 }
             }
             // A runtime load reaches what it may load: a literal's module, a
-            // closed expansion's, or, open, every module.
+            // closed expansion's, however many modules it lists, or, open,
+            // every module. Only Flow needs the load-set bound.
             for load in &ff.module_loads {
-                let reached: Vec<String> = match load_reach(file, load, files, inputs) {
+                let reached: Vec<String> = match load_reach_within(file, load, files, inputs, usize::MAX) {
                     LoadReach::Modules(modules) => modules.into_iter().cloned().collect(),
                     LoadReach::Any(_) => files.keys().cloned().collect(),
                 };
@@ -3401,6 +3402,17 @@ pub(crate) fn load_reach<'f, T>(
     files: &'f BTreeMap<String, T>,
     inputs: &CssInputs,
 ) -> LoadReach<'f> {
+    load_reach_within(file, load, files, inputs, LOAD_SET_LIMIT)
+}
+
+/// `load_reach`, with `bound` in place of the load-set bound.
+fn load_reach_within<'f, T>(
+    file: &str,
+    load: &crate::loads::ModuleLoad,
+    files: &'f BTreeMap<String, T>,
+    inputs: &CssInputs,
+    bound: usize,
+) -> LoadReach<'f> {
     if let crate::loads::LoadTarget::Specifier(_) = load.target {
         return LoadReach::Modules(loaded_modules(file, load, files, inputs));
     }
@@ -3410,7 +3422,7 @@ pub(crate) fn load_reach<'f, T>(
         .flat_map(|evidence| &evidence.expansions)
         .find(|expansion| expansion.importer == file && expansion.start == load.start);
     let Some(expansion) = expansion.filter(|expansion| expansion.closed) else {
-        if let Some(reach) = declared_reach(file, load, files, inputs) {
+        if let Some(reach) = declared_reach(file, load, files, inputs, bound) {
             return reach;
         }
         return LoadReach::Any("which may load any module, and the host lists no closed expansion of it".to_string());
@@ -3423,7 +3435,7 @@ pub(crate) fn load_reach<'f, T>(
             _ => return LoadReach::Any(format!("which may load {}, a module the analysis does not read", expanded.path)),
         }
     }
-    if modules.len() > LOAD_SET_LIMIT {
+    if modules.len() > bound {
         return LoadReach::Any(format!("which may load any of {} modules", modules.len()));
     }
     LoadReach::Modules(modules)
@@ -3437,6 +3449,7 @@ fn declared_reach<'f, T>(
     load: &crate::loads::ModuleLoad,
     files: &'f BTreeMap<String, T>,
     inputs: &CssInputs,
+    bound: usize,
 ) -> Option<LoadReach<'f>> {
     let enclosing = load.enclosing_function.as_deref()?;
     let site = inputs.analysis_context.closed_dynamic_imports.iter().find(|site| {
@@ -3446,7 +3459,7 @@ fn declared_reach<'f, T>(
         ClosedTargets::BuildChunks => {
             let chunks = inputs.build_chunks.get()?;
             let modules: Vec<&'f String> = chunks.iter().filter_map(|chunk| files.get_key_value(chunk).map(|(key, _)| key)).collect();
-            if modules.len() > LOAD_SET_LIMIT {
+            if modules.len() > bound {
                 return Some(LoadReach::Any(format!(
                     "declared closed over the build's chunks, which are {} modules, more than the bound",
                     modules.len()
@@ -7716,9 +7729,10 @@ fn run_with_system_floor(
     // user can see why pruning stopped.
     let mut exports_by_module: FxHashMap<&String, Vec<String>> = FxHashMap::default();
     for (path, ff) in files {
-        let mut sites: BTreeMap<(usize, &str), std::collections::BTreeSet<String>> = BTreeMap::new();
+        let mut sites: BTreeMap<(usize, &str), (&crate::loads::LoadTarget, std::collections::BTreeSet<String>)> =
+            BTreeMap::new();
         for load in &ff.module_loads {
-            let opened = sites.entry((load.line, load.call.as_str())).or_default();
+            let (_, opened) = sites.entry((load.line, load.call.as_str())).or_insert((&load.target, Default::default()));
             for module in loaded_modules(path, load, files, inputs) {
                 let ids = exports_by_module.entry(module).or_insert_with(|| {
                     exported_component_ids(module, files, inputs, links, &evaluated_ids)
@@ -7726,21 +7740,33 @@ fn run_with_system_floor(
                 opened.extend(ids.iter().cloned());
             }
         }
-        for ((line, call), opened) in sites {
+        for ((line, call), (target, opened)) in sites {
             if opened.len() > WIDE_MODULE_LOAD_LIMIT {
-                diagnostics.push(diagnostic(
-                    path,
-                    call,
-                    "warn",
-                    format!(
-                        "this call can load {} components, so each keeps every \
-                         variant and state option it declares — write the specifier \
-                         literally so only what it loads keeps its options",
+                use crate::loads::LoadTarget;
+                // The advice names what made the load wide: a literal
+                // specifier names one module that exports them all.
+                let message = match target {
+                    LoadTarget::Specifier(_) => format!(
+                        "this call loads a module that exports {} components, and usage is \
+                         not followed into a module loaded at runtime, so each keeps every \
+                         variant and state option it declares — load the components it \
+                         renders from a smaller module so only those keep their options",
                         opened.len()
                     ),
-                    Some(WIDE_MODULE_LOAD),
-                )
-                .on_line(line));
+                    LoadTarget::Context { .. } | LoadTarget::Glob(_) => format!(
+                        "this call can load {} components, so each keeps every variant and \
+                         state option it declares — narrow its pattern so only what it loads \
+                         keeps its options",
+                        opened.len()
+                    ),
+                    LoadTarget::Prefix(_) | LoadTarget::Unknown => format!(
+                        "this call can load {} components, so each keeps every variant and \
+                         state option it declares — write the specifier literally so only \
+                         what it loads keeps its options",
+                        opened.len()
+                    ),
+                };
+                diagnostics.push(diagnostic(path, call, "warn", message, Some(WIDE_MODULE_LOAD)).on_line(line));
             }
             escaped_ids.extend(opened);
         }
@@ -12992,6 +13018,50 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// Contract: inside a composed family a child's shared-axis rules follow
+    /// its own rule order, as they do outside it: an extension's own option
+    /// or default comes after what it inherits unchanged, and the root's
+    /// default rule stays with the option it selects. Both selectors weigh
+    /// the same, so order picks the winner when the root sets no props.
+    #[test]
+    fn composed_rules_follow_the_childs_rule_order() {
+        let family = |root_size: &str| {
+            format!(
+                "export const A = ds.styles({{ display: 'block' }})\n\
+                   .variant({{ prop: 'size', defaultVariant: 'sm', variants: {{ sm: {{ display: 'flex' }} }} }})\n\
+                   .variant({{ prop: 'tone', defaultVariant: 'loud', variants: {{ loud: {{ display: 'inline' }} }} }})\n\
+                   .asElement('div');\n\
+                 export const B = A.extend()\n\
+                   .variant({{ prop: 'size', defaultVariant: 'lg', variants: {{ lg: {{ display: 'inline-block' }} }} }})\n\
+                   .asElement('div');\n\
+                 export const C = B.extend().styles({{ outline: '0' }}).asElement('div');\n\
+                 export const Root = ds\n\
+                   .variant({{ prop: 'size', defaultVariant: '{root_size}', variants: {{ sm: {{ display: 'flex' }}, lg: {{ display: 'inline-block' }} }} }})\n\
+                   .variant({{ prop: 'tone', defaultVariant: 'loud', variants: {{ loud: {{ display: 'inline' }} }} }})\n\
+                   .asElement('div');\n\
+                 export const Fam = compose({{ Root, Child: C }}, {{ name: 'Fam', shared: {{ size: true, tone: true }} }});\n\
+                 export const App = () => <Fam.Root><Fam.Child /></Fam.Root>;\n"
+            )
+        };
+        // The composed rules for C, in written order, as root class suffixes.
+        let order = |root_size: &str| {
+            let source = family(root_size);
+            let out = analyze(&[("fam.tsx", source.as_str())], &test_inputs());
+            let (root, child) = (class_of(&out, "fam.tsx::Root"), class_of(&out, "fam.tsx::C"));
+            let mut found: Vec<(usize, &str)> = ["size-sm", "size-lg", "size-default", "tone-loud", "tone-default"]
+                .into_iter()
+                .filter_map(|suffix| out.sheets.variants.find(&format!(".{root}--{suffix} .{child}")).map(|at| (at, suffix)))
+                .collect();
+            found.sort();
+            found.into_iter().map(|(_, suffix)| suffix).collect::<Vec<_>>()
+        };
+        // The root's default picks the untouched inherited `sm`: it keeps
+        // `sm`'s place, before the inherited tone, so tone wins.
+        assert_eq!(order("sm"), ["size-sm", "size-default", "tone-loud", "tone-default", "size-lg"]);
+        // It picks B's own `lg`: after the inherited tone, so size wins.
+        assert_eq!(order("lg"), ["size-sm", "tone-loud", "tone-default", "size-lg", "size-default"]);
+    }
+
     #[test]
     fn compose_slots_resolve_through_local_export_renames() {
         // `const Foo = …; export { Foo as Bar }`: the slot imported as `Bar`
@@ -16524,6 +16594,19 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             files: vec![ExpandedFile { path: "tools/build.ts".to_string(), status: ExpandedStatus::Analysed }],
         };
         assert_eq!(run_expanded(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], &globbing, vec![expansion]), everything);
+        // A closed expansion reaches only what it lists, past the load-set
+        // bound too.
+        let pages: Vec<String> = (0..=LOAD_SET_LIMIT).map(|page| format!("pages/p{page}.ts")).collect();
+        let mut extra: Vec<(&str, &str)> = pages.iter().map(|page| (page.as_str(), "export const page = 1;\n")).collect();
+        extra.extend([("vite.config.ts", vite), ("tools/build.ts", via)]);
+        let paging = format!("const pages = import.meta.glob('./pages/*.ts');\n{app}");
+        let expansion = HostExpansion {
+            importer: "app.tsx".to_string(),
+            start: paging.find("import.meta.glob").expect("a glob") as u32,
+            closed: true,
+            files: pages.iter().map(|page| ExpandedFile { path: page.clone(), status: ExpandedStatus::Analysed }).collect(),
+        };
+        assert_eq!(run_expanded(&[], &extra, &paging, vec![expansion]), pruned);
         let open = format!("export const load = (name) => import(`./tools/${{name}}.ts`);\n{app}");
         assert_eq!(run(&[], &[("vite.config.ts", vite), ("tools/build.ts", via)], &open), everything);
     }

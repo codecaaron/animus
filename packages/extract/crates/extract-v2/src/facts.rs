@@ -120,17 +120,26 @@ impl KeySource {
 /// Every property of the object literals each named top-level `const`
 /// builds, keyed by the declaration's binding, as written: where the global
 /// blocks those declarations declare are located. A name an `export { local
-/// as name }` gives a declaration finds it by its local binding.
+/// as name }` gives a declaration finds it by its local binding; a value
+/// `export { a as name } from` gives is another module's `a`, never a local.
 pub fn declaration_keys(program: &Program<'_>, source: &str, names: &BTreeSet<String>) -> BTreeMap<String, Vec<KeySource>> {
     use oxc::ast::ast::{BindingPattern, Declaration, Statement, VariableDeclaration};
-    let mut wanted: BTreeMap<String, String> = names.iter().map(|name| (name.clone(), name.clone())).collect();
+    let reexported: BTreeSet<String> = program
+        .body
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::ExportFromDeclaration(export) if export.export_kind.is_value() => Some(&export.specifiers),
+            _ => None,
+        })
+        .flatten()
+        .filter(|specifier| specifier.export_kind.is_value())
+        .map(|specifier| specifier.exported.name().to_string())
+        .collect();
+    let mut wanted: BTreeMap<String, String> =
+        names.difference(&reexported).map(|name| (name.clone(), name.clone())).collect();
     for statement in &program.body {
-        let specifiers = match statement {
-            Statement::ExportNamedDeclaration(export) => &export.specifiers,
-            Statement::ExportFromDeclaration(export) => &export.specifiers,
-            _ => continue,
-        };
-        for specifier in specifiers {
+        let Statement::ExportNamedDeclaration(export) = statement else { continue };
+        for specifier in &export.specifiers {
             let exported = specifier.exported.name().to_string();
             if names.contains(&exported) {
                 wanted.insert(specifier.local.name().to_string(), exported);
