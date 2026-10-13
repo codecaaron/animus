@@ -1430,10 +1430,14 @@ fn builtin_array(program: &Program<'_>, expression: &Expression<'_>) -> bool {
 }
 
 /// A class as a value: unknown when a static member may carry the protocol
-/// (named `toConfig` or `getVocabularyRecord`, or computed), a value
+/// (named `toConfig` or `getVocabularyRecord`, or computed), or when it
+/// extends another class, whose statics it inherits unread; a value
 /// otherwise.
 fn class_shape(class: &oxc::ast::ast::Class<'_>) -> Class {
     use oxc::ast::ast::ClassElement;
+    if class.heritage.is_some() {
+        return Class::Unknown("a class that extends another, whose statics it inherits".to_string());
+    }
     let carries = class.body.body.iter().any(|element| {
         let (is_static, key, computed) = match element {
             ClassElement::MethodDefinition(method) => (method.r#static, &method.key, method.computed),
@@ -2254,6 +2258,7 @@ mod tests {
             ("assigned-array", "export const ds = createSystem().build().seal();\nexport const arr = [];\nObject.assign(arr, { toConfig: ds.toConfig });\n"),
             ("from-array", "export const ds = createSystem().build().seal();\nexport const arr = Array.from([]);\narr.toConfig = ds.toConfig;\n"),
             ("static-class", "export const ds = createSystem().build().seal();\nexport class Other { static toConfig() { return ds.toConfig(); } }\n"),
+            ("inherited-static", "export const ds = createSystem().build().seal();\nclass Base { static toConfig = ds.toConfig; static getVocabularyRecord = ds.getVocabularyRecord; }\nexport class Other extends Base {}\n"),
             ("alias-write", "export const ds = createSystem().build().seal();\nexport const other = {};\nconst alias = other;\nalias.toConfig = ds.toConfig;\n"),
             ("reassigned", "const first = createSystem().build().seal();\nconst second = createSystem().build().seal();\nexport let ds = first;\nexport default ds;\nds = second;\nexport const theme = createTheme().build();\n"),
         ] {
