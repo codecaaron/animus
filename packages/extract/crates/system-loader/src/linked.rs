@@ -8,7 +8,6 @@
 //! module when it runs, as a live binding does. An import of a name its
 //! module does not export, or exports ambiguously, fails the load.
 
-use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -18,6 +17,7 @@ use oxc::ast::AstKind;
 use oxc::parser::{Parser, ParserReturn};
 use oxc::semantic::SemanticBuilder;
 use oxc::span::{GetSpan, SourceType};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{js_quoted, module_export_name, stub_key};
 
@@ -29,7 +29,7 @@ fn source_type(path: &str) -> SourceType {
 
 /// The registry key a specifier of `path` names: a module's canonical path,
 /// or a stub's key.
-fn module_key(path: &str, spec: &str, specifier_map: &HashMap<(String, String), String>) -> String {
+fn module_key(path: &str, spec: &str, specifier_map: &FxHashMap<(String, String), String>) -> String {
     specifier_map
         .get(&(path.to_string(), spec.to_string()))
         .cloned()
@@ -39,7 +39,7 @@ fn module_key(path: &str, spec: &str, specifier_map: &HashMap<(String, String), 
 /// Each analysed module's place in `__modules['#']`, the registry's
 /// non-enumerable list of module objects, by key: a read through it names a
 /// module in a few characters where its key is a whole path.
-pub(crate) type ModuleRefs = HashMap<String, usize>;
+pub(crate) type ModuleRefs = FxHashMap<String, usize>;
 
 /// The expression for the module object registered as `key`.
 pub(crate) fn module_ref(refs: &ModuleRefs, key: &str) -> String {
@@ -57,13 +57,13 @@ fn export_read(refs: &ModuleRefs, key: &str, name: &str) -> String {
 /// Every module in evaluation order: depth-first post-order from the entry,
 /// following imports and re-exports in source order, then any module not
 /// reached, in path order.
-pub(crate) fn evaluation_order(modules: &HashMap<String, LinkedModule>, entry_path: &str) -> Vec<String> {
+pub(crate) fn evaluation_order(modules: &FxHashMap<String, LinkedModule>, entry_path: &str) -> Vec<String> {
     let requests = |path: &str| -> Vec<String> {
         modules[path].requests.iter().filter(|target| modules.contains_key(*target)).cloned().collect()
     };
     let mut paths: Vec<&String> = modules.keys().collect();
     paths.sort();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: FxHashSet<String> = FxHashSet::default();
     let mut order: Vec<String> = Vec::new();
     // Iterative, so a deep graph cannot overflow the stack.
     for root in std::iter::once(entry_path).chain(paths.iter().map(|path| path.as_str())) {
@@ -181,7 +181,7 @@ impl ModuleReads {
 /// A name for the module's own binding of its default export that the
 /// module neither declares nor reads: a name it uses may not be taken.
 fn default_binding_name(scoping: &oxc::semantic::Scoping) -> String {
-    let taken: HashSet<&str> =
+    let taken: FxHashSet<&str> =
         scoping.symbol_names().chain(scoping.root_unresolved_references().keys().map(|name| name.as_str())).collect();
     std::iter::once("__default".to_string())
         .chain((1..).map(|n| format!("__default{n}")))
@@ -221,7 +221,7 @@ struct Edit {
 pub(crate) fn rewrite_module_for_linking(
     source: &str,
     canonical_path: &str,
-    specifier_map: &HashMap<(String, String), String>,
+    specifier_map: &FxHashMap<(String, String), String>,
     refs: &ModuleRefs,
 ) -> Result<LinkedModule, String> {
     let allocator = Allocator::default();
@@ -251,8 +251,8 @@ pub(crate) fn rewrite_module_for_linking(
     let mut removed: Vec<(usize, usize)> = Vec::new();
     // Each imported binding, by symbol, as the module export it reads, and
     // by local name, as what exporting it exports.
-    let mut imported = HashMap::new();
-    let mut import_targets: HashMap<String, ExportTarget> = HashMap::new();
+    let mut imported = FxHashMap::default();
+    let mut import_targets: FxHashMap<String, ExportTarget> = FxHashMap::default();
     let mut module = LinkedModule {
         exports: Vec::new(),
         stars: Vec::new(),
@@ -407,7 +407,7 @@ pub(crate) fn rewrite_module_for_linking(
     }
 
     // Each import reference's edit, and the local name it refers to.
-    let mut refs: HashMap<(usize, usize), &str> = HashMap::new();
+    let mut refs: FxHashMap<(usize, usize), &str> = FxHashMap::default();
     for (&symbol, cell) in &imported {
         for reference in scoping.get_resolved_references(symbol) {
             let at = reference.scope_id();
@@ -518,29 +518,29 @@ fn collect_binding_names(
 pub(crate) struct Linker<'a> {
     table: crate::module_table::ModuleTable<String>,
     keys: Vec<String>,
-    index: HashMap<String, crate::module_table::ModuleIndex>,
-    stubs: &'a HashMap<String, HashSet<String>>,
+    index: FxHashMap<String, crate::module_table::ModuleIndex>,
+    stubs: &'a FxHashMap<String, FxHashSet<String>>,
     /// Each TypeScript module's type-only export names, which its stripped
     /// record no longer holds.
-    type_exports: &'a HashMap<String, HashSet<String>>,
+    type_exports: &'a FxHashMap<String, FxHashSet<String>>,
 }
 
 impl<'a> Linker<'a> {
     pub fn new(
-        modules: &HashMap<String, LinkedModule>,
-        stubs: &'a HashMap<String, HashSet<String>>,
-        type_exports: &'a HashMap<String, HashSet<String>>,
+        modules: &FxHashMap<String, LinkedModule>,
+        stubs: &'a FxHashMap<String, FxHashSet<String>>,
+        type_exports: &'a FxHashMap<String, FxHashSet<String>>,
     ) -> Self {
         use crate::module_table::{Import, ImportName, ModuleRecord, ModuleTable, Request};
         let mut keys: Vec<String> = modules.keys().cloned().collect();
         keys.sort();
-        let index: HashMap<String, usize> = keys.iter().enumerate().map(|(at, key)| (key.clone(), at)).collect();
+        let index: FxHashMap<String, usize> = keys.iter().enumerate().map(|(at, key)| (key.clone(), at)).collect();
         let mut records: Vec<ModuleRecord<String>> = Vec::with_capacity(keys.len());
         for key in &keys {
             let linked = &modules[key];
             let mut requests: Vec<Request> = Vec::new();
             // Each distinct request once, numbered in first-seen order.
-            let mut numbered: HashMap<Request, usize> = HashMap::new();
+            let mut numbered: FxHashMap<Request, usize> = FxHashMap::default();
             let mut request = |from: &str| {
                 let target = match index.get(from) {
                     Some(&at) => Request::Module(at),
