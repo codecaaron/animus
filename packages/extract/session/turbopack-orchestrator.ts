@@ -252,11 +252,14 @@ export function startTurbopackWatcher(
     enqueuePath(abs);
   };
 
+  /** Watches one admitted root recursively, an installed kit's under
+   *  node_modules too: Turbopack transforms its edits, and the loader then
+   *  waits on an analysis only this watcher schedules. Nothing else under
+   *  node_modules is watched. */
   const openExternalWatcher = (
     root: string,
     into: Map<string, ReturnType<typeof watch>>
   ): void => {
-    if (root.split(/[\\/]/).includes('node_modules')) return;
     try {
       let watcher: ReturnType<typeof watch> | undefined;
       watcher = watchFn(root, { recursive: true }, (_event, filename) =>
