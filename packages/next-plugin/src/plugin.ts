@@ -27,8 +27,14 @@ import { dirname } from 'path';
 
 import { resolveAnimusLoaderPath } from './loader-path';
 import { sameDirectory } from './same-directory';
+import { ignoredMatcher, withinDirectories } from './watch-ignored';
 
 import type { AnimusNextOptions } from './types';
+import type {
+  WatchIgnored,
+  WatchIgnoreMatcher,
+  WatchOptions,
+} from './watch-ignored';
 
 export { ANIMUS_CSS_MODULE_ID } from '@animus-ui/extract/session';
 
@@ -36,27 +42,6 @@ type WebpackSource = {
   source(): string | Buffer;
   size(): number;
 };
-
-type WatchIgnoreEntry = string | RegExp;
-
-type WatchIgnoreMatcher = (path: string) => boolean;
-
-type WatchIgnored =
-  | WatchIgnoreEntry
-  | WatchIgnoreEntry[]
-  | WatchIgnoreMatcher
-  | null
-  | undefined;
-
-/** The value arrives from a consumer's `next.config`, so the union above is a
- *  model of what webpack accepts, not a proof about the value in hand. */
-const isWatchIgnoreString = (ignored: WatchIgnored): ignored is string =>
-  Object.prototype.toString.call(ignored) === '[object String]';
-
-const isWatchIgnoreMatcher = (
-  ignored: WatchIgnored
-): ignored is WatchIgnoreMatcher =>
-  Object.prototype.toString.call(ignored) === '[object Function]';
 
 type WebpackAliasMap = Record<string, string | string[] | false>;
 
@@ -156,9 +141,7 @@ type Compiler = {
         | undefined
       >;
     };
-    watchOptions?: {
-      ignored?: WatchIgnored;
-    };
+    watchOptions?: WatchOptions;
   };
   webpack?: {
     version?: string;
@@ -185,6 +168,13 @@ const UNSUPPORTED_WEBPACK_MESSAGE =
 
 const PLUGIN_NAME = 'AnimusWebpackPlugin';
 
+/** Paths the Session's watch plan registers: files (and absent paths it
+ *  waits for) by exact path, directories with everything under them. */
+interface RegisteredWatch {
+  files: ReadonlySet<string>;
+  directories: (path: string) => boolean;
+}
+
 export class AnimusWebpackPlugin {
   private options: AnimusNextOptions;
   private session: ExtractionSession;
@@ -199,6 +189,14 @@ export class AnimusWebpackPlugin {
   /** This turn's rejected analysis. A rejection must fail the compilation,
    *  never `watchRun`: webpack stops watching after a failed `watchRun`. */
   private watchFailure: Error | null = null;
+  /** What the Session's watch plan last registered: `watchIgnored` never
+   *  ignores it. */
+  private registered: RegisteredWatch = {
+    files: new Set(),
+    directories: () => false,
+  };
+  /** The webpack config Next hands its watcher, when withAnimus made it. */
+  private watchedConfig: { watchOptions?: WatchOptions } | undefined;
 
   /** `development` is `next dev`: an error-level diagnostic reports and the
    *  compilation keeps publishing, whatever the emission mode. */
@@ -237,31 +235,46 @@ export class AnimusWebpackPlugin {
     );
   }
 
-  private appendEpochWatchIgnore(compiler: Compiler): void {
-    const options = compiler.options;
-    if (!options) return;
-    const epochPath = replacementEpochPath(
-      sessionArtifactDir(
-        this.session.rootDir ?? compiler.context,
-        this.session.sessionId
-      )
-    );
-    options.watchOptions ??= {};
-    const watchOptions = options.watchOptions;
-    const ignored = watchOptions.ignored;
-    if (ignored === undefined || ignored === null) {
-      watchOptions.ignored = [epochPath];
-    } else if (Array.isArray(ignored)) {
-      if (!ignored.includes(epochPath)) ignored.push(epochPath);
-    } else if (isWatchIgnoreString(ignored)) {
-      watchOptions.ignored = [ignored, epochPath];
-    } else if (ignored instanceof RegExp) {
-      watchOptions.ignored = (path: string) =>
-        path === epochPath || ignored.test(path);
-    } else if (isWatchIgnoreMatcher(ignored)) {
-      watchOptions.ignored = (path: string) =>
-        path === epochPath || Boolean(ignored(path));
-    }
+  /** The webpack config whose watch options the host's watcher reads,
+   *  rewritten when the plugin is applied. */
+  watchConfig(config: { watchOptions?: WatchOptions }): void {
+    this.watchedConfig = config;
+  }
+
+  /**
+   * `watchOptions.ignored` for the host's own `ignored`: this session's epoch
+   * file stays ignored, and every file and directory the Session's watch plan
+   * registers is watched, whatever the host ignores. Next ignores every
+   * `node_modules` path, where an installed source kit and its system live.
+   */
+  watchIgnored(ignored: WatchIgnored, context?: string): WatchIgnoreMatcher {
+    const hostIgnores = ignoredMatcher(ignored);
+    // Its root can be set after this is installed: read when asked.
+    let epochRoot: string | undefined;
+    let epochPath: string | undefined;
+    const epoch = () => {
+      const root = this.session.rootDir ?? context;
+      if (root !== epochRoot) {
+        epochRoot = root;
+        epochPath =
+          root === undefined
+            ? undefined
+            : replacementEpochPath(
+                sessionArtifactDir(root, this.session.sessionId)
+              );
+      }
+      return epochPath;
+    };
+    return (path) => {
+      if (path === epoch()) return true;
+      if (
+        this.registered.files.has(path) ||
+        this.registered.directories(path)
+      ) {
+        return false;
+      }
+      return hostIgnores(path);
+    };
   }
 
   /** Webpack's export conditions select the system's kit files as they
@@ -348,7 +361,25 @@ export class AnimusWebpackPlugin {
       throw new Error(UNSUPPORTED_WEBPACK_MESSAGE);
     }
 
-    this.appendEpochWatchIgnore(compiler);
+    // Whichever watch options the host's watcher reads: the compiler's, or
+    // the config Next passes it, validated by now, which Next freezes.
+    const options = compiler.options;
+    if (options) {
+      options.watchOptions ??= {};
+      options.watchOptions.ignored = this.watchIgnored(
+        options.watchOptions.ignored,
+        compiler.context
+      );
+    }
+    if (this.watchedConfig) {
+      this.watchedConfig.watchOptions = {
+        ...this.watchedConfig.watchOptions,
+        ignored: this.watchIgnored(
+          this.watchedConfig.watchOptions?.ignored,
+          compiler.context
+        ),
+      };
+    }
 
     compiler.hooks.thisCompilation.tap(PLUGIN_NAME, (compilation) => {
       const epochMoved = this.epochMovedForNextCompilation;
@@ -373,6 +404,10 @@ export class AnimusWebpackPlugin {
       // system load found absent reloads it when created.
       const registerSystemDependencies = () => {
         const plan = this.session.watchPlan();
+        this.registered = {
+          files: new Set([...plan.files, ...plan.missing]),
+          directories: withinDirectories(plan.directories),
+        };
         for (const path of plan.files) {
           if (existsSync(path)) compilation.fileDependencies.add(path);
           else compilation.missingDependencies.add(path);
