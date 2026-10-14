@@ -512,8 +512,10 @@ describe('parsed CI graph', () => {
     const suppliedTarballIndex = verifyLines.indexOf(
       '--tarball "$RELEASE_BUNDLE/animus-ui-extract-${VERSION}.tgz" \\'
     );
+    // The bundle is checked at the tag's version: a verifier expecting any
+    // other version refuses every release (v0.1.34 published nothing).
     const packedIndex = verifyLines.indexOf(
-      'bash scripts/verify/packed.sh --tarballs-dir "$RELEASE_BUNDLE"'
+      'bash scripts/verify/packed.sh --release-version "$VERSION" --tarballs-dir "$RELEASE_BUNDLE"'
     );
     expect(postpackIndex).toBeGreaterThanOrEqual(0);
     expect(suppliedTarballIndex).toBeGreaterThan(postpackIndex);
