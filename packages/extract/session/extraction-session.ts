@@ -109,6 +109,7 @@ import {
   SYSTEM_INSTANCE_MISMATCH,
 } from '../pipeline/manifest-diagnostics';
 import { foreignPackages } from '../pipeline/registry-packages';
+import { moduleFactsCall } from '../pipeline/source-ingestion';
 import { systemInstanceMismatches } from '../pipeline/system-instances';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
 import {
@@ -124,6 +125,7 @@ import {
   analysisCommitPath,
   ANIMUS_ARTIFACT_DIR,
   ANIMUS_CSS_MODULE_ID,
+  artifactHash,
   CLI_COMMIT_ARTIFACT,
   envelopeCssArtifact,
   envelopeJsonArtifact,
@@ -180,7 +182,7 @@ import type {
   HostLoadExpander,
   KitDescriptorRecord,
 } from '../pipeline/index';
-import type { ExtractFactsResult } from '../pipeline/source-ingestion';
+import type { ExtractModuleFactsResult } from '../pipeline/source-ingestion';
 import type { SessionResolutionContext } from './resolve-packages';
 import type { SessionKey, SystemLoad } from './singleton';
 
@@ -299,10 +301,12 @@ export interface WatchChanges {
   sources?: ReadonlyMap<string, string>;
 }
 
-/** `payloadHash` gates rewrites; `diskHash` covers the enveloped disk bytes
+/** `payload` gates rewrites; `diskHash` covers the enveloped disk bytes
  *  and is what the analysis-commit records. */
 interface ArtifactWriteRecord {
-  payloadHash: string;
+  /** The payload last written, which the publication holds anyway; the
+   *  inputs payload, which nothing else holds, as its `artifactHash`. */
+  payload: string;
   diskHash: string;
 }
 
@@ -3138,15 +3142,15 @@ export class ExtractionSession {
    *  empty classes. One the engine cannot read counts as one that does. */
   private rendersBuilder(file: string): boolean {
     if (!isEngineTransformExtension(file)) return false;
-    const { extractFacts } = this.engine();
-    if (extractFacts === undefined) return true;
+    const extract = moduleFactsCall(this.engine());
+    if (extract === undefined) return true;
     const path = relative(this.rootDir!, file);
     try {
-      const facts = parseInternalWire<ExtractFactsResult>(
-        extractFacts(
+      const facts = parseInternalWire<ExtractModuleFactsResult>(
+        extract(
           JSON.stringify([{ path, source: readFileSync(file, 'utf-8') }])
         ),
-        'extractFacts'
+        'module facts'
       ).files[path];
       return (
         facts === undefined || facts.parsePanicked || facts.chains.length > 0
@@ -3261,28 +3265,43 @@ export class ExtractionSession {
     generation: number,
     wrap: (payload: string, envelopeJson: string) => string
   ): void {
-    const payloadHash = contentHash(payload);
-    if (this.artifactRecords[key] === null) {
-      this.artifactRecords[key] = this.seedPayloadRecord(key, name);
-    }
-    const record = this.artifactRecords[key];
-    if (record !== null && record.payloadHash === payloadHash) return;
+    this.artifactRecords[key] ??= this.seedPayloadRecord(
+      key,
+      name,
+      payload,
+      wrap
+    );
+    const held = this.heldPayload(key, payload);
+    if (this.artifactRecords[key]?.payload === held) return;
     const envelope: SessionEnvelope = {
       sessionId: this.sessionId,
       generation,
       replacementEpoch: epoch,
-      payloadHash,
     };
     const bytes = wrap(payload, JSON.stringify(envelope));
     this.writeSessionArtifact(name, bytes);
-    this.artifactRecords[key] = { payloadHash, diskHash: contentHash(bytes) };
+    this.artifactRecords[key] = {
+      payload: held,
+      diskHash: artifactHash(this.engine(), bytes),
+    };
   }
 
-  /** Reconstruct a payload write guard from the on-disk artifact's envelope
-   *  (same-session restart: a byte-identical payload must not rewrite). */
+  /** What a write record holds of `payload` (`ArtifactWriteRecord`). */
+  private heldPayload(
+    key: 'manifest' | 'inputs' | 'styles',
+    payload: string
+  ): string {
+    return key === 'inputs' ? artifactHash(this.engine(), payload) : payload;
+  }
+
+  /** Reconstruct a payload write guard from the on-disk artifact
+   *  (same-session restart: a byte-identical payload must not rewrite):
+   *  its bytes must be `payload` under the envelope they carry. */
   private seedPayloadRecord(
     key: 'manifest' | 'inputs' | 'styles',
-    name: string
+    name: string,
+    payload: string,
+    wrap: (payload: string, envelopeJson: string) => string
   ): ArtifactWriteRecord | null {
     let bytes: string;
     try {
@@ -3297,8 +3316,13 @@ export class ExtractionSession {
     } catch {
       return null;
     }
-    if (!envelope || !isDiskString(envelope.payloadHash)) return null;
-    return { payloadHash: envelope.payloadHash, diskHash: contentHash(bytes) };
+    if (!envelope || wrap(payload, JSON.stringify(envelope)) !== bytes) {
+      return null;
+    }
+    return {
+      payload: this.heldPayload(key, payload),
+      diskHash: artifactHash(this.engine(), bytes),
+    };
   }
 
   /** Last analysis-commit persisted in this session's directory, or null. */

@@ -33,7 +33,7 @@ import {
   specifierCandidates,
 } from './native-resolution';
 import { isPathWithinRoot } from './source-identity';
-import { relativeSourceCandidates } from './source-ingestion';
+import { moduleFactsCall, relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 import { declaredWorkspacePackages } from './workspace-packages';
 
@@ -43,8 +43,8 @@ import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type { ExtensionOrder, ProbedFile } from './native-resolution';
 import type {
   ExtractExportFact,
-  ExtractFactsResult,
   ExtractImportFact,
+  ExtractModuleFactsResult,
 } from './source-ingestion';
 import type { JsonValue } from './tsconfig-paths';
 import type { WorkspacePackages } from './workspace-packages';
@@ -1223,7 +1223,7 @@ export function importedPackages(
    *  parse, so the corpus pass that follows parses nothing again. */
   factsOf: (
     files: ReadonlyArray<{ path: string; source: string; hash: string }>
-  ) => ExtractFactsResult
+  ) => ExtractModuleFactsResult
 ): ImportedPackages {
   const diagnostics: ManifestDiagnostic[] = [];
   const located: Array<{ name: string; roots: string[] }> = [];
@@ -1238,7 +1238,7 @@ export function importedPackages(
     engine,
     declaredWorkspacePackages(rootDir)
   );
-  let facts: ExtractFactsResult;
+  let facts: ExtractModuleFactsResult;
   try {
     facts = factsOf(parsed);
   } catch {
@@ -1485,18 +1485,18 @@ export type ModuleParser = (
 ) => ModuleRecord | null;
 
 /** The engine's own parse of a module's bindings, through its
- *  `extractFacts`; undefined for an engine without one. A parse that
- *  panicked counts as no parse. */
+ *  `extractModuleFacts` (or `extractFacts`); undefined for an engine without
+ *  either. A parse that panicked counts as no parse. */
 export function engineModuleParser(
-  engine: Pick<EngineApi, 'extractFacts'>
+  engine: Pick<EngineApi, 'extractFacts' | 'extractModuleFacts'>
 ): ModuleParser | undefined {
-  const { extractFacts } = engine;
-  if (!extractFacts) return undefined;
+  const extract = moduleFactsCall(engine);
+  if (!extract) return undefined;
   return (source, path) => {
     try {
-      const facts = parseInternalWire<ExtractFactsResult>(
-        extractFacts(JSON.stringify([{ path, source }])),
-        'extractFacts'
+      const facts = parseInternalWire<ExtractModuleFactsResult>(
+        extract(JSON.stringify([{ path, source }])),
+        'module facts'
       ).files[path];
       return facts && !facts.parsePanicked
         ? {

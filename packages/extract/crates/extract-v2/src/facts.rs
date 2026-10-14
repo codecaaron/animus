@@ -637,6 +637,139 @@ pub struct UnwalkedChainSite {
     pub line: usize,
 }
 
+/// 1-based `[line, column]` of each `createSystem(…)` call no binding
+/// resolves.
+fn unbound_create_system_calls(ast: &OwnedAst) -> Vec<(usize, usize)> {
+    crate::usage_facts::unbound_create_system_calls(ast.program())
+        .into_iter()
+        .map(|span| line_column(ast.source(), span.start))
+        .collect()
+}
+
+/// In MDX's TSX view, each reference to the Animus builder: only MDX is
+/// read for usage alone; elsewhere the builder is the point.
+fn builder_references(ast: &OwnedAst) -> Vec<crate::usage_facts::BuilderReference> {
+    if !ast.path.ends_with(".mdx.tsx") {
+        return Vec::new();
+    }
+    crate::usage_facts::builder_references(ast.program())
+        .into_iter()
+        .map(|(span, name)| {
+            let (line, column) = line_column(ast.source(), span.start);
+            crate::usage_facts::BuilderReference { line, column, name }
+        })
+        .collect()
+}
+
+/// What a module says of itself before any static value is evaluated, the
+/// part of `FileFacts` source ingestion and package discovery read: its
+/// imports and exports, its parse's outcome and its chains. It serializes
+/// as that subset of the `FileFacts` wire.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleFacts {
+    pub path: String,
+    pub chains: Vec<ModuleChain>,
+    pub imports: Vec<ImportFact>,
+    pub exports: Vec<crate::usage_facts::ExportFact>,
+    pub parse_diagnostics: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unbound_create_system_calls: Vec<(usize, usize)>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub builder_references: Vec<crate::usage_facts::BuilderReference>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub parse_panicked: bool,
+}
+
+/// A chain's descriptor and, for an extractable `.asClass()` chain only,
+/// its `fatalError`: whether it is a resolver depends on evaluating it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleChain {
+    pub descriptor: ChainDescriptor,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fatal_error: Option<Option<String>>,
+}
+
+/// A module's `ModuleFacts`. A module with an extractable `.asClass()`
+/// chain is read in full, for that chain's evaluation.
+pub fn extract_module_facts(ast: &OwnedAst) -> ModuleFacts {
+    let resolver =
+        |descriptor: &ChainDescriptor| descriptor.terminal == chain_walk::TerminalKind::AsClass && descriptor.extractable;
+    let walked = chain_walk::walk_program_facts(ast.program());
+    let namespaces = crate::usage_facts::collect_namespace_import_facts(ast.module_record());
+    let (chains, _) =
+        module_chains(walked.chains, walked.member_parents, |root| namespaces.iter().any(|import| import.local == root));
+    if chains.iter().any(resolver) {
+        let full = extract_file_facts(ast);
+        return ModuleFacts {
+            path: full.path,
+            chains: full
+                .chains
+                .into_iter()
+                .map(|chain| ModuleChain {
+                    fatal_error: resolver(&chain.descriptor).then_some(chain.fatal_error),
+                    descriptor: chain.descriptor,
+                })
+                .collect(),
+            imports: full.imports,
+            exports: full.exports,
+            parse_diagnostics: full.parse_diagnostics,
+            unbound_create_system_calls: full.unbound_create_system_calls,
+            builder_references: full.builder_references,
+            parse_panicked: full.parse_panicked,
+        };
+    }
+    ModuleFacts {
+        path: ast.path.clone(),
+        chains: chains.into_iter().map(|descriptor| ModuleChain { descriptor, fatal_error: None }).collect(),
+        imports: collect_import_facts(ast.module_record()),
+        exports: crate::usage_facts::collect_export_facts(ast.program()),
+        parse_diagnostics: ast.diagnostics.clone(),
+        unbound_create_system_calls: unbound_create_system_calls(ast),
+        builder_references: builder_references(ast),
+        parse_panicked: ast.panicked,
+    }
+}
+
+/// A module's chains in source order: the walked chains and each extension
+/// of a namespace import's member (`Parts.Base.extend()`), a chain whose
+/// parent the analysis resolves through the namespace. The other
+/// member-parent extensions come back apart.
+fn module_chains(
+    mut chains: Vec<ChainDescriptor>,
+    member_parents: Vec<(chain_walk::MemberParentExtension, ChainDescriptor)>,
+    is_namespace: impl Fn(&str) -> bool,
+) -> (Vec<ChainDescriptor>, Vec<chain_walk::MemberParentExtension>) {
+    let mut extensions = Vec::new();
+    for (extension, chain) in member_parents {
+        let root = extension.object.split('.').next().unwrap_or(&extension.object);
+        if is_namespace(root) {
+            chains.push(chain);
+        } else {
+            extensions.push(extension);
+        }
+    }
+    chains.sort_by_key(|chain| chain.span.0);
+    (chains, extensions)
+}
+
+/// Where each line of a source starts, for a scan that asks the line of
+/// many offsets: each lookup is a binary search, not a count from the
+/// start of the file.
+pub(crate) struct LineStarts(Vec<usize>);
+
+impl LineStarts {
+    pub(crate) fn of(source: &str) -> Self {
+        Self(std::iter::once(0).chain(source.match_indices('\n').map(|(at, _)| at + 1)).collect())
+    }
+
+    /// The 1-based line a byte offset is on.
+    pub(crate) fn line(&self, offset: usize) -> usize {
+        self.0.partition_point(|&start| start <= offset)
+    }
+}
+
 /// 1-based line and column of a byte offset.
 pub(crate) fn line_column(source: &str, offset: u32) -> (usize, usize) {
     let before = &source[..(offset as usize).min(source.len())];
@@ -1453,19 +1586,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let identifier_index = build_identifier_index(program);
 
     let walked = chain_walk::walk_program_facts(program);
-    // An extension of a namespace import's member (`Parts.Base.extend()`)
-    // is a chain whose parent the analysis resolves through the namespace.
-    let mut walked_chains = walked.chains;
-    let mut member_parent_extensions = Vec::new();
-    for (extension, chain) in walked.member_parents {
-        let root = extension.object.split('.').next().unwrap_or(&extension.object);
-        if structural.namespace_imports.contains_key(root) {
-            walked_chains.push(chain);
-        } else {
-            member_parent_extensions.push(extension);
-        }
-    }
-    walked_chains.sort_by_key(|chain| chain.span.0);
+    let (walked_chains, member_parent_extensions) =
+        module_chains(walked.chains, walked.member_parents, |root| structural.namespace_imports.contains_key(root));
     let create_transform_locals: rustc_hash::FxHashSet<String> = structural
         .imports
         .iter()
@@ -1780,22 +1902,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         opaque_calls,
         element_consts,
         opaque_tags,
-        unbound_create_system_calls: crate::usage_facts::unbound_create_system_calls(program)
-            .into_iter()
-            .map(|span| line_column(source, span.start))
-            .collect(),
-        // Only MDX is read for usage alone; elsewhere the builder is the point.
-        builder_references: if ast.path.ends_with(".mdx.tsx") {
-            crate::usage_facts::builder_references(program)
-                .into_iter()
-                .map(|(span, name)| {
-                    let (line, column) = line_column(source, span.start);
-                    crate::usage_facts::BuilderReference { line, column, name }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        },
+        unbound_create_system_calls: unbound_create_system_calls(ast),
+        builder_references: builder_references(ast),
         ..structural
     }
 }

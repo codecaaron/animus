@@ -36,6 +36,10 @@ export interface EngineApi {
   loadSystemModule: (...args: unknown[]) => any;
   /** Parse-only native fact extraction used to prepare adapted sources. */
   extractFacts?: (filesJson: string) => string;
+  /** The part of `extractFacts` source ingestion and package discovery
+   *  read (`ExtractModuleFactsResult`), without the statics, usage and
+   *  object facts. */
+  extractModuleFacts?: (filesJson: string) => string;
   /** Each file's run-time module specifiers, for the kit publication check. */
   moduleSpecifiers?: (filesJson: string, pathAliasesJson?: string) => string;
   /** Which kits a system file's roots extend or include, from the
@@ -205,6 +209,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
       loadSystemModule: (...args: unknown[]) =>
         native.loadSystemModule(...args),
       extractFacts: (filesJson) => native.extractFacts(filesJson),
+      extractModuleFacts: (filesJson) => native.extractModuleFacts(filesJson),
       moduleSpecifiers: (filesJson, pathAliasesJson) =>
         native.moduleSpecifiers(filesJson, pathAliasesJson),
       systemMembership: (inputsJson) => native.systemMembership(inputsJson),

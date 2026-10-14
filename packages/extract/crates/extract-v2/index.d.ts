@@ -103,6 +103,13 @@ export declare function engineVersion(): string
 export declare function extractFacts(fileEntriesJson: string): string
 
 /**
+ * The facts source ingestion and package discovery read, one parse per
+ * file: `extractFacts`'s wire without the statics, usage and object facts
+ * it also computes (`facts::ModuleFacts`).
+ */
+export declare function extractModuleFacts(fileEntriesJson: string): string
+
+/**
  * `fingerprint_file` of bytes already read, so a reader that keeps them
  * fingerprints exactly what it kept.
  */

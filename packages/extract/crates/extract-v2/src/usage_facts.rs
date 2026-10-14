@@ -15,6 +15,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::static_value::StaticValue;
@@ -1838,7 +1839,9 @@ fn scan_object_uses(
     let mut scan = ObjectUseScan {
         scoping,
         source: program.source_text,
-        candidates,
+        lines: std::cell::OnceCell::new(),
+        candidates: candidates.into_iter().map(|(symbol, binding)| (symbol, Rc::new(binding))).collect(),
+        container_names: FxHashSet::default(),
         // A module-scope `Object` is not the global one.
         global_object: scoping.get_root_binding("Object".into()).is_none(),
         react: ReactImports::of(program, scoping),
@@ -1952,10 +1955,13 @@ pub(crate) fn style_object_uses(
         let uses = names.into_iter().map(|name| (name, what.clone(), UseAt::WHOLE)).collect();
         return StyleObjectFacts { uses, ..StyleObjectFacts::default() };
     }
+    let container_names = candidates.values().filter(|b| !b.namespace).map(|b| b.name.clone()).collect();
     let mut scan = ObjectUseScan {
         scoping,
         source: program.source_text,
-        candidates,
+        lines: std::cell::OnceCell::new(),
+        candidates: candidates.into_iter().map(|(symbol, binding)| (symbol, Rc::new(binding))).collect(),
+        container_names,
         global_object: !binds_anywhere(scoping, "Object"),
         react: ReactImports::of(program, scoping),
         uses: BTreeMap::new(),
@@ -3560,7 +3566,12 @@ fn returned_position(span: Span, ancestors: &[AstKind<'_>]) -> Option<(Span, Vec
 struct ObjectUseScan<'a, 's> {
     scoping: &'s Scoping,
     source: &'s str,
-    candidates: FxHashMap<SymbolId, ObjectBinding>,
+    /// Built on the first line a use asks for.
+    lines: std::cell::OnceCell<crate::facts::LineStarts>,
+    candidates: FxHashMap<SymbolId, Rc<ObjectBinding>>,
+    /// In style mode, the names of the candidates that are not namespaces:
+    /// the objects a member may be stored in.
+    container_names: FxHashSet<String>,
     global_object: bool,
     /// React's own functions, whose context readers change nothing.
     react: ReactImports,
@@ -3835,8 +3846,7 @@ impl<'a> ObjectUseScan<'a, '_> {
 
     /// The 1-based line `span` starts on.
     fn line(&self, span: Span) -> usize {
-        let start = (span.start as usize).min(self.source.len());
-        self.source[..start].matches('\n').count() + 1
+        self.lines.get_or_init(|| crate::facts::LineStarts::of(self.source)).line(span.start as usize)
     }
 
     /// How a use may write the member value at `span`, read through a
@@ -3975,8 +3985,6 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                         return;
                     }
                 }
-                let containers: FxHashSet<String> =
-                    self.candidates.values().filter(|b| !b.namespace).map(|b| b.name.clone()).collect();
                 if let Some((derived, (at, held))) =
                     initializing_const(ident.span, &self.ancestors).filter(|(name, _)| name != &binding.name)
                 {
@@ -3988,7 +3996,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                     Some((*self.called_functions.as_ref()?.spans.get(&span)?, at))
                 });
                 if let Some((function, at)) = returned_by {
-                    let what = match style_object_use(ident.span, &self.ancestors, &containers, self.global_object) {
+                    let what = match style_object_use(ident.span, &self.ancestors, &self.container_names, self.global_object) {
                         StyleUse::Unsafe(what) => what,
                         _ => "is returned from a function".to_string(),
                     };
@@ -3996,7 +4004,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                     self.returns.push((binding.name.clone(), function, at, used));
                     return;
                 }
-                match style_object_use(ident.span, &self.ancestors, &containers, self.global_object) {
+                match style_object_use(ident.span, &self.ancestors, &self.container_names, self.global_object) {
                     StyleUse::Read => return,
                     StyleUse::StoredIn { container, at } => {
                         self.containers.push((binding.name.clone(), container, at));
@@ -4094,8 +4102,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 continue;
             }
             if let Some(what) = object_use(span, ancestors, false, self.global_object, true) {
-                let start = (ident.span.start as usize).min(self.source.len());
-                let line = self.source[..start].matches('\n').count() + 1;
+                let line = self.line(ident.span);
                 self.uses.insert(key, ObjectUse { line: Some(line), what });
             }
         }
@@ -4158,8 +4165,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
             (binding.name.clone(), object_use(ident.span, ancestors, true, self.global_object, assigned_target))
         };
         let Some(what) = what else { return };
-        let start = (ident.span.start as usize).min(self.source.len());
-        let line = self.source[..start].matches('\n').count() + 1;
+        let line = self.line(ident.span);
         self.uses.entry(key).or_insert(ObjectUse { line: Some(line), what });
     }
 }

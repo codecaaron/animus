@@ -109,13 +109,21 @@ export interface ExtractChainFact {
   fatalError: string | null;
 }
 
+/** A chain as `extractModuleFacts` reports it: `fatalError` is present for
+ *  an extractable `asClass` chain only, the one evaluation a resolver
+ *  export needs. */
+export interface ExtractModuleChainFact {
+  descriptor: ExtractChainFact['descriptor'];
+  fatalError?: string | null;
+}
+
 /**
- * A partial transcription of the engine's per-file facts wire: `statics`,
- * `usage`, `compose`, and `transforms` exist on it and are added when read.
+ * The engine's per-module facts wire (`extractModuleFacts`): what source
+ * ingestion and package discovery read. `extractFacts`'s wire is a superset.
  */
-export interface ExtractFileFacts {
+export interface ExtractModuleFacts {
   path: string;
-  chains: ExtractChainFact[];
+  chains: ExtractModuleChainFact[];
   imports: ExtractImportFact[];
   exports: ExtractExportFact[];
   parseDiagnostics: string[];
@@ -130,9 +138,33 @@ export interface ExtractFileFacts {
   builderReferences?: Array<{ line: number; column: number; name: string }>;
 }
 
+/**
+ * A partial transcription of the engine's per-file facts wire
+ * (`extractFacts`): `statics`, `usage`, `compose`, and `transforms` exist on
+ * it and are added when read.
+ */
+export interface ExtractFileFacts extends ExtractModuleFacts {
+  chains: ExtractChainFact[];
+}
+
 export interface ExtractFactsResult {
   files: Record<string, ExtractFileFacts>;
   parseCount: number;
+}
+
+export interface ExtractModuleFactsResult {
+  files: Record<string, ExtractModuleFacts>;
+  parseCount: number;
+}
+
+/** The engine's module-facts call (`ExtractModuleFactsResult` wire):
+ *  `extractModuleFacts`, or `extractFacts`, whose wire is its superset;
+ *  undefined for an engine with neither. */
+export function moduleFactsCall(engine: {
+  extractFacts?: (filesJson: string) => string;
+  extractModuleFacts?: (filesJson: string) => string;
+}): ((filesJson: string) => string) | undefined {
+  return engine.extractModuleFacts ?? engine.extractFacts;
 }
 
 export interface NativeSourceDiagnostic {
@@ -224,7 +256,7 @@ export interface AbortedParse {
 
 export interface CachedFileFacts {
   hash: string;
-  facts: ExtractFileFacts;
+  facts: ExtractModuleFacts;
 }
 
 export interface CachedMdxSource {
@@ -233,6 +265,8 @@ export interface CachedMdxSource {
 }
 
 export interface SourceIngestionOptions {
+  /** The engine's module facts of a files JSON (`ExtractModuleFactsResult`
+   *  wire): `extractModuleFacts`, or `extractFacts`'s superset. */
   extractFacts(filesJson: string): string;
   /** Host-owned memo reused across passes; without it every pass re-parses
    *  the whole corpus through the native boundary. */
@@ -370,7 +404,7 @@ class ResolverExportIndex {
   private readonly resolveMemo = new Map<string, string | null>();
 
   constructor(
-    private readonly facts: ExtractFactsResult,
+    private readonly facts: ExtractModuleFactsResult,
     analysisPaths: readonly string[],
     private readonly extensions: ExtensionOrder | undefined,
     private readonly host:
@@ -729,14 +763,14 @@ function collectFileFacts(
   /** Drop cached facts for paths not in `analysisEntries`: a full corpus
    *  pass's set, never a partial read's. */
   evict = true
-): ExtractFactsResult {
+): ExtractModuleFactsResult {
   const cache = options.factsCache;
   if (!cache) {
-    // SAFETY: serde output of the engine's own `extractFacts` NAPI call on
-    // this line, shaped as `ExtractFactsResult`; unparseable bytes throw.
+    // SAFETY: serde output of the engine's own facts NAPI call on this line,
+    // shaped as `ExtractModuleFactsResult`; unparseable bytes throw.
     return JSON.parse(
       options.extractFacts(JSON.stringify(analysisEntries))
-    ) as ExtractFactsResult;
+    ) as ExtractModuleFactsResult;
   }
   const pending = analysisEntries.filter(
     (entry) => cache.get(entry.path)?.hash !== entry.hash
@@ -747,7 +781,7 @@ function collectFileFacts(
     // pending subset.
     const fresh = JSON.parse(
       options.extractFacts(JSON.stringify(pending))
-    ) as ExtractFactsResult;
+    ) as ExtractModuleFactsResult;
     parseCount = fresh.parseCount;
     for (const entry of pending) {
       const facts = fresh.files[entry.path];
@@ -761,7 +795,7 @@ function collectFileFacts(
       if (!currentPaths.has(path)) cache.delete(path);
     }
   }
-  const files: Record<string, ExtractFileFacts> = {};
+  const files: Record<string, ExtractModuleFacts> = {};
   for (const entry of analysisEntries) {
     const cached = cache.get(entry.path);
     if (cached) files[entry.path] = cached.facts;
@@ -826,7 +860,10 @@ export function projectExternalFileOwners(
 }
 
 export interface SourceIngestorHost {
-  engineApi(): { extractFacts?: (filesJson: string) => string };
+  engineApi(): {
+    extractFacts?: (filesJson: string) => string;
+    extractModuleFacts?: (filesJson: string) => string;
+  };
   /** Host log prefix, e.g. `[animus-extract]`. */
   prefix: string;
   strict(): boolean;
@@ -845,7 +882,7 @@ export interface SourceIngestor {
   ingest(entries: readonly RawSourceEntry[]): Promise<SourceIngestionResult>;
   /** The engine's facts for parser-ready entries, through the ingestion's
    *  own cache, so a later ingest of the same bytes parses nothing. */
-  facts(entries: readonly AnalysisSourceEntry[]): ExtractFactsResult;
+  facts(entries: readonly AnalysisSourceEntry[]): ExtractModuleFactsResult;
   /** Returns originals to quarantine. Fatal diagnostics throw under strict
    *  (strict development reports them), else warn once per (original,
    *  message); advisory ones never quarantine. */
@@ -868,10 +905,10 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
    *  corpus pass, so re-warning it on each save is noise. */
   const warnedByOriginal = new Map<string, Set<string>>();
   const extractFacts = (): ((filesJson: string) => string) => {
-    const extract = host.engineApi().extractFacts;
+    const extract = moduleFactsCall(host.engineApi());
     if (extract === undefined) {
       throw new Error(
-        `${host.prefix} native engine does not expose extractFacts required for source adaptation`
+        `${host.prefix} native engine does not expose extractModuleFacts or extractFacts required for source adaptation`
       );
     }
     return extract;
