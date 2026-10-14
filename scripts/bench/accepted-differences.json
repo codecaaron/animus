@@ -2,15 +2,15 @@
   {
     "row": "loader:large-closure",
     "fixture": "large-closure",
-    "baseline": "8f72bd61b76d86bc4351debba5c55314914536a6d91cfacf23b684a2120efc3a",
-    "candidate": "4fb0f9038c311696e51bbb6ba0b83d0d5a8d1eb8c380f862b03e38d8c31e9121",
+    "baseline": "cbeed5a12a842936669a687017b5a935d5e77f86cac0955c91ae74aaecbb885f",
+    "candidate": "d7d6037b6e231ffa7b0f74e94e99b2c7c33813460c85bc9acd0de1bcac98b056",
     "reason": "The audit owns the packages of the monorepo the system's package belongs to, found as package managers find it: the load reads the manifest declaring the workspaces, this repository's root package.json, so 14 paths become 15. The config is identical (configDigest unchanged). Digests are of repository-relative paths, the same in any checkout and on any platform; both sides read this checkout's packages/system/dist, so the digests also name its chunk hashes and move with any runtime change."
   },
   {
     "row": "loader:showcase",
     "fixture": "showcase",
-    "baseline": "e1fbee051d428710da396b471c1ede559ff287ed56d4f14ea5686b6050e7ea9b",
-    "candidate": "cc174c12ce3beaf86507a8e6d6ed175b4aa2c062df0627a1d4f7e5f6a28c5a68",
+    "baseline": "b22953ed7d4e42556dca462b0abed20a2cfb27cf1f2de50e1e369bcab9d16482",
+    "candidate": "3bc70a1dca923ab2b878a3dc6d8a6b63423bda5d4d8c967a195fa49e49126ce0",
     "reason": "The audit owns the packages of the monorepo the system's package belongs to, found as package managers find it: the load reads the manifest declaring the workspaces, this repository's root package.json, so 20 paths become 21. The config is identical (configDigest unchanged). Digests are of repository-relative paths, the same in any checkout and on any platform; both sides read this checkout's packages/system/dist, so the digests also name its chunk hashes and move with any runtime change."
   },
   {
@@ -24,7 +24,7 @@
     "row": "build:vite-app",
     "fixture": "vite-app",
     "baseline": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
-    "candidate": "f1fb27cfd22be7e9ddee65bcb06df760e57898b23232988ffe80814b083f7196",
-    "reason": "The JS grows 22 bytes (250909 to 250931): runtime compound-variant matching compares the prop's value as a string so a boolean prop matches its \"true\"/\"false\" key. The CSS is identical (cssDigest unchanged)."
+    "candidate": "564682d18b9e7977785c25b8c4b8cac39270f67abe026bfad7536c371981c962",
+    "reason": "The JS grows 171 bytes (250909 to 251080): runtime compound-variant matching compares the prop value as a string, so a boolean prop matches its \"true\"/\"false\" key, and an asComponent() target receives the variants and states its terminal forwards. The CSS is identical (cssDigest unchanged)."
   }
 ]
