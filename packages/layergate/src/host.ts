@@ -155,6 +155,15 @@ export class Units {
   private readonly filesByUnit = new Map<string, Set<string>>();
   private readonly unitsByFile = new Map<string, Set<string>>();
   private readonly reached = new Map<string, boolean>();
+  private readonly realpaths = new Map<string, string>();
+
+  /** `file` by realpath, the identity ownership, opt-outs and the declared
+   *  sheets are decided by, wherever a host reads it from. */
+  canonical(file: string): string {
+    let path = this.realpaths.get(file);
+    if (path === undefined) this.realpaths.set(file, (path = real(file)));
+    return path;
+  }
 
   /** Records the files `unit` read. Returns the files no unit reads any
    *  more, whose parses are forgotten. */
@@ -189,6 +198,7 @@ export class Units {
    *  that read it. */
   changed(file: string): ReadonlySet<string> {
     this.parsed.delete(file);
+    this.realpaths.delete(file);
     this.reached.clear();
     return this.unitsByFile.get(file) ?? new Set();
   }

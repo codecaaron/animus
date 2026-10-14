@@ -79,12 +79,21 @@ module.exports = {
 ```
 
 The plugin adds no rule. It joins every loader chain of yours that has a
-css-loader (not a CSS Modules one), just before PostCSS runs, and raises
-that css-loader's `importLoaders` by one, so every stylesheet passes
-through it, imported ones included. An owned stylesheet arrives finished,
-its `@import`s resolved as css-loader resolves them and inlined, so
-css-loader never sees a `layer()` import. PostCSS, Sass and css-loader keep
-running as before.
+css-loader, just before PostCSS runs, and raises that css-loader's
+`importLoaders` by one, so every stylesheet passes through it, imported
+ones included. An owned stylesheet arrives finished, its `@import`s
+resolved as css-loader resolves them and inlined, so css-loader never sees
+a `layer()` import. PostCSS, Sass and css-loader keep running as before. A
+stylesheet that css-loader reads as a CSS Module or ICSS sheet, by its own
+`modules` and `icss` options for that file, is left alone, so its
+`:export`s survive.
+
+What layergate returns is never cached by webpack, so a warm start with a
+persistent cache finishes owned stylesheets again. Ownership, opt-outs and
+the declared sheets go by realpath; `url()`s are rebased from where webpack
+reads each file, so `resolve.symlinks: false` resolves them as css-loader
+does. The `declaredBy` stylesheet is never layered, even when an owned
+stylesheet imports it.
 
 webpack has no `virtual:layergate`. Pass `declaredBy`, the path of a
 stylesheet of yours: the declared sheets are delivered at its head, and a

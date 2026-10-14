@@ -95,7 +95,8 @@ export default withAnimus({
 
 It needs webpack: `next dev` and `next build` on Next 15, `--webpack` on
 Next 16. Turbopack runs no loader on the stylesheets a stylesheet imports,
-so with `quarantine` set it fails config loading.
+so with `quarantine` set any Turbopack run fails config loading, whatever
+the `turbopack` option says.
 
 `sheets` arrive at the head of Animus's own stylesheet, on every page.
 `!important` declarations and animations still win, and are reported. App

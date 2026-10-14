@@ -8,12 +8,17 @@
  * CSS with no local import, so css-loader has nothing left to resolve and
  * a `layer()` condition never reaches its import parser.
  */
-import { fileOf, ownership, real, resolveEach, slashes, Units } from './host';
+import { ownership, real, resolveEach, slashes, Units } from './host';
 import { resolvePlan } from './plan';
-import { CSS_RESOLVE, loaderPath, registry } from './webpack-state';
+import {
+  alwaysModules,
+  CSS_RESOLVE,
+  loaderPath,
+  registry,
+} from './webpack-state';
 
 import type { LayergateOptions } from './plan';
-import type { WebpackState } from './webpack-state';
+import type { ModuleOptions, WebpackState } from './webpack-state';
 
 export type { LayergateOptions } from './plan';
 
@@ -33,10 +38,12 @@ export interface LayergateWebpackOptions extends LayergateOptions {
 /** A loader as a rule's `use` lists it. */
 type UseEntry = string | { loader?: string; options?: unknown };
 
-/** The loader entry the plugin inserts. */
+/** The loader entry the plugin inserts; each chain's copy also carries
+ *  its css-loader's module options, so the loader leaves the stylesheets
+ *  that css-loader reads as CSS Modules alone. */
 export interface LoaderEntry {
   loader: string;
-  options: { id: string };
+  options: { id: string } & ModuleOptions;
 }
 
 /** The rules webpack's module options hold, as far as the plugin reads
@@ -74,33 +81,12 @@ interface Compilation {
   errors: Error[];
 }
 
-/** What webpack hands `needBuild` besides the module; not read. */
-interface NeedBuildContext {
-  readonly compilation?: Compilation;
-}
-
 /** The compiler, as far as the plugin reads it. */
 export interface Compiler {
   context: string;
   /** What changed since the last compile, in watch mode. */
   modifiedFiles?: ReadonlySet<string>;
   removedFiles?: ReadonlySet<string>;
-  webpack: {
-    NormalModule: {
-      getCompilationHooks(compilation: Compilation): {
-        needBuild: {
-          tapAsync(
-            name: string,
-            run: (
-              module: { resource?: string },
-              context: NeedBuildContext,
-              done: (error?: Error | null, rebuild?: boolean) => void
-            ) => void
-          ): void;
-        };
-      };
-    };
-  };
   options: {
     module: { rules: unknown[] };
     watchOptions?: { ignored?: unknown };
@@ -134,9 +120,9 @@ const loaderOf = (entry: UseEntry) =>
   entry instanceof Object ? (entry.loader ?? '') : entry;
 
 /**
- * Inserts `entry` into every loader chain of `rules` with a non-module
- * css-loader: just before PostCSS runs (after it in `use`), or before
- * css-loader without PostCSS.
+ * Inserts `entry` into every loader chain of `rules` whose css-loader does
+ * not read every stylesheet as a CSS Module: just before PostCSS runs
+ * (after it in `use`), or before css-loader without PostCSS.
  */
 export function insertLoader(rules: unknown[], entry: LoaderEntry): Coverage {
   const coverage: Coverage = { wrapped: 0, uncovered: 0 };
@@ -163,11 +149,11 @@ export function insertLoader(rules: unknown[], entry: LoaderEntry): Coverage {
       continue;
     }
     const cssEntry = use[css]!;
-    // SAFETY: css-loader's options object, read for two keys.
+    // SAFETY: css-loader's options object, read for three keys.
     const options = (
       cssEntry instanceof Object ? (cssEntry.options ?? {}) : {}
-    ) as { modules?: unknown; importLoaders?: number };
-    if (options.modules) continue;
+    ) as ModuleOptions & { importLoaders?: number };
+    if (alwaysModules(options)) continue;
     const postcss = loaders.findIndex((loader) => POSTCSS_LOADER.test(loader));
     const at = (postcss === -1 ? css : postcss) + 1;
     rule.use = [
@@ -180,7 +166,14 @@ export function insertLoader(rules: unknown[], entry: LoaderEntry): Coverage {
         },
       },
       ...use.slice(css + 1, at),
-      entry,
+      {
+        loader: entry.loader,
+        options: {
+          ...entry.options,
+          modules: options.modules,
+          icss: options.icss,
+        },
+      },
       ...use.slice(at),
     ];
     coverage.wrapped += 1;
@@ -196,28 +189,14 @@ const resolveOne = (resolver: Resolver, context: string, specifier: string) =>
     )
   );
 
-let instances = 0;
-
 export class LayergatePlugin {
   readonly id: string;
   private readonly state: WebpackState;
   private readonly watchIgnored: boolean;
-  /** Bumped by each watch run that changes a file a finished stylesheet
-   *  read. */
-  private generation = 0;
-  /** Each finished stylesheet a changed file was read into → the
-   *  generation of that change: rebuilt, though webpack takes a file under
-   *  `node_modules` to change only with its package's version. */
-  private readonly staleSince = new Map<string, number>();
-  /** Each module of a stale stylesheet → the generation it was rebuilt
-   *  at. A stylesheet has several modules (Next's CSS extraction builds
-   *  the loader chain as a module of its own), and each rebuilds once. */
-  private readonly rebuilt = new WeakMap<object, number>();
-  /** Each module resource → its file, by realpath. */
-  private readonly files = new Map<string, string>();
 
   constructor(options: LayergateWebpackOptions = {}) {
-    this.id = `layergate-${process.pid}-${instances++}`;
+    const shared = registry();
+    this.id = `layergate-${process.pid}-${shared.made++}`;
     this.watchIgnored = options.watchIgnored !== false;
     const plan = resolvePlan(options);
     this.state = {
@@ -227,7 +206,7 @@ export class LayergatePlugin {
       declaredBy: options.declaredBy ? real(options.declaredBy) : null,
       units: new Units(),
     };
-    registry().set(this.id, this.state);
+    shared.states.set(this.id, this.state);
   }
 
   /** Whether `path` is a file a finished stylesheet read: one the watcher
@@ -244,11 +223,6 @@ export class LayergatePlugin {
       options: { id: this.id },
     });
     compiler.hooks.thisCompilation.tap(NAME, (compilation) => {
-      compiler.webpack.NormalModule.getCompilationHooks(
-        compilation
-      ).needBuild.tapAsync(NAME, (module, _context, done) => {
-        done(null, this.rebuilds(module) || undefined);
-      });
       if (uncovered > 0) {
         compilation.warnings.push(
           new Error(
@@ -281,44 +255,17 @@ export class LayergatePlugin {
     };
     compiler.hooks.beforeRun.tapPromise(NAME, prepare);
     compiler.hooks.watchRun.tapPromise(NAME, async () => {
-      this.invalidate([
-        ...(compiler.modifiedFiles ?? []),
-        ...(compiler.removedFiles ?? []),
-      ]);
+      // A finished stylesheet is never cached (the loader says so), so it
+      // is finished again each compile; a changed file is read again.
+      for (const path of compiler.modifiedFiles ?? []) {
+        this.state.units.changed(slashes(path));
+      }
+      for (const path of compiler.removedFiles ?? []) {
+        this.state.units.changed(slashes(path));
+      }
       await prepare();
     });
-    compiler.hooks.shutdown.tap(NAME, () => registry().delete(this.id));
-  }
-
-  /** Whether `module` belongs to a stale finished stylesheet and has not
-   *  been rebuilt since it went stale. */
-  private rebuilds(module: { resource?: string }): boolean {
-    if (this.staleSince.size === 0 || module.resource === undefined) {
-      return false;
-    }
-    let file = this.files.get(module.resource);
-    if (file === undefined) {
-      file = fileOf(module.resource);
-      this.files.set(module.resource, file);
-    }
-    const since = this.staleSince.get(file);
-    if (since === undefined || (this.rebuilt.get(module) ?? -1) >= since) {
-      return false;
-    }
-    this.rebuilt.set(module, this.generation);
-    return true;
-  }
-
-  /** Forgets what the changed files fed and marks the finished
-   *  stylesheets that read them for rebuilding. */
-  private invalidate(changed: string[]): void {
-    if (changed.length === 0) return;
-    this.generation += 1;
-    for (const path of changed) {
-      for (const unit of this.state.units.changed(slashes(path))) {
-        this.staleSince.set(unit, this.generation);
-      }
-    }
+    compiler.hooks.shutdown.tap(NAME, () => registry().states.delete(this.id));
   }
 
   /** Makes the host's `watchOptions.ignored` watch every file a finished

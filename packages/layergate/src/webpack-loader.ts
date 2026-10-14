@@ -11,12 +11,12 @@
 import { dirname } from 'node:path';
 
 import { compileUnit } from './compile';
-import { formatDiagnostic, real } from './host';
+import { formatDiagnostic, slashes } from './host';
 import { readSheet } from './sheet';
-import { CSS_RESOLVE, registry } from './webpack-state';
+import { CSS_RESOLVE, isModuleSheet, registry } from './webpack-state';
 
 import type { CompiledUnit, CompileOptions } from './compile';
-import type { WebpackState } from './webpack-state';
+import type { ModuleOptions, WebpackState } from './webpack-state';
 
 type SourceMap = CompiledUnit['map'];
 
@@ -33,7 +33,9 @@ interface IncomingMeta {
 interface LoaderContext {
   resourcePath: string;
   rootContext: string;
-  getOptions(): { id?: string };
+  getOptions(): { id?: string } & ModuleOptions;
+  /** Whether webpack may cache this module's build. */
+  cacheable(flag: boolean): void;
   async(): (
     error: Error | null,
     code?: string,
@@ -62,14 +64,15 @@ const readFrom = (context: LoaderContext) => (path: string) =>
     )
   );
 
-/** The file an `@import` in `importer` reaches, as css-loader resolves it. */
+/** The file an `@import` in `importer` reaches, where css-loader would
+ *  reach it: by realpath unless `resolve.symlinks` is false. */
 const resolveFrom = (context: LoaderContext) => {
   const resolver = context.getResolve(CSS_RESOLVE);
   return async (specifier: string, importer: string) => {
     const resolved = await resolver(dirname(importer), specifier).catch(
       () => null
     );
-    return resolved ? real(resolved) : null;
+    return resolved ? slashes(resolved) : null;
   };
 };
 
@@ -86,14 +89,21 @@ async function finish(
     path === file ? Promise.resolve(source) : readFile(path);
   // The stylesheet itself arrives as the loaders before this one left it.
   state.units.parsed.delete(file);
+  // Files flow as webpack reads them, so URLs resolve as css-loader
+  // resolves them; who owns a file, opt-outs and the declared sheets go by
+  // realpath. The `declaredBy` stylesheet is never layered.
+  const { units, owner, optedOut, declaredBy } = state;
   const unit = await compileUnit(roots, {
     layer: state.plan.layer,
     order: state.plan.order,
     base: context.rootContext,
     resolve: resolveFrom(context),
     read,
-    quarantined: (path) => !state.optedOut.has(path),
-    owns: state.owner.owns,
+    quarantined: (path) => {
+      const canonical = units.canonical(path);
+      return !optedOut.has(canonical) && canonical !== declaredBy;
+    },
+    owns: (path) => owner.owns(units.canonical(path)),
     remote: 'refuse',
     cache: state.units.parsed,
     ...extra,
@@ -112,11 +122,17 @@ async function run(
   context: LoaderContext,
   source: string
 ): Promise<{ code: string; map: SourceMap } | null> {
-  const state = registry().get(context.getOptions().id ?? '');
-  if (!state) return null;
-  const file = real(context.resourcePath);
+  const options = context.getOptions();
+  const state = registry().states.get(options.id ?? '');
+  // css-loader reads a CSS Module's `:export`s, which a layer would hide.
+  if (!state || isModuleSheet(context.resourcePath, options)) return null;
+  const file = slashes(context.resourcePath);
+  const id = state.units.canonical(file);
   const { owner, declaredBy } = state;
-  if (file === declaredBy) {
+  // Whatever layergate returns depends on files and state webpack's cache
+  // does not know about, so it is never cached: it is finished again on
+  // a warm start and each compile.
+  if (id === declaredBy) {
     if (owner.declared.length === 0) return null;
     // URLs relative to this stylesheet, which css-loader resolves and
     // emits, a file outside the root too.
@@ -124,24 +140,27 @@ async function run(
       delivery: file,
       map: false,
     });
+    context.cacheable(false);
     return { code: `${unit.css}\n${source}`, map: null };
   }
   if (!owner.owning()) return null;
   // Delivered at the head of `declaredBy`, once.
-  if (declaredBy && owner.declared.includes(file)) {
+  if (declaredBy && owner.declared.includes(id)) {
+    context.cacheable(false);
     return { code: '', map: null };
   }
-  if (!owner.owns(file)) {
+  if (!owner.owns(id)) {
     const { imports } = readSheet(source);
     if (imports.length === 0) return null;
     const reached = await state.units.reaches(file, imports, {
       resolve: resolveFrom(context),
       read: readFrom(context),
-      owns: owner.owns,
+      owns: (path) => owner.owns(state.units.canonical(path)),
     });
     if (!reached) return null;
   }
   const unit = await finish(context, state, file, source, [file]);
+  context.cacheable(false);
   return { code: unit.css, map: unit.map };
 }
 

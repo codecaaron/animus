@@ -208,10 +208,14 @@ export function withAnimus(
     authoredConfig: NextConfigInput<Config>
   ): WebpackNextConfig<Config> | TurbopackNextConfig<Config> => {
     const nextConfig = withSourceKits(authoredConfig, appRoot);
-    if (resolveTurbopackMode(options)) {
-      if (options.quarantine) {
-        throw new AnimusConfigError(QUARANTINE_TURBOPACK_MESSAGE);
-      }
+    const turbopack = resolveTurbopackMode(options);
+    // Refused whenever Turbopack runs, whatever Animus's own mode: Next
+    // then never calls the webpack hook, so vendor CSS would ship
+    // unlayered.
+    if (options.quarantine && (turbopack || process.env.TURBOPACK)) {
+      throw new AnimusConfigError(QUARANTINE_TURBOPACK_MESSAGE);
+    }
+    if (turbopack) {
       warnTurbopackCwdRoot(options, appRoot);
       return turbopackConfig(nextConfig, options, build, appRoot);
     }
