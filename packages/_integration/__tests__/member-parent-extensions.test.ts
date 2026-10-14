@@ -91,6 +91,12 @@ export const UntouchedContent = Untouched.Content.extend().styles({ width: '70px
 `,
 };
 
+function codesOf(diagnostics: ManifestDiagnostic[], component: string) {
+  return diagnostics
+    .filter((d) => d.component === component)
+    .map((d) => d.code);
+}
+
 const MEMBER_PARENT_WARNING =
   '⚠ fixtures/member-child.tsx:2:35: ' +
   "ShortSelectContent not extracted: chain dropped: parent 'Select.Content' " +
@@ -214,8 +220,7 @@ describe('extending a member of an exported Animus namespace object', () => {
   });
 
   test('a member a later spread or computed key may replace proves nothing', () => {
-    const codes = (component: string) =>
-      diagnostics.filter((d) => d.component === component).map((d) => d.code);
+    const codes = (component: string) => codesOf(diagnostics, component);
     expect(codes('SpreadContent')).toEqual([]);
     expect(codes('ComputedContent')).toEqual([]);
     expect(codes('RestoredContent')).toEqual([
@@ -224,8 +229,7 @@ describe('extending a member of an exported Animus namespace object', () => {
   });
 
   test('a member a later top-level write may replace proves nothing', () => {
-    const codes = (component: string) =>
-      diagnostics.filter((d) => d.component === component).map((d) => d.code);
+    const codes = (component: string) => codesOf(diagnostics, component);
     expect({
       static: codes('MutatedContent'),
       computed: codes('ComputedMutatedContent'),
@@ -237,5 +241,80 @@ describe('extending a member of an exported Animus namespace object', () => {
       objectAssign: [],
       otherKey: ['animus.extension.unsupported-member-parent'],
     });
+  });
+});
+
+const NAMESPACE_BARREL = {
+  path: 'fixtures/namespace-barrel.tsx',
+  source: `export * as kit from './member-kit';
+`,
+};
+
+const NAMESPACE_CHILD = {
+  path: 'fixtures/namespace-child.tsx',
+  source: `import * as Kit from './member-kit';
+import * as Barrel from './namespace-barrel';
+import { kit } from './namespace-barrel';
+export const TallSelectContent = Kit.SelectContent.extend().styles({ opacity: '0.48' }).asElement('div');
+export const DeepSelectContent = Barrel.kit.SelectContent.extend().styles({ opacity: '0.36' }).asElement('div');
+export const NamedSelectContent = kit.SelectContent.extend().styles({ opacity: '0.12' }).asElement('div');
+export const AbsentSelectContent = Kit.Absent.extend().styles({ opacity: '0.06' }).asElement('div');
+`,
+};
+
+describe('extending a member of a namespace import', () => {
+  let manifest: ReturnType<typeof runPipeline>['manifest'];
+  let css: string;
+  let codes: (component: string) => (string | undefined)[];
+
+  beforeAll(() => {
+    clearAnalysisCache();
+    ({ manifest, css } = runPipeline(
+      [SYSTEM, KIT, NAMESPACE_BARREL, NAMESPACE_CHILD],
+      { devMode: true }
+    ));
+    assertNoUnresolvedTokens(css);
+    const diagnostics: ManifestDiagnostic[] = manifest.diagnostics ?? [];
+    codes = (component) => codesOf(diagnostics, component);
+  });
+
+  test('extracts like a named import, through a re-exported namespace too', () => {
+    const { code } = transformFile(
+      NAMESPACE_CHILD.path,
+      NAMESPACE_CHILD.source
+    );
+    for (const [child, value] of [
+      ['TallSelectContent', '0.48'],
+      ['DeepSelectContent', '0.36'],
+    ]) {
+      expect(codes(child)).toEqual([]);
+      expect(
+        manifest.components[`fixtures/namespace-child.tsx::${child}`]
+      ).toMatchObject({
+        extends_from: 'fixtures/member-kit.tsx::SelectContent',
+      });
+      expect(css).toContain(`opacity: ${value}`);
+      expect(code).not.toContain(`opacity: '${value}'`);
+    }
+  });
+
+  test('a named import of a namespace fails strict instead of dropping the child', () => {
+    expect(codes('NamedSelectContent')).toEqual([
+      'animus.extension.unsupported-member-parent',
+    ]);
+    expect(css).not.toContain('opacity: 0.12');
+  });
+
+  test('a member the namespace lacks is a dropped extension the host refuses to serve', () => {
+    expect(codes('AbsentSelectContent')).toEqual([
+      'animus.extension.unresolved-parent',
+    ]);
+    expect(manifest.missing_inputs).toEqual([
+      expect.objectContaining({
+        component: 'AbsentSelectContent',
+        parent: 'Kit.Absent',
+        specifier: './member-kit',
+      }),
+    ]);
   });
 });

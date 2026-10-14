@@ -1337,11 +1337,16 @@ fn missing_parent_input(
         base,
         outcome,
     };
-    let specifier = match ff.bindings.module_import(extends_binding) {
-        Some(ImportBinding::Named { specifier, .. } | ImportBinding::Default { specifier }) => Some(specifier.as_str()),
+    let (root, dotted) = extends_binding.split_once('.').map_or((extends_binding, false), |(root, _)| (root, true));
+    let specifier = match ff.bindings.module_import(root) {
+        Some(ImportBinding::Named { specifier, .. } | ImportBinding::Default { specifier }) if !dotted => {
+            Some(specifier.as_str())
+        }
+        // A namespace member parent (`Parts.Base`) is its namespace's import.
+        Some(ImportBinding::Namespace { specifier }) if dotted => Some(specifier.as_str()),
         _ => None,
     };
-    if let Some((file, binding, true)) = resolve_declaration(file_path, ff, extends_binding, files, inputs, links) {
+    if let Some((file, binding, true)) = resolve_parent_declaration(file_path, ff, extends_binding, files, inputs, links) {
         let outcome = match chain_extractable(files, &file, &binding) {
             Some(false) => MissingParent::FailedParent,
             _ => MissingParent::NotAChain,
@@ -1478,6 +1483,39 @@ fn declares_locally(ff: &FileFacts, binding: &str) -> bool {
             || ff.chains.iter().any(|c| c.descriptor.binding == binding))
 }
 
+/// Where an extension parent is declared: a name, as `resolve_declaration`
+/// reads it, or a member read through a namespace (`Parts.Base`,
+/// `Parts.sub.Base`), as the module table resolves that module's export.
+fn resolve_parent_declaration(
+    file_path: &str,
+    ff: &FileFacts,
+    parent: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> Option<(String, String, bool)> {
+    if !parent.contains('.') {
+        return resolve_declaration(file_path, ff, parent, files, inputs, links);
+    }
+    namespace_member_declaration(file_path, ff, parent, files, inputs, links)
+}
+
+/// Where a member path read through a namespace (`ns.X`, `ns.sub.X`) is
+/// declared, as the module table resolves that module's export: the
+/// declaring file, the binding, and whether that file declares it itself.
+fn namespace_member_declaration(
+    file: &str,
+    ff: &FileFacts,
+    path: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> Option<(String, String, bool)> {
+    let (namespace, member) = path.rsplit_once('.')?;
+    let module = namespace_path_module(file, ff, namespace, files, inputs, links)?;
+    module_declaration(module, member, files, links).map(|(file, binding, local, _)| (file, binding, local))
+}
+
 /// A parent bails only when its landing file is in the analyzed set AND
 /// declares the name locally; a barrel the resolver cannot follow, and an
 /// outside file, stay standalone.
@@ -1489,7 +1527,7 @@ fn resolve_extension_parent(
     inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
 ) -> Result<String, String> {
-    match resolve_declaration(file_path, ff, extends_binding, files, inputs, links) {
+    match resolve_parent_declaration(file_path, ff, extends_binding, files, inputs, links) {
         None => Err(parent_unresolvable_reason(extends_binding)),
         // Nothing proven about the parent: keep the standalone fallback.
         Some((file, binding, false)) => Ok(format!("{}::{}", file, binding)),
@@ -1583,10 +1621,9 @@ fn unsupported_member_parent_bail(
     extension: &MemberParentExtension,
     (component_file, component, exported): (String, String, bool),
 ) -> CssDiagnostic {
-    diagnostic(
+    member_parent_bail(
         file,
-        &extension.binding,
-        "bail",
+        extension,
         format!(
             "chain dropped: parent '{object}.{member}' is a member of {kind} object \
              '{object}', and member-parent extension is not supported; the declaration \
@@ -1596,10 +1633,47 @@ fn unsupported_member_parent_bail(
             member = extension.member,
             kind = if exported { "exported" } else { "local" },
         ),
-        Some(UNSUPPORTED_MEMBER_PARENT),
     )
-    .at(extension.start)
-    .dropping(&format!("{}.{}", extension.object, extension.member))
+}
+
+/// An extension of a member of a namespace a named import binds
+/// (`import { sub } from './kit'`, `sub.Base.extend()`) whose member has
+/// proven Animus origin: chain collection extracts a namespace parent only
+/// through a namespace import.
+fn named_namespace_parent(
+    file: &str,
+    ff: &FileFacts,
+    extension: &MemberParentExtension,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> Option<CssDiagnostic> {
+    let path = format!("{}.{}", extension.object, extension.member);
+    let Some((component_file, component, true)) = namespace_member_declaration(file, ff, &path, files, inputs, links)
+    else {
+        return None;
+    };
+    has_animus_origin(&component_file, &component, files, inputs, links, &mut FxHashSet::default()).then(|| {
+        member_parent_bail(
+            file,
+            extension,
+            format!(
+                "chain dropped: parent '{path}' reads '{member}' through namespace '{object}', \
+                 which a named import binds, and only a namespace import's member extends; the \
+                 declaration in {file} is left untransformed — import the namespace with \
+                 `import * as`, or extend '{component}' from {component_file} directly",
+                object = extension.object,
+                member = extension.member,
+            ),
+        )
+    })
+}
+
+/// The bail for a member-parent extension the extractor leaves untransformed.
+fn member_parent_bail(file: &str, extension: &MemberParentExtension, message: String) -> CssDiagnostic {
+    diagnostic(file, &extension.binding, "bail", message, Some(UNSUPPORTED_MEMBER_PARENT))
+        .at(extension.start)
+        .dropping(&format!("{}.{}", extension.object, extension.member))
 }
 
 /// A chain written as an object-literal property whose root has proven
@@ -4668,10 +4742,7 @@ fn bounded_prop_tags(
     };
     // A namespace member path (`ns.X`) a module reads, as a declaration.
     let namespace_declared = |file: &str, ff: &FileFacts, path: &str| {
-        let (namespace, member) = path.rsplit_once('.')?;
-        let module = namespace_path_module(file, ff, namespace, files, inputs, links)?;
-        let (declaring, binding, _, _) = module_declaration(module, member, files, links)?;
-        Some((declaring, binding))
+        namespace_member_declaration(file, ff, path, files, inputs, links).map(|(declaring, binding, _)| (declaring, binding))
     };
     // Whether the component `outer` builds forwards the prop only as written
     // literals: every use proven, none of them spread, cloned, forwarded into
@@ -6454,6 +6525,8 @@ fn run_with_system_floor(
             if let Some(component) = member_parent_component(file_path, ff, extension, files, inputs, links)
             {
                 diagnostics.push(unsupported_member_parent_bail(file_path, extension, component));
+            } else {
+                diagnostics.extend(named_namespace_parent(file_path, ff, extension, files, inputs, links));
             }
         }
         for chain in &ff.member_rooted_chains {

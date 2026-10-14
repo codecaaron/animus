@@ -220,8 +220,13 @@ fn replacement_import_needs(
         // A chain-stage reference or extended parent resolves at module
         // scope, where an import and a local cannot share a name.
         let import_of = |local: &str| file_facts.imports.iter().find(|import| import.local == local);
+        let namespace_of = |local: &str| file_facts.namespace_import_facts.iter().find(|import| import.local == local);
         if payload.drops_parent_reference {
-            let parent = chain.descriptor.extends_from.as_deref().and_then(import_of);
+            let parent = chain.descriptor.extends_from.as_deref().and_then(|parent| match parent.split_once('.') {
+                None => import_of(parent),
+                // A namespace member parent (`Parts.Base`) keeps its namespace's module.
+                Some((namespace, _)) => namespace_of(namespace),
+            });
             needs.effect_imports.extend(parent.map(|import| (import.declaration, import.source.clone())));
         }
         let delivered = |prop: &str| {

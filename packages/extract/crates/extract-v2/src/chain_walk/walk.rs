@@ -8,7 +8,7 @@ use oxc::ast::ast::{
 use oxc::ast_visit::Visit;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::expr::{match_static_member, unwrap_type_assertions};
+use super::expr::{match_static_member, static_member_path, unwrap_type_assertions};
 use super::terminal::{extract_terminal_arg, first_arg_span, second_arg_span_fn, TerminalArg};
 use super::{
     ChainDescriptor, ChainStage, MemberParentExtension, MemberRootedChain, StagedBuilder,
@@ -22,7 +22,7 @@ pub(crate) const CHAIN_METHODS: &[&str] = &["styles", "variant", "compound", "st
 /// `Object.member` root the extractor does not support.
 enum WalkedChain {
     Chain(ChainDescriptor),
-    MemberParent(MemberParentExtension),
+    MemberParent(MemberParentExtension, ChainDescriptor),
     MemberRooted(MemberRootedChain),
 }
 
@@ -30,7 +30,8 @@ enum WalkedChain {
 /// collection drops.
 pub struct WalkedProgram {
     pub chains: Vec<ChainDescriptor>,
-    pub member_parents: Vec<MemberParentExtension>,
+    /// Each member-parent extension, with the chain it walks.
+    pub member_parents: Vec<(MemberParentExtension, ChainDescriptor)>,
     pub member_rooted: Vec<MemberRootedChain>,
     /// Start offset of a terminal chain bound by `export default`.
     pub default_export: Option<u32>,
@@ -171,7 +172,7 @@ pub fn walk_program_facts(program: &Program<'_>) -> WalkedProgram {
     let mut default_export_span = None;
     let mut record = |declarator: &VariableDeclarator<'_>| match try_extract_chain(declarator, &builders) {
         Some(WalkedChain::Chain(chain)) => chains.push(chain),
-        Some(WalkedChain::MemberParent(extension)) => member_parents.push(extension),
+        Some(WalkedChain::MemberParent(extension, chain)) => member_parents.push((extension, chain)),
         Some(WalkedChain::MemberRooted(chain)) => member_rooted.push(chain),
         None => {}
     };
@@ -416,17 +417,18 @@ fn try_walk_chain(
         builders,
     )?;
 
-    let root_identifier = match root {
-        ChainRoot::Identifier(name) => name,
-        ChainRoot::Member { object, member } if has_extend_marker => {
-            return Some(WalkedChain::MemberParent(MemberParentExtension {
-                binding,
-                object,
-                member,
-                start: chain_start,
-            }));
-        }
-        ChainRoot::Member { object, member } if !stages.is_empty() => {
+    // A member parent (`Object.member.extend()`) is walked like any other
+    // extension, and also kept as the member it reads.
+    let (extends_from, member_parent) = match root {
+        ChainRoot::Identifier(name) if has_extend_marker => (Some(name), None),
+        // Primary chain: the method pattern suffices, so any root name
+        // works (`animus.styles(...)`, custom instances).
+        ChainRoot::Identifier(_) if !stages.is_empty() => (None, None),
+        ChainRoot::Member { object, member } if has_extend_marker => (
+            Some(format!("{object}.{member}")),
+            Some(MemberParentExtension { binding: binding.clone(), object, member, start: chain_start }),
+        ),
+        ChainRoot::Member { object, member } if !stages.is_empty() && !object.contains('.') => {
             return Some(WalkedChain::MemberRooted(MemberRootedChain {
                 binding,
                 object,
@@ -434,22 +436,12 @@ fn try_walk_chain(
                 start: chain_start,
             }));
         }
-        ChainRoot::Member { .. } => return None,
+        ChainRoot::Identifier(_) | ChainRoot::Member { .. } => return None,
     };
 
     stages.reverse();
 
-    let extends_from = if has_extend_marker {
-        Some(root_identifier)
-    } else if !stages.is_empty() {
-        // Primary chain: the method pattern suffices, so any root name
-        // works (`animus.styles(...)`, custom instances).
-        None
-    } else {
-        return None;
-    };
-
-    Some(WalkedChain::Chain(ChainDescriptor {
+    let chain = ChainDescriptor {
         binding,
         terminal,
         tag,
@@ -459,7 +451,11 @@ fn try_walk_chain(
         span: (chain_start, chain_end.end),
         extends_from,
         followed_builder,
-    }))
+    };
+    Some(match member_parent {
+        Some(extension) => WalkedChain::MemberParent(extension, chain),
+        None => WalkedChain::Chain(chain),
+    })
 }
 
 fn walk_chain_backwards(
@@ -490,17 +486,14 @@ fn walk_chain_backwards(
             }
             _ => Some((id.span.start, ChainRoot::Identifier(id.name.to_string()), None)),
         },
-        Expression::StaticMemberExpression(member) => match &member.object {
-            Expression::Identifier(object) => Some((
-                member.span.start,
-                ChainRoot::Member {
-                    object: object.name.to_string(),
-                    member: member.property.name.to_string(),
-                },
-                None,
-            )),
-            _ => None,
-        },
+        Expression::StaticMemberExpression(member) => Some((
+            member.span.start,
+            ChainRoot::Member {
+                object: static_member_path(&member.object)?,
+                member: member.property.name.to_string(),
+            },
+            None,
+        )),
         Expression::CallExpression(call) => {
             let (object, method_name) = match_static_member(&call.callee)?;
 

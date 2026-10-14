@@ -522,6 +522,9 @@ pub struct FileFacts {
     /// Namespace imports (`import * as ns from 'x'`): local → specifier.
     #[serde(skip)]
     pub namespace_imports: BTreeMap<String, String>,
+    /// The same imports with their declarations, `imported` being `*`.
+    #[serde(skip)]
+    pub(crate) namespace_import_facts: Vec<ImportFact>,
     /// A terminal chain bound by `export default`, which is never a chain.
     #[serde(skip)]
     pub default_export_chain: Option<DefaultExportChain>,
@@ -1031,6 +1034,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
     let ObjectFacts { props_forwarding, const_initializers, compose, uses } = objects;
     let crate::usage_facts::ObjectUses { context_consts, unsafe_object_uses, object_handoffs, written_namespaces } = uses;
     let bindings = &lowered.bindings;
+    let namespace_import_facts = crate::usage_facts::collect_namespace_import_facts(ast.module_record());
     // `export default X` of a module binding X names X.
     let default_export_binding = match bindings.default_export {
         Some(crate::identity::DefaultExport::Snapshot { of: Some(of), .. }) => Some(bindings.binding(of).name.clone()),
@@ -1067,7 +1071,8 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         member_parent_extensions: Vec::new(),
         member_rooted_chains: Vec::new(),
         object_member_chains: const_initializers.chains,
-        namespace_imports: crate::usage_facts::collect_namespace_imports(ast.module_record()),
+        namespace_imports: namespace_import_facts.iter().map(|import| (import.local.clone(), import.source.clone())).collect(),
+        namespace_import_facts,
         default_export_chain: None,
         unwalked_chains: Vec::new(),
         staged_builders: Vec::new(),
@@ -1448,8 +1453,19 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let identifier_index = build_identifier_index(program);
 
     let walked = chain_walk::walk_program_facts(program);
-    let member_parent_extensions = walked.member_parents;
-    let walked_chains = walked.chains;
+    // An extension of a namespace import's member (`Parts.Base.extend()`)
+    // is a chain whose parent the analysis resolves through the namespace.
+    let mut walked_chains = walked.chains;
+    let mut member_parent_extensions = Vec::new();
+    for (extension, chain) in walked.member_parents {
+        let root = extension.object.split('.').next().unwrap_or(&extension.object);
+        if structural.namespace_imports.contains_key(root) {
+            walked_chains.push(chain);
+        } else {
+            member_parent_extensions.push(extension);
+        }
+    }
+    walked_chains.sort_by_key(|chain| chain.span.0);
     let create_transform_locals: rustc_hash::FxHashSet<String> = structural
         .imports
         .iter()

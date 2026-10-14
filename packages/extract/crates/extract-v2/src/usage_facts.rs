@@ -10,7 +10,7 @@ use oxc::ast_visit::Visit;
 use oxc::semantic::{Scoping, SemanticBuilder, SymbolFlags, SymbolId};
 use oxc::span::Span;
 use oxc::span::GetSpan;
-use oxc::syntax::module_record::{ExportExportName, ExportLocalName, ImportImportName, ModuleRecord};
+use oxc::syntax::module_record::{ExportExportName, ExportLocalName, ImportEntry, ImportImportName, ModuleRecord};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
 use serde_json::Value;
@@ -724,13 +724,27 @@ pub fn collect_import_facts(module: &ModuleRecord<'_>) -> Vec<ImportFact> {
                 ImportImportName::Default(_) => "default".to_string(),
                 ImportImportName::NamespaceObject => return None,
             };
-            Some(ImportFact {
-                local: entry.local_name.name.to_string(),
-                imported,
-                source: entry.module_request.name.to_string(),
-                declaration: (entry.statement_span.start, entry.statement_span.end),
-            })
+            Some(import_fact(entry, imported))
         })
+        .collect()
+}
+
+fn import_fact(entry: &ImportEntry<'_>, imported: String) -> ImportFact {
+    ImportFact {
+        local: entry.local_name.name.to_string(),
+        imported,
+        source: entry.module_request.name.to_string(),
+        declaration: (entry.statement_span.start, entry.statement_span.end),
+    }
+}
+
+/// A module's namespace imports, `imported` being `*`.
+pub(crate) fn collect_namespace_import_facts(module: &ModuleRecord<'_>) -> Vec<ImportFact> {
+    module
+        .import_entries
+        .iter()
+        .filter(|entry| entry.import_name.is_namespace_object())
+        .map(|entry| import_fact(entry, "*".to_string()))
         .collect()
 }
 
