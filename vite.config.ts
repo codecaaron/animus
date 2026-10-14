@@ -28,6 +28,7 @@ const typescriptTestTargets = [
   'packages/extract/tests/post-process-css.test.ts',
   'packages/extract/tests/property-names.test.ts',
   'packages/extract/tests/property-table.test.ts',
+  'packages/extract/tests/quarantine.test.ts',
   'packages/extract/tests/registry-packages.test.ts',
   'packages/extract/tests/replacement-plans.test.ts',
   'packages/extract/tests/resolve-asset.test.ts',
