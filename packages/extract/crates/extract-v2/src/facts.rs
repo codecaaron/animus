@@ -1921,6 +1921,24 @@ mod tests {
         facts
     }
 
+    /// Contract: the module facts list an extension of a namespace import's
+    /// member (`Parts.Base.extend()`) among a module's chains, as the full
+    /// facts do, whether or not the module is read in full for a resolver.
+    #[test]
+    fn module_facts_list_a_namespace_member_extension_as_a_chain() {
+        for source in [
+            "import * as Parts from './parts';\nexport const badge = Parts.Base.extend().styles({}).asClass();",
+            "import * as Parts from './parts';\nexport const Card = Parts.Base.extend().styles({}).asElement('div');",
+        ] {
+            let counter = ParseCounter::new(0);
+            let ast = OwnedAst::parse("test.tsx".into(), source.into(), &counter);
+            let full: Vec<_> = extract_file_facts(&ast).chains.into_iter().map(|c| c.descriptor.binding).collect();
+            let module: Vec<_> = extract_module_facts(&ast).chains.into_iter().map(|c| c.descriptor.binding).collect();
+            assert_eq!(full.len(), 1, "{source}");
+            assert_eq!(module, full, "{source}");
+        }
+    }
+
     #[test]
     fn records_every_builder_reference_in_mdx_and_none_in_strings() {
         let references = |source: &str| {

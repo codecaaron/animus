@@ -233,7 +233,7 @@ describe('opted-in Svelte source ownership', () => {
     mocks.extractFactsEnabled = false;
 
     await expect(makeSession(workspace.app).runFullPipeline()).rejects.toThrow(
-      '[animus-next] native engine does not expose extractFacts required for source adaptation'
+      '[animus-next] native engine does not expose extractModuleFacts or extractFacts required for source adaptation'
     );
   });
 

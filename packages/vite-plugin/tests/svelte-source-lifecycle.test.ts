@@ -330,7 +330,7 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     const ctx = new PluginContext({ system: 'src/ds.ts' }, () => legacyEngine);
 
     await expect(ctx.createSession().corpus.prepare([])).rejects.toThrow(
-      '[animus-extract] native engine does not expose extractFacts required for source adaptation'
+      '[animus-extract] native engine does not expose extractModuleFacts or extractFacts required for source adaptation'
     );
   });
 

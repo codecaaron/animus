@@ -12,7 +12,7 @@ describe('createSourceIngestor', () => {
     const ingestor = createSourceIngestor(makeHost());
 
     await expect(ingestor.ingest([])).rejects.toThrow(
-      '[animus-test] native engine does not expose extractFacts required for source adaptation'
+      '[animus-test] native engine does not expose extractModuleFacts or extractFacts required for source adaptation'
     );
   });
 
