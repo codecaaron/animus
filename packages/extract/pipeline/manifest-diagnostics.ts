@@ -442,6 +442,10 @@ export const PROPERTY_LEGACY_TOKEN_COLLISION =
  *  name. */
 export const PROPERTY_TOKEN_COLLISION = 'animus.property.token-collision';
 
+/** A typed font face whose preload costs first paint: its file is not WOFF2
+ *  or WOFF, or is larger than the preload budget. */
+export const FONT_FACE_PRELOAD_COSTLY = 'animus.style.font-face-preload-costly';
+
 /**
  * A lost or unreadable configured input, or a classified unsupported Animus
  * declaration, is `error` — what `--strict` refuses; degradation that still
@@ -481,6 +485,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [PREFIX_NAME_CONFLICT, 'error'],
   [PROPERTY_LEGACY_TOKEN_COLLISION, 'warn'],
   [PROPERTY_TOKEN_COLLISION, 'error'],
+  [FONT_FACE_PRELOAD_COSTLY, 'warn'],
 ]);
 
 /** An unlisted code is `warn`: a witness kind from a newer system package

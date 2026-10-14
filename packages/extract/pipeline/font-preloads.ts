@@ -1,4 +1,8 @@
 import { ASSET_PLACEHOLDER_PREFIX } from './asset-placeholders';
+import { parseInternalWire } from './internal-wire';
+import { FONT_FACE_PRELOAD_COSTLY, severityFor } from './manifest-diagnostics';
+
+import type { ManifestDiagnostic } from './manifest-diagnostics';
 
 /** A font file the document preloads, by the URL its face's `url()` names:
  *  an absolute or root-relative URL, one relative to the stylesheet, or an
@@ -103,4 +107,73 @@ export function fontPreloadsModule(preloads: readonly FontPreload[]): string {
     return `  { href: ${url}${typed} },\n`;
   });
   return `export default [\n${entries.join('')}];\n`;
+}
+
+/** A typed font face as the system loader passes it on, as authored. */
+interface WireFace {
+  family?: string;
+  src?: Array<{ url?: string }>;
+  preload?: boolean;
+}
+
+/** A preloaded file larger than this delays first paint enough to report. */
+export const COSTLY_FONT_PRELOAD_BYTES = 150 * 1024;
+
+const FONT_FORMATS = new Map([
+  ['font/woff2', 'WOFF2'],
+  ['font/woff', 'WOFF'],
+  ['font/ttf', 'TrueType'],
+  ['font/otf', 'OpenType'],
+]);
+
+/**
+ * One warning per face whose preload costs first paint: a file that is not
+ * WOFF2 or WOFF, or one larger than `COSTLY_FONT_PRELOAD_BYTES`. A preload
+ * competes with the critical CSS and JavaScript for the connection, so a
+ * large or uncompressed font delays the first paint it was meant to steady.
+ * `sizeOf` gives an asset() file's size in bytes, where it resolves; another
+ * URL is judged by its format alone.
+ */
+export function costlyFontPreloadDiagnostics(
+  preloads: readonly FontPreload[] | undefined,
+  globalStyleBlocksJson: string | null | undefined,
+  sizeOf: (specifier: string) => number | undefined
+): ManifestDiagnostic[] {
+  if (!preloads?.length || !globalStyleBlocksJson) return [];
+  const blocks = parseInternalWire<Record<string, { fontFaces?: WireFace[] }>>(
+    globalStyleBlocksJson,
+    'globalStyleBlocksJson (the global style blocks)'
+  );
+  const faces = Object.values(blocks).flatMap((block) => block.fontFaces ?? []);
+  const diagnostics: ManifestDiagnostic[] = [];
+  for (const { href, type } of preloads) {
+    const format = type === undefined ? undefined : FONT_FORMATS.get(type);
+    const specifier = href.startsWith(ASSET_PLACEHOLDER_PREFIX)
+      ? href.slice(ASSET_PLACEHOLDER_PREFIX.length)
+      : undefined;
+    const size = specifier === undefined ? undefined : sizeOf(specifier);
+    const compressed = format === 'WOFF2' || format === 'WOFF';
+    if (compressed && (size === undefined || size <= COSTLY_FONT_PRELOAD_BYTES))
+      continue;
+    const file = (specifier ?? href).split(/[?#]/)[0]!.split('/').pop();
+    const what = `${format === undefined ? 'a font of unknown format' : `a ${format} font`}${size === undefined ? '' : ` of ${Math.round(size / 1024)} KB`}`;
+    for (const face of faces) {
+      if (
+        face.preload !== true ||
+        !Array.isArray(face.src) ||
+        !face.src.some((source) => source?.url === href)
+      ) {
+        continue;
+      }
+      diagnostics.push({
+        file: 'system',
+        component: `'${face.family}'`,
+        kind: 'warn',
+        message: `the font face preloads ${file}, ${what}: a preload competes with the critical CSS and JavaScript for first paint, so a large or uncompressed font delays it — preload a WOFF2 file, subset the font, or drop \`preload\``,
+        code: FONT_FACE_PRELOAD_COSTLY,
+        severity: severityFor(FONT_FACE_PRELOAD_COSTLY),
+      });
+    }
+  }
+  return diagnostics;
 }

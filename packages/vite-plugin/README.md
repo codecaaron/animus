@@ -99,12 +99,18 @@ Router examples live in the
 ## Font preloads
 
 A font face declared with `preload: true` gets a
-`<link rel="preload" as="font" crossorigin>` at the start of `<head>`, ahead
-of every stylesheet reference, with a `preconnect` for a file on another
-origin. Its href is the URL the stylesheet's `url()` loads: the hashed asset
+`<link rel="preload" as="font" crossorigin>` in `<head>`, after the charset
+and viewport metas and ahead of every stylesheet link, with a
+`preconnect` for a file on another origin. Its href is the URL the stylesheet's `url()` loads: the hashed asset
 in a build, the dev server's URL in development. A root-relative or
 absolute URL that `index.html` already preloads gets no second preload; an
 `asset()` file's preload is not compared with one written in the HTML.
+
+A preload competes with the critical CSS and JavaScript for first paint, so
+preload WOFF2 and only the faces the first screen needs: a large TrueType
+file can delay first paint by seconds on a slow link. A preloaded file that
+is not WOFF2 or WOFF, or an `asset()` file over 150 KB, reports
+`animus.style.font-face-preload-costly`.
 
 ## Third-party stylesheets
 

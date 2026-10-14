@@ -212,6 +212,12 @@ the module it reads. Nothing detects a layout that never renders the
 component: the faces then load when the stylesheet applies, as without
 `preload`.
 
+A preload competes with the critical CSS and JavaScript for first paint, so
+preload WOFF2 and only the faces the first screen needs: a large TrueType
+file can delay first paint by seconds on a slow link. A preloaded file that
+is not WOFF2 or WOFF, or an `asset()` file over 150 KB, reports
+`animus.style.font-face-preload-costly`.
+
 ## MDX
 
 Animus reads each `.mdx` file as the JSX it renders: its imports, exports,

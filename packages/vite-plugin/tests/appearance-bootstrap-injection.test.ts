@@ -406,10 +406,6 @@ describe('Vite injection option: absent by default (G4 parity)', () => {
       path: '/',
       filename: join(process.cwd(), 'index.html'),
     });
-    if (!Array.isArray(result)) {
-      throw new Error('transformIndexHtml must return tag descriptors');
-    }
-
-    expect(result).toEqual([]);
+    expect(result).toEqual({ html: '', tags: [] });
   });
 });

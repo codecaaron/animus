@@ -14,9 +14,12 @@ const DEFAULT_MARKER = 'data-animus-bootstrap';
  * Anything that makes the browser apply CSS. The preload counts: Next emits
  * `as="style"` ahead of the link it warms.
  */
-const STYLESHEET_REFERENCES: readonly RegExp[] = [
+const FETCHED_STYLESHEET_REFERENCES: readonly RegExp[] = [
   /<link\b[^>]*\brel\s*=\s*["']?stylesheet\b/i,
   /<link\b[^>]*\bas\s*=\s*["']?style\b/i,
+];
+const STYLESHEET_REFERENCES: readonly RegExp[] = [
+  ...FETCHED_STYLESHEET_REFERENCES,
   /<style\b/i,
 ];
 
@@ -46,12 +49,15 @@ type StylesheetReference = {
 function firstStylesheetReference(
   head: HeadSlice,
   assertion: string,
-  details: JsonObject = {}
+  details: JsonObject = {},
+  patterns: readonly RegExp[] = STYLESHEET_REFERENCES
 ): StylesheetReference & { references: StylesheetReference[] } {
-  const references = STYLESHEET_REFERENCES.map((pattern) => {
-    const found = head.html.match(pattern);
-    return { pattern: pattern.source, index: found?.index ?? -1 };
-  }).filter((reference) => reference.index !== -1);
+  const references = patterns
+    .map((pattern) => {
+      const found = head.html.match(pattern);
+      return { pattern: pattern.source, index: found?.index ?? -1 };
+    })
+    .filter((reference) => reference.index !== -1);
   if (references.length === 0) {
     throw new AssertionError(
       `${assertion}: no stylesheet reference found in <head> — the ordering contract cannot be witnessed against an empty set`,
@@ -199,12 +205,20 @@ export function assertNoBootstrapScript(
   }
 }
 
+/** The metas a font preload follows. */
+const FONT_PRELOAD_PRECEDING_METAS: readonly RegExp[] = [
+  /<meta\b[^>]*\bcharset\s*=/i,
+  /<meta\b[^>]*\bname\s*=\s*["']?viewport\b/i,
+];
+
 /**
  * The font preload contract: `<head>` holds exactly one font preload, with
  * `crossorigin`, whose href is `href` — the URL the stylesheet's `url()`
  * loads, so the browser fetches the file once — and it precedes every
- * stylesheet reference. Its type, when it has one, is a font MIME type: a
- * browser ignores a preload whose type it does not support.
+ * stylesheet the document fetches. Its type, when it has one, is a font MIME type: a
+ * browser ignores a preload whose type it does not support. It follows the
+ * charset and viewport metas, so preloads cannot push the charset past the
+ * bytes a browser sniffs for it.
  */
 export function assertFontPreload(html: string, href: string): void {
   const head = headOf(html);
@@ -235,7 +249,22 @@ export function assertFontPreload(html: string, href: string): void {
     );
   }
   const at = preloads[0]!.index!;
-  const first = firstStylesheetReference(head, 'assertFontPreload');
+  for (const meta of FONT_PRELOAD_PRECEDING_METAS) {
+    const found = head.html.search(meta);
+    if (found > at) {
+      throw new AssertionError(
+        `assertFontPreload: the font preload (head offset ${at}) must follow /${meta.source}/ (head offset ${found})`,
+        { tag }
+      );
+    }
+  }
+  // An inline `<style>` fetches nothing for the preload to get ahead of.
+  const first = firstStylesheetReference(
+    head,
+    'assertFontPreload',
+    {},
+    FETCHED_STYLESHEET_REFERENCES
+  );
   if (at >= first.index) {
     throw new AssertionError(
       `assertFontPreload: the font preload (head offset ${at}) must precede the first stylesheet reference /${first.pattern}/ (head offset ${first.index})`,

@@ -15,7 +15,7 @@ import { applyResolvedConfig } from './config';
 import { RESOLVED_CSS_ID } from './constants';
 import { PluginContext } from './context';
 import { cancelSystemReload, handleHotUpdate } from './hmr';
-import { buildIndexHtmlTags } from './index-html';
+import { buildIndexHtmlTags, injectFontPreloads } from './index-html';
 import { quarantinePlugin } from './quarantine-plugin';
 import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
@@ -362,7 +362,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     transformIndexHtml: {
       order: 'pre',
       handler(html) {
-        return buildIndexHtmlTags(ctx, html);
+        return {
+          html: injectFontPreloads(ctx, html),
+          tags: buildIndexHtmlTags(ctx),
+        };
       },
     },
 

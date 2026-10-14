@@ -8,7 +8,7 @@ import {
   VIRTUAL_BRIDGE_ID,
 } from '../src/constants';
 import { animusExtract } from '../src/index';
-import { buildIndexHtmlTags } from '../src/index-html';
+import { buildIndexHtmlTags, injectFontPreloads } from '../src/index-html';
 import { loadVirtualModule } from '../src/virtual-modules';
 import { publicationWith } from './context-probe';
 import {
@@ -109,11 +109,7 @@ describe('the wired hook delivers the bridge', () => {
       path: '/',
       filename: join(process.cwd(), 'index.html'),
     });
-    if (!Array.isArray(result)) {
-      throw new Error('transformIndexHtml must return tag descriptors');
-    }
-
-    expect(result).toEqual([BRIDGE_TAG]);
+    expect(result).toEqual({ html: '', tags: [BRIDGE_TAG] });
   });
 });
 
@@ -156,25 +152,47 @@ describe('the bridge module is server-safe', () => {
 });
 
 describe('font preload tags', () => {
-  test('a preload of no known type carries no type attribute', () => {
-    // Vite serializes an undefined attribute as type="undefined", which the
-    // browser reads as an unsupported type and ignores the preload.
+  const HTML = [
+    '<!doctype html>',
+    '<html>',
+    '  <head>',
+    '    <meta charset="UTF-8" />',
+    '    <meta name="viewport" content="width=device-width" />',
+    '    <title>t</title>',
+    '    <link rel="stylesheet" href="/app.css" />',
+    '  </head>',
+    '</html>',
+  ].join('\n');
+
+  function injected(fontPreloads: { href: string; type?: string }[]) {
     const ctx = contextWith({ isProd: true });
-    ctx.served = publicationWith({
-      fontPreloads: [{ href: '/a.woff2', type: 'font/woff2' }, { href: '/b' }],
-    });
-    const preloads = buildIndexHtmlTags(ctx).filter(
-      (tag) => tag.attrs?.rel === 'preload'
-    );
-    expect(preloads.map((tag) => tag.attrs)).toStrictEqual([
-      {
-        rel: 'preload',
-        href: '/a.woff2',
-        as: 'font',
-        type: 'font/woff2',
-        crossorigin: true,
-      },
-      { rel: 'preload', href: '/b', as: 'font', crossorigin: true },
+    ctx.served = publicationWith({ fontPreloads });
+    return injectFontPreloads(ctx, HTML);
+  }
+
+  test('a preload of no known type carries no type attribute', () => {
+    // Vite serializes an undefined attribute as type="undefined", which a
+    // browser must refuse as an unsupported type.
+    const html = injected([
+      { href: '/a.woff2', type: 'font/woff2' },
+      { href: '/b' },
     ]);
+    expect(html).toContain(
+      '<link rel="preload" href="/a.woff2" as="font" type="font/woff2" crossorigin>'
+    );
+    expect(html).toContain(
+      '<link rel="preload" href="/b" as="font" crossorigin>'
+    );
+    expect(html).not.toContain('undefined');
+  });
+
+  test('preloads follow the charset and viewport metas and precede the first stylesheet', () => {
+    // Before the charset, enough faces push it past the 1024 bytes a
+    // browser sniffs for it.
+    const html = injected([{ href: '/a.woff2', type: 'font/woff2' }]);
+    const at = html.indexOf('rel="preload"');
+    expect(html.indexOf('name="viewport"')).toBeLessThan(at);
+    expect(html.indexOf('charset=')).toBeLessThan(at);
+    expect(at).toBeLessThan(html.indexOf('rel="stylesheet"'));
   });
 });

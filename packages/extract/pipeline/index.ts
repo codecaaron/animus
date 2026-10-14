@@ -182,6 +182,7 @@ export {
 } from './asset-placeholders';
 export type { AssetSheets } from './asset-placeholders';
 export {
+  costlyFontPreloadDiagnostics,
   fontPreloadOrigins,
   fontPreloadsModule,
   renderFontPreloads,

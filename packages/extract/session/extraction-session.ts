@@ -88,6 +88,7 @@ import {
   generatedModuleCode,
   reportSurvivingAssetPlaceholders,
   substituteSheetAssets,
+  costlyFontPreloadDiagnostics,
   fontPreloadsModule,
   substituteFontPreloads,
   toWatchKeys,
@@ -586,6 +587,8 @@ export class ExtractionSession {
   /** Whether the session writes the font-preloads module beside its
    *  stylesheet, for a host that aliases it (Next). */
   writesFontPreloadsModule = false;
+  /** The costly-preload warnings this session has given. */
+  private readonly reportedFontPreloadCosts = new Set<string>();
   /** Whether the session keeps its artifacts on disk: status, commit,
    *  manifest, styles, the epoch witness, asset copies and its directory
    *  claim, with the sibling reconciliation they need. A host that serves
@@ -2917,6 +2920,10 @@ export class ExtractionSession {
       manifest?.font_preloads,
       !devMode || this.staleAssetPruning === 'every-cycle'
     );
+    this.reportCostlyFontPreloads(
+      manifest?.font_preloads,
+      system.globalStyleBlocksJson
+    );
 
     const { declaration, variables, body } = assembleStylesheet({
       layers: this.options.layers,
@@ -3648,6 +3655,42 @@ export class ExtractionSession {
       sheets: substituteSheetAssets(sheets, urlBySpecifier),
       fontPreloads: substituteFontPreloads(preloads, urlBySpecifier),
     };
+  }
+
+  /** Warns of each preload that costs first paint, once per session: every
+   *  edit analyses again, and an unchanged face is no news. */
+  private reportCostlyFontPreloads(
+    preloads: FontPreload[] | undefined,
+    globalStyleBlocksJson: string | null
+  ): void {
+    const diagnostics = costlyFontPreloadDiagnostics(
+      preloads,
+      globalStyleBlocksJson,
+      (specifier) => {
+        const path = this.resolveAssetSpecifier(specifier);
+        if (path === null) return undefined;
+        try {
+          return statSync(path).size;
+        } catch {
+          return undefined;
+        }
+      }
+    ).filter((diagnostic) => {
+      const key = `${diagnostic.component}\0${diagnostic.message}`;
+      if (this.reportedFontPreloadCosts.has(key)) return false;
+      this.reportedFontPreloadCosts.add(key);
+      return true;
+    });
+    if (diagnostics.length === 0) return;
+    surfaceManifestDiagnostics(
+      { diagnostics },
+      (message) => this.warn(message),
+      {
+        levels: this.options.diagnostics,
+        strict: this.options.strict,
+        reportErrors: this.reportErrors(),
+      }
+    );
   }
 
   private reportUnresolvableAsset(specifier: string): void {

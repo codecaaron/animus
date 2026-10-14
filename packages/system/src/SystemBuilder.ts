@@ -121,6 +121,20 @@ export interface FontFace {
    * `preconnect` for another origin): Vite injects it into `index.html`;
    * Next renders it through `AnimusFontPreloads`; Rollup, webpack and the
    * CLI emit a manifest for `renderFontPreloads`.
+   *
+   * A preload competes with the critical CSS and JavaScript for the
+   * connection: it trades first paint for no font swap. In consumer apps a
+   * WOFF2 face delayed first paint by about 40–140 ms (one 219 KB variable
+   * WOFF2: about 140 ms on a fast link, 1.1 s on a slow one), while an
+   * 877 KB TrueType face removed the swap but delayed first paint by about
+   * 5 s on slow 4G. Preload WOFF2, subset a large font, and preload only the
+   * faces the first screen needs. A preloaded file that is not WOFF2 or
+   * WOFF, or an `asset()` file over 150 KB, reports
+   * `animus.style.font-face-preload-costly`.
+   *
+   * `preload` is a source-level flag: the system module ships to the
+   * browser, so changing it changes that module's chunk hash, and the hashes
+   * of the chunks that import it.
    */
   preload?: boolean;
 }
