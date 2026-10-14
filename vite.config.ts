@@ -426,7 +426,8 @@ export default defineConfig({
         cache: false,
       },
       'verify:packed': {
-        command: 'bash scripts/verify/packed.sh',
+        // A version no package has, so a stale internal edge cannot match it.
+        command: 'bash scripts/verify/packed.sh --release-version 0.0.0-packed',
         cache: false,
       },
       'build:ts': {

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# verify:packed — pack all publishable packages once or consume a supplied
-# immutable tarball directory, lint those exact files, install into an isolated
+# verify:packed — pack all publishable packages once, as the release does, or
+# consume a supplied immutable tarball directory; check every tarball is at
+# --release-version, lint those exact files, install into an isolated
 # non-workspace consumer, prove ESM/CJS loading, published declarations (stable
 # TypeScript), the extraction engine, Vite + Next production builds, then run
 # repo-side positional assertions.
@@ -15,7 +16,28 @@ source "$ROOT/scripts/verify/_preconditions.sh"
 
 PKGS=(properties system extract layergate vite-plugin next-plugin cli unplugin)
 require_bun_install
-RESOLUTION=$(bun scripts/verify/packed-graph.ts resolve "$@")
+
+# Every tarball must carry this version: the release passes its tag's,
+# verify:packed passes a placeholder no package has.
+RELEASE_VERSION=
+RESOLVE_ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --release-version)
+      RELEASE_VERSION="${2:-}"
+      shift 2 || shift
+      ;;
+    *)
+      RESOLVE_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+if [ -z "$RELEASE_VERSION" ]; then
+  echo "ERROR: --release-version <version> is required. Run: vp run verify:packed" >&2
+  exit 1
+fi
+RESOLUTION=$(bun scripts/verify/packed-graph.ts resolve ${RESOLVE_ARGS[@]+"${RESOLVE_ARGS[@]}"})
 MODE=$(printf '%s\n' "$RESOLUTION" | awk -F '\t' '$1 == "mode" { print $2 }')
 
 require_fresh_package_dist _assertions
@@ -36,35 +58,48 @@ STAGING="$ROOT/e2e/packed-app/.staging"
 rm -rf "$STAGING"
 mkdir -p "$STAGING/tarballs"
 
-# ── 0. The release's version rewrite, on copies of the manifests ─────
-# Packing here keeps the workspace's own versions, where a stale
-# `workspace:*` resolves to the right number by accident; the release
-# rewrites them first (v0.1.33 shipped no tarball because a peer escaped
-# the rewrite). Run that rewrite at a version no package has, and check it.
-RELEASE_PROBE="$STAGING/release-manifests"
-for p in "${PKGS[@]}"; do
-  mkdir -p "$RELEASE_PROBE/packages/$p"
-  cp "packages/$p/package.json" "$RELEASE_PROBE/packages/$p/package.json"
-done
-bash scripts/set-release-version.sh 0.0.0-packed "$RELEASE_PROBE" >/dev/null
-bun scripts/verify/packed-graph.ts release-manifests 0.0.0-packed "$RELEASE_PROBE"/packages/*/package.json
-echo "[verify:packed] release version rewrite covers every internal edge"
-
-# ── 1. Resolve one tarball set + workspace-specifier guard ───────────
+# ── 1. Resolve one tarball set at the release version ────────────
+# Locally, pack the way the release does: rewrite the manifests with
+# set-release-version.sh, then `bun pm pack` each package. The rewrite runs
+# on a copy of each package's published files, so the workspace keeps its
+# versions; a `workspace:*` that escapes it fails the pack or the check
+# below (v0.1.33 shipped nothing over an escaped peer).
 if [ "$MODE" = local ]; then
+  RELEASE_TREE="$STAGING/release-tree"
   for p in "${PKGS[@]}"; do
-    (cd "packages/$p" && bun pm pack --destination "$STAGING/tarballs" >/dev/null)
+    mkdir -p "$RELEASE_TREE/packages/$p"
+    cp "packages/$p/package.json" "$RELEASE_TREE/packages/$p/"
+    for doc in "packages/$p"/README* "packages/$p"/LICENSE*; do
+      if [ -e "$doc" ]; then cp "$doc" "$RELEASE_TREE/packages/$p/"; fi
+    done
+    while IFS= read -r pattern; do
+      for match in "packages/$p"/$pattern; do
+        [ -e "$match" ] || continue
+        rel=${match#"packages/$p/"}
+        mkdir -p "$RELEASE_TREE/packages/$p/$(dirname "$rel")"
+        cp -R "$match" "$RELEASE_TREE/packages/$p/$rel"
+      done
+    done < <(jq -r '.files[]' "packages/$p/package.json")
+  done
+  bash scripts/set-release-version.sh "$RELEASE_VERSION" "$RELEASE_TREE" >/dev/null
+  for p in "${PKGS[@]}"; do
+    if grep -q '"workspace:' "$RELEASE_TREE/packages/$p/package.json"; then
+      echo "ERROR: set-release-version.sh left a workspace: specifier in @animus-ui/$p. Run: pin that block in scripts/set-release-version.sh" >&2
+      exit 1
+    fi
+    (cd "$RELEASE_TREE/packages/$p" && bun pm pack --destination "$STAGING/tarballs" >/dev/null)
   done
   # Normalize to the version-stable names the template's file: paths expect.
   for p in "${PKGS[@]}"; do
-    src=$(find "$STAGING/tarballs" -maxdepth 1 -type f -name "animus-ui-$p-[0-9]*.tgz" -print | head -n1)
-    if [ -z "$src" ]; then
+    src="$STAGING/tarballs/animus-ui-$p-$RELEASE_VERSION.tgz"
+    if [ ! -f "$src" ]; then
       echo "ERROR: tarball for @animus-ui/$p not produced. Run: cd packages/$p && bun pm pack" >&2
       exit 1
     fi
     mv "$src" "$STAGING/tarballs/animus-ui-$p.tgz"
   done
-  echo "[verify:packed] packed ${#PKGS[@]} tarballs once"
+  rm -rf "$RELEASE_TREE"
+  echo "[verify:packed] packed ${#PKGS[@]} tarballs once, as the release does, at $RELEASE_VERSION"
 else
   for p in "${PKGS[@]}"; do
     src=$(printf '%s\n' "$RESOLUTION" | awk -F '\t' -v package="@animus-ui/$p" '$1 == "tarball" && $2 == package { print $3 }')
@@ -80,8 +115,8 @@ for f in "$STAGING"/tarballs/*.tgz; do
     exit 1
   fi
 done
-bun scripts/verify/packed-graph.ts manifests "$STAGING"/tarballs/*.tgz
-echo "[verify:packed] embedded internal dependency graph ok"
+bun scripts/verify/packed-graph.ts release "$RELEASE_VERSION" "$STAGING"/tarballs/*.tgz
+echo "[verify:packed] every package and internal edge is at $RELEASE_VERSION"
 
 # ── 2. Tarball lint: export-map + type-resolution ──────────────────
 for p in "${PKGS[@]}"; do

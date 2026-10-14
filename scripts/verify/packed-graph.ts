@@ -257,9 +257,9 @@ function manifestFromTarball(path: string): PackageManifest {
 }
 
 /**
- * The release's version rewrite, checked on manifests it rewrote to
- * `version`: every publishable package is at `version`, every internal edge
- * a consumer installs (dependencies, optional and peer) declares it, and no
+ * The release's version rewrite, checked on the packed manifests: every
+ * publishable package is at `version`, every internal edge a consumer
+ * installs (dependencies, optional and peer) declares it, and no
  * `workspace:` specifier is left in any block, since `bun pm pack` resolves
  * one from the lockfile's version rather than the release's.
  */
@@ -295,19 +295,6 @@ export function validateReleaseManifests(
   return [...diagnostics, ...validateInternalManifestEdges(manifests)];
 }
 
-function manifestsFromFiles(
-  paths: readonly string[]
-): Map<string, PackageManifest> {
-  const manifests = new Map<string, PackageManifest>();
-  for (const path of paths) {
-    // SAFETY: a publishable package's package.json, which names and
-    // versions it.
-    const manifest = JSON.parse(readFileSync(path, 'utf8')) as PackageManifest;
-    manifests.set(manifest.name, manifest);
-  }
-  return manifests;
-}
-
 function manifestsFromTarballs(
   paths: readonly string[]
 ): Map<string, PackageManifest> {
@@ -341,12 +328,11 @@ function main(args: readonly string[]): number {
   const [command, ...rest] = args;
   if (
     command !== 'resolve' &&
-    command !== 'manifests' &&
-    command !== 'release-manifests' &&
+    command !== 'release' &&
     command !== 'installed'
   ) {
     console.error(
-      'ERROR: usage: packed-graph.ts resolve [--tarballs-dir <path>] | manifests <tarball...> | release-manifests <version> <package.json...> | installed <root> <tarball...>'
+      'ERROR: usage: packed-graph.ts resolve [--tarballs-dir <path>] | release <version> <tarball...> | installed <root> <tarball...>'
     );
     return 1;
   }
@@ -361,20 +347,12 @@ function main(args: readonly string[]): number {
       return 0;
     }
 
-    if (command === 'release-manifests') {
-      const [version, ...files] = rest;
+    if (command === 'release') {
+      const [version, ...tarballs] = rest;
       if (!version) throw new Error('release version is required');
       const diagnostics = validateReleaseManifests(
         version,
-        manifestsFromFiles(files)
-      );
-      printManifestDiagnostics(diagnostics);
-      return diagnostics.length === 0 ? 0 : 1;
-    }
-
-    if (command === 'manifests') {
-      const diagnostics = validateInternalManifestEdges(
-        manifestsFromTarballs(rest)
+        manifestsFromTarballs(tarballs)
       );
       printManifestDiagnostics(diagnostics);
       return diagnostics.length === 0 ? 0 : 1;

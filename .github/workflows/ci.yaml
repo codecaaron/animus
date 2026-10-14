@@ -691,7 +691,7 @@ jobs:
             # v0.1.2 because the lane packed differently). bun resolves a
             # remaining workspace: specifier from the lockfile's version, not
             # the release's, so set-release-version.sh above rewrites every
-            # block first (verify:packed checks that rewrite).
+            # block first (verify:packed packs this way on every push).
             (cd "packages/$pkg" && bun pm pack --destination "$RELEASE_BUNDLE")
           done
           for artifact in \
@@ -718,7 +718,7 @@ jobs:
           bash scripts/verify/postpack-smoke.sh \
             --tarball "$RELEASE_BUNDLE/animus-ui-extract-${VERSION}.tgz" \
             --expect-full-matrix
-          bash scripts/verify/packed.sh --tarballs-dir "$RELEASE_BUNDLE"
+          bash scripts/verify/packed.sh --release-version "$VERSION" --tarballs-dir "$RELEASE_BUNDLE"
 
       # ── Publish the verified bytes in dependency order ──
       - name: Publish immutable release bundle
