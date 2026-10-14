@@ -101,6 +101,10 @@ import {
   systemLoadReads,
 } from '../pipeline/index';
 import { parseInternalWire } from '../pipeline/internal-wire';
+import {
+  severityFor,
+  SYSTEM_INSTANCE_MISMATCH,
+} from '../pipeline/manifest-diagnostics';
 import { systemInstanceMismatches } from '../pipeline/system-instances';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
 import {
@@ -2325,10 +2329,12 @@ export class ExtractionSession {
     const instances = new Map<string, string>();
     if (resolver.hostFirst) {
       const locate = nativePackageLocator(this.engine(), context.workspaces);
+      // Every root each kit name reaches: one instance per name is the
+      // limit, so a name reaching two is refused, never resolved by order.
+      const roots = new Map<string, Set<string>>();
       for (const specifier of packageNames) {
         if (!isPackageSpecifier(specifier)) continue;
         const name = bareSpecifierPackageName(specifier);
-        if (instances.has(name)) continue;
         const member = kitMembers.get(specifier);
         const answer = member ?? (await hostAnswer(specifier));
         if (answer === null) continue;
@@ -2336,10 +2342,27 @@ export class ExtractionSession {
           name,
           member === undefined ? rootDir : dirname(member)
         );
-        instances.set(
-          name,
-          realPath(packageInstanceOf(answer, located || null, rootDir))
+        const root = realPath(
+          packageInstanceOf(answer, located || null, rootDir)
         );
+        roots.set(name, (roots.get(name) ?? new Set()).add(root));
+      }
+      for (const [name, reached] of roots) {
+        if (reached.size === 1) {
+          instances.set(name, [...reached][0]!);
+          continue;
+        }
+        const shown = [...reached]
+          .map((root) => relative(rootDir, root).split(sep).join('/'))
+          .join(' and ');
+        diagnostics.push({
+          file: name,
+          component: 'kit',
+          kind: 'error',
+          message: `the system reaches '${name}' as two instances, ${shown}, and Animus evaluates one instance of a package for the whole system, so it takes neither from the host and the bundle may render another than the one evaluated — make the system and its kits resolve '${name}' to one instance`,
+          code: SYSTEM_INSTANCE_MISMATCH,
+          severity: severityFor(SYSTEM_INSTANCE_MISMATCH),
+        });
       }
     }
     return {
@@ -2391,17 +2414,27 @@ export class ExtractionSession {
    *  it once under its own, and proceeds only on the same system. Otherwise
    *  it throws, naming both contexts, whichever participant came first. */
   async agreeWithSystemAuthority(): Promise<void> {
-    const authority = getSystemAuthority(this.key);
+    let authority = getSystemAuthority(this.key);
     if (authority === null) return;
     // This participant's own kit instances: its host may alias a kit
-    // another compiler does not (C8).
-    const hostContext = this.hostResolutionContext();
-    const instances = await instancesOf(
-      this.readKitInstances(
-        hostContext,
-        resolve(this.rootDir!, this.options.system)
-      )
-    );
+    // another compiler does not (C8). Reading them waits on the host, while
+    // which the build may commit another authority: the check is made only
+    // against the authority current when the read ends.
+    let hostContext: SessionResolutionContext;
+    let instances: Readonly<Record<string, string>>;
+    for (;;) {
+      hostContext = this.hostResolutionContext();
+      instances = await instancesOf(
+        this.readKitInstances(
+          hostContext,
+          resolve(this.rootDir!, this.options.system)
+        )
+      );
+      const current = getSystemAuthority(this.key);
+      if (current === null) return;
+      if (current === authority) break;
+      authority = current;
+    }
     const context = this.resolutionContextText(instances);
     if (context === authority.context) return;
     let own = authority.others.get(context);

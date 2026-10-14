@@ -3,7 +3,8 @@
  * alias of a kit extracts from the aliased instance instead of refusing.
  * Against the real engine.
  */
-import { join } from 'path';
+import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'fs';
+import { dirname, join, resolve } from 'path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 import { getSharedCss } from '../../session/singleton';
@@ -11,6 +12,7 @@ import {
   createAliasedKitApp,
   disposeTempRoots,
   makeSession,
+  makeTempRoot,
   resetAnimusGlobals,
 } from './session-fixtures';
 
@@ -46,6 +48,78 @@ function strictSession(
   return session;
 }
 
+/** An app whose system extends `kit/main` from its installed kit (A, brand
+ *  `#aaaaaa`) and `outer/definition`, which extends `kit/base` from outer's
+ *  own copy of kit (B, `#bbbbbb`) and re-exports B's brand: one package
+ *  name, two instances. */
+function twoInstanceApp(): string {
+  const root = realpathSync(makeTempRoot('animus-two-instances-'));
+  const write = (path: string, contents: string) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), contents);
+  };
+  mkdirSync(join(root, 'node_modules', '@animus-ui'), { recursive: true });
+  for (const name of ['system', 'properties']) {
+    symlinkSync(
+      resolve(__dirname, '../../../..', 'packages', name),
+      join(root, 'node_modules', '@animus-ui', name)
+    );
+  }
+  write('package.json', '{"name":"app"}');
+  const pkg = (dir: string, name: string, entries: string[]) => {
+    write(
+      `${dir}/package.json`,
+      JSON.stringify({
+        name,
+        exports: Object.fromEntries(
+          entries.map((entry) => [
+            `./${entry}`,
+            { animus: `./src/${entry}.ts`, default: `./dist/${entry}.mjs` },
+          ])
+        ),
+      })
+    );
+    for (const entry of entries) {
+      write(`${dir}/dist/${entry}.mjs`, 'export const ds = {};\n');
+    }
+  };
+  const kitSource = (brand: string) =>
+    `import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem().build().seal();\nexport const brand = '${brand}';\n`;
+  // A serves both entries, so taking A for outer's import loads silently.
+  pkg('node_modules/kit', 'kit', ['main', 'base']);
+  write('node_modules/kit/src/main.ts', kitSource('#aaaaaa'));
+  write('node_modules/kit/src/base.ts', kitSource('#aaaaaa'));
+  pkg('node_modules/outer/node_modules/kit', 'kit', ['base']);
+  write(
+    'node_modules/outer/node_modules/kit/src/base.ts',
+    kitSource('#bbbbbb')
+  );
+  pkg('node_modules/outer', 'outer', ['definition']);
+  write(
+    'node_modules/outer/src/definition.ts',
+    `import { createSystem } from '@animus-ui/system';\nimport { ds as base, brand } from 'kit/base';\nexport const ds = createSystem().extend(base).build().seal();\nexport { brand };\n`
+  );
+  write(
+    'src/system.ts',
+    `import { createSystem, createTheme } from '@animus-ui/system';\nimport { ds as main } from 'kit/main';\nimport { ds as outer, brand } from 'outer/definition';\nexport const theme = createTheme().addColors({ brand: { 500: brand } }).build();\nexport const ds = createSystem().extend(main).extend(outer).build().seal();\n`
+  );
+  write('src/App.tsx', 'export const App = 1;\n');
+  return root;
+}
+
+/** The host the app's bundler is, with each kit's source condition: each
+ *  specifier from the root to the source entry a source redirect serves. */
+function nodeHost(root: string): HostResolve {
+  const entries = new Map([
+    ['kit/main', 'node_modules/kit/src/main.ts'],
+    ['outer/definition', 'node_modules/outer/src/definition.ts'],
+  ]);
+  return async (specifier) => {
+    const entry = entries.get(specifier);
+    return entry === undefined ? null : join(root, entry);
+  };
+}
+
 describe("the system evaluates the host's kit instance", () => {
   /** Contract (C8): a strict build whose host aliases a kit evaluates the
    *  aliased instance, the one extraction analyses, so it extracts with
@@ -72,5 +146,57 @@ describe("the system evaluates the host's kit instance", () => {
     await expect(other.agreeWithSystemAuthority()).rejects.toThrow(
       'SessionConfigurationConflict'
     );
+  }, 60000);
+
+  /** Contract (C8's stated limit): the system evaluates one instance of a
+   *  package. A kit name the system reaches as two instances is refused,
+   *  naming both, and neither is taken from the host: the loader resolves
+   *  it per importer, as without a host, never by which came first. */
+  test('a kit name reaching two instances is refused, never resolved by order', async () => {
+    const root = twoInstanceApp();
+    const strict = strictSession(root, nodeHost(root));
+    await expect(strict.runFullPipeline()).rejects.toThrow(
+      /reaches 'kit' as two instances/
+    );
+    // Downgraded to a warning, the build evaluates as the loader resolves
+    // each importer: outer's kit/base from its own copy.
+    const lenient = makeSession(
+      root,
+      {
+        strict: true,
+        diagnostics: { 'animus.discovery.system-instance-mismatch': 'warn' },
+      },
+      { build: 'warned' }
+    );
+    lenient.hostResolve = nodeHost(root);
+    await lenient.runFullPipeline();
+    expect(getSharedCss(lenient.key)).toContain('#bbbbbb');
+    expect(getSharedCss(lenient.key)).not.toContain('#aaaaaa');
+  }, 60000);
+
+  /** Contract (C8): a participant's check holds only against the authority
+   *  current when its read of the host ends. Where the build commits
+   *  another authority while the host answers, the participant checks
+   *  against that one, never approving itself against a retired one. */
+  test('a participant checks against the authority current after its read', async () => {
+    const root = createAliasedKitApp('animus-kit-instances-');
+    const owner = strictSession(root, null);
+    await owner.runFullPipeline();
+    let release: () => void = () => {};
+    const held = new Promise<void>((done) => {
+      release = done;
+    });
+    const other = strictSession(root, async () => {
+      await held;
+      return null;
+    });
+    const agreed = other.agreeWithSystemAuthority();
+    // The owner commits another authority, under an aliasing host, while
+    // the participant's host is still answering.
+    owner.hostResolve = aliasingHost(root);
+    await owner.runFullPipeline();
+    expect(getSharedCss(owner.key)).toContain('#ff6347');
+    release();
+    await expect(agreed).rejects.toThrow('SessionConfigurationConflict');
   }, 60000);
 });
