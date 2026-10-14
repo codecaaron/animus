@@ -537,6 +537,15 @@ fn walk_chain_backwards(
 
             walk_chain_backwards(object, stages, extractable, bail_reason, has_extend_marker, builders)
         }
-        _ => None,
+        // A type assertion on the root (`(Base as any).extend()`) is erased:
+        // the root is the name, and the chain starts at the assertion.
+        other => match unwrap_type_assertions(other) {
+            name @ Expression::Identifier(_) => {
+                let (_, root, followed) =
+                    walk_chain_backwards(name, stages, extractable, bail_reason, has_extend_marker, builders)?;
+                Some((oxc::span::GetSpan::span(other).start, root, followed))
+            }
+            _ => None,
+        },
     }
 }

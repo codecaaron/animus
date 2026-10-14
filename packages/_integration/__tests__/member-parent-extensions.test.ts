@@ -342,3 +342,34 @@ describe('extending a member of a namespace import', () => {
     ]);
   });
 });
+
+const CAST_CHILD = {
+  path: 'fixtures/cast-child.tsx',
+  source: `import * as Kit from './member-kit';
+import { SelectContent } from './member-kit';
+export const NamedCast = (SelectContent as any).extend().styles({ opacity: '0.71' }).asElement('div');
+export const NamespaceCast = (Kit as any).SelectContent.extend().styles({ opacity: '0.72' }).asElement('div');
+`,
+};
+
+// Contract: a type assertion on an extension's parent is erased, so the
+// extension extracts as it does without one.
+test('an extension whose parent is written through a type assertion extracts', () => {
+  clearAnalysisCache();
+  const { manifest, css } = runPipeline([SYSTEM, KIT, CAST_CHILD], {
+    devMode: true,
+  });
+  assertNoUnresolvedTokens(css);
+  const { code } = transformFile(CAST_CHILD.path, CAST_CHILD.source);
+  for (const [child, value] of [
+    ['NamedCast', '0.71'],
+    ['NamespaceCast', '0.72'],
+  ]) {
+    expect(codesOf(manifest.diagnostics ?? [], child)).toEqual([]);
+    expect(
+      manifest.components[`fixtures/cast-child.tsx::${child}`]
+    ).toMatchObject({ extends_from: 'fixtures/member-kit.tsx::SelectContent' });
+    expect(css).toContain(`opacity: ${value}`);
+    expect(code).not.toContain(`opacity: '${value}'`);
+  }
+});
