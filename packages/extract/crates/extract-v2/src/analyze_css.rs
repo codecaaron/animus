@@ -4247,7 +4247,6 @@ fn spread_wrapper_targets(
                 inner: ids.iter().cloned().collect(),
                 dropped: dropped.iter().cloned().collect(),
                 named: dropped.iter().cloned().collect(),
-                opens: false,
             }));
         }
         let all: BTreeSet<&String> = reach.paths.values().flatten().collect();
@@ -5753,9 +5752,6 @@ struct Forward {
     inner: Vec<String>,
     dropped: FxHashSet<String>,
     named: FxHashSet<String>,
-    /// The runtime also hands the target a value no use writes: a
-    /// forwarded variant's default.
-    opens: bool,
 }
 
 /// What each forward carries to its inner components: its outer
@@ -5781,7 +5777,7 @@ fn forwarded_writes<'r>(
         let next: Vec<_> = forwards
             .iter()
             .map(|forward| {
-                if !proven(&forward.outer) || forward.opens {
+                if !proven(&forward.outer) {
                     return None;
                 }
                 let mut reaching = written.get(forward.outer.as_str()).cloned().unwrap_or_default();
@@ -7752,18 +7748,10 @@ fn run_with_system_floor(
         forwards.extend(file_forwards.into_iter().map(|mut forward| {
             forward.dropped.extend(RUNTIME_SET_PROPS.map(String::from));
             if let Some((css, _, _, active_props, _, custom_configs, _)) = evaluated.get(&forward.outer) {
-                // Variants and states the outer component forwards reach the target.
-                let forwarded = chain_lookup
-                    .get(forward.outer.as_str())
-                    .and_then(|(file, index)| files[*file].chains[*index].descriptor.forward.as_ref());
-                let kept = |name: &String| !forwarded.is_some_and(|forward| forward.forwards(name));
-                forward.dropped.extend(css.variants.iter().map(|variant| variant.prop.clone()).filter(kept));
-                forward.dropped.extend(css.states.iter().map(|(state, _)| state.clone()).filter(kept));
+                forward.dropped.extend(css.variants.iter().map(|variant| variant.prop.clone()));
+                forward.dropped.extend(css.states.iter().map(|(state, _)| state.clone()));
                 forward.dropped.extend(active_props.iter().flatten().cloned());
                 forward.dropped.extend(custom_configs.iter().flat_map(|configs| configs.keys().cloned()));
-                // A forwarded variant's default reaches the target where no use
-                // writes one, so what the target renders is unproven.
-                forward.opens = css.variants.iter().any(|variant| variant.default_option.is_some() && !kept(&variant.prop));
             }
             forward
         }));
@@ -11689,6 +11677,28 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &class_prop);
             assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["className"], "{render}");
             assert!(!out.system_prop_map.contains_key("className"), "{render}: {:?}", out.system_prop_map);
+        }
+    }
+
+    /// Contract: a variant an `.asComponent()` terminal forwards reaches the
+    /// target where no use writes it, as its default, so a component the
+    /// target renders by spread keeps the slot that value fills. One the
+    /// terminal does not forward is the runtime's and reaches nothing.
+    #[test]
+    fn forwarded_defaults_reach_what_the_target_renders() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n\
+                   export const Base = ds.styles({ display: 'block' })\n\
+                   .variant({ prop: 'p', defaultVariant: 'sm', variants: { sm: { display: 'flex' }, lg: { display: 'grid' } } })\n\
+                   .asElement('div');\n";
+        let cases: [(&str, &[&str]); 3] = [("", &[]), (", { forward: ['p'] }", &["p"]), (", { forward: true }", &["p"])];
+        for (forward, want) in cases {
+            let app = format!(
+                "import {{ Box, Base }} from './kit';\n\
+                 function El(props) {{ return <Box as=\"span\" {{...props}} />; }}\n\
+                 const Outer = Base.extend().asComponent(El{forward});\nexport const App = () => <Outer />;\n"
+            );
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{forward}");
         }
     }
 

@@ -34,6 +34,7 @@ import type {
   AnimusWrappedComponent,
   AsComponentOptions,
   ForwardOption,
+  RequiredForward,
   BuilderClassProps,
 } from './types/component';
 import type {
@@ -176,7 +177,8 @@ export class AnimusExtendedWithAll<
       Variants,
       States,
       ActiveGroups,
-      CustomProps
+      CustomProps,
+      RequiredForward<C, Variants, States, F>
     >;
   }
 
@@ -452,17 +454,18 @@ class AnimusExtendedWithVariants<
     Base extends AbstractProps,
     Props extends Record<Keys, AbstractProps>,
     PropKey extends Readonly<string> = 'variant',
+    Default extends VariantKeyOf<
+      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>
+    > = never,
   >(options: {
     prop?: UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>;
-    defaultVariant?: VariantKeyOf<
-      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>
-    >;
+    defaultVariant?: Default | undefined;
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
     type ModelOptions = ThemedVariantOptions<
       UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>,
-      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>,
+      `${Default}`,
       Base,
       Props,
       PropRegistry
@@ -514,17 +517,18 @@ class AnimusExtendedWithBase<
     Base extends AbstractProps,
     Props extends Record<Keys, AbstractProps>,
     PropKey extends Readonly<string> = 'variant',
+    Default extends VariantKeyOf<
+      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>
+    > = never,
   >(options: {
     prop?: UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>;
-    defaultVariant?: VariantKeyOf<
-      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>
-    >;
+    defaultVariant?: Default | undefined;
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
     type ModelOptions = ThemedVariantOptions<
       UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>,
-      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>,
+      `${Default}`,
       Base,
       Props,
       PropRegistry

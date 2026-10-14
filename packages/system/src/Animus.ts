@@ -35,6 +35,7 @@ import type {
   AnimusWrappedComponent,
   AsComponentOptions,
   ForwardOption,
+  RequiredForward,
   BuilderClassProps,
 } from './types/component';
 import type { StylingNames, SystemPicks } from './types/styling-names';
@@ -146,7 +147,8 @@ export class AnimusWithAll<
       Variants,
       States,
       ActiveGroups,
-      CustomProps
+      CustomProps,
+      RequiredForward<C, Variants, States, F>
     >;
   }
 
@@ -413,15 +415,16 @@ class AnimusWithVariants<
     Base extends AbstractProps,
     Props extends Record<Keys, AbstractProps>,
     PropKey extends Readonly<string> = 'variant',
+    Default extends VariantKeyOf<Extract<keyof Props, string>> = never,
   >(options: {
     prop?: PropKey;
-    defaultVariant?: VariantKeyOf<Extract<keyof Props, string>>;
+    defaultVariant?: Default | undefined;
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
     type ModelOptions = ThemedVariantOptions<
       PropKey,
-      Extract<keyof Props, string>,
+      `${Default}`,
       Base,
       Props,
       PropRegistry
@@ -460,15 +463,16 @@ class AnimusWithBase<
     Base extends AbstractProps,
     Props extends Record<Keys, AbstractProps>,
     PropKey extends Readonly<string> = 'variant',
+    Default extends VariantKeyOf<Extract<keyof Props, string>> = never,
   >(options: {
     prop?: PropKey;
-    defaultVariant?: VariantKeyOf<Extract<keyof Props, string>>;
+    defaultVariant?: Default | undefined;
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
     type ModelOptions = ThemedVariantOptions<
       PropKey,
-      Extract<keyof Props, string>,
+      `${Default}`,
       Base,
       Props,
       PropRegistry

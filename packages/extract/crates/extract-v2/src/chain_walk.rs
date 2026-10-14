@@ -55,13 +55,6 @@ pub enum Forward {
 }
 
 impl Forward {
-    pub fn forwards(&self, name: &str) -> bool {
-        match self {
-            Forward::All => true,
-            Forward::Names(names) => names.iter().any(|named| named == name),
-        }
-    }
-
     /// As the runtime config writes it: `true`, or the names.
     pub fn to_json(&self) -> serde_json::Value {
         match self {

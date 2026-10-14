@@ -2015,7 +2015,8 @@ void PublicProps;
 // ---------------------------------------------------------------------------
 // Contract: asComponent() forwards a variant or state, by name or with
 // `true`, only to a target whose prop accepts the value it delivers; any
-// other `forward` is a type error naming the name.
+// other `forward` is a type error naming the name. A forwarded variant
+// without a default is required where the target requires its prop.
 // ---------------------------------------------------------------------------
 
 interface ForwardTargetProps {
@@ -2032,6 +2033,10 @@ const NarrowTarget = forwardRef<HTMLInputElement, { size?: 'small' }>(
 const LabelTarget = forwardRef<HTMLInputElement, { label?: string }>(
   ({ label }, ref) => <input ref={ref} aria-label={label} />
 );
+const RequiringTarget = forwardRef<
+  HTMLInputElement,
+  { size: 'small' | 'large'; error: boolean }
+>(({ size }, ref) => <input ref={ref} aria-label={size} />);
 const forwardBase = ds
   .styles({})
   .variant({
@@ -2039,6 +2044,10 @@ const forwardBase = ds
     defaultVariant: 'small',
     variants: { small: {}, large: {} },
   })
+  .states({ error: {} });
+const undefaultedBase = ds
+  .styles({})
+  .variant({ prop: 'size', variants: { small: {}, large: {} } })
   .states({ error: {} });
 
 function AsComponentForward() {
@@ -2048,6 +2057,14 @@ function AsComponentForward() {
   const All = forwardBase.asComponent(ForwardTarget, { forward: true });
   void (<Listed size="large" error label="x" />);
   void (<All />);
+  const Defaulted = forwardBase.asComponent(RequiringTarget, { forward: true });
+  void (<Defaulted />);
+  const Undefaulted = undefaultedBase.asComponent(RequiringTarget, {
+    forward: true,
+  });
+  void (<Undefaulted size="large" />);
+  // @ts-expect-error — size has no default and the target requires it
+  void (<Undefaulted />);
   // @ts-expect-error — the target's size does not accept 'large'
   forwardBase.asComponent(NarrowTarget, { forward: ['size'] });
   // @ts-expect-error — `true` includes error, which the target has no prop for

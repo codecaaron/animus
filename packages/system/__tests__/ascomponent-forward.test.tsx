@@ -11,8 +11,8 @@ import { createComponent } from '../src/runtime';
 
 // Contract: an asComponent() target receives exactly the variants and states
 // its terminal forwards, a variant as its resolved value (the written one,
-// else its default), a state as written; the classes are unchanged, and a
-// string terminal forwards nothing.
+// else its default), a state as written, else `false`; the classes are
+// unchanged, and a string terminal forwards nothing.
 interface WrapperProps {
   size?: string;
   error?: boolean;
@@ -57,6 +57,7 @@ describe('asComponent forward', () => {
     expect(render(['size', 'error'], {})).toEqual({
       className: 'w w--size-default',
       size: 'small',
+      error: false,
     });
     expect(render(['size'], { size: 'large', error: true })).toEqual({
       className: 'w w--size-large w--error',
@@ -69,6 +70,11 @@ describe('asComponent forward', () => {
       className: 'w w--size-large w--error',
       size: 'large',
       error: true,
+    });
+    expect(render(true, {})).toEqual({
+      className: 'w w--size-default',
+      size: 'small',
+      error: false,
     });
   });
 

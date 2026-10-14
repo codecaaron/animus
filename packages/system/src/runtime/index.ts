@@ -22,7 +22,7 @@ declare const __ANIMUS_DEV__: boolean | undefined;
 interface ComponentConfig extends ClassResolverConfig {
   /** An `asComponent()` target's forwarded variants and states: `true` for
    *  all of them. Each reaches the target as a prop, a variant as its
-   *  resolved value. */
+   *  resolved value, a state as its boolean. */
   forward?: true | readonly string[];
 }
 
@@ -216,7 +216,7 @@ function renderElement(
   ref: ForwardedRef<any>,
   classes: string[],
   dynamicStyle: Record<string, string> | undefined,
-  forwardedDefaults: ReadonlyArray<[string, string]>
+  forwardedDefaults: ReadonlyArray<[string, string | boolean]>
 ): ReactElement {
   const ownsElement = typeof element === 'string';
   const target = ownsElement ? props.as || element : element;
@@ -231,7 +231,7 @@ function renderElement(
         : joinClassNames(ownClassName, className),
   };
   forwardProps(props, filterProps, domProps);
-  // A forwarded variant the props leave out reaches the target as its default.
+  // A forwarded name the props leave out reaches the target as its default.
   for (const [name, value] of forwardedDefaults) domProps[name] ??= value;
 
   if (dynamicStyle && !ownsElement && typeof style === 'function') {
@@ -256,7 +256,7 @@ export function createComponent(
   const systemPropNames = config.systemPropNames || [];
   const ownsPolymorphism = typeof element === 'string';
   // A component target receives the variants and states it forwards: the
-  // value written, a variant's default where none is.
+  // value written, else a variant's default and a state's `false`.
   const forward = ownsPolymorphism ? undefined : componentConfig.forward;
   const forwarded = (name: string) =>
     forward === true || (forward?.includes(name) ?? false);
@@ -270,9 +270,10 @@ export function createComponent(
   for (const [prop, vc] of Object.entries(config.variants ?? {})) {
     if (vc.default != null) variantDefaults[prop] = vc.default;
   }
-  const forwardedDefaults = Object.entries(variantDefaults).filter(([name]) =>
-    forwarded(name)
-  );
+  const forwardedDefaults: [string, string | boolean][] = [
+    ...Object.entries(variantDefaults),
+    ...stateProps.map((name): [string, boolean] => [name, false]),
+  ].filter(([name]) => forwarded(name));
 
   const Component = forwardRef(
     (props: Record<string, any>, ref: ForwardedRef<any>) => {
