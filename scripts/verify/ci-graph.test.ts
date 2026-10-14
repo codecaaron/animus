@@ -490,11 +490,17 @@ describe('parsed CI graph', () => {
       ),
     ];
     const validatedTarballs = shellLoopValues(pack.run, 'artifact');
-    const publishedTarballs = commandLines(publish.run)
-      .map(
-        (line) => line.match(/^npm publish "\$RELEASE_BUNDLE\/([^"]+)"/)?.[1]
-      )
-      .filter((name): name is string => name !== undefined);
+    const publishedTarballs = shellLoopValues(publish.run, 'pkg').map(
+      (name) => `animus-ui-${name}-\${VERSION}.tgz`
+    );
+    // Dependencies publish before their dependents.
+    expect(publishedTarballs).toEqual(exactTarballs);
+    expect(publish.run).toContain(
+      'tarball="$RELEASE_BUNDLE/animus-ui-${pkg}-${VERSION}.tgz"'
+    );
+    expect(publish.run).toContain(
+      'npm publish "$tarball" --access public --tag "$NPM_TAG" --ignore-scripts'
+    );
 
     for (const membership of [
       materializedTarballs,
@@ -521,18 +527,6 @@ describe('parsed CI graph', () => {
     expect(suppliedTarballIndex).toBeGreaterThan(postpackIndex);
     expect(packedIndex).toBeGreaterThan(suppliedTarballIndex);
 
-    expect(
-      commandLines(publish.run).filter((line) => line.startsWith('npm publish'))
-    ).toEqual([
-      'npm publish "$RELEASE_BUNDLE/animus-ui-extract-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
-      'npm publish "$RELEASE_BUNDLE/animus-ui-properties-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
-      'npm publish "$RELEASE_BUNDLE/animus-ui-system-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
-      'npm publish "$RELEASE_BUNDLE/animus-ui-layergate-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
-      'npm publish "$RELEASE_BUNDLE/animus-ui-vite-plugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
-      'npm publish "$RELEASE_BUNDLE/animus-ui-next-plugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
-      'npm publish "$RELEASE_BUNDLE/animus-ui-cli-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
-      'npm publish "$RELEASE_BUNDLE/animus-ui-unplugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts',
-    ]);
     expect(release.needs).not.toContain('verify-workers');
   });
 
