@@ -262,6 +262,21 @@ export const AbsentSelectContent = Kit.Absent.extend().styles({ opacity: '0.06' 
 `,
 };
 
+/** A named import of a namespace whose member is itself an extension of a
+ *  namespace member. */
+const CHAINED_NAMESPACE = {
+  path: 'fixtures/chained-namespace.tsx',
+  source: `import { tall } from './chained-barrel';
+export const TallerSelectContent = tall.TallSelectContent.extend().styles({ opacity: '0.24' }).asElement('div');
+`,
+};
+
+const CHAINED_BARREL = {
+  path: 'fixtures/chained-barrel.ts',
+  source: `export * as tall from './namespace-child';
+`,
+};
+
 describe('extending a member of a namespace import', () => {
   let manifest: ReturnType<typeof runPipeline>['manifest'];
   let css: string;
@@ -270,7 +285,14 @@ describe('extending a member of a namespace import', () => {
   beforeAll(() => {
     clearAnalysisCache();
     ({ manifest, css } = runPipeline(
-      [SYSTEM, KIT, NAMESPACE_BARREL, NAMESPACE_CHILD],
+      [
+        SYSTEM,
+        KIT,
+        NAMESPACE_BARREL,
+        NAMESPACE_CHILD,
+        CHAINED_BARREL,
+        CHAINED_NAMESPACE,
+      ],
       { devMode: true }
     ));
     assertNoUnresolvedTokens(css);
@@ -299,9 +321,11 @@ describe('extending a member of a namespace import', () => {
   });
 
   test('a named import of a namespace fails strict instead of dropping the child', () => {
-    expect(codes('NamedSelectContent')).toEqual([
-      'animus.extension.unsupported-member-parent',
-    ]);
+    for (const child of ['NamedSelectContent', 'TallerSelectContent']) {
+      expect(codes(child)).toEqual([
+        'animus.extension.unsupported-member-parent',
+      ]);
+    }
     expect(css).not.toContain('opacity: 0.12');
   });
 

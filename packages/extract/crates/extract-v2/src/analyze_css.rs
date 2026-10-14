@@ -1562,10 +1562,22 @@ fn has_animus_origin(
     else {
         return false;
     };
-    let root = files
-        .get(&declaring_file)
-        .and_then(|dff| dff.declaration_roots.get(&binding))
-        .cloned();
+    let Some(dff) = files.get(&declaring_file) else {
+        return false;
+    };
+    // An extension of a namespace member (`Parts.Base.extend()`) roots in the
+    // namespace: its origin is its parent's.
+    let namespace_parent = dff
+        .chains
+        .iter()
+        .find(|chain| chain.descriptor.binding == binding)
+        .and_then(|chain| chain.descriptor.extends_from.as_deref())
+        .filter(|parent| parent.contains('.'));
+    if let Some(parent) = namespace_parent {
+        return namespace_member_declaration(&declaring_file, dff, parent, files, inputs, links)
+            .is_some_and(|(parent_file, parent, _)| has_animus_origin(&parent_file, &parent, files, inputs, links, seen));
+    }
+    let root = dff.declaration_roots.get(&binding).cloned();
     root.is_some_and(|root| has_animus_origin(&declaring_file, &root, files, inputs, links, seen))
 }
 
