@@ -1200,7 +1200,9 @@ export function importedKitDiagnostics(
 /** What `importedPackages` finds. */
 export interface ImportedPackages {
   diagnostics: ManifestDiagnostic[];
-  located: Array<{ name: string; root: string }>;
+  /** Each package with the roots of every instance its importers of a
+   *  possible tag locate. */
+  located: Array<{ name: string; roots: string[] }>;
   /** The package names of the system's kits. */
   kits: Set<string>;
 }
@@ -1208,8 +1210,9 @@ export interface ImportedPackages {
 /**
  * The packages the application's own `files` import or re-export, past the
  * kits its system extends: `importedKitDiagnostics`' errors, and each other
- * package located on disk, with its root, which declares no kit source and
- * from which a file imports a name a JSX tag can have (capitalized).
+ * package from which a file imports a name a JSX tag can have (capitalized),
+ * with the root of every instance those files locate, where each is located
+ * and none declares a kit source.
  */
 export function importedPackages(
   files: ReadonlyArray<{ path: string; source: string; hash: string }>,
@@ -1223,7 +1226,7 @@ export function importedPackages(
   ) => ExtractFactsResult
 ): ImportedPackages {
   const diagnostics: ManifestDiagnostic[] = [];
-  const located: Array<{ name: string; root: string }> = [];
+  const located: Array<{ name: string; roots: string[] }> = [];
   const kits = new Set(
     systemKits
       .filter((specifier) => !isAbsolute(specifier))
@@ -1241,9 +1244,9 @@ export function importedPackages(
   } catch {
     return { diagnostics, located, kits };
   }
-  // Each package by its first importer, and whether any file imports a
-  // possible tag from it.
-  const imported = new Map<string, { path: string; tags: boolean }>();
+  // Each package by its first importer, and the directories of the files
+  // that import a possible tag from it.
+  const imported = new Map<string, { path: string; tagDirs: Set<string> }>();
   for (const [path, file] of Object.entries(facts.files)) {
     if (file.parsePanicked) continue;
     const specifiers = [
@@ -1256,12 +1259,13 @@ export function importedPackages(
       if (!isPackageSpecifier(specifier)) continue;
       const name = bareSpecifierPackageName(specifier);
       if (kits.has(name)) continue;
-      const entry = imported.get(name) ?? { path, tags: false };
-      entry.tags ||= /^[A-Z]/.test(local);
+      const entry = imported.get(name) ?? { path, tagDirs: new Set() };
+      if (/^[A-Z]/.test(local))
+        entry.tagDirs.add(dirname(resolve(rootDir, path)));
       imported.set(name, entry);
     }
   }
-  for (const [name, { path, tags }] of imported) {
+  for (const [name, { path, tagDirs }] of imported) {
     const pkgRoot = locatePackage(name, dirname(resolve(rootDir, path)));
     if (pkgRoot && declaresKitSource(engine, pkgRoot)) {
       diagnostics.push({
@@ -1272,9 +1276,20 @@ export function importedPackages(
         code: KIT_SYSTEM_NOT_INCLUDED,
         severity: severityFor(KIT_SYSTEM_NOT_INCLUDED),
       });
-    } else if (pkgRoot && tags) {
-      located.push({ name, root: pkgRoot });
+      continue;
     }
+    // An instance located nowhere, or one that declares a kit source, keeps
+    // the package from being judged by its dependencies.
+    const roots: string[] = [];
+    for (const dir of tagDirs) {
+      const root = locatePackage(name, dir);
+      if (root === null || declaresKitSource(engine, root)) {
+        roots.length = 0;
+        break;
+      }
+      if (!roots.includes(root)) roots.push(root);
+    }
+    if (roots.length > 0) located.push({ name, roots });
   }
   return { diagnostics, located, kits };
 }

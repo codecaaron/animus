@@ -24,6 +24,33 @@ export const Valid = () => <Text color="primary">x</Text>;
 `,
 };
 
+/** An analysed module's export that forwards to the Animus component under
+ *  its name, and a render of it: the module the import reads stands behind
+ *  the render. */
+const WRAPPER = {
+  path: 'possible-miss/wrapper.tsx',
+  source: `import { Text as AnimusText } from './animus';
+export const Text = (props) => <AnimusText {...props} />;
+`,
+};
+
+const WRAPPED = {
+  path: 'possible-miss/wrapped.tsx',
+  source: `import { Text } from './wrapper';
+export const Wrapped = () => <Text color="nope" />;
+`,
+};
+
+/** A file that hands the foreign tag a component in a spread. */
+const SPREAD = {
+  path: 'possible-miss/spread.tsx',
+  source: `import { Text as AnimusText } from './animus';
+import { Text } from 'other-kit';
+const handoff = { as: AnimusText };
+export const Spread = () => <Text {...handoff} color="nope" />;
+`,
+};
+
 /** A file that hands the same tag an Animus component through `asChild`. */
 const HANDED = {
   path: 'possible-miss/handed.tsx',
@@ -42,20 +69,22 @@ function misses(manifest: { diagnostics?: ManifestDiagnostic[] }) {
 }
 
 // Contract: a strict-scale miss at a render that reaches an Animus component
-// by proof is an error, and one at a render matched to it by name alone is an
+// by proof, or through a module the analysis reads, is an error, and one at a
+// render matched to it by name alone is an
 // `animus.usage.possible-system-prop-miss` warning; a tag of a package the
 // host finds has no dependency path to Animus (`foreignPackages`) matches no
-// Animus component by name, unless the file hands it a component.
+// Animus component by name, unless the file may hand it a component (`as`,
+// `asChild`, an open spread).
 describe('strict misses by the certainty of their render', () => {
   let named: ReturnType<typeof runPipeline>;
   let foreign: ReturnType<typeof runPipeline>;
 
   beforeAll(() => {
     clearAnalysisCache();
-    named = runPipeline([ANIMUS, APP, HANDED]);
+    named = runPipeline([ANIMUS, APP, HANDED, WRAPPER, WRAPPED, SPREAD]);
     assertNoUnresolvedTokens(named.css);
     clearAnalysisCache();
-    foreign = runPipeline([ANIMUS, APP, HANDED], {
+    foreign = runPipeline([ANIMUS, APP, HANDED, WRAPPER, WRAPPED, SPREAD], {
       inputs: {
         analysisContextJson: JSON.stringify({ foreignPackages: ['other-kit'] }),
       },
@@ -68,6 +97,8 @@ describe('strict misses by the certainty of their render', () => {
       ['animus.props.strict-token-miss', 'error', APP.path, 3, 41],
       ['animus.usage.possible-system-prop-miss', 'warn', APP.path, 4, 34],
       ['animus.usage.possible-system-prop-miss', 'warn', HANDED.path, 3, 43],
+      ['animus.usage.possible-system-prop-miss', 'warn', SPREAD.path, 4, 48],
+      ['animus.props.strict-token-miss', 'error', WRAPPED.path, 2, 36],
     ]);
   });
 
@@ -75,6 +106,8 @@ describe('strict misses by the certainty of their render', () => {
     expect(misses(foreign.manifest)).toEqual([
       ['animus.props.strict-token-miss', 'error', APP.path, 3, 41],
       ['animus.usage.possible-system-prop-miss', 'warn', HANDED.path, 3, 43],
+      ['animus.usage.possible-system-prop-miss', 'warn', SPREAD.path, 4, 48],
+      ['animus.props.strict-token-miss', 'error', WRAPPED.path, 2, 36],
     ]);
     // The valid value at the foreign tag gets no utility class either.
     expect(

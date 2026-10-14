@@ -130,7 +130,7 @@ test('a package is foreign to Animus until it or a package it names at any depth
       ['ui-kit', 'chakra', 'substrate', 'wrapper', '@animus-ui/properties'].map(
         (name) => ({
           name,
-          root: realpathSync(join(root, 'node_modules', name)),
+          roots: [realpathSync(join(root, 'node_modules', name))],
         })
       ),
       new Set()
@@ -138,9 +138,51 @@ test('a package is foreign to Animus until it or a package it names at any depth
 
   expect(foreign()).toEqual(['chakra', 'ui-kit']);
 
-  write('node_modules/emotion/package.json', {
-    name: 'emotion',
-    dependencies: { substrate: '^1.0.0' },
+  // A package is foreign only where every instance its importers reach is.
+  write('packages/nested/node_modules/chakra/package.json', {
+    name: 'chakra',
+    peerDependencies: { '@animus-ui/system': '^0.1.0' },
   });
+  const instances = [
+    realpathSync(join(root, 'node_modules/chakra')),
+    realpathSync(join(root, 'packages/nested/node_modules/chakra')),
+  ];
+  expect(
+    foreignPackages([{ name: 'chakra', roots: instances }], new Set())
+  ).toEqual([]);
+  expect(
+    foreignPackages([{ name: 'chakra', roots: instances.reverse() }], new Set())
+  ).toEqual([]);
+
+  // Retargeting a symlink a walk followed, to a package with the same
+  // manifest bytes, is read again.
+  write('linked/a/emotion/package.json', { name: 'emotion' });
+  write('linked/b/emotion/package.json', { name: 'emotion' });
+  write('linked/b/emotion/node_modules/substrate-peer/package.json', {
+    name: 'substrate-peer',
+    peerDependencies: { '@animus-ui/system': '^0.1.0' },
+  });
+  rmSync(join(root, 'node_modules/emotion'), { recursive: true });
+  symlinkSync(
+    join(root, 'linked/a/emotion'),
+    join(root, 'node_modules/emotion'),
+    'dir'
+  );
+  expect(foreign()).toEqual(['chakra', 'ui-kit']);
+  write('linked/b/emotion/package.json', {
+    name: 'emotion',
+    dependencies: { 'substrate-peer': '^1.0.0' },
+  });
+  write('linked/a/emotion/package.json', {
+    name: 'emotion',
+    dependencies: { 'substrate-peer': '^1.0.0' },
+  });
+  expect(foreign()).toEqual(['chakra', 'ui-kit']);
+  rmSync(join(root, 'node_modules/emotion'));
+  symlinkSync(
+    join(root, 'linked/b/emotion'),
+    join(root, 'node_modules/emotion'),
+    'dir'
+  );
   expect(foreign()).toEqual([]);
 });

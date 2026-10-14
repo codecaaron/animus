@@ -39,11 +39,19 @@ interface FileRead {
   text?: string;
 }
 
+/** The prefix of a stamp key that records where a path resolves through
+ *  its symlinks, rather than what the file holds. */
+const RESOLVED = '\0resolved:';
+
 /** A `package.json` by its bytes: a registry tarball's files carry one
  *  fixed modification time, so a swap of the same size keeps it. A lockfile
- *  by its size and modification time, which a write changes. */
+ *  by its size and modification time, which a write changes. A resolved
+ *  key by the real path it resolves to. */
 function read(path: string): FileRead {
   try {
+    if (path.startsWith(RESOLVED)) {
+      return { stamp: realpathSync.native(path.slice(RESOLVED.length)) };
+    }
     if (path.endsWith('package.json')) {
       const bytes = readFileSync(path);
       return {
@@ -129,6 +137,12 @@ class Reads {
         files.add(path);
         return this.file(path).stamp !== 'absent';
       },
+      resolve: (path) => {
+        const key = RESOLVED + path;
+        files.add(key);
+        const { stamp } = this.file(key);
+        return stamp === 'absent' ? null : stamp;
+      },
       manifest: (dir) => {
         const path = join(dir, 'package.json');
         files.add(path);
@@ -151,6 +165,8 @@ class Reads {
 
 interface Lookups {
   exists(path: string): boolean;
+  /** The real path `path` resolves to through its symlinks. */
+  resolve(path: string): string | null;
   manifest(dir: string): Manifest | null;
 }
 
@@ -172,15 +188,16 @@ const animusAnswers = new Map<string, { stamps: Stamps; reaches: boolean }>();
  * the bound a package may name any, so it reaches Animus.
  */
 export function foreignPackages(
-  located: ReadonlyArray<{ name: string; root: string }>,
+  located: ReadonlyArray<{ name: string; roots: readonly string[] }>,
   kits: ReadonlySet<string>
 ): string[] {
   const reads = new Reads();
   const key = [...kits].sort().join('\n');
   const animus = (name: string) =>
     name.startsWith('@animus-ui/') || kits.has(name);
+  // A package is foreign only where every instance its importers reach is.
   return located
-    .filter(({ name, root }) => !animus(name) && !reachesAnimus(root))
+    .filter(({ name, roots }) => !animus(name) && !roots.some(reachesAnimus))
     .map(({ name }) => name)
     .sort();
 
@@ -191,16 +208,16 @@ export function foreignPackages(
       return cached.reaches;
     }
     const files = lockfilesAbove(installed);
-    const { manifest, exists } = reads.tracked(files);
+    const lookups = reads.tracked(files);
     const reaches = (() => {
       const seen = new Set<string>([installed]);
       const work = [installed];
       while (work.length > 0) {
         const dir = work.pop()!;
-        const names = Object.keys(dependencySpecs(manifest(dir)));
+        const names = Object.keys(dependencySpecs(lookups.manifest(dir)));
         if (names.some(animus)) return true;
         for (const name of names) {
-          const dependency = installedPackage(name, dir, exists);
+          const dependency = installedPackage(name, dir, lookups);
           if (dependency === null || seen.has(dependency)) continue;
           seen.add(dependency);
           if (seen.size > DEPENDENCY_BOUND) return true;
@@ -305,7 +322,7 @@ function decide(
     const from = dirname(
       isAbsolute(importer) ? importer : resolve(root, importer)
     );
-    const installed = installedPackage(name, from, lookups.exists);
+    const installed = installedPackage(name, from, lookups);
     if (
       installed === null ||
       !insideNodeModules(installed) ||
@@ -325,16 +342,12 @@ function decide(
 function installedPackage(
   name: string,
   from: string,
-  exists: (path: string) => boolean
+  lookups: Pick<Lookups, 'exists' | 'resolve'>
 ): string | null {
   for (let dir = from; ; dir = dirname(dir)) {
     const candidate = join(dir, 'node_modules', name);
-    if (exists(join(candidate, 'package.json'))) {
-      try {
-        return realpathSync.native(candidate);
-      } catch {
-        return null;
-      }
+    if (lookups.exists(join(candidate, 'package.json'))) {
+      return lookups.resolve(candidate);
     }
     if (dirname(dir) === dir) return null;
   }
@@ -370,16 +383,16 @@ function declaredLocally(
  *  null past the bound. */
 function localDependencies(
   installed: string,
-  { manifest, exists }: Lookups
+  lookups: Lookups
 ): string[] | null {
   const local = new Set<string>();
   const seen = new Set<string>([installed]);
   const work = [installed];
   while (work.length > 0) {
     const dir = work.pop()!;
-    const specs = dependencySpecs(manifest(dir));
+    const specs = dependencySpecs(lookups.manifest(dir));
     for (const [name, spec] of Object.entries(specs)) {
-      const dependency = installedPackage(name, dir, exists);
+      const dependency = installedPackage(name, dir, lookups);
       if (dependency === null || seen.has(dependency)) continue;
       seen.add(dependency);
       if (seen.size > DEPENDENCY_BOUND) return null;

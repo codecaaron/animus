@@ -3263,9 +3263,11 @@ struct NameFallback<'a> {
 /// What a resolution took of its same-name fallback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Fallback {
-    /// None: the declarations and imports settled the name.
+    /// None: the declarations and imports settled the name, or an import
+    /// the analysis resolves took it.
     None,
-    /// Components bound to the name, by its spelling alone.
+    /// Components bound to the name, by its spelling alone: the name is
+    /// bound nowhere the analysis reads.
     ByName,
     /// None, refused: the name is a tag of a package with no dependency
     /// path to Animus.
@@ -3326,8 +3328,12 @@ fn resolve_identity(
     evaluated_ids: &FxHashSet<String>,
     fallback: Option<&NameFallback>,
 ) -> Vec<String> {
+    // Components bound to `name`. Behind an import the analysis resolves,
+    // the module it reads stands behind them; elsewhere only the spelling
+    // does, which the fallback records.
+    let in_graph = |name: &str| fallback.and_then(|fallback| fallback.ids.get(name)).cloned().unwrap_or_default();
     let by_bare_name = |name: &str| {
-        let ids = fallback.and_then(|fallback| fallback.ids.get(name)).cloned().unwrap_or_default();
+        let ids = in_graph(name);
         if let Some(fallback) = fallback.filter(|_| !ids.is_empty()) {
             fallback.took.set(Fallback::ByName);
         }
@@ -3353,7 +3359,7 @@ fn resolve_identity(
         if let Some(module) =
             files.get(file).and_then(|ff| namespace_path_module(file, ff, path_head, files, inputs, links))
         {
-            return import_identity(&module, last, files, links, evaluated_ids, &by_bare_name);
+            return import_identity(&module, last, files, links, evaluated_ids, &in_graph);
         }
         let root = path_head.split('.').next().unwrap_or(path_head);
         // A namespace the module table rejects names no member: none is
@@ -3390,7 +3396,7 @@ fn resolve_identity(
         .and_then(|ff| ff.imports.iter().find(|i| i.local == local))
     {
         if let Some(source_file) = resolve_import_source(file, &imp.source, files, inputs) {
-            return import_identity(&source_file, &imp.imported, files, links, evaluated_ids, &by_bare_name);
+            return import_identity(&source_file, &imp.imported, files, links, evaluated_ids, &in_graph);
         }
         return by_name_unless_foreign(&imp.imported, &imp.source);
     }
@@ -3399,19 +3405,24 @@ fn resolve_identity(
 
 /// Whether the tag `local` of `ff`, imported from `source`, is a tag of a
 /// package with no dependency path to Animus (the host's `foreignPackages`),
-/// which renders no Animus component its name matches. One the file renders
-/// with a component through `as`, or with `asChild`, may hand its props to
-/// one.
+/// which renders no Animus component its name matches. One the file may hand
+/// a component, which can take its props, is not: a render with a component
+/// through `as`, with `asChild`, or with a spread that can deliver any prop,
+/// and a `createElement` call of it.
 fn foreign_import(ff: &FileFacts, local: &str, source: &str, inputs: &CssInputs) -> bool {
     let package = animus_system_loader::split_specifier(source).0;
     if !inputs.analysis_context.foreign_packages.iter().any(|foreign| foreign == package) {
         return false;
     }
     !ff.usage_for_analysis().iter().any(|fact| match fact {
-        UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), attrs, .. } if tag == local => {
-            attrs.iter().any(|attr| {
-                attr.name == "asChild" || (attr.name == "as" && !matches!(attr.static_value, Some(Value::String(_))))
-            })
+        UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), attrs, spread, .. } if tag == local => {
+            spread.is_some()
+                || attrs.iter().any(|attr| {
+                    attr.name == "asChild" || (attr.name == "as" && !matches!(attr.static_value, Some(Value::String(_))))
+                })
+        }
+        UsageFact::CreateElement { ident, member, .. } => {
+            ident.as_deref() == Some(local) || member.as_deref() == Some(local)
         }
         _ => false,
     })
@@ -7744,9 +7755,9 @@ fn run_with_system_floor(
                 .any(|id| component_takes(id, prop))
         };
         // A tag renders its components by spelling alone where its import
-        // took the same-name fallback, or where it reads a bare name no
-        // proof in this file settles.
-        let possible = |tag: &str| by_name.contains(tag) || (by_bare_name.contains(tag) && !proven.contains(tag));
+        // took the same-name fallback, or where it reads a bare name, and no
+        // proof in this file settles it.
+        let possible = |tag: &str| !proven.contains(tag) && (by_name.contains(tag) || by_bare_name.contains(tag));
         let attributed = |tag: &str| {
             file_lookup.as_ref().unwrap_or(&global_lookup).attribution.contains_key(tag)
         };
