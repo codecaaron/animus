@@ -30,6 +30,13 @@ import {
   packageReadRecord,
 } from '../pipeline/alias-agreement';
 import {
+  bareSpecifierPackageName,
+  isPackageSpecifier,
+  packageInstanceOf,
+  realPath,
+} from '../pipeline/discover-packages';
+import { nativeLoaderResolution } from '../pipeline/host-package-resolver';
+import {
   adaptedOriginals,
   assembleStylesheet,
   buildPathAliasesJson,
@@ -94,6 +101,10 @@ import {
   systemLoadReads,
 } from '../pipeline/index';
 import { parseInternalWire } from '../pipeline/internal-wire';
+import {
+  DiagnosticFailure,
+  SYSTEM_INSTANCE_MISMATCH,
+} from '../pipeline/manifest-diagnostics';
 import { systemInstanceMismatches } from '../pipeline/system-instances';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
 import {
@@ -154,6 +165,7 @@ import {
 import { logBuildTimings } from './timing';
 
 import type { PackageReadRecord } from '../pipeline/alias-agreement';
+import type { DiscoveryResolver } from '../pipeline/host-package-resolver';
 import type {
   AnimusCoreOptions,
   ExternalPackageOutcome,
@@ -311,6 +323,33 @@ class AbortedParseRejection extends Error {}
  *  case-insensitive volume). Like a hold, it keeps the prior publication
  *  and the observed sources. */
 class DeferredReloadRefusal extends Error {}
+
+/** The system file's kits, read before the system loads (C8). */
+interface KitInstanceRead {
+  /** Discovery's resolver, its host answers asked once. */
+  readonly resolver: DiscoveryResolver;
+  readonly packageNames: string[];
+  readonly kitMembers: Map<string, string>;
+  readonly diagnostics: ManifestDiagnostic[];
+  /** Kit package name → the real root of the host's instance of it. */
+  readonly instances: Readonly<Record<string, string>>;
+}
+
+/** How many times a participant reads its kit instances while the build's
+ *  system authority keeps changing under it, before refusing. */
+const AUTHORITY_READS = 3;
+
+/** The kit instances of `read`; none where it failed, so the load resolves
+ *  on its own and the failure surfaces where discovery reads it. */
+async function instancesOf(
+  read: Promise<KitInstanceRead>
+): Promise<Readonly<Record<string, string>>> {
+  try {
+    return (await read).instances;
+  } catch {
+    return {};
+  }
+}
 
 /** The file's canonical path, or null when it cannot be resolved. */
 function canonicalPath(path: string): string | null {
@@ -472,6 +511,9 @@ export class ExtractionSession {
    *  discovery asks it first, the loader only for a declared workspace it
    *  cannot resolve. Null resolves through the loader alone. */
   hostResolve: HostResolve | null = null;
+  /** The instance the host resolved each kit to when this session last
+   *  loaded the build's system (C8); part of its resolution context. */
+  private kitInstanceMap: Readonly<Record<string, string>> = {};
   /** Each file's alias comparison, kept by content hash across analyses. */
   private readonly aliasCache = new AliasAgreementCache();
   /** Serialized path aliases, harvested by the adapter from bundler config. */
@@ -1773,8 +1815,8 @@ export class ExtractionSession {
   private commitSystemAuthority(): void {
     setSystemAuthority(this.key, {
       ...systemLoad(this.system!),
-      context: this.resolutionContextText(),
-      label: this.resolutionContextLabel(),
+      context: this.resolutionContextText(this.kitInstanceMap),
+      label: this.resolutionContextLabel(this.kitInstanceMap),
       others: new Map(),
     });
   }
@@ -1797,14 +1839,15 @@ export class ExtractionSession {
     this.readConfigInputs(rootDir);
 
     // One resolution context, which system loading and package resolution
-    // both read: the host's conditions and extension order, and the session
-    // root's declared workspaces.
-    const context: SessionResolutionContext = {
-      conditions: this.conditions,
-      workspaces: declaredWorkspacePackages(rootDir),
-      extensions: this.extensionPolicy,
-    };
-    this.log(`extension order: ${context.extensions.resolverVersion}`);
+    // both read, with the host's instance of each kit the system file
+    // reaches, read before the load so it evaluates the instances the bundle
+    // renders (C8).
+    const hostContext = this.hostResolutionContext();
+    this.log(`extension order: ${hostContext.extensions.resolverVersion}`);
+    const kitRead = this.readKitInstances(hostContext, resolvedSystemPath);
+    const instances = await instancesOf(kitRead);
+    const context: SessionResolutionContext = { ...hostContext, instances };
+    this.kitInstanceMap = instances;
     let t = this.now();
     try {
       this.system = this.loadSystemUnder(context);
@@ -1909,33 +1952,12 @@ export class ExtractionSession {
     // §2.2 A4), else the system loader's under the same context. The
     // traversal and ingest below are the shared collector.
     t = this.now();
-    const resolver = discoveryResolver(this.hostResolve, this.engine(), {
-      rootDir,
-      conditions: context.conditions,
-      workspaces: context.workspaces,
-      extensions: context.extensions,
-    });
-    const discoveryDiagnostics: ManifestDiagnostic[] = [];
-    const kitMembers = new Map<string, string>();
-    const packageNames = await extractSystemFilePackages(
-      resolvedSystemPath,
-      // A stateless native read of the system file, like the system loader:
-      // the native module answers where a host's engine supplies none.
-      {
-        systemMembership:
-          this.engine().systemMembership ?? requireEngine().systemMembership,
-      },
-      (diagnostic) => discoveryDiagnostics.push(diagnostic),
-      // The application's modules import as discovery resolves, from the
-      // root; a kit's, from its own directory, as the system loader
-      // evaluates them.
-      (specifier, importer) =>
-        findPackageRoot(importer) === systemPackageRoot
-          ? resolver.resolveSpecifier(specifier)
-          : resolver.loaderResolve(specifier, dirname(importer)),
-      context.extensions,
-      kitMembers
-    );
+    const {
+      resolver,
+      packageNames,
+      kitMembers,
+      diagnostics: discoveryDiagnostics,
+    } = await kitRead;
     discoveryDiagnostics.push(
       ...importedKitDiagnostics(
         rawEntries,
@@ -2003,8 +2025,8 @@ export class ExtractionSession {
 
     this.lastExternalOutcomes = collected.outcomes;
     this.ingestionFailureDiagnostics = ingestionFailures;
-    // The host chose the analysed instances; the system load resolved its
-    // own. Until the loader takes the host's instance, they must agree.
+    // A self-check: the load evaluated the host's instances (C8), so the
+    // instances it read are the ones discovery analyses.
     if (resolver.hostFirst) {
       discoveryDiagnostics.push(
         ...systemInstanceMismatches({
@@ -2012,8 +2034,12 @@ export class ExtractionSession {
           specifiers: packageNames,
           instances: collected.packageInstances,
           evaluated: this.systemDependencyPaths,
+          // As the load resolved it, under the host's kit instances.
           loaderResolve: (specifier) =>
-            resolver.loaderResolve(specifier, dirname(resolvedSystemPath)),
+            nativeLoaderResolution(this.engine(), context)(
+              specifier,
+              dirname(resolvedSystemPath)
+            ).path ?? null,
         })
       );
     }
@@ -2253,22 +2279,134 @@ export class ExtractionSession {
       conditions: context.conditions,
       workspaces: context.workspaces,
       extensions: context.extensions,
+      instances: context.instances,
     });
   }
 
+  /** The system file's kit membership and, where a host resolves, the
+   *  instance it resolves each kit to (C8), named as discovery names it
+   *  (packageInstanceOf, the first answer per name); the loader never takes
+   *  one for Animus's own package. Host answers are kept, so discovery asks
+   *  once. */
+  private async readKitInstances(
+    context: SessionResolutionContext,
+    systemPath: string
+  ): Promise<KitInstanceRead> {
+    const rootDir = this.rootDir!;
+    const resolver = discoveryResolver(this.hostResolve, this.engine(), {
+      rootDir,
+      conditions: context.conditions,
+      workspaces: context.workspaces,
+      extensions: context.extensions,
+    });
+    const answers = new Map<string, Promise<string | null>>();
+    const hostAnswer = (specifier: string): Promise<string | null> => {
+      let answer = answers.get(specifier);
+      if (answer === undefined) {
+        answer = resolver.resolveSpecifier(specifier);
+        answers.set(specifier, answer);
+      }
+      return answer;
+    };
+    const diagnostics: ManifestDiagnostic[] = [];
+    const kitMembers = new Map<string, string>();
+    const systemPackageRoot = findPackageRoot(systemPath);
+    const packageNames = await extractSystemFilePackages(
+      systemPath,
+      // A stateless native read of the system file, like the system loader:
+      // the native module answers where a host's engine supplies none.
+      {
+        systemMembership:
+          this.engine().systemMembership ?? requireEngine().systemMembership,
+      },
+      (diagnostic) => diagnostics.push(diagnostic),
+      // The application's modules import as discovery resolves, from the
+      // root; a kit's, from its own directory, as the system loader
+      // evaluates them.
+      (specifier, importer) =>
+        findPackageRoot(importer) === systemPackageRoot
+          ? hostAnswer(specifier)
+          : resolver.loaderResolve(specifier, dirname(importer)),
+      context.extensions,
+      kitMembers
+    );
+    const instances = new Map<string, string>();
+    if (resolver.hostFirst) {
+      const locate = nativePackageLocator(this.engine(), context.workspaces);
+      // Every root each kit name reaches: one instance per name is the
+      // limit, so a name reaching two is refused, never resolved by order.
+      const roots = new Map<string, Set<string>>();
+      for (const specifier of packageNames) {
+        if (!isPackageSpecifier(specifier)) continue;
+        const name = bareSpecifierPackageName(specifier);
+        const member = kitMembers.get(specifier);
+        const answer = member ?? (await hostAnswer(specifier));
+        if (answer === null) continue;
+        const located = locate(
+          name,
+          member === undefined ? rootDir : dirname(member)
+        );
+        const root = realPath(
+          packageInstanceOf(answer, located || null, rootDir)
+        );
+        roots.set(name, (roots.get(name) ?? new Set()).add(root));
+      }
+      for (const [name, reached] of roots) {
+        if (reached.size === 1) {
+          instances.set(name, [...reached][0]!);
+          continue;
+        }
+        // No instance of it is both evaluated and served, so no level
+        // configuration can make the build's output consistent: refused.
+        const shown = [...reached]
+          .map((root) => relative(rootDir, root).split(sep).join('/'))
+          .join(' and ');
+        throw new DiagnosticFailure(
+          `[animus] ${SYSTEM_INSTANCE_MISMATCH} — ${name}: the system reaches '${name}' as two instances, ${shown}, and Animus evaluates one instance of a package for the whole system, so the system it evaluates and the source the bundle serves cannot agree — make the system and its kits resolve '${name}' to one instance`
+        );
+      }
+    }
+    return {
+      resolver: { ...resolver, resolveSpecifier: hostAnswer },
+      packageNames,
+      kitMembers,
+      diagnostics,
+      instances: Object.fromEntries(instances),
+    };
+  }
+
+  /** The host's part of this session's resolution context: its conditions,
+   *  extension order and the root's declared workspaces. */
+  private hostResolutionContext(): SessionResolutionContext {
+    return {
+      conditions: this.conditions,
+      workspaces: declaredWorkspacePackages(this.rootDir!),
+      extensions: this.extensionPolicy,
+    };
+  }
+
   /** What the system loader reads of this participant besides the root, as
-   *  stable text: its conditions and extension order. */
-  private resolutionContextText(): string {
+   *  stable text: its conditions, extension order and kit instances. */
+  private resolutionContextText(
+    instances: Readonly<Record<string, string>>
+  ): string {
     return JSON.stringify([
       this.conditions,
       extensionPolicyJson(this.extensionPolicy),
+      Object.entries(instances).sort(([a], [b]) => (a < b ? -1 : 1)),
     ]);
   }
 
-  private resolutionContextLabel(): string {
+  private resolutionContextLabel(
+    instances: Readonly<Record<string, string>>
+  ): string {
+    const kits = Object.entries(instances)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([name, root]) => `${name} → ${relative(this.rootDir!, root)}`);
     return (
       `${this.driverLabel} with conditions [${this.conditions.join(', ')}] ` +
-      `and extension order ${this.extensionPolicy.resolverVersion}`
+      `and extension order ${this.extensionPolicy.resolverVersion}` +
+      (kits.length > 0 ? ` and kit instances [${kits.join(', ')}]` : '')
     );
   }
 
@@ -2276,20 +2414,50 @@ export class ExtractionSession {
    *  context differs from the one the build's system was loaded under loads
    *  it once under its own, and proceeds only on the same system. Otherwise
    *  it throws, naming both contexts, whichever participant came first. */
-  agreeWithSystemAuthority(): void {
-    const authority = getSystemAuthority(this.key);
+  async agreeWithSystemAuthority(): Promise<void> {
+    let authority = getSystemAuthority(this.key);
     if (authority === null) return;
-    const context = this.resolutionContextText();
+    // This participant's own kit instances: its host may alias a kit
+    // another compiler does not (C8). Reading them waits on the host, while
+    // which the build may commit another authority: the check is made only
+    // against an authority whose context and system match the one current
+    // when the read ends. A build still changing its system after three
+    // reads is refused.
+    let hostContext: SessionResolutionContext;
+    let instances: Readonly<Record<string, string>>;
+    for (let read = 1; ; read++) {
+      hostContext = this.hostResolutionContext();
+      instances = await instancesOf(
+        this.readKitInstances(
+          hostContext,
+          resolve(this.rootDir!, this.options.system)
+        )
+      );
+      const current = getSystemAuthority(this.key);
+      if (current === null) return;
+      const settled =
+        current.context === authority.context &&
+        current.identity === authority.identity;
+      authority = current;
+      if (settled) break;
+      if (read === AUTHORITY_READS) {
+        throw new SessionConfigurationConflict(
+          this.key,
+          current.label,
+          this.resolutionContextLabel(instances),
+          [
+            `the build's system, committed again under another context or system during each of ${AUTHORITY_READS} checks`,
+          ],
+          'A participant agrees only with a settled system: let the build ' +
+            'finish loading it, then check again.'
+        );
+      }
+    }
+    const context = this.resolutionContextText(instances);
     if (context === authority.context) return;
     let own = authority.others.get(context);
     if (own === undefined) {
-      own = systemLoad(
-        this.loadSystemUnder({
-          conditions: this.conditions,
-          workspaces: declaredWorkspacePackages(this.rootDir!),
-          extensions: this.extensionPolicy,
-        })
-      );
+      own = systemLoad(this.loadSystemUnder({ ...hostContext, instances }));
       authority.others.set(context, own);
     }
     if (own.identity === authority.identity) return;
@@ -2302,12 +2470,13 @@ export class ExtractionSession {
     throw new SessionConfigurationConflict(
       this.key,
       authority.label,
-      this.resolutionContextLabel(),
+      this.resolutionContextLabel(instances),
       differing.length > 0
         ? [`system modules ${differing.join(', ')}`]
         : ['the evaluated system'],
       'Every participant of one build must evaluate the same system: give ' +
-        'each compiler conditions that select the same system modules.'
+        'each compiler conditions and kit aliases that select the same ' +
+        'system modules.'
     );
   }
 

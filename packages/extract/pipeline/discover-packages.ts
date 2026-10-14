@@ -314,7 +314,7 @@ export function packageInstanceOf(
     : located;
 }
 
-function realPath(path: string): string {
+export function realPath(path: string): string {
   try {
     return realpathSync(path);
   } catch {

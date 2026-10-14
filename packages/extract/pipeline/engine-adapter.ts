@@ -52,7 +52,9 @@ export interface EngineApi {
     fromDir: string,
     conditions?: readonly string[],
     workspaces?: WorkspacePackages,
-    extensionPolicyJson?: string
+    extensionPolicyJson?: string,
+    /** The host's instance of each kit, by package name (C8). */
+    instances?: Readonly<Record<string, string>>
   ) => { path?: string | null; unresolved?: string | null };
   /** A fast fingerprint of the bytes at `path`, for telling whether a file
    *  changed between watch passes; null where it cannot be read. */
@@ -211,13 +213,21 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
       resolveSpecifier:
         native.resolveSpecifier === undefined
           ? undefined
-          : (specifier, fromDir, conditions, workspaces, extensionPolicyJson) =>
+          : (
+              specifier,
+              fromDir,
+              conditions,
+              workspaces,
+              extensionPolicyJson,
+              instances
+            ) =>
               native.resolveSpecifier(
                 specifier,
                 fromDir,
                 conditions,
                 workspaces,
-                extensionPolicyJson
+                extensionPolicyJson,
+                instances
               ),
       fingerprintFile:
         native.fingerprintFile === undefined

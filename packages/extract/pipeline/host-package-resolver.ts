@@ -38,6 +38,39 @@ export interface DiscoveryResolver {
   loaderResolve(specifier: string, fromDir: string): string | null;
 }
 
+/** A specifier from `fromDir` as the system loader resolves it under
+ *  `context`, with the host's kit instances where given (C8): the file it
+ *  names, or why it names none. */
+export function nativeLoaderResolution(
+  engine: Pick<EngineApi, 'resolveSpecifier'>,
+  context: {
+    conditions: readonly string[];
+    workspaces: WorkspacePackages;
+    extensions: HostExtensionPolicy;
+    instances?: Readonly<Record<string, string>>;
+  }
+): (
+  specifier: string,
+  fromDir: string
+) => { path?: string | null; unresolved?: string | null } {
+  return (specifier, fromDir) => {
+    const native = engine.resolveSpecifier;
+    if (native === undefined) {
+      throw new Error(
+        'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
+      );
+    }
+    return native(
+      specifier,
+      fromDir,
+      [...context.conditions],
+      context.workspaces,
+      extensionPolicyJson(context.extensions),
+      context.instances
+    );
+  };
+}
+
 /**
  * A declared workspace that nothing links into `node_modules` is no package
  * to the host, though the system loader resolves it: where the host finds
@@ -53,24 +86,7 @@ export function discoveryResolver(
     extensions: HostExtensionPolicy;
   }
 ): DiscoveryResolver {
-  const load = (
-    specifier: string,
-    fromDir: string
-  ): { path?: string | null; unresolved?: string | null } => {
-    const native = engine.resolveSpecifier;
-    if (native === undefined) {
-      throw new Error(
-        'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
-      );
-    }
-    return native(
-      specifier,
-      fromDir,
-      [...context.conditions],
-      context.workspaces,
-      extensionPolicyJson(context.extensions)
-    );
-  };
+  const load = nativeLoaderResolution(engine, context);
   const loaderResolve = (specifier: string, fromDir: string): string | null =>
     load(specifier, fromDir).path ?? null;
 
