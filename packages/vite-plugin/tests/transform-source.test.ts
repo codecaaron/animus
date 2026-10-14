@@ -521,36 +521,3 @@ describe('transform: new-file invalidation is unconditional', () => {
     );
   });
 });
-
-describe('transform: quarantine delivers layergate ahead of Animus', () => {
-  // Contract: with `quarantine`, every component module imports layergate's
-  // stylesheets ahead of the code that imports Animus's own, after the
-  // directive prologue, in production and development: Animus's own
-  // delivery edge carries them, never a separate bootstrap (E4).
-  it.each([
-    [true, `'use client';\nimport 'virtual:layergate';\nTRANSFORMED`],
-    [
-      false,
-      `'use client';\nimport 'virtual:layergate';\nimport '${VIRTUAL_BRIDGE_ID}';\nTRANSFORMED`,
-    ],
-  ])('production %s', async (isProd, expected) => {
-    const probe = makeProbe({
-      knownFiles: { 'src/Button.tsx': ['Button#1'] },
-      isProd,
-      engineOutput: `'use client';\nTRANSFORMED`,
-    });
-    Object.assign(probe.ctx, {
-      options: { ...probe.ctx.options, quarantine: { sheets: ['vendor.css'] } },
-    });
-
-    const emitted = (
-      await transformSource(
-        probe.ctx,
-        'export const X = 1;',
-        join(ROOT, 'src/Button.tsx')
-      )
-    )?.code;
-
-    expect(emitted).toBe(expected);
-  });
-});

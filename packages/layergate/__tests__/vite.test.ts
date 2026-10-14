@@ -10,7 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { build, createServer } from 'vite';
-import { afterAll, describe, expect, test } from 'vitest';
+import { afterAll, describe, expect, test, vi } from 'vitest';
 
 import { layergate } from '../src/vite';
 
@@ -32,6 +32,9 @@ const files = {
   'styles/app.css': '.app-own{color:red}\n',
   'styles/x.module.css': '.moduled{color:red}\n',
   'styles/first.css': '.first{color:red}\n',
+  'styles/shared.css': '.shared{color:red}\n',
+  'styles/app-imports.css':
+    '@import "./shared.css";\n@import "owned/a.css";\n.app-own-rule{color:red}\n',
   'styles/second.css': '.second{color:red}\n',
   'styles/uses-style-field.css': '@import "stylepkg";\n',
   'node_modules/stylepkg/package.json':
@@ -72,7 +75,11 @@ const count = (css: string, text: string) => css.split(text).length - 1;
 
 /** The layer statement around `selector`'s rule, or null for none. */
 function layerOf(css: string, selector: string): string | null {
-  const at = css.indexOf(selector);
+  return layerAt(css, css.indexOf(selector));
+}
+
+/** The layer statement around the rule at offset `at`, or null for none. */
+function layerAt(css: string, at: number): string | null {
   let depth = 0;
   for (let index = at; index >= 0; index--) {
     if (css[index] === '}') depth += 1;
@@ -120,6 +127,22 @@ describe('layergate/vite', () => {
     expect(layerOf(css, '._moduled_')).toBeNull();
   });
 
+  // Contract: no unlayered copy of an owned file escapes through a
+  // stylesheet Vite loads itself: an app sheet's own `@import` of a declared
+  // sheet or an owned dependency is inlined layered, its own rules stay
+  // unlayered. The declared copy and this one may both remain.
+  test('layers an owned file an app sheet imports', async () => {
+    const css = await builtCss(
+      "import 'virtual:layergate';\nimport './styles/app-imports.css';\n",
+      { sheets: ['./styles/shared.css'], dependencies: ['owned'] }
+    );
+    const shared = [...css.matchAll(/\.shared\{/g)].map((match) => match.index);
+    expect(shared.length).toBeGreaterThan(0);
+    for (const at of shared) expect(layerAt(css, at!)).toBe('vendor');
+    expect(layerOf(css, '.owned-a{')).toBe('vendor');
+    expect(layerOf(css, '.app-own-rule{')).toBeNull();
+  });
+
   // Contract: declared sheets come first, in their declared order, even
   // when the app imports a later one before anything imports
   // `virtual:layergate`.
@@ -157,15 +180,6 @@ describe('layergate/vite', () => {
   });
 });
 
-/** Polls `check` until it holds, or fails after `ms`. */
-async function until(check: () => boolean, ms = 5000) {
-  const start = Date.now();
-  while (!check()) {
-    if (Date.now() - start > ms) throw new Error('timed out');
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-}
-
 describe('layergate/vite in dev', () => {
   // Contract: an installed owned file is watched while a finished
   // stylesheet reads it: one its stylesheet stops importing is no longer
@@ -193,16 +207,17 @@ describe('layergate/vite in dev', () => {
 
       // Deleted and created again, the file is watched again.
       unlinkSync(nested);
-      await until(() => changed(nested));
+      await vi.waitUntil(() => changed(nested), { timeout: 5000 });
       changes.length = 0;
       writeFileSync(nested, '.owned-recreated{color:red}\n');
-      await until(() => changed(nested));
+      await vi.waitUntil(() => changed(nested), { timeout: 5000 });
 
       // Dropped from the graph, it is no longer watched.
       writeFileSync(entry, '.owned-a{color:red}\n');
-      await until(() => changed(entry));
-      await until(
-        () => !environment.moduleGraph.getModuleById(id)?.transformResult
+      await vi.waitUntil(() => changed(entry), { timeout: 5000 });
+      await vi.waitUntil(
+        () => !environment.moduleGraph.getModuleById(id)?.transformResult,
+        { timeout: 5000 }
       );
       await environment.transformRequest(id);
       changes.length = 0;

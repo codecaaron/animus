@@ -11,7 +11,7 @@ function compile(
   root: string,
   options: Partial<CompileOptions> = {}
 ) {
-  return compileUnit(root, {
+  return compileUnit([root], {
     layer: 'vendor',
     order: ['vendor', 'app'],
     resolve: (specifier, importer) => {
@@ -19,7 +19,6 @@ function compile(
       return file in files ? file : null;
     },
     read: (file) => files[file]!,
-    quarantined: () => true,
     ...options,
   });
 }
