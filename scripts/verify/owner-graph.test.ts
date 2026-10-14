@@ -76,7 +76,6 @@ function currentSurfaceFiles(): string[] {
   // fixtures; they neither invoke nor document executable commands.
   const nonCallerContractFiles = new Set([
     'packages/_assertions/__tests__/receipt.test.ts',
-    'scripts/verify/ci-graph.test.ts',
     'scripts/verify/owner-graph.test.ts',
   ]);
   const files: string[] = [];
