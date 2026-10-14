@@ -203,7 +203,8 @@ export function assertNoBootstrapScript(
  * The font preload contract: `<head>` holds exactly one font preload, with
  * `crossorigin`, whose href is `href` — the URL the stylesheet's `url()`
  * loads, so the browser fetches the file once — and it precedes every
- * stylesheet reference.
+ * stylesheet reference. Its type, when it has one, is a font MIME type: a
+ * browser ignores a preload whose type it does not support.
  */
 export function assertFontPreload(html: string, href: string): void {
   const head = headOf(html);
@@ -220,6 +221,13 @@ export function assertFontPreload(html: string, href: string): void {
   }
   const [tag] = preloads[0]!;
   const actual = /\bhref\s*=\s*["']?([^"'\s>]+)/i.exec(tag)?.[1];
+  const type = /\btype\s*=\s*["']?([^"'\s>]*)/i.exec(tag)?.[1];
+  if (type !== undefined && !/^font\/(?:woff2|woff|ttf|otf)$/.test(type)) {
+    throw new AssertionError(
+      `assertFontPreload: the preload's type "${type}" is no font MIME type, so the browser ignores it`,
+      { tag }
+    );
+  }
   if (actual !== href || !/\bcrossorigin\b/i.test(tag)) {
     throw new AssertionError(
       `assertFontPreload: the preload must name ${href} with crossorigin`,

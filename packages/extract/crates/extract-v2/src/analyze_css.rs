@@ -10539,6 +10539,12 @@ mod tests {
                     face("C", serde_json::json!([{ "url": "/c.otf", "format": "opentype" }, { "url": "/c.woff" }]), true.into()),
                     // An unknown format gives no type.
                     face("D", serde_json::json!([{ "url": "HTTP://cdn.test/d", "format": "collection" }]), true.into()),
+                    // A variable-font hint is typed by its format's family, and
+                    // a format no type names falls back to the extension.
+                    face("E", serde_json::json!([{ "url": "/e", "format": "woff2 supports variations" }]), true.into()),
+                    face("F", serde_json::json!([{ "url": "/f", "format": "woff2-variations" }]), true.into()),
+                    face("G", serde_json::json!([{ "url": "/g", "format": "truetype-variations" }]), true.into()),
+                    face("H", serde_json::json!([{ "url": "/h.woff2", "format": "x-unknown" }]), true.into()),
                     // The same file again preloads once.
                     face("A2", serde_json::json!([{ "url": "animus-asset:./a.woff", "format": "woff" }]), true.into()),
                     face("Off", serde_json::json!([{ "url": "./off.woff2" }]), false.into()),
@@ -10562,6 +10568,10 @@ mod tests {
                 ("https://cdn.test/b.woff2?v=1", Some("font/woff2")),
                 ("/c.otf", Some("font/otf")),
                 ("HTTP://cdn.test/d", None),
+                ("/e", Some("font/woff2")),
+                ("/f", Some("font/woff2")),
+                ("/g", Some("font/ttf")),
+                ("/h.woff2", Some("font/woff2")),
             ]
         );
         let unpreloaded: Vec<_> = out

@@ -53,11 +53,18 @@ function fontPreloadTags(
         injectTo: 'head-prepend',
       })
     ),
-    ...preloads.map(({ href, type }): HtmlTagDescriptor => ({
-      tag: 'link',
-      attrs: { rel: 'preload', href, as: 'font', type, crossorigin: true },
-      injectTo: 'head-prepend',
-    })),
+    ...preloads.map(({ href, type }): HtmlTagDescriptor => {
+      const attrs: NonNullable<HtmlTagDescriptor['attrs']> = {
+        rel: 'preload',
+        href,
+        as: 'font',
+      };
+      // Vite writes an undefined attribute as "undefined", a type that tells
+      // the browser to refuse the preload.
+      if (type !== undefined) attrs.type = type;
+      attrs.crossorigin = true;
+      return { tag: 'link', attrs, injectTo: 'head-prepend' };
+    }),
   ];
 }
 

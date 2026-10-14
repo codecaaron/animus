@@ -10,6 +10,7 @@ import {
 import { animusExtract } from '../src/index';
 import { buildIndexHtmlTags } from '../src/index-html';
 import { loadVirtualModule } from '../src/virtual-modules';
+import { publicationWith } from './context-probe';
 import {
   contextWith,
   HTML_HOOK_CONTEXT,
@@ -151,5 +152,29 @@ describe('the bridge module is server-safe', () => {
 
     expect(accepted).toHaveLength(1);
     expect(() => accepted[0]({ default: '.x{}' })).not.toThrow();
+  });
+});
+
+describe('font preload tags', () => {
+  test('a preload of no known type carries no type attribute', () => {
+    // Vite serializes an undefined attribute as type="undefined", which the
+    // browser reads as an unsupported type and ignores the preload.
+    const ctx = contextWith({ isProd: true });
+    ctx.served = publicationWith({
+      fontPreloads: [{ href: '/a.woff2', type: 'font/woff2' }, { href: '/b' }],
+    });
+    const preloads = buildIndexHtmlTags(ctx).filter(
+      (tag) => tag.attrs?.rel === 'preload'
+    );
+    expect(preloads.map((tag) => tag.attrs)).toStrictEqual([
+      {
+        rel: 'preload',
+        href: '/a.woff2',
+        as: 'font',
+        type: 'font/woff2',
+        crossorigin: true,
+      },
+      { rel: 'preload', href: '/b', as: 'font', crossorigin: true },
+    ]);
   });
 });

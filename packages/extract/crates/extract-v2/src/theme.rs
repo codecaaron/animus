@@ -2756,6 +2756,21 @@ pub struct FontPreload {
 /// browser skips such a source and loads the next.
 const UNLOADED_FONT_FORMATS: [&str; 3] = ["embedded-opentype", "eot", "svg"];
 
+/// The MIME type of a font format or file extension, by its family: a
+/// variable-font hint names its family's first (`woff2-variations`,
+/// `woff2 supports variations`).
+fn font_mime(format: &str) -> Option<&'static str> {
+    let lower = format.trim().trim_matches(['"', '\'']).to_ascii_lowercase();
+    let word = lower.split_ascii_whitespace().next()?;
+    match word.strip_suffix("-variations").unwrap_or(word) {
+        "woff2" => Some("font/woff2"),
+        "woff" => Some("font/woff"),
+        "truetype" | "ttf" => Some("font/ttf"),
+        "opentype" | "otf" => Some("font/otf"),
+        _ => None,
+    }
+}
+
 /// The source a face with `preload: true` preloads: the one the browser's
 /// `@font-face` loads, its first `url` source in a format browsers load (by
 /// `format`, or by extension where it gives none), so the file is fetched
@@ -2766,12 +2781,13 @@ fn preload_source(sources: &[&Value]) -> Result<FontPreload, String> {
         .iter()
         .filter_map(|entry| Some((entry.get("url")?.as_str()?, entry.get("format").and_then(Value::as_str))))
         .collect();
+    let extension_of = |url: &str| -> Option<String> {
+        let path = url.split(['?', '#']).next().unwrap_or(url);
+        let ext = path.rsplit_once('.')?.1;
+        (!ext.contains('/')).then(|| ext.to_ascii_lowercase())
+    };
     let format_of = |&(url, format): &(&str, Option<&str>)| -> Option<String> {
-        format.map(str::to_ascii_lowercase).or_else(|| {
-            let path = url.split(['?', '#']).next().unwrap_or(url);
-            let ext = path.rsplit_once('.')?.1;
-            (!ext.contains('/')).then(|| ext.to_ascii_lowercase())
-        })
+        format.map(str::to_ascii_lowercase).or_else(|| extension_of(url))
     };
     if urls.is_empty() {
         return Err("it has no `url` source to preload".into());
@@ -2792,13 +2808,10 @@ fn preload_source(sources: &[&Value]) -> Result<FontPreload, String> {
              moves a URL relative to the stylesheet"
         ));
     }
-    let mime = match format_of(chosen).as_deref() {
-        Some("woff2") => Some("font/woff2"),
-        Some("woff") => Some("font/woff"),
-        Some("truetype" | "ttf") => Some("font/ttf"),
-        Some("opentype" | "otf") => Some("font/otf"),
-        _ => None,
-    };
+    let mime = chosen
+        .1
+        .and_then(font_mime)
+        .or_else(|| extension_of(url).as_deref().and_then(font_mime));
     Ok(FontPreload { href: url.to_string(), mime })
 }
 
