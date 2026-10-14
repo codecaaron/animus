@@ -1,7 +1,4 @@
-import {
-  fontPreloadOrigins,
-  substituteFontPreloads,
-} from '@animus-ui/extract/pipeline';
+import { substituteFontPreloads } from '@animus-ui/extract/pipeline';
 
 import { BRIDGE_SCRIPT_SRC } from './constants';
 
@@ -9,6 +6,10 @@ import type { PluginContext } from './context';
 import type { HtmlTagDescriptor } from 'vite';
 
 const LINK_TAG_RE = /<link\b[^>]*>/gi;
+/** Marks the preloads Animus writes, so another preload of the same file
+ *  can be told from Animus's own. */
+const ANIMUS_PRELOAD_MARKER = 'data-animus-preload';
+const MARKER_RE = /\sdata-animus-preload(?=[\s=/>])/i;
 const REL_RE = /\srel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
 const HREF_RE = /\shref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
 
@@ -17,15 +18,32 @@ function attribute(tag: string, re: RegExp): string | undefined {
   return match ? (match[1] ?? match[2] ?? match[3]) : undefined;
 }
 
-/** The hrefs the document already preloads. */
-function preloadedHrefs(html: string): Set<string> {
-  const hrefs = new Set<string>();
+/** Each `<link rel="preload">` in `html`, with its href. */
+function* preloadLinks(html: string): Generator<[tag: string, href: string]> {
   for (const [tag] of html.matchAll(LINK_TAG_RE)) {
     const rel = attribute(tag, REL_RE)?.toLowerCase().split(/\s+/) ?? [];
     const href = attribute(tag, HREF_RE);
-    if (rel.includes('preload') && href !== undefined) hrefs.add(href);
+    if (rel.includes('preload') && href !== undefined) yield [tag, href];
   }
-  return hrefs;
+}
+
+/**
+ * The hrefs a finished document preloads both through Animus's tag and
+ * through another, which the page wrote or a hook running after Animus's
+ * added: the browser may then fetch the file twice.
+ */
+export function duplicatedFontPreloads(html: string): string[] {
+  const ours = new Set<string>();
+  const others = new Set<string>();
+  for (const [tag, href] of preloadLinks(html)) {
+    (MARKER_RE.test(tag) ? ours : others).add(href);
+  }
+  return [...ours].filter((href) => others.has(href));
+}
+
+/** The hrefs the document already preloads. */
+function preloadedHrefs(html: string): Set<string> {
+  return new Set([...preloadLinks(html)].map(([, href]) => href));
 }
 
 /** The head elements Animus's tags go after (the charset and viewport
@@ -112,8 +130,8 @@ export function injectHeadTags(
   return html.slice(0, offset) + inserted + html.slice(offset);
 }
 
-/** The preconnects and preloads for the faces that ask for one, by the
- *  URL the stylesheet's own `url()` gets; one the document already
+/** The preloads for the faces that ask for one, by the URL the stylesheet's
+ *  own `url()` gets, each marked as Animus's; one the document already
  *  preloads is left out. */
 function fontPreloadTags(
   ctx: PluginContext,
@@ -129,27 +147,19 @@ function fontPreloadTags(
         : { ...preload, href: ctx.devRootRelativeUrl(preload.href) }
     )
     .filter(({ href }) => !existing.has(href));
-  return [
-    ...fontPreloadOrigins(preloads.map(({ href }) => href)).map(
-      (origin): HtmlTagDescriptor => ({
-        tag: 'link',
-        attrs: { rel: 'preconnect', href: origin, crossorigin: true },
-        injectTo: 'head-prepend',
-      })
-    ),
-    ...preloads.map(({ href, type }): HtmlTagDescriptor => {
-      const attrs: NonNullable<HtmlTagDescriptor['attrs']> = {
-        rel: 'preload',
-        href,
-        as: 'font',
-      };
-      // An undefined attribute serializes as "undefined", a type that tells
-      // the browser to refuse the preload.
-      if (type !== undefined) attrs.type = type;
-      attrs.crossorigin = true;
-      return { tag: 'link', attrs, injectTo: 'head-prepend' };
-    }),
-  ];
+  return preloads.map(({ href, type }): HtmlTagDescriptor => {
+    const attrs: NonNullable<HtmlTagDescriptor['attrs']> = {
+      rel: 'preload',
+      href,
+      as: 'font',
+    };
+    // An undefined attribute serializes as "undefined", a type that tells
+    // the browser to refuse the preload.
+    if (type !== undefined) attrs.type = type;
+    attrs.crossorigin = true;
+    attrs[ANIMUS_PRELOAD_MARKER] = true;
+    return { tag: 'link', attrs, injectTo: 'head-prepend' };
+  });
 }
 
 /**

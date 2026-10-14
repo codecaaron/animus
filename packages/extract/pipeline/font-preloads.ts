@@ -31,26 +31,6 @@ export function substituteFontPreloads(
   });
 }
 
-/** The origins of the absolute hrefs, once each, in order: a
- *  protocol-relative href's stays protocol-relative, to follow the page's.
- *  An href no URL parser reads has none; its preload fails on its own. */
-export function fontPreloadOrigins(hrefs: readonly string[]): string[] {
-  const origins = new Set<string>();
-  for (const href of hrefs) {
-    if (!/^(?:https?:)?\/\//i.test(href)) continue;
-    try {
-      const { origin } = new URL(href, 'https://animus.invalid');
-      // As authored, port included: parsing would drop a default port.
-      origins.add(
-        href.startsWith('//') ? `//${href.slice(2).split(/[/?#]/)[0]}` : origin
-      );
-    } catch {
-      // No origin to warm.
-    }
-  }
-  return [...origins];
-}
-
 function escapeAttribute(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -60,11 +40,11 @@ function escapeAttribute(value: string): string {
 
 /**
  * The `<link>` tags for the preloads a host without a document emits: one
- * `preconnect` per other origin, then one `preload` per file, each
- * `crossorigin`, as fonts are always fetched in CORS mode. An href relative
- * to the stylesheet resolves against `base`, the URL the stylesheet's
- * directory is served at. An href in `exclude`, after resolution, is one the
- * document already preloads.
+ * `preload` per file, `crossorigin`, as fonts are always fetched in CORS
+ * mode. No `preconnect`: each preload opens its origin's connection as early
+ * as one would. An href relative to the stylesheet resolves against `base`,
+ * the URL the stylesheet's directory is served at. An href in `exclude`,
+ * after resolution, is one the document already preloads.
  */
 export function renderFontPreloads(
   preloads: readonly FontPreload[],
@@ -79,17 +59,13 @@ export function renderFontPreloads(
       type,
     }))
     .filter(({ href }) => !exclude.has(href));
-  return [
-    ...fontPreloadOrigins(resolved.map(({ href }) => href)).map(
-      (origin) =>
-        `<link rel="preconnect" href="${escapeAttribute(origin)}" crossorigin>`
-    ),
-    ...resolved.map(({ href, type }) => {
+  return resolved
+    .map(({ href, type }) => {
       const typed =
         type === undefined ? '' : ` type="${escapeAttribute(type)}"`;
       return `<link rel="preload" href="${escapeAttribute(href)}" as="font"${typed} crossorigin>`;
-    }),
-  ].join('\n');
+    })
+    .join('\n');
 }
 
 /**

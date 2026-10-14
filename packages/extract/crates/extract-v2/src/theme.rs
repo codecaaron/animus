@@ -373,6 +373,14 @@ pub const FONT_FACE_DROPPED: &str = "animus.style.font-face-dropped";
 /// not a boolean, or the face has no `url` source to preload.
 pub const FONT_FACE_PRELOAD_DROPPED: &str = "animus.style.font-face-preload-dropped";
 
+/// An entry of the host's `fontPreloads` option that no typed font face
+/// matches, so nothing preloads for it.
+pub const FONT_PRELOAD_UNMATCHED: &str = "animus.style.font-preload-unmatched";
+
+/// An entry of the host's `fontPreloads` option that is neither a family name
+/// nor `{ family, weight?, style? }` with one weight and one style.
+pub const FONT_PRELOAD_INVALID: &str = "animus.style.font-preload-invalid";
+
 /// A typed font face's family of several words that starts with a generic
 /// family (`serif Pro`): Lightning CSS unquotes it, and browsers then drop
 /// the face.
@@ -2638,13 +2646,13 @@ pub fn resolve_all_global_blocks(
     blocks: &Value,
     ctx: &ResolveContext,
 ) -> String {
-    resolve_global_blocks(blocks, ctx, false, &mut Vec::new(), &mut |_, _, _| {})
+    resolve_global_blocks(blocks, ctx, false, &mut FontPreloads::new(None), &mut |_, _, _| {})
 }
 
 /// The global blocks registered `unlayered`, which emit outside every
 /// cascade layer, in registration order.
 pub fn resolve_unlayered_global_blocks(blocks: &Value, ctx: &ResolveContext) -> String {
-    resolve_global_blocks(blocks, ctx, true, &mut Vec::new(), &mut |_, _, _| {})
+    resolve_global_blocks(blocks, ctx, true, &mut FontPreloads::new(None), &mut |_, _, _| {})
 }
 
 /// Called with a global block's registration key, declaring module and
@@ -2692,7 +2700,7 @@ pub fn resolve_global_blocks(
     blocks: &Value,
     ctx: &ResolveContext,
     unlayered: bool,
-    preloads: &mut Vec<FontPreload>,
+    preloads: &mut FontPreloads,
     after_block: &mut AfterGlobalBlock<'_>,
 ) -> String {
     let block_map = match blocks.as_object() {
@@ -2755,6 +2763,139 @@ pub struct FontPreload {
 /// The formats no current browser loads, by `format` or by extension: a
 /// browser skips such a source and loads the next.
 const UNLOADED_FONT_FORMATS: [&str; 3] = ["embedded-opentype", "eot", "svg"];
+
+/// The font files global blocks' faces preload, once per URL. A host that
+/// selects faces (its `fontPreloads` option) decides which preload, in place
+/// of each face's own `preload` flag: one declaration of a face serves every
+/// product, and only some products render it.
+pub struct FontPreloads {
+    /// The host's entries; `None` keeps each face's flag.
+    selection: Option<Vec<Selection>>,
+    pub list: Vec<FontPreload>,
+}
+
+/// One `fontPreloads` entry: a family name, or `{ family, weight?, style? }`.
+struct Selection {
+    /// The entry as the host wrote it, for its reports.
+    written: String,
+    /// Why the entry selects nothing, when it is malformed.
+    invalid: Option<String>,
+    family: String,
+    /// One weight a face's declared weight must contain; `None`, any weight.
+    weight: Option<f64>,
+    /// The style a face must declare; an object without one asks for
+    /// `normal`, and a bare family name for any style.
+    style: Option<String>,
+    matched: bool,
+}
+
+impl Selection {
+    fn of(entry: &Value) -> Self {
+        let written = match entry {
+            Value::String(family) => format!("'{family}'"),
+            other => other.to_string(),
+        };
+        let mut selection =
+            Selection { written, invalid: None, family: String::new(), weight: None, style: None, matched: false };
+        match entry {
+            Value::String(family) => selection.family = family.clone(),
+            Value::Object(fields) => {
+                match fields.get("family").and_then(Value::as_str) {
+                    Some(family) => selection.family = family.to_string(),
+                    None => selection.invalid = Some("it names no `family` string".into()),
+                }
+                match fields.get("weight") {
+                    None => {}
+                    Some(weight) => match weight.as_f64().or_else(|| weight.as_str().and_then(one_weight)) {
+                        Some(weight) => selection.weight = Some(weight),
+                        None => {
+                            selection.invalid = Some(format!(
+                                "its `weight` {weight} is not one weight (a number from 1 to 1000, `normal` or \
+                                 `bold`); a range selects nothing more, since one weight already selects every face \
+                                 whose declared range contains it"
+                            ))
+                        }
+                    },
+                }
+                selection.style = match fields.get("style") {
+                    None => Some("normal".into()),
+                    Some(Value::String(style)) if FONT_STYLES.contains(&style.trim().to_ascii_lowercase().as_str()) => {
+                        Some(style.trim().to_ascii_lowercase())
+                    }
+                    Some(style) => {
+                        selection.invalid = Some(format!("its `style` {style} is not `normal`, `italic` or `oblique`"));
+                        None
+                    }
+                };
+            }
+            other => selection.invalid = Some(format!("it is {other}, not a family name or `{{ family, weight?, style? }}`")),
+        }
+        selection
+    }
+
+    /// Whether a face of `family` declaring `weight` and `style` is one this
+    /// entry selects.
+    fn selects(&self, family: &str, weight: Option<&str>, style: Option<&str>) -> bool {
+        if self.invalid.is_some() || !self.family.trim().eq_ignore_ascii_case(family) {
+            return false;
+        }
+        let weight_fits = self.weight.is_none_or(|wanted| {
+            // A face declares one weight or a range; none is `normal`.
+            let declared: Option<Vec<f64>> = weight.map_or(Some(vec![400.0]), |declared| {
+                declared.split_ascii_whitespace().map(one_weight).collect()
+            });
+            match declared.as_deref() {
+                Some([one]) => *one == wanted,
+                Some([low, high]) => *low <= wanted && wanted <= *high,
+                _ => false,
+            }
+        });
+        let style_fits = self.style.as_deref().is_none_or(|wanted| {
+            // `oblique 10deg` is oblique.
+            let declared = style.map_or("normal".to_string(), |style| style.trim().to_ascii_lowercase());
+            declared.split_ascii_whitespace().next() == Some(wanted)
+        });
+        weight_fits && style_fits
+    }
+}
+
+const FONT_STYLES: [&str; 3] = ["normal", "italic", "oblique"];
+
+/// A single font weight: a number from 1 to 1000, `normal` or `bold`.
+fn one_weight(text: &str) -> Option<f64> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(400.0),
+        "bold" => Some(700.0),
+        number => number.parse::<f64>().ok().filter(|weight| (1.0..=1000.0).contains(weight)),
+    }
+}
+
+impl FontPreloads {
+    pub fn new(selection: Option<&[Value]>) -> Self {
+        FontPreloads { selection: selection.map(|entries| entries.iter().map(Selection::of).collect()), list: Vec::new() }
+    }
+
+    /// Whether the host selects the face, when it selects faces.
+    fn selects(&mut self, family: &str, weight: Option<&str>, style: Option<&str>) -> Option<bool> {
+        let entries = self.selection.as_mut()?;
+        let mut any = false;
+        for entry in entries.iter_mut().filter(|entry| entry.selects(family, weight, style)) {
+            entry.matched = true;
+            any = true;
+        }
+        Some(any)
+    }
+
+    /// The host's entries that select nothing, as written, and why: a
+    /// malformed one, or one no face matches.
+    pub fn unused(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
+        self.selection
+            .iter()
+            .flatten()
+            .filter(|entry| !entry.matched)
+            .map(|entry| (entry.written.as_str(), entry.invalid.as_deref()))
+    }
+}
 
 /// The MIME type of a font format or file extension, by its family: a
 /// variable-font hint names its family's first (`woff2-variations`,
@@ -2819,9 +2960,10 @@ fn preload_source(sources: &[&Value]) -> Result<FontPreload, String> {
 /// the sources in order, then the descriptors. A face with no family or no
 /// source, a source that is neither a `local` name nor a `url`, and a
 /// descriptor that is not a string are reported and left out. An emitted
-/// face with `preload: true` adds its preload source to `preloads`, once per
-/// URL; one with no `url` source to preload is reported.
-fn render_font_faces(faces: &Value, ctx: &ResolveContext, preloads: &mut Vec<FontPreload>) -> String {
+/// face with `preload: true`, or one the host's `fontPreloads` selects in
+/// place of the flags, adds its preload source to `preloads`, once per URL;
+/// one with no `url` source to preload is reported.
+fn render_font_faces(faces: &Value, ctx: &ResolveContext, preloads: &mut FontPreloads) -> String {
     let list = match faces.as_array() {
         Some(l) => l,
         None => return String::new(),
@@ -2863,9 +3005,10 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext, preloads: &mut Vec<Fon
             continue;
         }
         let resolved = resolve_token_aliases(family, ctx.theme, ctx.variable_map, ctx.contextual_vars);
+        let bare = resolved.trim().trim_matches(|c| c == '"' || c == '\'');
         let family = match family_name(&resolved) {
             Ok(printed) => {
-                if starts_with_generic(resolved.trim().trim_matches(|c| c == '"' || c == '\'')) {
+                if starts_with_generic(bare) {
                     let warning = DroppedStyleKey::FontFaceGenericFirstWord { face: name.clone(), family: printed.clone() };
                     record_dropped_key_at(ctx, &[], warning);
                 }
@@ -2884,17 +3027,26 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext, preloads: &mut Vec<Fon
                 None => {}
             }
         }
-        match obj.get("preload") {
-            None | Some(Value::Bool(false)) => {}
-            Some(Value::Bool(true)) => match preload_source(&kept) {
+        let descriptor = |key: &str| obj.get(key).and_then(Value::as_str);
+        let asked = preloads.selects(bare, descriptor("weight"), descriptor("style")).unwrap_or_else(|| {
+            match obj.get("preload") {
+                None | Some(Value::Bool(false)) => false,
+                Some(Value::Bool(true)) => true,
+                Some(other) => {
+                    preload_dropped(format!("its `preload` {other} is not a boolean"));
+                    false
+                }
+            }
+        });
+        if asked {
+            match preload_source(&kept) {
                 Ok(preload) => {
-                    if !preloads.iter().any(|known| known.href == preload.href) {
-                        preloads.push(preload);
+                    if !preloads.list.iter().any(|known| known.href == preload.href) {
+                        preloads.list.push(preload);
                     }
                 }
                 Err(reason) => preload_dropped(reason),
-            },
-            Some(other) => preload_dropped(format!("its `preload` {other} is not a boolean")),
+            }
         }
         blocks.push(format!("@font-face {{ {} }}", decls.join(" ")));
     }

@@ -2864,6 +2864,7 @@ export class ExtractionSession {
               .join('/'),
           })
         ),
+        fontPreloads: this.options.fontPreloads,
       },
     };
 

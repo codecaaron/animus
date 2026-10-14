@@ -113,11 +113,31 @@ export interface AnimusCoreOptions {
    * over environment signals; never process lifecycle (watchers, HMR).
    */
   mode?: AnimusMode;
+  /** The font faces this app preloads, in place of each typed face's own
+   *  `preload` flag: one declaration of a face serves every product, and
+   *  only the faces this app's first screen renders should preload. See
+   *  {@link FontPreloadEntry}; `[]` preloads none. */
+  fontPreloads?: FontPreloadEntry[];
   /** Root every relative input resolves against. Vite and unplugin derive
    *  their root from the host bundler and reject this key; Next takes it as
    *  the app's root, since Next passes no dir to a config module. */
   root?: string;
 }
+
+/**
+ * A face selection for the `fontPreloads` option. A family name selects
+ * every face of the family. An object selects the faces of `family` whose
+ * declared weight contains `weight` (a number, `'normal'` or `'bold'`; a
+ * variable face's range such as `'100 900'` contains each weight in it, and
+ * no weight selects any) and whose style is `style` (`'normal'` when
+ * omitted). Families match as a face's `family` prints, ignoring ASCII
+ * case. An entry no face matches reports
+ * `animus.style.font-preload-unmatched`; a malformed one, a weight range
+ * included, reports `animus.style.font-preload-invalid`.
+ */
+export type FontPreloadEntry =
+  | string
+  | { family: string; weight?: number | string; style?: string };
 
 export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'system',
@@ -138,6 +158,7 @@ export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'root',
   'runtimeImport',
   'closedDynamicImports',
+  'fontPreloads',
 ]);
 
 /** A computed `import()` declared closed: written in `importer` (relative

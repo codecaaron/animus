@@ -15,7 +15,11 @@ import { applyResolvedConfig } from './config';
 import { RESOLVED_CSS_ID } from './constants';
 import { PluginContext } from './context';
 import { cancelSystemReload, handleHotUpdate } from './hmr';
-import { buildIndexHtmlTags, injectHeadTags } from './index-html';
+import {
+  buildIndexHtmlTags,
+  duplicatedFontPreloads,
+  injectHeadTags,
+} from './index-html';
 import { quarantinePlugin } from './quarantine-plugin';
 import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
@@ -24,6 +28,7 @@ import { kitWatchNegations } from './watch-ignored';
 import type {
   AnimusQuarantineOptions,
   ClosedDynamicImport,
+  FontPreloadEntry,
   DiagnosticLevels,
   SourceKitDependency,
   StaticCssConfig,
@@ -102,6 +107,11 @@ export interface AnimusExtractOptions {
    * still load any module.
    */
   closedDynamicImports?: ClosedDynamicImport[];
+  /** The font faces this app preloads, in place of each typed face's own
+   *  `preload` flag, so a face declared once for every product preloads only
+   *  where the app renders it: family names, or `{ family, weight?, style? }`
+   *  (see `FontPreloadEntry`). `[]` preloads none. */
+  fontPreloads?: FontPreloadEntry[];
   /**
    * Substrings, or globs when `*`/`?` present. Replaces the defaults `dist`,
    * `.test.`, `.spec.`; `node_modules`, `.next`, `.animus` always apply.
@@ -357,6 +367,27 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         return (await vendor.plugin()).transform.call(this, code, id);
       }
       return transformSource(ctx, code, id);
+    },
+
+    // After Vite's build-html plugin has applied every index.html hook, so
+    // a preload another plugin adds after Animus's is in the HTML it reads.
+    generateBundle: {
+      order: 'post',
+      handler(_output, bundle) {
+        if (!ctx.served?.fontPreloads.length) return;
+        for (const file of Object.values(bundle)) {
+          if (file.type !== 'asset' || !file.fileName.endsWith('.html')) {
+            continue;
+          }
+          const html = Buffer.from(file.source).toString('utf8');
+          if (!html.includes('data-animus-preload')) continue;
+          for (const href of duplicatedFontPreloads(html)) {
+            ctx.warn(
+              `[animus-extract] ${file.fileName} preloads ${href} twice: Animus's font preload and another preload tag, written in the page or added by a plugin whose index.html hook runs after Animus's, so the browser may fetch it twice. Remove the other preload; Animus's names the URL the stylesheet's url() loads.`
+            );
+          }
+        }
+      },
     },
 
     transformIndexHtml: {

@@ -56,6 +56,7 @@ export {
 export type {
   AnimusCoreOptions,
   ClosedDynamicImport,
+  FontPreloadEntry,
   AnimusMode,
   DriverNamespace,
   ExcludeMatcher,
@@ -183,7 +184,6 @@ export {
 export type { AssetSheets } from './asset-placeholders';
 export {
   costlyFontPreloadDiagnostics,
-  fontPreloadOrigins,
   fontPreloadsModule,
   renderFontPreloads,
   substituteFontPreloads,

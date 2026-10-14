@@ -1,35 +1,13 @@
 /**
- * The font preloads the system's faces ask for (`preload: true`), rendered
- * into the document. Server-only; it imports neither the engine nor Node.
+ * The font preloads the system's faces ask for (`preload: true`, or the
+ * `fontPreloads` option), rendered into the document. Server-only; it
+ * imports neither the engine nor Node.
  */
 import { createElement, Fragment } from 'react';
 import type { ReactElement } from 'react';
-import { preconnect, preload } from 'react-dom';
+import { preload } from 'react-dom';
 
 import preloads from 'virtual:animus/font-preloads';
-
-/** The origins of the absolute hrefs, once each: an asset prefix on
- *  another host makes the bundler's URLs absolute. `fontPreloadOrigins`'s
- *  rule, restated: its module would bring the engine into the bundle. A
- *  malformed href warms no origin, and never fails the render. */
-const ORIGINS = [
-  ...new Set(
-    preloads.flatMap(({ href }) => {
-      if (!/^(?:https?:)?\/\//i.test(href)) return [];
-      try {
-        const { origin } = new URL(href, 'https://animus.invalid');
-        // As authored, port included: parsing would drop a default port.
-        return [
-          href.startsWith('//')
-            ? `//${href.slice(2).split(/[/?#]/)[0]}`
-            : origin,
-        ];
-      } catch {
-        return [];
-      }
-    })
-  ),
-];
 
 /**
  * App Router: render it in the root layout. React hoists each preload into
@@ -37,7 +15,6 @@ const ORIGINS = [
  * `next/font` too. Renders nothing; a no-op when no face preloads.
  */
 export function AnimusFontPreloads(): null {
-  for (const origin of ORIGINS) preconnect(origin, { crossOrigin: '' });
   for (const { href, type } of preloads) {
     preload(href, { as: 'font', type, crossOrigin: '' });
   }
@@ -52,14 +29,6 @@ export function AnimusFontPreloadLinks(): ReactElement {
   return createElement(
     Fragment,
     null,
-    ...ORIGINS.map((origin) =>
-      createElement('link', {
-        key: origin,
-        rel: 'preconnect',
-        href: origin,
-        crossOrigin: '',
-      })
-    ),
     ...preloads.map(({ href, type }) =>
       createElement('link', {
         key: href,

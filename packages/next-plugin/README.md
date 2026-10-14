@@ -176,6 +176,14 @@ stylesheet's `@font-face` applies. The plugin injects nothing into the
 document, so render the component that delivers it. It renders nothing when
 no face preloads.
 
+`fontPreloads` in `withAnimus`'s options selects the faces that preload in
+place of their `preload` flags, for an app that renders only some of a
+system's faces: a family name selects every face of the family, and
+`{ family, weight?, style? }` the faces whose declared weight contains
+`weight` and whose style is `style` (`'normal'` when omitted). `[]` preloads
+none. An entry no face matches reports `animus.style.font-preload-unmatched`;
+a malformed one, such as a weight range, `animus.style.font-preload-invalid`.
+
 **App Router:** render `AnimusFontPreloads` in the root layout. React hoists
 each preload into `<head>` ahead of the stylesheets, and dedupes it by href,
 against `next/font` too.

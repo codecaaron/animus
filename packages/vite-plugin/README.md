@@ -100,12 +100,36 @@ Router examples live in the
 ## Font preloads
 
 A font face declared with `preload: true` gets a
-`<link rel="preload" as="font" crossorigin>` in `<head>`, after the charset
-and viewport metas and ahead of every stylesheet link, with a
-`preconnect` for a file on another origin. Its href is the URL the stylesheet's `url()` loads: the hashed asset
-in a build, the dev server's URL in development. A root-relative or
-absolute URL that `index.html` already preloads gets no second preload; an
-`asset()` file's preload is not compared with one written in the HTML.
+`<link rel="preload" as="font" crossorigin data-animus-preload>` in `<head>`,
+after the charset and viewport metas and ahead of every stylesheet link. Its
+href is the URL the stylesheet's `url()` loads: the hashed asset in a build,
+the dev server's URL in development. A root-relative or absolute URL that
+`index.html` already preloads gets no second preload. A build warns, naming
+the HTML page, when the finished page preloads the same file through another
+tag: one written in the page for an `asset()` file, or one a plugin adds from
+an `index.html` hook that runs after Animus's.
+
+`fontPreloads` selects the faces that preload in place of their `preload`
+flags, for an app that renders only some of a system's faces. A family name
+selects every face of the family; `{ family, weight?, style? }` selects the
+faces whose declared weight contains `weight` (a variable face's range
+`'100 900'` contains 600) and whose style is `style` (`'normal'` when
+omitted):
+
+```ts
+animusExtract({
+  system: './src/ds.ts',
+  fontPreloads: [
+    { family: 'Apercu', weight: 400 },
+    { family: 'Apercu', weight: 'bold' },
+    { family: 'Suisse', weight: 700 },
+  ],
+});
+```
+
+`[]` preloads none. An entry no face matches reports
+`animus.style.font-preload-unmatched`; a malformed one, such as a weight
+range, reports `animus.style.font-preload-invalid`.
 
 A preload competes with the critical CSS and JavaScript for first paint, so
 preload WOFF2 and only the faces the first screen needs: a large TrueType

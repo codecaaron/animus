@@ -220,6 +220,10 @@ pub struct AnalysisContext {
     /// The packages the app imports that have no dependency path to Animus,
     /// by name: their tags never match an Animus component by name.
     pub foreign_packages: Vec<String>,
+    /// The faces the host preloads (its `fontPreloads` option: family
+    /// names, or `{ family, weight?, style? }`), in place of each typed
+    /// face's own `preload` flag; absent, the flags.
+    pub font_preloads: Option<Vec<Value>>,
 }
 
 /// Whether the probe base or candidate `path` names one of the system's
@@ -773,6 +777,8 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::theme::FONT_FACE_DROPPED, "error"),
     (crate::theme::FONT_FACE_GENERIC_FIRST_WORD, "warn"),
     (crate::theme::FONT_FACE_PRELOAD_DROPPED, "warn"),
+    (crate::theme::FONT_PRELOAD_UNMATCHED, "warn"),
+    (crate::theme::FONT_PRELOAD_INVALID, "error"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -9282,7 +9288,8 @@ fn run_with_system_floor(
             }
         }
     }
-    let mut font_preloads = Vec::new();
+    let mut font_preloads =
+        crate::theme::FontPreloads::new(inputs.analysis_context.font_preloads.as_deref());
     let (global_css_raw, unlayered_global_css) = if let Some(blocks) = &inputs.global_style_blocks {
         // Each block's reports name its registration key and the module that
         // declares it; without one, the loaded system stands in.
@@ -9322,6 +9329,27 @@ fn run_with_system_floor(
     } else {
         (String::new(), String::new())
     };
+    for (entry, invalid) in font_preloads.unused() {
+        diagnostics.push(match invalid {
+            Some(why) => diagnostic(
+                "system",
+                "fontPreloads",
+                "error",
+                format!("the host's `fontPreloads` entry {entry} selects nothing: {why}"),
+                Some(crate::theme::FONT_PRELOAD_INVALID),
+            ),
+            None => diagnostic(
+                "system",
+                "fontPreloads",
+                "warn",
+                format!(
+                    "the host's `fontPreloads` entry {entry} matches no typed font face, so nothing preloads for it \
+                     — name a face's `family` as it prints, and a `weight` and `style` the face declares"
+                ),
+                Some(crate::theme::FONT_PRELOAD_UNMATCHED),
+            ),
+        });
+    }
     let keyframes_css_raw = if let Some(blocks) = &inputs.keyframes_blocks {
         let css = crate::theme::resolve_all_keyframes_blocks(blocks, &resolve_ctx, &mut |name| {
             let component = format!("keyframes '{name}'");
@@ -9514,7 +9542,7 @@ fn run_with_system_floor(
             .map(|(path, members)| (path, members.into_iter().collect()))
             .collect(),
         missing_inputs,
-        font_preloads,
+        font_preloads: font_preloads.list,
     }
 }
 
@@ -10850,6 +10878,79 @@ mod tests {
             "{:#?}",
             out.diagnostics
         );
+    }
+
+    /// A host's `fontPreloads` decides which faces preload in place of each
+    /// face's flag: a family name selects every face of the family; an
+    /// object also its weight (contained in a face's declared range) and its
+    /// style (`normal` unless given). An entry matching nothing warns, and a
+    /// malformed one, such as a weight range, is an error.
+    #[test]
+    fn host_selected_faces_preload_in_place_of_each_faces_flag() {
+        let mut inputs = test_inputs();
+        let face = |family: &str, url: &str, weight: Option<&str>, style: Option<&str>| {
+            let mut face = serde_json::json!({ "family": family, "src": [{ "url": url, "format": "woff2" }], "preload": true });
+            if let Some(weight) = weight {
+                face["weight"] = weight.into();
+            }
+            if let Some(style) = style {
+                face["style"] = style.into();
+            }
+            face
+        };
+        inputs.global_style_blocks = Some(serde_json::json!({
+            "fonts": {
+                "styles": {},
+                "fontFaces": [
+                    // gamut's six faces, every one flagged.
+                    face("Apercu", "/apercu-regular.woff2", None, None),
+                    face("Apercu", "/apercu-italic.woff2", None, Some("italic")),
+                    face("Apercu", "/apercu-bold.woff2", Some("bold"), None),
+                    face("Apercu", "/apercu-bold-italic.woff2", Some("bold"), Some("italic")),
+                    face("Suisse", "/suisse-bold.woff2", Some("bold"), None),
+                    face("Suisse", "/suisse-mono.woff2", None, None),
+                    // A variable face declares a range.
+                    face("Mona Sans", "/mona.woff2", Some("200 900"), None)
+                ]
+            }
+        }));
+        let mut selected = |entries: serde_json::Value| {
+            inputs.analysis_context.font_preloads = Some(entries.as_array().unwrap().clone());
+            analyze(&[("a.tsx", "export const x = 1;\n")], &inputs)
+        };
+        let hrefs = |out: &CssOutput| out.font_preloads.iter().map(|p| p.href.clone()).collect::<Vec<_>>();
+        let reports = |out: &CssOutput, code: &str| {
+            out.diagnostics.iter().filter(|d| d.code.as_deref() == Some(code)).map(|d| (d.message.clone(), d.severity.clone())).collect::<Vec<_>>()
+        };
+
+        let out = selected(serde_json::json!([
+            { "family": "Apercu", "weight": 400 },
+            { "family": "apercu", "weight": "bold" },
+            { "family": "Suisse", "weight": 700 },
+            { "family": "Mona Sans", "weight": 600 }
+        ]));
+        assert_eq!(hrefs(&out), ["/apercu-regular.woff2", "/apercu-bold.woff2", "/suisse-bold.woff2", "/mona.woff2"]);
+        assert!(out.diagnostics.iter().all(|d| !d.code.as_deref().is_some_and(|c| c.starts_with("animus.style.font-preload-"))));
+
+        // A family name selects every face of it.
+        assert_eq!(hrefs(&selected(serde_json::json!(["Suisse"]))), ["/suisse-bold.woff2", "/suisse-mono.woff2"]);
+
+        let out = selected(serde_json::json!([
+            { "family": "Mona Sans", "weight": 100 },
+            { "family": "Mona Sans", "weight": "100 900" },
+            "Missing Font"
+        ]));
+        assert!(hrefs(&out).is_empty());
+        assert_eq!(
+            reports(&out, crate::theme::FONT_PRELOAD_UNMATCHED).iter().map(|(m, _)| m.split(" matches").next().unwrap().to_string()).collect::<Vec<_>>(),
+            ["the host's `fontPreloads` entry {\"family\":\"Mona Sans\",\"weight\":100}", "the host's `fontPreloads` entry 'Missing Font'"]
+        );
+        let invalid = reports(&out, crate::theme::FONT_PRELOAD_INVALID);
+        assert_eq!(invalid.len(), 1);
+        assert!(invalid[0].0.contains("is not one weight") && invalid[0].1.as_deref() == Some("error"), "{invalid:?}");
+
+        // An empty selection preloads nothing, whatever the faces ask.
+        assert!(hrefs(&selected(serde_json::json!([]))).is_empty());
     }
 
     #[test]

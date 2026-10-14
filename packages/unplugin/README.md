@@ -85,6 +85,8 @@ plugin first to fix it.
   `renderFontPreloads(preloads, { base, exclude })` returns the `<link>`
   tags for your HTML, where `base` is the URL `animus.css`'s directory is
   served at, and `exclude` lists hrefs the document already preloads.
+  The `fontPreloads` option (family names, or `{ family, weight?, style? }`)
+  selects the faces that preload in place of their `preload` flags.
 
 ## Options
 

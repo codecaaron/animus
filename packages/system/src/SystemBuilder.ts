@@ -117,10 +117,12 @@ export interface FontFace {
    * first `url` source in a format browsers load (an EOT or SVG font is
    * skipped). Order `src` as the browser should prefer it, WOFF2 first.
    * That source must be an `asset()` file or a root-relative or absolute
-   * URL. The host delivers the `<link rel="preload">` (and a
-   * `preconnect` for another origin): Vite injects it into `index.html`;
-   * Next renders it through `AnimusFontPreloads`; Rollup, webpack and the
-   * CLI emit a manifest for `renderFontPreloads`.
+   * URL. The host delivers the `<link rel="preload">`: Vite injects it
+   * into `index.html`; Next renders it through `AnimusFontPreloads`;
+   * Rollup, webpack and the CLI emit a manifest for `renderFontPreloads`.
+   * A host's `fontPreloads` option (family names, or `{ family, weight?,
+   * style? }`) decides instead of this flag, for an app that renders only
+   * some of a system's faces.
    *
    * A preload competes with the critical CSS and JavaScript for the
    * connection: it trades first paint for no font swap. In consumer apps a

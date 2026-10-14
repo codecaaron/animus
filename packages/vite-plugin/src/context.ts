@@ -366,6 +366,7 @@ export class PluginContext {
         engine: options.engine,
         runtimeImport: options.runtimeImport,
         closedDynamicImports: options.closedDynamicImports,
+        fontPreloads: options.fontPreloads,
         mode: this.emissionProd ? 'production' : 'development',
       },
       {

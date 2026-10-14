@@ -253,6 +253,10 @@ function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
       closedDynamicImports: Array.isArray(raw.closedDynamicImports)
         ? raw.closedDynamicImports
         : undefined,
+      // The engine validates each entry and reports a malformed one.
+      fontPreloads: Array.isArray(raw.fontPreloads)
+        ? raw.fontPreloads
+        : undefined,
       mode:
         raw.mode === 'development' || raw.mode === 'production'
           ? raw.mode
@@ -423,6 +427,7 @@ export async function resolveCliConfig(
     layers: pick('layers', undefined),
     runtimeImport: pick('runtimeImport', undefined),
     closedDynamicImports: pick('closedDynamicImports', undefined),
+    fontPreloads: pick('fontPreloads', undefined),
     mode: resolvedMode.mode,
   };
 
@@ -475,6 +480,7 @@ export function projectResolvedConfig(config: ResolvedCliConfig) {
     staticCss: config.options.staticCss ?? null,
     runtimeImport: config.options.runtimeImport ?? null,
     closedDynamicImports: config.options.closedDynamicImports ?? null,
+    fontPreloads: config.options.fontPreloads ?? null,
     exclude: config.excludePatterns,
     provenance: config.provenance,
   };

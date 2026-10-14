@@ -8,7 +8,11 @@ import {
   VIRTUAL_BRIDGE_ID,
 } from '../src/constants';
 import { animusExtract } from '../src/index';
-import { buildIndexHtmlTags, injectHeadTags } from '../src/index-html';
+import {
+  buildIndexHtmlTags,
+  duplicatedFontPreloads,
+  injectHeadTags,
+} from '../src/index-html';
 import { loadVirtualModule } from '../src/virtual-modules';
 import { publicationWith } from './context-probe';
 import {
@@ -188,6 +192,19 @@ describe('head tags after the charset', () => {
     return result;
   }
 
+  test("a preload another hook adds again is told from Animus's own", () => {
+    // A hook running after Animus's sees no reason to skip its own preload;
+    // the build warns for each file both tags name.
+    const html = transformed([
+      { href: '/a.woff2', type: 'font/woff2' },
+      { href: '/b.woff2', type: 'font/woff2' },
+    ]).replace(
+      '</head>',
+      '<link rel="preload" href="/a.woff2" as="font" crossorigin></head>'
+    );
+    expect(duplicatedFontPreloads(html)).toEqual(['/a.woff2']);
+  });
+
   test('a preload of no known type carries no type attribute', () => {
     // An undefined attribute serializes as type="undefined", which a
     // browser must refuse as an unsupported type.
@@ -196,10 +213,10 @@ describe('head tags after the charset', () => {
       { href: '/b' },
     ]);
     expect(html).toContain(
-      '<link rel="preload" href="/a.woff2" as="font" type="font/woff2" crossorigin>'
+      '<link rel="preload" href="/a.woff2" as="font" type="font/woff2" crossorigin data-animus-preload>'
     );
     expect(html).toContain(
-      '<link rel="preload" href="/b" as="font" crossorigin>'
+      '<link rel="preload" href="/b" as="font" crossorigin data-animus-preload>'
     );
     expect(html).not.toContain('undefined');
   });

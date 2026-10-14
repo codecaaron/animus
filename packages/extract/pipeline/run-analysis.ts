@@ -12,6 +12,7 @@ import { checkCustomProperties } from './property-diagnostics';
 import { applyUnitFallback } from './unit-fallback';
 
 import type { AnalyzeProjectInputs } from './analyze-project-args';
+import type { FontPreloadEntry } from './core-options';
 import type { HostAssetClassification } from './host-assets';
 import type { HostLoadExpander } from './host-expansions';
 import type { KitDescriptorRecord } from './kit-descriptor';
@@ -125,6 +126,9 @@ export interface AnalysisContext {
     enclosingFunction: string;
     targets: 'build-chunks';
   }>;
+  /** The host's `fontPreloads` entries, in place of each face's own
+   *  `preload` flag; omitted, the flags decide. */
+  fontPreloads?: FontPreloadEntry[];
 }
 
 /**
@@ -207,7 +211,8 @@ export function analysisContextJson(
       context?.systemModules?.length ||
       context?.configFiles?.length ||
       context?.closedDynamicImports?.length ||
-      context?.foreignPackages?.length
+      context?.foreignPackages?.length ||
+      context?.fontPreloads
     )
   ) {
     return undefined;
@@ -230,6 +235,7 @@ export function analysisContextJson(
     configFiles: context.configFiles ?? [],
     closedDynamicImports: context.closedDynamicImports ?? [],
     foreignPackages: context.foreignPackages ?? [],
+    fontPreloads: context.fontPreloads,
   } satisfies AnalysisContextWire;
   return JSON.stringify(wire);
 }

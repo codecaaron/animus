@@ -541,6 +541,7 @@ const OPTION_CLASSES = {
   mode: digestOf('mode'),
   runtimeImport: digestOf('runtimeImport'),
   closedDynamicImports: digestOf('closedDynamicImports'),
+  fontPreloads: digestOf('fontPreloads'),
   root: 'excluded',
 } as const satisfies {
   [Key in keyof AnimusCoreOptions]-?: OptionDigest<Key> | 'excluded';

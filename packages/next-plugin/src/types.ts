@@ -1,6 +1,7 @@
 import type {
   AnimusQuarantineOptions,
   ClosedDynamicImport,
+  FontPreloadEntry,
   DiagnosticLevels,
   StaticCssConfig,
 } from '@animus-ui/extract/pipeline';
@@ -96,6 +97,11 @@ export interface AnimusNextOptions {
    *  the root, and `enclosingFunction`): each loads only what the build's
    *  own literal `import()`s load, an assumption the analysis records. */
   closedDynamicImports?: ClosedDynamicImport[];
+  /** The font faces this app preloads, in place of each typed face's own
+   *  `preload` flag, so a face declared once for every product preloads only
+   *  where the app renders it: family names, or `{ family, weight?, style? }`
+   *  (see `FontPreloadEntry`). `[]` preloads none. */
+  fontPreloads?: FontPreloadEntry[];
   /**
    * Load third-party stylesheets into `anm-vendor`, a layer below every
    * Animus layer, so their normal rules never beat Animus's. Needs
