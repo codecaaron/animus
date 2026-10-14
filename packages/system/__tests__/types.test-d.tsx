@@ -2011,3 +2011,49 @@ function PublicProps() {
 }
 
 void PublicProps;
+
+// ---------------------------------------------------------------------------
+// Contract: asComponent() forwards a variant or state, by name or with
+// `true`, only to a target whose prop accepts the value it delivers; any
+// other `forward` is a type error naming the name.
+// ---------------------------------------------------------------------------
+
+interface ForwardTargetProps {
+  size?: 'small' | 'large';
+  error?: boolean;
+  label?: string;
+}
+const ForwardTarget = forwardRef<HTMLInputElement, ForwardTargetProps>(
+  ({ label }, ref) => <input ref={ref} aria-label={label} />
+);
+const NarrowTarget = forwardRef<HTMLInputElement, { size?: 'small' }>(
+  (_, ref) => <input ref={ref} aria-label="narrow" />
+);
+const LabelTarget = forwardRef<HTMLInputElement, { label?: string }>(
+  ({ label }, ref) => <input ref={ref} aria-label={label} />
+);
+const forwardBase = ds
+  .styles({})
+  .variant({
+    prop: 'size',
+    defaultVariant: 'small',
+    variants: { small: {}, large: {} },
+  })
+  .states({ error: {} });
+
+function AsComponentForward() {
+  const Listed = forwardBase.asComponent(ForwardTarget, {
+    forward: ['size', 'error'],
+  });
+  const All = forwardBase.asComponent(ForwardTarget, { forward: true });
+  void (<Listed size="large" error label="x" />);
+  void (<All />);
+  // @ts-expect-error — the target's size does not accept 'large'
+  forwardBase.asComponent(NarrowTarget, { forward: ['size'] });
+  // @ts-expect-error — `true` includes error, which the target has no prop for
+  forwardBase.asComponent(LabelTarget, { forward: true });
+  // @ts-expect-error — not a variant or state of the builder
+  forwardBase.asComponent(ForwardTarget, { forward: ['label'] });
+}
+
+void AsComponentForward;

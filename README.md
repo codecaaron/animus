@@ -197,6 +197,7 @@ apps, and `packages/showcase/src/ds.ts` with its live Examples pages.
 - **Pre-built groups**: Import `space`, `color`, `typography`, etc. from `@animus-ui/system/groups` and compose them into your own semantic groups.
 - **Slot composition**: `compose()` wires components into families with shared variant propagation via React context.
 - **Terminals**: `.asElement('div')` for HTML elements, `.asComponent(Existing)` for wrapping React components, `.asClass()` for a headless class resolver with no React component. All three produce typed, extractable output.
+- **Forwarding to an `asComponent` target**: variants and states become classes, so a target never receives them unless the terminal forwards them: `.asComponent(Input, { forward: ['size', 'error'] })`, or `{ forward: true }` for all of them. A forwarded variant arrives as its resolved value (the written one, else its `defaultVariant`), a state as written, and the classes are unchanged. Each forwarded name must be a prop the target accepts with that value, or `forward` is a type error naming it. It is the static, extractable counterpart of Emotion's `shouldForwardProp`: in place of a predicate the runtime asks for every prop, a list the extractor reads at build time.
 
 ## Legacy
 

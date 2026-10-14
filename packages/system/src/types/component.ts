@@ -237,6 +237,56 @@ type TargetClassName<P> = P extends { className?: infer T }
     : T | undefined
   : string | undefined;
 
+/** The variants and states of a builder, by name. */
+type ForwardableName<V, S> = Extract<
+  keyof StripIndex<V> | keyof StripIndex<S>,
+  string
+>;
+
+/**
+ * `asComponent()`'s `forward`: the variants and states its target receives
+ * as props, or `true` for all of them.
+ */
+export type ForwardOption<V, S> = true | readonly ForwardableName<V, S>[];
+
+/** The value a forwarded name delivers: a variant's resolved option, or a
+ *  state's boolean. */
+type ForwardedValue<V, S, K> = K extends keyof StripIndex<V>
+  ? Exclude<VariantProps<V>[K], undefined>
+  : K extends keyof StripIndex<S>
+    ? boolean
+    : never;
+
+/** The names `F` forwards. */
+type ForwardedNames<V, S, F> = F extends true
+  ? ForwardableName<V, S>
+  : F extends readonly unknown[]
+    ? F[number] & string
+    : never;
+
+/** The names `F` forwards that the target `C` takes no prop for, or takes
+ *  one that does not accept the value delivered. */
+type UnacceptedForward<C extends ComponentType<any>, V, S, F> =
+  ForwardedNames<V, S, F> extends infer K extends string
+    ? K extends keyof ComponentPropsWithRef<C>
+      ? [ForwardedValue<V, S, K>] extends [ComponentPropsWithRef<C>[K]]
+        ? never
+        : K
+      : K
+    : never;
+
+/**
+ * `asComponent()`'s options, refused where the target does not accept a
+ * forwarded name: `forward` must then also be a message naming it.
+ */
+export type AsComponentOptions<C extends ComponentType<any>, V, S, F> = {
+  forward?: F;
+} & ([UnacceptedForward<C, V, S, F>] extends [never]
+  ? unknown
+  : {
+      forward: `the target takes no prop for forwarded '${UnacceptedForward<C, V, S, F>}', or one that does not accept its value`;
+    });
+
 /**
  * The wrapped component's own props, with its ref, then exactly what the
  * builder admitted: the active groups' props, variants, states and custom

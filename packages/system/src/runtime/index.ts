@@ -19,7 +19,12 @@ import { reportUncompiledRender } from './uncompiled';
 
 declare const __ANIMUS_DEV__: boolean | undefined;
 
-interface ComponentConfig extends ClassResolverConfig {}
+interface ComponentConfig extends ClassResolverConfig {
+  /** An `asComponent()` target's forwarded variants and states: `true` for
+   *  all of them. Each reaches the target as a prop, a variant as its
+   *  resolved value. */
+  forward?: true | readonly string[];
+}
 
 type ElementType = string | React.ComponentType<any>;
 
@@ -210,7 +215,8 @@ function renderElement(
   props: Record<string, any>,
   ref: ForwardedRef<any>,
   classes: string[],
-  dynamicStyle: Record<string, string> | undefined
+  dynamicStyle: Record<string, string> | undefined,
+  forwardedDefaults: ReadonlyArray<[string, string]>
 ): ReactElement {
   const ownsElement = typeof element === 'string';
   const target = ownsElement ? props.as || element : element;
@@ -225,6 +231,8 @@ function renderElement(
         : joinClassNames(ownClassName, className),
   };
   forwardProps(props, filterProps, domProps);
+  // A forwarded variant the props leave out reaches the target as its default.
+  for (const [name, value] of forwardedDefaults) domProps[name] ??= value;
 
   if (dynamicStyle && !ownsElement && typeof style === 'function') {
     domProps.style = (state: unknown) => ({ ...style(state), ...dynamicStyle });
@@ -247,12 +255,24 @@ export function createComponent(
   const stateProps = config.states || [];
   const systemPropNames = config.systemPropNames || [];
   const ownsPolymorphism = typeof element === 'string';
+  // A component target receives the variants and states it forwards: the
+  // value written, a variant's default where none is.
+  const forward = ownsPolymorphism ? undefined : componentConfig.forward;
+  const forwarded = (name: string) =>
+    forward === true || (forward?.includes(name) ?? false);
   const filterProps = new Set([
     ...(ownsPolymorphism ? ['as', 'asChild'] : []),
-    ...variantProps,
-    ...stateProps,
+    ...variantProps.filter((name) => !forwarded(name)),
+    ...stateProps.filter((name) => !forwarded(name)),
     ...systemPropNames,
   ]);
+  const variantDefaults: Record<string, string> = {};
+  for (const [prop, vc] of Object.entries(config.variants ?? {})) {
+    if (vc.default != null) variantDefaults[prop] = vc.default;
+  }
+  const forwardedDefaults = Object.entries(variantDefaults).filter(([name]) =>
+    forwarded(name)
+  );
 
   const Component = forwardRef(
     (props: Record<string, any>, ref: ForwardedRef<any>) => {
@@ -285,19 +305,13 @@ export function createComponent(
         props,
         ref,
         classes,
-        dynamicStyle
+        dynamicStyle,
+        forwardedDefaults
       );
     }
   );
 
   Component.displayName = className;
-
-  const variantDefaults: Record<string, string> = {};
-  if (config.variants) {
-    for (const [prop, vc] of Object.entries(config.variants)) {
-      if (vc.default != null) variantDefaults[prop] = vc.default;
-    }
-  }
 
   // An extension's extracted config reads the callables it inherits from
   // here, so they keep the scope of the module that declares them.

@@ -32,6 +32,8 @@ import type { ClassResolverConfig } from './runtime/resolveClasses';
 import type {
   AnimusComponent,
   AnimusWrappedComponent,
+  AsComponentOptions,
+  ForwardOption,
   BuilderClassProps,
 } from './types/component';
 import type {
@@ -151,9 +153,13 @@ export class AnimusExtendedWithAll<
 
   // The constraint stays the fixed `ComponentType<any>`: an inferred `P` in
   // `C extends ComponentType<P>` silently stops checking the argument.
-  asComponent<C extends ComponentType<any>>(AsComponent: C) {
+  asComponent<
+    C extends ComponentType<any>,
+    const F extends ForwardOption<Variants, States> = never,
+  >(AsComponent: C, options?: AsComponentOptions<C, Variants, States, F>) {
     const config = {
       ...this._buildComponentConfig(),
+      ...(options?.forward === undefined ? {} : { forward: options.forward }),
       uncompiled: uncompiledDefinition(
         `a component wrapping ${AsComponent.displayName || AsComponent.name || 'an anonymous component'}`
       ),

@@ -5,13 +5,50 @@ use oxc::ast::ast::{Argument, CallExpression, Expression};
 use oxc::span::Span;
 
 use super::expr::{static_member_path, unwrap_type_assertions};
-use super::TerminalKind;
+use super::{Forward, TerminalKind};
 
 /// The terminal argument: a static name, or a bail. A placeholder is not an
 /// option — `createComponent(unknown, …)` is a runtime ReferenceError.
 pub(super) enum TerminalArg {
     Resolved(String),
     Unresolvable(String),
+}
+
+/// `.asComponent(Target, { forward })`'s `forward`: `true`, or the names an
+/// array of string literals lists. No second argument forwards nothing; any
+/// other is a bail reason.
+pub(super) fn extract_forward(call: &CallExpression<'_>) -> Result<Option<Forward>, String> {
+    let Some(options) = call.arguments.get(1) else {
+        return Ok(None);
+    };
+    let unread = || "are not an object literal of `forward: true` or an array of string literals".to_string();
+    let Some(Expression::ObjectExpression(object)) = options.as_expression().map(unwrap_type_assertions) else {
+        return Err(unread());
+    };
+    let mut forward = None;
+    for property in &object.properties {
+        let oxc::ast::ast::ObjectPropertyKind::ObjectProperty(property) = property else {
+            return Err(unread());
+        };
+        if property.computed || property.key.static_name().as_deref() != Some("forward") {
+            return Err(unread());
+        }
+        forward = Some(match unwrap_type_assertions(&property.value) {
+            Expression::BooleanLiteral(flag) if flag.value => Forward::All,
+            Expression::ArrayExpression(names) => Forward::Names(
+                names
+                    .elements
+                    .iter()
+                    .map(|element| match element.as_expression().map(unwrap_type_assertions) {
+                        Some(Expression::StringLiteral(name)) => Ok(name.value.to_string()),
+                        _ => Err(unread()),
+                    })
+                    .collect::<Result<_, _>>()?,
+            ),
+            _ => return Err(unread()),
+        });
+    }
+    Ok(forward)
 }
 
 pub(super) fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &TerminalKind) -> TerminalArg {

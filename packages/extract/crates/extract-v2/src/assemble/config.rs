@@ -188,6 +188,9 @@ pub(super) fn build_config(
     if !states.is_empty() {
         config.insert("states", json!(states));
     }
+    if let Some(forward) = &chain.descriptor.forward {
+        config.insert("forward", forward.to_json());
+    }
 
     let Some(p) = payload else {
         return Ok(config.render());
