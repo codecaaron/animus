@@ -149,8 +149,14 @@ export interface ProjectManifest {
   missing_inputs?: ManifestMissingInput[];
   /** The font files the emitted faces ask to preload, in emission order;
    *  absent where none does. */
-  font_preloads?: FontPreload[];
+  font_preloads?: ManifestFontPreload[];
   timing: ManifestTiming;
+}
+
+/** A preloaded font file and the faces that preload it, named as their
+ *  reports name them: by their flags, or by the host's `fontPreloads`. */
+export interface ManifestFontPreload extends FontPreload {
+  faces: string[];
 }
 
 /** An extension dropped over its parent: the typed evidence a host's

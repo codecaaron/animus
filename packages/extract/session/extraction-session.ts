@@ -262,6 +262,7 @@ import type {
   IngestionOpening,
   LightningTargets,
   ManifestDiagnostic,
+  ManifestFontPreload,
   ProjectManifest,
   SourceCorpus,
   SourceIngestorHost,
@@ -2922,19 +2923,17 @@ export class ExtractionSession {
 
     // Substitution happens before assembly so every CSS consumer receives
     // substituted urls. Pruning: every full pass, incremental on request.
+    // A preload's faces serve only the cost report; hosts get href and type.
     const { sheets, fontPreloads } = this.substituteAssetReferences(
       {
         variableCss: system.variableCss,
         globalCss: result.globalCss,
         componentCss: result.componentCss,
       },
-      manifest?.font_preloads,
+      manifest?.font_preloads?.map(({ faces: _faces, ...preload }) => preload),
       !devMode || this.staleAssetPruning === 'every-cycle'
     );
-    this.reportCostlyFontPreloads(
-      manifest?.font_preloads,
-      system.globalStyleBlocksJson
-    );
+    this.reportCostlyFontPreloads(manifest?.font_preloads);
 
     const { declaration, variables, body } = assembleStylesheet({
       layers: this.options.layers,
@@ -3691,12 +3690,11 @@ export class ExtractionSession {
   /** Warns of each preload that costs first paint, once per session: every
    *  edit analyses again, and an unchanged face is no news. */
   private reportCostlyFontPreloads(
-    preloads: FontPreload[] | undefined,
-    globalStyleBlocksJson: string | null
+    preloads: ManifestFontPreload[] | undefined
   ): void {
     const diagnostics = costlyFontPreloadDiagnostics(
       preloads,
-      globalStyleBlocksJson,
+      this.options.fontPreloads !== undefined,
       (specifier) => {
         const path = this.resolveAssetSpecifier(specifier);
         if (path === null) return undefined;

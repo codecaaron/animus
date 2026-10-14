@@ -233,6 +233,7 @@ export type { CssDiagnosticLike } from './error-diagnostics';
 export { assertNoErrorDiagnostics } from './error-diagnostics';
 export type {
   ManifestComponentDescriptor,
+  ManifestFontPreload,
   ManifestMissingInput,
   ManifestComponentSheets,
   ManifestSheets,

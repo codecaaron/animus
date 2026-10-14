@@ -2758,6 +2758,8 @@ pub struct FontPreload {
     /// The MIME type of the source's format, where it names a known one.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub mime: Option<&'static str>,
+    /// The faces that preload it, named as their reports name them.
+    pub faces: Vec<String>,
 }
 
 /// The formats no current browser loads, by `format` or by extension: a
@@ -2965,7 +2967,7 @@ fn preload_source(sources: &[&Value]) -> Result<FontPreload, String> {
         .1
         .and_then(font_mime)
         .or_else(|| extension_of(url).as_deref().and_then(font_mime));
-    Ok(FontPreload { href: url.to_string(), mime })
+    Ok(FontPreload { href: url.to_string(), mime, faces: Vec::new() })
 }
 
 /// A global block's typed font faces, each a `@font-face` rule: the family,
@@ -3053,8 +3055,10 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext, preloads: &mut FontPre
         if asked {
             match preload_source(&kept) {
                 Ok(preload) => {
-                    if !preloads.list.iter().any(|known| known.href == preload.href) {
-                        preloads.list.push(preload);
+                    match preloads.list.iter_mut().find(|known| known.href == preload.href) {
+                        Some(known) if known.faces.contains(&name) => {}
+                        Some(known) => known.faces.push(name.clone()),
+                        None => preloads.list.push(FontPreload { faces: vec![name.clone()], ..preload }),
                     }
                 }
                 Err(reason) => preload_dropped(reason),
