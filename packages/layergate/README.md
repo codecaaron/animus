@@ -90,11 +90,14 @@ Font, keyframe and property names are global, whatever their layer.
 ## Not yet
 
 - CSS Modules, Sass, Less and Stylus are left to Vite.
-- An app stylesheet's own `@import` of an owned file is inlined by Vite
-  itself, which never asks plugins, so that copy stays unlayered. Import
-  owned stylesheets from JS, or list them in `sheets`.
-- Each owned stylesheet is finished on its own: a file two of them import
-  appears in both.
+- An owned file can arrive more than once. A stylesheet Vite loads
+  itself, such as an app sheet whose `@import` reaches an owned file, is
+  finished by layergate too: its own rules stay unlayered and the owned
+  file is inlined layered, so no unlayered copy escapes. But each finished
+  stylesheet stands on its own, so the same owned file reached from two of
+  them is delivered in both, each copy layered. One delivery per file
+  across the document would need a document-wide registry, a possible
+  later increment.
 - App CSS is left alone unless you list it in `sheets`. CSS that loads
   before `virtual:layergate`, or another tool's layer order statement that
   comes first, can still place your layers after `vendor`.
@@ -104,11 +107,26 @@ Font, keyframe and property names are global, whatever their layer.
 - A host's PostCSS runs once, over each finished stylesheet, not per file.
 - Vite only, for now. webpack and Next come next; Turbopack after.
 
+## Delivering from a host stylesheet
+
+A tool with its own stylesheet module can deliver the declared sheets at
+its head instead of through `virtual:layergate`: pass `declaredBy` (the
+module's specifier, which an owned stylesheet a JS module imports then
+loads first), and prepend `await plugin.stylesheetHead.call(this, id)` to
+that module's CSS in its `load` hook. The head uses root-relative URLs, so
+assets resolve from a virtual module too; a file outside the Vite root is
+reached through `/@fs/`, its directory added to `server.fs.allow` in
+development, and emitted as an asset in a build. Animus's `quarantine`
+option works this way.
+
 ## Core API
 
-`compileUnit(root, { layer, order, resolve, read, quarantined, base, cache })`
-compiles one stylesheet graph with the host's resolver and file reader, and
-returns the finished CSS, a source map, the files read and the diagnostics.
+`compileUnit(roots, { layer, order, resolve, read, quarantined, owns, url, base, cache })`
+compiles stylesheet graphs, in order, into one finished stylesheet with the
+host's resolver and file reader, and returns the CSS, a source map, the files
+read, whether anything was layered, and the diagnostics. `owns` says which
+files start an owned graph (default: all), and `url` maps a referenced file
+to its URL text (default: relative to the first root).
 `base` is the directory generated layer names are relative to (the project
 root), so they are the same on every machine. `cache` keeps parsed files
 between compiles; drop a file's entry when it changes. The Vite adapter is built on it.

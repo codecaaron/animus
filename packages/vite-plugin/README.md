@@ -118,10 +118,12 @@ animusExtract({
 });
 ```
 
-`sheets` arrive with the modules that import Animus's stylesheet (every
-module with an extracted component), so no extra import is needed.
+`sheets` arrive at the head of Animus's own stylesheet, wherever it is
+imported, so no extra import is needed. Their fonts and images keep
+resolving, files outside the project root included.
 `!important` declarations and animations still win, and are reported. App
-CSS and CSS Modules are left alone.
+CSS keeps its own rules unlayered; where it imports a vendor file, that file
+is layered. CSS Modules are left alone.
 
 ## MDX
 

@@ -8,31 +8,19 @@ import { extname, relative } from 'path';
 
 import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
 import { invalidateFileModules } from './module-invalidation';
-import { LAYERGATE_ENTRY_ID } from './quarantine';
 import { droppedExtensions, reconcileSourceCorpus } from './rediscovery';
 import { applyPublished, changesOf, mergePublished } from './session-outcomes';
 
 import type { ObservedOutcome, PluginContext } from './context';
 
 /**
- * The imports a component module's transformed code gains: layergate's
- * stylesheets, ahead of Animus's own the code imports (with `quarantine`),
- * and in development the bridge, so SSR hosts that never invoke
- * transformIndexHtml still adopt CSS on hydration. They go after the
- * directive prologue: above it, 'use client' becomes an ordinary expression
- * and the module loses its client marking.
+ * The import goes after the directive prologue: above it, 'use client'
+ * becomes an ordinary expression and the module loses its client marking.
  */
-export function applyDeliveryImports(ctx: PluginContext, code: string): string {
-  const imports = [
-    ...(ctx.options.quarantine ? [LAYERGATE_ENTRY_ID] : []),
-    ...(ctx.isProd ? [] : [VIRTUAL_BRIDGE_ID]),
-  ];
-  if (imports.length === 0) return code;
+export function applyDevBridgeImport(code: string): string {
   const prologue = /^(?:(['"])use [a-z -]+\1;?\r?\n)*/.exec(code)?.[0] ?? '';
   return (
-    prologue +
-    imports.map((specifier) => `import '${specifier}';\n`).join('') +
-    code.slice(prologue.length)
+    prologue + `import '${VIRTUAL_BRIDGE_ID}';\n` + code.slice(prologue.length)
   );
 }
 
@@ -202,8 +190,11 @@ export async function transformSource(
       ctx.trace(`transform ${relativePath}: ${compCount} components`);
     }
 
-    const outputCode = applyDeliveryImports(ctx, result.code);
+    // Every component-bearing dev module imports the bridge, so SSR hosts
+    // that never invoke transformIndexHtml still adopt CSS on hydration.
+    let outputCode = result.code;
     if (!ctx.isProd) {
+      outputCode = applyDevBridgeImport(result.code);
       // The hot-update gate re-transforms after an edit and compares against
       // exactly these bytes to decide whether an update carries anything new.
       ctx.recordTransformOutput(relativePath, outputCode);

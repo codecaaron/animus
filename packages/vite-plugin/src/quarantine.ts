@@ -2,20 +2,17 @@
  * The `quarantine` option: third-party stylesheets loaded by layergate (an
  * optional peer dependency) into `anm-vendor`, below every Animus layer.
  * Animus runs layergate's hooks from its own, so the plugin stays one
- * object, and delivers layergate's stylesheets from the same modules that
- * deliver its own, ahead of them.
+ * object, and its stylesheet module begins with the declared sheets, so
+ * they arrive wherever Animus's stylesheet does.
  */
 import { ANIMUS_LAYERS } from '@animus-ui/extract/pipeline';
 
 export const VENDOR_LAYER = 'anm-vendor';
 
-/** The module delivering the layer order and the declared sheets. */
-export const LAYERGATE_ENTRY_ID = 'virtual:layergate';
-
 /** layergate's options, minus the layer and order Animus fixes. Declared
  *  here, so Animus's types never name the optional peer. */
 export interface AnimusQuarantineOptions {
-  /** Stylesheets always delivered, in this order, ahead of Animus's own:
+  /** Stylesheets delivered, in this order, at the head of Animus's own:
    *  package specifiers or paths relative to the Vite root. */
   sheets?: string[];
   /** Also load `.css` a JS module imports from a package other than the

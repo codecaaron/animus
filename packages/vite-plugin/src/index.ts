@@ -11,6 +11,7 @@ import { resolve } from 'path';
 
 import { runBuildStart } from './build-start';
 import { applyResolvedConfig } from './config';
+import { RESOLVED_CSS_ID } from './constants';
 import { PluginContext } from './context';
 import { cancelSystemReload, handleHotUpdate } from './hmr';
 import { buildIndexHtmlTags } from './index-html';
@@ -329,12 +330,23 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     async load(id) {
-      const loaded = await (await vendor?.plugin())?.load.call(this, id);
+      const layergate = await vendor?.plugin();
+      const loaded = await layergate?.load.call(this, id);
       if (loaded) return loaded;
-      return loadVirtualModule(ctx, id);
+      const own = loadVirtualModule(ctx, id);
+      // Animus's stylesheet begins with the declared vendor sheets, so they
+      // arrive wherever it does, whatever imports it.
+      if (layergate && id === RESOLVED_CSS_ID && own !== null) {
+        return (await layergate.stylesheetHead.call(this, id)) + own;
+      }
+      return own;
     },
 
-    transform(code, id) {
+    async transform(code, id) {
+      // A stylesheet layergate finishes is never an Animus source.
+      if (vendor && id.endsWith('.css')) {
+        return (await vendor.plugin()).transform.call(this, code, id);
+      }
       return transformSource(ctx, code, id);
     },
 
@@ -346,9 +358,13 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     async hotUpdate(hmr) {
+      // As Vite chains plugins: Animus's handler receives the modules
+      // layergate settled on.
       const vendorModules = (await vendor?.plugin())?.hotUpdate.call(this, hmr);
-      if (vendorModules) return vendorModules;
-      return handleHotUpdate(ctx, this.environment, hmr);
+      const next = vendorModules ? { ...hmr, modules: vendorModules } : hmr;
+      return (
+        (await handleHotUpdate(ctx, this.environment, next)) ?? vendorModules
+      );
     },
   };
 }

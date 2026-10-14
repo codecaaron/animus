@@ -3,6 +3,7 @@
  * layergate is an optional peer. Kept apart from `./quarantine`, whose types
  * Animus publishes, so they never name the peer.
  */
+import { VIRTUAL_CSS_ID } from './constants';
 import { VENDOR_LAYER, withVendorLayer } from './quarantine';
 
 import type { AnimusQuarantineOptions } from './quarantine';
@@ -38,5 +39,11 @@ async function load(
       { cause }
     );
   }
-  return layergate({ ...options, layer: VENDOR_LAYER, order });
+  // Animus's stylesheet delivers the declared sheets, at its head.
+  return layergate({
+    ...options,
+    layer: VENDOR_LAYER,
+    order,
+    declaredBy: VIRTUAL_CSS_ID,
+  });
 }
