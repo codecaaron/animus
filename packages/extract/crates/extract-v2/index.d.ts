@@ -249,6 +249,14 @@ export interface NapiSystemConfig {
   loadFindingsJson?: string
 }
 
+/**
+ * What each file of a package the analysis does not read loads, so the
+ * host can judge whether the package reaches only what its manifest
+ * declares. A file may load any module through a computed load, code from
+ * a string, an escaped loader, or a source that does not parse.
+ */
+export declare function packageLoads(fileEntriesJson: string): string
+
 export declare function probeFile(candidates: Array<string>, within?: string | undefined | null): NapiProbedFile
 
 /**

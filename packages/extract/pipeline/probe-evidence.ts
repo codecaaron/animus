@@ -34,6 +34,10 @@ export interface HostReadings {
   adapted?: ReadonlyMap<string, readonly string[]>;
   /** How the host's bundler expands computed loads (spec §6.3). */
   expander?: HostLoadExpander;
+  /** The engine's reading of what each file of an unread local package
+   *  loads (`packageLoads`). Without it, a local package may reach any
+   *  module. */
+  packageLoads?: (filesJson: string) => string;
 }
 
 /** The session's evidence for the probe bases, computed loads and unread
@@ -164,7 +168,12 @@ export function gatherProbeEvidence(
             readings.expander,
             readings.isAsset
           );
-    const reaches = packageReaches(root, packages, analysed);
+    const reaches = packageReaches(
+      root,
+      packages,
+      analysed,
+      readings.packageLoads
+    );
     generations += 1;
     return JSON.stringify({
       generation: generations,

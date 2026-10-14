@@ -40,6 +40,9 @@ export interface EngineApi {
    *  read (`ExtractModuleFactsResult`), without the statics, usage and
    *  object facts. */
   extractModuleFacts?: (filesJson: string) => string;
+  /** What each file of an unread local package loads, and whether it may
+   *  load any module (`packageLoads`). */
+  packageLoads?: (filesJson: string) => string;
   /** Each file's run-time module specifiers, for the kit publication check. */
   moduleSpecifiers?: (filesJson: string, pathAliasesJson?: string) => string;
   /** Which kits a system file's roots extend or include, from the
@@ -210,6 +213,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         native.loadSystemModule(...args),
       extractFacts: (filesJson) => native.extractFacts(filesJson),
       extractModuleFacts: (filesJson) => native.extractModuleFacts(filesJson),
+      packageLoads: (filesJson) => native.packageLoads(filesJson),
       moduleSpecifiers: (filesJson, pathAliasesJson) =>
         native.moduleSpecifiers(filesJson, pathAliasesJson),
       systemMembership: (inputsJson) => native.systemMembership(inputsJson),

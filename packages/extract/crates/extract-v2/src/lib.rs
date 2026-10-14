@@ -557,6 +557,59 @@ pub fn extract_module_facts(file_entries_json: String) -> napi::Result<String> {
         .map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
 }
 
+/// What one file of a package the analysis does not read loads: each
+/// specifier a runtime `import`, re-export, `import()` or load call names,
+/// and why the file may load any module, if it may.
+#[derive(serde::Serialize)]
+struct PackageFileLoads {
+    specifiers: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    open: Option<String>,
+}
+
+/// What each file of a package the analysis does not read loads, so the
+/// host can judge whether the package reaches only what its manifest
+/// declares. A file may load any module through a computed load, code from
+/// a string, an escaped loader, or a source that does not parse.
+#[napi]
+pub fn package_loads(file_entries_json: String) -> napi::Result<String> {
+    use crate::loads::{LoadKind, LoadTarget};
+    let entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
+        .map_err(|e| napi::Error::from_reason(format!("invalid file entries JSON: {e}")))?;
+    let store = ast_store::AstStore::build(
+        entries.into_iter().map(|e| ast_store::FileEntry { path: e.path, source: e.source }).collect(),
+    );
+    let files: BTreeMap<String, PackageFileLoads> = store
+        .iter()
+        .map(|ast| {
+            let program = ast.program();
+            let mut specifiers = std::collections::BTreeSet::new();
+            let mut open = (ast.panicked || !ast.diagnostics.is_empty()).then(|| "does not parse".to_string());
+            for load in crate::loads::collect(program) {
+                if matches!(load.kind, LoadKind::Import { runtime: false, .. } | LoadKind::Reexport { runtime: false }) {
+                    continue;
+                }
+                match load.target {
+                    LoadTarget::Specifier(specifier) => {
+                        specifiers.insert(specifier);
+                    }
+                    _ => {
+                        open.get_or_insert_with(|| "makes a computed load".to_string());
+                    }
+                }
+            }
+            let scoping = oxc::semantic::SemanticBuilder::new().build(program).semantic.into_scoping();
+            let escape = crate::usage_facts::dynamic_code(program, &scoping)
+                .or_else(|| crate::usage_facts::loader_escape(program, &scoping));
+            if let Some(how) = escape {
+                open.get_or_insert_with(|| how.to_string());
+            }
+            (ast.path.clone(), PackageFileLoads { specifiers: specifiers.into_iter().collect(), open })
+        })
+        .collect();
+    serde_json::to_string(&files).map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
+}
+
 /// Full per-file fact extraction, one parse per file. The store and its
 /// ASTs drop on return: no `program()` read survives cross-file resolve.
 #[napi]

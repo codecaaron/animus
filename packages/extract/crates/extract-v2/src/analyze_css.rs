@@ -1128,18 +1128,31 @@ fn is_tool_config(file: &str) -> bool {
             || stem.strip_suffix(".config").is_some_and(|tool| CONFIG_TOOLS.contains(&tool)))
 }
 
+/// Whether `file` is a config root: a build configuration the host
+/// declares, or a well-known tool config file in the analysis root.
+fn is_config_root(file: &str, inputs: &CssInputs) -> bool {
+    is_tool_config(file) || inputs.analysis_context.config_files.iter().any(|declared| declared == file)
+}
+
+/// The config files no app code imports, which the safety relations skip:
+/// a config runs in its tool, never in the app, so nothing it does changes
+/// an object the app reads. A module a config imports is not skipped,
+/// config-only or not: it may be an app entry no analysed module imports
+/// (`src/main.tsx`, which a prerendering config also imports), whose code
+/// runs in the app too.
+pub(crate) fn config_files(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> BTreeSet<String> {
+    config_only(files, inputs).iter().filter(|file| is_config_root(file, inputs)).cloned().collect()
+}
+
 /// The config-only modules: what the config roots (a build configuration
 /// the host declares, or a well-known tool config file in the analysis
 /// root) import, transitively, that no other module can reach. A config
 /// runs in its tool, never in the app, so an unanalysed import of one opens
-/// nothing the app renders, and nothing it does changes an object the app
-/// reads. A config file app code imports, and a module a config imports
-/// beside app code, are not config-only.
+/// nothing the app renders. A config file app code imports, and a module a
+/// config imports beside app code, are not config-only.
 pub(crate) fn config_only<'i>(files: &BTreeMap<String, FileFacts>, inputs: &'i CssInputs) -> &'i BTreeSet<String> {
     inputs.config_only.get_or_init(|| {
-        let declared: BTreeSet<&str> = inputs.analysis_context.config_files.iter().map(String::as_str).collect();
-        let roots: Vec<&String> =
-            files.keys().filter(|file| declared.contains(file.as_str()) || is_tool_config(file)).collect();
+        let roots: Vec<&String> = files.keys().filter(|file| is_config_root(file, inputs)).collect();
         if roots.is_empty() {
             return BTreeSet::new();
         }

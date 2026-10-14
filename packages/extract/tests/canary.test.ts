@@ -597,11 +597,14 @@ test.each([
 // or a dependency (spec §6.3). A load of `@reg/pkg` keeps `pad` extractable
 // when the host finds the package installed from a registry, in a pnpm store
 // too, and declaring no local package, or finds it local (a workspace link or
-// a `file:` copy) depending on nothing that holds `pad`. A local package it
+// a `file:` copy) whose code, read from its entry, loads nothing that holds
+// `pad`: a builtin or its own files. A local package the registry package
 // declares directly, through a registry dependency or as a `file:` copy
-// under node_modules, a workspace link that depends on the kit or on the app,
-// one whose manifest cannot be read, or a `react` alias onto the module that
-// holds `pad` keeps the opening.
+// under node_modules, a workspace link whose code loads the kit or the app,
+// declared or not, even where the app names the kit's module through a
+// symlinked directory, one whose manifest cannot be read, whose code reaches
+// app source by a relative path or makes a computed load, or a `react` alias
+// onto the module that holds `pad` keeps the opening.
 test.each([
   ['installed from a registry', {}, 'tokens.ts', true],
   ['in a pnpm store', { store: true }, 'tokens.ts', true],
@@ -609,15 +612,50 @@ test.each([
   ['copied in by a file: dependency', { copied: true }, 'tokens.ts', true],
   ['declaring the local kit', { declares: true }, 'kit/tokens.ts', false],
   [
-    'linked from the workspace, declaring the local kit',
-    { linked: true, declares: true },
+    'linked from the workspace, loading the local kit it declares',
+    { linked: true, declares: true, code: "require('@local/kit/tokens');\n" },
     'kit/tokens.ts',
     false,
   ],
   [
-    'linked from the workspace, depending on the app',
-    { linked: true, app: true },
+    'linked from the workspace, loading the app it depends on',
+    { linked: true, app: true, code: "require('app/tokens');\n" },
     'tokens.ts',
+    false,
+  ],
+  [
+    'linked from the workspace, loading a builtin and its own files',
+    { linked: true, code: "require('node:path');\nrequire('./index.cjs');\n" },
+    'tokens.ts',
+    true,
+  ],
+  [
+    'linked from the workspace, reaching app source by a relative path',
+    { linked: true, code: "require('../tokens').pad.padding = 16;\n" },
+    'tokens.ts',
+    false,
+  ],
+  [
+    'linked from the workspace, loading an undeclared hoisted package',
+    { linked: true, code: "require('@local/kit/tokens');\n" },
+    'kit/tokens.ts',
+    false,
+  ],
+  [
+    'linked from the workspace, with a computed load',
+    { linked: true, code: 'module.exports = (name) => require(name);\n' },
+    'tokens.ts',
+    false,
+  ],
+  [
+    'linked from the workspace, declaring the kit the app reads through a symlinked directory',
+    {
+      linked: true,
+      declares: true,
+      throughLink: true,
+      code: "require('@local/kit/tokens');\n",
+    },
+    'src/linked/tokens.ts',
     false,
   ],
   [
@@ -650,6 +688,8 @@ test.each([
       copied?: boolean;
       declares?: boolean;
       app?: boolean;
+      code?: string;
+      throughLink?: boolean;
       unreadable?: boolean;
       through?: boolean;
       copiesKit?: boolean;
@@ -706,7 +746,13 @@ test.each([
     } else {
       manifest('node_modules/@reg/pkg', '@reg/pkg', registry);
     }
+    // The package's entry, which a local package's reach reads.
+    writeFileSync(
+      join(root, 'node_modules/@reg/pkg/index.cjs'),
+      layout.code ?? ''
+    );
     manifest('node_modules/@reg/dep', '@reg/dep', { '@local/kit': '1.0.0' });
+    if (layout.throughLink) link('src/linked', 'kit');
     const tokensImport = './' + tokens.replace(/\.ts$/, '');
     const analysed = {
       [tokens]: 'export const pad = { padding: 4 };\n',
@@ -728,7 +774,8 @@ test.each([
     const evidence = gatherProbeEvidence(
       root,
       new Set(Object.keys(analysed)),
-      undefined
+      undefined,
+      { packageLoads: v2.packageLoads }
     )(prepared.bases, prepared.identity, prepared.loads, prepared.packages);
     const css = JSON.parse(engine.analyze(filesJson, evidence)).css;
     rmSync(root, { recursive: true, force: true });

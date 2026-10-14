@@ -741,10 +741,9 @@ impl<'f> ObjectMembers<'f> {
             }
         }
         let mut by_name: Option<FxHashMap<String, Vec<Object>>> = None;
-        // A config-only module runs in its tool, never in the app, so
-        // nothing it does changes what the app renders.
-        let config_only = crate::analyze_css::config_only(files, inputs);
-        for (module, ff) in files.iter().filter(|(module, _)| !config_only.contains(*module)) {
+        // A config file runs in its tool, never in the app (`config_files`).
+        let config_files = crate::analyze_css::config_files(files, inputs);
+        for (module, ff) in files.iter().filter(|(module, _)| !config_files.contains(*module)) {
             for (name, used) in &ff.unsafe_object_uses {
                 let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
                 let reason = format!("{name} {} in {module}{line}", used.what);

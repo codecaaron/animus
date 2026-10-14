@@ -290,7 +290,7 @@ export function runProjectAnalysis(
     reportErrors?: (message: string) => void;
   }
 ): ProjectAnalysisResult {
-  const { analyzeProject, diagnosticCodes } = engineApi();
+  const { analyzeProject, diagnosticCodes, packageLoads } = engineApi();
 
   let t = performance.now();
   const inputs = buildAnalysisInputs(opts);
@@ -310,6 +310,7 @@ export function runProjectAnalysis(
               isAsset: opts.assets?.isAsset,
               adapted: opts.adapted,
               expander: opts.loadExpander,
+              packageLoads,
             }
           )
     )

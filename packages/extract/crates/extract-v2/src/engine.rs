@@ -1245,10 +1245,9 @@ impl ExtractEngine {
         // object (`styles(preset)`) only reads a static; both record a
         // module's openings through one recorder, in the same words.
         let mut flow = crate::flow::FlowBuilder::new();
-        // A config-only module runs in its tool, never in the app, so
-        // nothing it does changes what the app renders.
-        let config_only = analyze_css::config_only(&structural_by_file, &self.opts.css_inputs);
-        style_modules.retain(|file, _| !config_only.contains(file));
+        // A config file runs in its tool, never in the app (`config_files`).
+        let config_files = analyze_css::config_files(&structural_by_file, &self.opts.css_inputs);
+        style_modules.retain(|file, _| !config_files.contains(file));
         record_style_changes(
             &style_modules,
             &imports_by_file,
@@ -3811,6 +3810,41 @@ export const App = () => <Box tone="red" />;
                 assert!(named.contains(said), "{said}: {named}");
             }
         }
+    }
+
+    /// Contract: a module a config imports is judged as app code. An app
+    /// entry no analysed module imports (a prerendering config imports it)
+    /// runs in the app, so a mutation it imports still unsettles what a
+    /// style reads; only the config file itself runs in its tool alone.
+    #[test]
+    fn a_module_a_config_imports_is_judged_as_app_code() {
+        let base = [
+            ("system.ts", "import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem().build().seal();\n"),
+            ("tokens.ts", "export const pad = { padding: '8px' };\n"),
+            ("mutate.ts", "import { pad } from './tokens';\npad.padding = '16px';\n"),
+            (
+                "src/main.tsx",
+                "import '../mutate';\nimport { ds } from '../system';\nimport { pad } from '../tokens';\nexport const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+            ),
+        ];
+        let stale = |config: &str| {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let mut files = base.to_vec();
+            files.push(("vite.config.ts", config));
+            // Without the app's own mutation, only the config's remains.
+            if !config.contains("src/main") {
+                files.retain(|(path, _)| *path != "mutate.ts");
+                files[2].1 = "import { ds } from '../system';\nimport { pad } from '../tokens';\nexport const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n";
+            }
+            let json = serde_json::Value::Array(
+                files.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect(),
+            )
+            .to_string();
+            engine.analyze(json, None).unwrap().contains("padding: 8px")
+        };
+        assert!(!stale("import { App } from './src/main';\nexport default { plugins: [{ name: 'prerender', buildEnd() { void App; } }] };\n"));
+        // A mutation the config file itself makes runs in its tool.
+        assert!(stale("import { pad } from './tokens';\npad.padding = '16px';\nexport default {};\n"));
     }
 
     #[test]

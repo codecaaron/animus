@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { builtinModules } from 'node:module';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
-import { bareSpecifierPackageName } from './discover-packages';
+import { bareSpecifierPackageName, exportsSubpaths } from './discover-packages';
+import { isJsonBlock, isJsonString, type JsonValue } from './tsconfig-paths';
 
 /** An unread package the engine's `prepare` lists, as a module names it. */
 export interface PreparedPackage {
@@ -24,6 +26,17 @@ export interface PackageReach {
 /** The most packages a package's dependencies are followed through; past
  *  it, the package keeps its reach over every module. */
 const DEPENDENCY_BOUND = 4000;
+
+/** The most modules of local packages one package's reach reads; past it,
+ *  the package keeps its reach over every module. */
+const SOURCE_FILE_BOUND = 5000;
+
+/** The modules a local package's code runs that `packageLoads` reads; a
+ *  JSON file or an asset loads nothing. */
+const SOURCE_FILE = /\.(?:[cm]?[jt]sx?)$/;
+
+/** Reads what each file of a local package loads (`packageLoads`). */
+export type PackageLoadsReader = (filesJson: string) => string;
 
 /** Dependency specs that link or copy a local package rather than install
  *  one from a registry. */
@@ -118,14 +131,18 @@ class Reads {
   }
 
   /** The roots `installed` reaches, read as a registry package
-   *  (`localDependencies`) or a local one (`dependencyClosure`), adding the
-   *  files their walk read to `files`. */
+   *  (`localDependencies`) or, loaded at `subpath`, as a local one
+   *  (`localReach`), adding the files their reading read to `files`. */
   reached(
     installed: string,
     registry: boolean,
-    files: Set<string>
+    subpath: string,
+    files: Set<string>,
+    packageLoads?: PackageLoadsReader
   ): string[] | null {
-    const key = `${registry ? 'registry' : 'local'}\0${installed}`;
+    const key = registry
+      ? `registry\0${installed}`
+      : `local\0${installed}\0${subpath}`;
     let walk = this.#walks.get(key);
     if (walk === undefined) {
       const walked = new Set<string>();
@@ -133,7 +150,11 @@ class Reads {
       walk = {
         roots: registry
           ? localDependencies(installed, lookups)
-          : dependencyClosure(installed, lookups),
+          : packageLoads === undefined
+            ? null
+            : localReach(installed, subpath, lookups, packageLoads, (dir) =>
+                this.reached(dir, true, '.', walked)
+              ),
         files: walked,
       };
       this.#walks.set(key, walk);
@@ -145,6 +166,14 @@ class Reads {
   /** Lookups that add each file they read to `files`. */
   tracked(files: Set<string>): Lookups {
     return {
+      source: (path) => {
+        files.add(path);
+        try {
+          return readFileSync(path, 'utf-8');
+        } catch {
+          return null;
+        }
+      },
       exists: (path) => {
         files.add(path);
         return this.file(path).stamp !== 'absent';
@@ -162,7 +191,8 @@ class Reads {
         if (found === undefined) {
           const { text } = this.file(path);
           try {
-            // SAFETY: a package.json is a JSON object; only its dependency maps are read.
+            // SAFETY: a package.json is a JSON object; its dependency maps
+            // are read, and its entry fields only through the JSON guards.
             found = text === undefined ? null : (JSON.parse(text) as Manifest);
           } catch {
             found = null;
@@ -176,6 +206,8 @@ class Reads {
 }
 
 interface Lookups {
+  /** A file's text, or null where it cannot be read. */
+  source(path: string): string | null;
   exists(path: string): boolean;
   /** The real path `path` resolves to through its symlinks. */
   resolve(path: string): string | null;
@@ -183,6 +215,9 @@ interface Lookups {
 }
 
 type Manifest = {
+  main?: JsonValue;
+  module?: JsonValue;
+  exports?: JsonValue;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
@@ -249,7 +284,10 @@ function walkDependencies(
     follows?: (spec: string, dependency: string) => boolean;
     stops?: (name: string) => boolean;
   }
-): { reached: Set<string>; followed: Set<string> } | null {
+): {
+  reached: Set<string>;
+  followed: Set<string>;
+} | null {
   const reached = new Set<string>([installed]);
   const followed = new Set<string>([installed]);
   const work = [installed];
@@ -273,14 +311,194 @@ function walkDependencies(
   return { reached, followed };
 }
 
-/** The real roots of a local package and of each package it depends on, at
- *  any depth; null where the walk is (`walkDependencies`). */
-function dependencyClosure(
+/** The extensions and directory indexes a load's path may leave out. */
+const RESOLVED_SUFFIXES = [
+  '',
+  '.js',
+  '.cjs',
+  '.mjs',
+  '.jsx',
+  '.ts',
+  '.cts',
+  '.mts',
+  '.tsx',
+  '.json',
+  '/index.js',
+  '/index.cjs',
+  '/index.mjs',
+  '/index.ts',
+  '/index.tsx',
+];
+
+/**
+ * The real roots of the packages a local package loaded at `subpath`
+ * reaches: itself, each package its modules load at any depth, found as
+ * Node finds it from the loading module, declared or not, and for one
+ * installed from a registry, the local packages it depends on (`registry`).
+ * A manifest is no boundary on what code loads, so the modules are read
+ * from the entries the package exports for `subpath`, under every
+ * condition, along each load (`packageLoads`). Null, so the package may
+ * reach any module, where a module makes a computed load, runs code from a
+ * string, lets a loader escape or does not parse, where a load leaves its
+ * package by a path, uses a `#` import or a URL, or resolves to nothing, or
+ * past the bound.
+ */
+function localReach(
   installed: string,
+  subpath: string,
+  lookups: Lookups,
+  packageLoads: PackageLoadsReader,
+  registry: (root: string) => string[] | null
+): string[] | null {
+  const roots = new Set<string>([installed]);
+  const seen = new Set<string>();
+  let pending: { file: string; root: string }[] = [];
+  const enter = (root: string, at: string): boolean => {
+    const entries = packageEntries(root, at, lookups);
+    if (entries === null) return false;
+    for (const file of entries) pending.push({ file, root });
+    return true;
+  };
+  if (!enter(installed, subpath)) return null;
+  while (pending.length > 0) {
+    const sources: { path: string; source: string; root: string }[] = [];
+    for (const { file, root } of pending) {
+      if (seen.has(file)) continue;
+      seen.add(file);
+      if (!SOURCE_FILE.test(file)) continue;
+      const source = lookups.source(file);
+      if (source === null) return null;
+      sources.push({ path: file, source, root });
+    }
+    pending = [];
+    if (seen.size > SOURCE_FILE_BOUND) return null;
+    if (sources.length === 0) continue;
+    // SAFETY: `packageLoads` returns the engine's serde output for these files.
+    const loaded = JSON.parse(
+      packageLoads(
+        JSON.stringify(sources.map(({ path, source }) => ({ path, source })))
+      )
+    ) as Record<string, { specifiers: string[]; open?: string }>;
+    for (const { path: file, root } of sources) {
+      const loads = loaded[file];
+      if (loads === undefined || loads.open !== undefined) return null;
+      for (const specifier of loads.specifiers) {
+        if (specifier.startsWith('.') || specifier.startsWith('/')) {
+          const target = resolveFile(
+            resolve(dirname(file), specifier),
+            lookups
+          );
+          if (target === null || !target.startsWith(root + sep)) return null;
+          pending.push({ file: target, root });
+          continue;
+        }
+        if (/^[a-z][a-z0-9+.-]*:/i.test(specifier)) {
+          if (specifier.startsWith('node:')) continue;
+          return null;
+        }
+        if (specifier.startsWith('#')) return null;
+        const name = bareSpecifierPackageName(specifier);
+        if (builtinModules.includes(name)) continue;
+        const dependency = installedPackage(name, dirname(file), lookups);
+        if (dependency === null) return null;
+        roots.add(dependency);
+        if (roots.size > DEPENDENCY_BOUND) return null;
+        const fromRegistry =
+          insideNodeModules(dependency) &&
+          !declaredLocally(name, dirname(file), lookups.manifest);
+        if (fromRegistry) {
+          const local = registry(dependency);
+          if (local === null) return null;
+          for (const reached of local) roots.add(reached);
+        } else if (!enter(dependency, `.${specifier.slice(name.length)}`)) {
+          return null;
+        }
+      }
+    }
+  }
+  return [...roots];
+}
+
+/** The files the package at `root` runs for `subpath` (`.` for the package
+ *  itself): each target its `exports` maps the subpath to, under every
+ *  condition but types, or without `exports`, its `main` or the path
+ *  itself. Null where the manifest cannot be read, `exports` maps nothing,
+ *  or a target resolves to nothing inside the package. */
+function packageEntries(
+  root: string,
+  subpath: string,
   lookups: Lookups
 ): string[] | null {
-  const walk = walkDependencies(installed, lookups, {});
-  return walk && [...walk.reached];
+  const manifest = lookups.manifest(root);
+  if (manifest === null) return null;
+  const targets: string[] = [];
+  if (manifest.exports === undefined) {
+    // Node runs `main`; a bundler may run `module` instead.
+    if (subpath !== '.') targets.push(subpath);
+    else {
+      targets.push(isJsonString(manifest.main) ? manifest.main : 'index');
+      if (isJsonString(manifest.module)) targets.push(manifest.module);
+    }
+  } else {
+    const subpaths = exportsSubpaths({ exports: manifest.exports });
+    const exact = subpaths.find(([key]) => key === subpath);
+    if (exact !== undefined) {
+      collectTargets(exact[1], targets, '');
+    } else {
+      // A pattern (`./api/*`) stands for each subpath its star matches.
+      for (const [key, value] of subpaths) {
+        const star = key.indexOf('*');
+        if (star === -1) continue;
+        const before = key.slice(0, star);
+        const after = key.slice(star + 1);
+        if (
+          subpath.length >= before.length + after.length &&
+          subpath.startsWith(before) &&
+          subpath.endsWith(after)
+        ) {
+          const match = subpath.slice(
+            before.length,
+            subpath.length - after.length
+          );
+          collectTargets(value, targets, match);
+        }
+      }
+    }
+    if (targets.length === 0) return null;
+  }
+  const files: string[] = [];
+  for (const target of targets) {
+    const file = resolveFile(resolve(root, target), lookups);
+    if (file === null || !file.startsWith(root + sep)) return null;
+    files.push(file);
+  }
+  return files;
+}
+
+/** Each path an `exports` value names under any condition but types, with
+ *  a pattern's star as `match`. */
+function collectTargets(value: JsonValue, targets: string[], match: string) {
+  if (isJsonString(value)) {
+    targets.push(value.replaceAll('*', match));
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectTargets(item, targets, match);
+  } else if (isJsonBlock(value)) {
+    for (const [condition, nested] of Object.entries(value)) {
+      if (condition !== 'types' && condition !== 'typings') {
+        collectTargets(nested, targets, match);
+      }
+    }
+  }
+}
+
+/** The file a load of `path` opens, trying the extensions and directory
+ *  indexes a load may leave out; null where none is a file. */
+function resolveFile(path: string, lookups: Lookups): string | null {
+  for (const suffix of RESOLVED_SUFFIXES) {
+    const file = path + suffix;
+    if (lookups.exists(file) && lookups.source(file) !== null) return file;
+  }
+  return null;
 }
 
 /** Every lockfile path at or above `dir`. */
@@ -319,7 +537,8 @@ function dependencySpecs(declared: Manifest | null) {
 export function packageReaches(
   root: string,
   packages: readonly PreparedPackage[],
-  analysed: ReadonlySet<string>
+  analysed: ReadonlySet<string>,
+  packageLoads?: PackageLoadsReader
 ): PackageReach[] {
   const byIdentity = new Map<string, PreparedPackage[]>();
   for (const listed of packages) {
@@ -329,12 +548,21 @@ export function packageReaches(
     ]);
   }
   const reads = new Reads();
-  const absolutes = new Map(
-    [...analysed].map((file) => [
-      file,
-      isAbsolute(file) ? file : resolve(root, file),
-    ])
-  );
+  // A package's roots are real paths, so each analysed file is compared at
+  // its real path: one a symlinked directory holds is inside the package
+  // the link names. Its key stays the analysis's own.
+  let canonical: Map<string, string> | undefined;
+  const absolutes = () =>
+    (canonical ??= new Map(
+      [...analysed].map((file) => {
+        const absolute = isAbsolute(file) ? file : resolve(root, file);
+        try {
+          return [file, realpathSync.native(absolute)];
+        } catch {
+          return [file, absolute];
+        }
+      })
+    ));
   const result: PackageReach[] = [];
   for (const [identity, instances] of byIdentity) {
     const key = [
@@ -346,12 +574,12 @@ export function packageReaches(
     ].join('\n');
     let decision = decisions.get(key);
     if (decision === undefined || !reads.unchanged(decision.stamps)) {
-      decision = decide(root, instances, reads);
+      decision = decide(root, instances, reads, packageLoads);
       decisions.set(key, decision);
     }
     if (decision.roots === null) continue;
     const roots = new Set(decision.roots);
-    const reaches = [...absolutes]
+    const reaches = [...absolutes()]
       .filter(([, absolute]) => {
         for (let dir = dirname(absolute); ; dir = dirname(dir)) {
           if (roots.has(dir)) return true;
@@ -373,7 +601,8 @@ export function packageReaches(
 function decide(
   root: string,
   instances: readonly PreparedPackage[],
-  reads: Reads
+  reads: Reads,
+  packageLoads: PackageLoadsReader | undefined
 ): Decision {
   const files = lockfilesAbove(root);
   const lookups = reads.tracked(files);
@@ -394,7 +623,14 @@ function decide(
     const registry =
       insideNodeModules(installed) &&
       !declaredLocally(name, from, lookups.manifest);
-    const reached = reads.reached(installed, registry, files);
+    const subpath = `.${specifier.slice(name.length)}`;
+    const reached = reads.reached(
+      installed,
+      registry,
+      subpath,
+      files,
+      packageLoads
+    );
     if (reached === null) return decided(null);
     local ||= !registry;
     for (const dependency of reached) roots.add(dependency);
