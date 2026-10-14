@@ -36,6 +36,20 @@ STAGING="$ROOT/e2e/packed-app/.staging"
 rm -rf "$STAGING"
 mkdir -p "$STAGING/tarballs"
 
+# ── 0. The release's version rewrite, on copies of the manifests ─────
+# Packing here keeps the workspace's own versions, where a stale
+# `workspace:*` resolves to the right number by accident; the release
+# rewrites them first (v0.1.33 shipped no tarball because a peer escaped
+# the rewrite). Run that rewrite at a version no package has, and check it.
+RELEASE_PROBE="$STAGING/release-manifests"
+for p in "${PKGS[@]}"; do
+  mkdir -p "$RELEASE_PROBE/packages/$p"
+  cp "packages/$p/package.json" "$RELEASE_PROBE/packages/$p/package.json"
+done
+bash scripts/set-release-version.sh 0.0.0-packed "$RELEASE_PROBE" >/dev/null
+bun scripts/verify/packed-graph.ts release-manifests 0.0.0-packed "$RELEASE_PROBE"/packages/*/package.json
+echo "[verify:packed] release version rewrite covers every internal edge"
+
 # ── 1. Resolve one tarball set + workspace-specifier guard ───────────
 if [ "$MODE" = local ]; then
   for p in "${PKGS[@]}"; do

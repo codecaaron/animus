@@ -647,19 +647,7 @@ jobs:
 
       # ── Set version in all packages ──
       - name: Bump versions and resolve workspace deps
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          for pkg in properties system extract layergate vite-plugin next-plugin cli unplugin; do
-            jq --arg v "$VERSION" '
-              .version = $v |
-              if .dependencies then .dependencies |= with_entries(if .value == "workspace:*" then .value = $v else . end) else . end |
-              # devDependencies ship verbatim in npm-pack tarballs and the
-              # packed guard rejects any retained workspace: specifier.
-              if .devDependencies then .devDependencies |= with_entries(if .value == "workspace:*" then .value = $v else . end) else . end |
-              if .optionalDependencies then .optionalDependencies |= with_entries(if (.value | test("^[0-9]")) then .value = $v else . end) else . end
-            ' packages/$pkg/package.json > tmp.json && mv tmp.json packages/$pkg/package.json
-            echo "$pkg → $VERSION"
-          done
+        run: bash scripts/set-release-version.sh "${{ steps.version.outputs.version }}"
 
       # ── Build TS packages ──
       - name: Build
@@ -700,9 +688,10 @@ jobs:
           for pkg in properties system extract layergate vite-plugin next-plugin cli unplugin; do
             # bun pm pack — the SAME packer verify:packed proves on every
             # push (packer parity: npm pack shipped two release-only bugs in
-            # v0.1.2 because the lane packed differently). bun also resolves
-            # workspace: specifiers in every dependency block at pack time;
-            # the jq rewrite above stays as the version bump + belt.
+            # v0.1.2 because the lane packed differently). bun resolves a
+            # remaining workspace: specifier from the lockfile's version, not
+            # the release's, so set-release-version.sh above rewrites every
+            # block first (verify:packed checks that rewrite).
             (cd "packages/$pkg" && bun pm pack --destination "$RELEASE_BUNDLE")
           done
           for artifact in \

@@ -20,6 +20,7 @@ export type PackageManifest = {
   name: string;
   version: string;
   dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
 };
@@ -255,6 +256,58 @@ function manifestFromTarball(path: string): PackageManifest {
   return JSON.parse(result.stdout) as PackageManifest;
 }
 
+/**
+ * The release's version rewrite, checked on manifests it rewrote to
+ * `version`: every publishable package is at `version`, every internal edge
+ * a consumer installs (dependencies, optional and peer) declares it, and no
+ * `workspace:` specifier is left in any block, since `bun pm pack` resolves
+ * one from the lockfile's version rather than the release's.
+ */
+export function validateReleaseManifests(
+  version: string,
+  manifests: ReadonlyMap<string, PackageManifest>
+): ManifestEdgeDiagnostic[] {
+  const diagnostics: ManifestEdgeDiagnostic[] = [];
+  for (const manifest of manifests.values()) {
+    if (manifest.version !== version) {
+      diagnostics.push({
+        dependent: manifest.name,
+        dependency: manifest.name,
+        declaredVersion: manifest.version,
+        expectedVersion: version,
+      });
+    }
+    // The edge check below covers the blocks a consumer installs;
+    // devDependencies ship too, and must not keep a workspace: specifier.
+    for (const [dependency, declaredVersion] of Object.entries(
+      manifest.devDependencies ?? {}
+    )) {
+      if (declaredVersion.startsWith('workspace:')) {
+        diagnostics.push({
+          dependent: manifest.name,
+          dependency,
+          declaredVersion,
+          expectedVersion: version,
+        });
+      }
+    }
+  }
+  return [...diagnostics, ...validateInternalManifestEdges(manifests)];
+}
+
+function manifestsFromFiles(
+  paths: readonly string[]
+): Map<string, PackageManifest> {
+  const manifests = new Map<string, PackageManifest>();
+  for (const path of paths) {
+    // SAFETY: a publishable package's package.json, which names and
+    // versions it.
+    const manifest = JSON.parse(readFileSync(path, 'utf8')) as PackageManifest;
+    manifests.set(manifest.name, manifest);
+  }
+  return manifests;
+}
+
 function manifestsFromTarballs(
   paths: readonly string[]
 ): Map<string, PackageManifest> {
@@ -289,10 +342,11 @@ function main(args: readonly string[]): number {
   if (
     command !== 'resolve' &&
     command !== 'manifests' &&
+    command !== 'release-manifests' &&
     command !== 'installed'
   ) {
     console.error(
-      'ERROR: usage: packed-graph.ts resolve [--tarballs-dir <path>] | manifests <tarball...> | installed <root> <tarball...>'
+      'ERROR: usage: packed-graph.ts resolve [--tarballs-dir <path>] | manifests <tarball...> | release-manifests <version> <package.json...> | installed <root> <tarball...>'
     );
     return 1;
   }
@@ -305,6 +359,17 @@ function main(args: readonly string[]): number {
         console.log(`tarball\t${packageName}\t${path}`);
       }
       return 0;
+    }
+
+    if (command === 'release-manifests') {
+      const [version, ...files] = rest;
+      if (!version) throw new Error('release version is required');
+      const diagnostics = validateReleaseManifests(
+        version,
+        manifestsFromFiles(files)
+      );
+      printManifestDiagnostics(diagnostics);
+      return diagnostics.length === 0 ? 0 : 1;
     }
 
     if (command === 'manifests') {
