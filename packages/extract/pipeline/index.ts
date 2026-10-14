@@ -8,6 +8,12 @@ export {
   stripLeadingLayerDeclaration,
   validateLayerOrder,
 } from './assemble-stylesheet';
+export type { AnimusQuarantineOptions } from './quarantine';
+export {
+  layergateMissing,
+  layergateOptions,
+  withVendorLayer,
+} from './quarantine';
 export type {
   AnalyzeProjectArgs,
   AnalyzeProjectInputs,

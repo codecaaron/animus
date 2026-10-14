@@ -11,6 +11,7 @@ import {
   resolveMode,
   sourceKitDependencies,
   turbopackExtensionPolicy,
+  withVendorLayer,
 } from '@animus-ui/extract/pipeline';
 import {
   createBuildId,
@@ -27,6 +28,7 @@ import { fileURLToPath } from 'url';
 
 import { resolveAnimusLoaderPath } from './loader-path';
 import { ANIMUS_CSS_MODULE_ID, AnimusWebpackPlugin } from './plugin';
+import { QUARANTINE_TURBOPACK_MESSAGE, quarantinePlugin } from './quarantine';
 import { sameDirectory } from './same-directory';
 import {
   ANIMUS_TURBOPACK_RULE_GLOB,
@@ -85,6 +87,7 @@ type DefinePluginConstructor = new (
 interface NextWebpackContext {
   dir?: string;
   dev?: boolean;
+  isServer?: boolean;
   webpack?: {
     DefinePlugin?: DefinePluginConstructor;
   };
@@ -170,6 +173,7 @@ export function withAnimus(
       'unstable_turbopack',
       'loaderPath',
       'phase',
+      'quarantine',
     ],
     [],
     {
@@ -205,6 +209,9 @@ export function withAnimus(
   ): WebpackNextConfig<Config> | TurbopackNextConfig<Config> => {
     const nextConfig = withSourceKits(authoredConfig, appRoot);
     if (resolveTurbopackMode(options)) {
+      if (options.quarantine) {
+        throw new AnimusConfigError(QUARANTINE_TURBOPACK_MESSAGE);
+      }
       warnTurbopackCwdRoot(options, appRoot);
       return turbopackConfig(nextConfig, options, build, appRoot);
     }
@@ -235,8 +242,14 @@ export function withAnimus(
         const { mode } = resolveMode(options.mode, () =>
           context.dev === true ? 'development' : 'production'
         );
+        // `quarantine` puts `anm-vendor` first in the layer order Animus's
+        // stylesheet declares.
+        const vendorOrder = options.quarantine
+          ? withVendorLayer(options.layers)
+          : undefined;
+        const layers = vendorOrder ?? options.layers;
         const plugin = new AnimusWebpackPlugin(
-          { ...options, mode },
+          { ...options, layers, mode },
           { development: context.dev === true, build }
         );
         plugin.setRootDir(rootDir);
@@ -251,7 +264,7 @@ export function withAnimus(
         const stubCssPath = stylesPath(sessionDir);
         if (!existsSync(stubCssPath)) {
           const { declaration } = assembleStylesheet({
-            layers: options.layers,
+            layers,
             variableCss: '',
             globalCss: '',
             split: true,
@@ -285,6 +298,19 @@ export function withAnimus(
         // compiler's: the plugin rewrites them once webpack has validated
         // the config, whose schema takes no matcher.
         plugin.watchConfig(config);
+
+        // Only the client compiler builds stylesheets. Animus's stylesheet
+        // delivers the declared sheets, and Animus's watch matcher watches
+        // what layergate reads.
+        if (options.quarantine && vendorOrder && context.isServer !== true) {
+          const gate = quarantinePlugin(
+            options.quarantine,
+            vendorOrder,
+            stubCssPath
+          );
+          config.plugins.push(gate);
+          plugin.watchAlso((path) => gate.watches(path));
+        }
 
         const DefinePlugin = context.webpack?.DefinePlugin;
         if (DefinePlugin) {

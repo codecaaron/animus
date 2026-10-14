@@ -53,13 +53,22 @@ export interface CompileOptions {
    *  too. A file outside every owned graph keeps its own text unlayered.
    *  Default: every file is owned. */
   owns?(file: string): boolean;
+  /** The file the finished stylesheet is delivered as. Default: the
+   *  first root. */
+  delivery?: string;
   /** The URL text that reaches the absolute file `target` from the finished
-   *  stylesheet. Default: relative to the first root's directory, and a
-   *  file in that directory keeps its URLs as written. */
+   *  stylesheet. Default: relative to the delivery's directory, and a file
+   *  in that directory keeps its URLs as written. */
   url?(target: string): string;
   /** The directory generated names are relative to, so they are the same
    *  on every machine: the project root. Default: the first root's. */
   base?: string;
+  /** What happens to a remote `@import`: `hoist` (default) keeps it
+   *  remote, hoisted ahead of every rule in its layer; `refuse` reports an
+   *  error instead wherever it would need `layer()` or `supports()`, for a
+   *  host whose CSS pipeline cannot carry them (Next's webpack css-loader),
+   *  and hoists only a plain or media-only one. */
+  remote?: 'hoist' | 'refuse';
   /** Whether to compose a source map. Default true. */
   map?: boolean;
   /** Parsed files by path, read and filled by the compile. */
@@ -186,9 +195,9 @@ export async function compileUnit(
   roots: readonly string[],
   options: CompileOptions
 ): Promise<CompiledUnit> {
-  const deliveryDir = dirname(roots[0]!);
-  /** The URL text reaching `target`; by default relative to the first
-   *  root's directory, so a file there keeps its URLs as written. */
+  const deliveryDir = dirname(options.delivery ?? roots[0]!);
+  /** The URL text reaching `target`; by default relative to the
+   *  delivery's directory, so a file there keeps its URLs as written. */
   const url =
     options.url ??
     ((target: string) => relative(deliveryDir, target).split(sep).join('/'));
@@ -388,9 +397,21 @@ export async function compileUnit(
         anonymousName(`${occurrence}/${index}`)
       );
       if (isRemote(statement.url)) {
-        const media = [...own, ...added].filter(
-          (frame) => frame.kind === 'media'
-        ).length;
+        const chain = [...own, ...added];
+        if (
+          options.remote === 'refuse' &&
+          chain.some((frame) => frame.kind !== 'media')
+        ) {
+          report(
+            'layergate.remote',
+            'error',
+            `@import "${statement.url}" is remote, and this host cannot load it inside a layer: vendor the sheet locally, or opt this file out explicitly if unlayered is acceptable`,
+            file,
+            statement.start
+          );
+          continue;
+        }
+        const media = chain.filter((frame) => frame.kind === 'media').length;
         const kept =
           media > 1
             ? `; its ${media} media conditions are joined where each is a bare condition, else only the innermost is kept`
@@ -402,8 +423,8 @@ export async function compileUnit(
           file,
           statement.start
         );
-        create(layerPath([...own, ...added]));
-        remote.push(remoteImport(statement.url, [...own, ...added]));
+        create(layerPath(chain));
+        remote.push(remoteImport(statement.url, chain));
         continue;
       }
       let child: string | null = null;

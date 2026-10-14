@@ -1,4 +1,5 @@
 import type {
+  AnimusQuarantineOptions,
   ClosedDynamicImport,
   DiagnosticLevels,
   StaticCssConfig,
@@ -95,4 +96,14 @@ export interface AnimusNextOptions {
    *  the root, and `enclosingFunction`): each loads only what the build's
    *  own literal `import()`s load, an assumption the analysis records. */
   closedDynamicImports?: ClosedDynamicImport[];
+  /**
+   * Load third-party stylesheets into `anm-vendor`, a layer below every
+   * Animus layer, so their normal rules never beat Animus's. Needs
+   * `@animus-ui/layergate` and webpack (`next build --webpack` on Next 16):
+   * Turbopack offers no CSS loader boundary for it. `sheets` are delivered
+   * with Animus's stylesheet, ahead of it; `dependencies` also covers `.css`
+   * your modules import from packages; `optOut` keeps a file's own rules
+   * outside the layer. App CSS and CSS Modules are left alone.
+   */
+  quarantine?: AnimusQuarantineOptions;
 }

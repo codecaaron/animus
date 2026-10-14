@@ -43,11 +43,18 @@
     "@animus-ui/extract": "workspace:*"
   },
   "devDependencies": {
-    "@animus-ui/assertions": "workspace:*"
+    "@animus-ui/assertions": "workspace:*",
+    "@animus-ui/layergate": "workspace:*"
   },
   "peerDependencies": {
+    "@animus-ui/layergate": "workspace:*",
     "next": ">=15 <17",
     "webpack": ">=5 <6"
+  },
+  "peerDependenciesMeta": {
+    "@animus-ui/layergate": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22.12.0"

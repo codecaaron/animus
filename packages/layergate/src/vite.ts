@@ -12,7 +12,7 @@
  * is finished in `transform`. CSS Modules and special requests (`?inline`,
  * `?url`, `?raw`) stay Vite's.
  */
-import { readFileSync, realpathSync, watch } from 'node:fs';
+import { watch } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import {
@@ -32,17 +32,19 @@ import {
 } from 'vite';
 
 import { compileUnit } from './compile';
+import {
+  fileOf,
+  formatDiagnostic,
+  ownership,
+  real,
+  resolveEach,
+  Units,
+} from './host';
 import { resolvePlan } from './plan';
 import { readSheet } from './sheet';
 
-import type {
-  CompiledUnit,
-  CompileOptions,
-  LayergateDiagnostic,
-  ParsedSheet,
-} from './compile';
+import type { CompiledUnit, CompileOptions } from './compile';
 import type { LayergateOptions } from './plan';
-import type { ImportStatement } from './sheet';
 import type { FSWatcher } from 'node:fs';
 import type {
   EnvironmentModuleNode,
@@ -96,85 +98,23 @@ const outside = (root: string, file: string) => {
   return path.startsWith('..') || isAbsolute(path);
 };
 
-interface PackageInfo {
-  dir: string;
-  name: string;
-}
-
-/** The nearest `package.json` above `dir`: its directory and name. */
-function packageOf(
-  dir: string,
-  cache: Map<string, PackageInfo | null>
-): PackageInfo | null {
-  const visited: string[] = [];
-  let current = dir;
-  let found: PackageInfo | null = null;
-  for (;;) {
-    if (cache.has(current)) {
-      found = cache.get(current)!;
-      break;
-    }
-    visited.push(current);
-    try {
-      // SAFETY: a package.json, whose `name`, when present, is a string.
-      const { name } = JSON.parse(
-        readFileSync(join(current, 'package.json'), 'utf8')
-      ) as { name?: string };
-      found = { dir: current, name: name ?? '' };
-      break;
-    } catch {
-      const parent = dirname(current);
-      if (parent === current) break;
-      current = parent;
-    }
-  }
-  for (const dirVisited of visited) cache.set(dirVisited, found);
-  return found;
-}
-
-/** A path through symlinks, with forward slashes. */
-function real(path: string): string {
-  try {
-    return normalizePath(realpathSync(path));
-  } catch {
-    return normalizePath(path);
-  }
-}
-
-/** The file a resolved id names, through symlinks, with forward slashes. */
-const fileOf = (id: string) => real(id.split('?')[0]!);
-
-function format(diagnostic: LayergateDiagnostic): string {
-  const where = diagnostic.file
-    ? `${diagnostic.file}${diagnostic.line ? `:${diagnostic.line}:${diagnostic.column}` : ''}: `
-    : '';
-  return `[layergate] ${where}${diagnostic.message} [${diagnostic.code}]`;
-}
-
 export function layergate(options: LayergateViteOptions = {}) {
   const plan = resolvePlan(options);
   const declaredBy = options.declaredBy ?? ENTRY_ID;
   let root = process.cwd();
-  let app: PackageInfo | null = null;
-  const packages = new Map<string, PackageInfo | null>();
+  const owner = ownership(plan);
+  const { owns, owning } = owner;
   /** `@import` inside an owned sheet resolves as Vite resolves a CSS
    *  import: the `style` field and condition, CSS files only. */
   let resolveCss: ReturnType<typeof createIdResolver> | undefined;
   /** Declared sheets, in order. */
-  let declared: string[] = [];
   let optedOut = new Set<string>();
-  /** Each owned id → the files its finished stylesheet read, and each file
-   *  → the owned ids that read it. */
-  const filesByUnit = new Map<string, Set<string>>();
-  const unitsByFile = new Map<string, Set<string>>();
-  /** Parsed files, kept until they change. */
-  const parsed = new Map<string, ParsedSheet>();
+  /** Parsed files, the files each owned id's finished stylesheet read,
+   *  and reach answers. */
+  const units = new Units();
   /** Each module's finished declared head, kept until a file it read
    *  changes. */
   const heads = new Map<string, string>();
-  /** Whether a stylesheet Vite loads itself reaches an owned file, kept
-   *  until any file changes. */
-  const reaches = new Map<string, boolean>();
   let server: ViteDevServer | undefined;
 
   /** Vite's watcher ignores node_modules, so an owned file there is
@@ -218,34 +158,9 @@ export function layergate(options: LayergateViteOptions = {}) {
   /** Records the files `id`'s finished stylesheet read, forgetting and
    *  unwatching what it no longer reads. */
   const reconcile = (id: string, files: readonly string[]) => {
-    const current = new Set(files);
-    for (const file of filesByUnit.get(id) ?? []) {
-      if (current.has(file)) continue;
-      const units = unitsByFile.get(file);
-      units?.delete(id);
-      if (units?.size === 0) {
-        unitsByFile.delete(file);
-        parsed.delete(file);
-        unwatch(file);
-      }
-    }
-    filesByUnit.set(id, current);
-    for (const file of current) {
-      let units = unitsByFile.get(file);
-      if (!units) unitsByFile.set(file, (units = new Set()));
-      units.add(id);
-      watchInstalled(file);
-    }
+    for (const file of units.record(id, files)) unwatch(file);
+    for (const file of files) watchInstalled(file);
   };
-
-  const owns = (file: string): boolean => {
-    if (declared.includes(file)) return true;
-    if (plan.dependencies === false) return false;
-    const owner = packageOf(dirname(file), packages);
-    if (!owner || owner.dir === app?.dir) return false;
-    return plan.dependencies === true || plan.dependencies.has(owner.name);
-  };
-  const owning = () => declared.length > 0 || plan.dependencies !== false;
 
   /** A root-relative URL for `target`, which Vite resolves from any
    *  stylesheet, its own virtual ones too; one outside the root through
@@ -286,7 +201,7 @@ export function layergate(options: LayergateViteOptions = {}) {
    *  parsed-file cache. */
   const finish = (
     context: Rolldown.PluginContext,
-    roots: string[],
+    roots: readonly string[],
     extra: Partial<CompileOptions> = {}
   ) =>
     compileUnit(roots, {
@@ -297,7 +212,7 @@ export function layergate(options: LayergateViteOptions = {}) {
       read: (file) => readFile(file, 'utf8'),
       quarantined: (file) => !optedOut.has(file),
       owns,
-      cache: parsed,
+      cache: units.parsed,
       ...extra,
     });
 
@@ -311,7 +226,7 @@ export function layergate(options: LayergateViteOptions = {}) {
     for (const file of unit.files) context.addWatchFile(file);
     reconcile(id, unit.files);
     for (const diagnostic of unit.diagnostics) {
-      const message = format(diagnostic);
+      const message = formatDiagnostic(diagnostic);
       if (diagnostic.severity === 'error') context.error(message);
       else if (diagnostic.severity === 'warning') context.warn(message);
       else context.info(message);
@@ -321,35 +236,16 @@ export function layergate(options: LayergateViteOptions = {}) {
   /** The declared sheets as one finished stylesheet for module `id`, with
    *  root-relative URLs; empty when nothing is declared. */
   const head = async (context: Rolldown.PluginContext, id: string) => {
-    if (declared.length === 0) return '';
+    if (owner.declared.length === 0) return '';
     const kept = heads.get(id);
     if (kept !== undefined) return kept;
-    const unit = await finish(context, declared, { url: rootUrl, map: false });
+    const unit = await finish(context, owner.declared, {
+      url: rootUrl,
+      map: false,
+    });
     publish(context, id, unit);
     heads.set(id, unit.css);
     return unit.css;
-  };
-
-  /** Whether the stylesheet `file`, whose `@import`s are `imports`,
-   *  reaches an owned file, resolved only, never compiled. */
-  const reachesOwned = async (
-    context: Rolldown.PluginContext,
-    file: string,
-    imports: readonly ImportStatement[],
-    seen = new Set<string>()
-  ): Promise<boolean> => {
-    if (seen.has(file)) return false;
-    seen.add(file);
-    if (owns(file)) return true;
-    for (const statement of imports) {
-      const child = await resolveImport(context, statement.url, file);
-      if (!child) continue;
-      const sheet =
-        parsed.get(child)?.sheet ??
-        readSheet(await readFile(child, 'utf8').catch(() => ''));
-      if (await reachesOwned(context, child, sheet.imports, seen)) return true;
-    }
-    return false;
   };
 
   const plugin = {
@@ -388,7 +284,7 @@ export function layergate(options: LayergateViteOptions = {}) {
       root = config.root;
       // By realpath, as owned files are: a root reached through a symlink
       // (`resolve.preserveSymlinks`) is still the app.
-      app = packageOf(real(root), packages);
+      owner.reset(root, []);
       resolveCss = createIdResolver(config, {
         extensions: ['.css'],
         mainFields: ['style'],
@@ -409,30 +305,27 @@ export function layergate(options: LayergateViteOptions = {}) {
 
     async buildStart() {
       const importer = join(root, 'index.html');
-      const resolveAll = async (
-        specifiers: readonly string[],
-        what: string
-      ) => {
-        const files: string[] = [];
-        for (const specifier of specifiers) {
-          const resolved = await this.resolve(specifier, importer, {
-            skipSelf: true,
-          });
-          if (!resolved || resolved.external)
-            this.error(
-              `[layergate] ${what}: cannot resolve "${specifier}" from ${root}`
-            );
-          files.push(fileOf(resolved.id));
-        }
-        return files;
+      const resolveOne = async (specifier: string) => {
+        const resolved = await this.resolve(specifier, importer, {
+          skipSelf: true,
+        });
+        return resolved && !resolved.external ? fileOf(resolved.id) : null;
       };
-      declared = await resolveAll(plan.sheets, 'sheets');
+      const declared = await resolveEach(
+        plan.sheets,
+        'sheets',
+        root,
+        resolveOne
+      );
+      owner.reset(root, declared);
       const cssModule = declared.find((file) => MODULE_CSS.test(file));
       if (cssModule)
         this.error(
           `[layergate] sheets: ${cssModule} is a CSS Module; layergate does not own CSS Modules yet`
         );
-      optedOut = new Set(await resolveAll(plan.optOut, 'optOut'));
+      optedOut = new Set(
+        await resolveEach(plan.optOut, 'optOut', root, resolveOne)
+      );
       heads.clear();
     },
 
@@ -461,7 +354,7 @@ export function layergate(options: LayergateViteOptions = {}) {
       if (id.startsWith(PROXY)) {
         const file = proxiedFile(id);
         // A declared sheet is in the declared stylesheet already.
-        const requests = declared.includes(file)
+        const requests = owner.declared.includes(file)
           ? [declaredBy]
           : [declaredBy, file + OWNED];
         return requests
@@ -487,13 +380,13 @@ export function layergate(options: LayergateViteOptions = {}) {
       const file = real(requested);
       const { imports } = readSheet(code);
       if (!owns(file) && imports.length === 0) return null;
-      let reached = reaches.get(file);
-      if (reached === undefined) {
-        reached = await reachesOwned(this, file, imports);
-        reaches.set(file, reached);
-      }
+      const reached = await units.reaches(file, imports, {
+        resolve: (specifier, from) => resolveImport(this, specifier, from),
+        read: (path) => readFile(path, 'utf8'),
+        owns,
+      });
       if (!reached) return null;
-      parsed.delete(file);
+      units.parsed.delete(file);
       const unit = await finish(this, [file], {
         read: (path) => (path === file ? code : readFile(path, 'utf8')),
       });
@@ -502,14 +395,11 @@ export function layergate(options: LayergateViteOptions = {}) {
     },
 
     hotUpdate({ file, modules }) {
-      const changed = normalizePath(file);
-      parsed.delete(changed);
-      reaches.clear();
-      const units = unitsByFile.get(changed);
-      if (!units) return;
+      const stale = units.changed(normalizePath(file));
+      if (stale.size === 0) return;
       const graph = this.environment.moduleGraph;
       const affected: EnvironmentModuleNode[] = [];
-      for (const id of units) {
+      for (const id of stale) {
         heads.delete(id);
         const node = graph.getModuleById(id);
         if (!node) continue;

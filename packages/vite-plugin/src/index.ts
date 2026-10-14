@@ -21,8 +21,8 @@ import { transformSource } from './transform';
 import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
 import { kitWatchNegations } from './watch-ignored';
 
-import type { AnimusQuarantineOptions } from './quarantine';
 import type {
+  AnimusQuarantineOptions,
   ClosedDynamicImport,
   DiagnosticLevels,
   SourceKitDependency,
@@ -31,7 +31,7 @@ import type {
 import type { Plugin, UserConfig } from 'vite';
 
 export { discoverFiles } from '@animus-ui/extract/pipeline';
-export type { AnimusQuarantineOptions } from './quarantine';
+export type { AnimusQuarantineOptions } from '@animus-ui/extract/pipeline';
 
 /** The optimizer would prebundle an installed kit past the transform: a
  *  source kit from its compiled entry, and a compiled kit with its builder
