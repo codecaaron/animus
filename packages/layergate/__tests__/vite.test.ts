@@ -33,6 +33,10 @@ const files = {
   'styles/x.module.css': '.moduled{color:red}\n',
   'styles/first.css': '.first{color:red}\n',
   'styles/shared.css': '.shared{color:red}\n',
+  'styles/app-escaped.css':
+    '@IMPORT "./shared.css";\n@\\69mport "owned/a.css";\n.app-escaped{color:red}\n',
+  'styles/linked.css': '@import "./mid.css";\n.linked-own{color:red}\n',
+  'styles/mid.css': '@import "./shared.css" supports(display: grid);\n',
   'styles/app-imports.css':
     '@import "./shared.css";\n@import "owned/a.css";\n.app-own-rule{color:red}\n',
   'styles/second.css': '.second{color:red}\n',
@@ -143,6 +147,20 @@ describe('layergate/vite', () => {
     expect(layerOf(css, '.app-own-rule{')).toBeNull();
   });
 
+  // Contract: an app sheet's imports are read as the parser reads them, so
+  // an uppercase or escaped `@import` of an owned file is layered too.
+  test('layers an owned file an app sheet imports in any spelling', async () => {
+    const css = await builtCss(
+      "import 'virtual:layergate';\nimport './styles/app-escaped.css';\n",
+      { sheets: ['./styles/shared.css'], dependencies: ['owned'] }
+    );
+    const shared = [...css.matchAll(/\.shared\{/g)].map((match) => match.index);
+    expect(shared.length).toBeGreaterThan(1);
+    for (const at of shared) expect(layerAt(css, at!)).toBe('vendor');
+    expect(layerOf(css, '.owned-a{')).toBe('vendor');
+    expect(layerOf(css, '.app-escaped{')).toBeNull();
+  });
+
   // Contract: declared sheets come first, in their declared order, even
   // when the app imports a later one before anything imports
   // `virtual:layergate`.
@@ -181,6 +199,31 @@ describe('layergate/vite', () => {
 });
 
 describe('layergate/vite in dev', () => {
+  // Contract: a stylesheet an HTML link loads in development, requested
+  // as `?direct`, is finished as any other: what it reaches of a declared
+  // sheet, through another sheet and a supports condition, is layered.
+  test('finishes a stylesheet an HTML link loads', async () => {
+    const server = await createServer({
+      root,
+      logLevel: 'silent',
+      configFile: false,
+      plugins: [layergate({ sheets: ['./styles/shared.css'] })],
+      server: { middlewareMode: true, ws: false },
+    });
+    try {
+      const result = await server.environments.client.transformRequest(
+        '/styles/linked.css?direct'
+      );
+      const css = result?.code ?? '';
+      expect(css).toMatch(
+        /@layer vendor \{\s*@supports \(display: grid\) \{\s*\.shared\{/
+      );
+      expect(layerOf(css, '.linked-own{')).toBeNull();
+    } finally {
+      await server.close();
+    }
+  });
+
   // Contract: an installed owned file is watched while a finished
   // stylesheet reads it: one its stylesheet stops importing is no longer
   // watched, and one deleted and created again is watched again.

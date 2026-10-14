@@ -1,7 +1,13 @@
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { build, createServer } from 'vite-plus';
+import { build, createServer, searchForWorkspaceRoot } from 'vite-plus';
 import { describe, expect, it } from 'vitest';
 
 import { animusExtract } from '../../src/index';
@@ -9,14 +15,26 @@ import { createDevFixture } from './fixture';
 
 /** A fixture whose entry imports Animus's stylesheet and nothing with a
  *  component, with one declared vendor sheet inside the root and one
- *  outside it, each with an image. */
+ *  outside it, each with an image; the outside sheet's image lies in
+ *  another directory. An app sheet an HTML link would load reaches the
+ *  declared vendor sheet through another sheet and a supports condition. */
 function globalOnlyFixture() {
   const fixture = createDevFixture();
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'animus-outside-')));
-  writeFileSync(join(outside, 'far.png'), Buffer.alloc(9000, 7));
+  mkdirSync(join(outside, 'sheets'));
+  mkdirSync(join(outside, 'assets'));
+  writeFileSync(join(outside, 'assets/far.png'), Buffer.alloc(9000, 7));
   writeFileSync(
-    join(outside, 'outside.css'),
-    '.vendor-outside{background:url(./far.png)}\n'
+    join(outside, 'sheets/outside.css'),
+    '.vendor-outside{background:url(../assets/far.png)}\n'
+  );
+  fixture.write(
+    'src/linked.css',
+    '@import "./mid.css";\n.linked-own{color:red}\n'
+  );
+  fixture.write(
+    'src/mid.css',
+    '@import "../vendor/vendor.css" supports(display: grid);\n'
   );
   fixture.write(
     'vendor/vendor.css',
@@ -26,11 +44,12 @@ function globalOnlyFixture() {
   fixture.write('src/main.ts', "import 'virtual:animus/styles.css';\n");
   return {
     root: fixture.root,
+    outside,
     write: fixture.write,
     plugin: animusExtract({
       system: './src/ds.ts',
       quarantine: {
-        sheets: ['./vendor/vendor.css', join(outside, 'outside.css')],
+        sheets: ['./vendor/vendor.css', join(outside, 'sheets/outside.css')],
       },
     }),
     dispose() {
@@ -83,9 +102,12 @@ describe('quarantine delivers declared sheets with Animus stylesheet', () => {
     }
   });
 
-  // Contract: in development, a declared sheet's file outside the root is
-  // served through `/@fs/`, its directory allowed.
-  it('serves a file outside the root in development', async () => {
+  // Contract: in development, a declared sheet's directory outside the
+  // root is allowed when the server starts, beside Vite's default workspace
+  // root; an asset it references elsewhere is served through `/@fs/` too.
+  // A stylesheet an HTML link loads (`?direct`) is finished: what it
+  // reaches of a declared sheet is layered.
+  it('serves files outside the root and finishes linked stylesheets in development', async () => {
     const app = globalOnlyFixture();
     const server = await createServer({
       root: app.root,
@@ -95,6 +117,9 @@ describe('quarantine delivers declared sheets with Animus stylesheet', () => {
       server: { port: 0 },
     });
     try {
+      const allow = server.config.server.fs.allow;
+      expect(allow).toContain(join(app.outside, 'sheets'));
+      expect(allow).toContain(searchForWorkspaceRoot(app.root));
       await server.listen();
       const base = server.resolvedUrls!.local[0]!.replace(/\/$/, '');
       const css = await (
@@ -104,6 +129,13 @@ describe('quarantine delivers declared sheets with Animus stylesheet', () => {
       const far = /url\(\\"(\/@fs[^"\\]+far\.png)\\"\)/.exec(css)?.[1];
       expect(far).toBeDefined();
       expect((await fetch(`${base}${far}`)).status).toBe(200);
+      const linked = await (
+        await fetch(`${base}/src/linked.css?direct`)
+      ).text();
+      expect(linked).toMatch(
+        /@layer anm-vendor \{\s*@supports \(display: grid\) \{\s*\.vendor-only\{/
+      );
+      expect(linked).toMatch(/^\.linked-own\{/m);
     } finally {
       await server.close();
       app.dispose();

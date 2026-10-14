@@ -149,6 +149,25 @@ describe('compileUnit', () => {
     );
   });
 
+  // Contract: a file's own text and its imports' stylesheets keep their
+  // source order, so a layer statement between two imports creates its
+  // layer between them, after the first import's layer.
+  test('keeps a layer statement between imports in source order', async () => {
+    const unit = await compile(
+      {
+        '/p/root.css':
+          '@import "./a.css" layer(first);\n@layer later;\n@import "./empty.css";\n@layer later { .x{color:blue} }\n',
+        '/p/a.css': '.x{color:red}\n',
+        '/p/empty.css': '\n',
+      },
+      '/p/root.css'
+    );
+    const first = unit.css.indexOf('@layer first {');
+    const later = unit.css.indexOf('@layer later;');
+    expect(first).toBeGreaterThan(-1);
+    expect(first).toBeLessThan(later);
+  });
+
   // Contract: nested media conditions on a remote import's way are joined
   // when each is a bare condition.
   test('joins bare media conditions on a remote import', async () => {
