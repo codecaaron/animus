@@ -2,29 +2,15 @@
   {
     "row": "loader:large-closure",
     "fixture": "large-closure",
-    "baseline": "a309af4d92359633e307204f4293d86653cea56c0d8755b2c6b94f01c2c5e727",
-    "candidate": "599d3eb58c71d3386942d2868cf18c53dfd4d23831371e10f0ec01fe3f3a58b3",
-    "reason": "The audit owns the packages of the monorepo the system's package belongs to, found as package managers find it: the load reads the manifest declaring the workspaces, this repository's root package.json, so 14 paths become 15. The config is identical (configDigest unchanged). (macOS)"
+    "baseline": "8892a4391672bb076224e43341755a1a84647456e1760eb55412d09b6bbb792a",
+    "candidate": "21ee5ec9dc8aacab753494eb9bd271ca19b069a4df200f2e87285a92d1887d54",
+    "reason": "The audit owns the packages of the monorepo the system's package belongs to, found as package managers find it: the load reads the manifest declaring the workspaces, this repository's root package.json, so 14 paths become 15. The config is identical (configDigest unchanged). Digests are of repository-relative paths, the same in any checkout and on any platform."
   },
   {
     "row": "loader:showcase",
     "fixture": "showcase",
-    "baseline": "95fc5b12200e61508b6db6f47ee25d8707bcb728e3fb80786e564582bc8b7d12",
-    "candidate": "d6faa34ecdd5c8219150f256577597879abd7f011a423c292b1fd1465ad4deee",
-    "reason": "The audit owns the packages of the monorepo the system's package belongs to, found as package managers find it: the load reads the manifest declaring the workspaces, this repository's root package.json, so 20 paths become 21. The config is identical (configDigest unchanged). (macOS)"
-  },
-  {
-    "row": "loader:large-closure",
-    "fixture": "large-closure",
-    "baseline": "2518d7cd1b46954b9677a94807c8c88b3d3347250bb56a3f199cc7b0b0a51dec",
-    "candidate": "013ed4d8a1892ab4a82c5905d05ea015013e24ccf784646f7ea1da46af3ff8b4",
-    "reason": "The audit owns the packages of the monorepo the system's package belongs to, found as package managers find it: the load reads the manifest declaring the workspaces, this repository's root package.json, so 14 paths become 15. The config is identical (configDigest unchanged). (Linux)"
-  },
-  {
-    "row": "loader:showcase",
-    "fixture": "showcase",
-    "baseline": "7e40513c2c9c2af8610d2d8770363371c079d69b445fa7bec8dc916a466187ba",
-    "candidate": "525b3254f23d867a4961aef46b71b5e8b4c8cef7d92a15238a2658540060f0dc",
-    "reason": "The audit owns the packages of the monorepo the system's package belongs to, found as package managers find it: the load reads the manifest declaring the workspaces, this repository's root package.json, so 20 paths become 21. The config is identical (configDigest unchanged). (Linux)"
+    "baseline": "d2b211f2bdd7431b9661f0df06539825eeffd78198071ce86bff92d13d191d63",
+    "candidate": "557fb7ebf9f64418eec914e35095ede704b24925fb53a6536daf7d8abb2f9be2",
+    "reason": "The audit owns the packages of the monorepo the system's package belongs to, found as package managers find it: the load reads the manifest declaring the workspaces, this repository's root package.json, so 20 paths become 21. The config is identical (configDigest unchanged). Digests are of repository-relative paths, the same in any checkout and on any platform."
   }
 ]
