@@ -376,15 +376,19 @@ describe('withAnimus', () => {
   // Contract: the refusal follows the host actually running, not Animus's
   // own Turbopack mode: under Turbopack with `turbopack: { mode: 'off' }`,
   // Next never calls the webpack hook, so vendor CSS would ship unlayered.
-  test('quarantine refuses Turbopack whatever the turbopack mode', () => {
-    vi.stubEnv('TURBOPACK', '1');
-    const wrapped = withAnimus({
-      system: './src/ds.ts',
-      turbopack: { mode: 'off' },
-      quarantine: { sheets: ['vendor/a.css'] },
-    });
-    expect(() => wrapped({})).toThrow(QUARANTINE_TURBOPACK_MESSAGE);
-  });
+  // Next sets TURBOPACK, possibly empty: its presence counts.
+  test.each(['1', ''])(
+    'quarantine refuses Turbopack whatever the turbopack mode (TURBOPACK=%j)',
+    (value) => {
+      vi.stubEnv('TURBOPACK', value);
+      const wrapped = withAnimus({
+        system: './src/ds.ts',
+        turbopack: { mode: 'off' },
+        quarantine: { sheets: ['vendor/a.css'] },
+      });
+      expect(() => wrapped({})).toThrow(QUARANTINE_TURBOPACK_MESSAGE);
+    }
+  );
 
   test('declares the runtime dev define from the Next dev flag', () => {
     const root = mkdtempSync(join(tmpdir(), 'animus-next-define-'));

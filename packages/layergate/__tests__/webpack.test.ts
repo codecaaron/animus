@@ -40,11 +40,15 @@ const postcss: unknown = requireCjs(
 );
 
 interface StatsOptions {
-  errors: boolean;
+  errors?: boolean;
+  warnings?: boolean;
 }
 interface Stats {
   hasErrors(): boolean;
-  toJson(options: StatsOptions): { errors?: { message: string }[] };
+  toJson(options: StatsOptions): {
+    errors?: { message: string }[];
+    warnings?: { message: string }[];
+  };
 }
 interface WatchOptions {
   aggregateTimeout: number;
@@ -79,9 +83,16 @@ interface Variant {
   symlinks?: boolean;
   alias?: Record<string, string>;
   cacheDirectory?: string;
+  /** css-loader's `modules`, when not `false`, as Next's global chains
+   *  set it. */
+  modules?: { value: unknown };
+  /** Whether layergate's plugin runs; false builds natively. */
+  plugin?: boolean;
+  sheets?: string[];
 }
 interface CssLoaderOptions {
   postcss(): Promise<{ postcss: unknown }>;
+  modules?: unknown;
 }
 /** A compilation, as the trace hook reads it: not at all. */
 interface Compilation {
@@ -161,6 +172,10 @@ const files = {
   // ICSS exports only: Next's css-loader names local classes only with
   // the getLocalIdent Next passes it.
   'node_modules/owned/button.module.css': ':export{accent:red}\n',
+  'node_modules/owned/sheet.icss.css':
+    ':export{tone:blue}\n.icss-rule{color:red}\n',
+  'app/link/img.png': 'image beside the link',
+  'elsewhere/root.css': '.linked-root{background:url(./img.png)}\n',
   'node_modules/owned/wraps.css':
     '@import "../../app/declarer.css";\n@import "animus-styles";\n.wraps{color:red}\n',
   'node_modules/owned/warm.css': '.warm{color:red}\n',
@@ -184,6 +199,7 @@ symlinkSync(
   join(root, 'elsewhere/child.css'),
   join(root, 'node_modules/linked/child.css')
 );
+symlinkSync(join(root, 'elsewhere/root.css'), join(root, 'app/link/root.css'));
 
 /** A compiler whose entry exports each stylesheet's CSS text by name, or
  *  runs the given module source. */
@@ -206,7 +222,7 @@ function compiler(
   );
   utimesSync(entry, past, past);
   const plugin = new LayergatePlugin({
-    sheets: ['owned/declared.css'],
+    sheets: variant.sheets ?? ['owned/declared.css'],
     dependencies: ['owned', 'linked'],
     declaredBy: join(root, 'app/declarer.css'),
   });
@@ -230,7 +246,10 @@ function compiler(
           use: [
             {
               loader: CSS_LOADER,
-              options: { postcss: async () => ({ postcss }) },
+              options: {
+                postcss: async () => ({ postcss }),
+                modules: variant.modules ? variant.modules.value : false,
+              },
             },
           ],
         },
@@ -249,7 +268,7 @@ function compiler(
     // As Next sets it: every `node_modules` file changes only with its
     // package's version.
     snapshot: { managedPaths: [/^(.+?[\\/]node_modules[\\/])/] },
-    plugins: [plugin],
+    plugins: variant.plugin === false ? [] : [plugin],
   });
   webpack.hooks.compilation.tap('trace', (compilation) => {
     webpack.webpack.NormalModule.getCompilationHooks(compilation).loader.tap(
@@ -318,15 +337,17 @@ function watchThrough(
 }
 
 describe('layergate webpack adapter', () => {
-  // Contract: the loader joins every CSS chain whose css-loader does not
-  // read every stylesheet as a CSS Module, just before PostCSS runs, and
+  // Contract: the loader joins every CSS chain whose css-loader is
+  // explicitly global (`modules: false`), just before PostCSS runs, and
   // raises css-loader's importLoaders by one on a copy; CSS Modules and
-  // next/font chains are left alone, a Lightning CSS chain is counted uncovered, inserting twice
+  // next/font chains are left alone, a chain whose css-loader decides per
+  // file (`modules` unset or `auto`) and a Lightning CSS chain are left
+  // alone and reported by their place, inserting twice
   // changes nothing, and no rule is added (Next drops its own CSS rules
   // when a top-level rule matches `.css`).
   test('wraps each global CSS chain and nothing else', () => {
     const entry = { loader: '/layergate-loader.js', options: { id: 'x' } };
-    const cssOptions = { importLoaders: 1, url: true };
+    const cssOptions = { importLoaders: 1, url: true, modules: false };
     const global = {
       use: [
         '/next/mini-css-extract/loader.js',
@@ -339,7 +360,7 @@ describe('layergate webpack adapter', () => {
         '/next/mini-css-extract/loader.js',
         {
           loader: '/next/css-loader/src/index.js',
-          options: { importLoaders: 3 },
+          options: { importLoaders: 3, modules: false },
         },
         { loader: '/next/postcss-loader/src/index.js' },
         { loader: '/resolve-url-loader/index.js' },
@@ -360,19 +381,43 @@ describe('layergate webpack adapter', () => {
         { loader: '/next/next-font-loader/index.js' },
       ],
     };
+    const auto = {
+      use: [
+        {
+          loader: '/css-loader/index.js',
+          options: { modules: { auto: () => true } },
+        },
+      ],
+    };
+    const unset = { use: [{ loader: '/css-loader/index.js' }] };
     const lightning = { use: [{ loader: '/lightningcss-loader/index.js' }] };
     const rules: unknown[] = [
-      { oneOf: [modules, font, global, { rules: [sass] }] },
+      { oneOf: [modules, font, global, { rules: [sass] }, auto] },
+      unset,
       lightning,
     ];
+    const coverage = {
+      wrapped: 2,
+      skipped: [
+        expect.stringMatching(
+          /^module\.rules\[0\]\.oneOf\[4\] is not layered: its css-loader is not `modules: false`/
+        ),
+        expect.stringMatching(
+          /^module\.rules\[1\] is not layered: its css-loader/
+        ),
+        expect.stringMatching(
+          /^module\.rules\[2\] is not layered: it uses Lightning CSS/
+        ),
+      ],
+    };
 
-    expect(insertLoader(rules, entry)).toEqual({ wrapped: 2, uncovered: 1 });
-    expect(rules).toHaveLength(2);
+    expect(insertLoader(rules, entry)).toEqual(coverage);
+    expect(rules).toHaveLength(3);
     expect(global.use).toEqual([
       '/next/mini-css-extract/loader.js',
       {
         loader: '/next/css-loader/src/index.js',
-        options: { importLoaders: 2, url: true },
+        options: { importLoaders: 2, url: true, modules: false },
       },
       { loader: '/next/postcss-loader/src/index.js', options: {} },
       entry,
@@ -391,8 +436,10 @@ describe('layergate webpack adapter', () => {
     expect(sass.use[1]).toMatchObject({ options: { importLoaders: 4 } });
     expect(modules.use).toHaveLength(1);
     expect(font.use).toHaveLength(2);
+    expect(auto.use).toHaveLength(1);
+    expect(unset.use).toHaveLength(1);
 
-    expect(insertLoader(rules, entry)).toEqual({ wrapped: 0, uncovered: 1 });
+    expect(insertLoader(rules, entry)).toEqual({ ...coverage, wrapped: 0 });
     expect(global.use).toHaveLength(4);
   });
 
@@ -482,21 +529,71 @@ describe('layergate webpack adapter', () => {
     expect(outputs[1]!.warm).toContain('.warm{color:green}');
   });
 
-  // Contract: a stylesheet css-loader treats as a CSS Module or ICSS
-  // sheet, by its own per-file decision (here, by name, with `modules`
-  // unset), passes untouched though it is owned, so its `:export` values
-  // survive.
-  test('leaves an owned CSS Module to css-loader', async () => {
+  // Contract: a chain whose css-loader decides per file whether a
+  // stylesheet is a CSS Module is never touched, whatever decides it:
+  // Next's own classifier (`modules` unset), a stateful /g RegExp, an
+  // `auto` function (which css-loader may hand a query and fragment), or
+  // `auto: false` beside an ICSS name. Owned stylesheets it builds come out
+  // exactly as natively, exports included, and the chain is reported with
+  // the remedy.
+  test.each([
+    ['unset', () => undefined],
+    ['a /g RegExp', () => ({ auto: /\.module\.css$/g })],
+    [
+      'a function',
+      () => ({
+        auto: (path: string, query?: string, fragment?: string) =>
+          /\.module\.css$/.test(path) && !query && !fragment,
+      }),
+    ],
+    ['auto: false', () => ({ auto: false })],
+  ])(
+    'leaves a per-file css-loader chain alone: modules %s',
+    async (name, modules) => {
+      const entry =
+        "import button from 'owned/button.module.css';\nimport sheet from 'owned/sheet.icss.css';\n" +
+        'export const accent = String(button.locals?.accent);\nexport const tone = String(sheet.locals?.tone);\n' +
+        'export const css = String(button) + String(sheet);\n';
+      const output = `per-file-${name.replace(/\W+/g, '-')}`;
+      const layered = await run(
+        compiler(entry, output, { modules: { value: modules() } })
+      );
+      const withLayergate = exported(output);
+      await run(
+        compiler(entry, output, {
+          modules: { value: modules() },
+          plugin: false,
+        })
+      );
+      expect(withLayergate).toEqual(exported(output));
+      expect(withLayergate.css).not.toContain('@layer');
+      const warnings = layered
+        .toJson({ warnings: true })
+        .warnings?.map((warning) => warning.message);
+      expect(warnings).toContainEqual(
+        expect.stringMatching(
+          /^\[layergate\] module\.rules\[0\] is not layered: .*`modules: false`, or opt out \[layergate\.coverage\]$/
+        )
+      );
+    }
+  );
+
+  // Contract: the declared sheets are read where webpack resolves them, so
+  // a declared sheet that is a symlink rebases its `url()`s from the link
+  // under `resolve.symlinks: false`, as css-loader would; it is still
+  // declared and owned by realpath.
+  test('delivers a symlinked declared sheet from where it lies', async () => {
     const stats = await run(
-      compiler(
-        "import s from 'owned/button.module.css';\nexport const accent = String(s.locals?.accent);\nexport const css = String(s);\n",
-        'module'
-      )
+      compiler({ declarer: './app/declarer.css' }, 'declared-link', {
+        symlinks: false,
+        sheets: ['./app/link/root.css'],
+      })
     );
     expect(stats.toJson({ errors: true }).errors).toEqual([]);
-    const { accent, css } = exported('module');
-    expect(accent).toBe('red');
-    expect(css).not.toContain('@layer');
+    expect(exported('declared-link').declarer).toBe(
+      '@layervendor;@layervendor{.linked-root{background:url(app/link/img.png)}}.declarer{color:red}'
+    );
+    expect(readdirSync(join(root, 'dist/app/link'))).toEqual(['img.png']);
   });
 
   // Contract: the `declaredBy` stylesheet (Animus's own) is never layered
