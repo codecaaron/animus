@@ -60,7 +60,8 @@ export default defineConfig({
 ```
 
 The plugin is **delivery-only**: it injects `artifact.code` verbatim as an inline
-`<script data-animus-bootstrap>` at the start of `<head>`, ahead of every
+`<script data-animus-bootstrap>` in `<head>`, after the charset and viewport
+metas (so the charset stays within the first 1024 bytes) and ahead of every
 stylesheet reference, and interprets no appearance semantics. Omit the option and
 the built HTML is byte-for-byte what it was before.
 

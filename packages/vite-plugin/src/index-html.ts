@@ -1,5 +1,5 @@
 import {
-  renderFontPreloads,
+  fontPreloadOrigins,
   substituteFontPreloads,
 } from '@animus-ui/extract/pipeline';
 
@@ -28,15 +28,15 @@ function preloadedHrefs(html: string): Set<string> {
   return hrefs;
 }
 
-/** The head elements a font preload goes after (the charset and viewport
- *  metas), the stylesheets it goes before, and what holds neither. */
+/** The head elements Animus's tags go after (the charset and viewport
+ *  metas), the stylesheets they go before, and what holds neither. */
 const HEAD_SCAN_RE =
   /<!--[\s\S]*?-->|<script\b[\s\S]*?<\/script\s*>|<\/head\s*>|<style\b|<(?:meta|link)\b[^>]*>/gi;
 
-/** Where the font preloads go: after the head's charset and viewport metas,
- *  so they cannot push the charset past the 1024 bytes a browser sniffs for
- *  it, and before its first stylesheet; -1 without a `<head>`. */
-function fontPreloadOffset(html: string): number {
+/** Where Animus's head tags go: after the head's charset and viewport
+ *  metas, so they cannot push the charset past the 1024 bytes a browser
+ *  sniffs for it, and before its first stylesheet; -1 without a `<head>`. */
+function headTagOffset(html: string): number {
   const open = /<head\b[^>]*>/i.exec(html);
   if (open === null) return -1;
   const start = open.index + open[0].length;
@@ -60,15 +60,67 @@ function fontPreloadOffset(html: string): number {
   return offset;
 }
 
+/** As `escape-html` escapes, which Vite applies to attribute values. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** A tag as Vite serializes it, `children` as written, except that an
+ *  undefined attribute is left out rather than written "undefined". */
+function serializeTag({
+  tag,
+  attrs = {},
+  children,
+}: HtmlTagDescriptor): string {
+  const serialized = Object.entries(attrs)
+    .map(([key, value]) => {
+      if (value === true) return ` ${key}`;
+      if (value === false || value === undefined) return '';
+      return ` ${key}="${escapeHtml(value)}"`;
+    })
+    .join('');
+  if (tag === 'link' || tag === 'meta' || tag === 'base') {
+    return `<${tag}${serialized}>`;
+  }
+  const body = Array.isArray(children) ? '' : (children ?? '');
+  return `<${tag}${serialized}>${body}</${tag}>`;
+}
+
 /**
- * `html` with the preconnects and preloads for the faces that ask for one,
- * by the URL the stylesheet's own `url()` gets, after the charset and
- * viewport metas and ahead of every stylesheet; one the document already
- * preloads is left out.
+ * The hook's result: the tags written after the charset and viewport metas,
+ * each on its own line indented as the element it follows, so the charset
+ * stays in the first 1024 bytes however long the tags are; as `head-prepend`
+ * tags for a document without a `<head>`.
  */
-export function injectFontPreloads(ctx: PluginContext, html: string): string {
+export function injectHeadTags(
+  html: string,
+  tags: HtmlTagDescriptor[]
+): string | HtmlTagDescriptor[] {
+  const offset = headTagOffset(html);
+  if (offset === -1) return tags;
+  if (tags.length === 0) return html;
+  const lineStart = html.lastIndexOf('\n', offset - 1) + 1;
+  const indent = /^[ \t]*/.exec(html.slice(lineStart))![0];
+  const inserted = tags
+    .map((tag) => `\n${indent}${serializeTag(tag)}`)
+    .join('');
+  return html.slice(0, offset) + inserted + html.slice(offset);
+}
+
+/** The preconnects and preloads for the faces that ask for one, by the
+ *  URL the stylesheet's own `url()` gets; one the document already
+ *  preloads is left out. */
+function fontPreloadTags(
+  ctx: PluginContext,
+  html: string
+): HtmlTagDescriptor[] {
   const published = ctx.served?.fontPreloads ?? [];
-  if (published.length === 0) return html;
+  if (published.length === 0) return [];
   const existing = preloadedHrefs(html);
   const preloads = substituteFontPreloads(published, ctx.assetUrlBySpecifier)
     .map((preload) =>
@@ -77,23 +129,38 @@ export function injectFontPreloads(ctx: PluginContext, html: string): string {
         : { ...preload, href: ctx.devRootRelativeUrl(preload.href) }
     )
     .filter(({ href }) => !existing.has(href));
-  const offset = fontPreloadOffset(html);
-  if (preloads.length === 0 || offset === -1) return html;
-  // Each tag on its own line, indented as the element it follows.
-  const lineStart = html.lastIndexOf('\n', offset - 1) + 1;
-  const indent = /^[ \t]*/.exec(html.slice(lineStart))![0];
-  const tags = renderFontPreloads(preloads)
-    .split('\n')
-    .map((tag) => `\n${indent}${tag}`)
-    .join('');
-  return html.slice(0, offset) + tags + html.slice(offset);
+  return [
+    ...fontPreloadOrigins(preloads.map(({ href }) => href)).map(
+      (origin): HtmlTagDescriptor => ({
+        tag: 'link',
+        attrs: { rel: 'preconnect', href: origin, crossorigin: true },
+        injectTo: 'head-prepend',
+      })
+    ),
+    ...preloads.map(({ href, type }): HtmlTagDescriptor => {
+      const attrs: NonNullable<HtmlTagDescriptor['attrs']> = {
+        rel: 'preload',
+        href,
+        as: 'font',
+      };
+      // An undefined attribute serializes as "undefined", a type that tells
+      // the browser to refuse the preload.
+      if (type !== undefined) attrs.type = type;
+      attrs.crossorigin = true;
+      return { tag: 'link', attrs, injectTo: 'head-prepend' };
+    }),
+  ];
 }
 
 /**
- * Vite serializes one `head-prepend` bucket in array order, so the bootstrap
- * script precedes the layer declaration and every stylesheet reference.
+ * Animus's head tags in document order: the bootstrap script, so it runs
+ * before first paint and ahead of every stylesheet, the layer declaration,
+ * the font preloads, then the development bridge.
  */
-export function buildIndexHtmlTags(ctx: PluginContext): HtmlTagDescriptor[] {
+export function buildIndexHtmlTags(
+  ctx: PluginContext,
+  html = ''
+): HtmlTagDescriptor[] {
   const tags: HtmlTagDescriptor[] = [];
 
   const bootstrap = ctx.options.appearanceBootstrap;
@@ -114,6 +181,8 @@ export function buildIndexHtmlTags(ctx: PluginContext): HtmlTagDescriptor[] {
       injectTo: 'head-prepend',
     });
   }
+
+  tags.push(...fontPreloadTags(ctx, html));
 
   // Dev only, never gated on a publication: index.html can be served before
   // the first analysis, and a document missing the tag stays unstyled.

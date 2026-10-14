@@ -217,8 +217,8 @@ const FONT_PRELOAD_PRECEDING_METAS: readonly RegExp[] = [
  * loads, so the browser fetches the file once — and it precedes every
  * stylesheet the document fetches. Its type, when it has one, is a font MIME type: a
  * browser ignores a preload whose type it does not support. It follows the
- * charset and viewport metas, so preloads cannot push the charset past the
- * bytes a browser sniffs for it.
+ * charset and viewport metas, and the charset ends within the 1024 bytes a
+ * browser sniffs for it.
  */
 export function assertFontPreload(html: string, href: string): void {
   const head = headOf(html);
@@ -259,6 +259,7 @@ export function assertFontPreload(html: string, href: string): void {
     }
   }
   // An inline `<style>` fetches nothing for the preload to get ahead of.
+  assertCharsetWithinByteBudget(html);
   const first = firstStylesheetReference(
     head,
     'assertFontPreload',

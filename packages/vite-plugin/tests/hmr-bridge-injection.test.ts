@@ -8,7 +8,7 @@ import {
   VIRTUAL_BRIDGE_ID,
 } from '../src/constants';
 import { animusExtract } from '../src/index';
-import { buildIndexHtmlTags, injectFontPreloads } from '../src/index-html';
+import { buildIndexHtmlTags, injectHeadTags } from '../src/index-html';
 import { loadVirtualModule } from '../src/virtual-modules';
 import { publicationWith } from './context-probe';
 import {
@@ -109,7 +109,11 @@ describe('the wired hook delivers the bridge', () => {
       path: '/',
       filename: join(process.cwd(), 'index.html'),
     });
-    expect(result).toEqual({ html: '', tags: [BRIDGE_TAG] });
+    if (!Array.isArray(result)) {
+      throw new Error('transformIndexHtml must return tag descriptors');
+    }
+
+    expect(result).toEqual([BRIDGE_TAG]);
   });
 });
 
@@ -151,7 +155,7 @@ describe('the bridge module is server-safe', () => {
   });
 });
 
-describe('font preload tags', () => {
+describe('head tags after the charset', () => {
   const HTML = [
     '<!doctype html>',
     '<html>',
@@ -164,16 +168,30 @@ describe('font preload tags', () => {
     '</html>',
   ].join('\n');
 
-  function injected(fontPreloads: { href: string; type?: string }[]) {
-    const ctx = contextWith({ isProd: true });
+  function transformed(
+    fontPreloads: { href: string; type?: string }[],
+    bootstrap?: string
+  ): string {
+    const overrides: Parameters<typeof contextWith>[0] = {
+      isProd: true,
+      layerDeclaration: LAYER_DECLARATION,
+    };
+    if (bootstrap !== undefined) {
+      overrides.appearanceBootstrap = { code: bootstrap, cspHash: '' };
+    }
+    const ctx = contextWith(overrides);
     ctx.served = publicationWith({ fontPreloads });
-    return injectFontPreloads(ctx, HTML);
+    const result = injectHeadTags(HTML, buildIndexHtmlTags(ctx, HTML));
+    if (Array.isArray(result)) {
+      throw new Error('a document with a <head> gets its tags written in');
+    }
+    return result;
   }
 
   test('a preload of no known type carries no type attribute', () => {
-    // Vite serializes an undefined attribute as type="undefined", which a
+    // An undefined attribute serializes as type="undefined", which a
     // browser must refuse as an unsupported type.
-    const html = injected([
+    const html = transformed([
       { href: '/a.woff2', type: 'font/woff2' },
       { href: '/b' },
     ]);
@@ -186,13 +204,28 @@ describe('font preload tags', () => {
     expect(html).not.toContain('undefined');
   });
 
-  test('preloads follow the charset and viewport metas and precede the first stylesheet', () => {
-    // Before the charset, enough faces push it past the 1024 bytes a
-    // browser sniffs for it.
-    const html = injected([{ href: '/a.woff2', type: 'font/woff2' }]);
-    const at = html.indexOf('rel="preload"');
-    expect(html.indexOf('name="viewport"')).toBeLessThan(at);
-    expect(html.indexOf('charset=')).toBeLessThan(at);
-    expect(at).toBeLessThan(html.indexOf('rel="stylesheet"'));
+  test('the charset stays in the first 1024 bytes, then bootstrap, layers, preloads, stylesheet', () => {
+    // Before the charset, a long bootstrap or many faces push it past the
+    // bytes a browser sniffs for it.
+    const html = transformed(
+      Array.from({ length: 12 }, (_, i) => ({
+        href: `/fonts/face-${i}.woff2`,
+        type: 'font/woff2',
+      })),
+      `/*${'x'.repeat(2000)}*/`
+    );
+    const charsetEnd = html.indexOf('>', html.indexOf('<meta charset')) + 1;
+    expect(
+      new TextEncoder().encode(html.slice(0, charsetEnd)).length
+    ).toBeLessThanOrEqual(1024);
+    const order = [
+      'name="viewport"',
+      'data-animus-bootstrap',
+      'data-animus-layers',
+      'rel="preload"',
+      'rel="stylesheet"',
+    ].map((marker) => html.indexOf(marker));
+    expect(order.every((at) => at > charsetEnd)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 });
