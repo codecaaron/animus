@@ -52,7 +52,7 @@ function strictSession(
  *  `#aaaaaa`) and `outer/definition`, which extends `kit/base` from outer's
  *  own copy of kit (B, `#bbbbbb`) and re-exports B's brand: one package
  *  name, two instances. */
-function twoInstanceApp(): string {
+function twoInstanceApp(aliasedMain = false): string {
   const root = realpathSync(makeTempRoot('animus-two-instances-'));
   const write = (path: string, contents: string) => {
     mkdirSync(dirname(join(root, path)), { recursive: true });
@@ -95,13 +95,19 @@ function twoInstanceApp(): string {
     kitSource('#bbbbbb')
   );
   pkg('node_modules/outer', 'outer', ['definition']);
+  // C, which a host aliasing `kit` to `alt-kit` serves for kit/main.
+  pkg('node_modules/alt-kit', 'alt-kit', ['main', 'base']);
+  write('node_modules/alt-kit/src/main.ts', kitSource('#cccccc'));
+  write('node_modules/alt-kit/src/base.ts', kitSource('#cccccc'));
   write(
     'node_modules/outer/src/definition.ts',
     `import { createSystem } from '@animus-ui/system';\nimport { ds as base, brand } from 'kit/base';\nexport const ds = createSystem().extend(base).build().seal();\nexport { brand };\n`
   );
   write(
     'src/system.ts',
-    `import { createSystem, createTheme } from '@animus-ui/system';\nimport { ds as main } from 'kit/main';\nimport { ds as outer, brand } from 'outer/definition';\nexport const theme = createTheme().addColors({ brand: { 500: brand } }).build();\nexport const ds = createSystem().extend(main).extend(outer).build().seal();\n`
+    aliasedMain
+      ? `import { createSystem, createTheme } from '@animus-ui/system';\nimport { ds as main, brand } from 'kit/main';\nimport { ds as outer } from 'outer/definition';\nexport const theme = createTheme().addColors({ brand: { 500: brand } }).build();\nexport const ds = createSystem().extend(main).extend(outer).build().seal();\n`
+      : `import { createSystem, createTheme } from '@animus-ui/system';\nimport { ds as main } from 'kit/main';\nimport { ds as outer, brand } from 'outer/definition';\nexport const theme = createTheme().addColors({ brand: { 500: brand } }).build();\nexport const ds = createSystem().extend(main).extend(outer).build().seal();\n`
   );
   write('src/App.tsx', 'export const App = 1;\n');
   return root;
@@ -109,9 +115,14 @@ function twoInstanceApp(): string {
 
 /** The host the app's bundler is, with each kit's source condition: each
  *  specifier from the root to the source entry a source redirect serves. */
-function nodeHost(root: string): HostResolve {
+function nodeHost(root: string, aliasedMain = false): HostResolve {
   const entries = new Map([
-    ['kit/main', 'node_modules/kit/src/main.ts'],
+    [
+      'kit/main',
+      aliasedMain
+        ? 'node_modules/alt-kit/src/main.ts'
+        : 'node_modules/kit/src/main.ts',
+    ],
     ['outer/definition', 'node_modules/outer/src/definition.ts'],
   ]);
   return async (specifier) => {
@@ -158,9 +169,15 @@ describe("the system evaluates the host's kit instance", () => {
     await expect(strict.runFullPipeline()).rejects.toThrow(
       /reaches 'kit' as two instances/
     );
-    // Downgraded to a warning, the build evaluates as the loader resolves
-    // each importer: outer's kit/base from its own copy.
-    const lenient = makeSession(
+  }, 60000);
+
+  /** Contract (C8): a kit name reaching two instances is refused whatever
+   *  its level, since no instance of it is both evaluated and served: with
+   *  kit/main aliased to C and outer's own B, the loader would evaluate the
+   *  installed A while the bundle serves C. */
+  test('a two-instance kit is refused even with the code downgraded', async () => {
+    const root = twoInstanceApp(true);
+    const warned = makeSession(
       root,
       {
         strict: true,
@@ -168,10 +185,11 @@ describe("the system evaluates the host's kit instance", () => {
       },
       { build: 'warned' }
     );
-    lenient.hostResolve = nodeHost(root);
-    await lenient.runFullPipeline();
-    expect(getSharedCss(lenient.key)).toContain('#bbbbbb');
-    expect(getSharedCss(lenient.key)).not.toContain('#aaaaaa');
+    warned.hostResolve = nodeHost(root, true);
+    await expect(warned.runFullPipeline()).rejects.toThrow(
+      /reaches 'kit' as two instances/
+    );
+    expect(getSharedCss(warned.key) ?? '').not.toContain('#aaaaaa');
   }, 60000);
 
   /** Contract (C8): a participant's check holds only against the authority
@@ -199,4 +217,37 @@ describe("the system evaluates the host's kit instance", () => {
     release();
     await expect(agreed).rejects.toThrow('SessionConfigurationConflict');
   }, 60000);
+
+  /** Contract (C8): a participant's check converges on an authority the
+   *  build commits again with the same context and system, and refuses
+   *  one still changing after three reads. */
+  test('a participant settles on identical recommits and refuses endless change', async () => {
+    const root = createAliasedKitApp('animus-kit-instances-');
+    const owner = strictSession(root, null);
+    await owner.runFullPipeline();
+    let reads = 0;
+    const recommitting =
+      (change: boolean): HostResolve =>
+      async () => {
+        reads += 1;
+        if (reads <= 20) {
+          if (change) {
+            owner.hostResolve =
+              owner.hostResolve === null ? aliasingHost(root) : null;
+          }
+          await owner.runFullPipeline();
+        }
+        return null;
+      };
+    const same = strictSession(root, recommitting(false));
+    await expect(same.agreeWithSystemAuthority()).resolves.toBeUndefined();
+    // The same context and system: settled on the read that saw it.
+    expect(reads).toBe(1);
+    reads = 0;
+    const moving = strictSession(root, recommitting(true));
+    await expect(moving.agreeWithSystemAuthority()).rejects.toThrow(
+      'SessionConfigurationConflict'
+    );
+    expect(reads).toBeLessThanOrEqual(3);
+  }, 120000);
 });

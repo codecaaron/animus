@@ -102,7 +102,7 @@ import {
 } from '../pipeline/index';
 import { parseInternalWire } from '../pipeline/internal-wire';
 import {
-  severityFor,
+  DiagnosticFailure,
   SYSTEM_INSTANCE_MISMATCH,
 } from '../pipeline/manifest-diagnostics';
 import { systemInstanceMismatches } from '../pipeline/system-instances';
@@ -334,6 +334,10 @@ interface KitInstanceRead {
   /** Kit package name → the real root of the host's instance of it. */
   readonly instances: Readonly<Record<string, string>>;
 }
+
+/** How many times a participant reads its kit instances while the build's
+ *  system authority keeps changing under it, before refusing. */
+const AUTHORITY_READS = 3;
 
 /** The kit instances of `read`; none where it failed, so the load resolves
  *  on its own and the failure surfaces where discovery reads it. */
@@ -2352,17 +2356,14 @@ export class ExtractionSession {
           instances.set(name, [...reached][0]!);
           continue;
         }
+        // No instance of it is both evaluated and served, so no level
+        // configuration can make the build's output consistent: refused.
         const shown = [...reached]
           .map((root) => relative(rootDir, root).split(sep).join('/'))
           .join(' and ');
-        diagnostics.push({
-          file: name,
-          component: 'kit',
-          kind: 'error',
-          message: `the system reaches '${name}' as two instances, ${shown}, and Animus evaluates one instance of a package for the whole system, so it takes neither from the host and the bundle may render another than the one evaluated — make the system and its kits resolve '${name}' to one instance`,
-          code: SYSTEM_INSTANCE_MISMATCH,
-          severity: severityFor(SYSTEM_INSTANCE_MISMATCH),
-        });
+        throw new DiagnosticFailure(
+          `[animus] ${SYSTEM_INSTANCE_MISMATCH} — ${name}: the system reaches '${name}' as two instances, ${shown}, and Animus evaluates one instance of a package for the whole system, so the system it evaluates and the source the bundle serves cannot agree — make the system and its kits resolve '${name}' to one instance`
+        );
       }
     }
     return {
@@ -2419,10 +2420,12 @@ export class ExtractionSession {
     // This participant's own kit instances: its host may alias a kit
     // another compiler does not (C8). Reading them waits on the host, while
     // which the build may commit another authority: the check is made only
-    // against the authority current when the read ends.
+    // against an authority whose context and system match the one current
+    // when the read ends. A build still changing its system after three
+    // reads is refused.
     let hostContext: SessionResolutionContext;
     let instances: Readonly<Record<string, string>>;
-    for (;;) {
+    for (let read = 1; ; read++) {
       hostContext = this.hostResolutionContext();
       instances = await instancesOf(
         this.readKitInstances(
@@ -2432,8 +2435,23 @@ export class ExtractionSession {
       );
       const current = getSystemAuthority(this.key);
       if (current === null) return;
-      if (current === authority) break;
+      const settled =
+        current.context === authority.context &&
+        current.identity === authority.identity;
       authority = current;
+      if (settled) break;
+      if (read === AUTHORITY_READS) {
+        throw new SessionConfigurationConflict(
+          this.key,
+          current.label,
+          this.resolutionContextLabel(instances),
+          [
+            `the build's system, committed again under another context or system during each of ${AUTHORITY_READS} checks`,
+          ],
+          'A participant agrees only with a settled system: let the build ' +
+            'finish loading it, then check again.'
+        );
+      }
     }
     const context = this.resolutionContextText(instances);
     if (context === authority.context) return;
