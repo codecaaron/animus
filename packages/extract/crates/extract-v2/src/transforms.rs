@@ -428,7 +428,7 @@ pub(crate) fn admit_configured_host_reads(name: &str, source: &str) -> Result<Ve
         return Err(reasons.into_iter().collect());
     }
     let unresolved = semantic.semantic.scoping().root_unresolved_references();
-    Ok(crate::evaluator::SHARED_HOST_GLOBALS
+    Ok(animus_system_loader::executor::shared_host_globals()
         .iter()
         .copied()
         .filter(|name| unresolved.contains_key(*name))
@@ -694,9 +694,9 @@ mod tests {
     fn every_standard_global_the_evaluator_supplies_is_admitted_and_runs() {
         let mut proven: Vec<&str> = STANDARD_GLOBAL_PROOFS.iter().map(|(name, _)| *name).collect();
         proven.sort_unstable();
-        let mut supplied = crate::evaluator::evaluator_standard_globals().to_vec();
+        let mut supplied = animus_system_loader::executor::standard_globals().to_vec();
         supplied.sort_unstable();
-        let mut specified = crate::evaluator::STANDARD_GLOBALS.to_vec();
+        let mut specified = animus_system_loader::executor::STANDARD_GLOBALS.to_vec();
         specified.sort_unstable();
         assert_eq!(proven, specified, "every specified standard global needs a proof");
         assert_eq!(proven, supplied, "every admitted standard global needs a proof");

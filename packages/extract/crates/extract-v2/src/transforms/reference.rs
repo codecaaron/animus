@@ -18,7 +18,6 @@ use oxc::semantic::{Scoping, SemanticBuilder};
 use oxc::syntax::symbol::SymbolFlags;
 
 use crate::analyze_css::{resolve_import_source, CssInputs};
-use crate::evaluator::SHARED_HOST_GLOBALS;
 use crate::transforms::CallbackDefinition;
 use crate::usage_facts::{is_animus_system_specifier, ExportFact, ImportFact};
 
@@ -267,7 +266,7 @@ impl<'s> Module<'s> {
 
     /// The shared host functions this module declares or imports at top level.
     fn host_bindings(&self) -> Vec<&'static str> {
-        SHARED_HOST_GLOBALS
+        animus_system_loader::executor::shared_host_globals()
             .iter()
             .copied()
             .filter(|name| {

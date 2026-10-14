@@ -12,16 +12,18 @@ use oxc::parser::{Parser, ParserReturn};
 use oxc::semantic::SemanticBuilder;
 use oxc::span::SourceType;
 use oxc::transformer::{TransformOptions, Transformer};
-use rquickjs::{Context, Function, Object, Runtime};
+use rquickjs::{Function, Object};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 mod bounded;
+pub mod executor;
 mod kit_source;
 mod linked;
 pub mod module_table;
 pub mod resolution;
 
 pub use kit_source::{declares_kit_source, resolve_kit_source_root, KitSourceRoot, KitSourceRule};
+use executor::{shared_host_globals, Realm};
 use serde::{Deserialize, Serialize};
 
 /// Serialized system configuration returned by `load_system_module()`.
@@ -1094,11 +1096,8 @@ fn execute_bundle(
     export_name: Option<&str>,
     global_origins: &FxHashMap<String, (String, String)>,
 ) -> Result<SystemConfig, String> {
-    let runtime = Runtime::new().map_err(|e| format!("rquickjs Runtime::new failed: {}", e))?;
-    let context =
-        Context::full(&runtime).map_err(|e| format!("rquickjs Context::full failed: {}", e))?;
-
-    context.with(|ctx| {
+    let realm = Realm::fresh(None)?;
+    realm.with(|ctx| {
         // Compiled before any module runs, so its getters are the pristine ones.
         let authored_probe: Function = ctx
             .eval(AUTHORED_CALLABLE_PROBE.as_bytes())
@@ -1453,11 +1452,6 @@ const AUTHORED_CALLABLE_PROBE: &str = r#"(() => {
   };
 })()"#;
 
-/// Host functions outside ECMA-262 that admission allows by name, when a
-/// configured callable reads them as the host's; the extraction engine's
-/// evaluator admits the same list.
-pub const SHARED_HOST_NAMES: [&str; 2] = ["atob", "btoa"];
-
 /// The script name rquickjs gives the bundle in positions and backtraces.
 const BUNDLE_SCRIPT: &str = "eval_script";
 
@@ -1541,7 +1535,7 @@ fn reads_shared_host_name(source: &str) -> bool {
     }
     let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
     let unresolved = semantic.scoping().root_unresolved_references();
-    SHARED_HOST_NAMES.iter().any(|name| unresolved.contains_key(*name))
+    shared_host_globals().iter().any(|name| unresolved.contains_key(*name))
 }
 
 /// The probe's view of each candidate's authored callable, `None` when its
@@ -1646,7 +1640,7 @@ fn host_binding_evidence(
                 captured.get_or_insert(reason);
             }
             None => {
-                let Some(host) = SHARED_HOST_NAMES.iter().find(|host| name == **host) else { continue };
+                let Some(host) = shared_host_globals().iter().find(|host| name == **host) else { continue };
                 if direct_eval {
                     unproven.get_or_insert_with(|| format!("reads '{name}' in {module}, which calls eval directly"));
                 } else if !globals.contains(host) {
@@ -1972,9 +1966,8 @@ export const ds = tokens;
     }
 
     fn eval_bundle(bundle: &str) -> Result<(), String> {
-        let runtime = Runtime::new().expect("rquickjs runtime");
-        let context = Context::full(&runtime).expect("rquickjs context");
-        context.with(|ctx| {
+        let realm = Realm::fresh(None).expect("rquickjs realm");
+        realm.with(|ctx| {
             ctx.eval::<(), _>(bundle.as_bytes())
                 .map_err(|e| describe_eval_failure(&ctx, &BundleLayout::default(), &e))
         })

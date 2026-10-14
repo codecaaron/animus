@@ -3,10 +3,9 @@
 
 use std::cell::RefCell;
 use std::fmt;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, OnceLock};
 
-use rquickjs::{Context, Function, Runtime};
+use animus_system_loader::executor::Realm;
+use rquickjs::Function;
 use rustc_hash::FxHashMap;
 use serde_json::Value;
 
@@ -133,8 +132,8 @@ struct Definition {
     results: RefCell<FxHashMap<String, Result<Scalar, EvalError>>>,
 }
 
-/// QuickJS polls the interrupt handler about every ten thousand operations,
-/// so an evaluation stops near a million operations on every machine.
+/// The interrupt polls an evaluation may pass: it stops near a million
+/// operations on every machine.
 const BUDGET: u32 = 100;
 
 /// A valid scalar result: its CSS text and whether it was a number.
@@ -142,126 +141,6 @@ const BUDGET: u32 = 100;
 pub struct Scalar {
     pub css: String,
     pub numeric: bool,
-}
-
-/// The standard global-object properties of ECMA-262 (2027 draft):
-/// §19.1 value, §19.2 function, §19.3 constructor and §19.4 other
-/// properties, plus Annex B.2.1's legacy `escape` and `unescape`.
-/// `Intl` (ECMA-402) and host globals are not part of it.
-pub const STANDARD_GLOBALS: &[&str] = &[
-    // §19.1
-    "globalThis",
-    "Infinity",
-    "NaN",
-    "undefined",
-    // §19.2
-    "eval",
-    "isFinite",
-    "isNaN",
-    "parseFloat",
-    "parseInt",
-    "decodeURI",
-    "decodeURIComponent",
-    "encodeURI",
-    "encodeURIComponent",
-    // §19.3
-    "AggregateError",
-    "Array",
-    "ArrayBuffer",
-    "AsyncDisposableStack",
-    "BigInt",
-    "BigInt64Array",
-    "BigUint64Array",
-    "Boolean",
-    "DataView",
-    "Date",
-    "DisposableStack",
-    "Error",
-    "EvalError",
-    "FinalizationRegistry",
-    "Float16Array",
-    "Float32Array",
-    "Float64Array",
-    "Function",
-    "Int8Array",
-    "Int16Array",
-    "Int32Array",
-    "Iterator",
-    "Map",
-    "Number",
-    "Object",
-    "Promise",
-    "Proxy",
-    "RangeError",
-    "ReferenceError",
-    "RegExp",
-    "Set",
-    "SharedArrayBuffer",
-    "String",
-    "SuppressedError",
-    "Symbol",
-    "SyntaxError",
-    "TypeError",
-    "Uint8Array",
-    "Uint8ClampedArray",
-    "Uint16Array",
-    "Uint32Array",
-    "URIError",
-    "WeakMap",
-    "WeakRef",
-    "WeakSet",
-    // §19.4
-    "Atomics",
-    "JSON",
-    "Math",
-    "Reflect",
-    // Annex B.2.1
-    "escape",
-    "unescape",
-];
-
-/// Host functions outside ECMA-262 that the evaluator realm, browsers and
-/// Node all define, each depending only on its argument.
-pub(crate) const SHARED_HOST_GLOBALS: &[&str] = &animus_system_loader::SHARED_HOST_NAMES;
-
-/// Every evaluator realm is this one; the probes below must match it.
-fn new_realm() -> (Runtime, Context) {
-    let runtime = Runtime::new().expect("failed to create rquickjs Runtime");
-    let context = Context::full(&runtime).expect("failed to create rquickjs Context");
-    (runtime, context)
-}
-
-/// The `names` a pristine evaluator realm defines as its own properties,
-/// probed in a fresh realm nothing has registered into.
-fn own_globals(names: &'static [&'static str]) -> Vec<&'static str> {
-    let (_runtime, context) = new_realm();
-    context.with(|ctx| {
-        names
-            .iter()
-            .copied()
-            .filter(|name| {
-                let probe = format!(
-                    "Object.prototype.hasOwnProperty.call(globalThis, {})",
-                    js_string_literal(name)
-                );
-                // A failed probe must not narrow admission silently.
-                ctx.eval::<bool, _>(probe.as_bytes())
-                    .unwrap_or_else(|e| panic!("probing global {name} failed: {e}"))
-            })
-            .collect()
-    })
-}
-
-/// The `STANDARD_GLOBALS` a pristine evaluator realm supplies.
-pub fn evaluator_standard_globals() -> &'static [&'static str] {
-    static SUPPLIED: OnceLock<Vec<&'static str>> = OnceLock::new();
-    SUPPLIED.get_or_init(|| own_globals(STANDARD_GLOBALS))
-}
-
-/// The `SHARED_HOST_GLOBALS` a pristine evaluator realm supplies.
-pub fn evaluator_shared_host_globals() -> &'static [&'static str] {
-    static SUPPLIED: OnceLock<Vec<&'static str>> = OnceLock::new();
-    SUPPLIED.get_or_init(|| own_globals(SHARED_HOST_GLOBALS))
 }
 
 /// Calls a registered callable and validates its result. Built in each
@@ -301,8 +180,8 @@ impl TransformEvaluator {
     /// evaluation. The key is only a registry entry. Only admission
     /// registers: a sealed evaluator has no way to.
     fn register(&self, key: &str, source: &str) -> Result<(), String> {
-        let (_runtime, context) = new_realm();
-        context.with(|ctx| {
+        // Compiling a definition runs no callback, so it spends no budget.
+        Realm::fresh(None).expect("failed to create an evaluator realm").with(|ctx| {
             let callable = ctx
                 .eval::<rquickjs::Value, _>(isolated_script(source).as_bytes())
                 .map_err(|e| format!("failed to register transform '{}': {}", key, e))?;
@@ -361,20 +240,10 @@ impl TransformEvaluator {
 
 /// Evaluate `source` for `js_arg` in a realm of its own.
 fn evaluate_in_fresh_realm(source: &str, name: &str, js_arg: &str) -> Result<Scalar, EvalError> {
-    // A runtime of its own: a second context of one runtime gives host
-    // errors such as btoa's `InvalidCharacterError` a null prototype.
-    let (runtime, context) = new_realm();
-    let budget = Arc::new(AtomicU32::new(BUDGET));
-    let polls = Arc::clone(&budget);
-    runtime.set_interrupt_handler(Some(Box::new(move || match polls.load(Ordering::Relaxed) {
-        0 => true,
-        left => {
-            polls.store(left - 1, Ordering::Relaxed);
-            false
-        }
-    })));
+    // A realm of its own: see `Realm` for why that is also a runtime.
+    let realm = Realm::fresh(Some(BUDGET)).expect("failed to create an evaluator realm");
     let mut touched_host = false;
-    let outcome = context.with(|ctx| {
+    let outcome = realm.with(|ctx| {
         let fail = |e: rquickjs::Error| classify_eval_error(&ctx, name, &e);
         let harness: Function = ctx.eval(harness_source().as_bytes()).map_err(fail)?;
         let touched: Function = ctx.eval(HOST_GUARD.as_bytes()).map_err(fail)?;
@@ -390,10 +259,9 @@ fn evaluate_in_fresh_realm(source: &str, name: &str, js_arg: &str) -> Result<Sca
         };
         scalar.map_err(fail)
     });
-    let exhausted = budget.load(Ordering::Relaxed) == 0;
     match outcome {
         _ if touched_host => Err(EvalError::Unevaluable),
-        Err(_) if exhausted => Err(EvalError::Unevaluable),
+        Err(_) if realm.exhausted() => Err(EvalError::Unevaluable),
         outcome => outcome,
     }
 }
@@ -488,18 +356,6 @@ fn value_to_js_literal(value: &Value) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// This rquickjs pin supplies every specified global; a name it drops
-    /// must be recorded here with its evidence, never silently narrowed.
-    #[test]
-    fn pristine_realm_supplies_every_specified_global() {
-        let missing: Vec<&str> = STANDARD_GLOBALS
-            .iter()
-            .copied()
-            .filter(|name| !evaluator_standard_globals().contains(name))
-            .collect();
-        assert_eq!(missing, Vec::<&str>::new());
-    }
 
     #[test]
     fn register_and_eval_simple() {

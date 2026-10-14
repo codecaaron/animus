@@ -13,7 +13,7 @@ use oxc::semantic::{Scoping, Semantic};
 use oxc::span::Span;
 use oxc::syntax::scope::ScopeId;
 
-use crate::evaluator::{evaluator_shared_host_globals, evaluator_standard_globals};
+use animus_system_loader::executor::{shared_host_globals, standard_globals};
 
 const ALLOWED_GLOBALS: &[&str] = &[
     "String",
@@ -89,7 +89,7 @@ impl ReferenceValidation<'_> {
             }
             Some(_) => {}
             None if ALLOWED_GLOBALS.contains(&ident.name.as_str())
-                || evaluator_shared_host_globals().contains(&ident.name.as_str()) =>
+                || shared_host_globals().contains(&ident.name.as_str()) =>
             {
                 return;
             }
@@ -407,8 +407,8 @@ pub(super) fn configured_reference_rejections(
                     ));
                 }
             } else if !ALLOWED_GLOBALS.contains(&reference_name)
-                && !evaluator_standard_globals().contains(&reference_name)
-                && !evaluator_shared_host_globals().contains(&reference_name)
+                && !standard_globals().contains(&reference_name)
+                && !shared_host_globals().contains(&reference_name)
             {
                 rejections.insert(external_symbol_diagnostic(transform_name, reference_name));
             }
