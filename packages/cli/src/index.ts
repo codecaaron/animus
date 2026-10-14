@@ -16,6 +16,9 @@ import {
 } from './config';
 import { runWatch } from './watch';
 
+export { renderFontPreloads } from '@animus-ui/extract/pipeline';
+export type { FontPreload } from '@animus-ui/extract/pipeline';
+
 export const EXIT_OK = 0;
 export const EXIT_EXTRACTION = 1;
 export const EXIT_USAGE = 2;

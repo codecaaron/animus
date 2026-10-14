@@ -1,4 +1,9 @@
-import { createSystem, createTheme, createTransform } from '@animus-ui/system';
+import {
+  asset,
+  createSystem,
+  createTheme,
+  createTransform,
+} from '@animus-ui/system';
 import {
   border,
   color,
@@ -205,19 +210,36 @@ export const animations = createKeyframes({
   },
 });
 
-export const globalStyles = createGlobalStyles({
-  '*, *::before, *::after': { boxSizing: 'border-box' },
-  html: { WebkitFontSmoothing: 'antialiased' },
-  body: {
-    m: 0,
-    fontFamily: 'system-ui, -apple-system, sans-serif',
-    lineHeight: '1.5',
-    bg: 'background',
-    color: 'text',
+export const globalStyles = createGlobalStyles(
+  {
+    '*, *::before, *::after': { boxSizing: 'border-box' },
+    html: { WebkitFontSmoothing: 'antialiased' },
+    body: {
+      m: 0,
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      lineHeight: '1.5',
+      bg: 'background',
+      color: 'text',
+    },
+    a: { color: 'primary', textDecoration: 'none' },
+    'code, kbd': { fontFamily: 'ui-monospace, monospace', fontSize: 14 },
   },
-  a: { color: 'primary', textDecoration: 'none' },
-  'code, kbd': { fontFamily: 'ui-monospace, monospace', fontSize: 14 },
-});
+  {
+    fontFaces: [
+      {
+        family: 'AnimusTestFont',
+        src: [
+          {
+            url: asset('@animus-ui/test-ds/assets/test-font.woff2'),
+            format: 'woff2',
+          },
+        ],
+        display: 'swap',
+        preload: true,
+      },
+    ],
+  }
+);
 
 export const ds = bundle
   .registerKeyframes({ animations })

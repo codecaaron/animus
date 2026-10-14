@@ -369,6 +369,10 @@ pub const AT_RULE_PLACEMENT: &str = "animus.style.at-rule-placement";
 /// font nor a `url`, or a descriptor whose value is not a string.
 pub const FONT_FACE_DROPPED: &str = "animus.style.font-face-dropped";
 
+/// A typed font face emitted without the preload it asks for: `preload` is
+/// not a boolean, or the face has no `url` source to preload.
+pub const FONT_FACE_PRELOAD_DROPPED: &str = "animus.style.font-face-preload-dropped";
+
 /// A typed font face's family of several words that starts with a generic
 /// family (`serif Pro`): Lightning CSS unquotes it, and browsers then drop
 /// the face.
@@ -395,6 +399,9 @@ pub enum DroppedStyleKey {
     /// The typed font face named `face`, or a part of it (`part`: a source
     /// or a descriptor), that is left out, and why.
     FontFace { face: String, part: Option<String>, reason: String },
+    /// The typed font face named `face`, emitted without the preload it
+    /// asks for, and why.
+    FontFacePreload { face: String, reason: String },
     /// A prop that writes only the custom `properties` was given the number
     /// `value`, which no unit or transform establishes: it is written
     /// unitless.
@@ -438,7 +445,9 @@ impl DroppedStyleKey {
             | Self::NonBlockValue { key, .. }
             | Self::AtRuleSelectorNesting { key, .. } => key,
             Self::SharedProperty { winner, .. } => winner,
-            Self::FontFace { face, .. } | Self::FontFaceGenericFirstWord { face, .. } => face,
+            Self::FontFace { face, .. }
+            | Self::FontFacePreload { face, .. }
+            | Self::FontFaceGenericFirstWord { face, .. } => face,
         }
     }
 }
@@ -2629,13 +2638,13 @@ pub fn resolve_all_global_blocks(
     blocks: &Value,
     ctx: &ResolveContext,
 ) -> String {
-    resolve_global_blocks(blocks, ctx, false, &mut |_, _, _| {})
+    resolve_global_blocks(blocks, ctx, false, &mut Vec::new(), &mut |_, _, _| {})
 }
 
 /// The global blocks registered `unlayered`, which emit outside every
 /// cascade layer, in registration order.
 pub fn resolve_unlayered_global_blocks(blocks: &Value, ctx: &ResolveContext) -> String {
-    resolve_global_blocks(blocks, ctx, true, &mut |_, _, _| {})
+    resolve_global_blocks(blocks, ctx, true, &mut Vec::new(), &mut |_, _, _| {})
 }
 
 /// Called with a global block's registration key, declaring module and
@@ -2677,11 +2686,13 @@ impl<'a> GlobalBlock<'a> {
 
 /// Resolves the layered (`unlayered: false`) or unlayered blocks, calling
 /// `after_block` after each, so what its resolution reported can be
-/// attributed to it.
+/// attributed to it. The faces they emit that ask for a preload add theirs
+/// to `preloads`.
 pub fn resolve_global_blocks(
     blocks: &Value,
     ctx: &ResolveContext,
     unlayered: bool,
+    preloads: &mut Vec<FontPreload>,
     after_block: &mut AfterGlobalBlock<'_>,
 ) -> String {
     let block_map = match blocks.as_object() {
@@ -2699,7 +2710,7 @@ pub fn resolve_global_blocks(
             continue;
         }
         if let Some(faces) = faces {
-            let css = render_font_faces(faces, ctx);
+            let css = render_font_faces(faces, ctx, preloads);
             if !css.is_empty() {
                 parts.push(css);
             }
@@ -2730,11 +2741,74 @@ const FONT_FACE_DESCRIPTORS: [(&str, &str); 11] = [
     ("fontVariationSettings", "font-variation-settings"),
 ];
 
+/// A font file an emitted face asks the document to start loading before its
+/// stylesheet applies: its `url` as authored, an asset() placeholder
+/// included, which the host substitutes as it does the face's own `url()`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FontPreload {
+    pub href: String,
+    /// The MIME type of the source's format, where it names a known one.
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub mime: Option<&'static str>,
+}
+
+/// The formats no current browser loads, by `format` or by extension: a
+/// browser skips such a source and loads the next.
+const UNLOADED_FONT_FORMATS: [&str; 3] = ["embedded-opentype", "eot", "svg"];
+
+/// The source a face with `preload: true` preloads: the one the browser's
+/// `@font-face` loads, its first `url` source in a format browsers load (by
+/// `format`, or by extension where it gives none), so the file is fetched
+/// once; why not, when it has none, or that source is relative to the
+/// stylesheet, which each host relocates.
+fn preload_source(sources: &[&Value]) -> Result<FontPreload, String> {
+    let urls: Vec<(&str, Option<&str>)> = sources
+        .iter()
+        .filter_map(|entry| Some((entry.get("url")?.as_str()?, entry.get("format").and_then(Value::as_str))))
+        .collect();
+    let format_of = |&(url, format): &(&str, Option<&str>)| -> Option<String> {
+        format.map(str::to_ascii_lowercase).or_else(|| {
+            let path = url.split(['?', '#']).next().unwrap_or(url);
+            let ext = path.rsplit_once('.')?.1;
+            (!ext.contains('/')).then(|| ext.to_ascii_lowercase())
+        })
+    };
+    if urls.is_empty() {
+        return Err("it has no `url` source to preload".into());
+    }
+    let chosen = urls
+        .iter()
+        .find(|source| !format_of(source).is_some_and(|format| UNLOADED_FONT_FORMATS.contains(&format.as_str())))
+        .ok_or("it has no `url` source in a format browsers load")?;
+    let url = chosen.0;
+    let lower = url.to_ascii_lowercase();
+    if !(url.starts_with(crate::eval::ASSET_PLACEHOLDER_PREFIX)
+        || url.starts_with('/')
+        || lower.starts_with("https://")
+        || lower.starts_with("http://"))
+    {
+        return Err(format!(
+            "its source `{url}` is neither an asset() file nor a root-relative or absolute URL, and a host \
+             moves a URL relative to the stylesheet"
+        ));
+    }
+    let mime = match format_of(chosen).as_deref() {
+        Some("woff2") => Some("font/woff2"),
+        Some("woff") => Some("font/woff"),
+        Some("truetype" | "ttf") => Some("font/ttf"),
+        Some("opentype" | "otf") => Some("font/otf"),
+        _ => None,
+    };
+    Ok(FontPreload { href: url.to_string(), mime })
+}
+
 /// A global block's typed font faces, each a `@font-face` rule: the family,
 /// the sources in order, then the descriptors. A face with no family or no
 /// source, a source that is neither a `local` name nor a `url`, and a
-/// descriptor that is not a string are reported and left out.
-fn render_font_faces(faces: &Value, ctx: &ResolveContext) -> String {
+/// descriptor that is not a string are reported and left out. An emitted
+/// face with `preload: true` adds its preload source to `preloads`, once per
+/// URL; one with no `url` source to preload is reported.
+fn render_font_faces(faces: &Value, ctx: &ResolveContext, preloads: &mut Vec<FontPreload>) -> String {
     let list = match faces.as_array() {
         Some(l) => l,
         None => return String::new(),
@@ -2747,20 +2821,26 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext) -> String {
         let drop = |part: Option<String>, reason: String| {
             record_dropped_key_at(ctx, &[], DroppedStyleKey::FontFace { face: name.clone(), part, reason });
         };
+        let preload_dropped = |reason: String| {
+            record_dropped_key_at(ctx, &[], DroppedStyleKey::FontFacePreload { face: name.clone(), reason });
+        };
         let Some(obj) = obj else {
             drop(None, format!("it is {face}, not an object"));
             continue;
         };
-        let sources: Vec<String> = obj
+        let (sources, kept): (Vec<String>, Vec<&Value>) = obj
             .get("src")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .enumerate()
             .filter_map(|(at, entry)| {
-                font_face_source(entry).map_err(|reason| drop(Some(format!("source {}", at + 1)), reason)).ok()
+                font_face_source(entry)
+                    .map(|source| (source, entry))
+                    .map_err(|reason| drop(Some(format!("source {}", at + 1)), reason))
+                    .ok()
             })
-            .collect();
+            .unzip();
         let Some(family) = family else {
             drop(None, "it has no `family`".into());
             continue;
@@ -2790,6 +2870,18 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext) -> String {
                 Some(other) => drop(Some(format!("`{key}`")), format!("its value {other} is not a string")),
                 None => {}
             }
+        }
+        match obj.get("preload") {
+            None | Some(Value::Bool(false)) => {}
+            Some(Value::Bool(true)) => match preload_source(&kept) {
+                Ok(preload) => {
+                    if !preloads.iter().any(|known| known.href == preload.href) {
+                        preloads.push(preload);
+                    }
+                }
+                Err(reason) => preload_dropped(reason),
+            },
+            Some(other) => preload_dropped(format!("its `preload` {other} is not a boolean")),
         }
         blocks.push(format!("@font-face {{ {} }}", decls.join(" ")));
     }

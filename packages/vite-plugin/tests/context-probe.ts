@@ -61,6 +61,7 @@ export function publicationWith(
     analysisGlobalCss: '',
     analysisComponentCss: '',
     styles: '',
+    fontPreloads: [],
     systemPropsModule: '',
     system: {
       propConfigJson: '{}',

@@ -29,6 +29,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.cjs"
+    },
+    "./font-preloads": {
+      "types": "./dist/font-preloads.d.ts",
+      "default": "./dist/font-preloads.cjs"
     }
   },
   "publishConfig": {

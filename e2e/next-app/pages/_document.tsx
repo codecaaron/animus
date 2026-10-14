@@ -1,3 +1,4 @@
+import { AnimusFontPreloadLinks } from '@animus-ui/next-plugin/font-preloads';
 import { Head, Html, Main, NextScript } from 'next/document';
 
 import { appearanceBootstrap } from '../appearance-bootstrap';
@@ -14,6 +15,7 @@ export default function Document() {
           data-animus-bootstrap=""
           dangerouslySetInnerHTML={{ __html: appearanceBootstrap.code }}
         />
+        <AnimusFontPreloadLinks />
       </Head>
       <body>
         <Main />

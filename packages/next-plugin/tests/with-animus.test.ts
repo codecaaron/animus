@@ -249,7 +249,10 @@ describe('withAnimus', () => {
     cwd.mockReturnValue(parent);
     const fromParent = withAnimus({ system: './src/ds.ts', root: app })({});
 
-    expect(own.transpilePackages).toEqual(['@kits/ui']);
+    expect(own.transpilePackages).toEqual([
+      '@kits/ui',
+      '@animus-ui/next-plugin',
+    ]);
     expect(fromParent.transpilePackages).toEqual(own.transpilePackages);
   });
 

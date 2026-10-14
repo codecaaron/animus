@@ -35,6 +35,7 @@ import {
   getManifestJson,
   getSessionArtifactDir,
   getSharedCss,
+  getSharedFontPreloads,
   getSharedSystemProps,
   SESSION_ASSETS_DIR,
   TURBOPACK_SYSTEM_PROPS_ID,
@@ -47,6 +48,7 @@ import { resolveHostMode, resolveHostOptions } from './options';
 import type { AnimusUnpluginOptions } from './options';
 import type {
   AnimusMode,
+  FontPreload,
   HostAssetClassification,
   HostExtensionPolicy,
   HostLoadExpander,
@@ -81,6 +83,10 @@ const WEBPACK_PROPS_REQUEST = '@animus-ui/unplugin/system-props';
 
 export const CSS_ASSET_NAME = 'animus.css';
 
+/** Emitted beside the stylesheet when a face preloads: its hrefs are
+ *  relative to the stylesheet, for `renderFontPreloads`. */
+export const FONT_PRELOADS_ASSET_NAME = 'animus-font-preloads.json';
+
 const TRANSFORM_INCLUDE_RE = new RegExp(
   `\\.(?:${[...ENGINE_TRANSFORM_EXTENSIONS, 'cjs'].join('|')})$`
 );
@@ -91,6 +97,7 @@ export interface HostState {
   pipeline: Promise<void> | null;
   mode: AnimusMode | null;
   cssText: string;
+  fontPreloads: FontPreload[];
   systemPropsJs: string;
   kitRedirects: Map<string, string>;
   /** Specifier → its redirect target's side effects; absent leaves the
@@ -122,6 +129,7 @@ export function createHostState(): HostState {
     pipeline: null,
     mode: null,
     cssText: '',
+    fontPreloads: [],
     served: { listed: new Set(), dropped: new Map() },
     analyzedFiles: [],
     systemPropsJs: '',
@@ -670,6 +678,7 @@ export const unpluginFactory: UnpluginFactory<
         );
       }
       state.cssText = getSharedCss(session.key);
+      state.fontPreloads = getSharedFontPreloads(session.key);
       state.served = manifestServedFiles(getManifestJson(session.key));
       state.systemPropsJs = getSharedSystemProps(session.key);
       state.kitRedirects = new Map(session.externalSourceEntries);
@@ -730,6 +739,10 @@ export const unpluginFactory: UnpluginFactory<
   function emitCssAsset(context: UnpluginBuildContext): void {
     if (!state.cssText) return;
     const assets = collectSessionAssets(state.sessionDir);
+    const preloadManifest =
+      state.fontPreloads.length === 0
+        ? null
+        : JSON.stringify(state.fontPreloads);
     if (meta.framework === 'esbuild') {
       // unplugin's esbuild emitFile silently no-ops without `outdir`, so
       // the host writes the stylesheet itself.
@@ -756,6 +769,11 @@ export const unpluginFactory: UnpluginFactory<
       const absOut = resolve(base, outDir);
       mkdirSync(absOut, { recursive: true });
       writeFileSync(join(absOut, CSS_ASSET_NAME), state.cssText);
+      // The host writes this directory itself, so it also removes a
+      // manifest an earlier build left once no face preloads.
+      const preloadsPath = join(absOut, FONT_PRELOADS_ASSET_NAME);
+      if (preloadManifest === null) rmSync(preloadsPath, { force: true });
+      else writeFileSync(preloadsPath, preloadManifest);
       if (assets.length > 0) {
         mkdirSync(join(absOut, SESSION_ASSETS_DIR), { recursive: true });
         for (const { name, bytes } of assets) {
@@ -769,6 +787,13 @@ export const unpluginFactory: UnpluginFactory<
       fileName: CSS_ASSET_NAME,
       source: state.cssText,
     });
+    if (preloadManifest !== null) {
+      context.emitFile({
+        type: 'asset',
+        fileName: FONT_PRELOADS_ASSET_NAME,
+        source: preloadManifest,
+      });
+    }
     for (const { name, bytes } of assets) {
       context.emitFile({
         type: 'asset',

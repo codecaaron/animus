@@ -361,8 +361,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
     transformIndexHtml: {
       order: 'pre',
-      handler() {
-        return buildIndexHtmlTags(ctx);
+      handler(html) {
+        return buildIndexHtmlTags(ctx, html);
       },
     },
 

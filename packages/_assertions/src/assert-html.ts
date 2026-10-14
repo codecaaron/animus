@@ -6,6 +6,8 @@ import { createHash } from 'node:crypto';
 
 import { AssertionError } from './assert-css';
 
+import type { JsonObject } from './json';
+
 const DEFAULT_MARKER = 'data-animus-bootstrap';
 
 /**
@@ -32,6 +34,32 @@ function headOf(html: string): HeadSlice {
     html: html.slice(start, end === -1 ? undefined : end),
     offset: start,
   };
+}
+
+type StylesheetReference = {
+  pattern: string;
+  index: number;
+};
+
+/** The first stylesheet reference in a `<head>`, or why the ordering
+ *  contract cannot be witnessed: a head with none is an empty set. */
+function firstStylesheetReference(
+  head: HeadSlice,
+  assertion: string,
+  details: JsonObject = {}
+): StylesheetReference & { references: StylesheetReference[] } {
+  const references = STYLESHEET_REFERENCES.map((pattern) => {
+    const found = head.html.match(pattern);
+    return { pattern: pattern.source, index: found?.index ?? -1 };
+  }).filter((reference) => reference.index !== -1);
+  if (references.length === 0) {
+    throw new AssertionError(
+      `${assertion}: no stylesheet reference found in <head> — the ordering contract cannot be witnessed against an empty set`,
+      details
+    );
+  }
+  const first = references.reduce((a, b) => (a.index <= b.index ? a : b));
+  return { ...first, references };
 }
 
 function scriptRe(marker: string): RegExp {
@@ -72,19 +100,11 @@ export function assertBootstrapScriptFirst(
   }
   const scriptIndex = match.index;
 
-  const references = STYLESHEET_REFERENCES.map((pattern) => {
-    const found = head.html.match(pattern);
-    return { pattern: pattern.source, index: found?.index ?? -1 };
-  }).filter((reference) => reference.index !== -1);
-
-  if (references.length === 0) {
-    throw new AssertionError(
-      'assertBootstrapScriptFirst: no stylesheet reference found in <head> — the ordering contract cannot be witnessed against an empty set',
-      { marker }
-    );
-  }
-
-  const first = references.reduce((a, b) => (a.index <= b.index ? a : b));
+  const { references, ...first } = firstStylesheetReference(
+    head,
+    'assertBootstrapScriptFirst',
+    { marker }
+  );
   if (scriptIndex >= first.index) {
     throw new AssertionError(
       `assertBootstrapScriptFirst: bootstrap script (head offset ${scriptIndex}) must precede the first stylesheet reference /${first.pattern}/ (head offset ${first.index})`,
@@ -175,6 +195,43 @@ export function assertNoBootstrapScript(
     throw new AssertionError(
       `assertNoBootstrapScript: found '${marker}' at offset ${index}`,
       { marker, context: html.slice(Math.max(0, index - 60), index + 90) }
+    );
+  }
+}
+
+/**
+ * The font preload contract: `<head>` holds exactly one font preload, with
+ * `crossorigin`, whose href is `href` — the URL the stylesheet's `url()`
+ * loads, so the browser fetches the file once — and it precedes every
+ * stylesheet reference.
+ */
+export function assertFontPreload(html: string, href: string): void {
+  const head = headOf(html);
+  const preloads = [...head.html.matchAll(/<link\b[^>]*>/gi)].filter(
+    ([tag]) =>
+      /\brel\s*=\s*["']?preload\b/i.test(tag) &&
+      /\bas\s*=\s*["']?font\b/i.test(tag)
+  );
+  if (preloads.length !== 1) {
+    throw new AssertionError(
+      `assertFontPreload: expected one font preload in <head>, found ${preloads.length}`,
+      { preloads: preloads.map(([tag]) => tag) }
+    );
+  }
+  const [tag] = preloads[0]!;
+  const actual = /\bhref\s*=\s*["']?([^"'\s>]+)/i.exec(tag)?.[1];
+  if (actual !== href || !/\bcrossorigin\b/i.test(tag)) {
+    throw new AssertionError(
+      `assertFontPreload: the preload must name ${href} with crossorigin`,
+      { tag }
+    );
+  }
+  const at = preloads[0]!.index!;
+  const first = firstStylesheetReference(head, 'assertFontPreload');
+  if (at >= first.index) {
+    throw new AssertionError(
+      `assertFontPreload: the font preload (head offset ${at}) must precede the first stylesheet reference /${first.pattern}/ (head offset ${first.index})`,
+      { tag }
     );
   }
 }

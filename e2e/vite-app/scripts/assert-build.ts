@@ -3,6 +3,7 @@ import {
   assertClassNameFormat,
   assertColorSchemeEmission,
   assertConditionsInsideLayers,
+  assertFontPreload,
   assertHeadInjectionContract,
   assertKeyframesExtracted,
   assertKeyframesUniqueBodies,
@@ -18,6 +19,7 @@ import {
   compact,
   findCssFiles,
   findJsFiles,
+  fontFaceUrl,
   layerBlock,
   layerBlockBody,
   readAllConcat,
@@ -136,17 +138,10 @@ async function main(): Promise<void> {
   assertClassNameFormat(css, { prefix: 'animus-' });
   assertGlobalBaseline(css);
 
-  const fontFaceBlock = css.match(/@font-face[^}]*AnimusTestFont[^}]*\}/)?.[0];
-  if (!fontFaceBlock) {
-    throw new AssertionError(
-      'asset() witness: expected the AnimusTestFont @font-face block in the dist CSS'
-    );
-  }
-  const fontUrl = fontFaceBlock.match(/url\((['"]?)([^'")]+)\1\)/)?.[2];
+  const fontUrl = fontFaceUrl(css, 'AnimusTestFont');
   if (!fontUrl || !/test-font[^'")]*\.woff2$/.test(fontUrl)) {
     throw new AssertionError(
-      `asset() witness: expected a bundler-resolved test-font woff2 URL in the @font-face block, got ${fontUrl ?? '<none>'}`,
-      { fontFaceBlock }
+      `asset() witness: expected a bundler-resolved test-font woff2 URL in the AnimusTestFont @font-face block, got ${fontUrl ?? '<none>'}`
     );
   }
   await readFile(resolve(DIST, fontUrl.replace(/^\//, ''))).catch(() => {
@@ -245,6 +240,8 @@ async function main(): Promise<void> {
     code: artifact.code,
     cspHash: artifact.cspHash,
   });
+  // `preload: true` on the face: the preload names the @font-face URL.
+  assertFontPreload(indexHtml, fontUrl);
 
   // Three blocks: the fixture's `fadeIn` and `pulse` plus the kit's `pulse`,
   // reached through the test-ds package entry.

@@ -1,3 +1,5 @@
+import { AnimusFontPreloads } from '@animus-ui/next-plugin/font-preloads';
+
 export const metadata = {
   title: 'Animus Packed Consumer App',
 };
@@ -9,7 +11,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <AnimusFontPreloads />
+        {children}
+      </body>
     </html>
   );
 }

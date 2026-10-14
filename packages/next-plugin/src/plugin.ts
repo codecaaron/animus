@@ -215,6 +215,7 @@ export class AnimusWebpackPlugin {
     // created; a plugin made alone is a build of its own.
     this.session = new ExtractionSession(options, { build });
     this.session.development = development;
+    this.session.writesFontPreloadsModule = true;
     // Transforms import the virtual id, which the module factory resolves to
     // this session's system-props module: a transform a persistent cache
     // restores then binds to the current session, not the one that built it.

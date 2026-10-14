@@ -548,3 +548,11 @@ export function assertVariantDeclarationParity(
     }
   }
 }
+
+/** The URL a `@font-face` for `family` loads, its first `url()`. */
+export function fontFaceUrl(css: string, family: string): string | undefined {
+  const face = [...css.matchAll(/@font-face\s*\{[^}]*\}/g)].find(([block]) =>
+    block.includes(family)
+  )?.[0];
+  return face?.match(/url\((['"]?)([^'")]+)\1\)/)?.[2];
+}

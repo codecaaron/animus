@@ -30,12 +30,22 @@ export const STYLES_ARTIFACT = 'styles.css';
 /** Session-dir-relative name of the emitted system-props module. */
 export const SYSTEM_PROPS_ARTIFACT = 'system-props.js';
 
+/** Session-dir-relative name of the emitted font-preloads module. */
+export const FONT_PRELOADS_ARTIFACT = 'font-preloads.js';
+
+/** Module id a host aliases to the font-preloads module. */
+export const FONT_PRELOADS_MODULE_ID = 'virtual:animus/font-preloads';
+
 /** Session-dir-relative directory holding copied asset() files. */
 export const SESSION_ASSETS_DIR = 'assets';
 
 /** The standalone CLI's published-set commit record in the flat `.animus/`
  *  tree; the session's start hygiene keys on this name before deleting. */
 export const CLI_COMMIT_ARTIFACT = 'commit.json';
+
+/** The standalone CLI's font-preloads manifest, beside its stylesheet,
+ *  published only when a face preloads. */
+export const CLI_FONT_PRELOADS_ARTIFACT = 'font-preloads.json';
 
 /** Advisory claim record (pid plus heartbeat) of whichever directory holds
  *  it; sessions write it into their own tree too, despite the `CLI_` name. */
@@ -85,6 +95,10 @@ export function stylesPath(sessionDir: string): string {
 
 export function systemPropsPath(sessionDir: string): string {
   return join(sessionDir, SYSTEM_PROPS_ARTIFACT);
+}
+
+export function fontPreloadsPath(sessionDir: string): string {
+  return join(sessionDir, FONT_PRELOADS_ARTIFACT);
 }
 
 /** Advisory: a loader reads it only after observing a source/commit

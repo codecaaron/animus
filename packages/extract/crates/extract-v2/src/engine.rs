@@ -48,6 +48,9 @@ struct AnalyzeResult<'a> {
     /// Present only where an extension was dropped over its parent.
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     missing_inputs: &'a [analyze_css::MissingInput],
+    /// Present only where an emitted face asks for a preload.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    font_preloads: &'a [crate::theme::FontPreload],
     timing: serde_json::Value,
 }
 
@@ -1459,6 +1462,7 @@ impl ExtractEngine {
             components: &css.components,
             files: &css.files_map,
             missing_inputs: &css.missing_inputs,
+            font_preloads: &css.font_preloads,
             timing: serde_json::json!({ "parseCount": self.parse_count }),
         });
         self.cross = Some(cross);

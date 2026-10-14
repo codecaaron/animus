@@ -135,6 +135,8 @@ describe('buildTurbopackConfig', () => {
       'virtual:animus/system-props':
         './.animus/sessions/test-session/system-props.js',
       '.animus/styles.css': './.animus/sessions/test-session/styles.css',
+      'virtual:animus/font-preloads':
+        './.animus/sessions/test-session/font-preloads.js',
       '@acme/ds': './packages/ds/src/index.ts',
     });
   });

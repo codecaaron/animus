@@ -92,14 +92,18 @@ async function serveWithAsset(options: ServeOptions = {}) {
   return { ctx, logo, specifier };
 }
 
-/** The file a dev `/@fs` URL serves. */
-const servedFile = (url: string): string => url.slice(url.indexOf('/@fs') + 4);
+/** The file a dev asset URL serves: root-relative inside the root, `/@fs`
+ *  outside. */
+const servedFile = (ctx: PluginContext, url: string): string =>
+  url.includes('/@fs/')
+    ? url.slice(url.indexOf('/@fs') + 4)
+    : join(ctx.viteRoot, url.slice(1));
 
 describe('a Vite dev asset URL names an immutable copy', () => {
   test('an edit gets a new URL, and the old URL keeps the old bytes', async () => {
     const { ctx, logo, specifier } = await serveWithAsset();
     const first = ctx.assetUrlBySpecifier.get(specifier)!;
-    expect(servedFile(first)).toContain('animus-assets');
+    expect(servedFile(ctx, first)).toContain('animus-assets');
     expect(ctx.globalCss).toContain(first);
 
     writeFileSync(logo, '<svg id="v2"/>');
@@ -108,8 +112,12 @@ describe('a Vite dev asset URL names an immutable copy', () => {
     const second = ctx.assetUrlBySpecifier.get(specifier)!;
     expect(second).not.toBe(first);
     expect(ctx.globalCss).toContain(second);
-    expect(readFileSync(servedFile(first), 'utf-8')).toBe('<svg id="v1"/>');
-    expect(readFileSync(servedFile(second), 'utf-8')).toBe('<svg id="v2"/>');
+    expect(readFileSync(servedFile(ctx, first), 'utf-8')).toBe(
+      '<svg id="v1"/>'
+    );
+    expect(readFileSync(servedFile(ctx, second), 'utf-8')).toBe(
+      '<svg id="v2"/>'
+    );
   });
 
   test('a cacheDir the dev server does not serve keeps the live file', async () => {
@@ -119,7 +127,7 @@ describe('a Vite dev asset URL names an immutable copy', () => {
     });
 
     expect(ctx.assetCopyDir).toBeNull();
-    expect(servedFile(ctx.assetUrlBySpecifier.get(specifier)!)).toBe(logo);
+    expect(servedFile(ctx, ctx.assetUrlBySpecifier.get(specifier)!)).toBe(logo);
   });
 });
 
@@ -137,7 +145,7 @@ describe('a Vite dev asset copy is served and kept', () => {
     });
 
     expect(ctx.assetCopyDir).toBeNull();
-    expect(servedFile(ctx.assetUrlBySpecifier.get(specifier)!)).toBe(logo);
+    expect(servedFile(ctx, ctx.assetUrlBySpecifier.get(specifier)!)).toBe(logo);
   });
 
   test("a second server sharing the cacheDir keeps the first's copies, and a dead process's go", async () => {
@@ -148,6 +156,7 @@ describe('a Vite dev asset copy is served and kept', () => {
     const fs = { strict: false };
     const first = await serveWithAsset({ cacheDir, fs });
     const firstCopy = servedFile(
+      first.ctx,
       first.ctx.assetUrlBySpecifier.get(first.specifier)!
     );
 
@@ -165,16 +174,16 @@ describe('a Vite dev asset copy is checked and bounded', () => {
     });
 
     expect(ctx.assetCopyDir).not.toBeNull();
-    expect(servedFile(ctx.assetUrlBySpecifier.get(specifier)!)).toBe(logo);
+    expect(servedFile(ctx, ctx.assetUrlBySpecifier.get(specifier)!)).toBe(logo);
   });
 
   test('a third edit removes the oldest copy and keeps the last two', async () => {
     const { ctx, logo, specifier } = await serveWithAsset();
-    const copies = [servedFile(ctx.assetUrlBySpecifier.get(specifier)!)];
+    const copies = [servedFile(ctx, ctx.assetUrlBySpecifier.get(specifier)!)];
     for (const version of ['v2', 'v3']) {
       writeFileSync(logo, `<svg id="${version}"/>`);
       ctx.refreshAssetCopies(logo);
-      copies.push(servedFile(ctx.assetUrlBySpecifier.get(specifier)!));
+      copies.push(servedFile(ctx, ctx.assetUrlBySpecifier.get(specifier)!));
     }
 
     expect(copies.map((copy) => existsSync(copy))).toEqual([false, true, true]);

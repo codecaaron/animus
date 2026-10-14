@@ -4,6 +4,7 @@
  */
 
 import type { DynamicPropMeta } from './dynamic-prop-config';
+import type { FontPreload } from './font-preloads';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type { ExtractFileFacts } from './source-ingestion';
 
@@ -146,6 +147,9 @@ export interface ProjectManifest {
   /** Each extension dropped over a parent that is no analysed chain, with
    *  why (spec §12.2 row 11); absent where none was. */
   missing_inputs?: ManifestMissingInput[];
+  /** The font files the emitted faces ask to preload, in emission order;
+   *  absent where none does. */
+  font_preloads?: FontPreload[];
   timing: ManifestTiming;
 }
 

@@ -23,7 +23,7 @@ import {
   releaseEngineHandle,
   sessionKey,
 } from '@animus-ui/extract/session';
-import { rmSync } from 'fs';
+import { existsSync, rmSync } from 'fs';
 import { join } from 'path';
 
 import {
@@ -234,6 +234,12 @@ export class PluginContext {
   });
 
   base = '/';
+  /** Vite's root and `server.origin`, which a dev asset URL is served
+   *  under. */
+  viteRoot = '';
+  serverOrigin = '';
+  /** Vite's resolved public directory; empty when it serves none. */
+  publicDir = '';
 
   // specifier → dev /@fs URL, or the `__VITE_ASSET__<referenceId>__` marker
   // Vite rewrites to the hashed file name before hashing the stylesheet.
@@ -531,15 +537,47 @@ export class PluginContext {
     report(message);
   }
 
-  devFsUrl(absPath: string): string {
+  /** The URL Vite's dev server serves `absPath` at, the form its dev CSS
+   *  pass writes (`fileToDevUrl`): root-relative inside its root, `/@fs/`
+   *  outside, under `server.origin` and the base. Every consumer, the
+   *  stylesheet that pass rewrites, component CSS it does not, and a font
+   *  preload, then names one URL, and the browser fetches the file once. */
+  devServedUrl(absPath: string): string {
     const base = this.base.endsWith('/') ? this.base.slice(0, -1) : this.base;
-    return `${base}/@fs${absPath}`;
+    const root = this.viteRoot.endsWith('/')
+      ? this.viteRoot
+      : `${this.viteRoot}/`;
+    const path =
+      this.viteRoot !== '' && absPath.startsWith(root)
+        ? `/${absPath.slice(root.length)}`
+        : `/@fs${absPath}`;
+    return `${this.serverOrigin}${base}${path}`;
+  }
+
+  /** A root-relative URL a face names as written, as Vite's dev CSS pass
+   *  writes it: under `server.origin` and the base where it names a public
+   *  file or a file under the root, else unchanged. */
+  devRootRelativeUrl(href: string): string {
+    if (!href.startsWith('/') || href.startsWith('//')) return href;
+    // Vite looks the file up by its decoded path; the URL keeps its escapes.
+    let path: string;
+    try {
+      path = decodeURI(href.split(/[?#]/)[0]!);
+    } catch {
+      return href;
+    }
+    const served = [this.publicDir, this.viteRoot].some(
+      (dir) => dir !== '' && existsSync(join(dir, path))
+    );
+    if (!served) return href;
+    const base = this.base.endsWith('/') ? this.base.slice(0, -1) : this.base;
+    return `${this.serverOrigin}${base}${href}`;
   }
 
   /** A dev asset() URL: an immutable content-named copy of `absPath`, so an
    *  edit gets a new URL, or the live file where copies are not served. */
   devAssetUrl(specifier: string, absPath: string): string {
-    if (this.assetCopyDir === null) return this.devFsUrl(absPath);
+    if (this.assetCopyDir === null) return this.devServedUrl(absPath);
     const { fileName } = writeAssetCopy(absPath, this.assetCopyDir);
     const copyPath = join(this.assetCopyDir, fileName);
     if (!this.servesFile(copyPath)) {
@@ -549,7 +587,7 @@ export class PluginContext {
           `[animus-extract] the copy of asset() ${specifier} is not served under server.fs; serving the live file instead, so an edit keeps its URL`
         );
       }
-      return this.devFsUrl(absPath);
+      return this.devServedUrl(absPath);
     }
     // Watched once its copy exists, wherever it lives: an edit makes the
     // next copy.
@@ -558,7 +596,7 @@ export class PluginContext {
     }
     this.assetSourceBySpecifier.set(specifier, absPath);
     this.retainAssetCopy(absPath, fileName);
-    return this.devFsUrl(copyPath);
+    return this.devServedUrl(copyPath);
   }
 
   /** Keeps each source's current copy and the one before it; an asset

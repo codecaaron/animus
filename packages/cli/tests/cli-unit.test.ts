@@ -492,6 +492,22 @@ describe('artifact writer', () => {
     expect(verifyCommitRecord(outDir).length).toBeGreaterThan(0);
   });
 
+  // Contract: font-preloads.json is published only while a face preloads,
+  // so a stale one never names assets the set no longer holds.
+  test('a font-preloads payload is recorded, and pruned once it drops out', () => {
+    const outDir = join(makeRoot(), '.animus');
+    publishArtifacts(outDir, {
+      ...payloads,
+      fontPreloadsJson: '[{"href":"./assets/f.woff2"}]',
+    });
+    expect(existsSync(join(outDir, 'font-preloads.json'))).toBe(true);
+    expect(verifyCommitRecord(outDir)).toEqual([]);
+
+    publishArtifacts(outDir, payloads);
+    expect(existsSync(join(outDir, 'font-preloads.json'))).toBe(false);
+    expect(verifyCommitRecord(outDir)).toEqual([]);
+  });
+
   test('session assets are published beside styles.css, recorded, and verified', () => {
     const root = makeRoot();
     const sessionDir = join(root, 'session');
