@@ -159,6 +159,9 @@ pub(crate) struct Loader<'c> {
     packages: FxHashMap<std::path::PathBuf, (Option<std::path::PathBuf>, Option<String>)>,
     /// The owner package directories, once the audit has found them.
     owners: FxHashSet<std::path::PathBuf>,
+    /// The root of the monorepo the entry's package belongs to, at its real
+    /// path: every module below it outside `node_modules` is owned too.
+    workspace: Option<std::path::PathBuf>,
     /// Whether the audit is running: it reads no third-party package.
     auditing: bool,
     /// Each binding's class, as root inference found it.
@@ -190,6 +193,7 @@ impl<'c> Loader<'c> {
             table: None,
             packages: FxHashMap::default(),
             owners: FxHashSet::default(),
+            workspace: None,
             auditing: false,
             classes: FxHashMap::default(),
             traced: FxHashMap::default(),
@@ -1288,22 +1292,77 @@ impl<'c> Loader<'c> {
         });
     }
 
-    /// The package directories whose code is owned: the entry's package and
-    /// the session's declared workspaces.
+    /// What code is owned: the entry's package, the session's declared
+    /// workspaces, and the monorepo the entry's package belongs to.
     fn find_owners(&mut self, entry: &str) {
         let mut owners: FxHashSet<std::path::PathBuf> =
             self.context.workspaces.values().map(|dir| resolution::real_path(dir.clone())).collect();
-        owners.extend(self.package_dir(Path::new(entry)));
+        let package = self.package_dir(Path::new(entry));
+        owners.extend(package.clone());
         self.owners = owners;
+        self.workspace = package.and_then(|package| self.find_workspace(&package));
     }
 
-    /// Whether `path` is owned code: in an owner package, or in a source kit
-    /// (a package declaring the `animus` source condition), wherever it is
-    /// installed. Each manifest that decides it is read evidence.
+    /// The monorepo root above `package`: the nearest directory, from the
+    /// package up, whose `package.json` has a `workspaces` field or that
+    /// holds a `pnpm-workspace.yaml`, never above the repository the package
+    /// is in (a directory holding `.git`). The declarations only mark the
+    /// root; which packages they name is not read. Each file probed is read
+    /// evidence, or watched for its creation where absent.
+    fn find_workspace(&mut self, package: &Path) -> Option<std::path::PathBuf> {
+        let mut dir = package.to_path_buf();
+        loop {
+            let manifest = dir.join("package.json");
+            let declares = if manifest.is_file() {
+                self.reads.read.insert(manifest.to_string_lossy().to_string());
+                std::fs::read_to_string(&manifest)
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                    .is_some_and(|json| json.get("workspaces").is_some())
+            } else {
+                self.reads.missing.insert(manifest.to_string_lossy().to_string());
+                false
+            };
+            let pnpm = dir.join("pnpm-workspace.yaml");
+            let pnpm_declares = pnpm.is_file();
+            if pnpm_declares {
+                self.reads.read.insert(pnpm.to_string_lossy().to_string());
+            } else {
+                self.reads.missing.insert(pnpm.to_string_lossy().to_string());
+            }
+            if declares || pnpm_declares {
+                return Some(resolution::real_path(dir));
+            }
+            // The repository boundary, a directory or a worktree's file: its
+            // removal moves the boundary, so it is read evidence too.
+            let git = dir.join(".git");
+            if git.exists() {
+                self.reads.read.insert(git.to_string_lossy().to_string());
+                return None;
+            }
+            self.reads.missing.insert(git.to_string_lossy().to_string());
+            if !dir.pop() {
+                return None;
+            }
+        }
+    }
+
+    /// Whether `path` is owned code: in an owner package, below the entry's
+    /// monorepo root in no `node_modules`, or in a source kit (a package
+    /// declaring the `animus` source condition), wherever it is installed.
+    /// Each manifest that decides it is read evidence.
     fn owned(&mut self, path: &str) -> bool {
         let Some(dir) = self.package_dir(Path::new(path)) else { return false };
         self.reads.read.insert(dir.join("package.json").to_string_lossy().to_string());
-        self.owners.contains(&dir) || crate::declares_kit_source(&dir)
+        self.owners.contains(&dir) || self.in_workspace(path) || crate::declares_kit_source(&dir)
+    }
+
+    /// Whether the module at `path` lies below the monorepo root, by its own
+    /// real path, in no `node_modules`.
+    fn in_workspace(&self, path: &str) -> bool {
+        let Some(root) = &self.workspace else { return false };
+        let real = resolution::real_path(std::path::PathBuf::from(path));
+        real.strip_prefix(root).is_ok_and(|relative| !relative.iter().any(|segment| segment == "node_modules"))
     }
 
     /// Whether `spec`, written in `module`, names the `@animus-ui/system`
@@ -2212,6 +2271,159 @@ mod tests {
             ]
         );
         assert!(!config.dependencies.iter().any(|path| path.ends_with("analytics/index.js")), "{:?}", config.dependencies);
+    }
+
+    /// Contract: the audit owns the code of the repository's monorepo: every
+    /// module the system imports from below the nearest root declared by a
+    /// `workspaces` field or a `pnpm-workspace.yaml`, in no `node_modules`,
+    /// whatever the declaration lists, and never past the repository's
+    /// `.git`. An unreached registration there is reported, as in the app;
+    /// one in a dependency, or claimed only by an unrelated parent
+    /// repository, is not. The declaring file is watched.
+    #[test]
+    fn the_audit_owns_the_repositorys_monorepo() {
+        const SIDE: &str =
+            "import { holder } from './state';\nholder.bundle = holder.bundle.registerGlobalStyles({ rogue: holder.bundle.createGlobalStyles({ body: { color: 'red' } }) });\n";
+        const DEP_SIDE: &str =
+            "import { holder } from '../../src/state.ts';\nholder.bundle = holder.bundle.registerGlobalStyles({ rogue: holder.bundle.createGlobalStyles({ body: { color: 'red' } }) });\n";
+        let monorepo = |declaration: &[(&'static str, &'static str)], index: &'static str, extra: &[(&'static str, &'static str)]| {
+            let mut files: Vec<(&str, &str)> = declaration.to_vec();
+            files.extend([
+                ("apps/web/package.json", "{\"name\":\"web\",\"type\":\"module\"}"),
+                ("apps/web/system.ts", "import { holder } from '@acme/styles';\nexport { theme } from '@acme/styles';\nexport const ds = holder.bundle.seal();\n"),
+                ("packages/styles/package.json", "{\"name\":\"@acme/styles\",\"type\":\"module\",\"exports\":\"./src/index.ts\"}"),
+                ("packages/styles/src/index.ts", index),
+                ("packages/styles/src/state.ts", STATE),
+                ("packages/styles/src/side.ts", SIDE),
+            ]);
+            files.extend(extra.iter().copied());
+            files
+        };
+        let unreached = |file: &str| vec![(crate::REGISTRATION_UNREACHED.to_string(), file.to_string(), 2)];
+        /// A layout, the load root, the findings expected, and the declaring
+        /// file the load must watch.
+        type Case<'a> = (&'a str, Vec<(&'a str, &'a str)>, &'a str, Vec<(String, String, usize)>, Option<&'a str>);
+        let cases: Vec<Case> = vec![
+            (
+                "gamut",
+                monorepo(&[("package.json", "{\"name\":\"monorepo\",\"private\":true,\"workspaces\":[\"apps/*\",\"packages/*\"]}")], "export * from './state';\nimport './side';\n", &[]),
+                "apps/web",
+                unreached("side.ts"),
+                Some("package.json"),
+            ),
+            (
+                "pnpm-inline",
+                monorepo(&[("pnpm-workspace.yaml", "packages: ['apps/*', \"packages/*\"]\n")], "export * from './state';\nimport './side';\n", &[]),
+                "apps/web",
+                unreached("side.ts"),
+                Some("pnpm-workspace.yaml"),
+            ),
+            (
+                "pnpm-and-manifest",
+                monorepo(
+                    &[
+                        ("package.json", "{\"name\":\"monorepo\",\"workspaces\":{\"nohoist\":[\"**\"]}}"),
+                        ("pnpm-workspace.yaml", "packages:\n  - apps/*\n  - packages/*\n"),
+                    ],
+                    "export * from './state';\nimport './side';\n",
+                    &[],
+                ),
+                "apps/web",
+                unreached("side.ts"),
+                Some("pnpm-workspace.yaml"),
+            ),
+            (
+                "manifest-free-dependency",
+                monorepo(
+                    &[("package.json", "{\"name\":\"monorepo\",\"workspaces\":[\"apps/*\",\"packages/*\"]}")],
+                    "export * from './state';\nimport '../node_modules/dep/side.js';\n",
+                    &[("packages/styles/node_modules/dep/side.js", DEP_SIDE)],
+                ),
+                "apps/web",
+                Vec::new(),
+                None,
+            ),
+            (
+                "unrelated-parent",
+                vec![
+                    ("package.json", "{\"name\":\"parent\",\"workspaces\":[\"**\"]}"),
+                    ("child/.git/HEAD", "ref: refs/heads/main\n"),
+                    ("child/package.json", "{\"name\":\"child\",\"type\":\"module\"}"),
+                    ("child/system.ts", "import { holder } from './lib/src/index.ts';\nexport { theme } from './lib/src/index.ts';\nexport const ds = holder.bundle.seal();\n"),
+                    ("child/lib/package.json", "{\"name\":\"lib\",\"type\":\"module\"}"),
+                    ("child/lib/src/index.ts", "export * from './state';\nimport './side';\n"),
+                    ("child/lib/src/state.ts", STATE),
+                    ("child/lib/src/side.ts", SIDE),
+                ],
+                "child",
+                Vec::new(),
+                None,
+            ),
+        ];
+        for (label, files, root, expected, watched) in cases {
+            let dir = project(&format!("monorepo-{label}"), &files);
+            if root == "apps/web" {
+                fs::create_dir_all(dir.join("node_modules/@acme")).expect("scope dir");
+                std::os::unix::fs::symlink(dir.join("packages/styles"), dir.join("node_modules/@acme/styles")).expect("link the workspace");
+            }
+            let app = dir.join(root);
+            let config = load_system_module(
+                &app.join("system.ts").to_string_lossy(),
+                &app.to_string_lossy(),
+                None,
+                &ResolutionContext::default(),
+            );
+            let _ = fs::remove_dir_all(&dir);
+            let config = config.unwrap_or_else(|error| panic!("{label}: the system loads: {error}"));
+            assert_eq!(findings(&config), expected, "{label}");
+            if let Some(watched) = watched {
+                let declaring = dir.join(watched).to_string_lossy().to_string();
+                assert!(config.dependencies.contains(&declaring), "{label}: {declaring} in {:?}", config.dependencies);
+            }
+        }
+    }
+
+    /// Contract: the repository boundary that stops the monorepo walk is
+    /// watched, whether `.git` is a directory or a worktree's file: removing
+    /// it lets an enclosing monorepo claim the code, so the load that
+    /// depended on it reloads and then reports what that root owns.
+    #[test]
+    fn the_repository_boundary_is_watched() {
+        for (label, boundary) in [("directory", "child/.git/HEAD"), ("worktree-file", "child/.git")] {
+            let dir = project(
+                &format!("git-boundary-{label}"),
+                &[
+                    ("package.json", "{\"name\":\"parent\",\"workspaces\":[\"**\"]}"),
+                    (boundary, "gitdir: ../.git/worktrees/child\n"),
+                    ("child/package.json", "{\"name\":\"child\",\"type\":\"module\"}"),
+                    ("child/system.ts", "import { holder } from './lib/src/index.ts';\nexport { theme } from './lib/src/index.ts';\nexport const ds = holder.bundle.seal();\n"),
+                    ("child/lib/package.json", "{\"name\":\"lib\",\"type\":\"module\"}"),
+                    ("child/lib/src/index.ts", "export * from './state';\nimport './side';\n"),
+                    ("child/lib/src/state.ts", STATE),
+                    (
+                        "child/lib/src/side.ts",
+                        "import { holder } from './state';\nholder.bundle = holder.bundle.registerGlobalStyles({ rogue: holder.bundle.createGlobalStyles({}) });\n",
+                    ),
+                ],
+            );
+            let child = dir.join("child");
+            let load = || {
+                load_system_module(&child.join("system.ts").to_string_lossy(), &child.to_string_lossy(), None, &ResolutionContext::default())
+                    .unwrap_or_else(|error| panic!("{label}: the system loads: {error}"))
+            };
+            let git = child.join(".git");
+            let bounded = load();
+            assert_eq!(findings(&bounded), [], "{label}");
+            assert!(bounded.dependencies.contains(&git.to_string_lossy().to_string()), "{label}: {:?}", bounded.dependencies);
+            if git.is_dir() {
+                fs::remove_dir_all(&git).expect("remove the boundary");
+            } else {
+                fs::remove_file(&git).expect("remove the boundary");
+            }
+            let unbounded = load();
+            let _ = fs::remove_dir_all(&dir);
+            assert_eq!(findings(&unbounded), [(crate::REGISTRATION_UNREACHED.to_string(), "side.ts".to_string(), 2)], "{label}");
+        }
     }
 
     /// Contract: what a load reads is what it watches: the modules it ran,
