@@ -6,9 +6,11 @@
     "cascade-layers",
     "css",
     "layer",
+    "nextjs",
     "vendor",
     "vite",
-    "vite-plugin"
+    "vite-plugin",
+    "webpack"
   ],
   "homepage": "https://github.com/codecaaron/animus/tree/main/packages/layergate#readme",
   "license": "MIT",
@@ -46,6 +48,16 @@
         "types": "./dist/vite.d.cts",
         "default": "./dist/vite.cjs"
       }
+    },
+    "./webpack": {
+      "import": {
+        "types": "./dist/webpack.d.mts",
+        "default": "./dist/webpack.mjs"
+      },
+      "require": {
+        "types": "./dist/webpack.d.cts",
+        "default": "./dist/webpack.cjs"
+      }
     }
   },
   "publishConfig": {
@@ -63,10 +75,14 @@
     "vite": "8.3.4"
   },
   "peerDependencies": {
-    "vite": ">=8 <9"
+    "vite": ">=8 <9",
+    "webpack": ">=5 <6"
   },
   "peerDependenciesMeta": {
     "vite": {
+      "optional": true
+    },
+    "webpack": {
       "optional": true
     }
   },

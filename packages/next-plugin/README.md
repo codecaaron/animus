@@ -71,6 +71,47 @@ export default withAnimus({
 Under webpack (`next dev` / `next build` on 15, or `--webpack` on 16) the
 plugin behaves exactly as before.
 
+## Third-party stylesheets
+
+A library's plain CSS outside any `@layer` beats every Animus layer. With
+`quarantine`, [`@animus-ui/layergate`](../layergate/README.md) loads it into
+`anm-vendor`, a layer below all of Animus's, so Animus's styles win and the
+library's still apply where Animus sets nothing:
+
+```bash
+npm install -D @animus-ui/layergate
+```
+
+```tsx
+export default withAnimus({
+  system: './src/ds.ts',
+  quarantine: {
+    sheets: ['react-grid-layout/css/styles.css'], // delivered ahead of Animus's own CSS
+    dependencies: ['react-datepicker'], // CSS these packages' modules import
+    optOut: [], // exact files whose own rules stay unlayered
+  },
+})(nextConfig);
+```
+
+It needs webpack: `next dev` and `next build` on Next 15, `--webpack` on
+Next 16. Turbopack runs no loader on the stylesheets a stylesheet imports,
+so with `quarantine` set any Turbopack run fails config loading, whatever
+the `turbopack` option says. Next marks a Turbopack run by setting
+`TURBOPACK`, so Animus refuses whenever that variable is set, even empty.
+The converse: a `TURBOPACK` inherited from the environment also refuses a
+webpack build of Next 15, loudly, so clear stale values in CI.
+
+Vendor stylesheets layergate finishes are not kept in webpack's persistent
+cache, so a warm rebuild finishes them again: about 118 ms per 200 vendor
+sheets in a synthetic measurement.
+
+`sheets` arrive at the head of Animus's own stylesheet, on every page.
+`!important` declarations and animations still win, and are reported. App
+CSS keeps its own rules unlayered; where it imports a vendor file, that file
+is layered. CSS Modules are left alone. A remote `@import` in a vendor
+stylesheet is an error: vendor the sheet locally, or opt the file out if
+unlayered is acceptable.
+
 ## Appearance bootstrap (no-FOUC color mode)
 
 Optional. Restores a persisted color mode before first paint with zero runtime

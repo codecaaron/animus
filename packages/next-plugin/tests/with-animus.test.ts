@@ -1,12 +1,21 @@
-import { ENGINE_TRANSFORM_EXTENSIONS } from '@animus-ui/extract/pipeline';
+import {
+  ANIMUS_LAYERS,
+  ENGINE_TRANSFORM_EXTENSIONS,
+} from '@animus-ui/extract/pipeline';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { sessionArtifactDir } from '../../extract/session/session-paths';
+import {
+  sessionArtifactDir,
+  stylesPath,
+} from '../../extract/session/session-paths';
 import { resetAnimusGlobals } from '../../extract/tests/session/session-fixtures';
+import { real } from '../../layergate/src/host';
+import { registry } from '../../layergate/src/webpack-state';
 import { AnimusWebpackPlugin } from '../src/plugin';
+import { QUARANTINE_TURBOPACK_MESSAGE } from '../src/quarantine';
 import { withAnimus } from '../src/with-animus';
 
 import type { AnimusNextOptions } from '../src/types';
@@ -21,6 +30,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreGlobals();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const root of temporaryRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -308,6 +318,80 @@ describe('withAnimus', () => {
       root: process.cwd(),
     });
   });
+
+  // Contract: `quarantine` gives the client compiler, the one that builds
+  // stylesheets, layergate's plugin: `anm-vendor` first in the order
+  // Animus's stylesheet declares, the declared sheets delivered at that
+  // stylesheet's head, and what layergate reads watched by Animus's
+  // matcher, which owns Next's watch options. Server compilers get none.
+  test('quarantine adds layergate to the client compiler only', () => {
+    const root = mkdtempSync(join(tmpdir(), 'animus-next-quarantine-'));
+    temporaryRoots.push(root);
+    vi.spyOn(process, 'cwd').mockReturnValue(root);
+
+    const wrapped = withAnimus({
+      system: './src/ds.ts',
+      quarantine: { sheets: ['vendor/a.css'], dependencies: ['vendor'] },
+    })({});
+    if (!('webpack' in wrapped)) {
+      throw new Error('withAnimus returned the Turbopack branch');
+    }
+    const isGate = (candidate: unknown): candidate is { id: string } =>
+      candidate instanceof Object &&
+      candidate.constructor.name === 'LayergatePlugin';
+    const client = wrapped.webpack?.({}, { isServer: false });
+    const server = wrapped.webpack?.({}, { isServer: true });
+    const animus = injectedAnimusPlugin(client?.plugins);
+    const gate = client?.plugins?.find(isGate);
+    if (!gate) throw new Error('expected layergate on the client compiler');
+    const state = registry().states.get(gate.id);
+
+    expect(server?.plugins?.some(isGate)).toBe(false);
+    expect(animus.getOptions().layers).toEqual([
+      'anm-vendor',
+      ...ANIMUS_LAYERS,
+    ]);
+    expect(state?.plan).toMatchObject({
+      layer: 'anm-vendor',
+      order: ['anm-vendor', ...ANIMUS_LAYERS],
+      sheets: ['vendor/a.css'],
+    });
+    expect(state?.declaredBy).toBe(real(stylesPath(animus.sessionDir)));
+
+    const read = join(root, 'node_modules/vendor/nested.css');
+    state?.units.record('unit', [read]);
+    const ignores = animus.watchIgnored(/node_modules/);
+    expect(ignores(read)).toBe(false);
+    expect(ignores(join(root, 'node_modules/vendor/other.css'))).toBe(true);
+  });
+
+  // Contract: under Turbopack, which runs no loader on the stylesheets a
+  // stylesheet imports, `quarantine` fails config loading, naming webpack.
+  test('quarantine refuses Turbopack', () => {
+    const wrapped = withAnimus({
+      system: './src/ds.ts',
+      turbopack: { mode: 'on' },
+      quarantine: { sheets: ['vendor/a.css'] },
+    });
+    expect(() => wrapped({})).toThrow(QUARANTINE_TURBOPACK_MESSAGE);
+  });
+
+  // Contract: the refusal follows the host actually running, not Animus's
+  // own Turbopack mode: under Turbopack with `turbopack: { mode: 'off' }`,
+  // Next never calls the webpack hook, so vendor CSS would ship unlayered.
+  // Next sets TURBOPACK, possibly empty: its presence counts.
+  test.each(['1', ''])(
+    'quarantine refuses Turbopack whatever the turbopack mode (TURBOPACK=%j)',
+    (value) => {
+      vi.stubEnv('TURBOPACK', value);
+      const wrapped = withAnimus({
+        system: './src/ds.ts',
+        turbopack: { mode: 'off' },
+        quarantine: { sheets: ['vendor/a.css'] },
+      });
+      expect(() => wrapped({})).toThrow(QUARANTINE_TURBOPACK_MESSAGE);
+    }
+  );
 
   test('declares the runtime dev define from the Next dev flag', () => {
     const root = mkdtempSync(join(tmpdir(), 'animus-next-define-'));

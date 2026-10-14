@@ -1,13 +1,14 @@
 # @animus-ui/layergate
 
-Load third-party stylesheets into a cascade layer, so their normal rules
-never beat yours, whatever their specificity or load order.
+For the vendor stylesheet you have to import: a date picker's, a grid
+library's, a package's `styles.css`. layergate loads it into a cascade
+layer below yours, so its normal rules can't fight your design system,
+whatever their specificity or load order.
 
-A stylesheet outside any `@layer` beats every layered rule. A date picker's
-or grid library's CSS imported as usual therefore overrides a design
-system or utility framework that uses layers. layergate loads that CSS
-itself, inlines its `@import`s, and puts each file's own rules in one layer
-below yours:
+A stylesheet outside any `@layer` beats every layered rule, so vendor CSS
+imported as usual overrides a design system or utility framework that uses
+layers. layergate loads that CSS itself, inlines its `@import`s, and puts
+each file's own rules in one layer below yours:
 
 ```css
 @layer vendor, app;
@@ -15,6 +16,11 @@ below yours:
   /* react-grid-layout/css/styles.css, as written */
 }
 ```
+
+Your own CSS is out of scope. App stylesheets and CSS Modules stay as you
+configure them: layergate layers only the vendor files you declare
+(`sheets`) or opt into (`dependencies`), including where your CSS imports
+one.
 
 ## Vite
 
@@ -59,6 +65,102 @@ layergate rewrites a relative `url()` to resolve from the delivered file.
 Edits to an owned file, nested imports and files under `node_modules`
 included, hot-update in place.
 
+## webpack
+
+```js
+// webpack.config.js
+const { LayergatePlugin } = require('@animus-ui/layergate/webpack');
+
+module.exports = {
+  plugins: [
+    new LayergatePlugin({
+      layer: 'vendor',
+      order: ['vendor', 'base', 'components', 'utilities'],
+      sheets: ['react-grid-layout/css/styles.css'],
+      dependencies: ['react-datepicker'],
+      declaredBy: require.resolve('./src/styles/app.css'),
+    }),
+  ],
+};
+```
+
+The plugin adds no rule. It joins every loader chain of yours whose
+css-loader is explicitly global (`modules: false`, as Next's global chains
+are), just before PostCSS runs, and raises that css-loader's
+`importLoaders` by one, so every stylesheet passes through it, imported
+ones included. An owned stylesheet arrives finished, its `@import`s
+resolved as css-loader resolves them and inlined, so css-loader never sees
+a `layer()` import. PostCSS, Sass and css-loader keep running as before.
+
+Any other chain is left untouched. One whose css-loader may treat a file
+as a CSS Module (`modules` unset, or `auto`) is reported in one line
+(`layergate.coverage`); a chain that only builds CSS Modules, such as
+Next's, is left alone silently.
+
+### CSS Modules alongside layergate
+
+layergate does not decide which stylesheets are CSS Modules. If one rule
+handles both, split it: global CSS in a rule whose css-loader has
+`modules: false`, which layergate joins, and CSS Modules in a rule of
+their own, which it leaves alone.
+
+```js
+module.exports = {
+  module: {
+    rules: [
+      {
+        test: /\.css$/,
+        exclude: /\.module\.css$/,
+        use: [
+          'style-loader',
+          { loader: 'css-loader', options: { modules: false } },
+        ],
+      },
+      {
+        test: /\.module\.css$/,
+        use: [
+          'style-loader',
+          { loader: 'css-loader', options: { modules: true } },
+        ],
+      },
+    ],
+  },
+};
+```
+
+Next already builds CSS this way.
+
+What layergate returns is never cached by webpack, so a warm start with a
+persistent cache finishes owned stylesheets again: about 118 ms per 200
+vendor sheets in a synthetic measurement. Caching them safely needs their
+provenance (the files and plan they came from) kept with the cache, a
+possible later change. Ownership, opt-outs and
+the declared sheets go by realpath; `url()`s are rebased from where webpack
+reads each file, so `resolve.symlinks: false` resolves them as css-loader
+does. The `declaredBy` stylesheet is never layered, even when an owned
+stylesheet imports it.
+
+webpack has no `virtual:layergate`. Pass `declaredBy`, the path of a
+stylesheet of yours: the declared sheets are delivered at its head, and a
+module's own import of one then loads nothing. Without it, import each
+declared sheet yourself; it is owned wherever it is imported.
+
+- A remote `@import` in an owned stylesheet is an error
+  (`layergate.remote`): webpack cannot load it inside the layer, and an
+  unlayered copy would escape it. Vendor the sheet locally, or opt the file
+  out if unlayered is acceptable.
+- A chain that uses Lightning CSS instead of css-loader is not covered,
+  and is reported (`layergate.coverage`).
+- In watch mode, an edit to any file an owned stylesheet read, files under
+  `node_modules` included, rebuilds it. The plugin makes a RegExp or
+  function `watchOptions.ignored` watch those files; a host that owns its
+  watch options passes `watchIgnored: false` and asks `plugin.watches(path)`.
+- Turbopack runs no loader on the stylesheets a stylesheet imports, so
+  layergate cannot work there.
+
+With Next and Animus, use the `quarantine` option of
+`@animus-ui/next-plugin`, which sets this up for Next's client compiler.
+
 ## What it does to a stylesheet
 
 - **Each file is decided on its own.** A file's own rules go into the
@@ -72,8 +174,9 @@ included, hot-update in place.
 - **Text is kept as written.** Selectors, declarations, `!important`,
   keyframes and the file's own layers reach the browser unchanged. Only a
   relative `url()` in a file outside the delivered file's directory changes.
-- **Remote imports stay remote.** An `http(s):` import is hoisted to the
-  top, in its layer, and reported, since its contents are not inspected.
+- **Remote imports stay remote.** Under Vite, an `http(s):` import is
+  hoisted to the top, in its layer, and reported, since its contents are
+  not inspected. Under webpack it is an error (see above).
 
 ## What a layer does not change
 
@@ -89,7 +192,8 @@ Font, keyframe and property names are global, whatever their layer.
 
 ## Not yet
 
-- CSS Modules, Sass, Less and Stylus are left to Vite.
+- CSS Modules, Sass, Less and Stylus are left to Vite. Under webpack, Sass
+  output is finished like any CSS, and CSS Modules are left alone.
 - An owned file can arrive more than once. A stylesheet Vite loads
   itself, such as an app sheet whose `@import` reaches an owned file, is
   finished by layergate too: its own rules stay unlayered and the owned
@@ -105,7 +209,7 @@ Font, keyframe and property names are global, whatever their layer.
 - A stylesheet with `@namespace` is an error (`layergate.namespace`): it
   applies to a whole stylesheet, which a file inlined into another is not.
 - A host's PostCSS runs once, over each finished stylesheet, not per file.
-- Vite only, for now. webpack and Next come next; Turbopack after.
+- Turbopack: not supported (see webpack above).
 
 ## Delivering from a host stylesheet
 
@@ -132,4 +236,5 @@ files start an owned graph (default: all), and `url` maps a referenced file
 to its URL text (default: relative to the first root).
 `base` is the directory generated layer names are relative to (the project
 root), so they are the same on every machine. `cache` keeps parsed files
-between compiles; drop a file's entry when it changes. The Vite adapter is built on it.
+between compiles; drop a file's entry when it changes. The Vite and webpack
+adapters are built on it.

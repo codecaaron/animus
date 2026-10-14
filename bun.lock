@@ -229,9 +229,11 @@
       },
       "peerDependencies": {
         "vite": ">=8 <9",
+        "webpack": ">=5 <6",
       },
       "optionalPeers": [
         "vite",
+        "webpack",
       ],
     },
     "packages/next-plugin": {
@@ -242,11 +244,16 @@
       },
       "devDependencies": {
         "@animus-ui/assertions": "workspace:*",
+        "@animus-ui/layergate": "workspace:*",
       },
       "peerDependencies": {
+        "@animus-ui/layergate": "workspace:*",
         "next": ">=15 <17",
         "webpack": ">=5 <6",
       },
+      "optionalPeers": [
+        "@animus-ui/layergate",
+      ],
     },
     "packages/oracle": {
       "name": "@animus-ui/oracle",

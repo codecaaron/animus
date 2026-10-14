@@ -195,6 +195,8 @@ export class AnimusWebpackPlugin {
     files: new Set(),
     directories: () => false,
   };
+  /** Other files the watcher must see, by the plugins that read them. */
+  private readonly alsoWatched: ((path: string) => boolean)[] = [];
   /** The webpack config Next hands its watcher, when withAnimus made it. */
   private watchedConfig: { watchOptions?: WatchOptions } | undefined;
 
@@ -242,6 +244,12 @@ export class AnimusWebpackPlugin {
     this.watchedConfig = config;
   }
 
+  /** Makes `watchIgnored` watch the paths `watches` names too: one matcher
+   *  owns the host's watch options. */
+  watchAlso(watches: (path: string) => boolean): void {
+    this.alsoWatched.push(watches);
+  }
+
   /**
    * `watchOptions.ignored` for the host's own `ignored`: this session's epoch
    * file stays ignored, and every file and directory the Session's watch plan
@@ -274,7 +282,9 @@ export class AnimusWebpackPlugin {
       ) {
         return false;
       }
-      return hostIgnores(path);
+      return (
+        hostIgnores(path) && !this.alsoWatched.some((watches) => watches(path))
+      );
     };
   }
 

@@ -1,7 +1,7 @@
-import { ANIMUS_LAYERS } from '@animus-ui/extract/pipeline';
 import { describe, expect, it } from 'vitest';
 
-import { withVendorLayer } from '../src/quarantine';
+import { ANIMUS_LAYERS } from '../pipeline/assemble-stylesheet';
+import { withVendorLayer } from '../pipeline/quarantine';
 
 describe('quarantine: the layer order', () => {
   // Contract: `anm-vendor` comes first in the order Animus's own stylesheet
