@@ -6,6 +6,8 @@ import {
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_CSS_MODULE_ID,
+  FONT_PRELOADS_ARTIFACT,
+  FONT_PRELOADS_MODULE_ID,
   STYLES_ARTIFACT,
   SYSTEM_PROPS_ARTIFACT,
   TURBOPACK_SYSTEM_PROPS_ID,
@@ -99,6 +101,10 @@ export function buildTurbopackConfig(args: {
     [ANIMUS_CSS_MODULE_ID]: rootRelativeRequest(
       rootDir,
       join(sessionDir, STYLES_ARTIFACT)
+    ),
+    [FONT_PRELOADS_MODULE_ID]: rootRelativeRequest(
+      rootDir,
+      join(sessionDir, FONT_PRELOADS_ARTIFACT)
     ),
   };
   for (const [specifier, srcEntry] of externalSourceEntries) {

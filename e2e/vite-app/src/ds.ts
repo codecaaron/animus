@@ -122,6 +122,7 @@ export const globalStyles = createGlobalStyles(
           },
         ],
         display: 'swap',
+        preload: true,
       },
     ],
   }

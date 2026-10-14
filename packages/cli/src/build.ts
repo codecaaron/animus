@@ -13,6 +13,7 @@ import {
   getAnalyzedHashes,
   getManifestJson,
   getSharedCss,
+  getSharedFontPreloads,
   getSharedSystemProps,
 } from '@animus-ui/extract/session';
 import { existsSync, rmSync, writeFileSync } from 'fs';
@@ -29,6 +30,7 @@ import {
 } from './writer';
 
 import type { ResolvedCliConfig } from './config';
+import type { ArtifactPayloads } from './writer';
 import type { ProjectManifest } from '@animus-ui/extract/pipeline';
 import type { SessionKey } from '@animus-ui/extract/session';
 
@@ -131,6 +133,7 @@ export function publishSharedPayloads(
   const manifestJson = getManifestJson(session.key) ?? '';
   const stylesCss = getSharedCss(session.key);
   const systemPropsJs = getSharedSystemProps(session.key);
+  const fontPreloads = getSharedFontPreloads(session.key);
   // Re-parsing the MB-scale manifest every cycle only to count keys is the
   // costly path; the parse survives as the fallback readability check.
   let componentCount = session.lastComponentCount ?? -1;
@@ -161,14 +164,17 @@ export function publishSharedPayloads(
     );
   }
 
-  const assets = collectSessionAssets(session.sessionDir);
+  const payloads: ArtifactPayloads = {
+    stylesCss,
+    systemPropsJs,
+    manifestJson,
+    assets: collectSessionAssets(session.sessionDir),
+  };
+  if (fontPreloads.length > 0) {
+    payloads.fontPreloadsJson = JSON.stringify(fontPreloads);
+  }
   try {
-    publishArtifacts(outDir, {
-      stylesCss,
-      systemPropsJs,
-      manifestJson,
-      assets,
-    });
+    publishArtifacts(outDir, payloads);
   } catch (error) {
     if (error instanceof PublishInconsistencyError) {
       throw new EnvironmentFailure(error.message);

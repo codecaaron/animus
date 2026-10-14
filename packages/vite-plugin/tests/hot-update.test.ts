@@ -806,6 +806,7 @@ function observedContext(root: string) {
       analysisGlobalCss: '',
       analysisComponentCss: '',
       styles: '',
+      fontPreloads: [],
       // Built from the same inputs as the Session builds it.
       systemPropsModule: buildSystemPropsModule({
         systemPropMapJson: JSON.stringify(manifest.system_prop_map),

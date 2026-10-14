@@ -7,7 +7,11 @@ import { requireNativeEngine } from '../pipeline/native-resolution';
 
 import type { PackageReadRecord } from '../pipeline/alias-agreement';
 import type { AnimusCoreOptions } from '../pipeline/core-options';
-import type { EngineApi, V2ExtractEngine } from '../pipeline/index';
+import type {
+  EngineApi,
+  FontPreload,
+  V2ExtractEngine,
+} from '../pipeline/index';
 
 /**
  * A build's shared state lives in one registry on `globalThis`, keyed by its
@@ -34,6 +38,8 @@ function joined(key: SessionKey): SessionState {
 export interface RegistryPublication {
   manifestJson: string;
   styles: string;
+  /** The faces' preloads, by the URLs the stylesheet names. */
+  fontPreloads: FontPreload[];
   systemPropsModule: string;
   /** Root-relative path → hash of the bytes the analysis read, including
    *  files that produced no entries: the loader's stale-input witness. */
@@ -106,6 +112,11 @@ export function claimExtractionReport(key: SessionKey): boolean {
 
 export function getSharedCss(key: SessionKey): string {
   return publicationOf(key)?.styles ?? '';
+}
+
+/** The published faces' preloads, by the URLs the stylesheet names. */
+export function getSharedFontPreloads(key: SessionKey): FontPreload[] {
+  return publicationOf(key)?.fontPreloads ?? [];
 }
 
 export function getSharedSystemProps(key: SessionKey): string {

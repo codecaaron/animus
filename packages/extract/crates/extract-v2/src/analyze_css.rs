@@ -764,6 +764,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::theme::AT_RULE_PLACEMENT, "error"),
     (crate::theme::FONT_FACE_DROPPED, "error"),
     (crate::theme::FONT_FACE_GENERIC_FIRST_WORD, "warn"),
+    (crate::theme::FONT_FACE_PRELOAD_DROPPED, "warn"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
     (UNSUPPORTED_OBJECT_MEMBER, "warn"),
@@ -845,6 +846,8 @@ pub struct CssOutput {
     /// Each extension dropped over a parent that is no analysed chain, with
     /// why (spec §12.2 row 11).
     pub missing_inputs: Vec<MissingInput>,
+    /// The font files the emitted faces ask to preload, in emission order.
+    pub font_preloads: Vec<crate::theme::FontPreload>,
 }
 
 pub fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
@@ -1905,6 +1908,13 @@ fn dropped_style_key(
                  entry of `{{ local }}` or `{{ url }}`, and each descriptor a string"
             );
             return diagnostic(file, component, "warn", message, Some(crate::theme::FONT_FACE_DROPPED));
+        }
+        DroppedStyleKey::FontFacePreload { face, reason } => {
+            let message = format!(
+                "the font face {face} is emitted without a preload: {reason} — preload a face that has a \
+                 `url` source with `preload: true`"
+            );
+            return diagnostic(file, component, "warn", message, Some(crate::theme::FONT_FACE_PRELOAD_DROPPED));
         }
         DroppedStyleKey::SharedProperty { overridden, winner, property, rule } => {
             return keys_share_property(file, component, (overridden, winner, property, *rule), inheritors);
@@ -9013,6 +9023,7 @@ fn run_with_system_floor(
             }
         }
     }
+    let mut font_preloads = Vec::new();
     let (global_css_raw, unlayered_global_css) = if let Some(blocks) = &inputs.global_style_blocks {
         // Each block's reports name its registration key and the module that
         // declares it; without one, the loaded system stands in.
@@ -9045,8 +9056,9 @@ fn run_with_system_floor(
             };
             drain_dropped_style_keys(&dropped_keys, file, &component, &[], keys, &mut diagnostics);
         };
-        let css = crate::theme::resolve_global_blocks(blocks, &resolve_ctx, false, &mut attribute);
-        let unlayered = crate::theme::resolve_global_blocks(blocks, &resolve_ctx, true, &mut attribute);
+        let css = crate::theme::resolve_global_blocks(blocks, &resolve_ctx, false, &mut font_preloads, &mut attribute);
+        let unlayered =
+            crate::theme::resolve_global_blocks(blocks, &resolve_ctx, true, &mut font_preloads, &mut attribute);
         (css, unlayered)
     } else {
         (String::new(), String::new())
@@ -9243,6 +9255,7 @@ fn run_with_system_floor(
             .map(|(path, members)| (path, members.into_iter().collect()))
             .collect(),
         missing_inputs,
+        font_preloads,
     }
 }
 
@@ -10492,6 +10505,70 @@ mod tests {
                 ("global 'fonts'", "the font face 'Empty'", Some("error")),
                 ("global 'fonts'", "the font face '{fonts.body}'", Some("error")),
                 ("global 'fonts'", "the font face '{fonts.mode}'", Some("error")),
+            ],
+            "{:#?}",
+            out.diagnostics
+        );
+    }
+
+    #[test]
+    fn preloading_faces_name_their_woff2_or_first_url_source_once() {
+        let mut inputs = test_inputs();
+        let face = |family: &str, src: serde_json::Value, preload: serde_json::Value| {
+            serde_json::json!({ "family": family, "src": src, "preload": preload })
+        };
+        inputs.global_style_blocks = Some(serde_json::json!({
+            "fonts": {
+                "styles": {},
+                "fontFaces": [
+                    // WOFF2 by format, after a local and a WOFF source.
+                    face("A", serde_json::json!([
+                        { "local": "A" },
+                        { "url": "animus-asset:./a.woff", "format": "woff" },
+                        { "url": "animus-asset:./a.woff2", "format": "woff2" }
+                    ]), true.into()),
+                    // WOFF2 by extension, where no format is given.
+                    face("B", serde_json::json!([{ "url": "/b.ttf" }, { "url": "https://cdn.test/b.woff2?v=1" }]), true.into()),
+                    // No WOFF2: the first url source, typed by its format.
+                    face("C", serde_json::json!([{ "url": "/c.otf", "format": "opentype" }, { "url": "/c.woff" }]), true.into()),
+                    // An unknown format gives no type.
+                    face("D", serde_json::json!([{ "url": "HTTP://cdn.test/d", "format": "embedded-opentype" }]), true.into()),
+                    // A URL relative to the stylesheet is not preloaded.
+                    face("Relative", serde_json::json!([{ "url": "./r.woff2" }]), true.into()),
+                    // The same file again preloads once.
+                    face("A2", serde_json::json!([{ "url": "animus-asset:./a.woff2", "format": "woff2" }]), true.into()),
+                    face("Off", serde_json::json!([{ "url": "./off.woff2" }]), false.into()),
+                    serde_json::json!({ "family": "Unasked", "src": [{ "url": "./unasked.woff2" }] }),
+                    face("Local", serde_json::json!([{ "local": "Arial" }]), true.into()),
+                    face("Bad", serde_json::json!([{ "url": "./bad.woff2" }]), "yes".into()),
+                    // A face left out preloads nothing.
+                    face("{fonts.missing}", serde_json::json!([]), true.into())
+                ]
+            }
+        }));
+        let out = analyze(&[("a.tsx", "export const x = 1;\n")], &inputs);
+        let preloads: Vec<_> = out.font_preloads.iter().map(|p| (p.href.as_str(), p.mime)).collect();
+        assert_eq!(
+            preloads,
+            [
+                ("animus-asset:./a.woff2", Some("font/woff2")),
+                ("https://cdn.test/b.woff2?v=1", Some("font/woff2")),
+                ("/c.otf", Some("font/otf")),
+                ("HTTP://cdn.test/d", None),
+            ]
+        );
+        let unpreloaded: Vec<_> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some("animus.style.font-face-preload-dropped"))
+            .map(|d| (d.message.split(" — ").next().unwrap_or_default(), d.severity.as_deref()))
+            .collect();
+        assert_eq!(
+            unpreloaded,
+            [
+                ("the font face 'Relative' is emitted without a preload: its source `./r.woff2` is neither an asset() file nor a root-relative or absolute URL, and a host moves a URL relative to the stylesheet", Some("warn")),
+                ("the font face 'Local' is emitted without a preload: it has no `url` source to preload", Some("warn")),
+                ("the font face 'Bad' is emitted without a preload: its `preload` \"yes\" is not a boolean", Some("warn")),
             ],
             "{:#?}",
             out.diagnostics

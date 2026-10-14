@@ -128,6 +128,49 @@ Two rules either way:
   you add to the script tag. The full CSP footguns are documented in the
   [`@animus-ui/vite-plugin` README](https://github.com/codecaaron/animus/tree/main/packages/vite-plugin#content-security-policy).
 
+## Font preloads
+
+A font face declared with `preload: true` can start loading before the
+stylesheet's `@font-face` applies. The plugin injects nothing into the
+document, so render the component that delivers it. It renders nothing when
+no face preloads.
+
+**App Router:** render `AnimusFontPreloads` in the root layout. React hoists
+each preload into `<head>` ahead of the stylesheets, and dedupes it by href,
+against `next/font` too.
+
+```tsx
+// app/layout.tsx
+import { AnimusFontPreloads } from '@animus-ui/next-plugin/font-preloads';
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body>
+        <AnimusFontPreloads />
+        {children}
+      </body>
+    </html>
+  );
+}
+```
+
+**Pages Router:** render `AnimusFontPreloadLinks` inside `<Head>` in
+`pages/_document.tsx`. It renders plain `<link>` tags, which any React
+version renders.
+
+Each preload names the URL the stylesheet's `url()` loads (the hashed
+`/_next/static/media/…` file, under webpack and Turbopack, in build and in
+development), so the browser fetches the file once. `withAnimus` adds this
+package to `transpilePackages`, so Next bundles the component and resolves
+the module it reads. Nothing detects a layout that never renders the
+component: the faces then load when the stylesheet applies, as without
+`preload`.
+
 ## MDX
 
 Animus reads each `.mdx` file as the JSX it renders: its imports, exports,

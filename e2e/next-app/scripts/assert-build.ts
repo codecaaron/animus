@@ -3,6 +3,7 @@ import {
   assertClassNameFormat,
   assertColorSchemeEmission,
   assertConditionsInsideLayers,
+  assertFontPreload,
   assertHeadInjectionContract,
   assertKeyframesExtracted,
   assertLayerOrder,
@@ -15,6 +16,7 @@ import {
   findBuildAssets,
   findCssFiles,
   findJsFiles,
+  fontFaceUrl,
   layerBlock,
   readAllConcat,
   systemSchemeVariableSpans,
@@ -170,6 +172,20 @@ async function main(): Promise<void> {
   }
   for (const htmlFile of appHtmlFiles) {
     assertNoBootstrapScript(await readFile(htmlFile, 'utf8'));
+  }
+
+  // `preload: true` on the face: each router's documents preload the URL
+  // the @font-face loads, through `AnimusFontPreloads` (App Router) and
+  // `AnimusFontPreloadLinks` (`_document`).
+  const fontUrl = fontFaceUrl(css, 'AnimusTestFont');
+  if (!fontUrl) {
+    throw new AssertionError(
+      'font preload witness: no AnimusTestFont @font-face URL in the CSS'
+    );
+  }
+  assertFontPreload(legacyHtml, fontUrl);
+  for (const htmlFile of appHtmlFiles) {
+    assertFontPreload(await readFile(htmlFile, 'utf8'), fontUrl);
   }
 
   console.log(

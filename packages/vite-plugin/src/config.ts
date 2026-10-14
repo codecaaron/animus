@@ -66,9 +66,11 @@ export function applyResolvedConfig(
   ctx.loadExpander = viteHostExpander(config);
   ctx.log(`extension order: ${ctx.extensionPolicy.resolverVersion}`);
   ctx.logger = config.logger;
-  // Public base for dev /@fs asset URLs (build URLs are resolved by Vite's
+  // What dev asset URLs are served under (build URLs are resolved by Vite's
   // own asset pipeline, which applies base itself).
   ctx.base = config.base ?? '/';
+  ctx.viteRoot = config.root;
+  ctx.serverOrigin = config.server.origin ?? '';
 
   ctx.lcssTargets = resolveLightningTargets(ctx.options.targets, ctx.rootDir);
   ctx.log(

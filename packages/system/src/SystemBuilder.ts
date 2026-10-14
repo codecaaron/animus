@@ -111,6 +111,16 @@ export interface FontFace {
   lineGapOverride?: string;
   fontFeatureSettings?: string;
   fontVariationSettings?: string;
+  /**
+   * Ask the document to start loading the face's file before its
+   * stylesheet applies: the first `url` source in WOFF2, else the first
+   * `url` source. That source must be an `asset()` file or a root-relative
+   * or absolute URL. The host delivers the `<link rel="preload">` (and a
+   * `preconnect` for another origin): Vite injects it into `index.html`;
+   * Next renders it through `AnimusFontPreloads`; Rollup, webpack and the
+   * CLI emit a manifest for `renderFontPreloads`.
+   */
+  preload?: boolean;
 }
 
 export interface GlobalStyleBlock {

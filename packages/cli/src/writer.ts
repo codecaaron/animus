@@ -2,6 +2,7 @@ import { AnimusConfigError, contentHash } from '@animus-ui/extract/pipeline';
 import {
   checkLockLiveness,
   CLI_COMMIT_ARTIFACT,
+  CLI_FONT_PRELOADS_ARTIFACT,
   CLI_LOCK_ARTIFACT,
   decodeCommitRecord,
   holdDirectoryClaim,
@@ -36,11 +37,15 @@ export const MANIFEST_FILE = MANIFEST_ARTIFACT;
 export const COMMIT_FILE = CLI_COMMIT_ARTIFACT;
 export const LOCK_FILE = CLI_LOCK_ARTIFACT;
 export const ASSETS_DIR = SESSION_ASSETS_DIR;
+export const FONT_PRELOADS_FILE = CLI_FONT_PRELOADS_ARTIFACT;
 
 export interface ArtifactPayloads {
   stylesCss: string;
   systemPropsJs: string;
   manifestJson: string;
+  /** The faces' preloads, hrefs relative to styles.css, for
+   *  `renderFontPreloads`; absent when no face preloads. */
+  fontPreloadsJson?: string;
   /** Published under `assets/<name>` beside styles.css — the stylesheet's
    *  relative urls dangle without them. */
   assets?: readonly SessionAsset[];
@@ -101,6 +106,7 @@ const NAMED_PAYLOAD_FIELDS = [
   [STYLES_FILE, 'stylesCss'],
   [SYSTEM_PROPS_FILE, 'systemPropsJs'],
   [MANIFEST_FILE, 'manifestJson'],
+  [FONT_PRELOADS_FILE, 'fontPreloadsJson'],
 ] as const satisfies ReadonlyArray<readonly [string, keyof ArtifactPayloads]>;
 
 const PUBLISHED_NAMES: readonly string[] = [
@@ -197,7 +203,8 @@ export function acquireLock(outDir: string): () => void {
   return holdDirectoryClaim(outDir, { write: 'rename', startedAt });
 }
 
-function publishedAssetNames(outDir: string): ReadonlySet<string> {
+/** Every name the current commit record publishes. */
+function publishedNames(outDir: string): ReadonlySet<string> {
   let record: CommitRecord | null;
   try {
     record = decodeCommitRecord(
@@ -206,12 +213,7 @@ function publishedAssetNames(outDir: string): ReadonlySet<string> {
   } catch {
     return new Set();
   }
-  if (record === null) return new Set();
-  return new Set(
-    Object.keys(record.payloads)
-      .filter((name) => name.startsWith(`${ASSETS_DIR}/`))
-      .map((name) => name.slice(ASSETS_DIR.length + 1))
-  );
+  return new Set(record === null ? [] : Object.keys(record.payloads));
 }
 
 /** Staged, verified, then renamed into place with the commit record LAST. A
@@ -223,13 +225,16 @@ export function publishArtifacts(
   mkdirSync(outDir, { recursive: true });
   // Captured before any mutation: only names the current record published
   // are prunable below.
-  const previouslyPublishedAssets = publishedAssetNames(outDir);
+  const previouslyPublished = publishedNames(outDir);
   const staging = join(outDir, `${STAGING_PREFIX}${process.pid}`);
   rmSync(staging, { recursive: true, force: true });
   mkdirSync(staging, { recursive: true });
   try {
-    const namedPayloads: ReadonlyArray<readonly [string, string]> =
-      NAMED_PAYLOAD_FIELDS.map(([name, field]) => [name, payloads[field]]);
+    const namedPayloads: Array<readonly [string, string]> = [];
+    for (const [name, field] of NAMED_PAYLOAD_FIELDS) {
+      const text = payloads[field];
+      if (text !== undefined) namedPayloads.push([name, text]);
+    }
     const record: CommitRecord = { schema: 1, payloads: {} };
     for (const [name, text] of namedPayloads) {
       writeFileSync(join(staging, name), text);
@@ -276,13 +281,17 @@ export function publishArtifacts(
           landed.push(`${ASSETS_DIR}/${name}`);
         }
       }
-      // Content-hashed asset names accumulate forever, but outDir is not
-      // animus-exclusive: only what the previous record published is pruned.
-      const expectedNames = new Set(assets.map((asset) => asset.name));
-      for (const name of previouslyPublishedAssets) {
-        if (expectedNames.has(name)) continue;
+      // Content-hashed asset names accumulate forever, and an optional
+      // payload can drop out, but outDir is not animus-exclusive: only what
+      // the previous record published is pruned.
+      const expectedNames = new Set([
+        ...namedPayloads.map(([name]) => name),
+        ...assets.map((asset) => `${ASSETS_DIR}/${asset.name}`),
+      ]);
+      for (const name of previouslyPublished) {
+        if (expectedNames.has(name) || name === COMMIT_FILE) continue;
         try {
-          unlinkSync(join(publishedAssetsDir, name));
+          unlinkSync(join(outDir, name));
         } catch {
           // Concurrent removal — the prune's goal is already met.
         }

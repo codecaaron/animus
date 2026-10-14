@@ -96,6 +96,16 @@ supplies either `cspHash` or a per-request nonce. Worked App Router and Pages
 Router examples live in the
 [`@animus-ui/next-plugin` README](https://github.com/codecaaron/animus/tree/main/packages/next-plugin#appearance-bootstrap-no-fouc-color-mode).
 
+## Font preloads
+
+A font face declared with `preload: true` gets a
+`<link rel="preload" as="font" crossorigin>` at the start of `<head>`, ahead
+of every stylesheet reference, with a `preconnect` for a file on another
+origin. Its href is the URL the stylesheet's `url()` loads: the hashed asset
+in a build, the dev server's URL in development. A root-relative or
+absolute URL that `index.html` already preloads gets no second preload; an
+`asset()` file's preload is not compared with one written in the HTML.
+
 ## Third-party stylesheets
 
 A library's plain CSS outside any `@layer` beats every Animus layer. With

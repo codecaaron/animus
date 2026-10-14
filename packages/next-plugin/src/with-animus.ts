@@ -3,6 +3,7 @@ import {
   assembleStylesheet,
   assertSupportedEngine,
   assertKnownOptionKeys,
+  fontPreloadsModule,
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
@@ -15,6 +16,8 @@ import {
 import {
   createBuildId,
   ExtractionSession,
+  FONT_PRELOADS_MODULE_ID,
+  fontPreloadsPath,
   requireEngine,
   runSessionPipeline,
   startTurbopackWatcher,
@@ -203,7 +206,10 @@ export function withAnimus(
   return <Config extends NextOwnedConfig>(
     authoredConfig: NextConfigInput<Config>
   ): WebpackNextConfig<Config> | TurbopackNextConfig<Config> => {
-    const nextConfig = withSourceKits(authoredConfig, appRoot);
+    const nextConfig = withTranspiled(
+      authoredConfig,
+      transpiledPackages(appRoot)
+    );
     if (resolveTurbopackMode(options)) {
       warnTurbopackCwdRoot(options, appRoot);
       return turbopackConfig(nextConfig, options, build, appRoot);
@@ -257,6 +263,11 @@ export function withAnimus(
             split: true,
           });
           writeFileSync(stubCssPath, declaration);
+        }
+        // Resolvable before the first publication writes it.
+        const sessionFontPreloadsPath = fontPreloadsPath(sessionDir);
+        if (!existsSync(sessionFontPreloadsPath)) {
+          writeFileSync(sessionFontPreloadsPath, fontPreloadsModule([]));
         }
 
         if (!warnedGitignore) {
@@ -340,6 +351,9 @@ export function withAnimus(
                   (resolveData) => {
                     if (resolveData.request === 'virtual:animus/system-props') {
                       resolveData.request = sessionSystemPropsPath;
+                    }
+                    if (resolveData.request === FONT_PRELOADS_MODULE_ID) {
+                      resolveData.request = sessionFontPreloadsPath;
                     }
                     if (
                       resolveData.request === 'virtual:animus/styles.css' ||
@@ -454,11 +468,8 @@ export function bindTurbopackWatchDeathReport(
   };
 }
 
-/** The config with the source kits the app depends on added to
- *  `transpilePackages`. The kit redirect points both bundles at a kit's
- *  source, but Next's server keeps an installed package external, and so
- *  loads its runtime entry, unless the package is transpiled; transpiling
- *  also compiles its TypeScript source. */
+const NEXT_PLUGIN_PACKAGE = '@animus-ui/next-plugin';
+
 let warnedTurbopackCwd = false;
 
 /** Turbopack's loaders get no app dir either, so a cwd that is not the app
@@ -482,18 +493,30 @@ function warnTurbopackCwdRoot(
   );
 }
 
-function withSourceKits<Config extends NextOwnedConfig>(
+/** The config with `packages` added to `transpilePackages`. Next's server
+ *  keeps an installed package external, and so loads its runtime entry,
+ *  unless the package is transpiled. */
+function withTranspiled<Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>,
-  rootDir: string
+  packages: readonly string[]
 ): NextConfigInput<Config> {
   const declared = nextConfig.transpilePackages ?? [];
+  const added = packages.filter((name) => !declared.includes(name));
+  if (added.length === 0) return nextConfig;
+  return { ...nextConfig, transpilePackages: [...declared, ...added] };
+}
+
+/** The packages Next must transpile: the source kits the app depends on,
+ *  since the kit redirect points both bundles at a kit's TypeScript source,
+ *  and this package, whose font-preloads entry imports the session module
+ *  only the bundle's alias resolves. */
+function transpiledPackages(rootDir: string): string[] {
   // The native module answers the kit source table directly; the build's
   // session engine is not created at config time.
-  const kits = sourceKitDependencies(rootDir, requireEngine())
-    .map((kit) => kit.name)
-    .filter((name) => !declared.includes(name));
-  if (kits.length === 0) return nextConfig;
-  return { ...nextConfig, transpilePackages: [...declared, ...kits] };
+  return [
+    ...sourceKitDependencies(rootDir, requireEngine()).map((kit) => kit.name),
+    NEXT_PLUGIN_PACKAGE,
+  ];
 }
 
 function turbopackConfig<Config extends NextOwnedConfig>(
@@ -623,6 +646,7 @@ async function analyzeForTurbopack(
     { ...options, mode },
     { unbundledComputedImports: true, build: `${build}-${phase}` }
   );
+  session.writesFontPreloadsModule = true;
   // A replaced session's watcher would keep the root claimed for it.
   const owner = turbopackOwner(build);
   owner.session?.close();

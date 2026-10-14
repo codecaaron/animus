@@ -79,6 +79,12 @@ plugin first to fix it.
   written into `outdir`, or beside `outfile`).
 - Supplies the `__ANIMUS_DEV__` dev-signal define through each bundler's
   own mechanism.
+- When a font face declares `preload: true`, emits
+  `animus-font-preloads.json` beside `animus.css`: the preloads, as
+  `{ href, type }`, with hrefs relative to the stylesheet.
+  `renderFontPreloads(preloads, { base, exclude })` returns the `<link>`
+  tags for your HTML, where `base` is the URL `animus.css`'s directory is
+  served at, and `exclude` lists hrefs the document already preloads.
 
 ## Options
 

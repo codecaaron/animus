@@ -88,6 +88,8 @@ import {
   generatedModuleCode,
   reportSurvivingAssetPlaceholders,
   substituteSheetAssets,
+  fontPreloadsModule,
+  substituteFontPreloads,
   toWatchKeys,
   tsconfigChainPaths,
   isDeletedSource,
@@ -123,6 +125,7 @@ import {
   CLI_COMMIT_ARTIFACT,
   envelopeCssArtifact,
   envelopeJsonArtifact,
+  FONT_PRELOADS_ARTIFACT,
   MANIFEST_ARTIFACT,
   readCssEnvelope,
   readJsonEnvelope,
@@ -133,6 +136,7 @@ import {
   sessionsRootDir,
   STYLES_ARTIFACT,
   SYSTEM_PROPS_ARTIFACT,
+  fontPreloadsPath,
   systemPropsPath,
 } from './session-paths';
 import {
@@ -250,6 +254,7 @@ import type {
 import type {
   AssetSheets,
   EngineApi,
+  FontPreload,
   IngestionOpening,
   LightningTargets,
   ManifestDiagnostic,
@@ -424,6 +429,9 @@ export interface SessionPublication {
    *  CSS: what a host assembling its own stylesheet reads. */
   analysisGlobalCss: string;
   analysisComponentCss: string;
+  /** The faces' preloads, by the URLs the published sheets name: asset()
+   *  placeholders stay for a host that substitutes assets itself. */
+  fontPreloads: FontPreload[];
   /** The final stylesheet, post-processed: byte for byte the body a
    *  persisting host writes as `styles.css`. */
   styles: string;
@@ -575,6 +583,9 @@ export class ExtractionSession {
    *  emitFile markers): the published sheets keep their placeholders, and
    *  the session makes no copy and tracks no asset file. */
   hostSubstitutesAssets = false;
+  /** Whether the session writes the font-preloads module beside its
+   *  stylesheet, for a host that aliases it (Next). */
+  writesFontPreloadsModule = false;
   /** Whether the session keeps its artifacts on disk: status, commit,
    *  manifest, styles, the epoch witness, asset copies and its directory
    *  claim, with the sibling reconciliation they need. A host that serves
@@ -2897,12 +2908,13 @@ export class ExtractionSession {
 
     // Substitution happens before assembly so every CSS consumer receives
     // substituted urls. Pruning: every full pass, incremental on request.
-    const sheets = this.substituteAssetReferences(
+    const { sheets, fontPreloads } = this.substituteAssetReferences(
       {
         variableCss: system.variableCss,
         globalCss: result.globalCss,
         componentCss: result.componentCss,
       },
+      manifest?.font_preloads,
       !devMode || this.staleAssetPruning === 'every-cycle'
     );
 
@@ -3015,6 +3027,8 @@ export class ExtractionSession {
     } else {
       this.writeSessionArtifact(SYSTEM_PROPS_ARTIFACT, systemPropsContent);
     }
+    if (this.writesFontPreloadsModule)
+      this.writeFontPreloadsModule(fontPreloads);
 
     this.publishAnalysisCommit(epoch, generation);
     this.publishReplacementEpoch(epoch);
@@ -3024,6 +3038,7 @@ export class ExtractionSession {
       manifestJson: result.manifestJson,
       analysisGlobalCss: sheets.globalCss,
       analysisComponentCss: sheets.componentCss,
+      fontPreloads,
       styles: fullCss,
       systemPropsModule: systemPropsContent,
       system,
@@ -3518,6 +3533,21 @@ export class ExtractionSession {
     }
   }
 
+  /** Rewrites the font-preloads module only when its bytes change, the
+   *  host's stub included: a rewrite rebuilds what imports it. */
+  private writeFontPreloadsModule(preloads: readonly FontPreload[]): void {
+    const content = fontPreloadsModule(preloads);
+    let written: string | null = null;
+    try {
+      written = readFileSync(fontPreloadsPath(this.sessionDir), 'utf-8');
+    } catch {
+      // Not written yet.
+    }
+    if (content !== written) {
+      this.writeSessionArtifact(FONT_PRELOADS_ARTIFACT, content);
+    }
+  }
+
   /** Write one artifact write-then-rename, so a cross-process reader never
    *  sees a torn file; the tmp name carries the pid to keep writers apart. */
   private writeSessionArtifact(name: string, content: string): void {
@@ -3552,18 +3582,21 @@ export class ExtractionSession {
 
   /** Copy each asset() specifier's bytes, from every sheet, into `assets/`
    *  under a content-hashed name and substitute a url relative to
-   *  styles.css. */
+   *  styles.css, in the sheets and the font preloads alike. */
   private substituteAssetReferences(
     sheets: AssetSheets,
+    preloads: FontPreload[] | undefined,
     pruneSuperseded: boolean
-  ): AssetSheets {
+  ) {
     const specifiers = findSheetAssetSpecifiers(sheets);
     const assetsDir = join(this.sessionDir, SESSION_ASSETS_DIR);
     const expected = new Set<string>();
     this.assetDependencyPaths.clear();
     this.assetDependencyKeys.clear();
 
-    if (this.hostSubstitutesAssets) return sheets;
+    if (this.hostSubstitutesAssets) {
+      return { sheets, fontPreloads: preloads ?? [] };
+    }
     const urlBySpecifier = new Map<string, string>();
     for (const specifier of specifiers) {
       // The memo saves resolution and the copy, never the bytes' check:
@@ -3611,7 +3644,10 @@ export class ExtractionSession {
     // content-hashed and never overwritten, so superseded ones accumulate.
     if (pruneSuperseded) pruneStaleAssets(assetsDir, expected);
 
-    return substituteSheetAssets(sheets, urlBySpecifier);
+    return {
+      sheets: substituteSheetAssets(sheets, urlBySpecifier),
+      fontPreloads: substituteFontPreloads(preloads, urlBySpecifier),
+    };
   }
 
   private reportUnresolvableAsset(specifier: string): void {

@@ -109,7 +109,9 @@ files, and structural emptiness are fatal in every mode.
 
 `animus build` publishes to `--out-dir` (default `<root>/.animus/` —
 `.gitignore` it) at fixed paths: `styles.css`, `system-props.js`,
-`manifest.json`, and `commit.json` — written last, carrying a content hash
+`manifest.json`, `font-preloads.json` (the font faces' preloads, for
+`renderFontPreloads`; present only when a face preloads), and
+`commit.json` — written last, carrying a content hash
 per payload, so one read verifies set completeness and freshness. Bytes are
 deterministic and identity-free; `lock.json` is a single-writer advisory
 lock that fails loud. The full contract, including the consistency-check

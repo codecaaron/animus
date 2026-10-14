@@ -318,13 +318,14 @@ named in a persistent warning at every publication; pass
 `animus build` publishes to `outDir` (default `<root>/.animus/`) at fixed
 relative paths:
 
-| File              | Contents                                                       |
-| ----------------- | -------------------------------------------------------------- |
-| `styles.css`      | The extracted stylesheet (`@layer`-structured)                 |
-| `system-props.js` | The emitted system-props runtime module                        |
-| `manifest.json`   | The analysis manifest (components, class names, report)        |
-| `commit.json`     | The commit record — written **last**, content hash per payload |
-| `lock.json`       | Single-writer advisory lock — present only while a run is live |
+| File                 | Contents                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------- |
+| `styles.css`         | The extracted stylesheet (`@layer`-structured)                                              |
+| `system-props.js`    | The emitted system-props runtime module                                                     |
+| `manifest.json`      | The analysis manifest (components, class names, report)                                     |
+| `font-preloads.json` | The font faces' preloads, hrefs relative to `styles.css`; present only when a face preloads |
+| `commit.json`        | The commit record — written **last**, content hash per payload                              |
+| `lock.json`          | Single-writer advisory lock — present only while a run is live                              |
 
 Artifact bytes are deterministic and identity-free: identical inputs produce
 byte-identical trees, with no session envelope or per-run identity in any

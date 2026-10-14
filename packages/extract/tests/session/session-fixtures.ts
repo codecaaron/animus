@@ -94,6 +94,7 @@ export function publishRecord(
   state.publication = {
     manifestJson: '{}',
     styles: '',
+    fontPreloads: [],
     systemPropsModule: '',
     analyzedHashes: new Map(),
     packageReadRecord: null,

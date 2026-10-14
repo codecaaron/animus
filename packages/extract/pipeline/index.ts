@@ -175,6 +175,13 @@ export {
   substituteSheetAssets,
 } from './asset-placeholders';
 export type { AssetSheets } from './asset-placeholders';
+export {
+  fontPreloadOrigins,
+  fontPreloadsModule,
+  renderFontPreloads,
+  substituteFontPreloads,
+} from './font-preloads';
+export type { FontPreload } from './font-preloads';
 export { resolveAssetFile, resolveThroughPathAliases } from './resolve-asset';
 export { enforceExternalTokenContracts } from './correlate-external-tokens';
 export { buildPathAliasesJson } from './path-aliases';
