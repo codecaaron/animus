@@ -206,6 +206,17 @@ type AnimusExtractOptionRecord = {
   [Key in keyof AnimusExtractOptions]: AnimusExtractOptions[Key];
 };
 
+/** The URL a build's root is served at, for resolving a page's hrefs: an
+ *  absolute `base`, a root-relative one on a stand-in origin, or the root
+ *  for a relative one, which every page resolves from its own location. */
+function servedBase(base: string): URL {
+  const origin = 'https://animus.invalid/';
+  if (/^[a-z][a-z\d+.-]*:/i.test(base))
+    return new URL(base.replace(/\/?$/, '/'));
+  if (base.startsWith('/')) return new URL(base.replace(/\/?$/, '/'), origin);
+  return new URL(origin);
+}
+
 export function animusExtract(options: AnimusExtractOptions): Plugin {
   // The option type excludes 'v1', but a raw runtime value still reaches here.
   assertSupportedEngine(options.engine);
@@ -381,7 +392,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           }
           const html = Buffer.from(file.source).toString('utf8');
           if (!html.includes('data-animus-preload')) continue;
-          for (const href of duplicatedFontPreloads(html)) {
+          for (const href of duplicatedFontPreloads(
+            html,
+            new URL(file.fileName, servedBase(ctx.base)).href
+          )) {
             ctx.warn(
               `[animus-extract] ${file.fileName} preloads ${href} twice: Animus's font preload and another preload tag, written in the page or added by a plugin whose index.html hook runs after Animus's, so the browser may fetch it twice. Remove the other preload; Animus's names the URL the stylesheet's url() loads.`
             );

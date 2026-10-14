@@ -2806,7 +2806,7 @@ impl Selection {
                 }
                 match fields.get("weight") {
                     None => {}
-                    Some(weight) => match weight.as_f64().or_else(|| weight.as_str().and_then(one_weight)) {
+                    Some(weight) => match weight.as_f64().and_then(in_weight_range).or_else(|| weight.as_str().and_then(one_weight)) {
                         Some(weight) => selection.weight = Some(weight),
                         None => {
                             selection.invalid = Some(format!(
@@ -2866,8 +2866,13 @@ fn one_weight(text: &str) -> Option<f64> {
     match text.trim().to_ascii_lowercase().as_str() {
         "normal" => Some(400.0),
         "bold" => Some(700.0),
-        number => number.parse::<f64>().ok().filter(|weight| (1.0..=1000.0).contains(weight)),
+        number => number.parse::<f64>().ok().and_then(in_weight_range),
     }
+}
+
+/// `weight` when CSS accepts it as a font weight: finite, from 1 to 1000.
+fn in_weight_range(weight: f64) -> Option<f64> {
+    (weight.is_finite() && (1.0..=1000.0).contains(&weight)).then_some(weight)
 }
 
 impl FontPreloads {
@@ -2875,11 +2880,18 @@ impl FontPreloads {
         FontPreloads { selection: selection.map(|entries| entries.iter().map(Selection::of).collect()), list: Vec::new() }
     }
 
-    /// Whether the host selects the face, when it selects faces.
-    fn selects(&mut self, family: &str, weight: Option<&str>, style: Option<&str>) -> Option<bool> {
+    /// Whether the host selects the face, when it selects faces; `family`
+    /// gives the face's family identity, read only then.
+    fn selects(
+        &mut self,
+        family: impl FnOnce() -> String,
+        weight: Option<&str>,
+        style: Option<&str>,
+    ) -> Option<bool> {
         let entries = self.selection.as_mut()?;
+        let family = family();
         let mut any = false;
-        for entry in entries.iter_mut().filter(|entry| entry.selects(family, weight, style)) {
+        for entry in entries.iter_mut().filter(|entry| entry.selects(&family, weight, style)) {
             entry.matched = true;
             any = true;
         }
@@ -3028,7 +3040,7 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext, preloads: &mut FontPre
             }
         }
         let descriptor = |key: &str| obj.get(key).and_then(Value::as_str);
-        let asked = preloads.selects(bare, descriptor("weight"), descriptor("style")).unwrap_or_else(|| {
+        let asked = preloads.selects(|| family_identity(&resolved), descriptor("weight"), descriptor("style")).unwrap_or_else(|| {
             match obj.get("preload") {
                 None | Some(Value::Bool(false)) => false,
                 Some(Value::Bool(true)) => true,
@@ -3130,6 +3142,25 @@ fn family_name(family: &str) -> Result<String, &'static str> {
         }
     }
     Ok(font_name(family))
+}
+
+/// The family a face names, as CSS reads its `font-family`: a single CSS
+/// string's text, whitespace kept; else its words, decoded and joined by one
+/// space, as `font_name` prints them.
+fn family_identity(family: &str) -> String {
+    use crate::css_tokens::Kind;
+    let family = family.trim();
+    let tokens = crate::css_tokens::tokenize(family);
+    let mut significant = tokens.iter().filter(|token| token.kind != Kind::Whitespace);
+    if let (Some(only), None) = (significant.next(), significant.next()) {
+        if only.kind == Kind::String {
+            let quoted = &family[only.start..only.end];
+            let quote = &quoted[..1];
+            let text = quoted[1..].strip_suffix(quote).unwrap_or(&quoted[1..]);
+            return crate::css_tokens::decoded_identifier(text).into_owned();
+        }
+    }
+    family.split_whitespace().map(crate::css_tokens::decoded_identifier).collect::<Vec<_>>().join(" ")
 }
 
 /// `text` as a single-quoted CSS string: a quote and a backslash are

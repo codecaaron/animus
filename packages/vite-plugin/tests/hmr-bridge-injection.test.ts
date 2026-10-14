@@ -194,15 +194,23 @@ describe('head tags after the charset', () => {
 
   test("a preload another hook adds again is told from Animus's own", () => {
     // A hook running after Animus's sees no reason to skip its own preload;
-    // the build warns for each file both tags name.
+    // the build warns for each file both tags name, compared as the browser
+    // resolves them against the page.
     const html = transformed([
-      { href: '/a.woff2', type: 'font/woff2' },
-      { href: '/b.woff2', type: 'font/woff2' },
+      { href: '/fonts/a.woff2', type: 'font/woff2' },
+      { href: '/fonts/b.woff2', type: 'font/woff2' },
     ]).replace(
       '</head>',
-      '<link rel="preload" href="/a.woff2" as="font" crossorigin></head>'
+      '<link rel="preload" href="./fonts/a.woff2" as="font" crossorigin></head>'
     );
-    expect(duplicatedFontPreloads(html)).toEqual(['/a.woff2']);
+    expect(
+      duplicatedFontPreloads(html, 'https://animus.invalid/index.html')
+    ).toEqual(['/fonts/a.woff2']);
+    // Character references decode as the browser reads the attribute.
+    const encoded = html.replace('./fonts/a.woff2', '&#x2F;fonts&#47;a.woff2');
+    expect(
+      duplicatedFontPreloads(encoded, 'https://animus.invalid/index.html')
+    ).toEqual(['/fonts/a.woff2']);
   });
 
   test('a preload of no known type carries no type attribute', () => {

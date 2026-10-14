@@ -10910,7 +10910,11 @@ mod tests {
                     face("Suisse", "/suisse-bold.woff2", Some("bold"), None),
                     face("Suisse", "/suisse-mono.woff2", None, None),
                     // A variable face declares a range.
-                    face("Mona Sans", "/mona.woff2", Some("200 900"), None)
+                    face("Mona Sans", "/mona.woff2", Some("200 900"), None),
+                    // Selected as its family prints: unquoted words collapse
+                    // to one space; a CSS string keeps its own.
+                    face("Hubot   Sans", "/hubot.woff2", None, None),
+                    face("'Quoted  Pair'", "/quoted.woff2", None, None)
                 ]
             }
         }));
@@ -10934,6 +10938,7 @@ mod tests {
 
         // A family name selects every face of it.
         assert_eq!(hrefs(&selected(serde_json::json!(["Suisse"]))), ["/suisse-bold.woff2", "/suisse-mono.woff2"]);
+        assert_eq!(hrefs(&selected(serde_json::json!(["Hubot Sans", "Quoted  Pair", "Quoted Pair"]))), ["/hubot.woff2", "/quoted.woff2"]);
 
         let out = selected(serde_json::json!([
             { "family": "Mona Sans", "weight": 100 },
@@ -10948,6 +10953,15 @@ mod tests {
         let invalid = reports(&out, crate::theme::FONT_PRELOAD_INVALID);
         assert_eq!(invalid.len(), 1);
         assert!(invalid[0].0.contains("is not one weight") && invalid[0].1.as_deref() == Some("error"), "{invalid:?}");
+
+        // A number outside 1 to 1000 is no weight, as its string form is not.
+        let out = selected(serde_json::json!([
+            { "family": "Mona Sans", "weight": 1001 },
+            { "family": "Mona Sans", "weight": 0 },
+            { "family": "Mona Sans", "weight": -5 }
+        ]));
+        assert_eq!(reports(&out, crate::theme::FONT_PRELOAD_INVALID).len(), 3);
+        assert!(reports(&out, crate::theme::FONT_PRELOAD_UNMATCHED).is_empty());
 
         // An empty selection preloads nothing, whatever the faces ask.
         assert!(hrefs(&selected(serde_json::json!([]))).is_empty());

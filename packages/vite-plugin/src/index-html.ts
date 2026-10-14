@@ -27,18 +27,49 @@ function* preloadLinks(html: string): Generator<[tag: string, href: string]> {
   }
 }
 
+const ENTITY_RE = /&(?:#x([0-9a-f]+)|#(\d+)|(amp|lt|gt|quot|apos));/gi;
+const NAMED_ENTITIES = new Map([
+  ['amp', '&'],
+  ['lt', '<'],
+  ['gt', '>'],
+  ['quot', '"'],
+  ['apos', "'"],
+]);
+
+/** An attribute value as the browser reads it: character references decoded. */
+function attributeText(value: string): string {
+  return value.replace(ENTITY_RE, (_, hex, decimal, named) =>
+    named === undefined
+      ? String.fromCodePoint(Number.parseInt(hex ?? decimal, hex ? 16 : 10))
+      : NAMED_ENTITIES.get(named.toLowerCase())!
+  );
+}
+
 /**
  * The hrefs a finished document preloads both through Animus's tag and
  * through another, which the page wrote or a hook running after Animus's
- * added: the browser may then fetch the file twice.
+ * added: the browser may then fetch the file twice. Each href is compared
+ * as the browser resolves it against `pageUrl`, the URL the page is served
+ * at, and reported as Animus wrote it.
  */
-export function duplicatedFontPreloads(html: string): string[] {
-  const ours = new Set<string>();
+export function duplicatedFontPreloads(
+  html: string,
+  pageUrl: string
+): string[] {
+  const resolved = (href: string) => {
+    try {
+      return new URL(attributeText(href), pageUrl).href;
+    } catch {
+      return href;
+    }
+  };
+  const ours = new Map<string, string>();
   const others = new Set<string>();
   for (const [tag, href] of preloadLinks(html)) {
-    (MARKER_RE.test(tag) ? ours : others).add(href);
+    if (MARKER_RE.test(tag)) ours.set(resolved(href), href);
+    else others.add(resolved(href));
   }
-  return [...ours].filter((href) => others.has(href));
+  return [...ours].filter(([url]) => others.has(url)).map(([, href]) => href);
 }
 
 /** The hrefs the document already preloads. */
