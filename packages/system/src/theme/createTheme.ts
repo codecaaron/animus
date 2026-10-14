@@ -2079,21 +2079,29 @@ interface MinimalHash {
 }
 
 /**
+ * Where a host without `node:crypto` puts a native SHA-256 (UTF-8 bytes in,
+ * lowercase hex out): Animus's system loader does, so its interpreter does
+ * not run {@link sha256HexFallback}.
+ */
+const HOST_SHA256 = Symbol.for('animus.sha256Hex');
+
+/**
  * Reached through `process.getBuiltinModule` so this module gains no static
  * `node:crypto` import edge — built themes run inside client bundles.
  */
 function sha256Hex(input: string): string {
-  const proc = (
-    globalThis as {
-      process?: { getBuiltinModule?: (id: string) => unknown };
-    }
-  ).process;
-  const nodeCrypto = proc?.getBuiltinModule?.('node:crypto') as
+  const host = globalThis as {
+    process?: { getBuiltinModule?: (id: string) => unknown };
+    [HOST_SHA256]?: (input: string) => string;
+  };
+  const nodeCrypto = host.process?.getBuiltinModule?.('node:crypto') as
     | { createHash?: (algorithm: string) => MinimalHash }
     | undefined;
   if (nodeCrypto?.createHash) {
     return nodeCrypto.createHash('sha256').update(input).digest('hex');
   }
+  const native = host[HOST_SHA256];
+  if (native) return native(input);
   return sha256HexFallback(input);
 }
 

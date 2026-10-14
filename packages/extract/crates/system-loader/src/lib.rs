@@ -1098,6 +1098,8 @@ fn execute_bundle(
 ) -> Result<SystemConfig, String> {
     let realm = Realm::fresh(None)?;
     realm.with(|ctx| {
+        // Each built theme hashes its contract; natively, not in the interpreter.
+        executor::install_native_sha256(&ctx).map_err(|e| format!("native sha256 failed to install: {e}"))?;
         // Compiled before any module runs, so its getters are the pristine ones.
         let authored_probe: Function = ctx
             .eval(AUTHORED_CALLABLE_PROBE.as_bytes())
