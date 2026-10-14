@@ -211,8 +211,9 @@ export function withAnimus(
     const turbopack = resolveTurbopackMode(options);
     // Refused whenever Turbopack runs, whatever Animus's own mode: Next
     // then never calls the webpack hook, so vendor CSS would ship
-    // unlayered.
-    if (options.quarantine && (turbopack || process.env.TURBOPACK)) {
+    // unlayered. Next sets TURBOPACK, possibly empty, so its presence
+    // counts.
+    if (options.quarantine && (turbopack || 'TURBOPACK' in process.env)) {
       throw new AnimusConfigError(QUARANTINE_TURBOPACK_MESSAGE);
     }
     if (turbopack) {

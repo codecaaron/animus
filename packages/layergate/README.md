@@ -1,13 +1,14 @@
 # @animus-ui/layergate
 
-Load third-party stylesheets into a cascade layer, so their normal rules
-never beat yours, whatever their specificity or load order.
+For the vendor stylesheet you have to import: a date picker's, a grid
+library's, a package's `styles.css`. layergate loads it into a cascade
+layer below yours, so its normal rules can't fight your design system,
+whatever their specificity or load order.
 
-A stylesheet outside any `@layer` beats every layered rule. A date picker's
-or grid library's CSS imported as usual therefore overrides a design
-system or utility framework that uses layers. layergate loads that CSS
-itself, inlines its `@import`s, and puts each file's own rules in one layer
-below yours:
+A stylesheet outside any `@layer` beats every layered rule, so vendor CSS
+imported as usual overrides a design system or utility framework that uses
+layers. layergate loads that CSS itself, inlines its `@import`s, and puts
+each file's own rules in one layer below yours:
 
 ```css
 @layer vendor, app;
@@ -15,6 +16,11 @@ below yours:
   /* react-grid-layout/css/styles.css, as written */
 }
 ```
+
+Your own CSS is out of scope. App stylesheets and CSS Modules stay as you
+configure them: layergate layers only the vendor files you declare
+(`sheets`) or opt into (`dependencies`), including where your CSS imports
+one.
 
 ## Vite
 
@@ -78,18 +84,57 @@ module.exports = {
 };
 ```
 
-The plugin adds no rule. It joins every loader chain of yours that has a
-css-loader, just before PostCSS runs, and raises that css-loader's
+The plugin adds no rule. It joins every loader chain of yours whose
+css-loader is explicitly global (`modules: false`, as Next's global chains
+are), just before PostCSS runs, and raises that css-loader's
 `importLoaders` by one, so every stylesheet passes through it, imported
 ones included. An owned stylesheet arrives finished, its `@import`s
 resolved as css-loader resolves them and inlined, so css-loader never sees
-a `layer()` import. PostCSS, Sass and css-loader keep running as before. A
-stylesheet that css-loader reads as a CSS Module or ICSS sheet, by its own
-`modules` and `icss` options for that file, is left alone, so its
-`:export`s survive.
+a `layer()` import. PostCSS, Sass and css-loader keep running as before.
+
+Any other chain is left untouched. One whose css-loader may treat a file
+as a CSS Module (`modules` unset, or `auto`) is reported in one line
+(`layergate.coverage`); a chain that only builds CSS Modules, such as
+Next's, is left alone silently.
+
+### CSS Modules alongside layergate
+
+layergate does not decide which stylesheets are CSS Modules. If one rule
+handles both, split it: global CSS in a rule whose css-loader has
+`modules: false`, which layergate joins, and CSS Modules in a rule of
+their own, which it leaves alone.
+
+```js
+module.exports = {
+  module: {
+    rules: [
+      {
+        test: /\.css$/,
+        exclude: /\.module\.css$/,
+        use: [
+          'style-loader',
+          { loader: 'css-loader', options: { modules: false } },
+        ],
+      },
+      {
+        test: /\.module\.css$/,
+        use: [
+          'style-loader',
+          { loader: 'css-loader', options: { modules: true } },
+        ],
+      },
+    ],
+  },
+};
+```
+
+Next already builds CSS this way.
 
 What layergate returns is never cached by webpack, so a warm start with a
-persistent cache finishes owned stylesheets again. Ownership, opt-outs and
+persistent cache finishes owned stylesheets again: about 118 ms per 200
+vendor sheets in a synthetic measurement. Caching them safely needs their
+provenance (the files and plan they came from) kept with the cache, a
+possible later change. Ownership, opt-outs and
 the declared sheets go by realpath; `url()`s are rebased from where webpack
 reads each file, so `resolve.symlinks: false` resolves them as css-loader
 does. The `declaredBy` stylesheet is never layered, even when an owned

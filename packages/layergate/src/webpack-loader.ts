@@ -13,10 +13,10 @@ import { dirname } from 'node:path';
 import { compileUnit } from './compile';
 import { formatDiagnostic, slashes } from './host';
 import { readSheet } from './sheet';
-import { CSS_RESOLVE, isModuleSheet, registry } from './webpack-state';
+import { CSS_RESOLVE, registry } from './webpack-state';
 
 import type { CompiledUnit, CompileOptions } from './compile';
-import type { ModuleOptions, WebpackState } from './webpack-state';
+import type { WebpackState } from './webpack-state';
 
 type SourceMap = CompiledUnit['map'];
 
@@ -33,7 +33,7 @@ interface IncomingMeta {
 interface LoaderContext {
   resourcePath: string;
   rootContext: string;
-  getOptions(): { id?: string } & ModuleOptions;
+  getOptions(): { id?: string };
   /** Whether webpack may cache this module's build. */
   cacheable(flag: boolean): void;
   async(): (
@@ -122,10 +122,8 @@ async function run(
   context: LoaderContext,
   source: string
 ): Promise<{ code: string; map: SourceMap } | null> {
-  const options = context.getOptions();
-  const state = registry().states.get(options.id ?? '');
-  // css-loader reads a CSS Module's `:export`s, which a layer would hide.
-  if (!state || isModuleSheet(context.resourcePath, options)) return null;
+  const state = registry().states.get(context.getOptions().id ?? '');
+  if (!state) return null;
   const file = slashes(context.resourcePath);
   const id = state.units.canonical(file);
   const { owner, declaredBy } = state;
@@ -136,7 +134,7 @@ async function run(
     if (owner.declared.length === 0) return null;
     // URLs relative to this stylesheet, which css-loader resolves and
     // emits, a file outside the root too.
-    const unit = await finish(context, state, file, source, owner.declared, {
+    const unit = await finish(context, state, file, source, state.roots, {
       delivery: file,
       map: false,
     });

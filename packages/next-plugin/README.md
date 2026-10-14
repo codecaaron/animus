@@ -96,7 +96,14 @@ export default withAnimus({
 It needs webpack: `next dev` and `next build` on Next 15, `--webpack` on
 Next 16. Turbopack runs no loader on the stylesheets a stylesheet imports,
 so with `quarantine` set any Turbopack run fails config loading, whatever
-the `turbopack` option says.
+the `turbopack` option says. Next marks a Turbopack run by setting
+`TURBOPACK`, so Animus refuses whenever that variable is set, even empty.
+The converse: a `TURBOPACK` inherited from the environment also refuses a
+webpack build of Next 15, loudly, so clear stale values in CI.
+
+Vendor stylesheets layergate finishes are not kept in webpack's persistent
+cache, so a warm rebuild finishes them again: about 118 ms per 200 vendor
+sheets in a synthetic measurement.
 
 `sheets` arrive at the head of Animus's own stylesheet, on every page.
 `!important` declarations and animations still win, and are reported. App

@@ -10,15 +10,10 @@
  */
 import { ownership, real, resolveEach, slashes, Units } from './host';
 import { resolvePlan } from './plan';
-import {
-  alwaysModules,
-  CSS_RESOLVE,
-  loaderPath,
-  registry,
-} from './webpack-state';
+import { CSS_RESOLVE, loaderPath, registry } from './webpack-state';
 
 import type { LayergateOptions } from './plan';
-import type { ModuleOptions, WebpackState } from './webpack-state';
+import type { WebpackState } from './webpack-state';
 
 export type { LayergateOptions } from './plan';
 
@@ -38,12 +33,17 @@ export interface LayergateWebpackOptions extends LayergateOptions {
 /** A loader as a rule's `use` lists it. */
 type UseEntry = string | { loader?: string; options?: unknown };
 
-/** The loader entry the plugin inserts; each chain's copy also carries
- *  its css-loader's module options, so the loader leaves the stylesheets
- *  that css-loader reads as CSS Modules alone. */
+/** The loader entry the plugin inserts. */
 export interface LoaderEntry {
   loader: string;
-  options: { id: string } & ModuleOptions;
+  options: { id: string };
+}
+
+/** css-loader's options that decide whether it reads a stylesheet as a
+ *  CSS Module or an ICSS sheet. */
+interface ModuleOptions {
+  modules?: unknown;
+  icss?: unknown;
 }
 
 /** The rules webpack's module options hold, as far as the plugin reads
@@ -54,11 +54,11 @@ interface Rule {
   use?: unknown;
 }
 
-/** How many loader chains `insertLoader` wrapped, and how many it could
- *  not: Lightning CSS chains, which have no css-loader. */
+/** How many loader chains `insertLoader` wrapped, and why it left each
+ *  chain it could not wrap, by the chain's place in the rules. */
 export interface Coverage {
   wrapped: number;
-  uncovered: number;
+  skipped: string[];
 }
 
 /** What webpack's resolver is handed besides the request: nothing the
@@ -119,22 +119,48 @@ const NEXT_FONT_LOADER = /next-font/;
 const loaderOf = (entry: UseEntry) =>
   entry instanceof Object ? (entry.loader ?? '') : entry;
 
+/** Whether css-loader with `options` reads every stylesheet as a CSS
+ *  Module or ICSS sheet: `modules` true, a mode name, or an object
+ *  without `auto`; or `icss: true`. */
+function allModules({ modules, icss }: ModuleOptions): boolean {
+  if (icss === true || modules === true) return true;
+  if (Object.prototype.toString.call(modules) === '[object String]') {
+    return true;
+  }
+  return (
+    modules instanceof Object &&
+    !(modules instanceof Function) &&
+    !('auto' in modules && modules.auto !== undefined)
+  );
+}
+
 /**
- * Inserts `entry` into every loader chain of `rules` whose css-loader does
- * not read every stylesheet as a CSS Module: just before PostCSS runs
- * (after it in `use`), or before css-loader without PostCSS.
+ * Inserts `entry` into every loader chain of `rules` whose css-loader is
+ * explicitly global (`modules: false`, as Next's global chains are): just
+ * before PostCSS runs (after it in `use`), or before css-loader without
+ * PostCSS. A chain whose css-loader decides per file whether a stylesheet
+ * is a CSS Module (`modules` unset or `auto`) is left alone, and reported:
+ * layergate never predicts that decision.
  */
-export function insertLoader(rules: unknown[], entry: LoaderEntry): Coverage {
-  const coverage: Coverage = { wrapped: 0, uncovered: 0 };
-  for (const candidate of rules) {
+export function insertLoader(
+  rules: unknown[],
+  entry: LoaderEntry,
+  prefix = 'module.rules'
+): Coverage {
+  const coverage: Coverage = { wrapped: 0, skipped: [] };
+  for (const [index, candidate] of rules.entries()) {
     if (!(candidate instanceof Object)) continue;
     // SAFETY: a webpack rule object; only these keys are read.
     const rule = candidate as Rule;
-    for (const nested of [rule.oneOf, rule.rules]) {
+    const place = `${prefix}[${index}]`;
+    for (const [key, nested] of [
+      ['oneOf', rule.oneOf],
+      ['rules', rule.rules],
+    ] as const) {
       if (!Array.isArray(nested)) continue;
-      const counts = insertLoader(nested, entry);
+      const counts = insertLoader(nested, entry, `${place}.${key}`);
       coverage.wrapped += counts.wrapped;
-      coverage.uncovered += counts.uncovered;
+      coverage.skipped.push(...counts.skipped);
     }
     if (!Array.isArray(rule.use)) continue;
     // SAFETY: an array `use` lists loader strings or objects.
@@ -144,8 +170,11 @@ export function insertLoader(rules: unknown[], entry: LoaderEntry): Coverage {
     if (loaders.some((loader) => NEXT_FONT_LOADER.test(loader))) continue;
     const css = loaders.findIndex((loader) => CSS_LOADER.test(loader));
     if (css === -1) {
-      if (loaders.some((loader) => LIGHTNINGCSS_LOADER.test(loader)))
-        coverage.uncovered += 1;
+      if (loaders.some((loader) => LIGHTNINGCSS_LOADER.test(loader))) {
+        coverage.skipped.push(
+          `${place} is not layered: it uses Lightning CSS, not css-loader`
+        );
+      }
       continue;
     }
     const cssEntry = use[css]!;
@@ -153,7 +182,13 @@ export function insertLoader(rules: unknown[], entry: LoaderEntry): Coverage {
     const options = (
       cssEntry instanceof Object ? (cssEntry.options ?? {}) : {}
     ) as ModuleOptions & { importLoaders?: number };
-    if (alwaysModules(options)) continue;
+    if (allModules(options)) continue;
+    if (options.modules !== false) {
+      coverage.skipped.push(
+        `${place} is not layered: its css-loader is not \`modules: false\`. Give global CSS a rule with \`modules: false\`, or opt out`
+      );
+      continue;
+    }
     const postcss = loaders.findIndex((loader) => POSTCSS_LOADER.test(loader));
     const at = (postcss === -1 ? css : postcss) + 1;
     rule.use = [
@@ -166,14 +201,7 @@ export function insertLoader(rules: unknown[], entry: LoaderEntry): Coverage {
         },
       },
       ...use.slice(css + 1, at),
-      {
-        loader: entry.loader,
-        options: {
-          ...entry.options,
-          modules: options.modules,
-          icss: options.icss,
-        },
-      },
+      entry,
       ...use.slice(at),
     ];
     coverage.wrapped += 1;
@@ -181,11 +209,12 @@ export function insertLoader(rules: unknown[], entry: LoaderEntry): Coverage {
   return coverage;
 }
 
-/** What `specifier` resolves to from `context`, by realpath, or null. */
+/** What `specifier` resolves to from `context`, as webpack resolves it
+ *  (by realpath unless `resolve.symlinks` is false), or null. */
 const resolveOne = (resolver: Resolver, context: string, specifier: string) =>
   new Promise<string | null>((done) =>
     resolver.resolve({}, context, specifier, {}, (error, result) =>
-      done(error || !result ? null : real(result))
+      done(error || !result ? null : slashes(result))
     )
   );
 
@@ -204,6 +233,7 @@ export class LayergatePlugin {
       owner: ownership(plan),
       optedOut: new Set(),
       declaredBy: options.declaredBy ? real(options.declaredBy) : null,
+      roots: [],
       units: new Units(),
     };
     shared.states.set(this.id, this.state);
@@ -218,18 +248,17 @@ export class LayergatePlugin {
   }
 
   apply(compiler: Compiler): void {
-    const { wrapped, uncovered } = insertLoader(compiler.options.module.rules, {
+    const { wrapped, skipped } = insertLoader(compiler.options.module.rules, {
       loader: loaderPath(),
       options: { id: this.id },
     });
     compiler.hooks.thisCompilation.tap(NAME, (compilation) => {
-      if (uncovered > 0) {
+      for (const reason of skipped) {
         compilation.warnings.push(
-          new Error(
-            `[layergate] ${uncovered} CSS loader chain(s) use Lightning CSS, which has no css-loader for layergate to work with: their stylesheets are not layered [layergate.coverage]`
-          )
+          new Error(`[layergate] ${reason} [layergate.coverage]`)
         );
-      } else if (wrapped === 0 && this.state.owner.owning()) {
+      }
+      if (wrapped === 0 && skipped.length === 0 && this.state.owner.owning()) {
         compilation.warnings.push(
           new Error(
             '[layergate] no CSS loader chain with a css-loader was found: nothing is layered [layergate.coverage]'
@@ -250,8 +279,11 @@ export class LayergatePlugin {
         resolveEach(sheets, 'sheets', compiler.context, resolve),
         resolveEach(optOut, 'optOut', compiler.context, resolve),
       ]);
-      this.state.owner.reset(compiler.context, declared);
-      this.state.optedOut = new Set(optedOut);
+      // Read where webpack resolves them; owned, opted out and compared by
+      // realpath.
+      this.state.roots = declared;
+      this.state.owner.reset(compiler.context, declared.map(real));
+      this.state.optedOut = new Set(optedOut.map(real));
     };
     compiler.hooks.beforeRun.tapPromise(NAME, prepare);
     compiler.hooks.watchRun.tapPromise(NAME, async () => {
