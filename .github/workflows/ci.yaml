@@ -730,7 +730,22 @@ jobs:
           # Re-runnable: a version npm already holds with these exact bytes is
           # skipped, and a publish that errors after its upload landed counts
           # once the registry shows the same bytes. Different bytes fail.
+          # Either way the release's dist-tag must name this version, or a newer
+          # one. Trusted publishing cannot move a tag, so a stale one fails.
           published_shasum() { npm view "@animus-ui/$1@${VERSION}" dist.shasum 2>/dev/null || true; }
+          check_tag() {
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              current="$(npm view "@animus-ui/$1" "dist-tags.${NPM_TAG}" 2>/dev/null || true)"
+              [ "$current" = "$VERSION" ] && return 0
+              if [ -n "$current" ] && [ "$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n1)" = "$current" ]; then
+                echo "= @animus-ui/$1: $NPM_TAG names the newer $current; left as it is"
+                return 0
+              fi
+              sleep 30
+            done
+            echo "ERROR: @animus-ui/$1@$VERSION is published, but $NPM_TAG names ${current:-nothing}. Run: npm dist-tag add @animus-ui/$1@$VERSION $NPM_TAG" >&2
+            return 1
+          }
           for pkg in extract properties system layergate vite-plugin next-plugin cli unplugin; do
             tarball="$RELEASE_BUNDLE/animus-ui-${pkg}-${VERSION}.tgz"
             local_shasum="$(sha1sum "$tarball" | cut -d' ' -f1)"
@@ -738,6 +753,7 @@ jobs:
             if [ -n "$remote" ]; then
               [ "$remote" = "$local_shasum" ] || { echo "ERROR: @animus-ui/$pkg@$VERSION is on npm with different bytes ($remote, bundle $local_shasum)" >&2; exit 1; }
               echo "= @animus-ui/$pkg@$VERSION already published with these bytes"
+              check_tag "$pkg"
               continue
             fi
             if ! npm publish "$tarball" --access public --tag "$NPM_TAG" --ignore-scripts; then
@@ -748,5 +764,6 @@ jobs:
               done
               [ "$remote" = "$local_shasum" ] || { echo "ERROR: publishing @animus-ui/$pkg@$VERSION failed" >&2; exit 1; }
               echo "= @animus-ui/$pkg@$VERSION landed despite the publish error"
+              check_tag "$pkg"
             fi
           done
