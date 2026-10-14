@@ -33,6 +33,10 @@ import type { ClassResolverConfig } from './runtime/resolveClasses';
 import type {
   AnimusComponent,
   AnimusWrappedComponent,
+  AsComponentOptions,
+  ForwardOption,
+  ForwardSource,
+  RequiredForward,
   BuilderClassProps,
 } from './types/component';
 import type { StylingNames, SystemPicks } from './types/styling-names';
@@ -121,9 +125,49 @@ export class AnimusWithAll<
 
   // The constraint stays the fixed `ComponentType<any>`: an inferred `P` in
   // `C extends ComponentType<P>` silently stops checking the argument.
-  asComponent<C extends ComponentType<any>>(AsComponent: C) {
+  asComponent<C extends ComponentType<any>>(
+    AsComponent: C
+  ): AnimusWrappedComponent<
+    C,
+    PropRegistry,
+    GroupRegistry,
+    BaseStyles,
+    Variants,
+    States,
+    ActiveGroups,
+    CustomProps
+  >;
+  // Forwarding reads the builder's names from the receiver, so the
+  // classes' own type parameters never carry the check.
+  asComponent<
+    C extends ComponentType<any>,
+    const F extends ForwardOption<This['variants'], This['statesConfig']>,
+    This extends ForwardSource = ForwardSource,
+  >(
+    this: This,
+    AsComponent: C,
+    options: AsComponentOptions<C, This['variants'], This['statesConfig'], F>
+  ): AnimusWrappedComponent<
+    C,
+    PropRegistry,
+    GroupRegistry,
+    BaseStyles,
+    Variants,
+    States,
+    ActiveGroups,
+    CustomProps,
+    RequiredForward<C, This['variants'], This['statesConfig'], F>
+  >;
+  asComponent(
+    AsComponent: ComponentType<any>,
+    // `unknown`: a refused call's options type `forward` as the message.
+    options?: { forward?: unknown }
+  ): unknown {
     const config = {
       ...this._buildComponentConfig(),
+      ...(options?.forward === undefined
+        ? {}
+        : { forward: options.forward as true | readonly string[] }),
       uncompiled: uncompiledDefinition(
         `a component wrapping ${AsComponent.displayName || AsComponent.name || 'an anonymous component'}`
       ),
@@ -132,16 +176,7 @@ export class AnimusWithAll<
     const extendFn = this.extend.bind(this);
     return Object.assign(Component, {
       extend: extendFn,
-    }) as unknown as AnimusWrappedComponent<
-      C,
-      PropRegistry,
-      GroupRegistry,
-      BaseStyles,
-      Variants,
-      States,
-      ActiveGroups,
-      CustomProps
-    >;
+    });
   }
 
   asClass<This extends { _buildComponentConfig(): ClassResolverConfig }>(
@@ -407,15 +442,16 @@ class AnimusWithVariants<
     Base extends AbstractProps,
     Props extends Record<Keys, AbstractProps>,
     PropKey extends Readonly<string> = 'variant',
+    Default extends VariantKeyOf<Extract<keyof Props, string>> = never,
   >(options: {
     prop?: PropKey;
-    defaultVariant?: VariantKeyOf<Extract<keyof Props, string>>;
+    defaultVariant?: Default | undefined;
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
     type ModelOptions = ThemedVariantOptions<
       PropKey,
-      Extract<keyof Props, string>,
+      `${Default}`,
       Base,
       Props,
       PropRegistry
@@ -454,15 +490,16 @@ class AnimusWithBase<
     Base extends AbstractProps,
     Props extends Record<Keys, AbstractProps>,
     PropKey extends Readonly<string> = 'variant',
+    Default extends VariantKeyOf<Extract<keyof Props, string>> = never,
   >(options: {
     prop?: PropKey;
-    defaultVariant?: VariantKeyOf<Extract<keyof Props, string>>;
+    defaultVariant?: Default | undefined;
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
     type ModelOptions = ThemedVariantOptions<
       PropKey,
-      Extract<keyof Props, string>,
+      `${Default}`,
       Base,
       Props,
       PropRegistry

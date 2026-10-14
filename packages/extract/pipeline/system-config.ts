@@ -120,7 +120,10 @@ function reportFindingsOn<Thrown>(error: Thrown): void {
  *  calls `createSystem` with no binding leads with discovery's warning line
  *  for it, then keeps the loader's own error. */
 function evaluateSystemModule(
-  engine: Pick<EngineApi, 'loadSystemModule' | 'extractFacts'>,
+  engine: Pick<
+    EngineApi,
+    'loadSystemModule' | 'extractFacts' | 'extractModuleFacts'
+  >,
   systemPath: string,
   systemExport: string | undefined,
   rootDir: string,

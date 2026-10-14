@@ -41,6 +41,33 @@ pub struct ChainDescriptor {
     /// The same-module staged builder its root continued into.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub followed_builder: Option<String>,
+    /// The variants and states an `.asComponent()` target receives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward: Option<Forward>,
+}
+
+/// An `.asComponent()` terminal's `forward`: every variant and state, or
+/// those it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Forward {
+    All,
+    Names(Vec<String>),
+}
+
+impl Forward {
+    /// As the runtime config writes it: `true`, or the names.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Forward::All => serde_json::Value::Bool(true),
+            Forward::Names(names) => serde_json::json!(names),
+        }
+    }
+}
+
+impl Serialize for Forward {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.to_json().serialize(serializer)
+    }
 }
 
 /// A top-level `const` builder chains may continue (see `walk.rs`).

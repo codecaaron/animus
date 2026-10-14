@@ -12,7 +12,7 @@ import {
 
 import type {
   AnalysisSourceEntry,
-  ExtractFactsResult,
+  ExtractModuleFactsResult,
 } from './source-ingestion';
 
 type CachedSourceEntry = { hash: string; source: string };
@@ -43,7 +43,7 @@ export interface SourceCorpus {
   ): Promise<SourceIngestionResult>;
   /** The engine's facts for parser-ready entries, through the ingestion's
    *  cache (`SourceIngestor.facts`). */
-  facts(entries: readonly AnalysisSourceEntry[]): ExtractFactsResult;
+  facts(entries: readonly AnalysisSourceEntry[]): ExtractModuleFactsResult;
   /** Non-null when an admitted original's parse aborted: the parser yielded
    *  no chains, imports or exports for it, so analyzing it would publish a
    *  generation without the styles its served module still uses. The attempt

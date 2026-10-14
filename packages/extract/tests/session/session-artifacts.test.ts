@@ -137,8 +137,7 @@ function parseSessionEnvelope(
     !isJsonObject(candidate) ||
     !isJsonString(candidate.sessionId) ||
     !isJsonNumber(candidate.generation) ||
-    !isJsonString(candidate.replacementEpoch) ||
-    !isJsonString(candidate.payloadHash)
+    !isJsonString(candidate.replacementEpoch)
   ) {
     throw new TypeError(`${artifactName} session envelope is malformed`);
   }
@@ -146,7 +145,6 @@ function parseSessionEnvelope(
     sessionId: candidate.sessionId,
     generation: candidate.generation,
     replacementEpoch: candidate.replacementEpoch,
-    payloadHash: candidate.payloadHash,
   };
 }
 
@@ -569,7 +567,6 @@ describe('payload envelopes (spec: Manifest disk artifact)', () => {
     expect(disk.__animusSession.sessionId).toBe(session.sessionId);
     expect(disk.__animusSession.generation).toBe(1);
     expect(disk.__animusSession.replacementEpoch).toBe(expectedEpoch(PLAN_A));
-    expect(disk.__animusSession.payloadHash).toBe(contentHash(manifestJson));
     expect(disk.components).toEqual(
       parseEngineManifest(manifestJson).components
     );

@@ -1949,6 +1949,28 @@ mod tests {
         assert!(unprepared.is_empty(), "probed without a prepared base: {unprepared:?} (prepared {bases:?})");
     }
 
+    /// Contract: an object-use diagnostic names the 1-based line of the
+    /// use, however far into the file it is.
+    #[test]
+    fn object_use_diagnostic_names_the_line_of_the_use() {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let source = [
+            "const base = { p: 4 };",
+            "",
+            "",
+            "",
+            "",
+            "export const helper = (o: any) => { o.p = 8; return o; };",
+            "",
+            "helper(base);",
+            "export const Box = ds.styles(base).asElement('div');",
+        ]
+        .join("\n");
+        let files = serde_json::json!([{ "path": "a.tsx", "source": source }]).to_string();
+        let out = engine.analyze(files, None).unwrap();
+        assert!(out.contains("base is passed to helper() in a.tsx on line 8"), "{out}");
+    }
+
     #[test]
     fn analyze_retains_state_and_reports_parse_count() {
         let mut engine = ExtractEngine::new(None).unwrap();

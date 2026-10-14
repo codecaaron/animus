@@ -32,6 +32,10 @@ import type { ClassResolverConfig } from './runtime/resolveClasses';
 import type {
   AnimusComponent,
   AnimusWrappedComponent,
+  AsComponentOptions,
+  ForwardOption,
+  ForwardSource,
+  RequiredForward,
   BuilderClassProps,
 } from './types/component';
 import type {
@@ -151,9 +155,49 @@ export class AnimusExtendedWithAll<
 
   // The constraint stays the fixed `ComponentType<any>`: an inferred `P` in
   // `C extends ComponentType<P>` silently stops checking the argument.
-  asComponent<C extends ComponentType<any>>(AsComponent: C) {
+  asComponent<C extends ComponentType<any>>(
+    AsComponent: C
+  ): AnimusWrappedComponent<
+    C,
+    PropRegistry,
+    GroupRegistry,
+    BaseStyles,
+    Variants,
+    States,
+    ActiveGroups,
+    CustomProps
+  >;
+  // Forwarding reads the builder's names from the receiver, so the
+  // classes' own type parameters never carry the check.
+  asComponent<
+    C extends ComponentType<any>,
+    const F extends ForwardOption<This['variants'], This['statesConfig']>,
+    This extends ForwardSource = ForwardSource,
+  >(
+    this: This,
+    AsComponent: C,
+    options: AsComponentOptions<C, This['variants'], This['statesConfig'], F>
+  ): AnimusWrappedComponent<
+    C,
+    PropRegistry,
+    GroupRegistry,
+    BaseStyles,
+    Variants,
+    States,
+    ActiveGroups,
+    CustomProps,
+    RequiredForward<C, This['variants'], This['statesConfig'], F>
+  >;
+  asComponent(
+    AsComponent: ComponentType<any>,
+    // `unknown`: a refused call's options type `forward` as the message.
+    options?: { forward?: unknown }
+  ): unknown {
     const config = {
       ...this._buildComponentConfig(),
+      ...(options?.forward === undefined
+        ? {}
+        : { forward: options.forward as true | readonly string[] }),
       uncompiled: uncompiledDefinition(
         `a component wrapping ${AsComponent.displayName || AsComponent.name || 'an anonymous component'}`
       ),
@@ -162,16 +206,7 @@ export class AnimusExtendedWithAll<
     const extendFn = this.extend.bind(this);
     return Object.assign(Component, {
       extend: extendFn,
-    }) as unknown as AnimusWrappedComponent<
-      C,
-      PropRegistry,
-      GroupRegistry,
-      BaseStyles,
-      Variants,
-      States,
-      ActiveGroups,
-      CustomProps
-    >;
+    });
   }
 
   asClass<This extends { _buildComponentConfig(): ClassResolverConfig }>(
@@ -446,17 +481,18 @@ class AnimusExtendedWithVariants<
     Base extends AbstractProps,
     Props extends Record<Keys, AbstractProps>,
     PropKey extends Readonly<string> = 'variant',
+    Default extends VariantKeyOf<
+      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>
+    > = never,
   >(options: {
     prop?: UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>;
-    defaultVariant?: VariantKeyOf<
-      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>
-    >;
+    defaultVariant?: Default | undefined;
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
     type ModelOptions = ThemedVariantOptions<
       UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>,
-      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>,
+      `${Default}`,
       Base,
       Props,
       PropRegistry
@@ -508,17 +544,18 @@ class AnimusExtendedWithBase<
     Base extends AbstractProps,
     Props extends Record<Keys, AbstractProps>,
     PropKey extends Readonly<string> = 'variant',
+    Default extends VariantKeyOf<
+      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>
+    > = never,
   >(options: {
     prop?: UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>;
-    defaultVariant?: VariantKeyOf<
-      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>
-    >;
+    defaultVariant?: Default | undefined;
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
     type ModelOptions = ThemedVariantOptions<
       UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>,
-      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>,
+      `${Default}`,
       Base,
       Props,
       PropRegistry

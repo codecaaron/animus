@@ -8,6 +8,7 @@ import {
 import {
   analysisCommitPath,
   analysisInputsPath,
+  artifactHash,
   analysisStatusPath,
   engineHandle,
   manifestPath,
@@ -70,7 +71,7 @@ const hydrations = new Map<
 
 type LoaderEngineApi = () => Pick<
   EngineApi,
-  'analyzeProject' | 'transformFile'
+  'analyzeProject' | 'transformFile' | 'fingerprintBytes'
 >;
 let engineApiOverride: LoaderEngineApi | null = null;
 
@@ -180,9 +181,10 @@ function hydrateSession(
     const manifestRaw = readFileOrNull(manifestPath(sessionDir));
     const inputsRaw = readFileOrNull(analysisInputsPath(sessionDir));
     if (manifestRaw === null || inputsRaw === null) continue;
+    const engine = engineApiFor(key)();
     if (
-      contentHash(manifestRaw) !== c0.manifestHash ||
-      contentHash(inputsRaw) !== c0.inputsHash
+      artifactHash(engine, manifestRaw) !== c0.manifestHash ||
+      artifactHash(engine, inputsRaw) !== c0.inputsHash
     ) {
       continue;
     }
@@ -210,8 +212,9 @@ function hydrateSession(
     } catch {
       return { kind: 'torn' };
     }
-    const { analyzeProject } = engineApiFor(key)();
-    const manifestJson = analyzeProject(...buildAnalyzeProjectArgs(inputs));
+    const manifestJson = engine.analyzeProject(
+      ...buildAnalyzeProjectArgs(inputs)
+    );
     hydrations.set(buildId, { commitKey, manifestJson, fileHashes });
     return {
       kind: 'ok',

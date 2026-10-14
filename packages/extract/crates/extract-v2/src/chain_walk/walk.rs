@@ -9,7 +9,7 @@ use oxc::ast_visit::Visit;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::expr::{match_static_member, static_member_path, unwrap_type_assertions};
-use super::terminal::{extract_terminal_arg, first_arg_span, second_arg_span_fn, TerminalArg};
+use super::terminal::{extract_forward, extract_terminal_arg, first_arg_span, second_arg_span_fn, TerminalArg};
 use super::{
     ChainDescriptor, ChainStage, MemberParentExtension, MemberRootedChain, StagedBuilder,
     TerminalKind, UnwalkedChain,
@@ -405,6 +405,14 @@ fn try_walk_chain(
             String::new()
         }
     };
+    let forward = match terminal {
+        TerminalKind::AsComponent => extract_forward(call).unwrap_or_else(|reason| {
+            extractable = false;
+            bail_reason.get_or_insert(format!("asComponent options: {reason}"));
+            None
+        }),
+        _ => None,
+    };
     let mut has_extend_marker = false;
     let chain_end = call.span;
 
@@ -451,6 +459,7 @@ fn try_walk_chain(
         span: (chain_start, chain_end.end),
         extends_from,
         followed_builder,
+        forward,
     };
     Some(match member_parent {
         Some(extension) => WalkedChain::MemberParent(extension, chain),

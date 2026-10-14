@@ -1,5 +1,9 @@
 import { join } from 'path';
 
+import { contentHash } from '../pipeline/content-hash';
+
+import type { EngineApi } from '../pipeline/engine-adapter';
+
 /**
  * Session artifact names, path derivations, and artifact shapes. Imports no
  * session or singleton module: the Turbopack loader graph stays worker-local.
@@ -124,8 +128,9 @@ export interface AnalysisStatus {
   ready?: boolean;
 }
 
-/** Transaction identity: every hash is of the DISK payload bytes, envelope
- *  included. `inputsHash` is absent when no hydration corpus is persisted. */
+/** Transaction identity: every hash is the `artifactHash` of the DISK
+ *  payload bytes, envelope included. `inputsHash` is absent when no
+ *  hydration corpus is persisted. */
 export interface AnalysisCommit {
   schema: 1;
   sessionId: string;
@@ -138,13 +143,23 @@ export interface AnalysisCommit {
   stylesHash: string;
 }
 
-/** Embedded in every payload artifact; `payloadHash` lets a same-session
- *  restart seed its write guards without rebuilding the payload bytes. */
+/** Embedded in every payload artifact. */
 export interface SessionEnvelope {
   sessionId: string;
   generation: number;
   replacementEpoch: string;
-  payloadHash: string;
+}
+
+/** The hash an analysis commit records of an artifact's disk bytes, and
+ *  that every reader checks the bytes it read against: the engine's fast
+ *  fingerprint, or the content hash for an engine without one. */
+export function artifactHash(
+  engine: Pick<EngineApi, 'fingerprintBytes'>,
+  bytes: string
+): string {
+  return engine.fingerprintBytes
+    ? engine.fingerprintBytes(Buffer.from(bytes))
+    : contentHash(bytes);
 }
 
 /** Splices the envelope in as a leading `__animusSession` field without

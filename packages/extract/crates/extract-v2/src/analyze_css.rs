@@ -1,6 +1,7 @@
 //! Project-level CSS orchestration over retained facts: extension provenance,
 //! chain evaluation, usage reconciliation, and `@layer` CSS generation.
 
+use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -1762,6 +1763,14 @@ fn unextractable_chain_bail(file: &str, binding: &str, reason: &str, animus: boo
                 crate::chain_walk::CHAIN_METHODS.join(", ")
             ),
             UNSUPPORTED_CHAIN_METHOD,
+        ))
+    } else if let Some(detail) = reason.strip_prefix("asComponent options: ") {
+        Some((
+            format!(
+                "chain dropped: .asComponent() options {detail}; {left} — write `{{ forward: true }}` or \
+                 `{{ forward: ['size', 'error'] }}` in place"
+            ),
+            UNSUPPORTED_TERMINAL_TARGET,
         ))
     } else if reason.starts_with("asComponent: ") {
         Some((
@@ -4884,6 +4893,24 @@ fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>
     }
 }
 
+/// A declaration each (file, name) resolves to, once resolved.
+type Declarations = RefCell<FxHashMap<String, FxHashMap<String, Option<(String, String)>>>>;
+
+/// `file`'s `name` in `cache`, resolved by `resolve` on its first ask.
+fn memoized(
+    cache: &Declarations,
+    file: &str,
+    name: &str,
+    resolve: impl FnOnce() -> Option<(String, String)>,
+) -> Option<(String, String)> {
+    if let Some(known) = cache.borrow().get(file).and_then(|names| names.get(name)) {
+        return known.clone();
+    }
+    let declaration = resolve();
+    cache.borrow_mut().entry(file.to_string()).or_default().insert(name.to_string(), declaration.clone());
+    declaration
+}
+
 /// The tags whose type a function's own prop chooses (`PropTag`) that
 /// render only host elements, by file and start: every route by which the
 /// analysis sees the function render is one it reads, and each gives the
@@ -4915,9 +4942,13 @@ fn bounded_prop_tags(
     let rendered: FxHashSet<&String> = results.iter().flat_map(|result| &result.rendered_components).collect();
     let cloned: FxHashSet<&String> = results.iter().flat_map(|result| &result.cloned_props).collect();
     // The declaration a module's name or default import resolves to, through
-    // any barrel.
+    // any barrel. Each target below asks again of the same names, so each
+    // answer is resolved once.
+    let declared_by_name: Declarations = RefCell::default();
     let declared = |file: &str, ff: &FileFacts, name: &str| {
-        resolve_declaration(file, ff, name, files, inputs, links).map(|(declaring, binding, _)| (declaring, binding))
+        memoized(&declared_by_name, file, name, || {
+            resolve_declaration(file, ff, name, files, inputs, links).map(|(declaring, binding, _)| (declaring, binding))
+        })
     };
     // Whether `module` is `declaring`, or re-exports from it at any depth,
     // as the module table links them: by name, as a namespace, through
@@ -4946,9 +4977,13 @@ fn bounded_prop_tags(
         }
         false
     };
-    // A namespace member path (`ns.X`) a module reads, as a declaration.
+    // A namespace member path (`ns.X`) a module reads, as a declaration,
+    // resolved once each.
+    let declared_by_path: Declarations = RefCell::default();
     let namespace_declared = |file: &str, ff: &FileFacts, path: &str| {
-        namespace_member_declaration(file, ff, path, files, inputs, links).map(|(declaring, binding, _)| (declaring, binding))
+        memoized(&declared_by_path, file, path, || {
+            namespace_member_declaration(file, ff, path, files, inputs, links).map(|(declaring, binding, _)| (declaring, binding))
+        })
     };
     // Whether the component `outer` builds forwards the prop only as written
     // literals: every use proven, none of them spread, cloned, forwarded into
@@ -4965,27 +5000,34 @@ fn bounded_prop_tags(
                     || matches!(&written.literal, Some(Value::String(_)))
             })
     };
+    // A default export, however written and wherever re-exported, is what a
+    // framework or entry renders by itself: each one's declaration.
+    let default_exports: OnceCell<FxHashSet<(String, String)>> = OnceCell::new();
+    let default_export_declarations = || {
+        let mut declarations = FxHashSet::default();
+        for (path, ff) in files {
+            if let Some(declaration) = ff.default_export_binding.as_ref().and_then(|binding| declared(path, ff, binding)) {
+                declarations.insert(declaration);
+            }
+            for export in ff.exports.iter().filter(|export| export.exported == "default") {
+                let declaration = match (&export.source, &export.original, &export.local) {
+                    (Some(source), Some(original), _) => resolve_export(path, source, original, files, inputs, links)
+                        .map(|(declaring, binding, _)| (declaring, binding)),
+                    (None, _, Some(local)) => declared(path, ff, local),
+                    _ => None,
+                };
+                declarations.extend(declaration);
+            }
+        }
+        declarations
+    };
     let mut bounded: FxHashMap<(String, String, String), bool> = FxHashMap::default();
     let mut renders_bounded = |module: &String, function: &String, prop: &String| -> bool {
         let target = (module.clone(), function.clone());
         if !files.contains_key(module) {
             return false;
         }
-        // A default export, however written and wherever re-exported, is
-        // what a framework or entry renders by itself.
-        let default = files.iter().any(|(path, ff)| {
-            ff.default_export_binding.as_ref().is_some_and(|binding| declared(path, ff, binding).as_ref() == Some(&target))
-                || ff.exports.iter().filter(|export| export.exported == "default").any(|export| {
-                    let declaration = match (&export.source, &export.original, &export.local) {
-                        (Some(source), Some(original), _) => resolve_export(path, source, original, files, inputs, links)
-                            .map(|(declaring, binding, _)| (declaring, binding)),
-                        (None, _, Some(local)) => declared(path, ff, local),
-                        _ => None,
-                    };
-                    declaration.as_ref() == Some(&target)
-                })
-        });
-        if default {
+        if default_exports.get_or_init(default_export_declarations).contains(&target) {
             return false;
         }
         // A clone's override usage cannot list may write the prop.
@@ -11717,6 +11759,28 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &class_prop);
             assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), ["className"], "{render}");
             assert!(!out.system_prop_map.contains_key("className"), "{render}: {:?}", out.system_prop_map);
+        }
+    }
+
+    /// Contract: a variant an `.asComponent()` terminal forwards reaches the
+    /// target where no use writes it, as its default, so a component the
+    /// target renders by spread keeps the slot that value fills. One the
+    /// terminal does not forward is the runtime's and reaches nothing.
+    #[test]
+    fn forwarded_defaults_reach_what_the_target_renders() {
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n\
+                   export const Base = ds.styles({ display: 'block' })\n\
+                   .variant({ prop: 'p', defaultVariant: 'sm', variants: { sm: { display: 'flex' }, lg: { display: 'grid' } } })\n\
+                   .asElement('div');\n";
+        let cases: [(&str, &[&str]); 3] = [("", &[]), (", { forward: ['p'] }", &["p"]), (", { forward: true }", &["p"])];
+        for (forward, want) in cases {
+            let app = format!(
+                "import {{ Box, Base }} from './kit';\n\
+                 function El(props) {{ return <Box as=\"span\" {{...props}} />; }}\n\
+                 const Outer = Base.extend().asComponent(El{forward});\nexport const App = () => <Outer />;\n"
+            );
+            let out = analyze(&[("kit.tsx", kit), ("app.tsx", &app)], &test_inputs());
+            assert_eq!(out.dynamic_props.keys().collect::<Vec<_>>(), want, "{forward}");
         }
     }
 

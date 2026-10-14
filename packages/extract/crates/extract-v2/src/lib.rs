@@ -535,6 +535,28 @@ pub fn system_membership(inputs_json: String) -> napi::Result<String> {
         .map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModuleFactsResult {
+    files: BTreeMap<String, facts::ModuleFacts>,
+    parse_count: usize,
+}
+
+/// The facts source ingestion and package discovery read, one parse per
+/// file: `extractFacts`'s wire without the statics, usage and object facts
+/// it also computes (`facts::ModuleFacts`).
+#[napi]
+pub fn extract_module_facts(file_entries_json: String) -> napi::Result<String> {
+    let entries: Vec<InputEntry> = serde_json::from_str(&file_entries_json)
+        .map_err(|e| napi::Error::from_reason(format!("invalid file entries JSON: {e}")))?;
+    let store = ast_store::AstStore::build(
+        entries.into_iter().map(|e| ast_store::FileEntry { path: e.path, source: e.source }).collect(),
+    );
+    let files = store.iter().map(|ast| (ast.path.clone(), facts::extract_module_facts(ast))).collect();
+    serde_json::to_string(&ModuleFactsResult { files, parse_count: store.parse_count() })
+        .map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
+}
+
 /// Full per-file fact extraction, one parse per file. The store and its
 /// ASTs drop on return: no `program()` read survives cross-file resolve.
 #[napi]
