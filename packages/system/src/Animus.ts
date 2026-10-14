@@ -26,9 +26,8 @@ import {
 } from './types/config';
 import { AbstractProps } from './types/props';
 import { admittedPropNames } from './utils/admittedPropNames';
-import { deepMerge } from './utils/deepMerge';
+import { deepMerge, withDefaultKey } from './utils/deepMerge';
 import { assertDisjointStylingNames } from './utils/stylingNameCollisions';
-import { withDefaultKey } from './utils/variantDefault';
 
 import type { ClassResolverConfig } from './runtime/resolveClasses';
 import type {

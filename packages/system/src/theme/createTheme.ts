@@ -1096,12 +1096,12 @@ export class ThemeBuilder<
     Key extends string,
     // Keyed by its own keys rather than an index signature, so an
     // interface, which has no implicit one, is a scale as a type alias is.
-    Values extends {
-      [K in keyof Values]:
-        | string
-        | number
-        | Record<keyof Values[K], string | number>;
-    },
+    // A nested record keeps its index signature: optional keys stay
+    // optional, and a function, which has none, is no scale value.
+    Values extends Record<
+      keyof Values,
+      string | number | Record<string, string | number>
+    >,
     Emit extends boolean = false,
     Replace extends boolean = false,
     NewScale extends LiteralPaths<Values, '.'> = LiteralPaths<Values, '.'>,

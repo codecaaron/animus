@@ -165,7 +165,6 @@ export type ScaleValue<
 > = Config['scale'] extends keyof TokenScales<T>
   ?
       | keyof TokenScales<T>[Config['scale']]
-      | `calc(${ScaleTokenRef<keyof TokenScales<T> & string>})`
       | NegativeOf<Config, keyof TokenScales<T>[Config['scale']]>
       | PropertyValues<
           Config,
@@ -253,18 +252,21 @@ export type ContainerUnitValue =
 
 /**
  * A `calc()` that references at least one token of the theme's scales,
- * which a strict scale admits as it admits the tokens themselves. The key is
- * left open, so the cost grows with the number of scales, not tokens; the
- * extractor resolves each reference and reports one that names no token.
+ * which a strict theme scale admits in a style block as it admits the
+ * tokens themselves: the extractor resolves each reference there, and
+ * reports one that names no token. A component prop does not take it, since
+ * a value that arrives at runtime keeps its references unresolved. The key
+ * is left open, so the cost grows with the number of scales, not tokens.
  */
-type CalcTokenValue =
-  `calc(${ScaleTokenRef<keyof TokenScales<Theme> & string>})`;
+type CalcTokenValue<Config extends SystemProp> =
+  Config['scale'] extends keyof TokenScales<Theme>
+    ? `calc(${ScaleTokenRef<keyof TokenScales<Theme> & string>})`
+    : never;
 
 export type ThemedScaleValue<Config extends SystemProp> =
   Config['scale'] extends keyof TokenScales<Theme>
     ?
         | keyof TokenScales<Theme>[Config['scale']]
-        | CalcTokenValue
         | NegativeOf<Config, keyof TokenScales<Theme>[Config['scale']]>
         | PropertyValues<
             Config,
@@ -308,6 +310,17 @@ export type ThemedScale<Config extends SystemProp> = [Config] extends [
   ? ResponsiveProp<DeclarationKey<Extract<Config, DeclarationProp>>>
   : ResponsiveProp<ThemedScaleValue<Config>>;
 
+/**
+ * `ThemedScale` as a style block takes it, which also admits a token
+ * `calc()`. Kept apart from the public `ThemedScale`, which a library may
+ * use to type its components' props.
+ */
+type ThemedStyleScale<Config extends SystemProp> = [Config] extends [
+  DeclarationProp,
+]
+  ? ResponsiveProp<DeclarationKey<Extract<Config, DeclarationProp>>>
+  : ResponsiveProp<ThemedScaleValue<Config> | CalcTokenValue<Config>>;
+
 /** `ThemedScale` as a component prop takes it: see `ResponsivePropValue`. */
 export type ThemedPropValue<Config extends SystemProp> = [Config] extends [
   DeclarationProp,
@@ -350,14 +363,14 @@ type UnderscoreBlockMembers<Config extends Record<string, SystemProp>> = {
 type ThemedBlockBody<Config extends Record<string, SystemProp>> = {
   [K in Exclude<keyof PropertyTypes, keyof Config>]?: PassThroughProp<K>;
 } & {
-  [P in keyof Config]?: ThemedScale<Config[P]>;
+  [P in keyof Config]?: ThemedStyleScale<Config[P]>;
 } & {
   [K in RawSelectorKey | RawAtRuleKey]?: ThemedBlockBody<Config>;
 } & UnderscoreBlockMembers<Config>;
 
 export type ThemedCSSProps<Props, Config extends Record<string, SystemProp>> = {
   [K in keyof Props]?: K extends keyof Config
-    ? ThemedScale<Config[K]>
+    ? ThemedStyleScale<Config[K]>
     : K extends RawSelectorKey
       ? ThemedBlockBody<Config>
       : K extends RawAtRuleKey
@@ -371,7 +384,7 @@ export type ThemedCSSProps<Props, Config extends Record<string, SystemProp>> = {
               : K extends `@${string}`
                 ? UnknownAtRule<K & string>
                 : Omit<PropertyTypes, keyof Config> & {
-                    [P in keyof Config]?: ThemedScale<Config[P]>;
+                    [P in keyof Config]?: ThemedStyleScale<Config[P]>;
                   };
 };
 
@@ -394,7 +407,7 @@ export type ThemedCSSInputProps<
   Config extends Record<string, SystemProp>,
 > = {
   [K in keyof Props]?: K extends keyof Config
-    ? NoInfer<ThemedScale<Config[K]>>
+    ? NoInfer<ThemedStyleScale<Config[K]>>
     : K extends RawSelectorKey
       ? ThemedBlockBody<Config>
       : K extends RawAtRuleKey
@@ -408,7 +421,7 @@ export type ThemedCSSInputProps<
               : K extends `@${string}`
                 ? UnknownAtRule<K & string>
                 : Omit<PropertyTypes, keyof Config> & {
-                    [P in keyof Config]?: ThemedScale<Config[P]>;
+                    [P in keyof Config]?: ThemedStyleScale<Config[P]>;
                   };
 };
 

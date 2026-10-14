@@ -1868,8 +1868,8 @@ function EmittedScaleNames() {
 void EmittedScaleNames;
 
 // ---------------------------------------------------------------------------
-// Contract: addScale takes an interface as it takes a type alias, and
-// still rejects a value no scale holds.
+// Contract: addScale takes an interface as it takes a type alias, keeps a
+// nested record's optional keys, and still rejects a value no scale holds.
 // ---------------------------------------------------------------------------
 
 function InterfaceScales() {
@@ -1889,6 +1889,13 @@ function InterfaceScales() {
   createTheme().addScale({ name: 'bad', values: {} as NotAScale });
   // @ts-expect-error — nor a nested one
   createTheme().addScale({ name: 'bad', values: {} as { a: { _: boolean } } });
+  // An optional nested key stays optional.
+  createTheme().addScale({
+    name: 'conditional',
+    values: { x: {} as { _?: string; hover?: string } },
+  });
+  // @ts-expect-error — a function is no scale value
+  createTheme().addScale({ name: 'bad', values: { x: () => 42 } });
 }
 
 void InterfaceScales;
@@ -1930,24 +1937,33 @@ function BooleanVariants() {
 void BooleanVariants;
 
 // ---------------------------------------------------------------------------
-// Contract: a strict theme scale takes a calc() that references one of the
-// theme's scales, and nothing else it did not take before.
+// Contract: a strict theme scale takes, in a style block, a calc() that
+// references one of the theme's scales; a component prop does not, since a
+// value that arrives at runtime keeps its references unresolved.
 // ---------------------------------------------------------------------------
 
 const CalcBox = ds
   .styles({ mt: 'calc({space.4} * -1)', mb: 'calc(100% - {fontSizes.16})' })
+  .variant({
+    prop: 'tone',
+    variants: { tight: { mt: 'calc({space.8} * -1)' } },
+  })
+  .states({ raised: { mb: { _: 4, md: 'calc({space.16} + 2px)' } } })
   .system({ space: true })
   .asElement('div');
+type CalcBoxPadding = ComponentPropsWithRef<typeof CalcBox>['p'];
 
 function CalcTokenValues() {
+  // @ts-expect-error — a component prop takes no token calc()
+  const _runtime: CalcBoxPadding = 'calc({space.4} + 2px)';
+  // @ts-expect-error — nor written in JSX
   void (<CalcBox mt="calc({space.8} * -1)" />);
-  void (<CalcBox p={{ _: 4, md: 'calc({space.16} + 2px)' }} />);
   // @ts-expect-error — a calc() without a token reference
   ds.styles({ mt: 'calc(1px * 2)' });
   // @ts-expect-error — a scale the theme does not have
-  void (<CalcBox mt="calc({spaces.4} * -1)" />);
+  ds.styles({ mt: 'calc({spaces.4} * -1)' });
   // @ts-expect-error — a reference outside calc()
-  void (<CalcBox mt="{space.4} * 2" />);
+  ds.styles({ mt: '{space.4} * 2' });
 }
 
 void CalcTokenValues;
