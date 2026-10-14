@@ -603,8 +603,9 @@ test.each([
 // under node_modules, a workspace link whose code loads the kit or the app,
 // declared or not, even where the app names the kit's module through a
 // symlinked directory, one whose manifest cannot be read, whose code reaches
-// app source by a relative path or makes a computed load, or a `react` alias
-// onto the module that holds `pad` keeps the opening.
+// app source by a relative path, or through a symlinked file of its own, or
+// makes a computed load, or a `react` alias onto the module that holds
+// `pad` keeps the opening.
 test.each([
   ['installed from a registry', {}, 'tokens.ts', true],
   ['in a pnpm store', { store: true }, 'tokens.ts', true],
@@ -639,6 +640,16 @@ test.each([
     'linked from the workspace, loading an undeclared hoisted package',
     { linked: true, code: "require('@local/kit/tokens');\n" },
     'kit/tokens.ts',
+    false,
+  ],
+  [
+    'linked from the workspace, loading app source through a symlinked file of its own',
+    {
+      linked: true,
+      fileLink: true,
+      code: "require('./tokens-link').pad.padding = 16;\n",
+    },
+    'tokens.ts',
     false,
   ],
   [
@@ -689,6 +700,7 @@ test.each([
       declares?: boolean;
       app?: boolean;
       code?: string;
+      fileLink?: boolean;
       throughLink?: boolean;
       unreadable?: boolean;
       through?: boolean;
@@ -753,6 +765,7 @@ test.each([
     );
     manifest('node_modules/@reg/dep', '@reg/dep', { '@local/kit': '1.0.0' });
     if (layout.throughLink) link('src/linked', 'kit');
+    if (layout.fileLink) link('proxy/tokens-link.ts', 'tokens.ts');
     const tokensImport = './' + tokens.replace(/\.ts$/, '');
     const analysed = {
       [tokens]: 'export const pad = { padding: 4 };\n',

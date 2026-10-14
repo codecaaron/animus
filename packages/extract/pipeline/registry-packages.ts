@@ -491,12 +491,16 @@ function collectTargets(value: JsonValue, targets: string[], match: string) {
   }
 }
 
-/** The file a load of `path` opens, trying the extensions and directory
- *  indexes a load may leave out; null where none is a file. */
+/** The file a load of `path` opens, at its real path, trying the
+ *  extensions and directory indexes a load may leave out; null where none
+ *  is a file. Node runs a module at its real path, so a symbolic link in a
+ *  package that points outside it loads a module outside it. */
 function resolveFile(path: string, lookups: Lookups): string | null {
   for (const suffix of RESOLVED_SUFFIXES) {
     const file = path + suffix;
-    if (lookups.exists(file) && lookups.source(file) !== null) return file;
+    if (lookups.exists(file) && lookups.source(file) !== null) {
+      return lookups.resolve(file);
+    }
   }
   return null;
 }
