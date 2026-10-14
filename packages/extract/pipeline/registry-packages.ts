@@ -161,6 +161,81 @@ type Manifest = {
   optionalDependencies?: Record<string, string>;
 };
 
+/** Each package's answer to whether it reaches Animus, by its real root and
+ *  the system's kits, held while every file it read is unchanged. */
+const animusAnswers = new Map<string, { stamps: Stamps; reaches: boolean }>();
+
+/**
+ * The `located` packages foreign to Animus: neither the package nor any
+ * package its dependencies, peers and optional dependencies name, at any
+ * depth, is an `@animus-ui/*` package or one of the system's `kits`. Past
+ * the bound a package may name any, so it reaches Animus.
+ */
+export function foreignPackages(
+  located: ReadonlyArray<{ name: string; root: string }>,
+  kits: ReadonlySet<string>
+): string[] {
+  const reads = new Reads();
+  const key = [...kits].sort().join('\n');
+  const animus = (name: string) =>
+    name.startsWith('@animus-ui/') || kits.has(name);
+  return located
+    .filter(({ name, root }) => !animus(name) && !reachesAnimus(root))
+    .map(({ name }) => name)
+    .sort();
+
+  function reachesAnimus(installed: string): boolean {
+    const cacheKey = `${installed}\n${key}`;
+    const cached = animusAnswers.get(cacheKey);
+    if (cached !== undefined && reads.unchanged(cached.stamps)) {
+      return cached.reaches;
+    }
+    const files = lockfilesAbove(installed);
+    const { manifest, exists } = reads.tracked(files);
+    const reaches = (() => {
+      const seen = new Set<string>([installed]);
+      const work = [installed];
+      while (work.length > 0) {
+        const dir = work.pop()!;
+        const names = Object.keys(dependencySpecs(manifest(dir)));
+        if (names.some(animus)) return true;
+        for (const name of names) {
+          const dependency = installedPackage(name, dir, exists);
+          if (dependency === null || seen.has(dependency)) continue;
+          seen.add(dependency);
+          if (seen.size > DEPENDENCY_BOUND) return true;
+          work.push(dependency);
+        }
+      }
+      return false;
+    })();
+    animusAnswers.set(cacheKey, {
+      stamps: new Map([...files].map((path) => [path, reads.file(path).stamp])),
+      reaches,
+    });
+    return reaches;
+  }
+}
+
+/** Every lockfile path at or above `dir`. */
+function lockfilesAbove(dir: string): Set<string> {
+  const files = new Set<string>();
+  for (; ; dir = dirname(dir)) {
+    for (const lockfile of LOCKFILES) files.add(join(dir, lockfile));
+    if (dirname(dir) === dir) return files;
+  }
+}
+
+/** The dependencies, peers and optional dependencies a manifest declares;
+ *  a name in more than one keeps its `dependencies` spec. */
+function dependencySpecs(declared: Manifest | null) {
+  return {
+    ...declared?.optionalDependencies,
+    ...declared?.peerDependencies,
+    ...declared?.dependencies,
+  };
+}
+
 /**
  * Each listed package every instance of which the host installed from a
  * registry (spec §6.3, A4): resolved through `node_modules` to a real path
@@ -218,11 +293,7 @@ function decide(
   instances: readonly PreparedPackage[],
   reads: Reads
 ): Decision {
-  const files = new Set<string>();
-  for (let dir = root; ; dir = dirname(dir)) {
-    for (const lockfile of LOCKFILES) files.add(join(dir, lockfile));
-    if (dirname(dir) === dir) break;
-  }
+  const files = lockfilesAbove(root);
   const lookups = reads.tracked(files);
   const decided = (roots: string[] | null): Decision => ({
     stamps: new Map([...files].map((path) => [path, reads.file(path).stamp])),
@@ -306,12 +377,7 @@ function localDependencies(
   const work = [installed];
   while (work.length > 0) {
     const dir = work.pop()!;
-    const declared = manifest(dir);
-    const specs = {
-      ...declared?.optionalDependencies,
-      ...declared?.peerDependencies,
-      ...declared?.dependencies,
-    };
+    const specs = dependencySpecs(manifest(dir));
     for (const [name, spec] of Object.entries(specs)) {
       const dependency = installedPackage(name, dir, exists);
       if (dependency === null || seen.has(dependency)) continue;

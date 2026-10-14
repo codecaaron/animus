@@ -1192,6 +1192,26 @@ export function isPackageSpecifier(specifier: string): boolean {
  * reaches the engine only as its generated children.
  */
 export function importedKitDiagnostics(
+  ...args: Parameters<typeof importedPackages>
+): ManifestDiagnostic[] {
+  return importedPackages(...args).diagnostics;
+}
+
+/** What `importedPackages` finds. */
+export interface ImportedPackages {
+  diagnostics: ManifestDiagnostic[];
+  located: Array<{ name: string; root: string }>;
+  /** The package names of the system's kits. */
+  kits: Set<string>;
+}
+
+/**
+ * The packages the application's own `files` import or re-export, past the
+ * kits its system extends: `importedKitDiagnostics`' errors, and each other
+ * package located on disk, with its root, which declares no kit source and
+ * from which a file imports a name a JSX tag can have (capitalized).
+ */
+export function importedPackages(
   files: ReadonlyArray<{ path: string; source: string; hash: string }>,
   engine: Pick<EngineApi, 'declaresKitSource' | 'locatePackage'>,
   rootDir: string,
@@ -1201,9 +1221,16 @@ export function importedKitDiagnostics(
   factsOf: (
     files: ReadonlyArray<{ path: string; source: string; hash: string }>
   ) => ExtractFactsResult
-): ManifestDiagnostic[] {
+): ImportedPackages {
+  const diagnostics: ManifestDiagnostic[] = [];
+  const located: Array<{ name: string; root: string }> = [];
+  const kits = new Set(
+    systemKits
+      .filter((specifier) => !isAbsolute(specifier))
+      .map(bareSpecifierPackageName)
+  );
   const parsed = files.filter(({ path }) => isEngineTransformExtension(path));
-  if (parsed.length === 0) return [];
+  if (parsed.length === 0) return { diagnostics, located, kits };
   const locatePackage = nativePackageLocator(
     engine,
     declaredWorkspacePackages(rootDir)
@@ -1212,41 +1239,44 @@ export function importedKitDiagnostics(
   try {
     facts = factsOf(parsed);
   } catch {
-    return [];
+    return { diagnostics, located, kits };
   }
-  const seen = new Set(
-    systemKits
-      .filter((specifier) => !isAbsolute(specifier))
-      .map(bareSpecifierPackageName)
-  );
-  const diagnostics: ManifestDiagnostic[] = [];
+  // Each package by its first importer, and whether any file imports a
+  // possible tag from it.
+  const imported = new Map<string, { path: string; tags: boolean }>();
   for (const [path, file] of Object.entries(facts.files)) {
     if (file.parsePanicked) continue;
     const specifiers = [
-      ...file.imports.map((fact) => fact.source),
+      ...file.imports.map((fact) => [fact.source, fact.local] as const),
       ...file.exports.flatMap((fact) =>
-        fact.source === null ? [] : [fact.source]
+        fact.source === null ? [] : [[fact.source, ''] as const]
       ),
     ];
-    for (const specifier of specifiers) {
+    for (const [specifier, local] of specifiers) {
       if (!isPackageSpecifier(specifier)) continue;
       const name = bareSpecifierPackageName(specifier);
-      if (seen.has(name)) continue;
-      seen.add(name);
-      const pkgRoot = locatePackage(name, dirname(resolve(rootDir, path)));
-      if (pkgRoot && declaresKitSource(engine, pkgRoot)) {
-        diagnostics.push({
-          file: path,
-          component: name,
-          kind: 'warn',
-          message: `the application imports this kit, but its system is not included in the application's system, so its components are not extracted — include the kit's system in the application's system: createSystem().extend(<the kit's system>)`,
-          code: KIT_SYSTEM_NOT_INCLUDED,
-          severity: severityFor(KIT_SYSTEM_NOT_INCLUDED),
-        });
-      }
+      if (kits.has(name)) continue;
+      const entry = imported.get(name) ?? { path, tags: false };
+      entry.tags ||= /^[A-Z]/.test(local);
+      imported.set(name, entry);
     }
   }
-  return diagnostics;
+  for (const [name, { path, tags }] of imported) {
+    const pkgRoot = locatePackage(name, dirname(resolve(rootDir, path)));
+    if (pkgRoot && declaresKitSource(engine, pkgRoot)) {
+      diagnostics.push({
+        file: path,
+        component: name,
+        kind: 'warn',
+        message: `the application imports this kit, but its system is not included in the application's system, so its components are not extracted — include the kit's system in the application's system: createSystem().extend(<the kit's system>)`,
+        code: KIT_SYSTEM_NOT_INCLUDED,
+        severity: severityFor(KIT_SYSTEM_NOT_INCLUDED),
+      });
+    } else if (pkgRoot && tags) {
+      located.push({ name, root: pkgRoot });
+    }
+  }
+  return { diagnostics, located, kits };
 }
 
 /** A kit without the source condition, warned once, or each condition entry

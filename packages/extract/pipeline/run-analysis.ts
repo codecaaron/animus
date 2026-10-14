@@ -112,6 +112,9 @@ export interface AnalysisContext {
   /** The configured system file and the modules its load read,
    *  rootDir-relative: known modules wherever they sit. */
   systemModules?: string[];
+  /** The packages the app imports with no dependency path to Animus: their
+   *  tags never match an Animus component by name. */
+  foreignPackages?: string[];
   /** The build configuration files the host loaded, rootDir-relative:
    *  config roots beside the well-known tool config names. */
   configFiles?: string[];
@@ -203,7 +206,8 @@ export function analysisContextJson(
       context?.openings?.length ||
       context?.systemModules?.length ||
       context?.configFiles?.length ||
-      context?.closedDynamicImports?.length
+      context?.closedDynamicImports?.length ||
+      context?.foreignPackages?.length
     )
   ) {
     return undefined;
@@ -225,6 +229,7 @@ export function analysisContextJson(
     systemModules: context.systemModules ?? [],
     configFiles: context.configFiles ?? [],
     closedDynamicImports: context.closedDynamicImports ?? [],
+    foreignPackages: context.foreignPackages ?? [],
   } satisfies AnalysisContextWire;
   return JSON.stringify(wire);
 }

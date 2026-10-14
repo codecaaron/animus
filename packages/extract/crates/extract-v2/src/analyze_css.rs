@@ -217,6 +217,9 @@ pub struct AnalysisContext {
     /// analysis keys them, wherever they sit: known modules, whose import
     /// opens nothing, whether or not analysis reads them.
     pub system_modules: Vec<String>,
+    /// The packages the app imports that have no dependency path to Animus,
+    /// by name: their tags never match an Animus component by name.
+    pub foreign_packages: Vec<String>,
 }
 
 /// Whether the probe base or candidate `path` names one of the system's
@@ -615,6 +618,10 @@ const CONFIGURED_TRANSFORM_REJECTED: &str = "animus.transform.configured-rejecte
 /// A value missing from a strict, populated scale is omitted rather than
 /// applied raw; the author meant a token the scale does not have.
 const STRICT_TOKEN_MISS: &str = "animus.props.strict-token-miss";
+/// A strict-scale miss or an unresolvable token alias at a render whose tag
+/// matches an Animus component by name alone: it may render another
+/// library's component, so the finding is a warning.
+const POSSIBLE_SYSTEM_PROP_MISS: &str = "animus.usage.possible-system-prop-miss";
 /// A configured transform that exhausts its evaluation budget or reads the
 /// host where no runtime slot exists (style blocks, variants, states,
 /// global styles): its declaration falls back to the raw value.
@@ -730,6 +737,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (STATIC_EVALUATION_UNAVAILABLE, "error"),
     (TRANSFORM_UNSEALED_BINDING, "error"),
     (STRICT_TOKEN_MISS, "error"),
+    (POSSIBLE_SYSTEM_PROP_MISS, "warn"),
     (TRANSFORM_INVALID_RESULT, "error"),
     (UNATTRIBUTED_SYSTEM_PROPS, "warn"),
     (UNTRACKED_CLONE_PROPS, "warn"),
@@ -2342,6 +2350,22 @@ fn raw_keyframe_alias(
     )
 }
 
+/// `finding`, made at a render whose tag `renders` matches an Animus
+/// component by name alone, as the possible miss it is.
+fn possible_system_prop_miss(finding: CssDiagnostic, renders: &str) -> CssDiagnostic {
+    CssDiagnostic {
+        kind: "warn".to_string(),
+        message: format!(
+            "<{renders}> matches an Animus component only by name, so it may render another \
+             library's component; if it is the Animus one, {}",
+            finding.message
+        ),
+        code: Some(POSSIBLE_SYSTEM_PROP_MISS.to_string()),
+        severity: Some(diagnostic_severity_for_code(POSSIBLE_SYSTEM_PROP_MISS).to_string()),
+        ..finding
+    }
+}
+
 /// Properties whose values legitimately carry dotted bare identifiers, so a
 /// dotted value there is never evidence of an unresolved token.
 const TOKEN_SHAPE_EXEMPT_PROPERTIES: &[&str] = &[
@@ -3211,7 +3235,41 @@ fn resolve_usage_identity(
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
 ) -> Vec<String> {
-    resolve_identity(file, local, files, inputs, links, evaluated_ids, Some(ids_by_binding))
+    resolve_usage_fallback(file, local, files, inputs, links, evaluated_ids, ids_by_binding).0
+}
+
+/// `resolve_usage_identity`, with the same-name fallback it took.
+fn resolve_usage_fallback(
+    file: &str,
+    local: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+    evaluated_ids: &FxHashSet<String>,
+    ids_by_binding: &IdsByBinding,
+) -> (Vec<String>, Fallback) {
+    let fallback = NameFallback { ids: ids_by_binding, took: std::cell::Cell::new(Fallback::None) };
+    let ids = resolve_identity(file, local, files, inputs, links, evaluated_ids, Some(&fallback));
+    (ids, fallback.took.get())
+}
+
+/// The same-name fallback a resolution may take: every component bound to a
+/// bare name the file's declarations and imports do not settle.
+struct NameFallback<'a> {
+    ids: &'a IdsByBinding,
+    took: std::cell::Cell<Fallback>,
+}
+
+/// What a resolution took of its same-name fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fallback {
+    /// None: the declarations and imports settled the name.
+    None,
+    /// Components bound to the name, by its spelling alone.
+    ByName,
+    /// None, refused: the name is a tag of a package with no dependency
+    /// path to Animus.
+    Foreign,
 }
 
 /// The components `local` names in `file` through that file's own
@@ -3256,8 +3314,9 @@ fn resolve_declared_identity(
     resolve_identity(&declaring_file, &declared, files, inputs, links, evaluated_ids, None)
 }
 
-/// With `ids_by_binding`, a name the file's declarations and imports do not
-/// settle falls back to every component bound to that bare name.
+/// With a `fallback`, a name the file's declarations and imports do not
+/// settle falls back to every component bound to that bare name, unless it
+/// is a tag of a package with no dependency path to Animus.
 fn resolve_identity(
     file: &str,
     local: &str,
@@ -3265,10 +3324,27 @@ fn resolve_identity(
     inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
-    ids_by_binding: Option<&IdsByBinding>,
+    fallback: Option<&NameFallback>,
 ) -> Vec<String> {
-    let by_bare_name =
-        |name: &str| ids_by_binding.and_then(|ids| ids.get(name)).cloned().unwrap_or_default();
+    let by_bare_name = |name: &str| {
+        let ids = fallback.and_then(|fallback| fallback.ids.get(name)).cloned().unwrap_or_default();
+        if let Some(fallback) = fallback.filter(|_| !ids.is_empty()) {
+            fallback.took.set(Fallback::ByName);
+        }
+        ids
+    };
+    // The fallback, unless `local` is imported from `source`, a package with
+    // no dependency path to Animus.
+    let by_name_unless_foreign = |name: &str, source: &str| {
+        let ids = by_bare_name(name);
+        if ids.is_empty() || !files.get(file).is_some_and(|ff| foreign_import(ff, local, source, inputs)) {
+            return ids;
+        }
+        if let Some(fallback) = fallback {
+            fallback.took.set(Fallback::Foreign);
+        }
+        Vec::new()
+    };
     // Dotted member path: the root resolves through the import table and the
     // last segment names the component there (`const Compound = { Item }`).
     if let Some((path_head, last)) = local.rsplit_once('.') {
@@ -3287,18 +3363,22 @@ fn resolve_identity(
         }
         // An imported root (named or namespace) names its module, and one the
         // analysis cannot resolve names nothing here.
-        let root_file = match files.get(file).map(|ff| {
+        let root_source = files.get(file).and_then(|ff| {
             let import = ff.imports.iter().find(|i| i.local == root).map(|i| &i.source);
             import.or_else(|| ff.namespace_imports.get(root))
-        }) {
-            Some(Some(source)) => resolve_import_source(file, source, files, inputs),
-            _ => Some(file.to_string()),
+        });
+        let root_file = match root_source {
+            Some(source) => resolve_import_source(file, source, files, inputs),
+            None => Some(file.to_string()),
         };
         let local_id = root_file.map(|root_file| format!("{root_file}::{last}"));
         if let Some(local_id) = local_id.filter(|id| evaluated_ids.contains(id)) {
             return vec![local_id];
         }
-        return by_bare_name(last);
+        return match root_source {
+            Some(source) => by_name_unless_foreign(last, source),
+            None => by_bare_name(last),
+        };
     }
     let local = resolve_alias_terminal(file, local, files);
     let local_id = format!("{}::{}", file, local);
@@ -3312,9 +3392,29 @@ fn resolve_identity(
         if let Some(source_file) = resolve_import_source(file, &imp.source, files, inputs) {
             return import_identity(&source_file, &imp.imported, files, links, evaluated_ids, &by_bare_name);
         }
-        return by_bare_name(&imp.imported);
+        return by_name_unless_foreign(&imp.imported, &imp.source);
     }
     by_bare_name(local)
+}
+
+/// Whether the tag `local` of `ff`, imported from `source`, is a tag of a
+/// package with no dependency path to Animus (the host's `foreignPackages`),
+/// which renders no Animus component its name matches. One the file renders
+/// with a component through `as`, or with `asChild`, may hand its props to
+/// one.
+fn foreign_import(ff: &FileFacts, local: &str, source: &str, inputs: &CssInputs) -> bool {
+    let package = animus_system_loader::split_specifier(source).0;
+    if !inputs.analysis_context.foreign_packages.iter().any(|foreign| foreign == package) {
+        return false;
+    }
+    !ff.usage_for_analysis().iter().any(|fact| match fact {
+        UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), attrs, .. } if tag == local => {
+            attrs.iter().any(|attr| {
+                attr.name == "asChild" || (attr.name == "as" && !matches!(attr.static_value, Some(Value::String(_))))
+            })
+        }
+        _ => false,
+    })
 }
 
 /// Whether the root `root` of a dotted path in `file` names a namespace the
@@ -3677,16 +3777,11 @@ fn modules_under<'f, T>(
     if let Some(expanded) = expand_alias(prefix, &inputs.path_aliases) {
         return starting(&expanded);
     }
-    let mut segments = prefix.splitn(3, '/');
-    let package = match (segments.next(), segments.next()) {
-        (Some(scope), Some(name)) if scope.starts_with('@') => format!("{scope}/{name}"),
-        (Some(name), _) => name.to_string(),
-        _ => return Vec::new(),
-    };
+    let package = animus_system_loader::split_specifier(prefix).0;
     let entries: Vec<&String> = inputs
         .package_map
         .iter()
-        .filter(|(spec, _)| *spec == &package || spec.starts_with(&format!("{package}/")))
+        .filter(|(spec, _)| spec.as_str() == package || spec.starts_with(&format!("{package}/")))
         .map(|(_, entry)| entry)
         .collect();
     if entries.is_empty() {
@@ -5282,6 +5377,22 @@ struct UsageSourceMaps {
 }
 
 impl UsageLookupMaps {
+    /// Whether any map knows `key`.
+    fn knows(&self, key: &str) -> bool {
+        self.props.contains_key(key)
+            || self.configs.contains_key(key)
+            || self.custom_props.contains_key(key)
+            || self.attribution.contains_key(key)
+    }
+
+    /// Drops `key`, so its tag renders no component the maps know.
+    fn forget(&mut self, key: &str) {
+        self.props.remove(key);
+        self.configs.remove(key);
+        self.custom_props.remove(key);
+        self.attribution.remove(key);
+    }
+
     /// Values union over the candidates: the filter reads only key sets, so a
     /// union is sound for an ambiguous name and exact for a single component.
     fn publish(&mut self, key: &str, ids: &[String], source: &UsageSourceMaps) {
@@ -7272,11 +7383,15 @@ fn run_with_system_floor(
             );
         }
     }
+    // A tag read under its bare name, with no proof in its file, renders
+    // these components by its spelling alone.
+    let mut by_bare_name: FxHashSet<&str> = FxHashSet::default();
     for component_id in &sorted_ids {
         if let Some((_, binding, _, _, _, _, _)) = evaluated.get(component_id) {
             if !global_lookup.attribution.contains_key(binding) {
                 let ids = ids_by_binding[binding].clone();
                 global_lookup.publish(binding, &ids, &usage_sources);
+                by_bare_name.insert(binding);
             }
         }
     }
@@ -7349,11 +7464,13 @@ fn run_with_system_floor(
     // each of its `uses`, at its offset and naming the component it renders,
     // which the shared utility stream no longer knows. A value whose
     // configured transform the runtime would resolve differently gets no
-    // class either: the runtime finds no key and computes it.
+    // class either: the runtime finds no key and computes it. A use whose
+    // render is not `proven` to reach an Animus component reports its finding
+    // as a possible miss.
     let admitted_input = |config: &PropConfigMap,
                           file: &str,
                           component: &str,
-                          (prop_name, value, uses): (&str, &Value, &[(u32, &str)]),
+                          (prop_name, value, uses): (&str, &Value, &[(u32, &str, bool)]),
                           diagnostics: &mut Vec<CssDiagnostic>| {
         let prop_config = config.get(prop_name);
         let miss = prop_config.and_then(|prop_config| {
@@ -7362,7 +7479,10 @@ fn run_with_system_floor(
         if let Some(miss) = miss {
             match uses {
                 [] => diagnostics.push(strict_token_miss(file, component, &miss)),
-                uses => diagnostics.extend(uses.iter().map(|&(at, renders)| strict_token_miss(file, renders, &miss).at(at))),
+                uses => diagnostics.extend(uses.iter().map(|&(at, renders, proven)| {
+                    let finding = strict_token_miss(file, renders, &miss);
+                    if proven { finding } else { possible_system_prop_miss(finding, renders) }.at(at)
+                })),
             }
             return None;
         }
@@ -7375,7 +7495,7 @@ fn run_with_system_floor(
             match uses {
                 [] => diagnostics.push(raw_keyframe_alias(file, component, &declaration, &alias)),
                 uses => diagnostics.extend(
-                    uses.iter().map(|&(at, renders)| raw_keyframe_alias(file, renders, &declaration, &alias).at(at)),
+                    uses.iter().map(|&(at, renders, _)| raw_keyframe_alias(file, renders, &declaration, &alias).at(at)),
                 ),
             }
         }
@@ -7396,9 +7516,10 @@ fn run_with_system_floor(
                 ..resolve_ctx
             };
             let resolved = resolve_styles(&serde_json::json!({ prop_name: value }), &quiet, true);
+            let mut findings = Vec::new();
             for declaration in resolved.all_declarations() {
                 let spans = unresolved_alias_spans(&declaration.value);
-                diagnostics.extend(unresolved_alias_findings(
+                findings.extend(unresolved_alias_findings(
                     file,
                     component,
                     declaration,
@@ -7406,6 +7527,13 @@ fn run_with_system_floor(
                     resolve_ctx.theme,
                     resolve_ctx.variable_map,
                 ));
+            }
+            // Written only where no render is proven, it is a possible miss.
+            match uses {
+                [(_, renders, _), ..] if uses.iter().all(|&(_, _, proven)| !proven) => {
+                    diagnostics.extend(findings.into_iter().map(|finding| possible_system_prop_miss(finding, renders)));
+                }
+                _ => diagnostics.extend(findings),
             }
         }
         Some(UtilityInput {
@@ -7460,6 +7588,10 @@ fn run_with_system_floor(
         let member_expr_bindings = member_bindings.get(path).unwrap_or(&no_members);
 
         let mut file_lookup: Option<UsageLookupMaps> = None;
+        // The tags this file reads by their spelling alone, and those a proof
+        // below settles.
+        let mut by_name: FxHashSet<&str> = FxHashSet::default();
+        let mut proven: FxHashSet<&str> = FxHashSet::default();
         let bound_names = ff
             .imports
             .iter()
@@ -7472,8 +7604,20 @@ fn run_with_system_floor(
             );
         let mut unattributed_imports: Vec<&str> = Vec::new();
         for (name, from_import) in bound_names {
-            let mut ids =
-                resolve_usage_identity(path, name, files, inputs, links, &evaluated_ids, &ids_by_binding);
+            let (mut ids, took) =
+                resolve_usage_fallback(path, name, files, inputs, links, &evaluated_ids, &ids_by_binding);
+            match took {
+                // A tag of a package with no dependency path to Animus stays
+                // unknown, as one no Animus component is named like does.
+                Fallback::Foreign => {
+                    if global_lookup.knows(name) {
+                        file_lookup.get_or_insert_with(|| global_lookup.clone()).forget(name);
+                    }
+                    continue;
+                }
+                Fallback::ByName => by_name.insert(name),
+                Fallback::None => proven.insert(name),
+            };
             // An imported facade built with `Object.assign(T, …)` is `T`.
             if ids.is_empty() && from_import {
                 if let Some(crate::family_members::Member::Stable(component)) = object_members.root(path, name) {
@@ -7506,7 +7650,11 @@ fn run_with_system_floor(
         // settle it.
         for alias in ff.aliases.keys().chain(ff.assigned_aliases.keys()) {
             let ids = resolve_declared_identity(path, alias, files, inputs, links, &evaluated_ids);
-            if ids.is_empty() || global_lookup.attribution.get(alias.as_str()) == Some(&ids) {
+            if ids.is_empty() {
+                continue;
+            }
+            proven.insert(alias);
+            if global_lookup.attribution.get(alias.as_str()) == Some(&ids) {
                 continue;
             }
             file_lookup
@@ -7526,6 +7674,7 @@ fn run_with_system_floor(
         for tag in written_tags {
             if let Some(crate::family_members::Member::Stable(component)) = object_members.root(path, tag) {
                 let ids = vec![component];
+                proven.insert(tag);
                 if global_lookup.attribution.get(tag) == Some(&ids) {
                     continue;
                 }
@@ -7551,6 +7700,7 @@ fn run_with_system_floor(
             file_lookup
                 .get_or_insert_with(|| global_lookup.clone())
                 .publish(wrapper, ids, &usage_sources);
+            proven.insert(wrapper);
         }
         // `<ui.R>` through `import * as ui` renders what the namespace's
         // module exports as `R`, followed through barrels.
@@ -7572,6 +7722,7 @@ fn run_with_system_floor(
             };
             let lookup = file_lookup.get_or_insert_with(|| global_lookup.clone());
             lookup.publish(tag, &held_ids(&module, &wrapper), &usage_sources);
+            proven.insert(tag);
             let mut lookups = Vec::new();
             for (index, (key, dropped)) in paths.iter().enumerate() {
                 let held_key = format!("{tag}#{index}");
@@ -7592,6 +7743,10 @@ fn run_with_system_floor(
                 .iter()
                 .any(|id| component_takes(id, prop))
         };
+        // A tag renders its components by spelling alone where its import
+        // took the same-name fallback, or where it reads a bare name no
+        // proof in this file settles.
+        let possible = |tag: &str| by_name.contains(tag) || (by_bare_name.contains(tag) && !proven.contains(tag));
         let attributed = |tag: &str| {
             file_lookup.as_ref().unwrap_or(&global_lookup).attribution.contains_key(tag)
         };
@@ -7611,7 +7766,7 @@ fn run_with_system_floor(
             &takes_system_prop,
         );
         for RoutedValue { prop, value, component, uses } in &routed {
-            let uses: Vec<_> = uses.iter().map(|at| (*at, component.as_str())).collect();
+            let uses: Vec<_> = uses.iter().map(|at| (*at, component.as_str(), true)).collect();
             all_utility_inputs.extend(admitted_input(&inputs.config, path, component, (prop, value, &uses), &mut diagnostics));
         }
         diagnostics.extend(untracked_clone_props(path, ff));
@@ -7630,6 +7785,12 @@ fn run_with_system_floor(
             member_expr_bindings,
             &proxies,
         );
+        // Read before attribution names each use's component instead of its tag.
+        let possible_uses: Vec<Vec<u32>> = usage_result
+            .system_prop_usages
+            .iter()
+            .map(|usage| usage.uses.iter().filter(|(_, tag)| possible(tag)).map(|(at, _)| *at).collect())
+            .collect();
         identity_policy.attribute_result(&mut usage_result, &lookup.attribution);
 
         usage_residue.extend(
@@ -7645,8 +7806,9 @@ fn run_with_system_floor(
                 }),
         );
 
-        for usage in &usage_result.system_prop_usages {
-            let uses: Vec<_> = usage.uses.iter().map(|(at, binding)| (*at, binding_of(binding))).collect();
+        for (usage, possible_uses) in usage_result.system_prop_usages.iter().zip(&possible_uses) {
+            let uses: Vec<_> =
+                usage.uses.iter().map(|(at, binding)| (*at, binding_of(binding), !possible_uses.contains(at))).collect();
             all_utility_inputs.extend(admitted_input(
                 &inputs.config,
                 path,
@@ -7682,7 +7844,8 @@ fn run_with_system_floor(
                     let Some(prop_config) = config.get(&usage.prop_name) else {
                         continue;
                     };
-                    let uses: Vec<_> = usage.uses.iter().map(|(at, _)| (*at, binding_of(&owner))).collect();
+                    let uses: Vec<_> =
+                        usage.uses.iter().map(|(at, tag)| (*at, binding_of(&owner), !possible(tag))).collect();
                     let input = admitted_input(
                         config,
                         path,
@@ -12713,7 +12876,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let by_binding: IdsByBinding =
             [("Root".to_string(), evaluated.iter().cloned().collect::<Vec<_>>())].into_iter().collect();
         for tag in ["amb.Root", "opn.Root", "abs.Root"] {
-            let ids = resolve_identity("app.ts", tag, &files, &inputs, &links, &evaluated, Some(&by_binding));
+            let ids = resolve_usage_identity("app.ts", tag, &files, &inputs, &links, &evaluated, &by_binding);
             assert!(ids.is_empty(), "{tag}: {ids:?}");
         }
     }

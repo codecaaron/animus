@@ -281,7 +281,17 @@ or imported, through aliases and named re-exports, from an analyzed source
 module, as is a named transform string such as `transform: 'size'`. It also fails on a value that
 names no token on a strict, populated scale (`animus.props.strict-token-miss`);
 that prop's styling is omitted in every mode, and the warning keeps the
-authored value. Each classified diagnostic carries
+authored value. That failure needs a render proven to reach an Animus
+component that takes the prop; a tag that matches one only by its name, such
+as another library's `Text` imported from a package the analysis does not
+read, reports the miss, or an unresolvable token alias, as the warning
+`animus.usage.possible-system-prop-miss`, which `diagnostics` can raise to
+an error. A tag imported from an installed package with no dependency path
+to Animus (neither it nor any package its dependencies and peers name
+depends on an `@animus-ui/*` package or a kit of the system, and it declares
+no `animus` export condition) matches no Animus component by name at all,
+unless the file hands it a component through `as` or `asChild`: its values
+get no utility class and no diagnostic. Each classified diagnostic carries
 a stable `animus.*` code, its file and binding, the reason and a supported
 rewrite. Genuine degradation stays a warning in every mode (per-property
 skips, name collisions, unsupported-value fallbacks, pruning, valid dynamic

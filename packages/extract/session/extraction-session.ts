@@ -31,6 +31,7 @@ import {
 } from '../pipeline/alias-agreement';
 import {
   bareSpecifierPackageName,
+  importedPackages,
   isPackageSpecifier,
   packageInstanceOf,
   realPath,
@@ -56,7 +57,6 @@ import {
   extractSystemFilePackages,
   nativeKitSourceRoot,
   nativePackageLocator,
-  importedKitDiagnostics,
   findPackageRoot,
   findSheetAssetSpecifiers,
   firstOwners,
@@ -108,6 +108,7 @@ import {
   DiagnosticFailure,
   SYSTEM_INSTANCE_MISMATCH,
 } from '../pipeline/manifest-diagnostics';
+import { foreignPackages } from '../pipeline/registry-packages';
 import { systemInstanceMismatches } from '../pipeline/system-instances';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
 import {
@@ -603,6 +604,8 @@ export class ExtractionSession {
 
   /** Absolute directory prefixes for external packages (loader allowlist). */
   externalPackageDirs: string[] = [];
+  /** The packages the app imports that have no dependency path to Animus. */
+  foreignPackages: string[] = [];
   /** Those whose package is linked rather than installed. */
   externalLinkedDirs: string[] = [];
   /** Those read from their package's compiled output. */
@@ -1972,15 +1975,17 @@ export class ExtractionSession {
       kitMembers,
       diagnostics: discoveryDiagnostics,
     } = await kitRead;
-    discoveryDiagnostics.push(
-      ...importedKitDiagnostics(
-        rawEntries,
-        this.engine(),
-        rootDir,
-        packageNames,
-        (entries) => this.corpus.facts(entries)
-      )
+    const imported = importedPackages(
+      rawEntries,
+      this.engine(),
+      rootDir,
+      packageNames,
+      (entries) => this.corpus.facts(entries)
     );
+    discoveryDiagnostics.push(...imported.diagnostics);
+    // A package that names no Animus package, through its dependencies and
+    // peers, cannot render an Animus component its tags are named like.
+    this.foreignPackages = foreignPackages(imported.located, imported.kits);
 
     // Raw content hashes of every walked external file, keyed by absolute
     // path — recorded before MDX preprocessing so the diff sees raw bytes.
@@ -2824,6 +2829,7 @@ export class ExtractionSession {
         ),
         unbundledComputedImports: this.host.unbundledComputedImports,
         openings: [...this.ingestionOpenings],
+        foreignPackages: this.foreignPackages,
         packageDirs: this.externalPackageDirs.map((dir) =>
           relative(this.rootDir!, dir)
         ),

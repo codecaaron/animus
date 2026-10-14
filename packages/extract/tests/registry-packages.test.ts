@@ -12,7 +12,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 
-import { registryPackages } from '../pipeline/registry-packages';
+import {
+  foreignPackages,
+  registryPackages,
+} from '../pipeline/registry-packages';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -78,4 +81,66 @@ test('a registry decision is read again once a manifest it read changes', () => 
   writeFileSync(manifest, swapped);
   utimesSync(manifest, tarballTime, tarballTime);
   expect(read()).toEqual([{ identity: 'reg', reaches: [] }]);
+});
+
+// Contract: a package is foreign to Animus unless it, or a package its
+// dependencies and peers name at any depth, is an Animus package; the answer
+// is read again once a manifest it read changes.
+test('a package is foreign to Animus until it or a package it names at any depth is an Animus package', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-depends-')));
+  roots.push(root);
+  interface Manifest {
+    name: string;
+    dependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+  }
+  const write = (path: string, value: Manifest) => {
+    mkdirSync(join(root, path, '..'), { recursive: true });
+    writeFileSync(join(root, path), JSON.stringify(value));
+  };
+  write('package.json', { name: 'app' });
+  write('node_modules/chakra/package.json', {
+    name: 'chakra',
+    dependencies: { emotion: '^11.0.0' },
+  });
+  write('node_modules/emotion/package.json', { name: 'emotion' });
+  write('node_modules/substrate/package.json', {
+    name: 'substrate',
+    peerDependencies: { '@animus-ui/system': '^0.1.0' },
+  });
+  write('node_modules/@animus-ui/properties/package.json', {
+    name: '@animus-ui/properties',
+  });
+  write('node_modules/wrapper/package.json', {
+    name: 'wrapper',
+    dependencies: { substrate: '^1.0.0' },
+  });
+  // A workspace package, linked into node_modules.
+  write('packages/ui-kit/package.json', {
+    name: 'ui-kit',
+    dependencies: { chakra: '^3.0.0' },
+  });
+  symlinkSync(
+    join(root, 'packages/ui-kit'),
+    join(root, 'node_modules/ui-kit'),
+    'dir'
+  );
+  const foreign = () =>
+    foreignPackages(
+      ['ui-kit', 'chakra', 'substrate', 'wrapper', '@animus-ui/properties'].map(
+        (name) => ({
+          name,
+          root: realpathSync(join(root, 'node_modules', name)),
+        })
+      ),
+      new Set()
+    );
+
+  expect(foreign()).toEqual(['chakra', 'ui-kit']);
+
+  write('node_modules/emotion/package.json', {
+    name: 'emotion',
+    dependencies: { substrate: '^1.0.0' },
+  });
+  expect(foreign()).toEqual([]);
 });

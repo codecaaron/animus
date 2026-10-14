@@ -330,7 +330,9 @@ fn select_package_entry_observed(
     }
 }
 
-fn split_specifier(specifier: &str) -> (&str, &str) {
+/// A bare specifier split into its package (`@scope/name` or `name`) and
+/// the subpath after it, with its leading `/`.
+pub fn split_specifier(specifier: &str) -> (&str, &str) {
     if specifier.starts_with('@') {
         if let Some(first_slash) = specifier.find('/') {
             if let Some(second_slash) = specifier[first_slash + 1..].find('/') {
