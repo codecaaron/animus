@@ -44,10 +44,17 @@
     "lightningcss": "^1.33.0"
   },
   "devDependencies": {
-    "@animus-ui/assertions": "workspace:*"
+    "@animus-ui/assertions": "workspace:*",
+    "@animus-ui/layergate": "workspace:*"
   },
   "peerDependencies": {
+    "@animus-ui/layergate": "workspace:*",
     "vite": ">=8 <9"
+  },
+  "peerDependenciesMeta": {
+    "@animus-ui/layergate": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22.12.0"

@@ -96,6 +96,35 @@ supplies either `cspHash` or a per-request nonce. Worked App Router and Pages
 Router examples live in the
 [`@animus-ui/next-plugin` README](https://github.com/codecaaron/animus/tree/main/packages/next-plugin#appearance-bootstrap-no-fouc-color-mode).
 
+## Third-party stylesheets
+
+A library's plain CSS outside any `@layer` beats every Animus layer. With
+`quarantine`, [`@animus-ui/layergate`](../layergate/README.md) loads it into
+`anm-vendor`, a layer below all of Animus's, so Animus's styles win and the
+library's still apply where Animus sets nothing:
+
+```sh
+bun add -D @animus-ui/layergate
+```
+
+```ts
+animusExtract({
+  system: './src/ds.ts',
+  quarantine: {
+    sheets: ['react-grid-layout/css/styles.css'], // delivered ahead of Animus's own CSS
+    dependencies: ['react-datepicker'], // CSS these packages' modules import
+    optOut: [], // exact files whose own rules stay unlayered
+  },
+});
+```
+
+`sheets` arrive at the head of Animus's own stylesheet, wherever it is
+imported, so no extra import is needed. Their fonts and images keep
+resolving, files outside the project root included.
+`!important` declarations and animations still win, and are reported. App
+CSS keeps its own rules unlayered; where it imports a vendor file, that file
+is layered. CSS Modules are left alone.
+
 ## MDX
 
 Animus reads each `.mdx` file as the JSX it renders: its imports, exports,

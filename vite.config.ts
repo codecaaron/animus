@@ -10,6 +10,7 @@ const typescriptTestTargets = [
   'packages/cli/tests',
   'packages/unplugin/tests',
   'packages/properties/__tests__',
+  'packages/layergate/__tests__',
   'packages/_assertions/__tests__',
   'packages/_parity/__tests__',
   'packages/oracle/__tests__',

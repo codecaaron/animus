@@ -1,0 +1,76 @@
+{
+  "name": "@animus-ui/layergate",
+  "version": "0.1.1",
+  "description": "Load third-party stylesheets into a cascade layer, per file, with their imports inlined and their URLs kept working",
+  "keywords": [
+    "cascade-layers",
+    "css",
+    "layer",
+    "vendor",
+    "vite",
+    "vite-plugin"
+  ],
+  "homepage": "https://github.com/codecaaron/animus/tree/main/packages/layergate#readme",
+  "license": "MIT",
+  "author": "codecaaron <airrobb@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codecaaron/animus",
+    "directory": "packages/layergate"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./vite": {
+      "import": {
+        "types": "./dist/vite.d.mts",
+        "default": "./dist/vite.mjs"
+      },
+      "require": {
+        "types": "./dist/vite.d.cts",
+        "default": "./dist/vite.cjs"
+      }
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun run build:ts",
+    "build:ts": "tsdown",
+    "compile": "bun check"
+  },
+  "dependencies": {
+    "magic-string": "^0.30.21"
+  },
+  "devDependencies": {
+    "vite": "8.3.4"
+  },
+  "peerDependencies": {
+    "vite": ">=8 <9"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

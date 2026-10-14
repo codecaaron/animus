@@ -6,6 +6,7 @@ export const PUBLISHABLE_PACKAGE_NAMES = [
   '@animus-ui/properties',
   '@animus-ui/system',
   '@animus-ui/extract',
+  '@animus-ui/layergate',
   '@animus-ui/vite-plugin',
   '@animus-ui/next-plugin',
   '@animus-ui/cli',

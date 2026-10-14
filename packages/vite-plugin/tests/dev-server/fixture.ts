@@ -169,7 +169,7 @@ export const roots = [Button, Sentinel];
 export interface DevFixture {
   /** Absolute, symlink-resolved project root handed to the dev server. */
   readonly root: string;
-  write(relativePath: string, source: string): void;
+  write(relativePath: string, source: string | Buffer): void;
   remove(relativePath: string): void;
   /** Write the sentinel component; the padding must be unique per barrier. */
   writeSentinel(padding: string): void;
@@ -186,7 +186,7 @@ export function createDevFixture(): DevFixture {
   // and the plugin compares the system path against `resolve(root, system)`.
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-dev-server-')));
 
-  const write = (relativePath: string, source: string): void => {
+  const write = (relativePath: string, source: string | Buffer): void => {
     const absolute = join(root, relativePath);
     mkdirSync(dirname(absolute), { recursive: true });
     writeFileSync(absolute, source);

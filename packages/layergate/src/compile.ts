@@ -1,0 +1,478 @@
+/**
+ * Compiles one owned stylesheet graph into one finished stylesheet: every
+ * local `@import` inlined at its position, under its media, supports and
+ * layer conditions, and each file's own text placed inside the quarantine
+ * layer, or outside it for a file opted out. Each file is decided on its
+ * own, before assembly, so a parent's decision never reaches a child's
+ * text. File text is kept as written; only relative URLs are rewritten, to
+ * resolve from the finished stylesheet's location.
+ */
+import MagicString, { Bundle } from 'magic-string';
+import { createHash } from 'node:crypto';
+import { dirname, join, relative, sep } from 'node:path';
+
+import { readSheet } from './sheet';
+
+import type { ImportStatement, Sheet } from './sheet';
+
+export type Severity = 'error' | 'warning' | 'info';
+
+export interface LayergateDiagnostic {
+  code: string;
+  severity: Severity;
+  message: string;
+  file?: string;
+  line?: number;
+  column?: number;
+}
+
+/** A file's text and structure, which a host may keep between compiles
+ *  until the file changes. */
+export interface ParsedSheet {
+  text: string;
+  sheet: Sheet;
+}
+
+export interface CompileOptions {
+  /** The quarantine layer each owned file's own text goes into. */
+  layer: string;
+  /** The full layer order the finished stylesheet declares first. */
+  order: readonly string[];
+  /** The host's CSS resolver: the absolute file `specifier` reaches from
+   *  `importer`, or null. */
+  resolve(
+    specifier: string,
+    importer: string
+  ): Promise<string | null> | string | null;
+  read(file: string): Promise<string> | string;
+  /** Whether `file`, inside an owned graph, has its own text in the
+   *  quarantine layer; false for a file opted out, which still loads,
+   *  outside it. Default: every owned file is. */
+  quarantined?(file: string): boolean;
+  /** Whether `file` starts an owned graph; every file it reaches is owned
+   *  too. A file outside every owned graph keeps its own text unlayered.
+   *  Default: every file is owned. */
+  owns?(file: string): boolean;
+  /** The URL text that reaches the absolute file `target` from the finished
+   *  stylesheet. Default: relative to the first root's directory, and a
+   *  file in that directory keeps its URLs as written. */
+  url?(target: string): string;
+  /** The directory generated names are relative to, so they are the same
+   *  on every machine: the project root. Default: the first root's. */
+  base?: string;
+  /** Whether to compose a source map. Default true. */
+  map?: boolean;
+  /** Parsed files by path, read and filled by the compile. */
+  cache?: Map<string, ParsedSheet>;
+}
+
+export interface CompiledUnit {
+  css: string;
+  /** Null when `map` is false. */
+  map: ReturnType<Bundle['generateMap']> | null;
+  /** Every file read, the roots first. */
+  files: string[];
+  /** Whether any file's own text went into the quarantine layer. */
+  layered: boolean;
+  diagnostics: LayergateDiagnostic[];
+}
+
+/** A condition an import puts its stylesheet under. */
+interface Frame {
+  kind: 'media' | 'supports' | 'layer';
+  text: string;
+}
+
+const open = (frame: Frame) =>
+  frame.kind === 'media'
+    ? `@media ${frame.text} {\n`
+    : frame.kind === 'supports'
+      ? `@supports (${frame.text}) {\n`
+      : `@layer ${frame.text} {\n`;
+
+/** A URL the finished stylesheet leaves to the browser. */
+const isRemote = (url: string) => /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(url);
+
+/** A URL that resolves the same from any stylesheet location. */
+const isLocationFree = (url: string) =>
+  url === '' || /^(?:[a-z][a-z0-9+.-]*:|\/|#|%23)/i.test(url);
+
+const quoted = (url: string) =>
+  `"${url.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\a ')}"`;
+
+/** `@import "x"` names a stylesheet relative to its own; a bare name that
+ *  is no relative file is the package a bundler resolves. */
+function candidates(url: string): string[] {
+  if (url.startsWith('~')) return [url.slice(1)];
+  if (url.startsWith('.') || url.startsWith('/')) return [url];
+  return [`./${url}`, url];
+}
+
+/** Line and column (1-based) of each offset in `text`. */
+function locator(text: string) {
+  const starts = [0];
+  for (let at = 0; at < text.length; at++)
+    if (text[at] === '\n') starts.push(at + 1);
+  return (offset: number) => {
+    let low = 0;
+    let high = starts.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if (starts[mid]! <= offset) low = mid;
+      else high = mid - 1;
+    }
+    return { line: low + 1, column: offset - starts[low]! + 1 };
+  };
+}
+
+/** A URL's path and its `?query#fragment`. */
+function splitSuffix(url: string): [string, string] {
+  const at = url.search(/[?#]/);
+  return at === -1 ? [url, ''] : [url.slice(0, at), url.slice(at)];
+}
+
+/** The frames an import adds, media, then supports, then layer; an
+ *  anonymous layer as `anonymous`. */
+function importFrames(
+  statement: ImportStatement,
+  anonymous: () => string
+): Frame[] {
+  const frames: Frame[] = [];
+  if (statement.media) frames.push({ kind: 'media', text: statement.media });
+  if (statement.supports !== null)
+    frames.push({ kind: 'supports', text: statement.supports });
+  if (statement.layer.kind === 'named')
+    frames.push({ kind: 'layer', text: statement.layer.name });
+  else if (statement.layer.kind === 'anonymous')
+    frames.push({ kind: 'layer', text: anonymous() });
+  return frames;
+}
+
+/** A remote `@import` hoisted to the top of the finished stylesheet: its
+ *  layer is every layer on its way, its supports every supports, and its
+ *  media the innermost media. */
+function remoteImport(url: string, frames: Frame[]): string {
+  const of = (kind: Frame['kind']) =>
+    frames.filter((frame) => frame.kind === kind).map((frame) => frame.text);
+  const [layers, supports, media] = [of('layer'), of('supports'), of('media')];
+  return [
+    `@import url(${quoted(url)})`,
+    layers.length > 0 ? ` layer(${layers.join('.')})` : '',
+    supports.length > 0
+      ? ` supports(${supports.map((text) => `(${text})`).join(' and ')})`
+      : '',
+    media.length > 0 ? ` ${combinedMedia(media)}` : '',
+    ';',
+  ].join('');
+}
+
+/** Media conditions on the way to an import, as one: joined when each is a
+ *  bare condition (`(min-width: 1px)`), otherwise the innermost. */
+function combinedMedia(media: string[]): string {
+  return media.every((text) => text.startsWith('(') && !text.includes(','))
+    ? media.join(' and ')
+    : media.at(-1)!;
+}
+
+/** The layer names `frames` nest, outermost first. */
+function layerPath(frames: Frame[]): string[] {
+  return frames
+    .filter((frame) => frame.kind === 'layer')
+    .flatMap((frame) => frame.text.split('.'));
+}
+
+/** Compiles `roots`, in order, into one finished stylesheet. */
+export async function compileUnit(
+  roots: readonly string[],
+  options: CompileOptions
+): Promise<CompiledUnit> {
+  const deliveryDir = dirname(roots[0]!);
+  /** The URL text reaching `target`; by default relative to the first
+   *  root's directory, so a file there keeps its URLs as written. */
+  const url =
+    options.url ??
+    ((target: string) => relative(deliveryDir, target).split(sep).join('/'));
+  /** Files whose own text went into the layer, and owned files opted out. */
+  const layered = new Set<string>();
+  const optedOut = new Set<string>();
+  const bundle = new Bundle({ separator: '' });
+  const diagnostics: LayergateDiagnostic[] = [];
+  const loaded = new Map<
+    string,
+    | (ParsedSheet & {
+        source: MagicString;
+        locate: ReturnType<typeof locator>;
+      })
+    | null
+  >();
+  const remote: string[] = [];
+  /** Every layer path, in the order the original cascade first creates it. */
+  const created = new Set<string>();
+  const create = (path: string[]) => {
+    for (let depth = 1; depth <= path.length; depth++) {
+      const name = path.slice(0, depth).join('.');
+      created.add(name);
+    }
+  };
+
+  const report = (
+    code: string,
+    severity: Severity,
+    message: string,
+    file: string,
+    at: number
+  ) => {
+    diagnostics.push({
+      code,
+      severity,
+      message,
+      file,
+      ...loaded.get(file)!.locate(at),
+    });
+  };
+
+  /** A stable private name for the anonymous layer an import occurrence
+   *  creates: from the unit and the chain of imports that reaches it from
+   *  the root, so each occurrence, of the same file too, gets its own, and
+   *  the same on every machine. */
+  const anonymousName = (occurrence: string) => () =>
+    `layergate-anonymous-${createHash('sha256').update(occurrence).digest('hex').slice(0, 10)}`;
+
+  /** What a file holds that the layer cannot hold back, or that layergate
+   *  cannot place, reported once per file. */
+  const reportEffects = (file: string, sheet: Sheet) => {
+    const effect = (offsets: number[], code: string, what: string) => {
+      if (offsets.length === 0) return;
+      const them = offsets.length === 1 ? 'it' : 'them';
+      report(
+        code,
+        'warning',
+        `${offsets.length} ${what} kept: the quarantine layer does not hold ${them} back`,
+        file,
+        offsets[0]!
+      );
+    };
+    effect(sheet.important, 'layergate.important', '!important declaration(s)');
+    effect(sheet.keyframes, 'layergate.animation', '@keyframes rule(s)');
+    effect(sheet.animations, 'layergate.animation', 'animation declaration(s)');
+  };
+
+  /** What layergate leaves as written or cannot place, reported once per
+   *  file; `placed` says the file's text sits inside a block, where
+   *  `@namespace` cannot. */
+  const reportFile = (file: string, sheet: Sheet, placed: boolean) => {
+    for (const at of sheet.ignoredImports) {
+      report(
+        'layergate.ignored-import',
+        'warning',
+        '@import after other rules is ignored by browsers, and layergate leaves it as written',
+        file,
+        at
+      );
+    }
+    if (placed && sheet.namespaces.length > 0) {
+      report(
+        'layergate.namespace',
+        'error',
+        '@namespace applies to a whole stylesheet, which layergate cannot place yet',
+        file,
+        sheet.namespaces[0]!
+      );
+    }
+  };
+
+  const load = async (file: string) => {
+    if (loaded.has(file)) return loaded.get(file)!;
+    let entry = null;
+    try {
+      let parsed = options.cache?.get(file);
+      if (!parsed) {
+        const text = String(await options.read(file));
+        parsed = { text, sheet: readSheet(text) };
+        options.cache?.set(file, parsed);
+      }
+      const source = new MagicString(parsed.text);
+      // With the default URLs, a file beside the finished stylesheet keeps
+      // every URL as written.
+      const kept = !options.url && dirname(file) === deliveryDir;
+      for (const reference of kept ? [] : parsed.sheet.urls) {
+        if (isLocationFree(reference.url) || isRemote(reference.url)) continue;
+        const [path, suffix] = splitSuffix(reference.url);
+        const rebased = url(join(dirname(file), path)) + suffix;
+        if (rebased === reference.url) continue;
+        source.overwrite(
+          reference.start,
+          reference.end,
+          reference.kind === 'token'
+            ? `url(${quoted(rebased)})`
+            : quoted(rebased)
+        );
+      }
+      for (const [from, to] of parsed.sheet.removed) source.remove(from, to);
+      entry = { ...parsed, source, locate: locator(parsed.text) };
+    } catch (error) {
+      diagnostics.push({
+        code: 'layergate.unreadable',
+        severity: 'error',
+        message: `cannot read ${file}: ${error instanceof Error ? error.message : String(error)}`,
+        file,
+      });
+    }
+    loaded.set(file, entry);
+    return entry;
+  };
+
+  /** The file's text from `from` to `to` inside `frames`, unless it holds
+   *  only whitespace. */
+  const emit = (file: string, frames: Frame[], from: number, to: number) => {
+    const entry = loaded.get(file)!;
+    // Its own text: what the removed leading statements leave.
+    let content = false;
+    let at = from;
+    for (const [start, end] of entry.sheet.removed) {
+      if (end <= at || start >= to) continue;
+      content ||= /\S/.test(entry.text.slice(at, start));
+      at = end;
+    }
+    if (!content && !/\S/.test(entry.text.slice(at, to))) return;
+    if (frames.length > 0)
+      bundle.addSource({ content: new MagicString(frames.map(open).join('')) });
+    bundle.addSource({ filename: file, content: entry.source.snip(from, to) });
+    bundle.addSource({
+      content: new MagicString(`\n${'}\n'.repeat(frames.length)}`),
+    });
+  };
+
+  /** Emits `file` as one occurrence: `frames` are the conditions its import
+   *  chain puts it under, `stack` the files on that chain, `occurrence` the
+   *  chain's import indexes. A file imported twice is emitted at each
+   *  import, as a browser applies it at each. */
+  const visit = async (
+    file: string,
+    frames: Frame[],
+    stack: string[],
+    occurrence: string,
+    insideOwned: boolean
+  ) => {
+    const first = !loaded.has(file);
+    const entry = await load(file);
+    if (!entry) return;
+    const owned = insideOwned || (options.owns?.(file) ?? true);
+    const quarantined = owned && (options.quarantined?.(file) ?? true);
+    if (owned && !quarantined) optedOut.add(file);
+    if (first) reportFile(file, entry.sheet, quarantined || stack.length > 1);
+    if (quarantined && !layered.has(file)) {
+      layered.add(file);
+      reportEffects(file, entry.sheet);
+    }
+    const own: Frame[] = quarantined
+      ? [{ kind: 'layer', text: options.layer }, ...frames]
+      : frames;
+    const ownPath = layerPath(own);
+    const createLayers = (from: number, to: number) => {
+      for (const { at, names } of entry.sheet.layers) {
+        if (at >= from && at < to)
+          for (const name of names) create([...ownPath, ...name.split('.')]);
+      }
+    };
+    create(ownPath);
+    // The file's own text and its imports' stylesheets in source order: a
+    // layer statement between two imports creates its layer between them.
+    let cursor = 0;
+    for (const [index, statement] of entry.sheet.imports.entries()) {
+      createLayers(cursor, statement.start);
+      emit(file, own, cursor, statement.start);
+      cursor = statement.end;
+      const added = importFrames(
+        statement,
+        anonymousName(`${occurrence}/${index}`)
+      );
+      if (isRemote(statement.url)) {
+        const media = [...own, ...added].filter(
+          (frame) => frame.kind === 'media'
+        ).length;
+        const kept =
+          media > 1
+            ? `; its ${media} media conditions are joined where each is a bare condition, else only the innermost is kept`
+            : '';
+        report(
+          'layergate.remote',
+          'warning',
+          `@import "${statement.url}" stays remote, so its contents are not inspected${kept}`,
+          file,
+          statement.start
+        );
+        create(layerPath([...own, ...added]));
+        remote.push(remoteImport(statement.url, [...own, ...added]));
+        continue;
+      }
+      let child: string | null = null;
+      for (const candidate of candidates(statement.url)) {
+        child = await options.resolve(candidate, file);
+        if (child) break;
+      }
+      if (!child) {
+        report(
+          'layergate.unresolved',
+          'error',
+          `cannot resolve @import "${statement.url}"`,
+          file,
+          statement.start
+        );
+      } else if (stack.includes(child)) {
+        report(
+          'layergate.cycle',
+          'warning',
+          `@import "${statement.url}" imports a stylesheet already being imported; skipped`,
+          file,
+          statement.start
+        );
+      } else {
+        await visit(
+          child,
+          [...frames, ...added],
+          [...stack, child],
+          `${occurrence}/${index}`,
+          owned
+        );
+      }
+    }
+    createLayers(cursor, entry.text.length);
+    emit(file, own, cursor, entry.text.length);
+  };
+
+  for (const root of roots) {
+    const name = relative(options.base ?? deliveryDir, root)
+      .split(sep)
+      .join('/');
+    await visit(root, [], [root], name, false);
+  }
+
+  bundle.prepend(
+    [
+      `@layer ${options.order.join(', ')};\n`,
+      // Hoisted imports create their layers first; the original order is
+      // declared ahead of them.
+      ...(remote.length > 0 ? [`@layer ${[...created].join(', ')};\n`] : []),
+      ...remote.map((line) => `${line}\n`),
+    ].join('')
+  );
+  for (const file of optedOut) {
+    diagnostics.push({
+      code: 'layergate.opt-out',
+      severity: 'info',
+      message: `opted out: its own rules stay outside @layer ${options.layer}`,
+      file,
+    });
+  }
+  return {
+    css: bundle.toString(),
+    map:
+      options.map === false
+        ? null
+        : bundle.generateMap({ hires: 'boundary', includeContent: true }),
+    files: [...loaded.keys()],
+    layered: layered.size > 0,
+    diagnostics,
+  };
+}
