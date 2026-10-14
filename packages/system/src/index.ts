@@ -106,6 +106,7 @@ export { percentageOrAbsolute, size } from './transforms/size';
 export type {
   AnimusClassProps,
   AnimusComponent,
+  AnimusProps,
   AnimusWrappedComponent,
   AnyBrandedComponent,
   ComposedFamily,
@@ -140,6 +141,7 @@ export type {
   ThemedVariantOptions,
   ThemedScaleValue,
   VariantConfig,
+  VariantKeyOf,
 } from './types/config';
 export type {
   AbstractProps,

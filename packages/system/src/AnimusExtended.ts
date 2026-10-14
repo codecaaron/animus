@@ -21,11 +21,13 @@ import {
   ThemedVariantOptions,
   ThemedCSSProps,
   VariantConfig,
+  VariantKeyOf,
 } from './types/config';
 import { AbstractProps } from './types/props';
 import { admittedPropNames } from './utils/admittedPropNames';
 import { deepMerge } from './utils/deepMerge';
 import { assertDisjointStylingNames } from './utils/stylingNameCollisions';
+import { withDefaultKey } from './utils/variantDefault';
 
 import type { ClassResolverConfig } from './runtime/resolveClasses';
 import type {
@@ -447,9 +449,9 @@ class AnimusExtendedWithVariants<
     PropKey extends Readonly<string> = 'variant',
   >(options: {
     prop?: UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>;
-    defaultVariant?:
-      | Extract<keyof Props, string>
-      | InheritedOptions<Variants, PropKey>;
+    defaultVariant?: VariantKeyOf<
+      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>
+    >;
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
@@ -474,7 +476,9 @@ class AnimusExtendedWithVariants<
       this.propRegistry,
       this.groupRegistry,
       this.baseStyles,
-      deepMerge(this.variants as any, { [prop]: options }) as NextVariants,
+      deepMerge(this.variants as any, {
+        [prop]: withDefaultKey(options),
+      }) as NextVariants,
       this.statesConfig,
       this.activeGroups,
       this.custom,
@@ -507,9 +511,9 @@ class AnimusExtendedWithBase<
     PropKey extends Readonly<string> = 'variant',
   >(options: {
     prop?: UnadmittedName<PropKey, AdmittedNames<GroupRegistry, ActiveGroups>>;
-    defaultVariant?:
-      | Extract<keyof Props, string>
-      | InheritedOptions<Variants, PropKey>;
+    defaultVariant?: VariantKeyOf<
+      Extract<keyof Props, string> | InheritedOptions<Variants, PropKey>
+    >;
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
@@ -534,7 +538,9 @@ class AnimusExtendedWithBase<
       this.propRegistry,
       this.groupRegistry,
       this.baseStyles,
-      deepMerge(this.variants as any, { [prop]: options }) as NextVariants,
+      deepMerge(this.variants as any, {
+        [prop]: withDefaultKey(options),
+      }) as NextVariants,
       this.statesConfig,
       this.activeGroups,
       this.custom,

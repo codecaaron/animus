@@ -450,7 +450,9 @@ function applyCompoundClasses(
   for (const compound of config.compounds) {
     let match = true;
     for (const [prop, expected] of Object.entries(compound.conditions)) {
-      const current = props[prop] ?? config.variants?.[prop]?.default;
+      // A variant's value matches its key, a boolean's `true` as `'true'`.
+      const value = props[prop] ?? config.variants?.[prop]?.default;
+      const current = value == null ? value : String(value);
       if (
         Array.isArray(expected)
           ? !expected.includes(current)

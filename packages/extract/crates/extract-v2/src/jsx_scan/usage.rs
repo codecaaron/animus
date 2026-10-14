@@ -497,17 +497,19 @@ pub(crate) fn create_element_literals(
 }
 
 /// Classify a present JSX attribute value for variant tracking: a string
-/// literal yields its string, every other form yields `"__dynamic__"`.
+/// literal yields its string, a boolean the key it names (`'true'` or
+/// `'false'`), every other form `"__dynamic__"`.
 pub(crate) fn classify_jsx_attribute_as_variant_value(value: &Option<JSXAttributeValue>) -> String {
     match value {
-        // `<Button variant />` carries no string option to match.
-        None => "__dynamic__".to_string(),
+        // `<Column fit />` writes `true`.
+        None => "true".to_string(),
 
         Some(JSXAttributeValue::StringLiteral(lit)) => lit.value.to_string(),
 
         Some(JSXAttributeValue::ExpressionContainer(container)) => {
             match &container.expression {
                 JSXExpression::StringLiteral(lit) => lit.value.to_string(),
+                JSXExpression::BooleanLiteral(lit) => lit.value.to_string(),
                 _ => "__dynamic__".to_string(),
             }
         }

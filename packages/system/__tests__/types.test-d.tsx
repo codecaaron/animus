@@ -1866,3 +1866,132 @@ function EmittedScaleNames() {
 }
 
 void EmittedScaleNames;
+
+// ---------------------------------------------------------------------------
+// Contract: addScale takes an interface as it takes a type alias, and
+// still rejects a value no scale holds.
+// ---------------------------------------------------------------------------
+
+function InterfaceScales() {
+  interface Elements {
+    headerHeight: string;
+    railWidth: number;
+  }
+  interface Tones {
+    primary: { _: string; hover: string };
+  }
+  interface NotAScale {
+    headerHeight: boolean;
+  }
+  createTheme().addScale({ name: 'elements', values: {} as Elements });
+  createTheme().addScale({ name: 'tones', values: {} as Tones });
+  // @ts-expect-error — a boolean is no scale value
+  createTheme().addScale({ name: 'bad', values: {} as NotAScale });
+  // @ts-expect-error — nor a nested one
+  createTheme().addScale({ name: 'bad', values: {} as { a: { _: boolean } } });
+}
+
+void InterfaceScales;
+
+// ---------------------------------------------------------------------------
+// Contract: a variant keyed `'true'`/`'false'` takes booleans, and so does
+// its `defaultVariant`; any other variant takes none.
+// ---------------------------------------------------------------------------
+
+const FitColumn = ds
+  .styles({})
+  .variant({
+    prop: 'fit',
+    defaultVariant: true,
+    variants: { true: { width: 'fit-content' }, false: {} },
+  })
+  .asElement('div');
+const SizedBox = ds
+  .styles({})
+  .variant({ prop: 'size', variants: { small: {}, large: {} } })
+  .asElement('div');
+
+function BooleanVariants() {
+  void (<FitColumn fit />);
+  void (<FitColumn fit={false} />);
+  void (<FitColumn fit="true" />);
+  // @ts-expect-error — a variant without boolean keys takes no boolean
+  void (<SizedBox size />);
+  // @ts-expect-error — nor other strings on a boolean variant
+  void (<FitColumn fit="yes" />);
+  ds.styles({}).variant({
+    prop: 'size',
+    // @ts-expect-error — `true` needs a `'true'` key
+    defaultVariant: true,
+    variants: { small: {} },
+  });
+}
+
+void BooleanVariants;
+
+// ---------------------------------------------------------------------------
+// Contract: a strict theme scale takes a calc() that references one of the
+// theme's scales, and nothing else it did not take before.
+// ---------------------------------------------------------------------------
+
+const CalcBox = ds
+  .styles({ mt: 'calc({space.4} * -1)', mb: 'calc(100% - {fontSizes.16})' })
+  .system({ space: true })
+  .asElement('div');
+
+function CalcTokenValues() {
+  void (<CalcBox mt="calc({space.8} * -1)" />);
+  void (<CalcBox p={{ _: 4, md: 'calc({space.16} + 2px)' }} />);
+  // @ts-expect-error — a calc() without a token reference
+  ds.styles({ mt: 'calc(1px * 2)' });
+  // @ts-expect-error — a scale the theme does not have
+  void (<CalcBox mt="calc({spaces.4} * -1)" />);
+  // @ts-expect-error — a reference outside calc()
+  void (<CalcBox mt="{space.4} * 2" />);
+}
+
+void CalcTokenValues;
+
+// ---------------------------------------------------------------------------
+// Contract: AnimusProps<typeof X> is what a consumer passes X, without the
+// selector-alias props; X keeps its own type, aliases and `.extend()`.
+// ---------------------------------------------------------------------------
+
+import type { AnimusProps } from '../src';
+
+const PublicText = ds
+  .styles({})
+  .variant({ prop: 'tone', variants: { muted: {}, loud: {} } })
+  .states({ strong: { fontWeight: 700 } })
+  .system({ space: true })
+  .asElement('p');
+type PublicTextProps = AnimusProps<typeof PublicText>;
+const ActionTarget = forwardRef<HTMLButtonElement, { label: string }>(
+  ({ label }, ref) => <button ref={ref}>{label}</button>
+);
+const PublicAction = ds
+  .styles({})
+  .system({ space: true })
+  .asComponent(ActionTarget);
+type PublicActionProps = AnimusProps<typeof PublicAction>;
+const WrappedText = (props: PublicTextProps) => <PublicText {...props} />;
+
+function PublicProps() {
+  const text: PublicTextProps = {
+    mt: 4,
+    tone: 'muted',
+    strong: true,
+    children: 'x',
+  };
+  const action: PublicActionProps = { label: 'go', p: 8 };
+  void [text, action, WrappedText, PublicText.extend()];
+  void (<PublicText _hover={{ mt: 4 }} />);
+  // @ts-expect-error — a selector alias is no public prop
+  const _alias: PublicTextProps = { _hover: { mt: 4 } };
+  // @ts-expect-error — off-scale
+  const _offScale: PublicTextProps = { mt: 17 };
+  // @ts-expect-error — the target's own required prop
+  const _missing: PublicActionProps = { p: 8 };
+}
+
+void PublicProps;

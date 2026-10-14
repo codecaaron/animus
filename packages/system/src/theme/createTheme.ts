@@ -1094,10 +1094,14 @@ export class ThemeBuilder<
 
   addScale<
     Key extends string,
-    Values extends Record<
-      string | number,
-      string | number | Record<string, string | number>
-    >,
+    // Keyed by its own keys rather than an index signature, so an
+    // interface, which has no implicit one, is a scale as a type alias is.
+    Values extends {
+      [K in keyof Values]:
+        | string
+        | number
+        | Record<keyof Values[K], string | number>;
+    },
     Emit extends boolean = false,
     Replace extends boolean = false,
     NewScale extends LiteralPaths<Values, '.'> = LiteralPaths<Values, '.'>,

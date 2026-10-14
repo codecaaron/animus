@@ -601,18 +601,17 @@ pub fn parse_variant_arg(
                         all_skips.push(skip("prop", expression_kind(&p.value), "variant prop name (non-static)", p.value.span()));
                     }
                 }
-                "defaultVariant" => {
-                    if let Expression::StringLiteral(lit) = &p.value {
-                        default_variant = Some(lit.value.to_string());
-                    } else {
-                        all_skips.push(skip(
-                            "defaultVariant",
-                            expression_kind(&p.value),
-                            "default variant name (non-static)",
-                            p.value.span(),
-                        ));
-                    }
-                }
+                "defaultVariant" => match &p.value {
+                    Expression::StringLiteral(lit) => default_variant = Some(lit.value.to_string()),
+                    // A boolean variant's default names its key.
+                    Expression::BooleanLiteral(lit) => default_variant = Some(lit.value.to_string()),
+                    other => all_skips.push(skip(
+                        "defaultVariant",
+                        expression_kind(other),
+                        "default variant name (non-static)",
+                        other.span(),
+                    )),
+                },
                 "base" => {
                     if let Expression::ObjectExpression(obj) = &p.value {
                         let (val, skips, _captures) =
@@ -1506,6 +1505,17 @@ mod tests {
             "{}",
             skips[0].reason
         );
+    }
+
+    // Contract: a boolean `defaultVariant` names its key, as the runtime and
+    // the variant's `'true'`/`'false'` keys do.
+    #[test]
+    fn boolean_default_variant_names_its_key() {
+        let (cfg, skips) = parse_variant("{ prop: 'fit', defaultVariant: true, variants: { true: {}, false: {} } }");
+        assert_eq!(cfg.default_variant.as_deref(), Some("true"));
+        assert!(skips.is_empty(), "{skips:?}");
+        let (cfg, _) = parse_variant("{ prop: 'fit', defaultVariant: false, variants: { true: {}, false: {} } }");
+        assert_eq!(cfg.default_variant.as_deref(), Some("false"));
     }
 
     #[test]

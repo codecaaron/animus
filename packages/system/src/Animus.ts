@@ -22,11 +22,13 @@ import {
   ThemedVariantOptions,
   ThemedCSSProps,
   VariantConfig,
+  VariantKeyOf,
 } from './types/config';
 import { AbstractProps } from './types/props';
 import { admittedPropNames } from './utils/admittedPropNames';
 import { deepMerge } from './utils/deepMerge';
 import { assertDisjointStylingNames } from './utils/stylingNameCollisions';
+import { withDefaultKey } from './utils/variantDefault';
 
 import type { ClassResolverConfig } from './runtime/resolveClasses';
 import type {
@@ -408,7 +410,7 @@ class AnimusWithVariants<
     PropKey extends Readonly<string> = 'variant',
   >(options: {
     prop?: PropKey;
-    defaultVariant?: Extract<keyof Props, string>;
+    defaultVariant?: VariantKeyOf<Extract<keyof Props, string>>;
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
@@ -431,7 +433,9 @@ class AnimusWithVariants<
       this.propRegistry,
       this.groupRegistry,
       this.baseStyles,
-      deepMerge(this.variants as any, { [prop]: options }) as NextVariants,
+      deepMerge(this.variants as any, {
+        [prop]: withDefaultKey(options),
+      }) as NextVariants,
       this.compounds
     );
   }
@@ -453,7 +457,7 @@ class AnimusWithBase<
     PropKey extends Readonly<string> = 'variant',
   >(options: {
     prop?: PropKey;
-    defaultVariant?: Extract<keyof Props, string>;
+    defaultVariant?: VariantKeyOf<Extract<keyof Props, string>>;
     base?: ThemedCSSInputProps<Base, PropRegistry>;
     variants: ThemedCSSInputPropMap<Props, PropRegistry>;
   }) {
@@ -476,7 +480,9 @@ class AnimusWithBase<
       this.propRegistry,
       this.groupRegistry,
       this.baseStyles,
-      deepMerge(this.variants as any, { [prop]: options }) as NextVariants,
+      deepMerge(this.variants as any, {
+        [prop]: withDefaultKey(options),
+      }) as NextVariants,
       this.compounds
     );
   }

@@ -17,7 +17,7 @@ import {
 } from './props';
 import { ArrayScale, MapScale } from './scales';
 import { CSSObject } from './shared';
-import { BaseTheme, Theme, TokenScales } from './theme';
+import { BaseTheme, ScaleTokenRef, Theme, TokenScales } from './theme';
 import { Arg } from './utils';
 
 export interface BaseProperty {
@@ -165,6 +165,7 @@ export type ScaleValue<
 > = Config['scale'] extends keyof TokenScales<T>
   ?
       | keyof TokenScales<T>[Config['scale']]
+      | `calc(${ScaleTokenRef<keyof TokenScales<T> & string>})`
       | NegativeOf<Config, keyof TokenScales<T>[Config['scale']]>
       | PropertyValues<
           Config,
@@ -250,10 +251,20 @@ export type ContainerUnitValue =
   | `${number}cqmin`
   | `${number}cqmax`;
 
+/**
+ * A `calc()` that references at least one token of the theme's scales,
+ * which a strict scale admits as it admits the tokens themselves. The key is
+ * left open, so the cost grows with the number of scales, not tokens; the
+ * extractor resolves each reference and reports one that names no token.
+ */
+type CalcTokenValue =
+  `calc(${ScaleTokenRef<keyof TokenScales<Theme> & string>})`;
+
 export type ThemedScaleValue<Config extends SystemProp> =
   Config['scale'] extends keyof TokenScales<Theme>
     ?
         | keyof TokenScales<Theme>[Config['scale']]
+        | CalcTokenValue
         | NegativeOf<Config, keyof TokenScales<Theme>[Config['scale']]>
         | PropertyValues<
             Config,
@@ -408,6 +419,14 @@ export type ThemedCSSInputPropMap<
 > = {
   [K in keyof Props]?: ThemedCSSInputProps<Props[K], Config>;
 };
+
+/**
+ * A variant's option keys, with `true` and `false` for the keys `'true'` and
+ * `'false'`: a boolean variant takes its boolean.
+ */
+export type VariantKeyOf<K> =
+  | K
+  | (K extends `${infer B extends boolean}` ? B : never);
 
 /**
  * A variant's options as a builder stores them: its `prop` and

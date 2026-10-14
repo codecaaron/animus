@@ -15,6 +15,7 @@ import type {
   SystemProps,
   ThemedPropValue,
   VariantConfig,
+  VariantKeyOf,
 } from './config';
 import type { AbstractProps } from './props';
 
@@ -96,7 +97,7 @@ type VariantProps<V> = {
   [K in keyof StripIndex<V>]?: StripIndex<V>[K] extends {
     variants: infer Options;
   }
-    ? keyof Options | undefined
+    ? VariantKeyOf<keyof Options> | undefined
     : string | undefined;
 };
 
@@ -290,6 +291,17 @@ export type AnimusWrappedComponent<
     readonly [VariantConfigBrand]: V;
     readonly variantDefaults: Readonly<Record<string, string>>;
   };
+
+/**
+ * The props a consumer passes to the Animus component `C` (an `asElement()`
+ * or `asComponent()` result), without the selector-alias props (`_hover`
+ * and the like): a library's public props type, so the component itself can
+ * keep its inferred type, `.extend()` included, as its export.
+ */
+export type AnimusProps<C extends AnyBrandedComponent> = DistributiveOmit<
+  C[typeof ConsumerProps],
+  keyof SelectorAliasProps<unknown>
+>;
 
 type StripStringIndex<T> = {
   [K in keyof T as string extends K ? never : K]: T[K];
