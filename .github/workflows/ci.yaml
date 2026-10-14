@@ -727,11 +727,26 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           NPM_TAG="${{ steps.version.outputs.tag }}"
-          npm publish "$RELEASE_BUNDLE/animus-ui-extract-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
-          npm publish "$RELEASE_BUNDLE/animus-ui-properties-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
-          npm publish "$RELEASE_BUNDLE/animus-ui-system-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
-          npm publish "$RELEASE_BUNDLE/animus-ui-layergate-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
-          npm publish "$RELEASE_BUNDLE/animus-ui-vite-plugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
-          npm publish "$RELEASE_BUNDLE/animus-ui-next-plugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
-          npm publish "$RELEASE_BUNDLE/animus-ui-cli-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
-          npm publish "$RELEASE_BUNDLE/animus-ui-unplugin-${VERSION}.tgz" --access public --tag "$NPM_TAG" --ignore-scripts
+          # Re-runnable: a version npm already holds with these exact bytes is
+          # skipped, and a publish that errors after its upload landed counts
+          # once the registry shows the same bytes. Different bytes fail.
+          published_shasum() { npm view "@animus-ui/$1@${VERSION}" dist.shasum 2>/dev/null || true; }
+          for pkg in extract properties system layergate vite-plugin next-plugin cli unplugin; do
+            tarball="$RELEASE_BUNDLE/animus-ui-${pkg}-${VERSION}.tgz"
+            local_shasum="$(sha1sum "$tarball" | cut -d' ' -f1)"
+            remote="$(published_shasum "$pkg")"
+            if [ -n "$remote" ]; then
+              [ "$remote" = "$local_shasum" ] || { echo "ERROR: @animus-ui/$pkg@$VERSION is on npm with different bytes ($remote, bundle $local_shasum)" >&2; exit 1; }
+              echo "= @animus-ui/$pkg@$VERSION already published with these bytes"
+              continue
+            fi
+            if ! npm publish "$tarball" --access public --tag "$NPM_TAG" --ignore-scripts; then
+              for attempt in 1 2 3 4 5 6 7 8 9 10; do
+                sleep 30
+                remote="$(published_shasum "$pkg")"
+                [ -n "$remote" ] && break
+              done
+              [ "$remote" = "$local_shasum" ] || { echo "ERROR: publishing @animus-ui/$pkg@$VERSION failed" >&2; exit 1; }
+              echo "= @animus-ui/$pkg@$VERSION landed despite the publish error"
+            fi
+          done
