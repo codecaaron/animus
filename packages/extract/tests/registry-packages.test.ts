@@ -12,10 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 
-import {
-  foreignPackages,
-  registryPackages,
-} from '../pipeline/registry-packages';
+import { foreignPackages, packageReaches } from '../pipeline/registry-packages';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -52,7 +49,7 @@ test('a registry decision is read again once a manifest it read changes', () => 
     { importer: 'src/App.ts', specifier: 'reg', identity: 'reg' },
   ];
   const analysed = new Set(['src/App.ts', 'packages/local/src/Card.ts']);
-  const read = () => registryPackages(root, listed, analysed);
+  const read = () => packageReaches(root, listed, analysed);
 
   expect(read()).toEqual([{ identity: 'reg', reaches: [] }]);
   expect(read()).toEqual([{ identity: 'reg', reaches: [] }]);

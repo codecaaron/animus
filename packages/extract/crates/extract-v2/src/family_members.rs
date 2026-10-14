@@ -741,7 +741,10 @@ impl<'f> ObjectMembers<'f> {
             }
         }
         let mut by_name: Option<FxHashMap<String, Vec<Object>>> = None;
-        for (module, ff) in files {
+        // A config-only module runs in its tool, never in the app, so
+        // nothing it does changes what the app renders.
+        let config_only = crate::analyze_css::config_only(files, inputs);
+        for (module, ff) in files.iter().filter(|(module, _)| !config_only.contains(*module)) {
             for (name, used) in &ff.unsafe_object_uses {
                 let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
                 let reason = format!("{name} {} in {module}{line}", used.what);
@@ -805,7 +808,8 @@ impl<'f> ObjectMembers<'f> {
                 let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
                 let reason = format!("{subject} {} in {module}{line}", used.what);
                 if let Some(unread) = crate::link::unread_package(&identity, files, inputs) {
-                    crate::link::open_unread(&mut flow, unread, &reason, &mut |flow, target, reason| {
+                    let opening = || crate::link::PackageOpening::namespace_write(module, used.line, namespace, &identity);
+                    crate::link::open_unread(&mut flow, unread, &reason, inputs, opening, &mut |flow, target, reason| {
                         self.namespace_reach(target).record(flow, self.families, Vec::new(), reason)
                     });
                 }

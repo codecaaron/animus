@@ -12,16 +12,17 @@ export interface PreparedPackage {
   identity: string;
 }
 
-/** An unread package the host installed from a registry, with the analysed
- *  modules it can reach (spec §6.3), as the engine's `RegistryPackage`
- *  reads it. */
-export interface RegistryPackage {
+/** An unread package the host located, with the analysed modules it can
+ *  reach (spec §6.3), as the engine's `PackageReach` reads it. `local` for
+ *  a workspace package or a local link or copy. */
+export interface PackageReach {
   identity: string;
   reaches: string[];
+  local?: true;
 }
 
-/** The most packages a registry package's dependencies are followed
- *  through; past it, the package keeps its reach over every module. */
+/** The most packages a package's dependencies are followed through; past
+ *  it, the package keeps its reach over every module. */
 const DEPENDENCY_BOUND = 4000;
 
 /** Dependency specs that link or copy a local package rather than install
@@ -76,19 +77,21 @@ const LOCKFILES = [
   'yarn.lock',
 ];
 
-/** Each package's registry decision, by root, identity and instances:
- *  the real roots of the local packages it reaches, or null for a package
- *  that may reach any module, held while every file it read is unchanged. */
+/** Each package's decision, by root, identity and instances: the real
+ *  roots of the packages whose analysed modules it reaches, or null for a
+ *  package that may reach any module, held while every file it read is
+ *  unchanged. */
 interface Decision {
   stamps: Stamps;
   roots: string[] | null;
+  local: boolean;
 }
 
 const decisions = new Map<string, Decision>();
 
 /** One call's reads, shared by its decisions, as one snapshot: each file is
- *  read once, and each installed package's local dependencies are walked
- *  once, with the files the walk read. Registry packages share most of
+ *  read once, and each installed package's dependencies are walked once
+ *  for each reading, with the files the walk read. Packages share most of
  *  their dependencies, so a decision of its own each walked them again. */
 class Reads {
   readonly #files = new Map<string, FileRead>();
@@ -114,17 +117,26 @@ class Reads {
     return true;
   }
 
-  /** `installed`'s local dependencies, adding the files their walk read to
-   *  `files`. */
-  localDependencies(installed: string, files: Set<string>): string[] | null {
-    let walk = this.#walks.get(installed);
+  /** The roots `installed` reaches, read as a registry package
+   *  (`localDependencies`) or a local one (`dependencyClosure`), adding the
+   *  files their walk read to `files`. */
+  reached(
+    installed: string,
+    registry: boolean,
+    files: Set<string>
+  ): string[] | null {
+    const key = `${registry ? 'registry' : 'local'}\0${installed}`;
+    let walk = this.#walks.get(key);
     if (walk === undefined) {
       const walked = new Set<string>();
+      const lookups = this.tracked(walked);
       walk = {
-        roots: localDependencies(installed, this.tracked(walked)),
+        roots: registry
+          ? localDependencies(installed, lookups)
+          : dependencyClosure(installed, lookups),
         files: walked,
       };
-      this.#walks.set(installed, walk);
+      this.#walks.set(key, walk);
     }
     for (const path of walk.files) files.add(path);
     return walk.roots;
@@ -208,30 +220,67 @@ export function foreignPackages(
       return cached.reaches;
     }
     const files = lockfilesAbove(installed);
-    const lookups = reads.tracked(files);
-    const reaches = (() => {
-      const seen = new Set<string>([installed]);
-      const work = [installed];
-      while (work.length > 0) {
-        const dir = work.pop()!;
-        const names = Object.keys(dependencySpecs(lookups.manifest(dir)));
-        if (names.some(animus)) return true;
-        for (const name of names) {
-          const dependency = installedPackage(name, dir, lookups);
-          if (dependency === null || seen.has(dependency)) continue;
-          seen.add(dependency);
-          if (seen.size > DEPENDENCY_BOUND) return true;
-          work.push(dependency);
-        }
-      }
-      return false;
-    })();
+    const reaches =
+      walkDependencies(installed, reads.tracked(files), {
+        stops: animus,
+      }) === null;
     animusAnswers.set(cacheKey, {
       stamps: new Map([...files].map((path) => [path, reads.file(path).stamp])),
       reaches,
     });
     return reaches;
   }
+}
+
+/**
+ * Walks the dependencies, peers and optional dependencies `installed`
+ * declares, and those of each one `follows` accepts, at any depth: the real
+ * root of each package reached, `installed` among them, with those
+ * followed. Null past the bound, at a manifest it cannot read, or once
+ * `stops` accepts a name a followed manifest declares.
+ */
+function walkDependencies(
+  installed: string,
+  lookups: Lookups,
+  {
+    follows = () => true,
+    stops = () => false,
+  }: {
+    follows?: (spec: string, dependency: string) => boolean;
+    stops?: (name: string) => boolean;
+  }
+): { reached: Set<string>; followed: Set<string> } | null {
+  const reached = new Set<string>([installed]);
+  const followed = new Set<string>([installed]);
+  const work = [installed];
+  while (work.length > 0) {
+    const dir = work.pop()!;
+    const declared = lookups.manifest(dir);
+    if (declared === null) return null;
+    const specs = Object.entries(dependencySpecs(declared));
+    if (specs.some(([name]) => stops(name))) return null;
+    for (const [name, spec] of specs) {
+      const dependency = installedPackage(name, dir, lookups);
+      if (dependency === null || reached.has(dependency)) continue;
+      reached.add(dependency);
+      if (reached.size > DEPENDENCY_BOUND) return null;
+      if (follows(spec, dependency)) {
+        followed.add(dependency);
+        work.push(dependency);
+      }
+    }
+  }
+  return { reached, followed };
+}
+
+/** The real roots of a local package and of each package it depends on, at
+ *  any depth; null where the walk is (`walkDependencies`). */
+function dependencyClosure(
+  installed: string,
+  lookups: Lookups
+): string[] | null {
+  const walk = walkDependencies(installed, lookups, {});
+  return walk && [...walk.reached];
 }
 
 /** Every lockfile path at or above `dir`. */
@@ -254,21 +303,24 @@ function dependencySpecs(declared: Manifest | null) {
 }
 
 /**
- * Each listed package every instance of which the host installed from a
- * registry (spec §6.3, A4): resolved through `node_modules` to a real path
- * inside one, and declared by its importer's nearest manifest that names it,
- * if any, with no local protocol. Such a package names only published
- * packages, so of the app's own modules it reaches only those of the local
- * packages it, or a registry package it depends on, declares as a
- * dependency or peer. A package that resolves to nothing, or to a local
- * path, is left out: it may reach any module. `root` is the session root's
- * real path, which relative paths resolve against.
+ * The analysed modules each listed package can reach (spec §6.3, A4). One
+ * the host installed from a registry, resolved through `node_modules` to a
+ * real path inside one and declared by its importer's nearest manifest that
+ * names it, if any, with no local protocol, names only published packages,
+ * so of the app's own modules it reaches only those of the local packages
+ * it, or a registry package it depends on, declares as a dependency or
+ * peer. Any other, a workspace package or a local link or copy, reaches the
+ * modules of itself and of each package it depends on, at any depth: the
+ * app's among them when it depends on the app. A package that resolves to
+ * nothing, or whose dependencies cannot be read, is left out: it may reach
+ * any module. `root` is the session root's real path, which relative paths
+ * resolve against.
  */
-export function registryPackages(
+export function packageReaches(
   root: string,
   packages: readonly PreparedPackage[],
   analysed: ReadonlySet<string>
-): RegistryPackage[] {
+): PackageReach[] {
   const byIdentity = new Map<string, PreparedPackage[]>();
   for (const listed of packages) {
     byIdentity.set(listed.identity, [
@@ -277,7 +329,13 @@ export function registryPackages(
     ]);
   }
   const reads = new Reads();
-  const result: RegistryPackage[] = [];
+  const absolutes = new Map(
+    [...analysed].map((file) => [
+      file,
+      isAbsolute(file) ? file : resolve(root, file),
+    ])
+  );
+  const result: PackageReach[] = [];
   for (const [identity, instances] of byIdentity) {
     const key = [
       root,
@@ -292,19 +350,26 @@ export function registryPackages(
       decisions.set(key, decision);
     }
     if (decision.roots === null) continue;
-    const roots = decision.roots;
-    const reaches = [...analysed].filter((file) => {
-      const absolute = isAbsolute(file) ? file : resolve(root, file);
-      return roots.some((local) => absolute.startsWith(local + sep));
+    const roots = new Set(decision.roots);
+    const reaches = [...absolutes]
+      .filter(([, absolute]) => {
+        for (let dir = dirname(absolute); ; dir = dirname(dir)) {
+          if (roots.has(dir)) return true;
+          if (dirname(dir) === dir) return false;
+        }
+      })
+      .map(([file]) => file);
+    result.push({
+      identity,
+      reaches: reaches.sort(),
+      ...(decision.local && { local: true as const }),
     });
-    result.push({ identity, reaches: reaches.sort() });
   }
   return result;
 }
 
-/** One package's registry decision from the filesystem, with the stamp of
- *  every file it read or looked for and of each lockfile at or above the
- *  root. */
+/** One package's decision from the filesystem, with the stamp of every
+ *  file it read or looked for and of each lockfile at or above the root. */
 function decide(
   root: string,
   instances: readonly PreparedPackage[],
@@ -312,10 +377,12 @@ function decide(
 ): Decision {
   const files = lockfilesAbove(root);
   const lookups = reads.tracked(files);
-  const decided = (roots: string[] | null): Decision => ({
+  const decided = (roots: string[] | null, local = false): Decision => ({
     stamps: new Map([...files].map((path) => [path, reads.file(path).stamp])),
     roots,
+    local,
   });
+  let local = false;
   const roots = new Set<string>();
   for (const { importer, specifier } of instances) {
     const name = bareSpecifierPackageName(specifier);
@@ -323,18 +390,16 @@ function decide(
       isAbsolute(importer) ? importer : resolve(root, importer)
     );
     const installed = installedPackage(name, from, lookups);
-    if (
-      installed === null ||
-      !insideNodeModules(installed) ||
-      declaredLocally(name, from, lookups.manifest)
-    ) {
-      return decided(null);
-    }
-    const reached = reads.localDependencies(installed, files);
+    if (installed === null) return decided(null);
+    const registry =
+      insideNodeModules(installed) &&
+      !declaredLocally(name, from, lookups.manifest);
+    const reached = reads.reached(installed, registry, files);
     if (reached === null) return decided(null);
-    for (const local of reached) roots.add(local);
+    local ||= !registry;
+    for (const dependency of reached) roots.add(dependency);
   }
-  return decided([...roots]);
+  return decided([...roots], local);
 }
 
 /** The real directory of package `name` as Node resolves it from `from`:
@@ -380,29 +445,16 @@ function declaredLocally(
 
 /** The real roots of the local packages a registry package reaches through
  *  the dependencies and peers it and its registry dependencies declare;
- *  null past the bound. */
+ *  null where the walk is (`walkDependencies`). */
 function localDependencies(
   installed: string,
   lookups: Lookups
 ): string[] | null {
-  const local = new Set<string>();
-  const seen = new Set<string>([installed]);
-  const work = [installed];
-  while (work.length > 0) {
-    const dir = work.pop()!;
-    const specs = dependencySpecs(lookups.manifest(dir));
-    for (const [name, spec] of Object.entries(specs)) {
-      const dependency = installedPackage(name, dir, lookups);
-      if (dependency === null || seen.has(dependency)) continue;
-      seen.add(dependency);
-      if (seen.size > DEPENDENCY_BOUND) return null;
-      // A local protocol links or copies a local package, wherever it lands.
-      const linked = LOCAL_PROTOCOLS.some((protocol) =>
-        spec.startsWith(protocol)
-      );
-      if (!linked && insideNodeModules(dependency)) work.push(dependency);
-      else local.add(dependency);
-    }
-  }
-  return [...local];
+  // A local protocol links or copies a local package, wherever it lands.
+  const walk = walkDependencies(installed, lookups, {
+    follows: (spec, dependency) =>
+      !LOCAL_PROTOCOLS.some((protocol) => spec.startsWith(protocol)) &&
+      insideNodeModules(dependency),
+  });
+  return walk && [...walk.reached].filter((root) => !walk.followed.has(root));
 }

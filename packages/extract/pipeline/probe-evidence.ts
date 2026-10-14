@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 
 import { hostExpansions } from './host-expansions';
 import { seeFile, specifierCandidates } from './native-resolution';
-import { registryPackages } from './registry-packages';
+import { packageReaches } from './registry-packages';
 
 import type { HostLoadExpander, ListedLoad } from './host-expansions';
 import type { ExtensionOrder } from './native-resolution';
@@ -129,8 +129,8 @@ export function hostCandidate(
 /**
  * The session's host-candidate evidence for one analysis (spec §2.3): each
  * probe base the engine's `prepare` names, as `hostCandidate` reads it, the
- * host's expansion of each computed load it lists, and each unread package
- * it lists that a registry installed (spec §6.3). The
+ * host's expansion of each computed load it lists, and the analysed
+ * modules each unread package it lists can reach (spec §6.3). The
  * evidence carries the input identity `prepare` reported, and each call is a
  * new ingest generation, so no evidence is read for other files.
  */
@@ -164,14 +164,14 @@ export function gatherProbeEvidence(
             readings.expander,
             readings.isAsset
           );
-    const registry = registryPackages(root, packages, analysed);
+    const reaches = packageReaches(root, packages, analysed);
     generations += 1;
     return JSON.stringify({
       generation: generations,
       identity,
       bases: byBase,
       ...(expansions.length > 0 && { expansions }),
-      ...(registry.length > 0 && { registry }),
+      ...(reaches.length > 0 && { packages: reaches }),
     });
   };
 }

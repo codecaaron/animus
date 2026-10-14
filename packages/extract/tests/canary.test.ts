@@ -593,19 +593,39 @@ test.each([
   }).toEqual({ sm: true, lg: kept });
 });
 
-// Contract: a registry package reaches no app source except through an alias
-// or a declared dependency (spec §6.3). A load of `@reg/pkg` keeps `pad`
-// extractable when the host finds the package installed from a registry,
-// in a pnpm store too, and declaring no local package; a workspace link, a
-// `file:` copy, a local package it declares directly, through a registry
-// dependency or as a `file:` copy under node_modules, or a `react` alias onto
-// the module that holds `pad` keeps the opening.
+// Contract: an unread package reaches no app source except through an alias
+// or a dependency (spec §6.3). A load of `@reg/pkg` keeps `pad` extractable
+// when the host finds the package installed from a registry, in a pnpm store
+// too, and declaring no local package, or finds it local (a workspace link or
+// a `file:` copy) depending on nothing that holds `pad`. A local package it
+// declares directly, through a registry dependency or as a `file:` copy
+// under node_modules, a workspace link that depends on the kit or on the app,
+// one whose manifest cannot be read, or a `react` alias onto the module that
+// holds `pad` keeps the opening.
 test.each([
   ['installed from a registry', {}, 'tokens.ts', true],
   ['in a pnpm store', { store: true }, 'tokens.ts', true],
-  ['linked from the workspace', { linked: true }, 'tokens.ts', false],
-  ['copied in by a file: dependency', { copied: true }, 'tokens.ts', false],
+  ['linked from the workspace', { linked: true }, 'tokens.ts', true],
+  ['copied in by a file: dependency', { copied: true }, 'tokens.ts', true],
   ['declaring the local kit', { declares: true }, 'kit/tokens.ts', false],
+  [
+    'linked from the workspace, declaring the local kit',
+    { linked: true, declares: true },
+    'kit/tokens.ts',
+    false,
+  ],
+  [
+    'linked from the workspace, depending on the app',
+    { linked: true, app: true },
+    'tokens.ts',
+    false,
+  ],
+  [
+    'linked from the workspace, with a manifest it cannot read',
+    { linked: true, unreadable: true },
+    'tokens.ts',
+    false,
+  ],
   [
     'whose dependency declares the local kit',
     { through: true },
@@ -629,6 +649,8 @@ test.each([
       linked?: boolean;
       copied?: boolean;
       declares?: boolean;
+      app?: boolean;
+      unreadable?: boolean;
       through?: boolean;
       copiesKit?: boolean;
       aliased?: boolean;
@@ -652,18 +674,24 @@ test.each([
       '@reg/pkg': layout.copied ? 'file:./proxy' : '1.0.0',
       '@local/kit': 'workspace:*',
     });
+    link('node_modules/app', '.');
     manifest('kit', '@local/kit');
     link('node_modules/@local/kit', 'kit');
     manifest('node_modules/@local/copy', '@local/copy');
     const registry = layout.declares
       ? { '@local/kit': '1.0.0' }
-      : layout.through
-        ? { '@reg/dep': '1.0.0' }
-        : layout.copiesKit
-          ? { '@local/copy': 'file:../../kit' }
-          : {};
+      : layout.app
+        ? { app: 'workspace:*' }
+        : layout.through
+          ? { '@reg/dep': '1.0.0' }
+          : layout.copiesKit
+            ? { '@local/copy': 'file:../../kit' }
+            : {};
     if (layout.linked) {
-      manifest('proxy', '@reg/pkg');
+      manifest('proxy', '@reg/pkg', registry);
+      if (layout.unreadable) {
+        writeFileSync(join(root, 'proxy/package.json'), '{ "name": ');
+      }
       link('node_modules/@reg/pkg', 'proxy');
     } else if (layout.store) {
       manifest(

@@ -278,9 +278,10 @@ pub(crate) enum Unread {
     /// A package the analysis does not hold, other than one built into
     /// Node.
     Package,
-    /// A package the host installed from a registry: it reaches only these
-    /// analysed modules (spec §6.3).
-    Registry(Vec<String>),
+    /// A package the host located: it reaches only these analysed modules
+    /// (spec §6.3). `local` for a workspace package or a local link or
+    /// copy, which reaches those of the packages it depends on.
+    Reaches { reaches: Vec<String>, local: bool },
     /// A path that names no file the analysis holds: one it excluded, one
     /// generated later, or one in a language it does not read. A file the
     /// host reads as an opaque value imports nothing.
@@ -292,14 +293,19 @@ impl Unread {
     pub(crate) fn clause(&self) -> &'static str {
         match self {
             Unread::Package => "a package the analysis does not read may re-export any module",
-            Unread::Registry(_) => "a package installed from a registry may re-export the local modules it depends on",
+            Unread::Reaches { local: false, .. } => {
+                "a package installed from a registry may re-export the local modules it depends on"
+            }
+            Unread::Reaches { local: true, .. } => {
+                "a local package the analysis does not read may re-export the modules of the packages it depends on"
+            }
             Unread::Missing => "a module the analysis cannot find may re-export any module",
         }
     }
 
     pub(crate) fn reason(&self) -> crate::flow::ReasonId {
         match self {
-            Unread::Package | Unread::Registry(_) => crate::flow::ReasonId::SkippedSource,
+            Unread::Package | Unread::Reaches { .. } => crate::flow::ReasonId::SkippedSource,
             Unread::Missing => crate::flow::ReasonId::UnresolvedSpecifier,
         }
     }
@@ -321,7 +327,8 @@ pub(crate) fn record_module_openings(
     for (name, spec) in &ff.namespace_exports {
         if let Some(unread) = unread_source(module, spec, files, inputs) {
             let reason = format!("{module} re-exports {spec} as the namespace {name}, and {}", unread.clause());
-            open_unread(flow, unread, &reason, hand_on);
+            let opening = || PackageOpening::new(module, None, format!("re-exports it as the namespace {name}"), spec);
+            open_unread(flow, unread, &reason, inputs, opening, hand_on);
             continue;
         }
         if let Some(target) = resolve_import_source(module, spec, files, inputs) {
@@ -348,7 +355,11 @@ pub(crate) fn record_module_openings(
         if let LoadTarget::Specifier(spec) = &load.target {
             if let Some(unread) = unread_source(module, spec, files, inputs) {
                 let reason = format!("{module} loads {spec} at runtime on line {}, and {}", load.line, unread.clause());
-                open_unread(flow, unread, &reason, hand_on);
+                let opening = || {
+                    let callee = if load.dynamic_import { "import()" } else { "require()" };
+                    PackageOpening::new(module, Some(load.line), format!("loads it at runtime with {callee}"), spec)
+                };
+                open_unread(flow, unread, &reason, inputs, opening, hand_on);
                 continue;
             }
         }
@@ -378,16 +389,55 @@ pub(crate) fn record_module_openings(
     }
 }
 
+/// A package opening as its diagnostic names it: where a module reaches an
+/// unread package, how, and how the host located the package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PackageOpening {
+    pub module: String,
+    pub line: Option<usize>,
+    /// Said of the package: `loads it at runtime with require()`.
+    pub how: String,
+    pub specifier: String,
+    /// Whether the host located it as a local package; None where it did
+    /// not locate it.
+    pub local: Option<bool>,
+}
+
+impl PackageOpening {
+    pub(crate) fn new(module: &str, line: Option<usize>, how: String, specifier: &str) -> Self {
+        PackageOpening { module: module.to_string(), line, how, specifier: specifier.to_string(), local: None }
+    }
+
+    /// A write through `module`'s namespace import of the package.
+    pub(crate) fn namespace_write(module: &str, line: Option<usize>, namespace: &str, identity: &str) -> Self {
+        Self::new(module, line, format!("writes through its namespace {namespace}"), identity)
+    }
+}
+
 /// Opens what an unread module may reach: any module, or for a package
-/// installed from a registry, the modules it can reach, each handed on.
+/// the host located, the modules it can reach, each handed on. A package
+/// opening is noted, by `reason`, for the diagnostic that names what it
+/// cost.
 pub(crate) fn open_unread(
     flow: &mut FlowBuilder,
     unread: Unread,
     reason: &str,
+    inputs: &CssInputs,
+    opening: impl FnOnce() -> PackageOpening,
     hand_on: &mut dyn FnMut(&mut FlowBuilder, &str, &str),
 ) {
+    let local = match &unread {
+        Unread::Package => Some(None),
+        Unread::Reaches { local, .. } => Some(Some(*local)),
+        Unread::Missing => None,
+    };
+    if let (Some(local), Ok(mut noted)) = (local, inputs.package_openings.lock()) {
+        if !noted.contains_key(reason) {
+            noted.insert(reason.to_string(), PackageOpening { local, ..opening() });
+        }
+    }
     match unread {
-        Unread::Registry(reaches) => {
+        Unread::Reaches { reaches, .. } => {
             for target in &reaches {
                 hand_on(flow, target, reason);
             }
@@ -412,25 +462,24 @@ pub(crate) fn unread_source<T>(
 }
 
 /// What the unread package `identity` may reach: nothing for one built into
-/// Node; for one the host installed from a registry, the local modules it
-/// depends on and every module a bare specifier is an alias of; anything
-/// otherwise.
+/// Node; for one the host located, the analysed modules it says it reaches
+/// and every module a bare specifier is an alias of; anything otherwise.
 pub(crate) fn unread_package<T>(identity: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> Option<Unread> {
     if is_node_builtin(identity) {
         return None;
     }
-    let registry = inputs.probe_evidence.as_ref().and_then(|evidence| {
-        evidence.registry.iter().find(|package| package.identity == identity)
+    let located = inputs.probe_evidence.as_ref().and_then(|evidence| {
+        evidence.packages.iter().find(|package| package.identity == identity)
     });
-    let Some(registry) = registry else { return Some(Unread::Package) };
+    let Some(located) = located else { return Some(Unread::Package) };
     let aliased = files.keys().filter(|file| aliased_by_bare_specifier(file, &inputs.path_aliases));
-    let mut reaches: Vec<String> = registry.reaches.iter().cloned().chain(aliased.cloned()).collect();
+    let mut reaches: Vec<String> = located.reaches.iter().cloned().chain(aliased.cloned()).collect();
     reaches.sort();
     reaches.dedup();
-    Some(Unread::Registry(reaches))
+    Some(Unread::Reaches { reaches, local: located.local })
 }
 
-/// Whether an alias whose pattern a registry package's code may name, a
+/// Whether an alias whose pattern a package's code may name, a
 /// published package's name, maps onto `file`.
 fn aliased_by_bare_specifier(file: &str, aliases: &[crate::analyze_css::AliasEntry]) -> bool {
     aliases.iter().any(|alias| {

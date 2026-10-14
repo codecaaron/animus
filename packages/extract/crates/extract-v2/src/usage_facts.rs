@@ -2718,7 +2718,7 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
     };
     use oxc::syntax::operator::UnaryOperator;
     const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "self", "global"];
-    const BUILTINS: [&str; 2] = ["module", "node:module"];
+    const BUILTINS: [&str; 2] = MODULE_BUILTINS;
     /// Members of the unbound `module` that load nothing.
     const MODULE_MEMBERS: [&str; 6] = ["exports", "id", "filename", "loaded", "path", "paths"];
     /// Exports of the `module` builtin that load nothing.
@@ -2786,6 +2786,10 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
     struct Uses<'s> {
         scoping: &'s oxc::semantic::Scoping,
         builtins: FxHashSet<SymbolId>,
+        /// The `createRequire` imports and the `require` bindings they make
+        /// (`own_requires`).
+        own: FxHashSet<SymbolId>,
+        requires: FxHashSet<SymbolId>,
         found: Option<&'static str>,
     }
     impl Uses<'_> {
@@ -2845,7 +2849,12 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
             if !value {
                 return;
             }
-            if id.name == "require" && self.unbound(id) {
+            let symbol = id.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+            if symbol.is_some_and(|symbol| self.requires.contains(&symbol)) {
+                // A require of this file's own read other than as a direct
+                // callee, which is never visited.
+                self.found.get_or_insert(CREATE);
+            } else if id.name == "require" && self.unbound(id) {
                 self.found.get_or_insert(REQUIRE);
             } else if id.name == "module" && self.unbound(id) {
                 self.found.get_or_insert(MODULE);
@@ -2898,14 +2907,28 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
         }
         fn visit_import_declaration(&mut self, import: &ImportDeclaration<'a>) {
             let builtin = BUILTINS.contains(&import.source.value.as_str()) && !import.import_kind.is_type();
+            // A `createRequire` that makes only this file's own `require`
+            // loads only what that `require` does.
+            let own = std::mem::take(&mut self.own);
+            let own_import = |specifier: &ImportDeclarationSpecifier<'_>| match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                    named.local.symbol_id.get().is_some_and(|symbol| own.contains(&symbol))
+                }
+                _ => false,
+            };
             let loads = |specifier: &ImportDeclarationSpecifier<'_>| match specifier {
                 ImportDeclarationSpecifier::ImportSpecifier(named) => {
                     !named.import_kind.is_type() && !BUILTIN_MEMBERS.contains(&named.imported.name().as_str())
                 }
                 _ => false,
             };
-            oxc::ast_visit::walk::walk_import_declaration(self, import);
-            if builtin && import.specifiers.iter().flatten().any(loads) {
+            let mut loading = false;
+            for specifier in import.specifiers.iter().flatten().filter(|specifier| !own_import(specifier)) {
+                self.visit_import_declaration_specifier(specifier);
+                loading |= loads(specifier);
+            }
+            self.own = own;
+            if builtin && loading {
                 self.found.get_or_insert(BUILTIN);
             }
         }
@@ -2938,9 +2961,83 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
     }
     let mut builtins = Builtins::default();
     builtins.visit_program(program);
-    let mut uses = Uses { scoping, builtins: builtins.0, found: None };
+    let (own, requires) = own_requires(program, scoping);
+    let mut uses = Uses { scoping, builtins: builtins.0, own, requires, found: None };
     uses.visit_program(program);
     uses.found
+}
+
+/// The spellings of Node's `module` builtin.
+const MODULE_BUILTINS: [&str; 2] = ["module", "node:module"];
+
+/// The `createRequire` imports of the `module` builtin each of whose reads
+/// is the call `createRequire(import.meta.url)` (or `import.meta.filename`)
+/// that initializes a module-scope `const require`, with those `require`
+/// bindings: a require of this file's own, which `loads` reads by its name
+/// as it reads the unbound `require`'s, so long as each read of it is a
+/// direct call, as `loader_escape` checks.
+fn own_requires(
+    program: &oxc::ast::ast::Program<'_>,
+    scoping: &oxc::semantic::Scoping,
+) -> (FxHashSet<SymbolId>, FxHashSet<SymbolId>) {
+    use oxc::ast::ast::{BindingPattern, VariableDeclarationKind};
+    let mut imported = FxHashSet::default();
+    for statement in &program.body {
+        let Statement::ImportDeclaration(import) = statement else { continue };
+        if !MODULE_BUILTINS.contains(&import.source.value.as_str()) || import.import_kind.is_type() {
+            continue;
+        }
+        for specifier in import.specifiers.iter().flatten() {
+            if let ImportDeclarationSpecifier::ImportSpecifier(named) = specifier {
+                if !named.import_kind.is_type() && named.imported.name() == "createRequire" {
+                    imported.extend(named.local.symbol_id.get());
+                }
+            }
+        }
+    }
+    if imported.is_empty() {
+        return Default::default();
+    }
+    let own_url = |call: &CallExpression<'_>| {
+        let [argument] = call.arguments.as_slice() else { return false };
+        matches!(
+            argument.as_expression().map(Expression::get_inner_expression),
+            Some(Expression::StaticMemberExpression(member))
+                if matches!(member.object, Expression::ImportMeta(_))
+                    && matches!(member.property.name.as_str(), "url" | "filename")
+        )
+    };
+    // Each module-scope `const require = createRequire(<this file>)`, by
+    // the import its callee reads, with the `require` binding. An exported
+    // one is handed on, so it is not one.
+    let mut made: Vec<(SymbolId, SymbolId)> = Vec::new();
+    for statement in &program.body {
+        let Statement::VariableDeclaration(declaration) = statement else { continue };
+        if declaration.kind != VariableDeclarationKind::Const || declaration.declare {
+            continue;
+        }
+        for declarator in &declaration.declarations {
+            let BindingPattern::BindingIdentifier(id) = &declarator.id else { continue };
+            let Some(Expression::CallExpression(call)) = declarator.init.as_ref().map(Expression::get_inner_expression) else {
+                continue;
+            };
+            let callee = match call.callee.get_inner_expression() {
+                Expression::Identifier(callee) => {
+                    callee.reference_id.get().and_then(|reference| scoping.get_reference(reference).symbol_id())
+                }
+                _ => None,
+            };
+            if let (true, Some(callee), Some(binding)) = (id.name == "require" && own_url(call), callee, id.symbol_id.get()) {
+                made.push((callee, binding));
+            }
+        }
+    }
+    let own: FxHashSet<SymbolId> = imported
+        .into_iter()
+        .filter(|create| made.iter().filter(|(callee, _)| callee == create).count() == scoping.get_resolved_reference_ids(*create).len())
+        .collect();
+    let requires = made.into_iter().filter(|(callee, _)| own.contains(callee)).map(|(_, binding)| binding).collect();
+    (own, requires)
 }
 
 /// One module's functions, each with how its parameters treat an object.

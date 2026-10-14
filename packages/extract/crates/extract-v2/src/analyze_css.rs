@@ -131,6 +131,10 @@ pub struct CssInputs {
     pub build_chunks: std::sync::OnceLock<Vec<String>>,
     /// The config-only modules ([`config_only`]), found once.
     pub config_only: std::sync::OnceLock<BTreeSet<String>>,
+    /// Each opening of an unread package, by the reason the safety
+    /// relations record it under, for the diagnostic that names what it
+    /// cost.
+    pub(crate) package_openings: std::sync::Mutex<BTreeMap<String, crate::link::PackageOpening>>,
     /// `{ definitionKey: sourceText }` for the loaded system's configured
     /// transforms, keyed as its props' `transformId` (or, for a system that
     /// predates identities, their name).
@@ -411,6 +415,7 @@ impl CssInputs {
             shadowing_probes: Default::default(),
             build_chunks: Default::default(),
             config_only: Default::default(),
+            package_openings: Default::default(),
             dev_mode,
             numeric_properties: FxHashSet::default(),
             system_hash,
@@ -672,6 +677,11 @@ const RESOLVE_UNANALYSED_IMPORT: &str = "animus.resolve.unanalysed-import";
 const LOAD_DECLARED_CLOSED: &str = "animus.load.declared-closed";
 /// A `closedDynamicImports` entry that names no computed `import()`.
 const LOAD_DECLARED_CLOSED_UNMATCHED: &str = "animus.load.declared-closed-unmatched";
+/// A warning, once per opening: a module reaches a package the analysis
+/// does not read, which may change exported objects, so declarations that
+/// read them are not extracted. It names the declarations and the exclusion
+/// that removes server or build code from the analysis.
+const UNREAD_PACKAGE_REACH: &str = "animus.load.unread-package-reach";
 const WIDE_MODULE_LOAD_LIMIT: usize = 20;
 /// A warning, once per production analysis: tags usage cannot match to an
 /// Animus component stop whole-component removal, so every extracted
@@ -752,6 +762,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (RESOLVE_UNANALYSED_IMPORT, "warn"),
     (LOAD_DECLARED_CLOSED, "info"),
     (LOAD_DECLARED_CLOSED_UNMATCHED, "warn"),
+    (UNREAD_PACKAGE_REACH, "warn"),
     (IDENTITY_UNCERTAIN, "warn"),
     (IDENTITY_UNCERTAIN_TAG, "info"),
     (UNEXTRACTABLE_CHAIN, "warn"),
@@ -978,24 +989,29 @@ pub struct ProbeEvidence {
     /// to (spec §6.3), by importer and the load's byte offset.
     #[serde(default)]
     pub expansions: Vec<HostExpansion>,
-    /// Each unread package `prepare` lists that the host installed from a
-    /// registry (spec §6.3), with the analysed modules it can reach.
+    /// Each unread package `prepare` lists that the host located, with the
+    /// analysed modules it can reach (spec §6.3).
     #[serde(default)]
-    pub registry: Vec<RegistryPackage>,
+    pub packages: Vec<PackageReach>,
 }
 
-/// An unread package the host installed from a registry, under
-/// `node_modules`, every instance of it alike (spec §6.3, A4). It names
-/// only published packages, so of the app's own modules it reaches only
-/// the entries of the local packages it, or a registry package it depends
-/// on, declares as a dependency or peer.
+/// An unread package the host located, every instance of it alike (spec
+/// §6.3, A4). One installed from a registry names only published packages,
+/// so of the app's own modules it reaches only the entries of the local
+/// packages it, or a registry package it depends on, declares as a
+/// dependency or peer. A local one, a workspace package or a local link or
+/// copy, reaches the modules of itself and of each package it depends on,
+/// at any depth.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RegistryPackage {
+pub struct PackageReach {
     /// The package as the analysis names it (see `link::Named::Package`).
     pub identity: String,
-    /// The analysed modules of the local packages it reaches.
+    /// The analysed modules it reaches.
     pub reaches: Vec<String>,
+    /// Whether it is local rather than installed from a registry.
+    #[serde(default)]
+    pub local: bool,
 }
 
 /// The path a specifier probes from `from_file`, relative to rootDir: a
@@ -1115,8 +1131,9 @@ fn is_tool_config(file: &str) -> bool {
 /// the host declares, or a well-known tool config file in the analysis
 /// root) import, transitively, that no other module can reach. A config
 /// runs in its tool, never in the app, so an unanalysed import of one opens
-/// nothing the app renders. A config file app code imports, and a module a
-/// config imports beside app code, are not config-only.
+/// nothing the app renders, and nothing it does changes an object the app
+/// reads. A config file app code imports, and a module a config imports
+/// beside app code, are not config-only.
 pub(crate) fn config_only<'i>(files: &BTreeMap<String, FileFacts>, inputs: &'i CssInputs) -> &'i BTreeSet<String> {
     inputs.config_only.get_or_init(|| {
         let declared: BTreeSet<&str> = inputs.analysis_context.config_files.iter().map(String::as_str).collect();
@@ -3068,6 +3085,71 @@ fn emit_eval_drop_bail(
         ),
     };
     diagnostics.push(diagnostic(file, binding, "bail", message, code));
+}
+
+/// The declarations a package opening cost that a warning names in full.
+const PACKAGE_REACH_NAMED: usize = 5;
+
+/// One warning for each opening of an unread package that cost
+/// declarations: where a module reaches the package and how, how the host
+/// located it, the declarations it left unextracted, located, and what to
+/// do when the module is server or build code.
+pub(crate) fn report_package_openings(diagnostics: &mut Vec<CssDiagnostic>, inputs: &CssInputs) {
+    let openings = inputs.package_openings.lock().map(|mut openings| std::mem::take(&mut *openings)).unwrap_or_default();
+    let bails: Vec<&CssDiagnostic> = diagnostics.iter().filter(|d| d.kind == "bail").collect();
+    let mut found = Vec::new();
+    for (reason, opening) in &openings {
+        let mut cost: Vec<String> = bails
+            .iter()
+            .filter(|d| d.message.contains(reason.as_str()))
+            .map(|d| match d.line {
+                Some(line) => format!("{} ({}:{line})", d.component, d.file),
+                None => format!("{} ({})", d.component, d.file),
+            })
+            .collect();
+        cost.sort();
+        cost.dedup();
+        if cost.is_empty() {
+            continue;
+        }
+        let crate::link::PackageOpening { module, line, how, specifier, local } = opening;
+        let package = match local {
+            Some(true) => format!(
+                "'{specifier}' is a local package the analysis does not read, and a package it depends on holds \
+                 analysed modules, so it may change the objects they export"
+            ),
+            Some(false) => format!(
+                "'{specifier}' is a package installed from a registry, and a local package it depends on holds \
+                 analysed modules, so it may change the objects they export"
+            ),
+            None => format!(
+                "'{specifier}' is a package the analysis does not read, and the host could not locate it or read \
+                 its dependencies, so it may change any exported object"
+            ),
+        };
+        let at = line.map_or(String::new(), |line| format!(" on line {line}"));
+        let more = cost.len().saturating_sub(PACKAGE_REACH_NAMED);
+        let named = cost.iter().take(PACKAGE_REACH_NAMED).cloned().collect::<Vec<_>>().join(", ");
+        let named = if more > 0 { format!("{named} and {more} more") } else { named };
+        let pattern = match module.split_once('/') {
+            Some((top, _)) if top != ".." && top != "." => format!("{top}/**"),
+            _ => module.clone(),
+        };
+        let message = format!(
+            "{package}; {module} {how}{at}, so {} that read an exported object {} not extracted: \
+             {named} — if {module} and the modules that import it are server or build code that cannot change \
+             what the app renders, exclude them from the analysis (for example exclude: ['{pattern}', …]); \
+             otherwise add the package's source to the analysis, or pass each stage an object literal",
+            count_of(cost.len(), "declaration"),
+            if cost.len() == 1 { "is" } else { "are" },
+        );
+        let warning = diagnostic(module, specifier, "warn", message, Some(UNREAD_PACKAGE_REACH));
+        found.push(match line {
+            Some(line) => warning.on_line(*line),
+            None => warning,
+        });
+    }
+    diagnostics.extend(found);
 }
 
 /// Slot bindings are local identifiers, resolved in the composing file.
@@ -9710,7 +9792,7 @@ mod tests {
             .into_iter()
             .collect(),
             expansions: Vec::new(),
-            registry: Vec::new(),
+            packages: Vec::new(),
         });
         let entries: Vec<(&str, &str)> = files.iter().map(|(path, source)| (*path, source.as_str())).collect();
         let out = analyze(&entries, &inputs);
@@ -14838,16 +14920,16 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// object (a linked workspace package), so a write through its
     /// namespace re-exported, loaded with `import()` or with `require()`,
     /// wrapped or not, leaves every member table unproven, through a further
-    /// star too. A
-    /// module built into Node imports nothing analysed, and a load of an
-    /// analysed module reaches only what it exports.
+    /// star too, unless a config-only module writes it, which runs in its
+    /// tool. A module built into Node imports nothing analysed, and a load
+    /// of an analysed module reaches only what it exports.
     #[test]
     fn a_write_through_a_package_the_analysis_does_not_read_reaches_any_exported_object() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
         let fam = "import { Box } from './recipe';\nexport const Fam = { Box };\n";
         let app = "import { Fam } from './fam';\nexport const App = () => <Fam.Box marginInlineStart={8} />;\n";
         let proxied = "export * as ns from '@local/proxy';\n";
-        let rows: [(&[(&str, &str)], bool); 9] = [
+        let rows: [(&[(&str, &str)], bool); 10] = [
             (&[("proxied.ts", proxied), ("mutate.ts", "import { ns } from './proxied';\nns.Fam.Box = () => null;\n")], true),
             (
                 &[
@@ -14859,6 +14941,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ),
             (&[("mutate.ts", "import('@local/proxy').then((ui) => { ui.Fam.Box = () => null; });\n")], true),
             (&[("mutate.ts", "require('@local/proxy').Fam.Box = () => null;\n")], true),
+            (&[("vite.config.ts", "require('@local/proxy').Fam.Box = () => null;\n")], false),
             (&[("mutate.ts", "(require)('@local/proxy').Fam.Box = () => null;\n")], true),
             (&[("mutate.ts", "import('node:path').then((path) => { path.Fam = null; });\n")], false),
             (&[("mutate.ts", "require('fs').Fam = null;\n")], false),
@@ -14899,7 +14982,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             generation: 1,
             identity: String::new(),
             expansions: Vec::new(),
-            registry: Vec::new(),
+            packages: Vec::new(),
             bases: ["data.json", "icon.svg?url", "styles.css"].into_iter().map(asset).collect(),
         });
         for (mutate, warns) in [
@@ -15138,8 +15221,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// `require`, or a `createRequire` result) can load any module and rebind
     /// what an exported object holds, so a member tag of one rendered
     /// elsewhere is not proven. An ambient declaration binds no loader. A
-    /// direct `require` of a literal path reaches only that module, and
-    /// `module.exports` loads nothing.
+    /// direct `require` of a literal path reaches only that module, as does
+    /// a module-scope `const require` made by `createRequire` for the file's
+    /// own URL and only called; `module.exports` loads nothing.
     #[test]
     fn an_escaped_loader_may_rebind_any_exported_object() {
         let recipe = "export const Box = ds.styles({}).system({ space: true }).asElement('div');\n";
@@ -15165,6 +15249,36 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             (
                 "loader.ts",
                 create!("const load = createRequire(import.meta.url);\nexport const open = (name) => load(name);\n"),
+                Some("reads createRequire"),
+            ),
+            ("loader.ts", create!("const require = createRequire(import.meta.url);\nexport const x = require('./x');\n"), None),
+            ("loader.ts", create!("const require = createRequire(import.meta.filename);\nexport const x = require.resolve('./x');\n"), None),
+            (
+                "loader.ts",
+                create!("const require = createRequire(new URL('../', import.meta.url));\nexport const x = require('./x');\n"),
+                Some("reads createRequire"),
+            ),
+            ("loader.ts", create!("let require = createRequire(import.meta.url);\nexport const x = require('./x');\n"), Some("reads createRequire")),
+            (
+                "loader.ts",
+                create!("const require = createRequire(import.meta.url);\nconst r = require;\nexport const x = r('./x');\n"),
+                Some("reads createRequire"),
+            ),
+            ("loader.ts", create!("const require = createRequire(import.meta.url);\nregister(require);\n"), Some("reads createRequire")),
+            (
+                "loader.ts",
+                create!("const require = createRequire(import.meta.url);\nexport const x = require.call(null, './x');\n"),
+                Some("reads createRequire"),
+            ),
+            ("loader.ts", create!("export const require = createRequire(import.meta.url);\n"), Some("reads createRequire")),
+            (
+                "loader.ts",
+                create!("export const open = () => {\n  const require = createRequire(import.meta.url);\n  return require('./x');\n};\n"),
+                Some("reads createRequire"),
+            ),
+            (
+                "loader.ts",
+                create!("const require = createRequire(import.meta.url);\nexport const load = createRequire(import.meta.url);\n"),
                 Some("reads createRequire"),
             ),
             ("loader.cts", "declare const require: any;\nconst r = require;\nexport const open = (name) => r(name);\n", handed),
@@ -15201,6 +15315,20 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 None => assert!(warned.is_empty(), "{loader}: {warned:?}"),
             }
         }
+        // A require made for this file's own URL loads as the unbound one:
+        // a computed specifier is the same unexpanded load.
+        let said = |loader: &str| -> Vec<String> {
+            let out = analyze_with_logical_space(&[
+                ("recipe.tsx", recipe),
+                ("fam.tsx", fam),
+                ("loader.ts", loader),
+                ("app.tsx", app),
+            ]);
+            unproven(&out).iter().map(|d| d.message.clone()).collect()
+        };
+        let plain = said("\n\nexport const open = (name) => require(name);\n");
+        assert!(!plain.is_empty());
+        assert_eq!(said(create!("const require = createRequire(import.meta.url);\nexport const open = (name) => require(name);\n")), plain);
     }
 
     /// The verbose records of member tags, or facades' own tags, whose
@@ -16929,7 +17057,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 generation: 1,
                 identity: String::new(),
                 expansions: Vec::new(),
-                registry: Vec::new(),
+                packages: Vec::new(),
                 bases: [(
                     "twin".to_string(),
                     HostCandidate {
@@ -16988,7 +17116,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 generation: 1,
                 identity: String::new(),
                 expansions,
-                registry: Vec::new(),
+                packages: Vec::new(),
                 bases: [(
                     "../outside".to_string(),
                     HostCandidate {
@@ -17058,7 +17186,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 generation: 1,
                 identity: String::new(),
                 expansions: Vec::new(),
-                registry: Vec::new(),
+                packages: Vec::new(),
                 bases: [(
                     "a".to_string(),
                     HostCandidate { candidate: "a.json".into(), actual: None, analysed_as: None, reading: Some(reading) },

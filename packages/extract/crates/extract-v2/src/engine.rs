@@ -813,7 +813,8 @@ fn record_style_changes(
         for (namespace, (subject, used)) in &module.written_namespaces {
             let Some(Request::Outside(identity)) = namespace_of(file, namespace) else { continue };
             if let Some(unread) = crate::link::unread_package(&identity, files, inputs) {
-                crate::link::open_unread(flow, unread, &said(file, subject, used), &mut |flow, target, reason| {
+                let opening = || crate::link::PackageOpening::namespace_write(file, used.line, namespace, &identity);
+                crate::link::open_unread(flow, unread, &said(file, subject, used), inputs, opening, &mut |flow, target, reason| {
                     hand_on(flow, target, reason)
                 });
             }
@@ -1051,6 +1052,12 @@ impl ExtractEngine {
         if let Ok(mut shadowing) = self.opts.css_inputs.shadowing_probes.lock() {
             shadowing.clear();
         }
+        if let Ok(mut openings) = self.opts.css_inputs.package_openings.lock() {
+            openings.clear();
+        }
+        // The config-only modules are this file set's own: an edit may move
+        // a module into the app's reach.
+        self.opts.css_inputs.config_only = Default::default();
         if let Ok(mut incomplete) = self.opts.css_inputs.incomplete_probes.lock() {
             incomplete.clear();
             // Ingestion's openings are this analysis's own.
@@ -1238,6 +1245,10 @@ impl ExtractEngine {
         // object (`styles(preset)`) only reads a static; both record a
         // module's openings through one recorder, in the same words.
         let mut flow = crate::flow::FlowBuilder::new();
+        // A config-only module runs in its tool, never in the app, so
+        // nothing it does changes what the app renders.
+        let config_only = analyze_css::config_only(&structural_by_file, &self.opts.css_inputs);
+        style_modules.retain(|file, _| !config_only.contains(file));
         record_style_changes(
             &style_modules,
             &imports_by_file,
@@ -1447,6 +1458,7 @@ impl ExtractEngine {
             }
             name_compiled_kit_fix(diagnostic, &compiled_declarations, output_dirs);
         }
+        analyze_css::report_package_openings(&mut css.diagnostics, &self.opts.css_inputs);
         let cross = cross_file::resolve_cross_file(&self.facts, css.member_bindings.clone());
         let out = serde_json::to_string(&AnalyzeResult {
             cross_file: cross.clone(),
@@ -3700,6 +3712,82 @@ export const App = () => <Box tone="red" />;
         for (system, host) in [(r#"["../src/ds.ts"]"#, "../src/ds.js"), (r#"["../src/ds/index.ts"]"#, "../src/ds.ts")] {
             let (extracted, codes) = run_host(system, host);
             assert!(!extracted && codes.contains(&"animus.resolve.unanalysed-import".to_string()), "{host}: {codes:?}");
+        }
+    }
+
+    /// Contract: a load of an unread package unsettles only the exported
+    /// objects the host says it reaches, and a config-only module's load
+    /// unsettles nothing; a load that still costs declarations is named
+    /// once, where it is written, with them and the exclusion that removes
+    /// server code.
+    #[test]
+    fn an_unread_package_load_unsettles_what_it_reaches_and_is_named_with_its_cost() {
+        let base = [
+            ("system.ts", "import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem().build().seal();\n"),
+            ("groups.ts", "export const groups = { space: true };\n"),
+            (
+                "box.tsx",
+                "import { ds } from './system';\nimport { groups } from './groups';\nexport const Box = ds.styles({ display: 'block' }).system(groups).asElement('div');\nexport const App = () => <Box p={4} />;\n",
+            ),
+        ];
+        let load = "require('@opaque/workspace');\n";
+        let run = |more: &[(&str, &str)], reaches: Option<serde_json::Value>| {
+            let mut engine = ExtractEngine::new(Some(EngineOptions {
+                config_json: Some(r#"{"p":{"property":"padding"}}"#.to_string()),
+                group_registry_json: Some(r#"{"space":["p"]}"#.to_string()),
+                ..Default::default()
+            }))
+            .unwrap();
+            let files = serde_json::Value::Array(
+                base.iter()
+                    .chain(more)
+                    .map(|(path, source)| serde_json::json!({ "path": path, "source": source }))
+                    .collect(),
+            )
+            .to_string();
+            let prepared: serde_json::Value = serde_json::from_str(&engine.prepare(files.clone()).unwrap()).unwrap();
+            let evidence = reaches.map(|reaches| {
+                serde_json::json!({
+                    "generation": 1,
+                    "identity": prepared["identity"],
+                    "bases": {},
+                    "packages": [{ "identity": "@opaque/workspace", "reaches": reaches, "local": true }],
+                })
+                .to_string()
+            });
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files, evidence).unwrap()).unwrap();
+            let diagnostics = out["diagnostics"].as_array().cloned().unwrap_or_default();
+            let failed = diagnostics
+                .iter()
+                .filter(|d| d["code"] == "animus.chain.stage-evaluation-failed")
+                .map(|d| d["component"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>();
+            let named = diagnostics
+                .iter()
+                .filter(|d| d["code"] == "animus.load.unread-package-reach")
+                .map(|d| format!("{}:{} {}", d["file"].as_str().unwrap(), d["line"], d["message"].as_str().unwrap()))
+                .collect::<Vec<_>>();
+            (out["css"].as_str().unwrap_or_default().contains("display: block"), failed, named)
+        };
+        assert_eq!(run(&[], None), (true, vec![], vec![]));
+        assert_eq!(run(&[("vite.config.ts", load)], None), (true, vec![], vec![]));
+        assert_eq!(run(&[("api/server.ts", load)], Some(serde_json::json!([]))), (true, vec![], vec![]));
+        for (reaches, package) in [
+            (None, "'@opaque/workspace' is a package the analysis does not read, and the host could not locate it"),
+            (Some(serde_json::json!(["groups.ts"])), "'@opaque/workspace' is a local package the analysis does not read"),
+        ] {
+            let (extracted, failed, named) = run(&[("api/server.ts", load)], reaches);
+            assert!(!extracted && failed == ["Box"], "{failed:?}");
+            let [named] = named.as_slice() else { panic!("{named:?}") };
+            for said in [
+                "api/server.ts:1 ",
+                package,
+                "api/server.ts loads it at runtime with require() on line 1",
+                "1 declaration that read an exported object is not extracted: Box (box.tsx:3)",
+                "exclude: ['api/**', …]",
+            ] {
+                assert!(named.contains(said), "{said}: {named}");
+            }
         }
     }
 
