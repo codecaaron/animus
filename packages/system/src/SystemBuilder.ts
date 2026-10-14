@@ -113,9 +113,11 @@ export interface FontFace {
   fontVariationSettings?: string;
   /**
    * Ask the document to start loading the face's file before its
-   * stylesheet applies: the first `url` source in WOFF2, else the first
-   * `url` source. That source must be an `asset()` file or a root-relative
-   * or absolute URL. The host delivers the `<link rel="preload">` (and a
+   * stylesheet applies: the file the browser's `@font-face` loads, its
+   * first `url` source in a format browsers load (an EOT or SVG font is
+   * skipped). Order `src` as the browser should prefer it, WOFF2 first.
+   * That source must be an `asset()` file or a root-relative or absolute
+   * URL. The host delivers the `<link rel="preload">` (and a
    * `preconnect` for another origin): Vite injects it into `index.html`;
    * Next renders it through `AnimusFontPreloads`; Rollup, webpack and the
    * CLI emit a manifest for `renderFontPreloads`.

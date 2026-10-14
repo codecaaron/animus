@@ -10,12 +10,19 @@ import preloads from 'virtual:animus/font-preloads';
 
 /** The origins of the absolute hrefs, once each: an asset prefix on
  *  another host makes the bundler's URLs absolute. `fontPreloadOrigins`'s
- *  rule, restated: its module would bring the engine into the bundle. */
+ *  rule, restated: its module would bring the engine into the bundle. A
+ *  malformed href warms no origin, and never fails the render. */
 const ORIGINS = [
   ...new Set(
-    preloads
-      .filter(({ href }) => /^(?:https?:)?\/\//i.test(href))
-      .map(({ href }) => new URL(href, 'https://animus.invalid').origin)
+    preloads.flatMap(({ href }) => {
+      if (!/^(?:https?:)?\/\//i.test(href)) return [];
+      try {
+        const url = new URL(href, 'https://animus.invalid');
+        return [href.startsWith('//') ? `//${url.host}` : url.origin];
+      } catch {
+        return [];
+      }
+    })
   ),
 ];
 

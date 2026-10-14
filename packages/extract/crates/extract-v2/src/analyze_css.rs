@@ -10512,7 +10512,7 @@ mod tests {
     }
 
     #[test]
-    fn preloading_faces_name_their_woff2_or_first_url_source_once() {
+    fn preloading_faces_name_the_url_source_their_font_face_loads_once() {
         let mut inputs = test_inputs();
         let face = |family: &str, src: serde_json::Value, preload: serde_json::Value| {
             serde_json::json!({ "family": family, "src": src, "preload": preload })
@@ -10521,25 +10521,32 @@ mod tests {
             "fonts": {
                 "styles": {},
                 "fontFaces": [
-                    // WOFF2 by format, after a local and a WOFF source.
+                    // The browser loads the first url source it can, in src
+                    // order: WOFF here, not the WOFF2 after it.
                     face("A", serde_json::json!([
                         { "local": "A" },
                         { "url": "animus-asset:./a.woff", "format": "woff" },
                         { "url": "animus-asset:./a.woff2", "format": "woff2" }
                     ]), true.into()),
-                    // WOFF2 by extension, where no format is given.
-                    face("B", serde_json::json!([{ "url": "/b.ttf" }, { "url": "https://cdn.test/b.woff2?v=1" }]), true.into()),
-                    // No WOFF2: the first url source, typed by its format.
+                    // A format no browser loads is skipped, by format or by
+                    // extension; a WOFF2 by extension is typed.
+                    face("B", serde_json::json!([
+                        { "url": "/b.eot", "format": "embedded-opentype" },
+                        { "url": "/b.svg" },
+                        { "url": "https://cdn.test/b.woff2?v=1" }
+                    ]), true.into()),
+                    // Typed by its format.
                     face("C", serde_json::json!([{ "url": "/c.otf", "format": "opentype" }, { "url": "/c.woff" }]), true.into()),
                     // An unknown format gives no type.
-                    face("D", serde_json::json!([{ "url": "HTTP://cdn.test/d", "format": "embedded-opentype" }]), true.into()),
-                    // A URL relative to the stylesheet is not preloaded.
-                    face("Relative", serde_json::json!([{ "url": "./r.woff2" }]), true.into()),
+                    face("D", serde_json::json!([{ "url": "HTTP://cdn.test/d", "format": "collection" }]), true.into()),
                     // The same file again preloads once.
-                    face("A2", serde_json::json!([{ "url": "animus-asset:./a.woff2", "format": "woff2" }]), true.into()),
+                    face("A2", serde_json::json!([{ "url": "animus-asset:./a.woff", "format": "woff" }]), true.into()),
                     face("Off", serde_json::json!([{ "url": "./off.woff2" }]), false.into()),
                     serde_json::json!({ "family": "Unasked", "src": [{ "url": "./unasked.woff2" }] }),
+                    // A URL relative to the stylesheet is not preloaded.
+                    face("Relative", serde_json::json!([{ "url": "./r.woff2" }]), true.into()),
                     face("Local", serde_json::json!([{ "local": "Arial" }]), true.into()),
+                    face("Legacy", serde_json::json!([{ "url": "/l.eot", "format": "embedded-opentype" }]), true.into()),
                     face("Bad", serde_json::json!([{ "url": "./bad.woff2" }]), "yes".into()),
                     // A face left out preloads nothing.
                     face("{fonts.missing}", serde_json::json!([]), true.into())
@@ -10551,7 +10558,7 @@ mod tests {
         assert_eq!(
             preloads,
             [
-                ("animus-asset:./a.woff2", Some("font/woff2")),
+                ("animus-asset:./a.woff", Some("font/woff")),
                 ("https://cdn.test/b.woff2?v=1", Some("font/woff2")),
                 ("/c.otf", Some("font/otf")),
                 ("HTTP://cdn.test/d", None),
@@ -10568,6 +10575,7 @@ mod tests {
             [
                 ("the font face 'Relative' is emitted without a preload: its source `./r.woff2` is neither an asset() file nor a root-relative or absolute URL, and a host moves a URL relative to the stylesheet", Some("warn")),
                 ("the font face 'Local' is emitted without a preload: it has no `url` source to preload", Some("warn")),
+                ("the font face 'Legacy' is emitted without a preload: it has no `url` source in a format browsers load", Some("warn")),
                 ("the font face 'Bad' is emitted without a preload: its `preload` \"yes\" is not a boolean", Some("warn")),
             ],
             "{:#?}",

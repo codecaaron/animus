@@ -23,7 +23,7 @@ import {
   releaseEngineHandle,
   sessionKey,
 } from '@animus-ui/extract/session';
-import { rmSync } from 'fs';
+import { existsSync, rmSync } from 'fs';
 import { join } from 'path';
 
 import {
@@ -238,6 +238,8 @@ export class PluginContext {
    *  under. */
   viteRoot = '';
   serverOrigin = '';
+  /** Vite's resolved public directory; empty when it serves none. */
+  publicDir = '';
 
   // specifier → dev /@fs URL, or the `__VITE_ASSET__<referenceId>__` marker
   // Vite rewrites to the hashed file name before hashing the stylesheet.
@@ -550,6 +552,20 @@ export class PluginContext {
         ? `/${absPath.slice(root.length)}`
         : `/@fs${absPath}`;
     return `${this.serverOrigin}${base}${path}`;
+  }
+
+  /** A root-relative URL a face names as written, as Vite's dev CSS pass
+   *  writes it: under `server.origin` and the base where it names a public
+   *  file or a file under the root, else unchanged. */
+  devRootRelativeUrl(href: string): string {
+    if (!href.startsWith('/') || href.startsWith('//')) return href;
+    const path = href.split(/[?#]/)[0]!;
+    const served = [this.publicDir, this.viteRoot].some(
+      (dir) => dir !== '' && existsSync(join(dir, path))
+    );
+    if (!served) return href;
+    const base = this.base.endsWith('/') ? this.base.slice(0, -1) : this.base;
+    return `${this.serverOrigin}${base}${href}`;
   }
 
   /** A dev asset() URL: an immutable content-named copy of `absPath`, so an

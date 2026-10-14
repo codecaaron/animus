@@ -71,6 +71,7 @@ export function applyResolvedConfig(
   ctx.base = config.base ?? '/';
   ctx.viteRoot = config.root;
   ctx.serverOrigin = config.server.origin ?? '';
+  ctx.publicDir = config.publicDir;
 
   ctx.lcssTargets = resolveLightningTargets(ctx.options.targets, ctx.rootDir);
   ctx.log(

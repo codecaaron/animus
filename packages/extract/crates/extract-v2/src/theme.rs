@@ -2752,10 +2752,15 @@ pub struct FontPreload {
     pub mime: Option<&'static str>,
 }
 
-/// The source a face with `preload: true` preloads: its first `url` source
-/// in WOFF2 (by `format`, or by extension where it gives none), else its
-/// first `url` source; why not, when it has only `local` sources or that
-/// source is relative to the stylesheet, which each host relocates.
+/// The formats no current browser loads, by `format` or by extension: a
+/// browser skips such a source and loads the next.
+const UNLOADED_FONT_FORMATS: [&str; 3] = ["embedded-opentype", "eot", "svg"];
+
+/// The source a face with `preload: true` preloads: the one the browser's
+/// `@font-face` loads, its first `url` source in a format browsers load (by
+/// `format`, or by extension where it gives none), so the file is fetched
+/// once; why not, when it has none, or that source is relative to the
+/// stylesheet, which each host relocates.
 fn preload_source(sources: &[&Value]) -> Result<FontPreload, String> {
     let urls: Vec<(&str, Option<&str>)> = sources
         .iter()
@@ -2768,11 +2773,13 @@ fn preload_source(sources: &[&Value]) -> Result<FontPreload, String> {
             (!ext.contains('/')).then(|| ext.to_ascii_lowercase())
         })
     };
+    if urls.is_empty() {
+        return Err("it has no `url` source to preload".into());
+    }
     let chosen = urls
         .iter()
-        .find(|source| format_of(source).as_deref() == Some("woff2"))
-        .or(urls.first())
-        .ok_or("it has no `url` source to preload")?;
+        .find(|source| !format_of(source).is_some_and(|format| UNLOADED_FONT_FORMATS.contains(&format.as_str())))
+        .ok_or("it has no `url` source in a format browsers load")?;
     let url = chosen.0;
     let lower = url.to_ascii_lowercase();
     if !(url.starts_with(crate::eval::ASSET_PLACEHOLDER_PREFIX)

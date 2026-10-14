@@ -769,9 +769,11 @@ export const unpluginFactory: UnpluginFactory<
       const absOut = resolve(base, outDir);
       mkdirSync(absOut, { recursive: true });
       writeFileSync(join(absOut, CSS_ASSET_NAME), state.cssText);
-      if (preloadManifest !== null) {
-        writeFileSync(join(absOut, FONT_PRELOADS_ASSET_NAME), preloadManifest);
-      }
+      // The host writes this directory itself, so it also removes a
+      // manifest an earlier build left once no face preloads.
+      const preloadsPath = join(absOut, FONT_PRELOADS_ASSET_NAME);
+      if (preloadManifest === null) rmSync(preloadsPath, { force: true });
+      else writeFileSync(preloadsPath, preloadManifest);
       if (assets.length > 0) {
         mkdirSync(join(absOut, SESSION_ASSETS_DIR), { recursive: true });
         for (const { name, bytes } of assets) {

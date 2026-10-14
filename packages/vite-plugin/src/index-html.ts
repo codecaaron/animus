@@ -38,10 +38,13 @@ function fontPreloadTags(
   const published = ctx.served?.fontPreloads ?? [];
   if (published.length === 0) return [];
   const existing = preloadedHrefs(html);
-  const preloads = substituteFontPreloads(
-    published,
-    ctx.assetUrlBySpecifier
-  ).filter(({ href }) => !existing.has(href));
+  const preloads = substituteFontPreloads(published, ctx.assetUrlBySpecifier)
+    .map((preload) =>
+      ctx.isProd
+        ? preload
+        : { ...preload, href: ctx.devRootRelativeUrl(preload.href) }
+    )
+    .filter(({ href }) => !existing.has(href));
   return [
     ...fontPreloadOrigins(preloads.map(({ href }) => href)).map(
       (origin): HtmlTagDescriptor => ({

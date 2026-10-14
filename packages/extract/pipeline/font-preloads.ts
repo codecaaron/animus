@@ -27,15 +27,18 @@ export function substituteFontPreloads(
   });
 }
 
-/** The origins of the absolute hrefs, once each, in order. */
+/** The origins of the absolute hrefs, once each, in order: a
+ *  protocol-relative href's stays protocol-relative, to follow the page's.
+ *  An href no URL parser reads has none; its preload fails on its own. */
 export function fontPreloadOrigins(hrefs: readonly string[]): string[] {
   const origins = new Set<string>();
   for (const href of hrefs) {
     if (!/^(?:https?:)?\/\//i.test(href)) continue;
     try {
-      origins.add(new URL(href, 'https://animus.invalid').origin);
+      const url = new URL(href, 'https://animus.invalid');
+      origins.add(href.startsWith('//') ? `//${url.host}` : url.origin);
     } catch {
-      // Not a URL a browser parses either; its preload fails on its own.
+      // No origin to warm.
     }
   }
   return [...origins];
