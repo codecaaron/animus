@@ -30,6 +30,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreGlobals();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const root of temporaryRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -340,7 +341,7 @@ describe('withAnimus', () => {
     const animus = injectedAnimusPlugin(client?.plugins);
     const gate = client?.plugins?.find(isGate);
     if (!gate) throw new Error('expected layergate on the client compiler');
-    const state = registry().get(gate.id);
+    const state = registry().states.get(gate.id);
 
     expect(server?.plugins?.some(isGate)).toBe(false);
     expect(animus.getOptions().layers).toEqual([
@@ -367,6 +368,19 @@ describe('withAnimus', () => {
     const wrapped = withAnimus({
       system: './src/ds.ts',
       turbopack: { mode: 'on' },
+      quarantine: { sheets: ['vendor/a.css'] },
+    });
+    expect(() => wrapped({})).toThrow(QUARANTINE_TURBOPACK_MESSAGE);
+  });
+
+  // Contract: the refusal follows the host actually running, not Animus's
+  // own Turbopack mode: under Turbopack with `turbopack: { mode: 'off' }`,
+  // Next never calls the webpack hook, so vendor CSS would ship unlayered.
+  test('quarantine refuses Turbopack whatever the turbopack mode', () => {
+    vi.stubEnv('TURBOPACK', '1');
+    const wrapped = withAnimus({
+      system: './src/ds.ts',
+      turbopack: { mode: 'off' },
       quarantine: { sheets: ['vendor/a.css'] },
     });
     expect(() => wrapped({})).toThrow(QUARANTINE_TURBOPACK_MESSAGE);
