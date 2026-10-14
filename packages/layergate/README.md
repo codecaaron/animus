@@ -115,8 +115,11 @@ module's specifier, which an owned stylesheet a JS module imports then
 loads first), and prepend `await plugin.stylesheetHead.call(this, id)` to
 that module's CSS in its `load` hook. The head uses root-relative URLs, so
 assets resolve from a virtual module too; a file outside the Vite root is
-reached through `/@fs/`, its directory added to `server.fs.allow` in
-development, and emitted as an asset in a build. Animus's `quarantine`
+reached through `/@fs/`: in development a declared sheet's directory is
+added to `server.fs.allow` when the server starts (beside your own list, or
+Vite's default workspace root), and an asset it references in another
+directory is allowed when it is found; in a build it is emitted as an
+asset. Animus's `quarantine`
 option works this way.
 
 ## Core API

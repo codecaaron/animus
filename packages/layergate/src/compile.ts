@@ -376,12 +376,13 @@ export async function compileUnit(
       }
     };
     create(ownPath);
-    // What precedes the last import (layer statements and comments), each
-    // import's stylesheet, then the rest.
-    const split = entry.sheet.imports.at(-1)?.end ?? 0;
-    createLayers(0, split);
-    emit(file, own, 0, split);
+    // The file's own text and its imports' stylesheets in source order: a
+    // layer statement between two imports creates its layer between them.
+    let cursor = 0;
     for (const [index, statement] of entry.sheet.imports.entries()) {
+      createLayers(cursor, statement.start);
+      emit(file, own, cursor, statement.start);
+      cursor = statement.end;
       const added = importFrames(
         statement,
         anonymousName(`${occurrence}/${index}`)
@@ -436,8 +437,8 @@ export async function compileUnit(
         );
       }
     }
-    createLayers(split, entry.text.length);
-    emit(file, own, split, entry.text.length);
+    createLayers(cursor, entry.text.length);
+    emit(file, own, cursor, entry.text.length);
   };
 
   for (const root of roots) {

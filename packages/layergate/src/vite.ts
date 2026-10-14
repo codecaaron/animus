@@ -14,12 +14,21 @@
  */
 import { readFileSync, realpathSync, watch } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative } from 'node:path';
+import { createRequire } from 'node:module';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from 'node:path';
 import {
   createIdResolver,
   isCSSRequest,
   isFileLoadingAllowed,
   normalizePath,
+  searchForWorkspaceRoot,
 } from 'vite';
 
 import { compileUnit } from './compile';
@@ -33,6 +42,7 @@ import type {
   ParsedSheet,
 } from './compile';
 import type { LayergateOptions } from './plan';
+import type { ImportStatement } from './sheet';
 import type { FSWatcher } from 'node:fs';
 import type {
   EnvironmentModuleNode,
@@ -65,6 +75,26 @@ const proxiedFile = (id: string) =>
 
 const PLAIN_CSS = /\.css$/;
 const MODULE_CSS = /\.module\.css$/;
+
+/** The stylesheet a request id names when the request is plain stylesheet
+ *  delivery: no query, or only Vite's `direct` (a stylesheet an HTML link
+ *  loads in development) and its `t`/`v` cache-busting params. Special
+ *  requests (`?inline`, `?url`, `?raw`) and CSS Modules are not. */
+function plainCssFile(id: string): string | null {
+  const at = id.indexOf('?');
+  const path = at === -1 ? id : id.slice(0, at);
+  if (!PLAIN_CSS.test(path) || MODULE_CSS.test(path)) return null;
+  const params = at === -1 ? [] : id.slice(at + 1).split('&');
+  return params.every((param) => param === 'direct' || /^[tv]=/.test(param))
+    ? path
+    : null;
+}
+
+/** Whether `file` lies outside the directory `root`. */
+const outside = (root: string, file: string) => {
+  const path = relative(root, file);
+  return path.startsWith('..') || isAbsolute(path);
+};
 
 interface PackageInfo {
   dir: string;
@@ -149,22 +179,37 @@ export function layergate(options: LayergateViteOptions = {}) {
 
   /** Vite's watcher ignores node_modules, so an owned file there is
    *  watched here through its directory, which sees edits, atomic saves,
-   *  deletion and creation alike, and its change handed to Vite's HMR. */
-  const watchers = new Map<string, FSWatcher>();
+   *  deletion and creation alike, and its change handed to Vite's HMR. One
+   *  watch serves every owned file of a directory. */
+  const directories = new Map<
+    string,
+    { watcher: FSWatcher; files: Set<string> }
+  >();
   const unwatch = (file: string) => {
-    watchers.get(file)?.close();
-    watchers.delete(file);
+    const dir = dirname(file);
+    const watched = directories.get(dir);
+    watched?.files.delete(file);
+    if (watched?.files.size === 0) {
+      watched.watcher.close();
+      directories.delete(dir);
+    }
   };
   const watchInstalled = (file: string) => {
-    if (!server || watchers.has(file) || !file.includes('/node_modules/'))
+    if (!server || !file.includes('/node_modules/')) return;
+    const dir = dirname(file);
+    const watched = directories.get(dir);
+    if (watched) {
+      watched.files.add(file);
       return;
+    }
     try {
-      watchers.set(
-        file,
-        watch(dirname(file), (_event, name) => {
-          if (name === basename(file)) server?.watcher.emit('change', file);
-        })
-      );
+      const files = new Set([file]);
+      const watcher = watch(dir, (_event, name) => {
+        const changed = name ? `${dir}/${basename(name)}` : null;
+        if (changed && files.has(changed))
+          server?.watcher.emit('change', changed);
+      });
+      directories.set(dir, { watcher, files });
     } catch {
       // A directory that vanished has nothing to report.
     }
@@ -208,9 +253,13 @@ export function layergate(options: LayergateViteOptions = {}) {
    *  `server.fs.allow`: the directory of an owned file outside it is
    *  allowed, and nothing more. */
   const rootUrl = (target: string) => {
-    const path = relative(real(root), target);
-    if (!path.startsWith('..') && !isAbsolute(path))
-      return `/${normalizePath(path)}`;
+    if (!outside(real(root), target))
+      return `/${normalizePath(relative(real(root), target))}`;
+    // A declared sheet's own directory is allowed at config time; an asset
+    // it references elsewhere is found only now. The dev server reads
+    // `server.fs.allow` on each request, so its directory is added here, a
+    // dependency on Vite's behaviour it does not document (pinned by the
+    // test serving a file outside the root in development).
     if (server && !isFileLoadingAllowed(server.config, normalizePath(target))) {
       server.config.server.fs.allow.push(normalizePath(dirname(target)));
     }
@@ -281,24 +330,24 @@ export function layergate(options: LayergateViteOptions = {}) {
     return unit.css;
   };
 
-  /** Whether the stylesheet `file`, with `code`, reaches an owned file
-   *  through its `@import`s, resolved only, never compiled. */
+  /** Whether the stylesheet `file`, whose `@import`s are `imports`,
+   *  reaches an owned file, resolved only, never compiled. */
   const reachesOwned = async (
     context: Rolldown.PluginContext,
     file: string,
-    code: string,
+    imports: readonly ImportStatement[],
     seen = new Set<string>()
   ): Promise<boolean> => {
     if (seen.has(file)) return false;
     seen.add(file);
     if (owns(file)) return true;
-    for (const statement of readSheet(code).imports) {
+    for (const statement of imports) {
       const child = await resolveImport(context, statement.url, file);
       if (!child) continue;
-      const text =
-        parsed.get(child)?.text ??
-        (await readFile(child, 'utf8').catch(() => ''));
-      if (await reachesOwned(context, child, text, seen)) return true;
+      const sheet =
+        parsed.get(child)?.sheet ??
+        readSheet(await readFile(child, 'utf8').catch(() => ''));
+      if (await reachesOwned(context, child, sheet.imports, seen)) return true;
     }
     return false;
   };
@@ -306,6 +355,34 @@ export function layergate(options: LayergateViteOptions = {}) {
   const plugin = {
     name: 'layergate',
     enforce: 'pre',
+
+    // The dev server serves a declared sheet outside the root through
+    // `/@fs/`: its directory is allowed here, the documented way, beside
+    // the user's own list or, without one, Vite's default workspace root.
+    config(userConfig, env) {
+      if (env.command !== 'serve') return;
+      const base = resolve(userConfig.root ?? process.cwd());
+      const require = createRequire(join(base, 'package.json'));
+      const dirs: string[] = [];
+      for (const specifier of plan.sheets) {
+        let file: string;
+        try {
+          file = real(
+            specifier.startsWith('.') || isAbsolute(specifier)
+              ? resolve(base, specifier)
+              : require.resolve(specifier)
+          );
+        } catch {
+          continue;
+        }
+        if (outside(real(base), file)) dirs.push(dirname(file));
+      }
+      if (dirs.length === 0) return;
+      const allow = userConfig.server?.fs?.allow
+        ? dirs
+        : [searchForWorkspaceRoot(base), ...dirs];
+      return { server: { fs: { allow } } };
+    },
 
     configResolved(config) {
       root = config.root;
@@ -326,7 +403,8 @@ export function layergate(options: LayergateViteOptions = {}) {
     },
 
     buildEnd() {
-      for (const file of [...watchers.keys()]) unwatch(file);
+      for (const { watcher } of directories.values()) watcher.close();
+      directories.clear();
     },
 
     async buildStart() {
@@ -403,13 +481,15 @@ export function layergate(options: LayergateViteOptions = {}) {
     // pipeline: its own rules stay as they were, and what it reaches of an
     // owned graph is layered.
     async transform(code, id) {
-      if (!owning() || id.startsWith('\0') || id.includes('?')) return null;
-      if (!PLAIN_CSS.test(id) || MODULE_CSS.test(id)) return null;
-      const file = fileOf(id);
-      if (!owns(file) && !code.includes('@import')) return null;
+      if (!owning() || id.startsWith('\0')) return null;
+      const requested = plainCssFile(id);
+      if (!requested) return null;
+      const file = real(requested);
+      const { imports } = readSheet(code);
+      if (!owns(file) && imports.length === 0) return null;
       let reached = reaches.get(file);
       if (reached === undefined) {
-        reached = await reachesOwned(this, file, code);
+        reached = await reachesOwned(this, file, imports);
         reaches.set(file, reached);
       }
       if (!reached) return null;

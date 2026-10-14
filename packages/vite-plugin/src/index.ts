@@ -8,6 +8,7 @@ import {
   systemKitDependencies,
 } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
+import { mergeConfig } from 'vite';
 
 import { runBuildStart } from './build-start';
 import { applyResolvedConfig } from './config';
@@ -27,7 +28,7 @@ import type {
   SourceKitDependency,
   StaticCssConfig,
 } from '@animus-ui/extract/pipeline';
-import type { Plugin } from 'vite';
+import type { Plugin, UserConfig } from 'vite';
 
 export { discoverFiles } from '@animus-ui/extract/pipeline';
 export type { AnimusQuarantineOptions } from './quarantine';
@@ -232,6 +233,13 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
     // `__ANIMUS_DEV__` gates the system runtime's development-only diagnostics.
     async config(userConfig, env) {
+      // layergate's config (a declared sheet's directory outside the root,
+      // allowed for the dev server) merges with Animus's own.
+      const vendorConfig = await (
+        await vendor?.plugin()
+      )?.config.call(this, userConfig, env);
+      const withVendor = (own: UserConfig) =>
+        vendorConfig ? mergeConfig(own, vendorConfig) : own;
       const { mode } = resolveMode(options.mode, () =>
         env.command === 'build' ? 'production' : 'development'
       );
@@ -242,7 +250,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         resolve(root, options.system),
         ctx.kitEngine()
       );
-      if (!kits) return { define };
+      if (!kits) return withVendor({ define });
       const { roots, ...config } = kits;
       // Vite's watcher ignores every installed kit; these are appended to
       // the user's own ignored, and a disabled watcher stays disabled.
@@ -250,7 +258,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         env.command === 'serve' && userConfig.server?.watch !== null
           ? { server: { watch: { ignored: kitWatchNegations(roots) } } }
           : {};
-      return { define, ...config, ...watched };
+      return withVendor({ define, ...config, ...watched });
     },
 
     async configureServer(server) {
@@ -343,8 +351,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     async transform(code, id) {
-      // A stylesheet layergate finishes is never an Animus source.
-      if (vendor && id.endsWith('.css')) {
+      // A stylesheet layergate finishes is never an Animus source; one an
+      // HTML link loads in development arrives as `?direct`.
+      if (vendor && /\.css(?:$|\?)/.test(id)) {
         return (await vendor.plugin()).transform.call(this, code, id);
       }
       return transformSource(ctx, code, id);
