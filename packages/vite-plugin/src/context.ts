@@ -559,7 +559,13 @@ export class PluginContext {
    *  file or a file under the root, else unchanged. */
   devRootRelativeUrl(href: string): string {
     if (!href.startsWith('/') || href.startsWith('//')) return href;
-    const path = href.split(/[?#]/)[0]!;
+    // Vite looks the file up by its decoded path; the URL keeps its escapes.
+    let path: string;
+    try {
+      path = decodeURI(href.split(/[?#]/)[0]!);
+    } catch {
+      return href;
+    }
     const served = [this.publicDir, this.viteRoot].some(
       (dir) => dir !== '' && existsSync(join(dir, path))
     );

@@ -17,8 +17,13 @@ const ORIGINS = [
     preloads.flatMap(({ href }) => {
       if (!/^(?:https?:)?\/\//i.test(href)) return [];
       try {
-        const url = new URL(href, 'https://animus.invalid');
-        return [href.startsWith('//') ? `//${url.host}` : url.origin];
+        const { origin } = new URL(href, 'https://animus.invalid');
+        // As authored, port included: parsing would drop a default port.
+        return [
+          href.startsWith('//')
+            ? `//${href.slice(2).split(/[/?#]/)[0]}`
+            : origin,
+        ];
       } catch {
         return [];
       }

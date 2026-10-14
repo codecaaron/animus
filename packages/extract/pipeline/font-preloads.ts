@@ -35,8 +35,11 @@ export function fontPreloadOrigins(hrefs: readonly string[]): string[] {
   for (const href of hrefs) {
     if (!/^(?:https?:)?\/\//i.test(href)) continue;
     try {
-      const url = new URL(href, 'https://animus.invalid');
-      origins.add(href.startsWith('//') ? `//${url.host}` : url.origin);
+      const { origin } = new URL(href, 'https://animus.invalid');
+      // As authored, port included: parsing would drop a default port.
+      origins.add(
+        href.startsWith('//') ? `//${href.slice(2).split(/[/?#]/)[0]}` : origin
+      );
     } catch {
       // No origin to warm.
     }
