@@ -3,6 +3,7 @@
  * alias of a kit extracts from the aliased instance instead of refusing.
  * Against the real engine.
  */
+import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
@@ -57,6 +58,34 @@ describe("the system evaluates the host's kit instance", () => {
     await session.runFullPipeline();
     expect(getSharedCss(session.key)).toContain('#ff6347');
     expect(getSharedCss(session.key)).not.toContain('#111111');
+  }, 60000);
+
+  /** Contract (C8): a participant reads its kit instances once per
+   *  authority commit, and again only where an instance's root moved or its
+   *  manifest changed, so a watch turn that changes neither asks its host
+   *  nothing. */
+  test('a participant reads its kit instances again only when one changed', async () => {
+    const root = createAliasedKitApp('animus-kit-instances-');
+    const owner = strictSession(root, aliasingHost(root));
+    await owner.runFullPipeline();
+    let asked = 0;
+    const counting: HostResolve = async (specifier, importer) => {
+      asked += 1;
+      return aliasingHost(root)(specifier, importer);
+    };
+    const other = strictSession(root, counting);
+    await other.agreeWithSystemAuthority();
+    const first = asked;
+    expect(first).toBeGreaterThan(0);
+    await other.agreeWithSystemAuthority();
+    expect(asked).toBe(first);
+    const manifest = join(root, 'node_modules', 'alt-kit', 'package.json');
+    writeFileSync(
+      manifest,
+      readFileSync(manifest, 'utf-8').replace('"alt-kit"', '"alt-kit" ')
+    );
+    await other.agreeWithSystemAuthority();
+    expect(asked).toBeGreaterThan(first);
   }, 60000);
 
   /** Contract (C8): the instances a participant's host chooses are part of

@@ -172,7 +172,7 @@ import type {
 } from '../pipeline/index';
 import type { ExtractFactsResult } from '../pipeline/source-ingestion';
 import type { SessionResolutionContext } from './resolve-packages';
-import type { SessionKey, SystemLoad } from './singleton';
+import type { SessionKey, SystemAuthority, SystemLoad } from './singleton';
 
 export type SessionOptions = AnimusCoreOptions;
 
@@ -329,6 +329,9 @@ interface KitInstanceRead {
   readonly diagnostics: ManifestDiagnostic[];
   /** Kit package name → the real root of the host's instance of it. */
   readonly instances: Readonly<Record<string, string>>;
+  /** The same roots, spelled as the host's answers spell them: a link a
+   *  relayout retargets keeps its spelling and changes its real path. */
+  readonly spelled: Readonly<Record<string, string>>;
 }
 
 /** The kit instances of `read`; none where it failed, so the load resolves
@@ -506,6 +509,15 @@ export class ExtractionSession {
   /** The instance the host resolved each kit to when this session last
    *  loaded the build's system (C8); part of its resolution context. */
   private kitInstanceMap: Readonly<Record<string, string>> = {};
+  /** This participant's kit instances as last read against the build's
+   *  authority, with the state of each instance root they name: reused
+   *  while the authority and every root's real path and manifest hold. */
+  private agreedKits: {
+    readonly authority: SystemAuthority;
+    readonly key: string;
+    readonly instances: Readonly<Record<string, string>>;
+    readonly spelled: Readonly<Record<string, string>>;
+  } | null = null;
   /** Each file's alias comparison, kept by content hash across analyses. */
   private readonly aliasCache = new AliasAgreementCache();
   /** Serialized path aliases, harvested by the adapter from bundler config. */
@@ -2323,6 +2335,7 @@ export class ExtractionSession {
       kitMembers
     );
     const instances = new Map<string, string>();
+    const spelled = new Map<string, string>();
     if (resolver.hostFirst) {
       const locate = nativePackageLocator(this.engine(), context.workspaces);
       for (const specifier of packageNames) {
@@ -2336,10 +2349,9 @@ export class ExtractionSession {
           name,
           member === undefined ? rootDir : dirname(member)
         );
-        instances.set(
-          name,
-          realPath(packageInstanceOf(answer, located || null, rootDir))
-        );
+        const root = packageInstanceOf(answer, located || null, rootDir);
+        spelled.set(name, root);
+        instances.set(name, realPath(root));
       }
     }
     return {
@@ -2348,6 +2360,7 @@ export class ExtractionSession {
       kitMembers,
       diagnostics,
       instances: Object.fromEntries(instances),
+      spelled: Object.fromEntries(spelled),
     };
   }
 
@@ -2386,6 +2399,57 @@ export class ExtractionSession {
     );
   }
 
+  /** This participant's kit instances against `authority`: the last read
+   *  while the authority holds and each instance root keeps its real path
+   *  and manifest, else a fresh read. */
+  private async agreedKitInstances(
+    authority: SystemAuthority,
+    hostContext: SessionResolutionContext
+  ): Promise<Readonly<Record<string, string>>> {
+    const cached = this.agreedKits;
+    if (
+      cached !== null &&
+      cached.authority === authority &&
+      cached.key === this.instanceRootsKey(cached.spelled)
+    ) {
+      return cached.instances;
+    }
+    let read: KitInstanceRead | null = null;
+    try {
+      read = await this.readKitInstances(
+        hostContext,
+        resolve(this.rootDir!, this.options.system)
+      );
+    } catch {}
+    const instances = read?.instances ?? {};
+    const spelled = read?.spelled ?? {};
+    this.agreedKits =
+      read === null
+        ? null
+        : {
+            authority,
+            key: this.instanceRootsKey(spelled),
+            instances,
+            spelled,
+          };
+    return instances;
+  }
+
+  /** Each instance root's real path and manifest fingerprint, as stable
+   *  text. */
+  private instanceRootsKey(spelled: Readonly<Record<string, string>>): string {
+    const fingerprint = this.engine().fingerprintFile;
+    return JSON.stringify(
+      Object.entries(spelled)
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([name, root]) => [
+          name,
+          realPath(root),
+          fingerprint?.(join(root, 'package.json')) ?? null,
+        ])
+    );
+  }
+
   /** One agreed system authority (SA5): a participant whose resolution
    *  context differs from the one the build's system was loaded under loads
    *  it once under its own, and proceeds only on the same system. Otherwise
@@ -2394,14 +2458,10 @@ export class ExtractionSession {
     const authority = getSystemAuthority(this.key);
     if (authority === null) return;
     // This participant's own kit instances: its host may alias a kit
-    // another compiler does not (C8).
+    // another compiler does not (C8). Read once per authority commit, and
+    // again where an instance's root moved or its manifest changed.
     const hostContext = this.hostResolutionContext();
-    const instances = await instancesOf(
-      this.readKitInstances(
-        hostContext,
-        resolve(this.rootDir!, this.options.system)
-      )
-    );
+    const instances = await this.agreedKitInstances(authority, hostContext);
     const context = this.resolutionContextText(instances);
     if (context === authority.context) return;
     let own = authority.others.get(context);
