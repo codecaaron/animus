@@ -141,6 +141,12 @@ pub struct ResolutionContext {
     pub conditions: Vec<String>,
     pub workspaces: BTreeMap<String, PathBuf>,
     pub extensions: resolution::ExtensionPolicy,
+    /// The instance the host resolves each kit to, by package name, at its
+    /// real directory: a package named here is that directory from every
+    /// importer, so the system evaluates the kit the bundle renders (A3).
+    /// Only kits; the entry inside the instance is still the loader's own
+    /// selection.
+    pub instances: BTreeMap<String, PathBuf>,
 }
 
 impl Default for ResolutionContext {
@@ -149,6 +155,7 @@ impl Default for ResolutionContext {
             conditions: Vec::new(),
             workspaces: BTreeMap::new(),
             extensions: resolution::extension_policy().clone(),
+            instances: BTreeMap::new(),
         }
     }
 }
@@ -355,6 +362,11 @@ fn locate_package_observed(
     context: &ResolutionContext,
     reads: &mut LoadReads,
 ) -> Result<PathBuf, String> {
+    // Animus's own package is never redirected: a host alias of it must
+    // not change which system package evaluates.
+    if let Some(instance) = context.instances.get(pkg_name).filter(|_| pkg_name != "@animus-ui/system") {
+        return Ok(instance.clone());
+    }
     let mut dir = PathBuf::from(start_dir);
     loop {
         let package = dir.join("node_modules").join(pkg_name);

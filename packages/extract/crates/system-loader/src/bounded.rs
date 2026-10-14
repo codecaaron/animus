@@ -2273,6 +2273,49 @@ mod tests {
         assert!(!config.dependencies.iter().any(|path| path.ends_with("analytics/index.js")), "{:?}", config.dependencies);
     }
 
+    /// Contract (C8): a kit named in the context's instances is evaluated
+    /// from the host's instance, from every importer, so an aliased kit's
+    /// vocabulary is the one the bundle renders; Animus's own package is
+    /// never redirected, whatever the map holds.
+    #[test]
+    fn a_kit_is_evaluated_from_the_hosts_instance_and_never_the_system_package() {
+        let kit = |ink: &str| {
+            format!("import {{ createTheme }} from '@animus-ui/system';\nexport const theme = createTheme().addColors({{ ink: '{ink}' }}).build();\n")
+        };
+        let installed = kit("#111111");
+        let aliased = kit("#222222");
+        let dir = project(
+            "instances",
+            &[
+                ("node_modules/kit/package.json", "{\"name\":\"kit\",\"type\":\"module\",\"exports\":\"./index.js\"}"),
+                ("node_modules/kit/index.js", installed.as_str()),
+                ("alt/kit/package.json", "{\"name\":\"kit\",\"type\":\"module\",\"exports\":\"./index.js\"}"),
+                ("alt/kit/index.js", aliased.as_str()),
+                ("alt/system/package.json", "{\"name\":\"@animus-ui/system\",\"type\":\"module\",\"exports\":\"./index.js\"}"),
+                ("alt/system/index.js", "throw new Error('the aliased system package evaluated');\n"),
+                ("system.ts", "import { createSystem } from '@animus-ui/system';\nexport { theme } from 'kit';\nexport const ds = createSystem().build().seal();\n"),
+            ],
+        );
+        let entry = dir.join("system.ts").to_string_lossy().to_string();
+        let root = dir.to_string_lossy().to_string();
+        let own = load_system_module(&entry, &root, None, &ResolutionContext::default());
+        let hosted = load_system_module(
+            &entry,
+            &root,
+            None,
+            &ResolutionContext {
+                instances: [("kit", "alt/kit"), ("@animus-ui/system", "alt/system")]
+                    .into_iter()
+                    .map(|(name, path)| (name.to_string(), dir.join(path)))
+                    .collect(),
+                ..ResolutionContext::default()
+            },
+        );
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(own.expect("the installed kit loads").scales_json, r##"{"ink":"#111111"}"##);
+        assert_eq!(hosted.expect("the host's instance loads").scales_json, r##"{"ink":"#222222"}"##);
+    }
+
     /// Contract: the audit owns the code of the repository's monorepo: every
     /// module the system imports from below the nearest root declared by a
     /// `workspaces` field or a `pnpm-workspace.yaml`, in no `node_modules`,

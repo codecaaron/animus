@@ -4,11 +4,12 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'fs';
 import { createRequire } from 'module';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join, resolve } from 'path';
 
 import {
   buildSystemPropsModule,
@@ -262,6 +263,63 @@ export function disposeTempRoots(): void {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+const REPO_ROOT = resolve(__dirname, '../../../..');
+
+/**
+ * An app whose system includes `kit/definition`, with `kit` installed and a
+ * copy, `alt-kit`, whose definition's `brand` is `#ff6347` (the installed
+ * one's is `#111111`): a host alias of `kit` to `alt-kit` is visible in the
+ * extracted CSS (C8). `esm` writes `"type": "module"` packages with a `.js`
+ * runtime entry, as Vite's ESM resolution reads them; otherwise `.mjs`.
+ */
+export function createAliasedKitApp(
+  prefix: string,
+  options: { esm?: boolean } = {}
+): string {
+  const root = realpathSync(makeTempRoot(prefix));
+  const type = options.esm ? ',"type":"module"' : '';
+  const runtime = options.esm ? 'definition.js' : 'definition.mjs';
+  const write = (path: string, contents: string): void => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), contents);
+  };
+  mkdirSync(join(root, 'node_modules', '@animus-ui'), { recursive: true });
+  for (const name of ['system', 'properties']) {
+    symlinkSync(
+      join(REPO_ROOT, 'packages', name),
+      join(root, 'node_modules', '@animus-ui', name)
+    );
+  }
+  write('package.json', `{"name":"app"${type}}`);
+  for (const [name, brand] of [
+    ['kit', '#111111'],
+    ['alt-kit', '#ff6347'],
+  ] as const) {
+    write(
+      `node_modules/${name}/package.json`,
+      `{"name":"${name}"${type},"exports":{"./definition":{"animus":"./src/definition.ts","default":"./dist/${runtime}"}}}`
+    );
+    write(
+      `node_modules/${name}/src/definition.ts`,
+      `import { createSystem } from '@animus-ui/system';
+export const ds = createSystem().build().seal();
+export const brand = '${brand}';
+`
+    );
+    write(`node_modules/${name}/dist/${runtime}`, 'export const ds = {};\n');
+  }
+  write(
+    'src/system.ts',
+    `import { createSystem, createTheme } from '@animus-ui/system';
+import { ds as kit, brand } from 'kit/definition';
+export const theme = createTheme().addColors({ brand: { 500: brand } }).build();
+export const ds = createSystem().extend(kit).build().seal();
+`
+  );
+  write('src/App.tsx', 'export const App = 1;\n');
+  return root;
 }
 
 export function createProject(prefix: string): string {
