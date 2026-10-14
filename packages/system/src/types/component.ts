@@ -237,6 +237,12 @@ type TargetClassName<P> = P extends { className?: infer T }
     : T | undefined
   : string | undefined;
 
+/** The builder fields `asComponent()` reads its forwardable names from. */
+export interface ForwardSource {
+  variants: unknown;
+  statesConfig: unknown;
+}
+
 /** The variants and states of a builder, by name. */
 type ForwardableName<V, S> = Extract<
   keyof StripIndex<V> | keyof StripIndex<S>,
@@ -301,15 +307,15 @@ export type RequiredForward<C extends ComponentType<any>, V, S, F> =
 
 /**
  * `asComponent()`'s options, refused where the target does not accept a
- * forwarded name: `forward` must then also be a message naming it.
+ * forwarded name: `forward` must then be a message naming it.
  */
-export type AsComponentOptions<C extends ComponentType<any>, V, S, F> = {
-  forward?: F;
-} & ([UnacceptedForward<C, V, S, F>] extends [never]
-  ? unknown
+export type AsComponentOptions<C extends ComponentType<any>, V, S, F> = [
+  UnacceptedForward<C, V, S, F>,
+] extends [never]
+  ? { forward?: F }
   : {
       forward: `the target takes no prop for forwarded '${UnacceptedForward<C, V, S, F>}', or one that does not accept its value`;
-    });
+    };
 
 /**
  * The wrapped component's own props, with its ref, then exactly what the
