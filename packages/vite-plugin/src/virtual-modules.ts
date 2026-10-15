@@ -172,12 +172,27 @@ if (import.meta.hot) {
     return ctx.systemPropsModule;
   }
 
-  if (id === RESOLVED_FONT_PRELOADS_ID) {
-    // The hrefs index.html preloads, as written: a build's asset placeholder
-    // becomes the emitted file's URL in this module as it does in the page.
-    // Not `fontPreloadsModule`, which reads a `./` href against the module.
-    return `export default ${JSON.stringify(ctx.fontPreloads)};\n`;
-  }
+  if (id === RESOLVED_FONT_PRELOADS_ID) return fontPreloadsSource(ctx);
 
   return null;
+}
+
+/**
+ * The font-preloads module: each preload at the href index.html preloads it.
+ * A build's asset placeholder becomes the emitted file's URL here as it does
+ * in the page. A build imports a root-relative file Vite serves with `?url`,
+ * so Vite applies its `base` here as it does to the page's preload. Not
+ * `fontPreloadsModule`, which reads a `./` href against the module.
+ */
+function fontPreloadsSource(ctx: PluginContext): string {
+  const imports: string[] = [];
+  const entries = ctx.fontPreloads.map(({ href, ...rest }) => {
+    if (!ctx.isProd || !ctx.servesRootRelative(href) || /[?#]/.test(href)) {
+      return JSON.stringify({ href, ...rest });
+    }
+    const name = `href${imports.length}`;
+    imports.push(`import ${name} from ${JSON.stringify(`${href}?url`)};\n`);
+    return `{ href: ${name}, ...${JSON.stringify(rest)} }`;
+  });
+  return `${imports.join('')}export default [${entries.join(', ')}];\n`;
 }

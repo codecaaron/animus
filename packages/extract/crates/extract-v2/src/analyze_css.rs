@@ -3510,6 +3510,21 @@ fn resolve_identity(
     by_bare_name(local)
 }
 
+/// Whether an analysed module may write through a binding it imports from
+/// the package `source` names: sets or deletes a member, or hands the object
+/// on whole.
+fn writes_into_package(files: &BTreeMap<String, FileFacts>, source: &str) -> bool {
+    let package = animus_system_loader::split_specifier(source).0;
+    let from_package = |source: &str| animus_system_loader::split_specifier(source).0 == package;
+    files.values().any(|ff| {
+        ff.imports.iter().any(|import| from_package(&import.source) && ff.unsafe_object_uses.contains_key(&import.local))
+            || ff
+                .namespace_imports
+                .iter()
+                .any(|(local, source)| from_package(source) && ff.written_namespaces.contains_key(local))
+    })
+}
+
 /// The source `root` is imported from in `ff`, by a named or a namespace
 /// import.
 fn root_import_source<'a>(ff: &'a FileFacts, root: &str) -> Option<&'a String> {
@@ -5415,7 +5430,9 @@ fn uncertain_tag_reason(
                 true => format!("is a member of '{root}', imported from '{source}'"),
                 false => format!("is imported from '{source}'"),
             };
-            if foreign_import(ff, tag, source, inputs) {
+            // A member of an object the app writes into may be one it put
+            // there.
+            if foreign_import(ff, tag, source, inputs) && !(member && writes_into_package(files, source)) {
                 return (TagClass::Foreign, format!("{whose}, a package with no dependency path to Animus"));
             }
             if resolve_import_source(file, source, files, inputs).is_none() {

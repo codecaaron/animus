@@ -575,19 +575,24 @@ export class PluginContext {
   /** A root-relative URL a face names as written, as Vite's dev CSS pass
    *  writes it: under `server.origin` and the base where it names a public
    *  file or a file under the root, else unchanged. */
-  devRootRelativeUrl(href: string): string {
-    if (!href.startsWith('/') || href.startsWith('//')) return href;
+  /** Whether `href` is a root-relative URL of a file Vite serves, from its
+   *  public directory or its root. */
+  servesRootRelative(href: string): boolean {
+    if (!href.startsWith('/') || href.startsWith('//')) return false;
     // Vite looks the file up by its decoded path; the URL keeps its escapes.
     let path: string;
     try {
       path = decodeURI(href.split(/[?#]/)[0]!);
     } catch {
-      return href;
+      return false;
     }
-    const served = [this.publicDir, this.viteRoot].some(
+    return [this.publicDir, this.viteRoot].some(
       (dir) => dir !== '' && existsSync(join(dir, path))
     );
-    if (!served) return href;
+  }
+
+  devRootRelativeUrl(href: string): string {
+    if (!this.servesRootRelative(href)) return href;
     const base = this.base.endsWith('/') ? this.base.slice(0, -1) : this.base;
     return `${this.serverOrigin}${base}${href}`;
   }

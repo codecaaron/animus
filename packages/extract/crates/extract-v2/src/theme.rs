@@ -2912,8 +2912,23 @@ impl Selection {
 /// A CSS `unicode-range` value as code point ranges: `U+0041`,
 /// `U+0000-00FF` and `U+4??`, comma-separated; `None` when it is not one.
 fn unicode_ranges(text: &str) -> Option<Vec<(u32, u32)>> {
-    let hex = |text: &str| (1..=6).contains(&text.len()).then(|| u32::from_str_radix(text, 16).ok()).flatten();
-    text.split(',')
+    let hex = |text: &str| {
+        ((1..=6).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then(|| u32::from_str_radix(text, 16).ok())
+            .flatten()
+    };
+    // A comment separates tokens as whitespace does; one left open runs to
+    // the end.
+    let mut uncommented = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find("/*") {
+        uncommented.push_str(&rest[..open]);
+        uncommented.push(' ');
+        rest = rest[open + 2..].find("*/").map_or("", |close| &rest[open + 2 + close + 2..]);
+    }
+    uncommented.push_str(rest);
+    uncommented
+        .split(',')
         .map(|part| {
             let part = part.trim();
             let digits = part.strip_prefix("U+").or_else(|| part.strip_prefix("u+"))?;
