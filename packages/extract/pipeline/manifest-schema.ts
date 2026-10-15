@@ -4,7 +4,7 @@
  */
 
 import type { DynamicPropMeta } from './dynamic-prop-config';
-import type { FontPreload } from './font-preloads';
+import type { PreloadedFontFace } from './font-preloads';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type { ExtractFileFacts } from './source-ingestion';
 
@@ -153,10 +153,14 @@ export interface ProjectManifest {
   timing: ManifestTiming;
 }
 
-/** A preloaded font file and the faces that preload it, named as their
- *  reports name them: by their flags, or by the host's `fontPreloads`. */
-export interface ManifestFontPreload extends FontPreload {
+/** A preloaded font file and the faces that preload it, by their flags or
+ *  by the host's `fontPreloads`: named as their reports name them, and as
+ *  they declare themselves. */
+export interface ManifestFontPreload {
+  href: string;
+  type?: string;
   faces: string[];
+  descriptors: PreloadedFontFace[];
 }
 
 /** An extension dropped over its parent: the typed evidence a host's

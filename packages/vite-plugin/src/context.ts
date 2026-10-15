@@ -29,6 +29,7 @@ import { join } from 'path';
 import {
   RESOLVED_COMPONENTS_ID,
   RESOLVED_CSS_ID,
+  RESOLVED_FONT_PRELOADS_ID,
   RESOLVED_SYSTEM_PROPS_ID,
   VIRTUAL_CSS_ID,
   VIRTUAL_SYSTEM_PROPS_ID,
@@ -709,6 +710,7 @@ export class PluginContext {
       RESOLVED_CSS_ID,
       RESOLVED_COMPONENTS_ID,
       RESOLVED_SYSTEM_PROPS_ID,
+      RESOLVED_FONT_PRELOADS_ID,
     ]) {
       const mod = server.moduleGraph.getModuleById(moduleId);
       if (mod) server.moduleGraph.invalidateModule(mod);

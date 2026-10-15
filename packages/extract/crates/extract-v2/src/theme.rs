@@ -2760,6 +2760,23 @@ pub struct FontPreload {
     pub mime: Option<&'static str>,
     /// The faces that preload it, named as their reports name them.
     pub faces: Vec<String>,
+    /// The faces that preload it, as a host's `fontPreloads` reads them.
+    pub descriptors: Vec<PreloadedFace>,
+}
+
+/// A face that preloads a file: its family, as a host's `fontPreloads`
+/// matches it, and the descriptors that tell it from the family's other
+/// faces, as it declares them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreloadedFace {
+    pub family: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weight: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unicode_range: Option<String>,
 }
 
 /// The formats no current browser loads, by `format` or by extension: a
@@ -2967,7 +2984,7 @@ fn preload_source(sources: &[&Value]) -> Result<FontPreload, String> {
         .1
         .and_then(font_mime)
         .or_else(|| extension_of(url).as_deref().and_then(font_mime));
-    Ok(FontPreload { href: url.to_string(), mime, faces: Vec::new() })
+    Ok(FontPreload { href: url.to_string(), mime, faces: Vec::new(), descriptors: Vec::new() })
 }
 
 /// A global block's typed font faces, each a `@font-face` rule: the family,
@@ -3055,10 +3072,24 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext, preloads: &mut FontPre
         if asked {
             match preload_source(&kept) {
                 Ok(preload) => {
-                    match preloads.list.iter_mut().find(|known| known.href == preload.href) {
-                        Some(known) if known.faces.contains(&name) => {}
-                        Some(known) => known.faces.push(name.clone()),
-                        None => preloads.list.push(FontPreload { faces: vec![name.clone()], ..preload }),
+                    let declared = PreloadedFace {
+                        family: family_identity(&resolved),
+                        weight: descriptor("weight").map(str::to_string),
+                        style: descriptor("style").map(str::to_string),
+                        unicode_range: descriptor("unicodeRange").map(str::to_string),
+                    };
+                    let known = match preloads.list.iter_mut().position(|known| known.href == preload.href) {
+                        Some(at) => &mut preloads.list[at],
+                        None => {
+                            preloads.list.push(preload);
+                            preloads.list.last_mut().expect("just pushed")
+                        }
+                    };
+                    if !known.faces.contains(&name) {
+                        known.faces.push(name.clone());
+                    }
+                    if !known.descriptors.contains(&declared) {
+                        known.descriptors.push(declared);
                     }
                 }
                 Err(reason) => preload_dropped(reason),

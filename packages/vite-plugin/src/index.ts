@@ -37,6 +37,12 @@ import type { Plugin, UserConfig } from 'vite';
 
 export { discoverFiles } from '@animus-ui/extract/pipeline';
 export type { AnimusQuarantineOptions } from '@animus-ui/extract/pipeline';
+/** The entries `virtual:animus/font-preloads` exports by default: each file
+ *  this build preloads, the URL it is preloaded at, and its faces. */
+export type {
+  FontPreload,
+  PreloadedFontFace,
+} from '@animus-ui/extract/pipeline';
 
 /** The optimizer would prebundle an installed kit past the transform: a
  *  source kit from its compiled entry, and a compiled kit with its builder

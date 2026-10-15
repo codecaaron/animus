@@ -11,6 +11,18 @@ export interface FontPreload {
   href: string;
   /** The file's MIME type, where its format names a known one. */
   type?: string;
+  /** The faces that preload the file: those whose flag asks, or those the
+   *  host's `fontPreloads` selects. */
+  faces?: PreloadedFontFace[];
+}
+
+/** A face that preloads a file: its family, as `fontPreloads` matches it,
+ *  and the descriptors it declares. */
+export interface PreloadedFontFace {
+  family: string;
+  weight?: string;
+  style?: string;
+  unicodeRange?: string;
 }
 
 /**
@@ -75,12 +87,14 @@ export function renderFontPreloads(
  * pipeline gives the face's own `url()` beside this module.
  */
 export function fontPreloadsModule(preloads: readonly FontPreload[]): string {
-  const entries = preloads.map(({ href, type }) => {
+  const entries = preloads.map(({ href, type, faces }) => {
     const url = href.startsWith('./')
       ? `new URL(${JSON.stringify(href)}, import.meta.url).href`
       : JSON.stringify(href);
     const typed = type === undefined ? '' : `, type: ${JSON.stringify(type)}`;
-    return `  { href: ${url}${typed} },\n`;
+    const declared =
+      faces === undefined ? '' : `, faces: ${JSON.stringify(faces)}`;
+    return `  { href: ${url}${typed}${declared} },\n`;
   });
   return `export default [\n${entries.join('')}];\n`;
 }

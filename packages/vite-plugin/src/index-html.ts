@@ -1,5 +1,7 @@
 import { substituteFontPreloads } from '@animus-ui/extract/pipeline';
 
+import type { FontPreload } from '@animus-ui/extract/pipeline';
+
 import { BRIDGE_SCRIPT_SRC } from './constants';
 
 import type { PluginContext } from './context';
@@ -161,23 +163,30 @@ export function injectHeadTags(
   return html.slice(0, offset) + inserted + html.slice(offset);
 }
 
-/** The preloads for the faces that ask for one, by the URL the stylesheet's
- *  own `url()` gets, each marked as Animus's; one the document already
- *  preloads is left out. */
+/** The published preloads, each by the URL the stylesheet's own `url()`
+ *  gets. */
+export function servedFontPreloads(ctx: PluginContext): FontPreload[] {
+  return substituteFontPreloads(
+    ctx.served?.fontPreloads,
+    ctx.assetUrlBySpecifier
+  ).map((preload) =>
+    ctx.isProd
+      ? preload
+      : { ...preload, href: ctx.devRootRelativeUrl(preload.href) }
+  );
+}
+
+/** The preloads for the faces that ask for one, each marked as Animus's;
+ *  one the document already preloads is left out. */
 function fontPreloadTags(
   ctx: PluginContext,
   html: string
 ): HtmlTagDescriptor[] {
-  const published = ctx.served?.fontPreloads ?? [];
-  if (published.length === 0) return [];
+  if (!ctx.served?.fontPreloads.length) return [];
   const existing = preloadedHrefs(html);
-  const preloads = substituteFontPreloads(published, ctx.assetUrlBySpecifier)
-    .map((preload) =>
-      ctx.isProd
-        ? preload
-        : { ...preload, href: ctx.devRootRelativeUrl(preload.href) }
-    )
-    .filter(({ href }) => !existing.has(href));
+  const preloads = servedFontPreloads(ctx).filter(
+    ({ href }) => !existing.has(href)
+  );
   return preloads.map(({ href, type }): HtmlTagDescriptor => {
     const attrs: NonNullable<HtmlTagDescriptor['attrs']> = {
       rel: 'preload',

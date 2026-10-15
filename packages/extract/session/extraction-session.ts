@@ -2923,14 +2923,19 @@ export class ExtractionSession {
 
     // Substitution happens before assembly so every CSS consumer receives
     // substituted urls. Pruning: every full pass, incremental on request.
-    // A preload's faces serve only the cost report; hosts get href and type.
+    // A preload's face names serve only the cost report; hosts get the
+    // faces as they declare themselves.
     const { sheets, fontPreloads } = this.substituteAssetReferences(
       {
         variableCss: system.variableCss,
         globalCss: result.globalCss,
         componentCss: result.componentCss,
       },
-      manifest?.font_preloads?.map(({ faces: _faces, ...preload }) => preload),
+      manifest?.font_preloads?.map(({ href, type, descriptors }) => ({
+        href,
+        ...(type === undefined ? {} : { type }),
+        faces: descriptors,
+      })),
       !devMode || this.staleAssetPruning === 'every-cycle'
     );
     this.reportCostlyFontPreloads(manifest?.font_preloads);

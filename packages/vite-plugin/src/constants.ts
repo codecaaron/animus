@@ -1,3 +1,5 @@
+import { FONT_PRELOADS_MODULE_ID } from '@animus-ui/extract/session';
+
 /**
  * The namespace every virtual module here lives under; the `transform` guard
  * matches on this same string so a rename cannot strand it.
@@ -21,6 +23,11 @@ export const BRIDGE_SCRIPT_SRC = `/@id/${VIRTUAL_BRIDGE_ID}`;
 
 export const VIRTUAL_SYSTEM_PROPS_ID = `${VIRTUAL_PREFIX}system-props`;
 export const RESOLVED_SYSTEM_PROPS_ID = `\0${VIRTUAL_SYSTEM_PROPS_ID}`;
+
+/** The faces this build preloads, with the URL each file is preloaded at:
+ *  the module every host serves under this id. */
+export const VIRTUAL_FONT_PRELOADS_ID = FONT_PRELOADS_MODULE_ID;
+export const RESOLVED_FONT_PRELOADS_ID = `\0${VIRTUAL_FONT_PRELOADS_ID}`;
 
 // The default exclusion set is owned by the shared pipeline core; this is a
 // re-export, not a second authority.

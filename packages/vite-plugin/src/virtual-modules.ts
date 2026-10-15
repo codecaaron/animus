@@ -10,13 +10,16 @@ import {
   RESOLVED_BRIDGE_ID,
   RESOLVED_COMPONENTS_ID,
   RESOLVED_CSS_ID,
+  RESOLVED_FONT_PRELOADS_ID,
   RESOLVED_SYSTEM_PROPS_ID,
   VIRTUAL_BRIDGE_ID,
   VIRTUAL_COMPONENTS_ID,
   VIRTUAL_CSS_ID,
+  VIRTUAL_FONT_PRELOADS_ID,
   VIRTUAL_SYSTEM_PROPS_ID,
 } from './constants';
 import { postProcessCss } from './css';
+import { servedFontPreloads } from './index-html';
 
 import type { PluginContext } from './context';
 
@@ -39,6 +42,7 @@ export function resolveVirtualId(
   if (id === VIRTUAL_COMPONENTS_ID) return RESOLVED_COMPONENTS_ID;
   if (id === VIRTUAL_BRIDGE_ID) return RESOLVED_BRIDGE_ID;
   if (id === VIRTUAL_SYSTEM_PROPS_ID) return RESOLVED_SYSTEM_PROPS_ID;
+  if (id === VIRTUAL_FONT_PRELOADS_ID) return RESOLVED_FONT_PRELOADS_ID;
 
   // Redirect external DS package imports to their source entry
   // so Vite serves .ts files (transformable) instead of .mjs dist files.
@@ -167,6 +171,12 @@ if (import.meta.hot) {
     // The Session's module: the HMR change decision compares the exact bytes
     // this hook serves, built where every host's are.
     return ctx.systemPropsModule;
+  }
+
+  if (id === RESOLVED_FONT_PRELOADS_ID) {
+    // The hrefs index.html preloads, as written: a build's asset placeholder
+    // becomes the emitted file's URL in this module as it does in the page.
+    return `export default ${JSON.stringify(servedFontPreloads(ctx))};\n`;
   }
 
   return null;
