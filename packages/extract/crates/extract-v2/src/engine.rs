@@ -1548,12 +1548,14 @@ impl ExtractEngine {
             return Ok(serde_json::json!({ "code": source, "hasComponents": false }).to_string());
         }
 
+        let names = assemble::GeneratedNames::free_in(source);
         let replacements = assemble::assemble_replacements(
             &path,
             file_facts,
             crate::ids::CLASS_PREFIX,
             Some(&file_payloads),
             &self.opts.css_inputs.group_registry,
+            &names,
         )
         .map_err(|e| match e {
             assemble::AssembleError::NeedsConfig(msg) => napi::Error::from_reason(format!(
@@ -1605,25 +1607,18 @@ impl ExtractEngine {
             return Ok(serde_json::json!({ "code": source, "hasComponents": false }).to_string());
         }
 
-        let mut virtual_imports: Vec<&str> = Vec::new();
-        if import_needs.system_prop_map {
-            virtual_imports.push("systemPropMap");
-        }
-        if import_needs.system_prop_groups {
-            virtual_imports.push("systemPropGroups");
-        }
-        if import_needs.typed_system_props {
-            virtual_imports.push("typedSystemProps");
-        }
-        if import_needs.dynamic_prop_config {
-            virtual_imports.push("dynamicPropConfig");
-        }
-        if import_needs.transforms {
-            virtual_imports.push("transforms");
-        }
-        if import_needs.runtime_tables {
-            virtual_imports.push("animusTables");
-        }
+        let mut virtual_imports: Vec<String> = Vec::new();
+        let mut import = |needed: bool, export: &str, local: &str| {
+            if needed {
+                virtual_imports.push(if export == local { local.to_string() } else { format!("{export} as {local}") });
+            }
+        };
+        import(import_needs.system_prop_map, "systemPropMap", &names.system_prop_map);
+        import(import_needs.system_prop_groups, "systemPropGroups", &names.system_prop_groups);
+        import(import_needs.typed_system_props, "typedSystemProps", &names.typed_system_props);
+        import(import_needs.dynamic_prop_config, "dynamicPropConfig", &names.dynamic_prop_config);
+        import(import_needs.transforms, "transforms", &names.transforms);
+        import(import_needs.runtime_tables, "animusTables", &names.animus_tables);
 
         let mut system_imports: Vec<&str> = Vec::new();
         if import_needs.create_component {
@@ -1663,9 +1658,12 @@ impl ExtractEngine {
                 self.opts.system_props_module_id
             );
             let binding_loop = if import_needs.dynamic_prop_config {
-                "for (const [k, v] of Object.entries(dynamicPropConfig)) { if (v.transformId) v.transform = transforms[v.transformId]; }\n"
+                format!(
+                    "for (const [k, v] of Object.entries({})) {{ if (v.transformId) v.transform = {}[v.transformId]; }}\n",
+                    names.dynamic_prop_config, names.transforms
+                )
             } else {
-                ""
+                String::new()
             };
             format!(
                 "{}{}{}{}import '{}';\n",
@@ -2427,6 +2425,35 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("import { compose }"));
+    }
+
+    /// Contract: a generated import never collides with the module's own
+    /// bindings. A module that already binds `animusTables` gets the shared
+    /// tables under a free alias, and the whole transformed module parses.
+    #[test]
+    fn generated_imports_never_collide_with_module_bindings() {
+        let source = "const animusTables = 'user';\n\
+            export const C = ds.props({ tone: { property: 'color', scale: { x: 'red' } } }).asElement('div');\n\
+            export const App = ({ v }) => <C tone={v} title={animusTables} />;\n";
+        let code = transform_source(source);
+
+        assert!(code.contains("animusTables as "), "the tables arrive under an alias: {code}");
+        // Parsed as JavaScript: oxc reports a redeclared binding only
+        // outside TypeScript, and this module carries no type syntax.
+        let ast = crate::owned_ast::OwnedAst::parse(
+            "directive.jsx".into(),
+            code.clone(),
+            &crate::owned_ast::ParseCounter::new(0),
+        );
+        let semantic =
+            oxc::semantic::SemanticBuilder::new().with_check_syntax_error(true).build(ast.program());
+        let errors: Vec<String> = ast
+            .diagnostics
+            .iter()
+            .cloned()
+            .chain(semantic.diagnostics.iter().map(ToString::to_string))
+            .collect();
+        assert!(errors.is_empty(), "{errors:?}\n{code}");
     }
 
     #[test]

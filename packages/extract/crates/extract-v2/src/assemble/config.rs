@@ -89,6 +89,7 @@ pub(super) fn build_config(
     prefix: &str,
     payload: Option<&ReplacementPayload>,
     group_registry: &FxHashMap<String, Vec<String>>,
+    names: &super::GeneratedNames,
 ) -> Result<String, AssembleError> {
     let mut config = ObjectLiteral::default();
 
@@ -200,7 +201,7 @@ pub(super) fn build_config(
         let mut concat_parts: Vec<String> = p
             .system_group_names
             .iter()
-            .map(|g| format!("systemPropGroups.{}", g))
+            .map(|g| format!("{}.{}", names.system_prop_groups, g))
             .collect();
         let extra_names = extra_prop_names(p, group_registry);
         if !extra_names.is_empty() {
@@ -231,7 +232,7 @@ pub(super) fn build_config(
     // One generated list, shared by every component, names the system props
     // whose static keys are typed.
     if p.reads_typed_system_props {
-        config.insert("typedSystemProps", Field::Script("typedSystemProps".into()));
+        config.insert("typedSystemProps", Field::Script(names.typed_system_props.clone()));
     }
 
     if let Some(ref cdc) = p.custom_dynamic_config {
@@ -250,7 +251,7 @@ pub(super) fn build_config(
                             "tables" => {}
                             "declarationScaleValues" => fields.insert(
                                 &field,
-                                shared_table(&field, meta.tables.declaration_scale_values.as_deref(), &value),
+                                shared_table(names, &field, meta.tables.declaration_scale_values.as_deref(), &value),
                             ),
                             _ => fields.insert(&field, value),
                         }
@@ -273,7 +274,7 @@ pub(super) fn build_config(
                 fields.insert("strict", json!(true));
             }
             if !meta.keywords.is_empty() {
-                fields.insert("keywords", shared_table("keywords", meta.tables.keywords.as_deref(), &meta.keywords));
+                fields.insert("keywords", shared_table(names, "keywords", meta.tables.keywords.as_deref(), &meta.keywords));
             }
             if meta.declared_numeric {
                 fields.insert("declaredNumeric", json!(true));
@@ -284,13 +285,13 @@ pub(super) fn build_config(
                 fields.insert("transformName", json!(tn));
                 if let Some(ref id) = meta.transform_id {
                     let literal = crate::evaluator::js_string_literal(id);
-                    fields.insert("transform", Field::Script(format!("transforms[{literal}]")));
+                    fields.insert("transform", Field::Script(format!("{}[{literal}]", names.transforms)));
                 }
             }
             if !meta.scale_values.is_empty() {
                 fields.insert(
                     "scaleValues",
-                    shared_table("scaleValues", meta.tables.scale_values.as_deref(), &meta.scale_values),
+                    shared_table(names, "scaleValues", meta.tables.scale_values.as_deref(), &meta.scale_values),
                 );
             }
             if let Some(ref current_var) = meta.current_var {
@@ -308,10 +309,20 @@ pub(super) fn build_config(
 }
 
 /// A table the system-props module's `animusTables` export holds under
-/// `key`, referenced there; one without a key, inlined.
-fn shared_table(table: &str, key: Option<&str>, value: &impl serde::Serialize) -> Field {
+/// `key`, referenced there through the module's local name for it; one
+/// without a key, inlined.
+fn shared_table(
+    names: &super::GeneratedNames,
+    table: &str,
+    key: Option<&str>,
+    value: &impl serde::Serialize,
+) -> Field {
     match key {
-        Some(key) => Field::Script(format!("animusTables.{table}[{}]", crate::evaluator::js_string_literal(key))),
+        Some(key) => Field::Script(format!(
+            "{}.{table}[{}]",
+            names.animus_tables,
+            crate::evaluator::js_string_literal(key)
+        )),
         None => Field::Json(json!(value)),
     }
 }
@@ -391,7 +402,8 @@ mod tests {
         let facts = facts_for("box.tsx", source);
         let registry: FxHashMap<String, Vec<String>> =
             [("space".to_string(), vec!["p".to_string(), "m".to_string()])].into_iter().collect();
-        build_config("box.tsx", "Box", &facts.chains[0], "animus", Some(payload), &registry).unwrap()
+        build_config("box.tsx", "Box", &facts.chains[0], "animus", Some(payload), &registry, &super::super::GeneratedNames::exports())
+            .unwrap()
     }
 
     #[test]

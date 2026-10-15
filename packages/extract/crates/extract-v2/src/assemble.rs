@@ -85,6 +85,59 @@ pub(crate) fn component_class_name(
         .unwrap_or_else(|| class_name_for(filename, binding, prefix))
 }
 
+/// The local names a transformed module gives the system-props module's
+/// exports: each export's own name, or the first free `name$n` where the
+/// module already uses that name, so a generated import never collides
+/// with the module's own bindings.
+#[derive(Debug, Clone)]
+pub struct GeneratedNames {
+    pub system_prop_map: String,
+    pub system_prop_groups: String,
+    pub typed_system_props: String,
+    pub dynamic_prop_config: String,
+    pub transforms: String,
+    pub animus_tables: String,
+}
+
+impl GeneratedNames {
+    /// Each export under its own name, for replacement text no module
+    /// surrounds.
+    pub fn exports() -> Self {
+        Self::chosen(|name| name.to_string())
+    }
+
+    /// Names that no identifier in `source` spells.
+    pub fn free_in(source: &str) -> Self {
+        Self::chosen(|name| {
+            std::iter::once(name.to_string())
+                .chain((1..).map(|n| format!("{name}${n}")))
+                .find(|candidate| !spells_identifier(source, candidate))
+                .expect("an unbounded sequence has a free name")
+        })
+    }
+
+    fn chosen(local: impl Fn(&str) -> String) -> Self {
+        Self {
+            system_prop_map: local("systemPropMap"),
+            system_prop_groups: local("systemPropGroups"),
+            typed_system_props: local("typedSystemProps"),
+            dynamic_prop_config: local("dynamicPropConfig"),
+            transforms: local("transforms"),
+            animus_tables: local("animusTables"),
+        }
+    }
+}
+
+/// Whether `name` occurs in `source` as a whole identifier: in code, a
+/// string or a comment alike, which can only make a name look taken.
+fn spells_identifier(source: &str, name: &str) -> bool {
+    let continues = oxc::syntax::identifier::is_identifier_part;
+    source.match_indices(name).any(|(at, _)| {
+        !source[..at].chars().next_back().is_some_and(continues)
+            && !source[at + name.len()..].chars().next().is_some_and(continues)
+    })
+}
+
 /// Build the replacement call text for one chain.
 pub fn generate_replacement(
     filename: &str,
@@ -92,21 +145,29 @@ pub fn generate_replacement(
     prefix: &str,
     payload: Option<&ReplacementPayload>,
     group_registry: &FxHashMap<String, Vec<String>>,
+    names: &GeneratedNames,
 ) -> Result<String, AssembleError> {
     let d = &chain.descriptor;
     let class_name = component_class_name(filename, &d.binding, prefix, payload);
-    let config = build_config(filename, &d.binding, chain, prefix, payload, group_registry)?;
+    let config = build_config(filename, &d.binding, chain, prefix, payload, group_registry, names)?;
+    let maps = |dynamic: bool| {
+        if dynamic {
+            format!("{}, {}", names.system_prop_map, names.dynamic_prop_config)
+        } else {
+            names.system_prop_map.clone()
+        }
+    };
     let has_system_props = payload.is_some_and(|p| !p.system_prop_names.is_empty());
     let has_dynamic_props = payload.is_some_and(|p| p.has_dynamic_props);
 
     Ok(if d.terminal == TerminalKind::AsClass {
         if has_system_props && has_dynamic_props {
             format!(
-                "createClassResolver('{}', {}, systemPropMap, dynamicPropConfig)",
-                class_name, config
+                "createClassResolver('{}', {}, {})",
+                class_name, config, maps(true)
             )
         } else if has_system_props {
-            format!("createClassResolver('{}', {}, systemPropMap)", class_name, config)
+            format!("createClassResolver('{}', {}, {})", class_name, config, maps(false))
         } else {
             format!("createClassResolver('{}', {})", class_name, config)
         }
@@ -118,11 +179,11 @@ pub fn generate_replacement(
         };
         if has_system_props && has_dynamic_props {
             format!(
-                "createComponent({}, '{}', {}, systemPropMap, dynamicPropConfig)",
-                tag, class_name, config
+                "createComponent({}, '{}', {}, {})",
+                tag, class_name, config, maps(true)
             )
         } else if has_system_props {
-            format!("createComponent({}, '{}', {}, systemPropMap)", tag, class_name, config)
+            format!("createComponent({}, '{}', {}, {})", tag, class_name, config, maps(false))
         } else {
             format!("createComponent({}, '{}', {})", tag, class_name, config)
         }
@@ -137,6 +198,7 @@ pub fn assemble_replacements(
     prefix: &str,
     payloads: Option<&HashMap<String, ReplacementPayload>>,
     group_registry: &FxHashMap<String, Vec<String>>,
+    names: &GeneratedNames,
 ) -> Result<Vec<(u32, u32, String)>, AssembleError> {
     let mut out = Vec::new();
     for chain in &facts.chains {
@@ -152,7 +214,7 @@ pub fn assemble_replacements(
             },
             None => None,
         };
-        let text = generate_replacement(filename, chain, prefix, payload, group_registry)?;
+        let text = generate_replacement(filename, chain, prefix, payload, group_registry, names)?;
         out.push((chain.descriptor.span.0, chain.descriptor.span.1, text));
     }
     Ok(out)
@@ -191,7 +253,7 @@ mod tests {
             "a.tsx",
             "export const Box = ds.styles({ p: 4 }).asElement('div');",
         );
-        let text = generate_replacement("a.tsx", &facts.chains[0], "animus", None, &FxHashMap::default()).unwrap();
+        let text = generate_replacement("a.tsx", &facts.chains[0], "animus", None, &FxHashMap::default(), &GeneratedNames::exports()).unwrap();
         let class = class_name_for("a.tsx", "Box", "animus");
         assert_eq!(text, format!("createComponent('div', '{class}', {{}})"));
     }
@@ -206,7 +268,7 @@ mod tests {
                 .states({ loading: {} })
                 .asElement('button');"#,
         );
-        let text = generate_replacement("b.tsx", &facts.chains[0], "animus", None, &FxHashMap::default()).unwrap();
+        let text = generate_replacement("b.tsx", &facts.chains[0], "animus", None, &FxHashMap::default(), &GeneratedNames::exports()).unwrap();
         // Compound conditions are sorted (size before variant) for
         // determinism.
         assert!(text.contains(r#""conditions":{"size":"sm","variant":"ghost"}"#), "got {text}");
@@ -221,7 +283,7 @@ mod tests {
             "c.tsx",
             "export const Box = ds.system({ space: true }).asElement('div');",
         );
-        let err = generate_replacement("c.tsx", &facts.chains[0], "animus", None, &FxHashMap::default()).unwrap_err();
+        let err = generate_replacement("c.tsx", &facts.chains[0], "animus", None, &FxHashMap::default(), &GeneratedNames::exports()).unwrap_err();
         match err {
             AssembleError::NeedsConfig(msg) => assert!(msg.contains("row 07")),
         }
@@ -230,7 +292,7 @@ mod tests {
     #[test]
     fn class_resolver_shape() {
         let facts = facts_for("d.tsx", "export const card = ds.styles({ p: 8 }).asClass();");
-        let text = generate_replacement("d.tsx", &facts.chains[0], "animus", None, &FxHashMap::default()).unwrap();
+        let text = generate_replacement("d.tsx", &facts.chains[0], "animus", None, &FxHashMap::default(), &GeneratedNames::exports()).unwrap();
         assert!(text.starts_with("createClassResolver('animus-card-"), "got {text}");
     }
 }

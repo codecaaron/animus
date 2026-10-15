@@ -9784,6 +9784,7 @@ fn run_with_system_floor(
             class_prefix,
             payload,
             &inputs.group_registry,
+            &crate::assemble::GeneratedNames::exports(),
         )
         .unwrap_or_default();
         let terminal_str = match terminal {
