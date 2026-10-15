@@ -1098,41 +1098,49 @@ fn eval_asset_call(
     Some(Ok(StaticValue::String(format!("{ASSET_PLACEHOLDER_PREFIX}{}", specifier.value))))
 }
 
-/// A template whose every expression is a static string or number, as its
-/// text. Outside an `asset()` placeholder, a number joins as JavaScript
-/// writes it, so one this cannot spell without an exponent keeps the
-/// template non-static.
+/// A template whose every expression is a static string or number, as
+/// JavaScript evaluates it: its cooked text, and each number as `String(n)`
+/// writes it. A text with no cooked value, or a number this may not print
+/// as JavaScript does, keeps the template non-static.
 fn eval_static_template(
     tpl: &oxc::ast::ast::TemplateLiteral<'_>,
     static_values: Option<Statics<'_>>,
     keyframes_eligible: bool,
 ) -> Option<StaticValue> {
     let mut parts = Vec::with_capacity(tpl.expressions.len());
-    let mut exponent = false;
     for expression in &tpl.expressions {
         let mut skips = Vec::new();
         let part = match eval_expression_scoped(expression, &mut skips, static_values, keyframes_eligible).ok()? {
             StaticValue::String(text) => text,
-            StaticValue::Number(StaticNumber(number)) => {
-                let text = number.to_string();
-                exponent |= text.contains(['e', 'E']);
-                text
-            }
+            StaticValue::Number(StaticNumber(number)) => js_number_text(&number)?,
             _ => return None,
         };
         parts.push(part);
     }
-    if exponent && !parts.iter().any(|part| part.contains(ASSET_PLACEHOLDER_PREFIX)) {
-        return None;
-    }
     let mut text = String::new();
     for (index, quasi) in tpl.quasis.iter().enumerate() {
-        text.push_str(&quasi.value.raw);
+        text.push_str(quasi.value.cooked.as_ref()?);
         if let Some(part) = parts.get(index) {
             text.push_str(part);
         }
     }
     Some(StaticValue::String(text))
+}
+
+/// `number` as JavaScript's `String(n)` writes it, where its own text
+/// provably is that: an integer within ±2^53, or a finite fraction printed
+/// without an exponent that reads back as the same value.
+fn js_number_text(number: &serde_json::Number) -> Option<String> {
+    const SAFE: u64 = 1 << 53;
+    if let Some(integer) = number.as_i64() {
+        return (integer.unsigned_abs() <= SAFE).then(|| integer.to_string());
+    }
+    if let Some(integer) = number.as_u64() {
+        return (integer <= SAFE).then(|| integer.to_string());
+    }
+    let value = number.as_f64()?;
+    let text = number.to_string();
+    (value.is_finite() && value.fract() != 0.0 && !text.contains(['e', 'E']) && text.parse::<f64>() == Ok(value)).then_some(text)
 }
 
 /// Whether a value holds an `asset()` placeholder with a relative
@@ -1694,16 +1702,23 @@ mod tests {
     }
 
     /// Contract: a template whose every substitution is a static string or
-    /// number evaluates to its text, a number as JavaScript writes it; one
-    /// that needs an exponent keeps the skip.
+    /// number evaluates as JavaScript does, to its cooked text with each
+    /// number as `String(n)` writes it; a number this cannot prove it prints
+    /// that way (beyond ±2^53, or with an exponent) keeps the skip.
     #[test]
     fn template_with_static_substitutions_evaluates() {
-        let (val, skips) = parse_obj_full("{ width: `${8}px`, inset: `${0.5}rem`, content: `\"${'絵'}\"`, top: `${1e-7}px` }");
+        let (val, skips) = parse_obj_full(
+            "{ width: `${8}px`, inset: `${0.5}rem`, content: `\"${'絵'}\"`, top: `${1e-7}px`, \
+             color: `\\u0072${'ed'}`, quotes: `\"${1000000000000000100}\"`, safe: `${9007199254740992}` }",
+        );
         assert_eq!(val["width"], "8px");
         assert_eq!(val["inset"], "0.5rem");
         assert_eq!(val["content"], "\"絵\"");
+        assert_eq!(val["color"], "red");
+        assert_eq!(val["safe"], "9007199254740992");
+        assert!(val.get("quotes").is_none());
         assert!(val.get("top").is_none());
-        assert_eq!(skips.iter().map(|skip| skip.key.as_str()).collect::<Vec<_>>(), ["top"]);
+        assert_eq!(skips.iter().map(|skip| skip.key.as_str()).collect::<Vec<_>>(), ["top", "quotes"]);
     }
 
     #[test]
