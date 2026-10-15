@@ -69,6 +69,9 @@ export function applyResolvedConfig(
   // What dev asset URLs are served under (build URLs are resolved by Vite's
   // own asset pipeline, which applies base itself).
   ctx.base = config.base ?? '/';
+  // How a built page names its assets, which a split build's slice links
+  // follow as Vite's own links do.
+  ctx.renderBuiltUrl = config.experimental.renderBuiltUrl;
   ctx.viteRoot = config.root;
   ctx.serverOrigin = config.server.origin ?? '';
   ctx.publicDir = config.publicDir;

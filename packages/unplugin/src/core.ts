@@ -16,6 +16,7 @@ import {
   rollupExtensionPolicy,
   rollupOutputTargets,
   servedFiles,
+  STYLESHEET_SLICES,
   stylesheetSliceFiles,
   viteAssetClassification,
   viteExtensionPolicy,
@@ -41,8 +42,14 @@ import {
   SESSION_ASSETS_DIR,
   TURBOPACK_SYSTEM_PROPS_ID,
 } from '@animus-ui/extract/session';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 
 import { resolveHostMode, resolveHostOptions } from './options';
 
@@ -91,14 +98,37 @@ export const FONT_PRELOADS_ASSET_NAME = 'animus-font-preloads.json';
  *  relative to `animus.css`, each `animus.<slice>.<hash>.css` beside it. */
 export const STYLESHEETS_ASSET_NAME = 'animus-stylesheets.json';
 
-/** The slice names a slices manifest this host wrote lists; none when it
- *  is absent or unreadable. */
-function previousSlices(path: string): string[] {
+/** A slice file this host publishes, by its name. */
+const SLICE_FILE_RE = new RegExp(
+  `^animus\\.(?:${STYLESHEET_SLICES.join('|')})\\.[0-9a-f]{8}\\.css$`
+);
+
+/** The directory a Rollup or Rolldown output writes to, when it names one. */
+function outputDirOf(output: { dir?: string; file?: string }): string | null {
+  if (output.dir !== undefined) return resolve(output.dir);
+  return output.file === undefined ? null : dirname(resolve(output.file));
+}
+
+/**
+ * Removes from `outDir` the slice files an earlier build published and this
+ * one does not, and the slices index when this build publishes none: a
+ * reader that finds the index must find this build's slices.
+ */
+function pruneSlices(outDir: string | null, kept: readonly string[]): void {
+  if (outDir === null) return;
+  let names: string[];
   try {
-    const names: unknown = JSON.parse(readFileSync(path, 'utf-8'));
-    return Array.isArray(names) ? names.map(String) : [];
+    names = readdirSync(outDir);
   } catch {
-    return [];
+    return;
+  }
+  for (const name of names) {
+    if (SLICE_FILE_RE.test(name) && !kept.includes(name)) {
+      rmSync(join(outDir, name), { force: true });
+    }
+  }
+  if (kept.length === 0) {
+    rmSync(join(outDir, STYLESHEETS_ASSET_NAME), { force: true });
   }
 }
 
@@ -463,6 +493,7 @@ interface WebpackLikeCompiler {
   };
   hooks: {
     done: { tap: (name: string, fn: () => void) => void };
+    afterEmit?: { tap: (name: string, fn: () => void) => void };
     failed?: { tap: (name: string, fn: () => void) => void };
     /** `close()` of a watch, which webpack fires in place of `done` when it
      *  closes mid-compile. */
@@ -751,13 +782,19 @@ export const unpluginFactory: UnpluginFactory<
     await state.pipeline;
   }
 
+  // The slice files the last emitted stylesheet published, which the
+  // output directory keeps once the bundler has written its files.
+  let publishedSlices: string[] = [];
+
   function emitCssAsset(context: UnpluginBuildContext): void {
+    publishedSlices = [];
     if (!state.cssText) return;
     const assets = collectSessionAssets(state.sessionDir);
     const slices =
       options.stylesheets === 'split'
         ? stylesheetSliceFiles(state.cssText, 'animus')
         : [];
+    publishedSlices = slices.map(({ name }) => name);
     const sliceManifest =
       slices.length === 0
         ? null
@@ -792,19 +829,13 @@ export const unpluginFactory: UnpluginFactory<
       const absOut = resolve(base, outDir);
       mkdirSync(absOut, { recursive: true });
       writeFileSync(join(absOut, CSS_ASSET_NAME), state.cssText);
-      // The host writes this directory itself, so it also removes the
-      // slices the last build listed and this one does not publish.
-      const slicesPath = join(absOut, STYLESHEETS_ASSET_NAME);
-      for (const name of previousSlices(slicesPath)) {
-        if (!slices.some((slice) => slice.name === name)) {
-          rmSync(join(absOut, basename(name)), { force: true });
-        }
-      }
       for (const { name, css } of slices) {
         writeFileSync(join(absOut, name), css);
       }
-      if (sliceManifest === null) rmSync(slicesPath, { force: true });
-      else writeFileSync(slicesPath, sliceManifest);
+      if (sliceManifest !== null) {
+        writeFileSync(join(absOut, STYLESHEETS_ASSET_NAME), sliceManifest);
+      }
+      pruneSlices(absOut, publishedSlices);
       // The host writes this directory itself, so it also removes a
       // manifest an earlier build left once no face preloads.
       const preloadsPath = join(absOut, FONT_PRELOADS_ASSET_NAME);
@@ -1055,6 +1086,9 @@ export const unpluginFactory: UnpluginFactory<
           config.command === 'serve' || Boolean(config.build.watch);
         watching = () => serving;
       },
+      writeBundle(outputOptions: { dir?: string; file?: string }) {
+        pruneSlices(outputDirOf(outputOptions), publishedSlices);
+      },
     },
 
     rollup: {
@@ -1083,11 +1117,17 @@ export const unpluginFactory: UnpluginFactory<
       renderStart(outputOptions) {
         checkOwnOutput(this, outputOptions);
       },
+      writeBundle(outputOptions) {
+        pruneSlices(outputDirOf(outputOptions), publishedSlices);
+      },
     },
 
     rolldown: {
       renderStart(outputOptions) {
         checkOwnOutput(this, outputOptions);
+      },
+      writeBundle(outputOptions) {
+        pruneSlices(outputDirOf(outputOptions), publishedSlices);
       },
     },
 
@@ -1312,6 +1352,11 @@ export const unpluginFactory: UnpluginFactory<
     new DefinePlugin({
       __ANIMUS_DEV__: JSON.stringify(effectiveMode() === 'development'),
     }).apply(compiler);
+    // Once the assets are on disk, so an earlier build's slices go.
+    compiler.hooks.afterEmit?.tap(PLUGIN_NAME, () => {
+      const outDir = compiler.options.output?.path;
+      if (outDir !== undefined) pruneSlices(outDir, publishedSlices);
+    });
     // buildEnd maps to the emit hook here, which a failed compilation
     // never reaches.
     compiler.hooks.done.tap(PLUGIN_NAME, () => {

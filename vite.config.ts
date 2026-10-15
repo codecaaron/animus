@@ -36,6 +36,7 @@ const typescriptTestTargets = [
   'packages/extract/tests/source-corpus.test.ts',
   'packages/extract/tests/source-ingestion.test.ts',
   'packages/extract/tests/source-ingestor.test.ts',
+  'packages/extract/tests/split-stylesheet.test.ts',
   'packages/extract/tests/svelte-source-adapter.test.ts',
   'packages/extract/tests/svelte-source-origin.test.ts',
   'packages/extract/tests/tsconfig-paths.test.ts',

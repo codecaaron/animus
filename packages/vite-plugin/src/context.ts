@@ -56,7 +56,7 @@ import type {
   SessionPublication,
   WatchChanges,
 } from '@animus-ui/extract/session';
-import type { Logger } from 'vite';
+import type { Logger, ResolvedConfig } from 'vite';
 
 function emptySystemConfig(): SystemConfig {
   return {
@@ -256,6 +256,7 @@ export class PluginContext {
   });
 
   base = '/';
+  renderBuiltUrl: ResolvedConfig['experimental']['renderBuiltUrl'];
   /** Vite's root and `server.origin`, which a dev asset URL is served
    *  under. */
   viteRoot = '';

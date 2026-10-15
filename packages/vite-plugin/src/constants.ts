@@ -20,10 +20,16 @@ export const RESOLVED_SLICE_IDS: ReadonlyMap<string, StylesheetSlice> = new Map(
   STYLESHEET_SLICES.map((slice) => [`\0${sliceStylesheetId(slice)}`, slice])
 );
 
-/** What the stylesheet's id resolves to in a split build, whose pages
- *  link the slices instead: an empty module, so no chunk carries a
- *  stylesheet of its own. */
-export const RESOLVED_LINKED_STYLES_ID = `\0${VIRTUAL_PREFIX}linked-styles.js`;
+/**
+ * What the stylesheet module holds in a split build: one rule that keeps
+ * the stylesheet's place in Vite's CSS, where the page's links to the
+ * slices then go. Its own property, so no minifier merges or drops it.
+ */
+export const SPLIT_STYLESHEET_MARKER =
+  '.animus-split-stylesheet{--animus-split-stylesheet:1}';
+/** The marker as a built stylesheet spells it, minified or not. */
+export const SPLIT_STYLESHEET_MARKER_RE =
+  /\.animus-split-stylesheet\s*\{\s*--animus-split-stylesheet\s*:\s*1\s*;?\s*\}\n?/;
 
 export const VIRTUAL_COMPONENTS_ID = `${VIRTUAL_PREFIX}components.js`;
 export const RESOLVED_COMPONENTS_ID = `\0${VIRTUAL_COMPONENTS_ID}`;

@@ -11,9 +11,9 @@ import {
   RESOLVED_COMPONENTS_ID,
   RESOLVED_CSS_ID,
   RESOLVED_FONT_PRELOADS_ID,
-  RESOLVED_LINKED_STYLES_ID,
   RESOLVED_SLICE_IDS,
   RESOLVED_SYSTEM_PROPS_ID,
+  SPLIT_STYLESHEET_MARKER,
   VIRTUAL_BRIDGE_ID,
   VIRTUAL_COMPONENTS_ID,
   VIRTUAL_CSS_ID,
@@ -40,12 +40,7 @@ export function resolveVirtualId(
   ctx: PluginContext,
   id: string
 ): string | { id: string; moduleSideEffects: boolean } | null {
-  if (id === VIRTUAL_CSS_ID) {
-    // A split build links the slices from the page instead.
-    return ctx.splitsStylesheet
-      ? { id: RESOLVED_LINKED_STYLES_ID, moduleSideEffects: false }
-      : RESOLVED_CSS_ID;
-  }
+  if (id === VIRTUAL_CSS_ID) return RESOLVED_CSS_ID;
   if (id.startsWith(VIRTUAL_PREFIX) && RESOLVED_SLICE_IDS.has(`\0${id}`)) {
     return `\0${id}`;
   }
@@ -111,8 +106,12 @@ export function loadVirtualModule(
   ctx: PluginContext,
   id: string
 ): string | null {
-  if (id === RESOLVED_CSS_ID) return stylesheetSource(ctx);
-  if (id === RESOLVED_LINKED_STYLES_ID) return 'export {};\n';
+  // A split build's pages link the slices where this module's CSS lands.
+  if (id === RESOLVED_CSS_ID) {
+    return ctx.splitsStylesheet
+      ? SPLIT_STYLESHEET_MARKER
+      : stylesheetSource(ctx);
+  }
 
   if (id === RESOLVED_COMPONENTS_ID) {
     const strippedCss = stripLeadingLayerDeclaration(

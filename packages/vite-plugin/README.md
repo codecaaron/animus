@@ -148,11 +148,13 @@ each a consecutive slice of the single sheet, in its order:
 2. components: `anm-base`, `anm-variants`, `anm-compounds`, `anm-states`;
 3. utilities: `anm-system`, `anm-custom`.
 
-Each page links them in that order in `<head>`, right after Animus's layer
-declaration and font preloads, as ordinary render-blocking stylesheets.
-They hold the single sheet's rules in its order, so the cascade is unchanged;
-Vite minifies each file on its own, which leaves its bytes the same apart from
-the newline ending each file.
+Each page links them in that order exactly where Vite places the single sheet
+among the app's own CSS, as ordinary render-blocking stylesheets: app CSS
+bundled with it keeps its place before or after the three files. They hold
+the single sheet's rules in its order, so the cascade is unchanged; Vite
+minifies each file on its own, which leaves its bytes the same apart from
+the newline ending each file. Their URLs are the ones Vite gives its own
+links, through `base` and `experimental.renderBuiltUrl`.
 Each file is named by its content, so a browser keeps its cached copy of a
 file an edit leaves alone: an edit to a component's styles changes only the
 components file. The three files compress slightly worse than one (about
@@ -162,9 +164,10 @@ components file. The three files compress slightly worse than one (about
 animusExtract({ system: './src/ds.ts', stylesheets: 'split' });
 ```
 
-A split build needs a page Vite builds from HTML, which is where the links go;
-a build with none fails. The dev server keeps one sheet. `'single'` (the
-default) is one sheet the bundle imports.
+A split build needs a page Vite builds from HTML that links the stylesheet,
+which is where the links go: one with no page, or whose stylesheet only a lazy
+chunk loads, fails. The dev server keeps one sheet. `'single'` (the default)
+is one sheet the bundle imports.
 
 ## Third-party stylesheets
 

@@ -24,7 +24,7 @@ import {
   buildIndexHtmlTags,
   duplicatedFontPreloads,
   injectHeadTags,
-  linkStylesheetSlices,
+  placeStylesheetSlices,
 } from './index-html';
 import { quarantinePlugin } from './quarantine-plugin';
 import { transformSource } from './transform';
@@ -134,13 +134,13 @@ export interface AnimusExtractOptions {
    *  (see `FontPreloadEntry`). `[]` preloads none. */
   fontPreloads?: FontPreloadEntry[];
   /** `'split'` builds the stylesheet as three consecutive files, each page
-   *  linking them in order after Animus's layer declaration: foundation
-   *  (variables, `@property`, `anm-global`), components (base through
-   *  states), then utilities (`anm-system`, `anm-custom`). In order they
-   *  hold the rules of the one sheet `'single'` (the default) builds, so
-   *  the cascade is unchanged, and a file an edit leaves alone keeps its
-   *  hash.
-   *  Needs a page Vite builds from HTML; the dev server keeps one sheet. */
+   *  linking them in order where it would link the one sheet `'single'`
+   *  (the default) builds: foundation (variables, `@property`,
+   *  `anm-global`), components (base through states), then utilities
+   *  (`anm-system`, `anm-custom`). In order they hold that sheet's rules,
+   *  so the cascade is unchanged, and a file an edit leaves alone keeps its
+   *  hash. Needs a page Vite builds from HTML to link the stylesheet; the
+   *  dev server keeps one sheet. */
   stylesheets?: StylesheetDelivery;
   /**
    * Substrings, or globs when `*`/`?` present. Replaces the defaults `dist`,
@@ -432,7 +432,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       const slice = RESOLVED_SLICE_IDS.get(id);
       if (slice !== undefined) return slices.get(slice) ?? '';
       const own = loadVirtualModule(ctx, id);
-      if (id === RESOLVED_CSS_ID && own !== null) {
+      // A split build's foundation slice carries the vendor sheets.
+      if (id === RESOLVED_CSS_ID && own !== null && !ctx.splitsStylesheet) {
         return withVendorHead(this, own);
       }
       return own;
@@ -453,7 +454,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       order: 'post',
       handler(_output, bundle) {
         if (linkedSlices.length > 0 && isClient(this)) {
-          linkStylesheetSlices(ctx.base, bundle, linkedSlices);
+          placeStylesheetSlices(ctx, bundle, linkedSlices, (name, source) =>
+            this.getFileName(this.emitFile({ type: 'asset', name, source }))
+          );
         }
         if (!ctx.served?.fontPreloads.length) return;
         for (const file of Object.values(bundle)) {

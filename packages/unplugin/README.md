@@ -81,7 +81,8 @@ plugin first to fix it.
   slices beside `animus.css`, `animus.<slice>.<hash>.css` (foundation,
   components, utilities), and `animus-stylesheets.json`, their names in link
   order. Their bytes in order are `animus.css`'s; a slice an edit leaves
-  alone keeps its name.
+  alone keeps its name. A later build into the same directory removes the
+  slices it no longer publishes, and the index when it publishes none.
 - Supplies the `__ANIMUS_DEV__` dev-signal define through each bundler's
   own mechanism.
 - When a font face declares `preload: true`, emits
