@@ -8428,7 +8428,12 @@ fn run_with_system_floor(
             identity_policy.include(parent_id.clone());
         }
     }
-    let reachable_ids = if identity_uncertain { evaluated_ids.clone() } else { identity_policy.rendered_ids };
+    // A component handed to code usage does not follow renders there with any
+    // props, so it is as reachable as one an analysed use renders.
+    let reachable_ids = match identity_uncertain {
+        true => evaluated_ids.clone(),
+        false => identity_policy.rendered_ids.into_iter().chain(escaped_ids.iter().cloned()).collect(),
+    };
     let active_system_prop_names = collect_reachable_active_prop_names(
         sorted_ids.iter().filter_map(|component_id| {
             evaluated
@@ -14243,39 +14248,47 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// dependency path to Animus, and handed no component) leaves usage
     /// identity certain: it gets no record, and whole-component removal
     /// runs. A component handed to one by reference, as a prop value, an
-    /// element or a child, stays with every option. The same tag where a file
-    /// may hand it a component through `as`, or a member of an object the app
-    /// writes into, keeps its record and turns removal off.
+    /// element or a child, or through an alias or an object holding it, stays
+    /// with every option and a slot for each system prop, which the foreign
+    /// code may write. The same tag where a file may hand it a component
+    /// through `as`, or a member of an object the app writes into, keeps its
+    /// record and turns removal off.
     #[test]
     fn foreign_tags_leave_whole_component_removal_on() {
         let mut inputs = test_inputs();
         inputs.analysis_context.foreign_packages = vec!["icons".to_string()];
-        // R's surviving `size` options, and the identity-uncertainty records.
+        let recipe = RECIPE.replace("ds.styles({})", "ds.system({ space: true }).styles({})");
+        // R's surviving `size` options, its slots, and the identity-uncertainty
+        // records.
         let run = |app: &str| {
             let app = format!("import {{ List }} from 'icons';\nimport {{ R }} from './r';\n{app}");
-            let out = analyze(&[("src/r.tsx", RECIPE), ("src/app.tsx", app.as_str())], &inputs);
+            let out = analyze(&[("src/r.tsx", recipe.as_str()), ("src/app.tsx", app.as_str())], &inputs);
             let sizes = kept_sizes(&out, "src/r.tsx::R");
+            let slots: Vec<_> = out.dynamic_props.keys().cloned().collect();
             let records: Vec<_> = out
                 .diagnostics
                 .into_iter()
                 .filter(|d| matches!(d.code.as_deref(), Some(IDENTITY_UNCERTAIN | IDENTITY_UNCERTAIN_TAG)))
                 .map(|d| d.component)
                 .collect();
-            (sizes, records)
+            (sizes, slots, records)
         };
         let every = vec!["sm", "md", "lg"];
-        assert_eq!(run("export const App = () => <List />;\n"), (vec![], vec![]));
+        let p = vec!["p".to_string()];
+        assert_eq!(run("export const App = () => <List />;\n"), (vec![], vec![], vec![]));
         for handed in [
             "export const App = () => <List renderItem={R} />;\n",
             "export const App = () => <List component={R} />;\n",
-            "export const App = () => <List icon={<R size=\"sm\" />} />;\n",
+            "export const App = () => <List icon={<R size=\"sm\" p={8} />} />;\n",
             "export const App = () => <List><R size=\"sm\" /></List>;\n",
+            "const C = R;\nexport const App = () => <List component={C} />;\n",
+            "export const App = () => <List components={{ Item: R }} />;\n",
         ] {
-            assert_eq!(run(handed), (every.clone(), vec![]), "{handed}");
+            assert_eq!(run(handed), (every.clone(), p.clone(), vec![]), "{handed}");
         }
         assert_eq!(
             run("export const App = () => <List as={R} />;\n"),
-            (every, vec!["whole-component removal".to_string(), "<List>".to_string()])
+            (every, p, vec!["whole-component removal".to_string(), "<List>".to_string()])
         );
 
         // A member of an object the app writes into, in the rendering file or
