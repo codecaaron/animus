@@ -19,7 +19,6 @@ import {
   VIRTUAL_SYSTEM_PROPS_ID,
 } from './constants';
 import { postProcessCss } from './css';
-import { servedFontPreloads } from './index-html';
 
 import type { PluginContext } from './context';
 
@@ -176,7 +175,8 @@ if (import.meta.hot) {
   if (id === RESOLVED_FONT_PRELOADS_ID) {
     // The hrefs index.html preloads, as written: a build's asset placeholder
     // becomes the emitted file's URL in this module as it does in the page.
-    return `export default ${JSON.stringify(servedFontPreloads(ctx))};\n`;
+    // Not `fontPreloadsModule`, which reads a `./` href against the module.
+    return `export default ${JSON.stringify(ctx.fontPreloads)};\n`;
   }
 
   return null;

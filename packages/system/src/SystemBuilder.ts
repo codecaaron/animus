@@ -1398,15 +1398,14 @@ export class SystemBuilder<
       styles: GlobalStyleMap | readonly FontFace[],
       options?: { fontFaces?: readonly FontFace[]; unlayered?: boolean }
     ): GlobalStyleBlock => {
-      if (Array.isArray(styles)) {
-        return createGlobalStyles({}, { fontFaces: styles });
-      }
+      // An array of faces alone is a block of those faces and no rules.
+      const [map, fontFaces] = Array.isArray(styles)
+        ? [{}, styles as readonly FontFace[]]
+        : [styles as GlobalStyleMap, options?.fontFaces];
       return {
         __brand: 'GlobalStyleBlock' as const,
-        styles: styles as GlobalStyleMap,
-        ...(options?.fontFaces?.length
-          ? { fontFaces: [...options.fontFaces] }
-          : {}),
+        styles: map,
+        ...(fontFaces?.length ? { fontFaces: [...fontFaces] } : {}),
         ...(options?.unlayered ? { unlayered: true as const } : {}),
       };
     }) as GlobalStylesFactory<PropReg>;

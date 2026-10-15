@@ -3479,10 +3479,7 @@ fn resolve_identity(
         }
         // An imported root (named or namespace) names its module, and one the
         // analysis cannot resolve names nothing here.
-        let root_source = files.get(file).and_then(|ff| {
-            let import = ff.imports.iter().find(|i| i.local == root).map(|i| &i.source);
-            import.or_else(|| ff.namespace_imports.get(root))
-        });
+        let root_source = files.get(file).and_then(|ff| root_import_source(ff, root));
         let root_file = match root_source {
             Some(source) => resolve_import_source(file, source, files, inputs),
             None => Some(file.to_string()),
@@ -3513,17 +3510,14 @@ fn resolve_identity(
     by_bare_name(local)
 }
 
-/// Whether `tag` in `ff`, or the root it is a member of, is imported from a
-/// package with no dependency path to Animus and is a foreign import there.
-fn foreign_tag(ff: &FileFacts, tag: &str, inputs: &CssInputs) -> bool {
-    let root = tag.split('.').next().unwrap_or(tag);
-    let source = ff
-        .imports
+/// The source `root` is imported from in `ff`, by a named or a namespace
+/// import.
+fn root_import_source<'a>(ff: &'a FileFacts, root: &str) -> Option<&'a String> {
+    ff.imports
         .iter()
         .find(|import| import.local == root)
         .map(|import| &import.source)
-        .or_else(|| ff.namespace_imports.get(root));
-    source.is_some_and(|source| foreign_import(ff, tag, source, inputs))
+        .or_else(|| ff.namespace_imports.get(root))
 }
 
 /// Whether the tag `local` of `ff`, imported from `source`, is a tag of a
@@ -4715,6 +4709,12 @@ enum TagClass {
 }
 
 impl TagClass {
+    /// Whether a tag of the kind gets a record of its own: a tag proven
+    /// foreign renders no Animus component, so the warning only counts it.
+    fn listed(self) -> bool {
+        self != TagClass::Foreign
+    }
+
     fn counted(self, n: usize) -> String {
         let (one, many) = match self {
             TagClass::Ordinary => ("ordinary component", "ordinary components"),
@@ -4767,7 +4767,7 @@ fn identity_uncertainty_diagnostics(
     objects: &mut crate::family_members::ObjectMembers<'_>,
 ) -> Vec<CssDiagnostic> {
     let mut seen: FxHashSet<(&str, String)> = FxHashSet::default();
-    let mut records: Vec<(TagClass, &str, String, Option<CssDiagnostic>)> = Vec::new();
+    let mut records: Vec<(TagClass, &str, String, CssDiagnostic)> = Vec::new();
     for (file, site) in sites {
         let Some(ff) = files.get(*file) else {
             continue;
@@ -4833,12 +4833,6 @@ fn identity_uncertainty_diagnostics(
             Some(at) => record.at(at),
             None => record,
         };
-        // A tag proven foreign renders no Animus component: the summary
-        // counts it, and no line of its own names it.
-        let (class, record) = match tag.is_some_and(|tag| foreign_tag(ff, tag, inputs)) {
-            true => (TagClass::Foreign, None),
-            false => (class, Some(record)),
-        };
         records.push((class, file.as_str(), spelling, record));
     }
     if records.is_empty() {
@@ -4881,7 +4875,9 @@ fn identity_uncertainty_diagnostics(
         ),
         Some(IDENTITY_UNCERTAIN),
     );
-    std::iter::once(summary).chain(records.into_iter().filter_map(|(.., record)| record)).collect()
+    std::iter::once(summary)
+        .chain(records.into_iter().filter(|(class, ..)| class.listed()).map(|(.., record)| record))
+        .collect()
 }
 
 /// The first element or `createElement` call naming `name`: whether it is
@@ -5376,12 +5372,7 @@ fn imported_from_outside(
     inputs: &CssInputs,
 ) -> bool {
     let root = tag.split('.').next().unwrap_or(tag);
-    let source = ff
-        .imports
-        .iter()
-        .find(|import| import.local == root)
-        .map(|import| &import.source)
-        .or_else(|| ff.namespace_imports.get(root));
+    let source = root_import_source(ff, root);
     origin == Some(TagOrigin::Import)
         && source.is_some_and(|source| {
             !source.starts_with('.')
@@ -5417,19 +5408,16 @@ fn uncertain_tag_reason(
     let class = |class: TagClass| if member { TagClass::Member } else { class };
     match origin {
         Some(TagOrigin::Import) => {
-            let source = ff
-                .imports
-                .iter()
-                .find(|import| import.local == root)
-                .map(|import| &import.source)
-                .or_else(|| ff.namespace_imports.get(root));
-            let Some(source) = source else {
+            let Some(source) = root_import_source(ff, root) else {
                 return (class(TagClass::Unfollowed), "is imported from a module extraction cannot name".to_string());
             };
             let whose = match member {
                 true => format!("is a member of '{root}', imported from '{source}'"),
                 false => format!("is imported from '{source}'"),
             };
+            if foreign_import(ff, tag, source, inputs) {
+                return (TagClass::Foreign, format!("{whose}, a package with no dependency path to Animus"));
+            }
             if resolve_import_source(file, source, files, inputs).is_none() {
                 return (class(TagClass::External), format!("{whose}, which extraction does not analyse"));
             }

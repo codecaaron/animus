@@ -2758,10 +2758,10 @@ pub struct FontPreload {
     /// The MIME type of the source's format, where it names a known one.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub mime: Option<&'static str>,
-    /// The faces that preload it, named as their reports name them.
-    pub faces: Vec<String>,
     /// The faces that preload it, as a host's `fontPreloads` reads them.
-    pub descriptors: Vec<PreloadedFace>,
+    pub faces: Vec<PreloadedFace>,
+    /// The same faces, named as their reports name them.
+    pub names: Vec<String>,
 }
 
 /// A face that preloads a file: its family, as a host's `fontPreloads`
@@ -2878,12 +2878,13 @@ impl Selection {
         selection
     }
 
-    /// Whether a face of `family` declaring `weight`, `style` and
-    /// `unicode_range` is one this entry selects.
-    fn selects(&self, family: &str, weight: Option<&str>, style: Option<&str>, unicode_range: Option<&str>) -> bool {
-        if self.invalid.is_some() || !self.family.trim().eq_ignore_ascii_case(family) {
+    /// Whether `face` is one this entry selects.
+    fn selects(&self, face: &PreloadedFace) -> bool {
+        if self.invalid.is_some() || !self.family.trim().eq_ignore_ascii_case(&face.family) {
             return false;
         }
+        let (weight, style, unicode_range) =
+            (face.weight.as_deref(), face.style.as_deref(), face.unicode_range.as_deref());
         let weight_fits = self.weight.is_none_or(|wanted| {
             // A face declares one weight or a range; none is `normal`.
             let declared: Option<Vec<f64>> = weight.map_or(Some(vec![400.0]), |declared| {
@@ -2900,13 +2901,9 @@ impl Selection {
             let declared = style.map_or("normal".to_string(), |style| style.trim().to_ascii_lowercase());
             declared.split_ascii_whitespace().next() == Some(wanted)
         });
+        // A face without a unicode-range covers every code point.
         let range_fits = self.unicode_range.as_deref().is_none_or(|wanted| {
-            // A face without one covers every code point.
-            match unicode_range.map(unicode_ranges) {
-                None => true,
-                Some(Some(declared)) => covers(&declared, wanted),
-                Some(None) => false,
-            }
+            unicode_range.is_none_or(|declared| unicode_ranges(declared).is_some_and(|declared| covers(&declared, wanted)))
         });
         weight_fits && style_fits && range_fits
     }
@@ -2915,13 +2912,11 @@ impl Selection {
 /// A CSS `unicode-range` value as code point ranges: `U+0041`,
 /// `U+0000-00FF` and `U+4??`, comma-separated; `None` when it is not one.
 fn unicode_ranges(text: &str) -> Option<Vec<(u32, u32)>> {
+    let hex = |text: &str| (1..=6).contains(&text.len()).then(|| u32::from_str_radix(text, 16).ok()).flatten();
     text.split(',')
         .map(|part| {
             let part = part.trim();
             let digits = part.strip_prefix("U+").or_else(|| part.strip_prefix("u+"))?;
-            let hex = |text: &str| {
-                (1..=6).contains(&text.len()).then(|| u32::from_str_radix(text, 16).ok()).flatten()
-            };
             let (start, end) = match digits.split_once('-') {
                 Some((start, end)) => (hex(start)?, hex(end)?),
                 None if digits.contains('?') => {
@@ -2933,7 +2928,10 @@ fn unicode_ranges(text: &str) -> Option<Vec<(u32, u32)>> {
                     let base = if fixed.is_empty() { 0 } else { hex(fixed)? } << (4 * wild);
                     (base, base | ((1 << (4 * wild)) - 1))
                 }
-                None => (hex(digits)?, hex(digits)?),
+                None => {
+                    let point = hex(digits)?;
+                    (point, point)
+                }
             };
             (start <= end && end <= 0x10FFFF).then_some((start, end))
         })
@@ -2975,19 +2973,11 @@ impl FontPreloads {
         FontPreloads { selection: selection.map(|entries| entries.iter().map(Selection::of).collect()), list: Vec::new() }
     }
 
-    /// Whether the host selects the face, when it selects faces; `family`
-    /// gives the face's family identity, read only then.
-    fn selects(
-        &mut self,
-        family: impl FnOnce() -> String,
-        weight: Option<&str>,
-        style: Option<&str>,
-        unicode_range: Option<&str>,
-    ) -> Option<bool> {
+    /// Whether the host selects `face`, when it selects faces.
+    fn selects(&mut self, face: &PreloadedFace) -> Option<bool> {
         let entries = self.selection.as_mut()?;
-        let family = family();
         let mut any = false;
-        for entry in entries.iter_mut().filter(|entry| entry.selects(&family, weight, style, unicode_range)) {
+        for entry in entries.iter_mut().filter(|entry| entry.selects(face)) {
             entry.matched = true;
             any = true;
         }
@@ -3061,7 +3051,7 @@ fn preload_source(sources: &[&Value]) -> Result<FontPreload, String> {
         .1
         .and_then(font_mime)
         .or_else(|| extension_of(url).as_deref().and_then(font_mime));
-    Ok(FontPreload { href: url.to_string(), mime, faces: Vec::new(), descriptors: Vec::new() })
+    Ok(FontPreload { href: url.to_string(), mime, faces: Vec::new(), names: Vec::new() })
 }
 
 /// A global block's typed font faces, each a `@font-face` rule: the family,
@@ -3135,40 +3125,34 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext, preloads: &mut FontPre
                 None => {}
             }
         }
-        let descriptor = |key: &str| obj.get(key).and_then(Value::as_str);
-        let asked = preloads
-            .selects(|| family_identity(&resolved), descriptor("weight"), descriptor("style"), descriptor("unicodeRange"))
-            .unwrap_or_else(|| match obj.get("preload") {
-                None | Some(Value::Bool(false)) => false,
-                Some(Value::Bool(true)) => true,
-                Some(other) => {
-                    preload_dropped(format!("its `preload` {other} is not a boolean"));
-                    false
-                }
-            });
+        let descriptor = |key: &str| obj.get(key).and_then(Value::as_str).map(str::to_string);
+        let declared = PreloadedFace {
+            family: family_identity(&resolved),
+            weight: descriptor("weight"),
+            style: descriptor("style"),
+            unicode_range: descriptor("unicodeRange"),
+        };
+        let asked = preloads.selects(&declared).unwrap_or_else(|| match obj.get("preload") {
+            None | Some(Value::Bool(false)) => false,
+            Some(Value::Bool(true)) => true,
+            Some(other) => {
+                preload_dropped(format!("its `preload` {other} is not a boolean"));
+                false
+            }
+        });
         if asked {
             match preload_source(&kept) {
-                Ok(preload) => {
-                    let declared = PreloadedFace {
-                        family: family_identity(&resolved),
-                        weight: descriptor("weight").map(str::to_string),
-                        style: descriptor("style").map(str::to_string),
-                        unicode_range: descriptor("unicodeRange").map(str::to_string),
-                    };
-                    let known = match preloads.list.iter_mut().position(|known| known.href == preload.href) {
-                        Some(at) => &mut preloads.list[at],
-                        None => {
-                            preloads.list.push(preload);
-                            preloads.list.last_mut().expect("just pushed")
+                Ok(preload) => match preloads.list.iter_mut().find(|known| known.href == preload.href) {
+                    Some(known) => {
+                        if !known.names.contains(&name) {
+                            known.names.push(name.clone());
                         }
-                    };
-                    if !known.faces.contains(&name) {
-                        known.faces.push(name.clone());
+                        if !known.faces.contains(&declared) {
+                            known.faces.push(declared);
+                        }
                     }
-                    if !known.descriptors.contains(&declared) {
-                        known.descriptors.push(declared);
-                    }
-                }
+                    None => preloads.list.push(FontPreload { faces: vec![declared], names: vec![name.clone()], ..preload }),
+                },
                 Err(reason) => preload_dropped(reason),
             }
         }

@@ -9,6 +9,7 @@ import {
   resolveAssetFile,
   resolveVerbosity,
   runStructuralSelfCheck,
+  substituteFontPreloads,
   substituteSheetAssets,
   writeAssetCopy,
   toWatchKeys,
@@ -42,6 +43,7 @@ import type {
   AssetSheets,
   ExcludeMatcher,
   ExternalPackageOutcome,
+  FontPreload,
   HostAssetClassification,
   HostExtensionPolicy,
   HostLoadExpander,
@@ -196,6 +198,20 @@ export class PluginContext {
 
   get resolvedComponentCss(): string {
     return this.substitutedSheets().componentCss;
+  }
+
+  /** The published font preloads, each by the URL the stylesheet's own
+   *  `url()` gets: what index.html preloads and the font-preloads module
+   *  exports. */
+  get fontPreloads(): FontPreload[] {
+    return substituteFontPreloads(
+      this.served?.fontPreloads,
+      this.assetUrlBySpecifier
+    ).map((preload) =>
+      this.isProd
+        ? preload
+        : { ...preload, href: this.devRootRelativeUrl(preload.href) }
+    );
   }
 
   private analysisSheets(): AssetSheets {

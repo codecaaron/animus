@@ -128,7 +128,7 @@ export function costlyFontPreloadDiagnostics(
   const remedy = selected
     ? 'leave the face out of `fontPreloads`'
     : 'drop `preload`';
-  for (const { href, type, faces } of preloads ?? []) {
+  for (const { href, type, names } of preloads ?? []) {
     const format = type === undefined ? undefined : FONT_FORMATS.get(type);
     const specifier = href.startsWith(ASSET_PLACEHOLDER_PREFIX)
       ? href.slice(ASSET_PLACEHOLDER_PREFIX.length)
@@ -139,7 +139,7 @@ export function costlyFontPreloadDiagnostics(
       continue;
     const file = (specifier ?? href).split(/[?#]/)[0]!.split('/').pop();
     const what = `${format === undefined ? 'a font of unknown format' : `a ${format} font`}${size === undefined ? '' : ` of ${Math.round(size / 1024)} KB`}`;
-    for (const face of faces) {
+    for (const face of names) {
       diagnostics.push({
         file: 'system',
         component: face,
