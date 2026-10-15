@@ -82,7 +82,8 @@ function replacedByFrom() {
 }
 
 // Recorded from the builder before contextual variables moved onto property
-// records; every value must stay byte-identical.
+// records; every value must stay byte-identical. The manifest digests are
+// those recordings less the removed `contractHash` key.
 const recorded = {
   everyRegistration: {
     variableCss:
@@ -91,10 +92,8 @@ const recorded = {
       '{"colors":["plain","universal","typed","isolated","gap","plain","typed"],"space":["gap","pad","gap"]}',
     registrationsJson:
       '{"isolated":{"syntax":"<color> | transparent","inherits":false,"initialValue":"transparent"},"universal":{"syntax":"*","inherits":true},"typed":{"syntax":"<color>","inherits":true,"initialValue":"black"},"gap":{"inherits":false,"syntax":"<length>","initialValue":"0px"},"pad":{"syntax":"<length>","inherits":true,"initialValue":"0px"}}',
-    contractHash:
-      '573e6c248413480196a7f7724af5ca89c9cd0c635908e77cb405e2c00299b9ca',
     manifestDigest:
-      'e8987347c327a597dbf27f6977062459a0c1e3daae243b7e4cb0f075efce14cc',
+      'd6eebe89f0081204d1b7e733510ac2c36da0342b0790c0b6909eae9e371435a5',
   },
   extended: {
     variableCss:
@@ -103,10 +102,8 @@ const recorded = {
       '{"space":["gap","shared","pad","gap"],"colors":["tone"]}',
     registrationsJson:
       '{"shared":{"syntax":"<length>","inherits":false,"initialValue":"0px"},"tone":{"syntax":"*","inherits":false}}',
-    contractHash:
-      '80a4efb339156b2f46cc69e32690bc615b7d7d509f84c7dc100c5570f0c4e1bc',
     manifestDigest:
-      '55de5ea44e1e650b127c4fb5e84e18514e274411570cc64f7c61b935a72bea03',
+      '3a1d5b5eef8deb6ac19648d00fd537294cbcdfc7df2e6fb0e7e7221e3741f57a',
   },
   replacedByFrom: {
     variableCss:
@@ -114,10 +111,8 @@ const recorded = {
     contextualVarsJson: '{"colors":["tone"],"space":["gap","shared"]}',
     registrationsJson:
       '{"local":{"syntax":"*","inherits":true},"shared":{"syntax":"<length>","inherits":true,"initialValue":"0px"}}',
-    contractHash:
-      'e5a4356e0c5f5bb81c0554e2e5a218ba3dc231f46f35be022d9c453e784d68be',
     manifestDigest:
-      'f8e3fc3c41d6cba9aa1548ab72a54caf5ba6e498928738130e3ddb2ddcfad61a',
+      '6f994dee5cc21c2bae2a28ab7309e0968e4039cb8b473a3c985f54824016e80d',
   },
 };
 
@@ -134,7 +129,6 @@ describe('contextual-variable output', () => {
     expect(JSON.stringify(theme.manifest.registrations)).toBe(
       expected.registrationsJson
     );
-    expect(theme.manifest.contractHash).toBe(expected.contractHash);
     expect(
       createHash('sha256').update(JSON.stringify(theme.manifest)).digest('hex')
     ).toBe(expected.manifestDigest);

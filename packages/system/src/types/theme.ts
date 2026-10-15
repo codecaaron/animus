@@ -163,6 +163,5 @@ export interface ThemeManifest {
   modeAliasDefinitions?: ModeAliasDefinition;
   registrations?: Record<string, ContextualVarRegistration>;
   emitterVersion?: number;
-  contractHash?: string;
   cssFragments?: ThemeCssFragment[];
 }

@@ -284,7 +284,6 @@ describe('zero-configuration byte parity', () => {
   it('leaves the manifest of an unconfigured theme free of option-derived keys', () => {
     const manifest = buildUnconfiguredTheme().manifest;
     expect(Object.keys(manifest).sort()).toEqual([
-      'contractHash',
       'cssFragments',
       'emittedScales',
       'emitterVersion',

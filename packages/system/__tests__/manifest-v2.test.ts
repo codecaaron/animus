@@ -152,18 +152,7 @@ describe('manifest v2 authored token definitions', () => {
   });
 });
 
-type BuiltinModuleLookup = (id: string) => object | undefined;
-
-interface HashingAmbients {
-  process?: Omit<NodeJS.Process, 'getBuiltinModule'> & {
-    getBuiltinModule?: BuiltinModuleLookup;
-  };
-  TextEncoder?: typeof globalThis.TextEncoder;
-}
-
-const ambients: HashingAmbients = globalThis;
-
-describe('manifest v2 version, contract hash, and CSS fragments', () => {
+describe('manifest v2 version and CSS fragments', () => {
   it('carries manifestVersion 2 and an emitter version on every fresh build', () => {
     const manifest = buildReferenceFixture().manifest;
     expect(manifest.manifestVersion).toBe(2);
@@ -181,113 +170,6 @@ describe('manifest v2 version, contract hash, and CSS fragments', () => {
 
     expect(inline.manifest.emittedScales).toEqual([]);
     expect(emitted.manifest.emittedScales).toEqual(['space']);
-    expect(emitted.manifest.contractHash).not.toBe(
-      inline.manifest.contractHash
-    );
-  });
-
-  it('computes an identical contractHash for two identically authored builds', () => {
-    const first = buildSystemRegisteredFixture().manifest.contractHash;
-    const second = buildSystemRegisteredFixture().manifest.contractHash;
-    expect(first).toBeDefined();
-    expect(second).toBe(first);
-  });
-
-  it('computes the same contractHash regardless of authored insertion order', () => {
-    // The hash identifies the authored token graph, not the emitted wire:
-    // canonicalization sorts keys at every depth.
-    const forward = createTheme()
-      .addBreakpoints({ sm: 768 })
-      .addScale({ name: 'space', values: { 4: '0.25rem' } })
-      .addScale({ name: 'radii', values: { sm: '2px' } })
-      .build();
-    const reversed = createTheme()
-      .addBreakpoints({ sm: 768 })
-      .addScale({ name: 'radii', values: { sm: '2px' } })
-      .addScale({ name: 'space', values: { 4: '0.25rem' } })
-      .build();
-
-    expect(forward.manifest.contractHash).toBeDefined();
-    expect(reversed.manifest.contractHash).toBe(forward.manifest.contractHash);
-  });
-
-  // Contract: a theme hashes its contract on the first read of
-  // `contractHash`, never in `build()`, which runs in the browser too.
-  it('hashes the contract on first read, not in build()', () => {
-    const proc = ambients.process;
-    const original = proc!.getBuiltinModule;
-    const hook = Symbol.for('animus.sha256Hex');
-    let hashed = 0;
-    try {
-      proc!.getBuiltinModule = undefined;
-      Reflect.set(
-        globalThis,
-        hook,
-        (text: string) => `${++hashed}:${text.length}`
-      );
-      const { manifest } = buildSystemRegisteredFixture();
-      expect(hashed).toBe(0);
-      const hash = manifest.contractHash;
-      expect([hashed, manifest.contractHash]).toEqual([1, hash]);
-    } finally {
-      proc!.getBuiltinModule = original;
-      Reflect.deleteProperty(globalThis, hook);
-    }
-  });
-
-  it('computes an identical contractHash when node:crypto is unavailable (pure fallback)', () => {
-    // sha256Hex reads process.getBuiltinModule at call time; removing it forces
-    // the pure fallback non-Node runtimes take, which must digest identically.
-    const nodeCryptoHash = buildSystemRegisteredFixture().manifest.contractHash;
-    const proc = ambients.process;
-    expect(proc?.getBuiltinModule).toBeDefined();
-    const original = proc!.getBuiltinModule;
-    let fallbackHash: string | undefined;
-    try {
-      proc!.getBuiltinModule = undefined;
-      fallbackHash = buildSystemRegisteredFixture().manifest.contractHash;
-    } finally {
-      proc!.getBuiltinModule = original;
-    }
-
-    expect(nodeCryptoHash).toBeDefined();
-    expect(fallbackHash).toBe(nodeCryptoHash);
-  });
-
-  it('computes an identical contractHash without node:crypto or TextEncoder (QuickJS)', () => {
-    // The Rust system-loader runs the bundle in QuickJS: ES built-ins only, no
-    // Node globals and no WHATWG APIs, so the fallback needs neither.
-    const nodeCryptoHash = buildSystemRegisteredFixture().manifest.contractHash;
-    const proc = ambients.process;
-    expect(proc?.getBuiltinModule).toBeDefined();
-    const originalGetBuiltin = proc!.getBuiltinModule;
-    const originalTextEncoder = ambients.TextEncoder;
-    expect(originalTextEncoder).toBeDefined();
-    let fallbackHash: string | undefined;
-    try {
-      proc!.getBuiltinModule = undefined;
-      ambients.TextEncoder = undefined;
-      fallbackHash = buildSystemRegisteredFixture().manifest.contractHash;
-    } finally {
-      proc!.getBuiltinModule = originalGetBuiltin;
-      ambients.TextEncoder = originalTextEncoder;
-    }
-
-    expect(nodeCryptoHash).toBeDefined();
-    expect(fallbackHash).toBe(nodeCryptoHash);
-  });
-
-  it('changes the contractHash when one authored literal changes', () => {
-    const base = createTheme()
-      .addBreakpoints({ sm: 768 })
-      .addColors({ ember: '#ff2800' })
-      .build();
-    const changed = createTheme()
-      .addBreakpoints({ sm: 768 })
-      .addColors({ ember: '#ff2801' })
-      .build();
-    expect(base.manifest.contractHash).toBeDefined();
-    expect(changed.manifest.contractHash).not.toBe(base.manifest.contractHash);
   });
 
   it('records registrations and base fragments holding the composed strings', () => {
@@ -330,7 +212,7 @@ describe('manifest v2 from() copy-on-write fidelity', () => {
     });
   });
 
-  it('carries tokenDefinitions, emittedScales, modeAliasDefinitions, emitterVersion, and contractHash through from()', () => {
+  it('carries tokenDefinitions, emittedScales, modeAliasDefinitions, and emitterVersion through from()', () => {
     const source = buildSystemRegisteredFixture();
     const rebuilt = createTheme().from(source).build();
 
@@ -347,7 +229,6 @@ describe('manifest v2 from() copy-on-write fidelity', () => {
     expect(rebuilt.manifest.emitterVersion).toBe(
       source.manifest.emitterVersion
     );
-    expect(rebuilt.manifest.contractHash).toBe(source.manifest.contractHash);
   });
 
   it('keeps @property registration metadata across from() and re-emits the same rules', () => {
@@ -399,7 +280,6 @@ describe('manifest v2 from() copy-on-write fidelity', () => {
     expect(rebuilt.manifest.modeAliasDefinitions).toBeUndefined();
     expect(rebuilt.manifest.registrations).toBeUndefined();
     expect(rebuilt.manifest.emitterVersion).toBeUndefined();
-    expect(rebuilt.manifest.contractHash).toBeUndefined();
     expect(rebuilt.manifest.cssFragments).toBeUndefined();
   });
 
@@ -414,7 +294,6 @@ describe('manifest v2 from() copy-on-write fidelity', () => {
     expect(mutated.serialize().variableCss).toContain('--radii-sm: 2px;');
     expect(mutated.manifest.manifestVersion).toBeUndefined();
     expect(mutated.manifest.tokenDefinitions).toBeUndefined();
-    expect(mutated.manifest.contractHash).toBeUndefined();
     expect(mutated.manifest.cssFragments).toBeUndefined();
   });
 });

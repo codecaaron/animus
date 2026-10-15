@@ -182,7 +182,6 @@ describe('ThemeBuilder extend() composition', () => {
     expect(rebuilt.manifest.tokenDefinitions).toBeUndefined();
     expect(rebuilt.manifest.modeAliasDefinitions).toBeUndefined();
     expect(rebuilt.manifest.registrations).toBeUndefined();
-    expect(rebuilt.manifest.contractHash).toBeUndefined();
     expect(rebuilt.manifest.cssFragments).toBeUndefined();
   });
 });
@@ -225,7 +224,6 @@ describe('extend() round-trip fidelity', () => {
     const lib = buildRichSource();
     const rebuilt = createTheme().extend(lib).build();
     expect(rebuilt.serialize()).toEqual(lib.serialize());
-    expect(rebuilt.manifest.contractHash).toBe(lib.manifest.contractHash);
     expect(rebuilt.manifest.registrations).toEqual(lib.manifest.registrations);
   });
 
