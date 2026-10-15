@@ -1,7 +1,12 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test } from 'vitest';
 
+import {
+  disposeTempRoots,
+  makeTempRoot,
+} from '../../extract/tests/session/session-fixtures';
 import {
   BRIDGE_SCRIPT_SRC,
   RESOLVED_BRIDGE_ID,
@@ -165,6 +170,34 @@ describe('the bridge module is server-safe', () => {
 // preloads, at the href index.html preloads it, with the faces that preload
 // it, so a page can show the build's own selection.
 describe('the font-preloads module', () => {
+  afterEach(() => {
+    disposeTempRoots();
+  });
+
+  // Contract: a build takes a root-relative file's URL from Vite, as the
+  // page's preload does, so the module agrees with index.html under any
+  // `base`; a URL Vite serves no file for stays as written.
+  test("a build asks Vite for a served file's URL", () => {
+    const publicDir = makeTempRoot('animus-font-preloads-');
+    mkdirSync(join(publicDir, 'fonts'));
+    writeFileSync(join(publicDir, 'fonts', 'inter.woff2'), '');
+    const ctx = contextWith({ isProd: true });
+    ctx.publicDir = publicDir;
+    ctx.served = publicationWith({
+      fontPreloads: [
+        { href: '/fonts/inter.woff2', faces: [{ family: 'Inter' }] },
+        { href: '/fonts/elsewhere.woff2', faces: [{ family: 'Mono' }] },
+      ],
+    });
+    const source = loadVirtualModule(ctx, RESOLVED_FONT_PRELOADS_ID)!;
+    const [imported, body] = source.split('export default');
+    expect(imported).toBe('import href0 from "/fonts/inter.woff2?url";\n');
+    expect(runInNewContext(`m =${body}`, { href0: '<vite url>' })).toEqual([
+      { href: '<vite url>', faces: [{ family: 'Inter' }] },
+      { href: '/fonts/elsewhere.woff2', faces: [{ family: 'Mono' }] },
+    ]);
+  });
+
   test('exports the preloads index.html carries, with their faces', () => {
     const faces = [
       { family: 'Inter', weight: '400', unicodeRange: 'U+0000-00FF' },

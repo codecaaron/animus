@@ -11067,7 +11067,9 @@ mod tests {
                     face("Inter", "/latin.woff2", Some("U+0000-00FF, U+0131, U+0152-0153")),
                     face("Inter", "/latin-ext.woff2", Some("U+0100-02BA, U+1E00-1EFF")),
                     face("Inter", "/cyrillic.woff2", Some("u+0400-045f")),
-                    face("Plain", "/plain.woff2", None)
+                    face("Plain", "/plain.woff2", None),
+                    // A comment is whitespace in a unicode-range, as a browser reads it.
+                    face("Noted", "/noted.woff2", Some("U+0000-00FF /*latin*/, /* ext */U+0100-017F"))
                 ]
             }
         }));
@@ -11090,7 +11092,16 @@ mod tests {
         assert_eq!(selected(range("Plain", "U+0410")).0, ["/plain.woff2"]);
         // No one face covers a range two subsets split between them.
         assert_eq!(selected(range("Inter", "U+0000-02BA")), (vec![], vec![crate::theme::FONT_PRELOAD_UNMATCHED.to_string()]));
-        for malformed in [serde_json::json!("latin"), serde_json::json!("U+0100-0041"), serde_json::json!(65)] {
+        assert_eq!(selected(range("Noted", "U+0041")).0, ["/noted.woff2"]);
+        assert_eq!(selected(range("Noted", "U+0150 /* Ő */")).0, ["/noted.woff2"]);
+        for malformed in [
+            serde_json::json!("latin"),
+            serde_json::json!("U+0100-0041"),
+            serde_json::json!(65),
+            serde_json::json!("U++41"),
+            serde_json::json!("U+00/**/41"),
+            serde_json::json!("U+-41"),
+        ] {
             let entries = serde_json::json!([{ "family": "Inter", "unicodeRange": malformed }]);
             assert_eq!(selected(entries), (vec![], vec![crate::theme::FONT_PRELOAD_INVALID.to_string()]), "{malformed}");
         }
@@ -14268,6 +14279,33 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(
             reported[1..].iter().map(|(file, tag, _)| (file.as_str(), tag.as_str())).collect::<Vec<_>>(),
             [("src/app.tsx", "<Link>"), ("src/handed.tsx", "<List>")]
+        );
+
+        // A member of an object the app writes into, in the rendering file or
+        // in another, may be an Animus component: it keeps its record.
+        let written = |files: &[(&'static str, &'static str)]| {
+            let entries: Vec<_> = std::iter::once(("src/r.tsx", RECIPE)).chain(files.iter().copied()).collect();
+            analyze(&entries, &inputs)
+                .diagnostics
+                .into_iter()
+                .filter(|d| d.code.as_deref() == Some(IDENTITY_UNCERTAIN_TAG))
+                .map(|d| (d.file, d.component))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            written(&[(
+                "src/app.tsx",
+                "import { Parts } from 'icons';\nimport { R } from './r';\nParts.Item = R;\n\
+                 export const App = () => <Parts.Item size=\"lg\" />;\n",
+            )]),
+            [("src/app.tsx".to_string(), "<Parts.Item>".to_string())]
+        );
+        assert_eq!(
+            written(&[
+                ("src/setup.tsx", "import * as Icons from 'icons';\nimport { R } from './r';\nIcons.Parts.Item = R;\n"),
+                ("src/app.tsx", "import { Parts } from 'icons';\nexport const App = () => <Parts.Item size=\"lg\" />;\n"),
+            ]),
+            [("src/app.tsx".to_string(), "<Parts.Item>".to_string())]
         );
     }
 
