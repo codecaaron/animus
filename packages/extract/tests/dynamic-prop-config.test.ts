@@ -126,6 +126,7 @@ async function evaluateTransforms(
     dynamicProps: {},
     admittedTransforms,
     typedSystemProps: [],
+    runtimeTables: undefined,
   });
   const { transforms } = await import(
     `data:text/javascript,${encodeURIComponent(source)}`

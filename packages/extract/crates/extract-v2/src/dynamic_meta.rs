@@ -50,6 +50,8 @@ pub struct ValuePropMeta {
     /// so a number needs no unit and the development runtime does not warn.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub declared_numeric: bool,
+    #[serde(default, skip_serializing_if = "TableKeys::is_empty")]
+    pub tables: TableKeys,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,6 +65,94 @@ pub struct DeclarationPropMeta {
     /// See `DynamicPropMeta::set_production_conditions`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub production_conditions: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "TableKeys::is_empty")]
+    pub tables: TableKeys,
+}
+
+/// The keys under which a runtime config's tables sit in the shared
+/// `animusTables` export, set only by `RuntimeTables::intern`. A config
+/// references a keyed table and inlines one without a key.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableKeys {
+    /// The named scale the values come from, the key `intern` prefers.
+    #[serde(skip)]
+    pub scale_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale_values: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declaration_scale_values: Option<String>,
+}
+
+impl TableKeys {
+    pub fn is_empty(&self) -> bool {
+        self.scale_values.is_none() && self.keywords.is_none() && self.declaration_scale_values.is_none()
+    }
+}
+
+/// The tables every runtime config shares, shipped once in the
+/// system-props module: scale values by scale name, a strict prop's keywords
+/// by property, and declaration records by declaration scale. A name, not a
+/// position, keys each, so adding a component leaves every other config's
+/// reference, and the chunk holding it, unchanged.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeTables {
+    pub scale_values: BTreeMap<String, BTreeMap<String, Value>>,
+    pub keywords: BTreeMap<String, Vec<String>>,
+    pub declaration_scale_values: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
+}
+
+impl RuntimeTables {
+    /// Files `meta`'s tables here and records their keys on it. A named
+    /// scale is filed under its name, an inline one under its content hash.
+    pub fn intern(&mut self, meta: &mut DynamicPropMeta) {
+        match meta {
+            DynamicPropMeta::Value(meta) => {
+                if !meta.scale_values.is_empty() {
+                    let name = meta.tables.scale_name.clone();
+                    meta.tables.scale_values = file(&mut self.scale_values, name, &meta.scale_values);
+                }
+                if !meta.keywords.is_empty() {
+                    let name = Some(meta.property.clone());
+                    meta.tables.keywords = file(&mut self.keywords, name, &meta.keywords);
+                }
+            }
+            DynamicPropMeta::Declarations(meta) => {
+                if !meta.declaration_scale_values.is_empty() {
+                    let name = meta.tables.scale_name.clone();
+                    let table = &meta.declaration_scale_values;
+                    meta.tables.declaration_scale_values = file(&mut self.declaration_scale_values, name, table);
+                }
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.scale_values.is_empty() && self.keywords.is_empty() && self.declaration_scale_values.is_empty()
+    }
+}
+
+/// The key `table` is filed under; `None`, leaving it inline, when that key
+/// already holds other content.
+fn file<T: Clone + PartialEq + Serialize>(
+    tables: &mut BTreeMap<String, T>,
+    name: Option<String>,
+    table: &T,
+) -> Option<String> {
+    let key = name.unwrap_or_else(|| {
+        format!("#{:08x}", crate::ids::fnv1a_json(crate::ids::FNV_OFFSET, table) as u32)
+    });
+    match tables.entry(key) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            let key = entry.key().clone();
+            entry.insert(table.clone());
+            Some(key)
+        }
+        std::collections::btree_map::Entry::Occupied(entry) => (entry.get() == table).then(|| entry.key().clone()),
+    }
 }
 
 impl DynamicPropMeta {
@@ -101,6 +191,13 @@ impl DynamicPropMeta {
                 .map(|current_var| contextual_vars.emitted_property(current_var).into_owned()),
             production_conditions: None,
             declared_numeric: config.declares_numeric(numeric_properties),
+            tables: TableKeys {
+                scale_name: match &config.scale {
+                    Some(Value::String(name)) => Some(name.clone()),
+                    _ => None,
+                },
+                ..TableKeys::default()
+            },
         })
     }
 
@@ -118,6 +215,7 @@ impl DynamicPropMeta {
                 .collect(),
             declaration_scale_values: binding.records.as_ref().clone(),
             production_conditions: None,
+            tables: TableKeys { scale_name: Some(binding.scale.clone()), ..TableKeys::default() },
         })
     }
 
@@ -129,6 +227,14 @@ impl DynamicPropMeta {
         match self {
             Self::Value(meta) => meta.production_conditions = conditions,
             Self::Declarations(meta) => meta.production_conditions = conditions,
+        }
+    }
+
+    /// Where the runtime config's tables sit in `animusTables`.
+    pub fn tables(&self) -> &TableKeys {
+        match self {
+            Self::Value(meta) => &meta.tables,
+            Self::Declarations(meta) => &meta.tables,
         }
     }
 

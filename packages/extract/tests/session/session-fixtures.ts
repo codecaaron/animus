@@ -451,6 +451,7 @@ const SYSTEM_PROPS_WITNESS = buildSystemPropsModule({
   dynamicProps: {},
   admittedTransforms: {},
   typedSystemProps: [],
+  runtimeTables: undefined,
 });
 
 export function expectedEpoch(

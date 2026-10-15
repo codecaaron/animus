@@ -49,6 +49,8 @@ pub struct DeclarationBinding {
     /// The declaring component's name scope for a component prop; `None`
     /// for a system prop, whose member variables every consumer shares.
     pub identity: Option<String>,
+    /// The declaration scale the records come from.
+    pub scale: String,
 }
 
 impl DeclarationBinding {
@@ -362,7 +364,7 @@ fn bind_prop(
         };
         bound.push(DeclarationMember { name: scale_member.name.clone(), css_property: scale_member.css_property.clone() });
     }
-    Ok(DeclarationBinding { members: bound, records: Arc::clone(records), identity })
+    Ok(DeclarationBinding { members: bound, records: Arc::clone(records), identity, scale: scale_name.clone() })
 }
 
 /// A scalar prop must not name a declaration scale, and a prop without a

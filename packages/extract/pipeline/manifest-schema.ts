@@ -3,7 +3,7 @@
  * the engine's, never a transcription choice. One spelling per field.
  */
 
-import type { DynamicPropMeta } from './dynamic-prop-config';
+import type { DynamicPropMeta, RuntimeTables } from './dynamic-prop-config';
 import type { FontPreload, PreloadedFontFace } from './font-preloads';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type { ExtractFileFacts } from './source-ingestion';
@@ -135,6 +135,10 @@ export interface ProjectManifest {
   /** Sorted system props bound to a configured transform: their
    *  `system_prop_map` keys keep the authored value's type. */
   typed_system_props: string[];
+  /** The tables runtime configs reference from the system-props module's
+   *  `animusTables` export, each by the key its meta's `tables` names;
+   *  absent where none is referenced. */
+  runtime_tables?: RuntimeTables;
   component_fragments: Record<string, ManifestComponentSheets>;
   /** The fingerprint of the system the analysis ran with. */
   system_fingerprint: string;

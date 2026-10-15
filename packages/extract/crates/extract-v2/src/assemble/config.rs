@@ -242,7 +242,20 @@ pub(super) fn build_config(
             let meta = match &cdc[prop_name] {
                 crate::dynamic_meta::DynamicPropMeta::Value(meta) => meta,
                 crate::dynamic_meta::DynamicPropMeta::Declarations(meta) => {
-                    dynamic.insert(prop_name, json!(meta));
+                    // The meta's own serialization, its table referenced.
+                    let Value::Object(entries) = json!(meta) else { unreachable!("a struct serializes as an object") };
+                    let mut fields = ObjectLiteral::default();
+                    for (field, value) in entries {
+                        match field.as_str() {
+                            "tables" => {}
+                            "declarationScaleValues" => fields.insert(
+                                &field,
+                                shared_table(&field, meta.tables.declaration_scale_values.as_deref(), &value),
+                            ),
+                            _ => fields.insert(&field, value),
+                        }
+                    }
+                    dynamic.insert(prop_name, Field::Object(fields));
                     continue;
                 }
             };
@@ -260,7 +273,7 @@ pub(super) fn build_config(
                 fields.insert("strict", json!(true));
             }
             if !meta.keywords.is_empty() {
-                fields.insert("keywords", json!(meta.keywords));
+                fields.insert("keywords", shared_table("keywords", meta.tables.keywords.as_deref(), &meta.keywords));
             }
             if meta.declared_numeric {
                 fields.insert("declaredNumeric", json!(true));
@@ -275,7 +288,10 @@ pub(super) fn build_config(
                 }
             }
             if !meta.scale_values.is_empty() {
-                fields.insert("scaleValues", json!(meta.scale_values));
+                fields.insert(
+                    "scaleValues",
+                    shared_table("scaleValues", meta.tables.scale_values.as_deref(), &meta.scale_values),
+                );
             }
             if let Some(ref current_var) = meta.current_var {
                 fields.insert("currentVar", json!(current_var));
@@ -289,6 +305,15 @@ pub(super) fn build_config(
     }
 
     Ok(config.render())
+}
+
+/// A table the system-props module's `animusTables` export holds under
+/// `key`, referenced there; one without a key, inlined.
+fn shared_table(table: &str, key: Option<&str>, value: &impl serde::Serialize) -> Field {
+    match key {
+        Some(key) => Field::Script(format!("animusTables.{table}[{}]", crate::evaluator::js_string_literal(key))),
+        None => Field::Json(json!(value)),
+    }
 }
 
 /// One value of the config object literal.
@@ -358,6 +383,7 @@ mod tests {
             current_var: None,
             production_conditions: None,
             declared_numeric: false,
+            tables: Default::default(),
         }
     }
 
@@ -392,6 +418,7 @@ mod tests {
             member_vars: [("color".to_string(), "--animus-tone-color".to_string())].into_iter().collect(),
             declaration_scale_values: BTreeMap::new(),
             production_conditions: None,
+            tables: Default::default(),
         };
         let payload = ReplacementPayload {
             system_prop_names: vec!["bg".into(), "p".into()],

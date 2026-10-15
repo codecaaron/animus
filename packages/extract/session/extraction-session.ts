@@ -3013,6 +3013,7 @@ export class ExtractionSession {
       dynamicProps: manifest?.dynamic_props ?? {},
       admittedTransforms: manifest?.admitted_transforms ?? {},
       typedSystemProps: manifest?.typed_system_props ?? [],
+      runtimeTables: manifest?.runtime_tables,
     });
 
     // Payloads first, then the commit, then the epoch LAST and only when its

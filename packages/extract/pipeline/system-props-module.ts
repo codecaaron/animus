@@ -1,6 +1,11 @@
 import { buildDynamicPropConfig } from './dynamic-prop-config';
 
-import type { DynamicPropMeta } from './dynamic-prop-config';
+import type {
+  DynamicPropConfig,
+  DynamicPropMeta,
+  RuntimeTables,
+  TableKeys,
+} from './dynamic-prop-config';
 import type { ProjectManifest } from './manifest-schema';
 
 /** Compiles the exact entry text in strict mode, the mode of the ES module it
@@ -29,18 +34,49 @@ function transformsSource(
   return entries.length > 0 ? `{\n${entries.join('')}}` : '{}';
 }
 
+/** The system's dynamic config as source, each table its meta keys in
+ *  `animusTables` referenced there rather than inlined. */
+function dynamicPropConfigSource(
+  config: DynamicPropConfig,
+  dynamicProps: Record<string, DynamicPropMeta>
+): string {
+  const entries = Object.entries(config).map(([prop, entry]) => {
+    const keys: TableKeys = dynamicProps[prop]?.tables ?? {};
+    const fields = Object.entries(entry).map(([field, value]) => {
+      const key =
+        field === 'scaleValues' ||
+        field === 'keywords' ||
+        field === 'declarationScaleValues'
+          ? keys[field]
+          : undefined;
+      const source =
+        key === undefined
+          ? JSON.stringify(value)
+          : `animusTables.${field}[${JSON.stringify(key)}]`;
+      return `${JSON.stringify(field)}:${source}`;
+    });
+    return `${JSON.stringify(prop)}:{${fields.join(',')}}`;
+  });
+  return `{${entries.join(',')}}`;
+}
+
 export function buildSystemPropsModule(opts: {
   systemPropMapJson: string;
   groupRegistryJson: string;
   dynamicProps: Record<string, DynamicPropMeta>;
   admittedTransforms: ProjectManifest['admitted_transforms'];
   typedSystemProps: ProjectManifest['typed_system_props'];
+  runtimeTables: RuntimeTables | undefined;
 }): string {
   const dynamicPropConfig = buildDynamicPropConfig(opts.dynamicProps);
   return (
+    // Every config that references a table imports this one export.
+    (opts.runtimeTables
+      ? `export const animusTables = ${JSON.stringify(opts.runtimeTables)};\n`
+      : '') +
     `export const systemPropMap = ${opts.systemPropMapJson};\n` +
     `export const systemPropGroups = ${opts.groupRegistryJson};\n` +
-    `export const dynamicPropConfig = ${JSON.stringify(dynamicPropConfig)};\n` +
+    `export const dynamicPropConfig = ${dynamicPropConfigSource(dynamicPropConfig, opts.dynamicProps)};\n` +
     `export const transforms = ${transformsSource(opts.admittedTransforms)};\n` +
     // Only a component reading a typed system prop imports the list.
     (opts.typedSystemProps.length > 0

@@ -90,6 +90,7 @@ mod tests {
             current_var: None,
             production_conditions: None,
             declared_numeric: false,
+            tables: Default::default(),
         })
     }
 
@@ -123,6 +124,7 @@ mod tests {
             .into_iter()
             .collect(),
             production_conditions: None,
+            tables: Default::default(),
         });
         let mut value = value_meta(serde_json::json!({ "rock": ROCK }));
         vars.lift_meta(&mut declarations);

@@ -86,6 +86,7 @@ const EMPTY_SYSTEM_PROPS_MODULE = buildSystemPropsModule({
   dynamicProps: {},
   admittedTransforms: {},
   typedSystemProps: [],
+  runtimeTables: undefined,
 });
 
 const NO_SHEETS: AssetSheets = {

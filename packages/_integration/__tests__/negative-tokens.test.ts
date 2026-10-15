@@ -6,7 +6,7 @@ import { createSystem, createTheme, size } from '@animus-ui/system';
 import { expect, test } from 'vitest';
 
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';
-import { analyzeProject } from './run-pipeline';
+import { analyzeProject, inlineTables } from './run-pipeline';
 
 const ruleBody = (css: string, component: string) =>
   css.match(new RegExp(`\\.animus-${component}-\\w+ \\{([^}]*)\\}`))?.[1];
@@ -130,7 +130,10 @@ export function App({ value }) { return <><Box inset={value} mx={value} /><Custo
   });
   expect(manifest.dynamic_props.mx.scaleValues).toEqual({ 1: 4 });
   expect(
-    manifest.components['fixtures/negative-inline.tsx::Custom'].replacement
+    inlineTables(
+      manifest,
+      manifest.components['fixtures/negative-inline.tsx::Custom'].replacement
+    )
   ).toContain('"scaleValues":{"1":0.5,"half":0.5}');
 });
 
@@ -425,7 +428,10 @@ export const App = (props) => <><C {...props} /><Wrap p="sm" /><Box p={8} /><S q
     )
   );
   const replacement = (id: string): string =>
-    manifest.components[`fixtures/spread-owner.tsx::${id}`].replacement;
+    inlineTables(
+      manifest,
+      manifest.components[`fixtures/spread-owner.tsx::${id}`].replacement
+    );
   expect(replacement('C')).toMatch(
     /"customDynamicConfig":\{"p":\{[^}]*"strict":true[^}]*"scaleValues":\{"sm":"1px"\}/
   );

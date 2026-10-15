@@ -51,6 +51,9 @@ struct AnalyzeResult<'a> {
     /// Present only where an emitted face asks for a preload.
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     font_preloads: &'a [crate::theme::FontPreload],
+    /// Present only where a runtime config references a shared table.
+    #[serde(skip_serializing_if = "crate::dynamic_meta::RuntimeTables::is_empty")]
+    runtime_tables: &'a crate::dynamic_meta::RuntimeTables,
     timing: serde_json::Value,
 }
 
@@ -108,6 +111,7 @@ struct ReplacementImportNeeds {
     typed_system_props: bool,
     dynamic_prop_config: bool,
     transforms: bool,
+    runtime_tables: bool,
     /// Import declarations, by span, whose imported callback a replacement no
     /// longer references because its delivery was pruned: with that last use
     /// gone, TypeScript elides the declaration and its module's effects.
@@ -216,6 +220,11 @@ fn replacement_import_needs(
                         meta.transform_id.is_some()
                     })
                 });
+
+        needs.runtime_tables |= payload
+            .custom_dynamic_config
+            .as_ref()
+            .is_some_and(|config| config.values().any(|meta| !meta.tables().is_empty()));
 
         // A chain-stage reference or extended parent resolves at module
         // scope, where an import and a local cannot share a name.
@@ -1479,6 +1488,7 @@ impl ExtractEngine {
             files: &css.files_map,
             missing_inputs: &css.missing_inputs,
             font_preloads: &css.font_preloads,
+            runtime_tables: &css.runtime_tables,
             timing: serde_json::json!({ "parseCount": self.parse_count }),
         });
         self.cross = Some(cross);
@@ -1610,6 +1620,9 @@ impl ExtractEngine {
         }
         if import_needs.transforms {
             virtual_imports.push("transforms");
+        }
+        if import_needs.runtime_tables {
+            virtual_imports.push("animusTables");
         }
 
         let mut system_imports: Vec<&str> = Vec::new();
@@ -1809,6 +1822,7 @@ mod tests {
             current_var: None,
             production_conditions: None,
             declared_numeric: false,
+            tables: Default::default(),
         })
     }
 

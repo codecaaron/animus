@@ -2,7 +2,7 @@ import { generatedModuleCode } from '@animus-ui/extract/pipeline';
 import { asset, createSystem, createTheme } from '@animus-ui/system';
 import { expect, test } from 'vitest';
 
-import { analyzeProject } from './run-pipeline';
+import { analyzeProject, inlineTables } from './run-pipeline';
 
 /**
  * A scale value holding asset() reaches runtime configs as a root variable
@@ -54,8 +54,10 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;`;
   expect(manifest.sheets.global).toContain(
     `${name}: url("animus-asset:@acme/media/rock.jpg");`
   );
-  const replacement: string =
-    manifest.components['fixtures/runtime-assets.tsx::Box'].replacement;
+  const replacement = inlineTables(
+    manifest,
+    manifest.components['fixtures/runtime-assets.tsx::Box'].replacement
+  );
   expect(replacement).toContain(`"rock":"${reference}"`);
   expect(generatedModuleCode(manifest)).not.toContain('animus-asset:');
 });

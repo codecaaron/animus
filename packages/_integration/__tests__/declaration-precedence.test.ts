@@ -277,6 +277,7 @@ async function project(reversed: boolean) {
         dynamicProps: manifest.dynamic_props,
         admittedTransforms: manifest.admitted_transforms,
         typedSystemProps: manifest.typed_system_props,
+        runtimeTables: manifest.runtime_tables,
       })
     )}`
   );

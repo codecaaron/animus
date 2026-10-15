@@ -8,6 +8,7 @@ import { config, theme } from '../fixtures/setup';
 
 import type {
   AnalyzeProjectInputs,
+  ProjectManifest,
   V2ExtractEngine,
 } from '@animus-ui/extract/pipeline';
 import type { KeyframeFrameMap } from '@animus-ui/system';
@@ -88,6 +89,27 @@ export function analyzeProject(
 /** Transforms one file of the most recent analysis. */
 export function transformFile(path: string, source: string) {
   return engineApi().transformFile(source, path, '');
+}
+
+/** `code` with each shared-table reference, `animusTables.<table>["<key>"]`,
+ *  replaced by the table it names, as the runtime reads it. */
+export function inlineTables(manifest: ProjectManifest, code: string): string {
+  const tables = manifest.runtime_tables;
+  return code.replace(
+    /animusTables\.(scaleValues|keywords|declarationScaleValues)\[("(?:[^"\\]|\\.)*")\]/g,
+    (reference, table: string, literal: string) => {
+      const key = String(JSON.parse(literal));
+      const value =
+        table === 'scaleValues'
+          ? tables?.scaleValues[key]
+          : table === 'keywords'
+            ? tables?.keywords[key]
+            : tables?.declarationScaleValues[key];
+      if (value === undefined)
+        throw new Error(`no shared table for ${reference}`);
+      return JSON.stringify(value);
+    }
+  );
 }
 
 export function clearAnalysisCache(): void {

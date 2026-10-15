@@ -19,7 +19,26 @@ interface ValuePropMeta {
    * production build keeps this prop's slot, empty when it keeps none.
    */
   productionConditions?: readonly string[];
+  tables?: TableKeys;
   kind?: never;
+}
+
+/** Where a meta's tables sit in `animusTables`; a table without a key is
+ *  inlined. */
+export interface TableKeys {
+  scaleValues?: string;
+  keywords?: string;
+  declarationScaleValues?: string;
+}
+
+/** The tables runtime configs share, each by its key. */
+export interface RuntimeTables {
+  scaleValues: Record<string, Record<string, string | number>>;
+  keywords: Record<string, readonly string[]>;
+  declarationScaleValues: Record<
+    string,
+    DeclarationPropMeta['declarationScaleValues']
+  >;
 }
 
 interface DeclarationPropMeta {
@@ -32,13 +51,14 @@ interface DeclarationPropMeta {
    * production build keeps this prop's slot, empty when it keeps none.
    */
   productionConditions?: readonly string[];
+  tables?: TableKeys;
 }
 
 type DeclarationMeta = DeclarationPropMeta & {
   [
     K in Exclude<
       keyof ValuePropMeta,
-      'kind' | 'slotClass' | 'productionConditions'
+      'kind' | 'slotClass' | 'productionConditions' | 'tables'
     >
   ]?: never;
 };

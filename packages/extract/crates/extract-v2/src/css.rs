@@ -2619,6 +2619,7 @@ mod tests {
                 current_var: current_var.map(str::to_string),
                 production_conditions: None,
                 declared_numeric: false,
+                tables: Default::default(),
             }),
         );
         dynamic_props
@@ -2681,6 +2682,7 @@ mod tests {
                 current_var: None,
                 production_conditions: None,
                 declared_numeric: false,
+                tables: Default::default(),
             }),
         );
         let bp = test_breakpoints();
@@ -2723,6 +2725,7 @@ mod tests {
                 current_var: None,
                 production_conditions: None,
                 declared_numeric: false,
+                tables: Default::default(),
             }),
         );
         let bp = test_breakpoints();
@@ -2765,6 +2768,7 @@ mod tests {
                 current_var: None,
                 production_conditions: None,
                 declared_numeric: false,
+                tables: Default::default(),
             }),
         );
         let bp = test_breakpoints();

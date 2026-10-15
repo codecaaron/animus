@@ -874,6 +874,8 @@ pub struct CssOutput {
     pub missing_inputs: Vec<MissingInput>,
     /// The font files the emitted faces ask to preload, in emission order.
     pub font_preloads: Vec<crate::theme::FontPreload>,
+    /// The tables runtime configs reference (`RuntimeTables`).
+    pub runtime_tables: crate::dynamic_meta::RuntimeTables,
 }
 
 pub fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
@@ -9015,6 +9017,18 @@ fn run_with_system_floor(
     {
         runtime_assets.lift_meta(meta);
     }
+    // Each table ships once, in the system-props module, and every config
+    // references it there. Sorted, so a key's first claimant is stable.
+    let mut runtime_tables = crate::dynamic_meta::RuntimeTables::default();
+    let mut components: Vec<_> = per_component_custom_dynamic.iter_mut().collect();
+    components.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    for metas in std::iter::once(&mut dynamic_props).chain(components.into_iter().map(|(_, metas)| metas)) {
+        let mut props: Vec<_> = metas.iter_mut().collect();
+        props.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        for (_, meta) in props {
+            runtime_tables.intern(meta);
+        }
+    }
     let custom_slot_entries = if !all_custom_slot_entries.is_empty() {
         Some(all_custom_slot_entries)
     } else {
@@ -9839,6 +9853,7 @@ fn run_with_system_floor(
             .collect(),
         missing_inputs,
         font_preloads: font_preloads.list,
+        runtime_tables,
     }
 }
 

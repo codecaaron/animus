@@ -142,7 +142,7 @@ describe('custom props inherited through extend()', () => {
         }
       )
     );
-    const { transforms } = await import(
+    const { transforms, animusTables } = await import(
       `data:text/javascript,${encodeURIComponent(
         buildSystemPropsModule({
           systemPropMapJson: '{}',
@@ -150,6 +150,7 @@ describe('custom props inherited through extend()', () => {
           dynamicProps: {},
           admittedTransforms: manifest.admitted_transforms,
           typedSystemProps: manifest.typed_system_props,
+          runtimeTables: manifest.runtime_tables,
         })
       )}`
     );
@@ -160,6 +161,7 @@ describe('custom props inherited through extend()', () => {
       systemPropMap: {},
       dynamicPropConfig: {},
       transforms,
+      animusTables,
     };
     const instantiate = (
       file: { path: string },
