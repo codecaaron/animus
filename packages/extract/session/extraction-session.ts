@@ -74,7 +74,7 @@ import {
   outputSourceGuard,
   outputSourceMessage,
   outputTreesMessage,
-  loweredDirMessage,
+  loweredDirDiagnostic,
   postProcessCss,
   readTsconfigAliasPairs,
   projectExternalFileOwners,
@@ -2979,8 +2979,18 @@ export class ExtractionSession {
       warnFn: (msg) => this.warn(msg),
       onLoweredDir: () => {
         if (claimReport(this.key, 'lowered-dir')) {
-          this.warn(
-            loweredDirMessage("Animus's CSS post-processing", 'targets')
+          surfaceManifestDiagnostics(
+            {
+              diagnostics: [
+                loweredDirDiagnostic("Animus's CSS post-processing", 'targets'),
+              ],
+            },
+            (message) => this.warn(message),
+            {
+              levels: this.options.diagnostics,
+              strict: this.options.strict,
+              reportErrors: this.reportErrors(),
+            }
           );
         }
       },

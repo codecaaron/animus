@@ -1,13 +1,14 @@
 import {
   assertKnownOptionKeys,
   assertSupportedEngine,
-  DIR_SELECTOR_FEATURE,
   isPathWithinRoot,
   keepsKitSourceEffects,
-  loweredDirMessage,
+  keptDirFeatures,
+  loweredDirDiagnostic,
   resolveMode,
   sourceKitDependencies,
   splitStylesheet,
+  surfaceManifestDiagnostics,
   systemKitDependencies,
 } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
@@ -331,11 +332,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       const keptDir: UserConfig = options.keepDirSelector
         ? {
             css: {
-              lightningcss: {
-                exclude:
-                  (userConfig.css?.lightningcss?.exclude ?? 0) |
-                  DIR_SELECTOR_FEATURE,
-              },
+              lightningcss: keptDirFeatures(userConfig.css?.lightningcss),
             },
           }
         : {};
@@ -498,8 +495,21 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
             )
           ) {
             ctx.warnedLoweredDir = true;
-            ctx.warn(
-              loweredDirMessage("Vite's CSS minification", 'build.cssTarget')
+            surfaceManifestDiagnostics(
+              {
+                diagnostics: [
+                  loweredDirDiagnostic(
+                    "Vite's CSS minification",
+                    'build.cssTarget'
+                  ),
+                ],
+              },
+              (message) => ctx.warn(message),
+              {
+                levels: ctx.options.diagnostics,
+                strict: ctx.options.strict,
+                reportErrors: ctx.reportErrors(),
+              }
             );
           }
         }

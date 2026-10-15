@@ -205,8 +205,8 @@ export { enforceExternalTokenContracts } from './correlate-external-tokens';
 export { buildPathAliasesJson } from './path-aliases';
 export type { LightningTargets } from './post-process-css';
 export {
-  DIR_SELECTOR_FEATURE,
-  loweredDirMessage,
+  keptDirFeatures,
+  loweredDirDiagnostic,
   postProcessCss,
   resolveLightningTargets,
 } from './post-process-css';

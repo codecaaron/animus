@@ -456,6 +456,10 @@ export const PROPERTY_TOKEN_COLLISION = 'animus.property.token-collision';
  *  or WOFF, or is larger than the preload budget. */
 export const FONT_FACE_PRELOAD_COSTLY = 'animus.style.font-face-preload-costly';
 
+/** Post-processing or the host's minification lowered an authored `:dir()`
+ *  to `:lang()`, which an element that sets only `dir` does not match. */
+export const LOWERED_DIR_SELECTOR = 'animus.selector.lowered-dir';
+
 /**
  * A lost or unreadable configured input, or a classified unsupported Animus
  * declaration, is `error` — what `--strict` refuses; degradation that still
@@ -498,6 +502,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [PROPERTY_LEGACY_TOKEN_COLLISION, 'warn'],
   [PROPERTY_TOKEN_COLLISION, 'error'],
   [FONT_FACE_PRELOAD_COSTLY, 'warn'],
+  [LOWERED_DIR_SELECTOR, 'warn'],
 ]);
 
 /** An unlisted code is `warn`: a witness kind from a newer system package

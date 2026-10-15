@@ -86,6 +86,32 @@ describe('postProcessCss', () => {
     expect(onLoweredDir).toHaveBeenCalledTimes(1);
   });
 
+  // Contract: keepDirSelector changes no CSS output except :dir().
+  test('keepDirSelector leaves every other selector as the targets compile it', () => {
+    const css = [
+      '.mix, .x::-webkit-scrollbar { width: 8px; }',
+      'input:autofill { color: red; }',
+      '.f:fullscreen { color: red; }',
+      '.l:lang(en, fr) { color: blue; }',
+      '.n:not(.e, .f) { color: green; }',
+      '.i:is(.h, .j) { color: teal; }',
+      '.b { & .c { color: gray; } }',
+    ].join('\n');
+    for (const query of [
+      'defaults',
+      'last 2 versions, firefox esr, safari >= 13',
+      'safari 15',
+      'chrome 120',
+    ]) {
+      const targets = resolveLightningTargets(query, process.cwd());
+      for (const minify of [true, false]) {
+        expect(
+          postProcessCss(css, { minify, targets, keepDirSelector: true })
+        ).toBe(postProcessCss(css, { minify, targets }));
+      }
+    }
+  });
+
   test('empty input passes through untouched', () => {
     expect(postProcessCss('', { minify: true, targets: CHROME120 })).toBe('');
   });
