@@ -129,15 +129,22 @@ export interface AnimusCoreOptions {
  * every face of the family. An object selects the faces of `family` whose
  * declared weight contains `weight` (a number, `'normal'` or `'bold'`; a
  * variable face's range such as `'100 900'` contains each weight in it, and
- * no weight selects any) and whose style is `style` (`'normal'` when
- * omitted). Families match as a face's `family` prints, ignoring ASCII
- * case. An entry no face matches reports
- * `animus.style.font-preload-unmatched`; a malformed one, a weight range
- * included, reports `animus.style.font-preload-invalid`.
+ * no weight selects any), whose style is `style` (`'normal'` when omitted),
+ * and whose declared unicode-range covers `unicodeRange` (such as
+ * `'U+0000-00FF'`, choosing one subset of a family split by script; a face
+ * without one covers every code point, and no `unicodeRange` selects any).
+ * Families match as a face's `family` prints, ignoring ASCII case. An entry
+ * no face matches reports `animus.style.font-preload-unmatched`; a malformed
+ * one, a weight range included, reports `animus.style.font-preload-invalid`.
  */
 export type FontPreloadEntry =
   | string
-  | { family: string; weight?: number | string; style?: string };
+  | {
+      family: string;
+      weight?: number | string;
+      style?: string;
+      unicodeRange?: string;
+    };
 
 export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'system',

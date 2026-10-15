@@ -2793,7 +2793,8 @@ pub struct FontPreloads {
     pub list: Vec<FontPreload>,
 }
 
-/// One `fontPreloads` entry: a family name, or `{ family, weight?, style? }`.
+/// One `fontPreloads` entry: a family name, or `{ family, weight?, style?,
+/// unicodeRange? }`.
 struct Selection {
     /// The entry as the host wrote it, for its reports.
     written: String,
@@ -2805,6 +2806,9 @@ struct Selection {
     /// The style a face must declare; an object without one asks for
     /// `normal`, and a bare family name for any style.
     style: Option<String>,
+    /// The code points a face's declared `unicode-range` must cover; `None`,
+    /// any range.
+    unicode_range: Option<Vec<(u32, u32)>>,
     matched: bool,
 }
 
@@ -2814,8 +2818,15 @@ impl Selection {
             Value::String(family) => format!("'{family}'"),
             other => other.to_string(),
         };
-        let mut selection =
-            Selection { written, invalid: None, family: String::new(), weight: None, style: None, matched: false };
+        let mut selection = Selection {
+            written,
+            invalid: None,
+            family: String::new(),
+            weight: None,
+            style: None,
+            unicode_range: None,
+            matched: false,
+        };
         match entry {
             Value::String(family) => selection.family = family.clone(),
             Value::Object(fields) => {
@@ -2846,15 +2857,30 @@ impl Selection {
                         None
                     }
                 };
+                match fields.get("unicodeRange") {
+                    None => {}
+                    Some(range) => match range.as_str().and_then(unicode_ranges) {
+                        Some(ranges) => selection.unicode_range = Some(ranges),
+                        None => {
+                            selection.invalid = Some(format!(
+                                "its `unicodeRange` {range} is not a unicode-range (such as `U+0000-00FF`, \
+                                 `U+0400-045F, U+0490-0491` or `U+4??`)"
+                            ))
+                        }
+                    },
+                }
             }
-            other => selection.invalid = Some(format!("it is {other}, not a family name or `{{ family, weight?, style? }}`")),
+            other => {
+                selection.invalid =
+                    Some(format!("it is {other}, not a family name or `{{ family, weight?, style?, unicodeRange? }}`"))
+            }
         }
         selection
     }
 
-    /// Whether a face of `family` declaring `weight` and `style` is one this
-    /// entry selects.
-    fn selects(&self, family: &str, weight: Option<&str>, style: Option<&str>) -> bool {
+    /// Whether a face of `family` declaring `weight`, `style` and
+    /// `unicode_range` is one this entry selects.
+    fn selects(&self, family: &str, weight: Option<&str>, style: Option<&str>, unicode_range: Option<&str>) -> bool {
         if self.invalid.is_some() || !self.family.trim().eq_ignore_ascii_case(family) {
             return false;
         }
@@ -2874,8 +2900,58 @@ impl Selection {
             let declared = style.map_or("normal".to_string(), |style| style.trim().to_ascii_lowercase());
             declared.split_ascii_whitespace().next() == Some(wanted)
         });
-        weight_fits && style_fits
+        let range_fits = self.unicode_range.as_deref().is_none_or(|wanted| {
+            // A face without one covers every code point.
+            match unicode_range.map(unicode_ranges) {
+                None => true,
+                Some(Some(declared)) => covers(&declared, wanted),
+                Some(None) => false,
+            }
+        });
+        weight_fits && style_fits && range_fits
     }
+}
+
+/// A CSS `unicode-range` value as code point ranges: `U+0041`,
+/// `U+0000-00FF` and `U+4??`, comma-separated; `None` when it is not one.
+fn unicode_ranges(text: &str) -> Option<Vec<(u32, u32)>> {
+    text.split(',')
+        .map(|part| {
+            let part = part.trim();
+            let digits = part.strip_prefix("U+").or_else(|| part.strip_prefix("u+"))?;
+            let hex = |text: &str| {
+                (1..=6).contains(&text.len()).then(|| u32::from_str_radix(text, 16).ok()).flatten()
+            };
+            let (start, end) = match digits.split_once('-') {
+                Some((start, end)) => (hex(start)?, hex(end)?),
+                None if digits.contains('?') => {
+                    let fixed = digits.trim_end_matches('?');
+                    let wild = digits.len() - fixed.len();
+                    if digits.len() > 6 || fixed.contains('?') {
+                        return None;
+                    }
+                    let base = if fixed.is_empty() { 0 } else { hex(fixed)? } << (4 * wild);
+                    (base, base | ((1 << (4 * wild)) - 1))
+                }
+                None => (hex(digits)?, hex(digits)?),
+            };
+            (start <= end && end <= 0x10FFFF).then_some((start, end))
+        })
+        .collect()
+}
+
+/// Whether the code point ranges `declared` cover every range in `wanted`.
+fn covers(declared: &[(u32, u32)], wanted: &[(u32, u32)]) -> bool {
+    let mut merged = declared.to_vec();
+    merged.sort_unstable();
+    let mut spans: Vec<(u32, u32)> = Vec::new();
+    for (start, end) in merged {
+        match spans.last_mut() {
+            Some(last) if start <= last.1.saturating_add(1) => last.1 = last.1.max(end),
+            _ => spans.push((start, end)),
+        }
+    }
+    wanted.iter().all(|&(start, end)| spans.iter().any(|&(low, high)| low <= start && end <= high))
 }
 
 const FONT_STYLES: [&str; 3] = ["normal", "italic", "oblique"];
@@ -2906,11 +2982,12 @@ impl FontPreloads {
         family: impl FnOnce() -> String,
         weight: Option<&str>,
         style: Option<&str>,
+        unicode_range: Option<&str>,
     ) -> Option<bool> {
         let entries = self.selection.as_mut()?;
         let family = family();
         let mut any = false;
-        for entry in entries.iter_mut().filter(|entry| entry.selects(&family, weight, style)) {
+        for entry in entries.iter_mut().filter(|entry| entry.selects(&family, weight, style, unicode_range)) {
             entry.matched = true;
             any = true;
         }
@@ -3059,16 +3136,16 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext, preloads: &mut FontPre
             }
         }
         let descriptor = |key: &str| obj.get(key).and_then(Value::as_str);
-        let asked = preloads.selects(|| family_identity(&resolved), descriptor("weight"), descriptor("style")).unwrap_or_else(|| {
-            match obj.get("preload") {
+        let asked = preloads
+            .selects(|| family_identity(&resolved), descriptor("weight"), descriptor("style"), descriptor("unicodeRange"))
+            .unwrap_or_else(|| match obj.get("preload") {
                 None | Some(Value::Bool(false)) => false,
                 Some(Value::Bool(true)) => true,
                 Some(other) => {
                     preload_dropped(format!("its `preload` {other} is not a boolean"));
                     false
                 }
-            }
-        });
+            });
         if asked {
             match preload_source(&kept) {
                 Ok(preload) => {
