@@ -12,6 +12,8 @@ export function logBuildTimings(
     ['fileDiscovery', 'file-discovery'],
     ['fileRead', 'file-read+hash'],
     ['packageResolve', 'pkg-resolve'],
+    ['taggedPackages', 'tagged-packages'],
+    ['foreignPackages', 'foreign-packages'],
     ['analysis', 'analysis'],
   ];
   for (const [key, label] of jsPhases) {

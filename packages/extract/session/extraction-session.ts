@@ -2200,6 +2200,7 @@ export class ExtractionSession {
       // peers, cannot render an Animus component its tags are named like.
       // Its tags are read in every analysed source, a workspace package's as
       // well as the application's, each instance located from its importers.
+      t = this.now();
       const tagged = taggedPackages(
         readEntries,
         this.engine(),
@@ -2207,7 +2208,10 @@ export class ExtractionSession {
         packageNames,
         factsOf
       );
+      bt.taggedPackages = this.elapsed(t);
+      t = this.now();
       this.foreignPackages = foreignPackages(tagged.located, tagged.kits);
+      bt.foreignPackages = this.elapsed(t);
       try {
         accepted = await this.corpus.prepare(readEntries);
         this.throwOnAbortedParse(accepted);
