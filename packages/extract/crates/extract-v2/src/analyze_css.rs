@@ -3513,6 +3513,19 @@ fn resolve_identity(
     by_bare_name(local)
 }
 
+/// Whether `tag` in `ff`, or the root it is a member of, is imported from a
+/// package with no dependency path to Animus and is a foreign import there.
+fn foreign_tag(ff: &FileFacts, tag: &str, inputs: &CssInputs) -> bool {
+    let root = tag.split('.').next().unwrap_or(tag);
+    let source = ff
+        .imports
+        .iter()
+        .find(|import| import.local == root)
+        .map(|import| &import.source)
+        .or_else(|| ff.namespace_imports.get(root));
+    source.is_some_and(|source| foreign_import(ff, tag, source, inputs))
+}
+
 /// Whether the tag `local` of `ff`, imported from `source`, is a tag of a
 /// package with no dependency path to Animus (the host's `foreignPackages`),
 /// which renders no Animus component its name matches. One the file may hand
@@ -4690,6 +4703,7 @@ enum UncertainIdentity {
 enum TagClass {
     Ordinary,
     External,
+    Foreign,
     Nested,
     Member,
     OtherDeclaration,
@@ -4707,6 +4721,10 @@ impl TagClass {
             TagClass::External => (
                 "import from a module extraction does not analyse",
                 "imports from modules extraction does not analyse",
+            ),
+            TagClass::Foreign => (
+                "tag of a package with no dependency path to Animus, which it does not list",
+                "tags of packages with no dependency path to Animus, which it does not list",
             ),
             TagClass::Nested => (
                 "parameter or binding inside a function",
@@ -4749,7 +4767,7 @@ fn identity_uncertainty_diagnostics(
     objects: &mut crate::family_members::ObjectMembers<'_>,
 ) -> Vec<CssDiagnostic> {
     let mut seen: FxHashSet<(&str, String)> = FxHashSet::default();
-    let mut records: Vec<(TagClass, &str, String, CssDiagnostic)> = Vec::new();
+    let mut records: Vec<(TagClass, &str, String, Option<CssDiagnostic>)> = Vec::new();
     for (file, site) in sites {
         let Some(ff) = files.get(*file) else {
             continue;
@@ -4815,6 +4833,12 @@ fn identity_uncertainty_diagnostics(
             Some(at) => record.at(at),
             None => record,
         };
+        // A tag proven foreign renders no Animus component: the summary
+        // counts it, and no line of its own names it.
+        let (class, record) = match tag.is_some_and(|tag| foreign_tag(ff, tag, inputs)) {
+            true => (TagClass::Foreign, None),
+            false => (class, Some(record)),
+        };
         records.push((class, file.as_str(), spelling, record));
     }
     if records.is_empty() {
@@ -4857,7 +4881,7 @@ fn identity_uncertainty_diagnostics(
         ),
         Some(IDENTITY_UNCERTAIN),
     );
-    std::iter::once(summary).chain(records.into_iter().map(|(.., record)| record)).collect()
+    std::iter::once(summary).chain(records.into_iter().filter_map(|(.., record)| record)).collect()
 }
 
 /// The first element or `createElement` call naming `name`: whether it is
