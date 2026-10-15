@@ -155,12 +155,16 @@ export interface GlobalStyleBlock {
 
 export type GlobalStylesFactory<
   PropReg extends Record<string, SystemProp> = Record<string, SystemProp>,
-> = <Map extends Record<string, AbstractProps>>(
-  styles: {
-    readonly [K in keyof Map]: ThemedCSSInputProps<Map[K], PropReg>;
-  },
-  options?: { fontFaces?: readonly FontFace[]; unlayered?: boolean }
-) => GlobalStyleBlock;
+> = {
+  /** A block of font faces alone: `createGlobalStyles({}, { fontFaces })`. */
+  (fontFaces: readonly FontFace[]): GlobalStyleBlock;
+  <Map extends Record<string, AbstractProps>>(
+    styles: {
+      readonly [K in keyof Map]: ThemedCSSInputProps<Map[K], PropReg>;
+    },
+    options?: { fontFaces?: readonly FontFace[]; unlayered?: boolean }
+  ): GlobalStyleBlock;
+};
 
 export type CreateKeyframesFactory<
   PropReg extends Record<string, SystemProp> = Record<string, SystemProp>,
@@ -1391,16 +1395,21 @@ export class SystemBuilder<
     const legacyVerbWitnessRecord = this.#legacyVerbWitnesses;
 
     const createGlobalStyles = ((
-      styles: GlobalStyleMap,
+      styles: GlobalStyleMap | readonly FontFace[],
       options?: { fontFaces?: readonly FontFace[]; unlayered?: boolean }
-    ): GlobalStyleBlock => ({
-      __brand: 'GlobalStyleBlock' as const,
-      styles,
-      ...(options?.fontFaces?.length
-        ? { fontFaces: [...options.fontFaces] }
-        : {}),
-      ...(options?.unlayered ? { unlayered: true as const } : {}),
-    })) as GlobalStylesFactory<PropReg>;
+    ): GlobalStyleBlock => {
+      if (Array.isArray(styles)) {
+        return createGlobalStyles({}, { fontFaces: styles });
+      }
+      return {
+        __brand: 'GlobalStyleBlock' as const,
+        styles: styles as GlobalStyleMap,
+        ...(options?.fontFaces?.length
+          ? { fontFaces: [...options.fontFaces] }
+          : {}),
+        ...(options?.unlayered ? { unlayered: true as const } : {}),
+      };
+    }) as GlobalStylesFactory<PropReg>;
 
     const createKeyframes = ((frames: Record<string, KeyframeFrameMap>) =>
       keyframesImpl(frames)) as CreateKeyframesFactory<PropReg>;
