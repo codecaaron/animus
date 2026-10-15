@@ -26,5 +26,19 @@
     "baseline": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
     "candidate": "212a5480244c3f25a83c6d6c405e06e5eecccf78c601a7bf80c4c345f9bd6398",
     "reason": "The JS grows 196 bytes (250909 to 251105): runtime compound-variant matching compares the prop value as a string, so a boolean prop matches its \"true\"/\"false\" key, and an asComponent() target receives the variants and states its terminal forwards, each with its default. The CSS is identical (cssDigest unchanged)."
+  },
+  {
+    "row": "analysis:showcase",
+    "fixture": "showcase-analysis",
+    "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
+    "candidate": "5bc3b7764c8db93e2b2845ff3387597569bc3b62b43225c3b32df54f3fd1acdd",
+    "reason": "Beside the fileFacts difference above, only diagnostics differ: the 28 identity-uncertain-tag info lines for tags of packages with no dependency path to Animus (react-router-dom, lucide-react, @ark-ui/react, react, @mdx-js/react, prism-react-renderer) are gone, and the identity-uncertain warning counts them as their own kind; it still counts 64 tags."
+  },
+  {
+    "row": "build:vite-app",
+    "fixture": "vite-app",
+    "baseline": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
+    "candidate": "41ea47ec68341096d1406645e478623f669df2b05104292de85d77702078c840",
+    "reason": "Beside the 196 JS bytes above, one identity-uncertain-tag info line fewer: a tag of a package with no dependency path to Animus is counted in the identity-uncertain warning, not listed."
   }
 ]
