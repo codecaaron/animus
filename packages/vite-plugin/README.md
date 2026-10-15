@@ -23,6 +23,8 @@ export default defineConfig({
 
 The `system` option points to the file that exports your built system instance. The plugin loads this file in a subprocess to serialize the prop config and theme data for the Rust extraction pipeline.
 
+TypeScript apps get the plugin's virtual modules (`virtual:animus/styles.css`, `virtual:animus/font-preloads`) typed with `/// <reference types="@animus-ui/vite-plugin/client" />` or `"types": ["@animus-ui/vite-plugin/client"]` in `tsconfig.json`.
+
 ## What It Does
 
 1. **Build time**: Analyzes all files importing from `@animus-ui/system`, extracts static styles into CSS with `@layer` ordering
