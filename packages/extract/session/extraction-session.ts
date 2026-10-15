@@ -109,6 +109,7 @@ import {
 import { parseInternalWire } from '../pipeline/internal-wire';
 import {
   DiagnosticFailure,
+  effectiveLevel,
   SYSTEM_INSTANCE_MISMATCH,
 } from '../pipeline/manifest-diagnostics';
 import { foreignPackages } from '../pipeline/registry-packages';
@@ -2978,19 +2979,24 @@ export class ExtractionSession {
       keepDirSelector: this.options.keepDirSelector,
       warnFn: (msg) => this.warn(msg),
       onLoweredDir: () => {
-        if (claimReport(this.key, 'lowered-dir')) {
+        const diagnostic = loweredDirDiagnostic(
+          "Animus's CSS post-processing",
+          'targets'
+        );
+        const policy = {
+          levels: this.options.diagnostics,
+          strict: this.options.strict,
+          reportErrors: this.reportErrors(),
+        };
+        // An error fails every attempt; a warning prints once per build.
+        if (
+          effectiveLevel(diagnostic, policy) === 'error' ||
+          claimReport(this.key, 'lowered-dir')
+        ) {
           surfaceManifestDiagnostics(
-            {
-              diagnostics: [
-                loweredDirDiagnostic("Animus's CSS post-processing", 'targets'),
-              ],
-            },
+            { diagnostics: [diagnostic] },
             (message) => this.warn(message),
-            {
-              levels: this.options.diagnostics,
-              strict: this.options.strict,
-              reportErrors: this.reportErrors(),
-            }
+            policy
           );
         }
       },
