@@ -401,11 +401,6 @@ fn eval_expression_scoped(
         }
 
         Expression::TemplateLiteral(tpl) => {
-            if tpl.expressions.is_empty() {
-                if let Some(quasi) = tpl.quasis.first() {
-                    return Ok(StaticValue::String(quasi.value.raw.to_string()));
-                }
-            }
             eval_static_template(tpl, static_values, keyframes_eligible).ok_or_else(|| {
                 BailError::new(UnevaluatedKind::Template, "template literal with expressions (non-static)")
             })
@@ -1098,10 +1093,10 @@ fn eval_asset_call(
     Some(Ok(StaticValue::String(format!("{ASSET_PLACEHOLDER_PREFIX}{}", specifier.value))))
 }
 
-/// A template whose every expression is a static string or number, as
-/// JavaScript evaluates it: its cooked text, and each number as `String(n)`
-/// writes it. A text with no cooked value, or a number this may not print
-/// as JavaScript does, keeps the template non-static.
+/// A template with no expression, or whose every expression is a static
+/// string or number, as JavaScript evaluates it: its cooked text, and each
+/// number as `String(n)` writes it. A text with no cooked value, or a number
+/// this may not print as JavaScript does, keeps the template non-static.
 fn eval_static_template(
     tpl: &oxc::ast::ast::TemplateLiteral<'_>,
     static_values: Option<Statics<'_>>,
@@ -1701,20 +1696,23 @@ mod tests {
         assert_eq!(skips[0].key, "animation");
     }
 
-    /// Contract: a template whose every substitution is a static string or
-    /// number evaluates as JavaScript does, to its cooked text with each
-    /// number as `String(n)` writes it; a number this cannot prove it prints
-    /// that way (beyond ±2^53, or with an exponent) keeps the skip.
+    /// Contract: a template with no substitution, or whose every substitution
+    /// is a static string or number, evaluates as JavaScript does, to its
+    /// cooked text with each number as `String(n)` writes it; a number this
+    /// cannot prove it prints that way (beyond ±2^53, or with an exponent)
+    /// keeps the skip.
     #[test]
     fn template_with_static_substitutions_evaluates() {
         let (val, skips) = parse_obj_full(
             "{ width: `${8}px`, inset: `${0.5}rem`, content: `\"${'絵'}\"`, top: `${1e-7}px`, \
-             color: `\\u0072${'ed'}`, quotes: `\"${1000000000000000100}\"`, safe: `${9007199254740992}` }",
+             color: `\\u0072${'ed'}`, quotes: `\"${1000000000000000100}\"`, safe: `${9007199254740992}`, \
+             fill: `\\u0072ed` }",
         );
         assert_eq!(val["width"], "8px");
         assert_eq!(val["inset"], "0.5rem");
         assert_eq!(val["content"], "\"絵\"");
         assert_eq!(val["color"], "red");
+        assert_eq!(val["fill"], "red");
         assert_eq!(val["safe"], "9007199254740992");
         assert!(val.get("quotes").is_none());
         assert!(val.get("top").is_none());
