@@ -1507,6 +1507,15 @@ void createGlobalStyles(
 // @ts-expect-error — 'nonexistent' is not a key of the colors scale
 void createGlobalStyles({ body: { bg: 'nonexistent' } });
 
+void createGlobalStyles([
+  { family: 'Inter', src: [{ url: '/fonts/inter.woff2', format: 'woff2' }] },
+]);
+
+void createGlobalStyles([
+  // @ts-expect-error — 'variant' is not a FontFace descriptor
+  { family: 'Inter', src: [{ url: '/f.woff2' }], variant: 'small-caps' },
+]);
+
 // strictFunctionTypes is off in this project, so only the class-component case
 // below is non-vacuous here; the other arms hold for strict consumers.
 

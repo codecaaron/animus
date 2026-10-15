@@ -37,6 +37,19 @@ describe('createGlobalStyles fontFaces', () => {
     ).toBe(false);
   });
 
+  // Contract: an array of faces alone is the block `createGlobalStyles({},
+  // { fontFaces })` makes: those faces and no style rules.
+  it('takes an array of faces alone as a block of those faces', () => {
+    const fontFaces = [
+      { family: 'Inter', src: [{ url: '/fonts/inter.woff2', format: 'woff2' }] },
+    ];
+
+    expect(createGlobalStyles(fontFaces)).toEqual(
+      createGlobalStyles({}, { fontFaces })
+    );
+    expect(createGlobalStyles(fontFaces).styles).toEqual({});
+  });
+
   it('copies the descriptor array so later caller mutation cannot leak in', () => {
     const authored = [
       { family: 'Inter', src: [{ url: '/fonts/inter.woff2' }] },
