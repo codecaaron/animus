@@ -40,5 +40,12 @@
     "baseline": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
     "candidate": "41ea47ec68341096d1406645e478623f669df2b05104292de85d77702078c840",
     "reason": "Beside the 196 JS bytes above, one identity-uncertain-tag info line fewer: a tag of a package with no dependency path to Animus is counted in the identity-uncertain warning, not listed."
+  },
+  {
+    "row": "analysis:showcase",
+    "fixture": "showcase-analysis",
+    "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
+    "candidate": "3a5605399bcfc17d0fb8581a057af892b7eaa67eb7419208ce5658a113914489",
+    "reason": "Beside the fileFacts and diagnostics differences above, only two statics of src/pages/Examples.tsx differ: AS_CHILD_CODE and TOOLTIP_CODE are templates without substitutions, now evaluated to their cooked text, so an escaped \\` reads as `. CSS, components and diagnostics are identical."
   }
 ]
