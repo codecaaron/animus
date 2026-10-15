@@ -98,7 +98,11 @@ export function resetAnalysisStartedPromise(key: SessionKey): void {
  * not that pass publishes), what it extracted (from its first analysis), and
  * the advisories about its inputs.
  */
-export type BuildReport = 'unmatched-excludes' | 'extraction' | 'lowered-dir';
+export type BuildReport =
+  | 'unmatched-excludes'
+  | 'extraction'
+  | 'lowered-dir'
+  | 'output-trees';
 
 /** True for the build's first caller of `report` only: the one that makes it. */
 export function claimReport(key: SessionKey, report: BuildReport): boolean {

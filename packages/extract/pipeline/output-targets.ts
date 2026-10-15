@@ -6,7 +6,7 @@
  */
 import { relative, resolve, sep } from 'path';
 
-import { outputExclusion } from './core-options';
+import { outputExclusion, REPLACEABLE_DEFAULT_EXCLUDE } from './core-options';
 import { isPathWithinRoot } from './source-identity';
 
 /** Absolute paths. A file target names only itself: an output written
@@ -157,4 +157,91 @@ export function analysedOutputs(
   return parts.length === 0
     ? null
     : `[animus] this build ${parts.join('; and ')}.`;
+}
+
+/** Directory names build tools write into, which source rarely uses. */
+const OUTPUT_DIR_NAMES: ReadonlySet<string> = new Set([
+  'dist',
+  'build',
+  'out',
+  '.output',
+  '.publish',
+  '.turbo',
+  'coverage',
+  'storybook-static',
+  '.vercel',
+  '.netlify',
+  '.svelte-kit',
+  '.nuxt',
+  '.docusaurus',
+  '.expo',
+  '.parcel-cache',
+  '.cache',
+]);
+
+/** The share of the analysed source, by bytes, output-named trees must hold
+ *  to report, and the least they must hold: startup cost follows bytes, and
+ *  a build's minified bundles are few files and most of the bytes. A tree
+ *  holding less than a quarter of that least, such as a small source folder
+ *  named `build`, is not counted. */
+const OUTPUT_TREE_SHARE = 0.25;
+const OUTPUT_TREE_BYTES = 256 * 1024;
+const OUTPUT_TREE_LEAST_BYTES = OUTPUT_TREE_BYTES / 4;
+
+/**
+ * Why a build's analysed set looks dominated by build output, or null: the
+ * trees under a directory named as build tools name their output (the first
+ * such directory on each path), each holding 64 KiB, that together hold a
+ * quarter of the analysed source and 256 KiB. Read from the paths and
+ * sources discovery already holds. `exclude` is the user's list, which the
+ * suggested one extends; with none, the message names the defaults a list
+ * replaces.
+ */
+export function outputTreesMessage(
+  entries: ReadonlyArray<{ path: string; source: string }>,
+  exclude: readonly string[] | undefined
+): string | null {
+  let total = 0;
+  const trees = new Map<string, { files: number; bytes: number }>();
+  for (const { path, source } of entries) {
+    total += source.length;
+    const segments = path.split(/[\\/]/);
+    const at = segments.findIndex(
+      (segment, index) =>
+        index < segments.length - 1 && OUTPUT_DIR_NAMES.has(segment)
+    );
+    if (at === -1) continue;
+    const dir = segments.slice(0, at + 1).join('/');
+    const tree = trees.get(dir) ?? { files: 0, bytes: 0 };
+    tree.files += 1;
+    tree.bytes += source.length;
+    trees.set(dir, tree);
+  }
+  const largest = [...trees]
+    .filter(([, tree]) => tree.bytes >= OUTPUT_TREE_LEAST_BYTES)
+    .sort(([, a], [, b]) => b.bytes - a.bytes);
+  const held = largest.reduce((sum, [, tree]) => sum + tree.bytes, 0);
+  if (held < OUTPUT_TREE_BYTES || held < total * OUTPUT_TREE_SHARE) return null;
+  const named = largest.slice(0, 5);
+  const files = largest.reduce((sum, [, tree]) => sum + tree.files, 0);
+  const more = largest.length - named.length;
+  const listed =
+    named.map(([dir, tree]) => `${dir} (${tree.files} files)`).join(', ') +
+    (more > 0 ? `, and ${more} more` : '');
+  const suggested = [
+    ...(exclude ?? []),
+    ...named.map(([dir]) => `${dir}/**`),
+  ].map((pattern) => `'${pattern}'`);
+  const defaults = REPLACEABLE_DEFAULT_EXCLUDE.map((pattern) => `'${pattern}'`);
+  return (
+    `${Math.floor((held / total) * 100)}% of the analysed source ` +
+    `(${(held / 1024 / 1024).toFixed(1)} MB in ${files} files) sits under ` +
+    `directories that look like build output: ${listed}. Analysing them ` +
+    `slows every build; if they are output, exclude them with ` +
+    `exclude: [${suggested.join(', ')}]` +
+    (exclude === undefined
+      ? ` (a list replaces the default excludes ${defaults.join(', ')}; ` +
+        'add those it should keep).'
+      : '.')
+  );
 }

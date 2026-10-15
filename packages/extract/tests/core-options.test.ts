@@ -18,6 +18,7 @@ import {
   analysedOutputs,
   esbuildOutputTargets,
   outputExclusions,
+  outputTreesMessage,
   rollupOutputTargets,
   webpackOutputTargets,
 } from '../pipeline/output-targets';
@@ -479,4 +480,41 @@ describe('discoverFiles with an ExcludeMatcher', () => {
     expect(files).toContain(join('node_modules', 'pkg', 'index.tsx'));
     expect(files).toContain(join('src', 'App.tsx'));
   });
+});
+
+// Contract: a build reports output-named trees (`dist`, `.publish`, ...)
+// only once they hold a quarter of the analysed source and 256 KiB, names
+// each, and suggests excluding them in the user's own list.
+test('output-named trees that dominate the analysed source are reported', () => {
+  const file = (path: string, kib: number) => ({
+    path,
+    source: 'x'.repeat(kib * 1024),
+  });
+  const source = [file('src/App.tsx', 300), file('src/build/plan.ts', 10)];
+  const bundles = [
+    file('.publish/frozen/assets/a.js', 200),
+    file('apps/docs/out/b.js', 100),
+  ];
+
+  // An ordinary tree, with a `build` folder of source, and output below
+  // the share or the size.
+  expect(outputTreesMessage(source, undefined)).toBeNull();
+  expect(
+    outputTreesMessage([...source, file('dist/c.js', 90)], undefined)
+  ).toBeNull();
+  expect(
+    outputTreesMessage(
+      [file('src/App.tsx', 10), file('dist/c.js', 200)],
+      undefined
+    )
+  ).toBeNull();
+
+  const message = outputTreesMessage([...source, ...bundles], undefined);
+  expect(message).toContain(
+    'look like build output: .publish (1 files), apps/docs/out (1 files)'
+  );
+  expect(message).toContain("exclude: ['.publish/**', 'apps/docs/out/**']");
+  expect(
+    outputTreesMessage([...source, ...bundles], ['fixtures/**'])
+  ).toContain("exclude: ['fixtures/**', '.publish/**', 'apps/docs/out/**'].");
 });

@@ -49,6 +49,7 @@ export {
   mergeOutputTargets,
   noOutputTargets,
   outputExclusions,
+  outputTreesMessage,
   rollupOutputTargets,
   viteOutputTargets,
   webpackOutputTargets,

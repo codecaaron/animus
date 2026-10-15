@@ -73,6 +73,7 @@ import {
   loadSystemConfig,
   outputSourceGuard,
   outputSourceMessage,
+  outputTreesMessage,
   loweredDirMessage,
   postProcessCss,
   readTsconfigAliasPairs,
@@ -1970,6 +1971,10 @@ export class ExtractionSession {
 
     bt.fileRead = this.elapsed(t);
     const rawPaths = new Set(rawEntries.map((entry) => entry.path));
+    const outputTrees = outputTreesMessage(rawEntries, this.options.exclude);
+    if (outputTrees !== null && claimReport(this.key, 'output-trees')) {
+      this.warn(outputTrees);
+    }
 
     // Package resolution: the host's own where it resolves imports (spec
     // §2.2 A4), else the system loader's under the same context. The
