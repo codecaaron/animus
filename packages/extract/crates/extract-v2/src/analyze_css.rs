@@ -3510,19 +3510,141 @@ fn resolve_identity(
     by_bare_name(local)
 }
 
-/// The packages an analysed module may write into through a binding it
-/// imports from them: it sets or deletes a member, or hands the object on
-/// whole.
-fn written_packages(files: &BTreeMap<String, FileFacts>) -> FxHashSet<&str> {
-    files
-        .values()
-        .flat_map(|ff| {
-            let named = ff.imports.iter().filter(|import| ff.written_bindings.contains_key(&import.local));
-            let namespaces = ff.namespace_imports.iter().filter(|(local, _)| ff.written_namespaces.contains_key(*local));
-            named.map(|import| import.source.as_str()).chain(namespaces.map(|(_, source)| source.as_str()))
-        })
-        .map(|source| animus_system_loader::split_specifier(source).0)
-        .collect()
+/// The packages an analysed module may write into: it sets or deletes a
+/// member of an object a package exports, or hands the object on whole,
+/// through an import of it, a `const` alias of one, an `Object.assign` that
+/// initializes a `const` with it as the target, or another module's export
+/// of it.
+fn written_packages(
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> FxHashSet<String> {
+    if inputs.analysis_context.foreign_packages.is_empty() {
+        return FxHashSet::default();
+    }
+    let mut origins = WrittenOrigins { files, inputs, links, seen: FxHashSet::default(), packages: FxHashSet::default() };
+    for (path, ff) in files {
+        for binding in ff.written_bindings.keys().chain(ff.assigned_aliases.values()) {
+            origins.binding(path, binding);
+        }
+        for (local, (subject, _)) in &ff.written_namespaces {
+            if let Some(source) = ff.namespace_imports.get(local) {
+                origins.import(path, source, subject.strip_prefix(&format!("{local}.")));
+            }
+        }
+        for (binding, (subject, _)) in &ff.written_members {
+            origins.member(path, binding, subject.strip_prefix(&format!("{binding}.")));
+        }
+    }
+    origins.packages
+}
+
+/// Follows a written object to the packages that export it.
+struct WrittenOrigins<'f> {
+    files: &'f BTreeMap<String, FileFacts>,
+    inputs: &'f CssInputs,
+    links: &'f crate::link::ProjectLinks,
+    seen: FxHashSet<(String, String)>,
+    packages: FxHashSet<String>,
+}
+
+impl WrittenOrigins<'_> {
+    /// The object module `path`'s binding holds, through its `const` aliases.
+    fn binding(&mut self, path: &str, binding: &str) {
+        let files = self.files;
+        let held = resolve_alias_terminal(path, binding, files);
+        if !self.seen.insert((path.to_string(), held.to_string())) {
+            return;
+        }
+        if let Some(import) = files.get(path).and_then(|ff| ff.imports.iter().find(|import| import.local == held)) {
+            self.import(path, &import.source, Some(&import.imported));
+        }
+    }
+
+    /// Member `member` of module `path`'s binding (any member when `None`),
+    /// where the binding is another module's namespace: that module's export.
+    fn member(&mut self, path: &str, binding: &str, member: Option<&str>) {
+        use animus_system_loader::module_table::{ExportLookup, Terminal};
+        let files = self.files;
+        let held = resolve_alias_terminal(path, binding, files);
+        let Some(import) = files.get(path).and_then(|ff| ff.imports.iter().find(|import| import.local == held)) else {
+            return;
+        };
+        let crate::link::Named::Module(target) = crate::link::named(path, &import.source, files, self.inputs) else {
+            return;
+        };
+        match self.links.resolve_export(&target, &import.imported) {
+            Some(ExportLookup::Resolved(Terminal::Namespace(module))) => {
+                let namespace = self.links.paths[module].clone();
+                self.export(&namespace, member);
+            }
+            Some(ExportLookup::Resolved(Terminal::External { module, export: None })) => self.package(&module),
+            _ => {}
+        }
+    }
+
+    /// Export `name` of what `source` names in `path`, or every export when
+    /// `name` is `None`, and the package `source` names, analysed or not.
+    fn import(&mut self, path: &str, source: &str, name: Option<&str>) {
+        self.package(source);
+        match crate::link::named(path, source, self.files, self.inputs) {
+            crate::link::Named::Module(target) => self.export(&target, name),
+            crate::link::Named::Package(identity) => self.package(&identity),
+            crate::link::Named::Nothing => {}
+        }
+    }
+
+    fn export(&mut self, path: &str, name: Option<&str>) {
+        use animus_system_loader::module_table::{ExportLookup, OpeningReason};
+        let Some(module) = self.links.module(path) else { return };
+        let (terminals, openings) = match name {
+            Some(name) => match self.links.table.resolve_export(module, name) {
+                ExportLookup::Resolved(terminal) => (vec![terminal], Vec::new()),
+                ExportLookup::Ambiguous(terminals) => (terminals, Vec::new()),
+                ExportLookup::Incomplete { known, openings } => (known, openings),
+                ExportLookup::Absent => return,
+            },
+            None => {
+                let (members, openings) = self.links.table.namespace_members(module);
+                (members.into_iter().map(|(_, terminal)| terminal).collect(), openings)
+            }
+        };
+        for opening in openings {
+            if let OpeningReason::OutsideStar(identity) = opening.reason {
+                self.package(&identity);
+            }
+        }
+        for terminal in terminals {
+            self.terminal(terminal);
+        }
+    }
+
+    fn terminal(&mut self, terminal: animus_system_loader::module_table::Terminal<crate::identity::LocalId>) {
+        use animus_system_loader::module_table::Terminal;
+        match terminal {
+            Terminal::Local { module, binding } => {
+                let (path, name) = binding_name(self.links, self.files, module, binding);
+                self.binding(&path, &name);
+            }
+            Terminal::Namespace(module) => {
+                let path = self.links.paths[module].clone();
+                if self.seen.insert((path.clone(), String::new())) {
+                    self.export(&path, None);
+                }
+            }
+            Terminal::External { module, .. } => self.package(&module),
+        }
+    }
+
+    /// The package `identity` names: a specifier, or the entry the host
+    /// resolved one to.
+    fn package(&mut self, identity: &str) {
+        let specifiers = self.inputs.package_map.iter().filter(|(_, entry)| *entry == identity).map(|(specifier, _)| specifier.as_str());
+        for specifier in std::iter::once(identity).chain(specifiers) {
+            self.packages.insert(animus_system_loader::split_specifier(specifier).0.to_string());
+        }
+    }
 }
 
 /// The source `root` is imported from in `ff`, by a named or a namespace
@@ -5397,7 +5519,7 @@ fn imported_from_outside(
 fn proven_foreign(
     ff: &FileFacts,
     site: &crate::usage_facts::UncertainTag,
-    written: &FxHashSet<&str>,
+    written: &FxHashSet<String>,
     inputs: &CssInputs,
 ) -> bool {
     let Some(tag) = site.tag.as_deref().filter(|_| site.origin == Some(TagOrigin::Import)) else {
@@ -7755,7 +7877,7 @@ fn run_with_system_floor(
             .unwrap_or_default()
     };
     let mut uncertain_identities: Vec<(&String, UncertainIdentity)> = Vec::new();
-    let written_packages = written_packages(files);
+    let written_packages = written_packages(files, inputs, links);
 
     for path in order {
         if global_lookup.props.is_empty()
@@ -14332,9 +14454,39 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "register(Parts);\n",
             "const keep = (o) => { o.Item = R; };\nkeep(Parts);\n",
             "parse('#fff');\nparse.Item = R;\n",
+            "const A = Parts;\nconst B = A as typeof Parts;\nB.Item = R;\n",
+            "const A = Object.assign(Parts, { Item: R });\n",
         ] {
             let util = format!("import {{ parse, Parts }} from 'icons/parts';\nimport {{ R }} from './r';\n{write}");
             assert_eq!(written(&[("src/util.tsx", util.as_str()), render]), [("src/app.tsx".to_string(), "<Parts.Item>".to_string())], "{write}");
+        }
+        // A write through another module's export of the object.
+        for (kit, writer) in [
+            ("import { Parts } from 'icons/parts';\nexport const Kit = Parts;\n", "Kit.Item = R;\n"),
+            ("export { Parts as Kit } from 'icons/parts';\n", "Kit.Item = R;\n"),
+            ("export * from 'icons/parts';\n", "Parts.Item = R;\n"),
+            ("import { Parts } from 'icons/parts';\nexport default Parts;\n", "Kit.Item = R;\n"),
+            ("export * from 'icons/parts';\n", "kit.Parts.Item = R;\n"),
+            ("export * as ns from 'icons/parts';\n", "ns.Parts.Item = R;\n"),
+            ("import * as ns from 'icons/parts';\nexport { ns };\n", "ns.Parts.Item = R;\n"),
+        ] {
+            let import = if writer.starts_with("Parts") {
+                "import { Parts } from './kit';"
+            } else if writer.starts_with("ns.") {
+                "import { ns } from './kit';"
+            } else if writer.starts_with("kit.") {
+                "import * as kit from './kit';"
+            } else if kit.contains("default") {
+                "import Kit from './kit';"
+            } else {
+                "import { Kit } from './kit';"
+            };
+            let writes = format!("{import}\nimport {{ R }} from './r';\n{writer}");
+            assert_eq!(
+                written(&[("src/kit.tsx", kit), ("src/util.tsx", writes.as_str()), render]),
+                [("src/app.tsx".to_string(), "<Parts.Item>".to_string())],
+                "{kit}{writer}"
+            );
         }
     }
 

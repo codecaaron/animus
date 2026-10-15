@@ -498,6 +498,12 @@ pub struct FileFacts {
     /// as a method, writes nothing.
     #[serde(skip)]
     pub(crate) written_bindings: BTreeMap<String, crate::usage_facts::ObjectUse>,
+    /// The bindings of `written_bindings`' kind with a member whose value
+    /// some use may write through, as `written_namespaces` records it for a
+    /// namespace. It says nothing of the binding's own object; it matters
+    /// where the binding is another module's namespace.
+    #[serde(skip)]
+    pub(crate) written_members: crate::usage_facts::WrittenNamespaces,
     /// Each namespace import some use may write through, with the first
     /// such use and what it names: a member written or deleted, a member's
     /// value (`ui.Fam`, `icons[name]`) handed on, exported, or bound to a
@@ -1206,8 +1212,14 @@ pub(crate) fn object_facts(program: &Program<'_>, scoping: &oxc::semantic::Scopi
 pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, objects: ObjectFacts) -> FileFacts {
     let source = ast.source();
     let ObjectFacts { props_forwarding, const_initializers, compose, uses } = objects;
-    let crate::usage_facts::ObjectUses { context_consts, unsafe_object_uses, object_handoffs, written_namespaces, written_bindings } =
-        uses;
+    let crate::usage_facts::ObjectUses {
+        context_consts,
+        unsafe_object_uses,
+        object_handoffs,
+        written_namespaces,
+        written_bindings,
+        written_members,
+    } = uses;
     let bindings = &lowered.bindings;
     let namespace_import_facts = crate::usage_facts::collect_namespace_import_facts(ast.module_record());
     // `export default X` of a module binding X names X.
@@ -1240,6 +1252,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         unsafe_object_uses,
         object_handoffs,
         written_bindings,
+        written_members,
         written_namespaces,
         param_readings: Arc::clone(&lowered.readings),
         dynamic_code: lowered.dynamic_code,

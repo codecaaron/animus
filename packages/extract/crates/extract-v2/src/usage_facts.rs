@@ -1763,6 +1763,8 @@ pub(crate) struct ObjectUses {
     pub written_namespaces: WrittenNamespaces,
     /// See `FileFacts::written_bindings`.
     pub written_bindings: BTreeMap<String, ObjectUse>,
+    /// See `FileFacts::written_members`.
+    pub written_members: WrittenNamespaces,
 }
 
 /// The uses of `object_consts` and of the module's contexts that may change
@@ -1809,10 +1811,16 @@ fn scan_object_uses(program: &Program<'_>, scoping: &Scoping, candidates: FxHash
             .collect();
         let written_bindings =
             candidates.values().filter(|binding| !binding.namespace).map(|binding| (binding.name.clone(), what.clone())).collect();
+        let written_members = candidates
+            .values()
+            .filter(|binding| !binding.namespace)
+            .map(|binding| (binding.name.clone(), (format!("a member of {}", binding.name), what.clone())))
+            .collect();
         return ObjectUses {
             unsafe_object_uses: candidates.into_values().map(|binding| (binding.name, what.clone())).collect(),
             written_namespaces,
             written_bindings,
+            written_members,
             ..ObjectUses::default()
         };
     }
@@ -1851,6 +1859,7 @@ fn scan_object_uses(program: &Program<'_>, scoping: &Scoping, candidates: FxHash
         member_consts: member_consts.consts,
         written_namespaces: BTreeMap::new(),
         written_bindings: BTreeMap::new(),
+        written_members: BTreeMap::new(),
         called_functions: None,
         returns: Vec::new(),
         local_aliases: FxHashMap::default(),
@@ -1862,6 +1871,7 @@ fn scan_object_uses(program: &Program<'_>, scoping: &Scoping, candidates: FxHash
         object_handoffs: scan.handoffs,
         written_namespaces: scan.written_namespaces,
         written_bindings: scan.written_bindings,
+        written_members: scan.written_members,
         ..ObjectUses::default()
     }
 }
@@ -1977,6 +1987,7 @@ pub(crate) fn style_object_uses(
         member_consts: FxHashMap::default(),
         written_namespaces: BTreeMap::new(),
         written_bindings: BTreeMap::new(),
+        written_members: BTreeMap::new(),
         called_functions: Some(CalledFunctions::of(program)),
         returns: Vec::new(),
         local_aliases: FxHashMap::default(),
@@ -3697,6 +3708,8 @@ struct ObjectUseScan<'a, 's> {
     written_namespaces: WrittenNamespaces,
     /// See `FileFacts::written_bindings`; empty in style mode.
     written_bindings: BTreeMap<String, ObjectUse>,
+    /// See `FileFacts::written_members`; empty in style mode.
+    written_members: WrittenNamespaces,
     /// In style mode, the module-scope functions nothing exports, and the
     /// `const` each call of one initializes.
     called_functions: Option<CalledFunctions>,
@@ -4249,6 +4262,26 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 }
             }
         } else {
+            // A member's value written through, as through a namespace's.
+            if !self.written_members.contains_key(&binding.name) {
+                let mut rest = ancestors.clone();
+                let (span, parent) = peel_wrappers(ident.span, &mut rest);
+                let member = match parent {
+                    Some(AstKind::StaticMemberExpression(member)) if member.object.span() == span => {
+                        Some((member.span, format!("{}.{}", binding.name, member.property.name)))
+                    }
+                    Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == span => {
+                        Some((member.span, format!("a member of {}", binding.name)))
+                    }
+                    _ => None,
+                };
+                if let Some((span, subject)) = member {
+                    if let Some(what) = self.member_value_write(span, rest) {
+                        let used = ObjectUse { line: Some(self.line(ident.span)), what };
+                        self.written_members.insert(binding.name.clone(), (subject, used));
+                    }
+                }
+            }
             let used = self.uses.contains_key(&binding.name);
             let written = self.written_bindings.contains_key(&binding.name);
             if (used && written) || (binding.facade && top_level_write(ident.span, &self.ancestors)) {
