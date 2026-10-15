@@ -119,6 +119,14 @@ lock that fails loud. The full contract, including the consistency-check
 recipe for non-JS orchestrators, is in the
 [standalone extraction contract](https://github.com/codecaaron/animus/blob/main/docs/standalone-extraction.md).
 
+With `stylesheets: 'split'` in the config, the build also publishes
+`styles.css` as consecutive slices, `styles.<slice>.<hash>.css` for the
+foundation, components and utilities, and `stylesheets.json`, their names in
+the order a document links them. Their bytes in order are `styles.css`'s, so
+linking them in that order changes nothing in the cascade, and a slice an
+edit leaves alone keeps its name and its cached copy. `commit.json` lists
+them with the rest.
+
 ## License
 
 MIT

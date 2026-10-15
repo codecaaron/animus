@@ -16,6 +16,7 @@ import {
   rollupExtensionPolicy,
   rollupOutputTargets,
   servedFiles,
+  stylesheetSliceFiles,
   viteAssetClassification,
   viteExtensionPolicy,
   viteHostExpander,
@@ -41,7 +42,7 @@ import {
   TURBOPACK_SYSTEM_PROPS_ID,
 } from '@animus-ui/extract/session';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { resolveHostMode, resolveHostOptions } from './options';
 
@@ -86,6 +87,20 @@ export const CSS_ASSET_NAME = 'animus.css';
 /** Emitted beside the stylesheet when a face preloads: its hrefs are
  *  relative to the stylesheet, for `renderFontPreloads`. */
 export const FONT_PRELOADS_ASSET_NAME = 'animus-font-preloads.json';
+/** With `stylesheets: 'split'`, the stylesheet's files in link order, names
+ *  relative to `animus.css`, each `animus.<slice>.<hash>.css` beside it. */
+export const STYLESHEETS_ASSET_NAME = 'animus-stylesheets.json';
+
+/** The slice names a slices manifest this host wrote lists; none when it
+ *  is absent or unreadable. */
+function previousSlices(path: string): string[] {
+  try {
+    const names: unknown = JSON.parse(readFileSync(path, 'utf-8'));
+    return Array.isArray(names) ? names.map(String) : [];
+  } catch {
+    return [];
+  }
+}
 
 const TRANSFORM_INCLUDE_RE = new RegExp(
   `\\.(?:${[...ENGINE_TRANSFORM_EXTENSIONS, 'cjs'].join('|')})$`
@@ -739,6 +754,14 @@ export const unpluginFactory: UnpluginFactory<
   function emitCssAsset(context: UnpluginBuildContext): void {
     if (!state.cssText) return;
     const assets = collectSessionAssets(state.sessionDir);
+    const slices =
+      options.stylesheets === 'split'
+        ? stylesheetSliceFiles(state.cssText, 'animus')
+        : [];
+    const sliceManifest =
+      slices.length === 0
+        ? null
+        : JSON.stringify(slices.map(({ name }) => name));
     const preloadManifest =
       state.fontPreloads.length === 0
         ? null
@@ -769,6 +792,19 @@ export const unpluginFactory: UnpluginFactory<
       const absOut = resolve(base, outDir);
       mkdirSync(absOut, { recursive: true });
       writeFileSync(join(absOut, CSS_ASSET_NAME), state.cssText);
+      // The host writes this directory itself, so it also removes the
+      // slices the last build listed and this one does not publish.
+      const slicesPath = join(absOut, STYLESHEETS_ASSET_NAME);
+      for (const name of previousSlices(slicesPath)) {
+        if (!slices.some((slice) => slice.name === name)) {
+          rmSync(join(absOut, basename(name)), { force: true });
+        }
+      }
+      for (const { name, css } of slices) {
+        writeFileSync(join(absOut, name), css);
+      }
+      if (sliceManifest === null) rmSync(slicesPath, { force: true });
+      else writeFileSync(slicesPath, sliceManifest);
       // The host writes this directory itself, so it also removes a
       // manifest an earlier build left once no face preloads.
       const preloadsPath = join(absOut, FONT_PRELOADS_ASSET_NAME);
@@ -787,6 +823,16 @@ export const unpluginFactory: UnpluginFactory<
       fileName: CSS_ASSET_NAME,
       source: state.cssText,
     });
+    for (const { name, css } of slices) {
+      context.emitFile({ type: 'asset', fileName: name, source: css });
+    }
+    if (sliceManifest !== null) {
+      context.emitFile({
+        type: 'asset',
+        fileName: STYLESHEETS_ASSET_NAME,
+        source: sliceManifest,
+      });
+    }
     if (preloadManifest !== null) {
       context.emitFile({
         type: 'asset',

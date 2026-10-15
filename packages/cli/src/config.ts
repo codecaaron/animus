@@ -257,6 +257,10 @@ function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
       fontPreloads: Array.isArray(raw.fontPreloads)
         ? raw.fontPreloads
         : undefined,
+      stylesheets:
+        raw.stylesheets === 'single' || raw.stylesheets === 'split'
+          ? raw.stylesheets
+          : undefined,
       mode:
         raw.mode === 'development' || raw.mode === 'production'
           ? raw.mode
@@ -428,6 +432,7 @@ export async function resolveCliConfig(
     runtimeImport: pick('runtimeImport', undefined),
     closedDynamicImports: pick('closedDynamicImports', undefined),
     fontPreloads: pick('fontPreloads', undefined),
+    stylesheets: pick('stylesheets', undefined),
     mode: resolvedMode.mode,
   };
 
@@ -481,6 +486,7 @@ export function projectResolvedConfig(config: ResolvedCliConfig) {
     runtimeImport: config.options.runtimeImport ?? null,
     closedDynamicImports: config.options.closedDynamicImports ?? null,
     fontPreloads: config.options.fontPreloads ?? null,
+    stylesheets: config.options.stylesheets ?? 'single',
     exclude: config.excludePatterns,
     provenance: config.provenance,
   };

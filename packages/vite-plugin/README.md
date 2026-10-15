@@ -137,6 +137,35 @@ file can delay first paint by seconds on a slow link. A preloaded file that
 is not WOFF2 or WOFF, or an `asset()` file over 150 KB, reports
 `animus.style.font-face-preload-costly`.
 
+## Split stylesheets
+
+`stylesheets: 'split'` builds the stylesheet as three files instead of one,
+each a consecutive slice of the single sheet, in its order:
+
+1. foundation: theme variables and color modes, `@property` registrations,
+   and `anm-global` (resets, `@font-face`, keyframes), with any
+   `quarantine` sheets;
+2. components: `anm-base`, `anm-variants`, `anm-compounds`, `anm-states`;
+3. utilities: `anm-system`, `anm-custom`.
+
+Each page links them in that order in `<head>`, right after Animus's layer
+declaration and font preloads, as ordinary render-blocking stylesheets.
+They hold the single sheet's rules in its order, so the cascade is unchanged;
+Vite minifies each file on its own, which leaves its bytes the same apart from
+the newline ending each file.
+Each file is named by its content, so a browser keeps its cached copy of a
+file an edit leaves alone: an edit to a component's styles changes only the
+components file. The three files compress slightly worse than one (about
+0.1% more gzip on a large app).
+
+```ts
+animusExtract({ system: './src/ds.ts', stylesheets: 'split' });
+```
+
+A split build needs a page Vite builds from HTML, which is where the links go;
+a build with none fails. The dev server keeps one sheet. `'single'` (the
+default) is one sheet the bundle imports.
+
 ## Third-party stylesheets
 
 A library's plain CSS outside any `@layer` beats every Animus layer. With

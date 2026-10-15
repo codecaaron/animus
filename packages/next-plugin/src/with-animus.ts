@@ -185,6 +185,14 @@ export function withAnimus(
     }
   );
 
+  // Next decides its own CSS chunks and their order, so it links one
+  // sheet, as Vite's dev server does: the output is the same cascade.
+  if ('stylesheets' in options && options.stylesheets === 'split') {
+    console.warn(
+      "[animus-extract] `stylesheets: 'split'` is not supported by the Next plugin yet: Next decides how CSS chunks are merged and ordered, so it links one stylesheet."
+    );
+  }
+
   if (
     options.unstable_turbopack &&
     !options.turbopack &&

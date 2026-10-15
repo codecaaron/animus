@@ -1,4 +1,7 @@
+import { STYLESHEET_SLICES } from '@animus-ui/extract/pipeline';
 import { FONT_PRELOADS_MODULE_ID } from '@animus-ui/extract/session';
+
+import type { StylesheetSlice } from '@animus-ui/extract/pipeline';
 
 /**
  * The namespace every virtual module here lives under; the `transform` guard
@@ -8,6 +11,19 @@ export const VIRTUAL_PREFIX = 'virtual:animus/';
 
 export const VIRTUAL_CSS_ID = `${VIRTUAL_PREFIX}styles.css`;
 export const RESOLVED_CSS_ID = `\0${VIRTUAL_CSS_ID}`;
+
+/** A slice of the stylesheet, which `stylesheets: 'split'` builds emit as
+ *  a file of its own. */
+export const sliceStylesheetId = (slice: StylesheetSlice): string =>
+  `${VIRTUAL_PREFIX}styles.${slice}.css`;
+export const RESOLVED_SLICE_IDS: ReadonlyMap<string, StylesheetSlice> = new Map(
+  STYLESHEET_SLICES.map((slice) => [`\0${sliceStylesheetId(slice)}`, slice])
+);
+
+/** What the stylesheet's id resolves to in a split build, whose pages
+ *  link the slices instead: an empty module, so no chunk carries a
+ *  stylesheet of its own. */
+export const RESOLVED_LINKED_STYLES_ID = `\0${VIRTUAL_PREFIX}linked-styles.js`;
 
 export const VIRTUAL_COMPONENTS_ID = `${VIRTUAL_PREFIX}components.js`;
 export const RESOLVED_COMPONENTS_ID = `\0${VIRTUAL_COMPONENTS_ID}`;

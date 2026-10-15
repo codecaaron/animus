@@ -542,6 +542,8 @@ const OPTION_CLASSES = {
   runtimeImport: digestOf('runtimeImport'),
   closedDynamicImports: digestOf('closedDynamicImports'),
   fontPreloads: digestOf('fontPreloads'),
+  // How a host delivers the stylesheet; the analysis is the same.
+  stylesheets: 'excluded',
   root: 'excluded',
 } as const satisfies {
   [Key in keyof AnimusCoreOptions]-?: OptionDigest<Key> | 'excluded';

@@ -10,6 +10,7 @@ import { DIAGNOSTIC_LEVELS } from './manifest-diagnostics';
 import { isPathWithinRoot } from './source-identity';
 
 import type { DiagnosticLevels } from './manifest-diagnostics';
+import type { StylesheetDelivery } from './split-stylesheet';
 import type { StaticCssConfig } from './static-css';
 
 export const DRIVER_NAMESPACES = ['vite', 'next', 'cli'] as const;
@@ -118,6 +119,12 @@ export interface AnimusCoreOptions {
    *  only the faces this app's first screen renders should preload. See
    *  {@link FontPreloadEntry}; `[]` preloads none. */
   fontPreloads?: FontPreloadEntry[];
+  /** `'split'` delivers the stylesheet as consecutive files linked in
+   *  order, each a slice of the one `'single'` (the default) delivers:
+   *  foundation, components, then utilities, so a file an edit leaves alone
+   *  keeps its cached copy. Vite builds and the CLI deliver it; Vite's dev
+   *  server keeps one sheet. */
+  stylesheets?: StylesheetDelivery;
   /** Root every relative input resolves against. Vite and unplugin derive
    *  their root from the host bundler and reject this key; Next takes it as
    *  the app's root, since Next passes no dir to a config module. */
@@ -166,6 +173,7 @@ export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'runtimeImport',
   'closedDynamicImports',
   'fontPreloads',
+  'stylesheets',
 ]);
 
 /** A computed `import()` declared closed: written in `importer` (relative
@@ -351,6 +359,11 @@ const CORE_VALUE_GATES: ReadonlyArray<{
     expected: 'a module specifier',
   },
   { key: 'prefixContextualVars', ok: isBoolean, expected: 'a boolean' },
+  {
+    key: 'stylesheets',
+    ok: (value): value is string => value === 'single' || value === 'split',
+    expected: "'single' or 'split'",
+  },
   {
     key: 'targets',
     ok: isStringOrStringArray,

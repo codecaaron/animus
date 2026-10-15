@@ -77,6 +77,11 @@ plugin first to fix it.
   entry extraction analyzed. tsconfig `paths` are the alias source.
 - Emits the extracted stylesheet as a real `animus.css` asset (for esbuild:
   written into `outdir`, or beside `outfile`).
+- With `stylesheets: 'split'`, also emits the stylesheet as consecutive
+  slices beside `animus.css`, `animus.<slice>.<hash>.css` (foundation,
+  components, utilities), and `animus-stylesheets.json`, their names in link
+  order. Their bytes in order are `animus.css`'s; a slice an edit leaves
+  alone keeps its name.
 - Supplies the `__ANIMUS_DEV__` dev-signal define through each bundler's
   own mechanism.
 - When a font face declares `preload: true`, emits

@@ -4,6 +4,7 @@ import {
   kitPublicationFailures,
   outputExclusion,
   runStructuralSelfCheck,
+  stylesheetSliceFiles,
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_ARTIFACT_DIR,
@@ -172,6 +173,9 @@ export function publishSharedPayloads(
   };
   if (fontPreloads.length > 0) {
     payloads.fontPreloadsJson = JSON.stringify(fontPreloads);
+  }
+  if (options.stylesheets === 'split') {
+    payloads.stylesheets = stylesheetSliceFiles(stylesCss, 'styles');
   }
   try {
     publishArtifacts(outDir, payloads);

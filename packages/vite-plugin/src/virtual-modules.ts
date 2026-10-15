@@ -11,11 +11,14 @@ import {
   RESOLVED_COMPONENTS_ID,
   RESOLVED_CSS_ID,
   RESOLVED_FONT_PRELOADS_ID,
+  RESOLVED_LINKED_STYLES_ID,
+  RESOLVED_SLICE_IDS,
   RESOLVED_SYSTEM_PROPS_ID,
   VIRTUAL_BRIDGE_ID,
   VIRTUAL_COMPONENTS_ID,
   VIRTUAL_CSS_ID,
   VIRTUAL_FONT_PRELOADS_ID,
+  VIRTUAL_PREFIX,
   VIRTUAL_SYSTEM_PROPS_ID,
 } from './constants';
 import { postProcessCss } from './css';
@@ -37,7 +40,15 @@ export function resolveVirtualId(
   ctx: PluginContext,
   id: string
 ): string | { id: string; moduleSideEffects: boolean } | null {
-  if (id === VIRTUAL_CSS_ID) return RESOLVED_CSS_ID;
+  if (id === VIRTUAL_CSS_ID) {
+    // A split build links the slices from the page instead.
+    return ctx.splitsStylesheet
+      ? { id: RESOLVED_LINKED_STYLES_ID, moduleSideEffects: false }
+      : RESOLVED_CSS_ID;
+  }
+  if (id.startsWith(VIRTUAL_PREFIX) && RESOLVED_SLICE_IDS.has(`\0${id}`)) {
+    return `\0${id}`;
+  }
   if (id === VIRTUAL_COMPONENTS_ID) return RESOLVED_COMPONENTS_ID;
   if (id === VIRTUAL_BRIDGE_ID) return RESOLVED_BRIDGE_ID;
   if (id === VIRTUAL_SYSTEM_PROPS_ID) return RESOLVED_SYSTEM_PROPS_ID;
@@ -58,59 +69,59 @@ export function resolveVirtualId(
   return null;
 }
 
+function lightningOptions(ctx: PluginContext) {
+  return {
+    minify: ctx.options.minify ?? ctx.emissionProd,
+    targets: ctx.lcssTargets,
+    warnFn: (msg: string) => ctx.warn(msg),
+  };
+}
+
+function checked(ctx: PluginContext, css: string): string {
+  reportSurvivingAssetPlaceholders(css, {
+    strict: ctx.options.strict,
+    warn: (message) => ctx.warn(message),
+    reportErrors: ctx.reportErrors(),
+    prefix: '[animus-extract]',
+  });
+  return css;
+}
+
+/**
+ * The stylesheet `virtual:animus/styles.css` serves: the variables, then
+ * the post-processed body. In development the component layers arrive
+ * through the bridge's sheet instead, unminified.
+ */
+export function stylesheetSource(ctx: PluginContext): string {
+  const bridged = !ctx.isProd && Boolean(ctx.storedManifest);
+  const { variables, body } = assembleStylesheet({
+    layers: ctx.options.layers,
+    variableCss: ctx.variableCss,
+    globalCss: ctx.globalCss,
+    componentCss: bridged ? undefined : ctx.resolvedComponentCss,
+    split: true,
+  });
+  const lcssOpts = lightningOptions(ctx);
+  if (bridged) lcssOpts.minify = false;
+  const processedBody = postProcessCss(body, lcssOpts);
+  return checked(ctx, [variables, processedBody].filter(Boolean).join('\n'));
+}
+
 export function loadVirtualModule(
   ctx: PluginContext,
   id: string
 ): string | null {
-  const shouldMinify = ctx.options.minify ?? ctx.emissionProd;
-  const lcssOpts = {
-    minify: shouldMinify,
-    targets: ctx.lcssTargets,
-    warnFn: (msg: string) => ctx.warn(msg),
-  };
-
-  const checked = (css: string): string => {
-    reportSurvivingAssetPlaceholders(css, {
-      strict: ctx.options.strict,
-      warn: (message) => ctx.warn(message),
-      reportErrors: ctx.reportErrors(),
-      prefix: '[animus-extract]',
-    });
-    return css;
-  };
-
-  if (id === RESOLVED_CSS_ID) {
-    if (!ctx.isProd && ctx.storedManifest) {
-      const { variables, body } = assembleStylesheet({
-        layers: ctx.options.layers,
-        variableCss: ctx.variableCss,
-        globalCss: ctx.globalCss,
-        split: true,
-      });
-      const processedBody = postProcessCss(body, {
-        ...lcssOpts,
-        minify: false,
-      });
-      return checked([variables, processedBody].filter(Boolean).join('\n'));
-    }
-    const { variables, body } = assembleStylesheet({
-      layers: ctx.options.layers,
-      variableCss: ctx.variableCss,
-      globalCss: ctx.globalCss,
-      componentCss: ctx.resolvedComponentCss,
-      split: true,
-    });
-    const processedBody = postProcessCss(body, lcssOpts);
-    return checked([variables, processedBody].filter(Boolean).join('\n'));
-  }
+  if (id === RESOLVED_CSS_ID) return stylesheetSource(ctx);
+  if (id === RESOLVED_LINKED_STYLES_ID) return 'export {};\n';
 
   if (id === RESOLVED_COMPONENTS_ID) {
     const strippedCss = stripLeadingLayerDeclaration(
       ctx.resolvedComponentCss || ''
     );
     const css = checked(
+      ctx,
       postProcessCss(strippedCss, {
-        ...lcssOpts,
+        ...lightningOptions(ctx),
         minify: false,
       })
     );

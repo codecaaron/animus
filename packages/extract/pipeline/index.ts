@@ -189,6 +189,12 @@ export {
   substituteFontPreloads,
 } from './font-preloads';
 export type { FontPreload, PreloadedFontFace } from './font-preloads';
+export {
+  splitStylesheet,
+  STYLESHEET_SLICES,
+  stylesheetSliceFiles,
+} from './split-stylesheet';
+export type { StylesheetDelivery, StylesheetSlice } from './split-stylesheet';
 export { resolveAssetFile, resolveThroughPathAliases } from './resolve-asset';
 export { enforceExternalTokenContracts } from './correlate-external-tokens';
 export { buildPathAliasesJson } from './path-aliases';

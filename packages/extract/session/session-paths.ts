@@ -50,6 +50,8 @@ export const CLI_COMMIT_ARTIFACT = 'commit.json';
 /** The standalone CLI's font-preloads manifest, beside its stylesheet,
  *  published only when a face preloads. */
 export const CLI_FONT_PRELOADS_ARTIFACT = 'font-preloads.json';
+/** A split build's stylesheet files, in the order a document links them. */
+export const CLI_STYLESHEETS_ARTIFACT = 'stylesheets.json';
 
 /** Advisory claim record (pid plus heartbeat) of whichever directory holds
  *  it; sessions write it into their own tree too, despite the `CLI_` name. */

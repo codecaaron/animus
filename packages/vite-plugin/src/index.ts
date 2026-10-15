@@ -5,6 +5,7 @@ import {
   keepsKitSourceEffects,
   resolveMode,
   sourceKitDependencies,
+  splitStylesheet,
   systemKitDependencies,
 } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
@@ -12,17 +13,26 @@ import { mergeConfig } from 'vite';
 
 import { runBuildStart } from './build-start';
 import { applyResolvedConfig } from './config';
-import { RESOLVED_CSS_ID } from './constants';
+import {
+  RESOLVED_CSS_ID,
+  RESOLVED_SLICE_IDS,
+  sliceStylesheetId,
+} from './constants';
 import { PluginContext } from './context';
 import { cancelSystemReload, handleHotUpdate } from './hmr';
 import {
   buildIndexHtmlTags,
   duplicatedFontPreloads,
   injectHeadTags,
+  linkStylesheetSlices,
 } from './index-html';
 import { quarantinePlugin } from './quarantine-plugin';
 import { transformSource } from './transform';
-import { loadVirtualModule, resolveVirtualId } from './virtual-modules';
+import {
+  loadVirtualModule,
+  resolveVirtualId,
+  stylesheetSource,
+} from './virtual-modules';
 import { kitWatchNegations } from './watch-ignored';
 
 import type {
@@ -32,11 +42,16 @@ import type {
   DiagnosticLevels,
   SourceKitDependency,
   StaticCssConfig,
+  StylesheetDelivery,
+  StylesheetSlice,
 } from '@animus-ui/extract/pipeline';
-import type { Plugin, UserConfig } from 'vite';
+import type { Environment, Plugin, Rolldown, UserConfig } from 'vite';
 
 export { discoverFiles } from '@animus-ui/extract/pipeline';
-export type { AnimusQuarantineOptions } from '@animus-ui/extract/pipeline';
+export type {
+  AnimusQuarantineOptions,
+  StylesheetDelivery,
+} from '@animus-ui/extract/pipeline';
 /** The entries `virtual:animus/font-preloads` exports by default: each file
  *  this build preloads, the URL it is preloaded at, and its faces. */
 export type {
@@ -118,6 +133,15 @@ export interface AnimusExtractOptions {
    *  where the app renders it: family names, or `{ family, weight?, style? }`
    *  (see `FontPreloadEntry`). `[]` preloads none. */
   fontPreloads?: FontPreloadEntry[];
+  /** `'split'` builds the stylesheet as three consecutive files, each page
+   *  linking them in order after Animus's layer declaration: foundation
+   *  (variables, `@property`, `anm-global`), components (base through
+   *  states), then utilities (`anm-system`, `anm-custom`). In order they
+   *  hold the rules of the one sheet `'single'` (the default) builds, so
+   *  the cascade is unchanged, and a file an edit leaves alone keeps its
+   *  hash.
+   *  Needs a page Vite builds from HTML; the dev server keeps one sheet. */
+  stylesheets?: StylesheetDelivery;
   /**
    * Substrings, or globs when `*`/`?` present. Replaces the defaults `dist`,
    * `.test.`, `.spec.`; `node_modules`, `.next`, `.animus` always apply.
@@ -215,6 +239,12 @@ type AnimusExtractOptionRecord = {
 /** The URL a build's root is served at, for resolving a page's hrefs: an
  *  absolute `base`, a root-relative one on a stand-in origin, or the root
  *  for a relative one, which every page resolves from its own location. */
+/** Whether a hook runs for the browser's environment; a host without
+ *  environments builds only that one. */
+function isClient(context: { environment?: Environment }): boolean {
+  return (context.environment?.config.consumer ?? 'client') === 'client';
+}
+
 function servedBase(base: string): URL {
   const origin = 'https://animus.invalid/';
   if (/^[a-z][a-z\d+.-]*:/i.test(base))
@@ -253,6 +283,23 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   const ctx = new PluginContext(
     vendor ? { ...options, layers: vendor.order } : options
   );
+
+  /** The stylesheet with the declared vendor sheets at its head, so they
+   *  arrive wherever it does, whatever imports it. */
+  async function withVendorHead(
+    context: Rolldown.PluginContext,
+    sheet: string
+  ): Promise<string> {
+    const layergate = await vendor?.plugin();
+    return layergate
+      ? (await layergate.stylesheetHead.call(context, RESOLVED_CSS_ID)) + sheet
+      : sheet;
+  }
+
+  // A split client build's slices, cut once in `buildStart`, and the ids of
+  // those it emitted, in link order.
+  let slices = new Map<StylesheetSlice, string>();
+  let linkedSlices: string[] = [];
 
   return {
     name: 'animus-extract',
@@ -328,6 +375,20 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
               this.emitFile({ type: 'asset', name: fileName, source })
           : undefined
       );
+      // Each slice an entry of its own: Vite runs it through its CSS
+      // pipeline (asset URLs, base, minify) into a content-hashed file.
+      if (ctx.splitsStylesheet && isClient(this)) {
+        const sheet = await withVendorHead(this, stylesheetSource(ctx));
+        const cut = splitStylesheet(sheet);
+        slices = new Map(cut.map(({ slice, css }) => [slice, css]));
+        linkedSlices = [];
+        for (const { slice, css } of cut) {
+          if (css === '') continue;
+          const id = sliceStylesheetId(slice);
+          this.emitFile({ type: 'chunk', id, name: `animus-${slice}` });
+          linkedSlices.push(id);
+        }
+      }
     },
 
     async resolveId(id, importer, resolveOptions) {
@@ -368,11 +429,11 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       const layergate = await vendor?.plugin();
       const loaded = await layergate?.load.call(this, id);
       if (loaded) return loaded;
+      const slice = RESOLVED_SLICE_IDS.get(id);
+      if (slice !== undefined) return slices.get(slice) ?? '';
       const own = loadVirtualModule(ctx, id);
-      // Animus's stylesheet begins with the declared vendor sheets, so they
-      // arrive wherever it does, whatever imports it.
-      if (layergate && id === RESOLVED_CSS_ID && own !== null) {
-        return (await layergate.stylesheetHead.call(this, id)) + own;
+      if (id === RESOLVED_CSS_ID && own !== null) {
+        return withVendorHead(this, own);
       }
       return own;
     },
@@ -391,6 +452,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     generateBundle: {
       order: 'post',
       handler(_output, bundle) {
+        if (linkedSlices.length > 0 && isClient(this)) {
+          linkStylesheetSlices(ctx.base, bundle, linkedSlices);
+        }
         if (!ctx.served?.fontPreloads.length) return;
         for (const file of Object.values(bundle)) {
           if (file.type !== 'asset' || !file.fileName.endsWith('.html')) {

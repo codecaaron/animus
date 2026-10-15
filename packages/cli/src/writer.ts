@@ -4,6 +4,7 @@ import {
   CLI_COMMIT_ARTIFACT,
   CLI_FONT_PRELOADS_ARTIFACT,
   CLI_LOCK_ARTIFACT,
+  CLI_STYLESHEETS_ARTIFACT,
   decodeCommitRecord,
   holdDirectoryClaim,
   isLockHolderAlive,
@@ -38,6 +39,7 @@ export const COMMIT_FILE = CLI_COMMIT_ARTIFACT;
 export const LOCK_FILE = CLI_LOCK_ARTIFACT;
 export const ASSETS_DIR = SESSION_ASSETS_DIR;
 export const FONT_PRELOADS_FILE = CLI_FONT_PRELOADS_ARTIFACT;
+export const STYLESHEETS_FILE = CLI_STYLESHEETS_ARTIFACT;
 
 export interface ArtifactPayloads {
   stylesCss: string;
@@ -46,6 +48,10 @@ export interface ArtifactPayloads {
   /** The faces' preloads, hrefs relative to styles.css, for
    *  `renderFontPreloads`; absent when no face preloads. */
   fontPreloadsJson?: string;
+  /** A split build's stylesheet files in link order, published beside
+   *  styles.css, whose bytes in order are styles.css's, with
+   *  stylesheets.json naming them; absent for one sheet. */
+  stylesheets?: ReadonlyArray<{ name: string; css: string }>;
   /** Published under `assets/<name>` beside styles.css — the stylesheet's
    *  relative urls dangle without them. */
   assets?: readonly SessionAsset[];
@@ -111,6 +117,7 @@ const NAMED_PAYLOAD_FIELDS = [
 
 const PUBLISHED_NAMES: readonly string[] = [
   ...NAMED_PAYLOAD_FIELDS.map(([name]) => name),
+  STYLESHEETS_FILE,
   COMMIT_FILE,
 ];
 
@@ -234,6 +241,15 @@ export function publishArtifacts(
     for (const [name, field] of NAMED_PAYLOAD_FIELDS) {
       const text = payloads[field];
       if (text !== undefined) namedPayloads.push([name, text]);
+    }
+    if (payloads.stylesheets !== undefined) {
+      for (const { name, css } of payloads.stylesheets) {
+        namedPayloads.push([name, css]);
+      }
+      namedPayloads.push([
+        STYLESHEETS_FILE,
+        JSON.stringify(payloads.stylesheets.map(({ name }) => name)),
+      ]);
     }
     const record: CommitRecord = { schema: 1, payloads: {} };
     for (const [name, text] of namedPayloads) {

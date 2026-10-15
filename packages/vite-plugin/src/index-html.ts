@@ -1,13 +1,18 @@
+import { posix } from 'path';
+
 import { BRIDGE_SCRIPT_SRC } from './constants';
 
 import type { PluginContext } from './context';
-import type { HtmlTagDescriptor } from 'vite';
+import type { HtmlTagDescriptor, Rolldown } from 'vite';
 
 const LINK_TAG_RE = /<link\b[^>]*>/gi;
 /** Marks the preloads Animus writes, so another preload of the same file
  *  can be told from Animus's own. */
 const ANIMUS_PRELOAD_MARKER = 'data-animus-preload';
-const MARKER_RE = /\sdata-animus-preload(?=[\s=/>])/i;
+const MARKER_RE = new RegExp(`\\s${ANIMUS_PRELOAD_MARKER}(?=[\\s=/>])`, 'i');
+/** Marks Animus's layer declaration, which a split build's slice links
+ *  follow. */
+const ANIMUS_LAYERS_MARKER = 'data-animus-layers';
 const REL_RE = /\srel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
 const HREF_RE = /\shref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
 
@@ -149,7 +154,16 @@ export function injectHeadTags(
   tags: HtmlTagDescriptor[]
 ): string | HtmlTagDescriptor[] {
   const offset = headTagOffset(html);
-  if (offset === -1) return tags;
+  return offset === -1 ? tags : insertHeadTags(html, tags, offset);
+}
+
+/** `tags` written at `offset` in `html`, each on its own line indented as
+ *  the element it follows. */
+function insertHeadTags(
+  html: string,
+  tags: HtmlTagDescriptor[],
+  offset: number
+): string {
   if (tags.length === 0) return html;
   const lineStart = html.lastIndexOf('\n', offset - 1) + 1;
   const indent = /^[ \t]*/.exec(html.slice(lineStart))![0];
@@ -207,7 +221,7 @@ export function buildIndexHtmlTags(
   if (ctx.layerDeclaration) {
     tags.push({
       tag: 'style',
-      attrs: { 'data-animus-layers': '' },
+      attrs: { [ANIMUS_LAYERS_MARKER]: '' },
       children: ctx.layerDeclaration,
       injectTo: 'head-prepend',
     });
@@ -230,4 +244,88 @@ export function buildIndexHtmlTags(
   }
 
   return tags;
+}
+
+/** Animus's layer declaration and font preloads in a built page. */
+const ANIMUS_HEAD_TAG_RE = new RegExp(
+  `<style\\b[^>]*\\s${ANIMUS_LAYERS_MARKER}\\b[^>]*>[\\s\\S]*?</style\\s*>|<link\\b[^>]*\\s${ANIMUS_PRELOAD_MARKER}\\b[^>]*>`,
+  'gi'
+);
+
+/** Where a page's stylesheet slices go: after Animus's layer declaration
+ *  and font preloads, so the declaration precedes every slice; where its
+ *  head tags would go when the page has neither. */
+function sliceLinkOffset(html: string): number {
+  const close = /<\/head\s*>/i.exec(html)?.index ?? html.length;
+  let offset = -1;
+  for (const match of html.slice(0, close).matchAll(ANIMUS_HEAD_TAG_RE)) {
+    offset = match.index + match[0].length;
+  }
+  return offset === -1 ? headTagOffset(html) : offset;
+}
+
+/** A built file's URL from a page, as Vite writes its own links: under
+ *  `base`, or relative to the page under a relative base. */
+function builtHref(base: string, page: string, fileName: string): string {
+  if (base !== '' && !base.startsWith('.')) {
+    return `${base.replace(/\/?$/, '/')}${fileName}`;
+  }
+  const relative = posix.relative(posix.dirname(page), fileName);
+  return relative.startsWith('.') ? relative : `./${relative}`;
+}
+
+/**
+ * Links each emitted stylesheet slice, in order, from every page of a split
+ * build. A build with no page, or whose bundle lost a slice, fails: its
+ * stylesheet would never load.
+ */
+export function linkStylesheetSlices(
+  base: string,
+  bundle: Rolldown.OutputBundle,
+  sliceIds: readonly string[]
+): void {
+  const fileOf = new Map<string, string>();
+  const pages: Rolldown.OutputAsset[] = [];
+  for (const file of Object.values(bundle)) {
+    if (file.type !== 'asset') continue;
+    if (file.fileName.endsWith('.html')) pages.push(file);
+    // The id, or a path to it from the root, as Vite versions spell it.
+    const id = sliceIds.find((slice) =>
+      file.originalFileNames.some((name) => name.endsWith(slice))
+    );
+    if (id !== undefined) fileOf.set(id, file.fileName);
+  }
+  const files = sliceIds.map((id) => {
+    const fileName = fileOf.get(id);
+    if (fileName === undefined) {
+      throw new Error(
+        `[animus-extract] stylesheets: 'split' emitted ${id}, and the bundle holds no file for it, so the stylesheet would load without it.`
+      );
+    }
+    return fileName;
+  });
+  if (pages.length === 0) {
+    throw new Error(
+      `[animus-extract] stylesheets: 'split' links the stylesheet's files from the pages Vite builds, and this build emitted no HTML page, so nothing would load them. Build from an index.html, or leave \`stylesheets\` unset for one sheet the bundle imports.`
+    );
+  }
+  for (const page of pages) {
+    const html = Buffer.from(page.source).toString('utf8');
+    const tags = files.map((fileName): HtmlTagDescriptor => ({
+      tag: 'link',
+      attrs: {
+        rel: 'stylesheet',
+        crossorigin: true,
+        href: builtHref(base, page.fileName, fileName),
+        'data-animus-stylesheet': true,
+      },
+    }));
+    const offset = sliceLinkOffset(html);
+    if (offset === -1) {
+      throw new Error(
+        `[animus-extract] stylesheets: 'split' links the stylesheet's files in <head>, and ${page.fileName} has none.`
+      );
+    }
+    page.source = insertHeadTags(html, tags, offset);
+  }
 }

@@ -107,6 +107,11 @@ export class PluginContext {
   /** Emission mode (the explicit `mode` option wins over the command); feeds
    *  engine devMode and the minify default. Lifecycle stays on `isProd`. */
   emissionProd = false;
+  /** A build that links the stylesheet's slices from each page, in place of
+   *  the one sheet the CSS module carries; the dev server keeps one sheet. */
+  get splitsStylesheet(): boolean {
+    return this.isProd && this.options.stylesheets === 'split';
+  }
   rootDir = '';
   logger: Logger | null = null;
 
