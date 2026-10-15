@@ -87,12 +87,13 @@ plugin first to fix it.
   own mechanism.
 - When a font face declares `preload: true`, emits
   `animus-font-preloads.json` beside `animus.css`: the preloads, as
-  `{ href, type }`, with hrefs relative to the stylesheet.
+  `{ href, type, fetchpriority }`, with hrefs relative to the stylesheet.
   `renderFontPreloads(preloads, { base, exclude })` returns the `<link>`
   tags for your HTML, where `base` is the URL `animus.css`'s directory is
   served at, and `exclude` lists hrefs the document already preloads.
-  The `fontPreloads` option (family names, or `{ family, weight?, style? }`)
-  selects the faces that preload in place of their `preload` flags.
+  The `fontPreloads` option (family names, or `{ family, weight?, style?,
+  unicodeRange?, fetchpriority? }`) selects the faces that preload in place
+  of their `preload` flags; an entry's `fetchpriority` reaches their tags.
 
 ## Options
 

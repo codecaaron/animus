@@ -180,8 +180,9 @@ no face preloads.
 place of their `preload` flags, for an app that renders only some of a
 system's faces: a family name selects every face of the family, and
 `{ family, weight?, style? }` the faces whose declared weight contains
-`weight` and whose style is `style` (`'normal'` when omitted). `[]` preloads
-none. An entry no face matches reports `animus.style.font-preload-unmatched`;
+`weight` and whose style is `style` (`'normal'` when omitted). An entry's
+`fetchpriority` (`'high'`, `'low'` or `'auto'`) reaches the preloads of the
+faces it selects. `[]` preloads none. An entry no face matches reports `animus.style.font-preload-unmatched`;
 a malformed one, such as a weight range, `animus.style.font-preload-invalid`.
 
 **App Router:** render `AnimusFontPreloads` in the root layout. React hoists

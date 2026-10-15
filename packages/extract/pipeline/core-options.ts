@@ -9,6 +9,7 @@ import { relative, resolve, sep } from 'path';
 import { DIAGNOSTIC_LEVELS } from './manifest-diagnostics';
 import { isPathWithinRoot } from './source-identity';
 
+import type { FetchPriority } from './font-preloads';
 import type { DiagnosticLevels } from './manifest-diagnostics';
 import type { StylesheetDelivery } from './split-stylesheet';
 import type { StaticCssConfig } from './static-css';
@@ -144,9 +145,12 @@ export interface AnimusCoreOptions {
  * and whose declared unicode-range covers `unicodeRange` (such as
  * `'U+0000-00FF'`, choosing one subset of a family split by script; a face
  * without one covers every code point, and no `unicodeRange` selects any).
- * Families match as a face's `family` prints, ignoring ASCII case. An entry
- * no face matches reports `animus.style.font-preload-unmatched`; a malformed
- * one, a weight range included, reports `animus.style.font-preload-invalid`.
+ * Families match as a face's `family` prints, ignoring ASCII case.
+ * `fetchpriority` (`'high'`, `'low'` or `'auto'`) is written on the preloads
+ * of the faces the entry selects; a file several entries select carries the
+ * strongest one given, and none gives none. An entry no face matches reports
+ * `animus.style.font-preload-unmatched`; a malformed one, a weight range
+ * included, reports `animus.style.font-preload-invalid`.
  */
 export type FontPreloadEntry =
   | string
@@ -155,6 +159,7 @@ export type FontPreloadEntry =
       weight?: number | string;
       style?: string;
       unicodeRange?: string;
+      fetchpriority?: FetchPriority;
     };
 
 export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([

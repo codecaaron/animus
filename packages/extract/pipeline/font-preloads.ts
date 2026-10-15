@@ -14,7 +14,13 @@ export interface FontPreload {
   /** The faces that preload the file: those whose flag asks, or those the
    *  host's `fontPreloads` selects. */
   faces?: PreloadedFontFace[];
+  /** The strongest `fetchpriority` the `fontPreloads` entries selecting its
+   *  faces give; absent where none gives one. */
+  fetchpriority?: FetchPriority;
 }
+
+/** A preload's `fetchpriority` attribute. */
+export type FetchPriority = 'high' | 'low' | 'auto';
 
 /** A face that preloads a file: its family, as `fontPreloads` matches it,
  *  and the descriptors it declares. */
@@ -66,16 +72,21 @@ export function renderFontPreloads(
     options.base === undefined ? '' : options.base.replace(/\/?$/, '/');
   const exclude = new Set(options.exclude ?? []);
   const resolved = preloads
-    .map(({ href, type }) => ({
+    .map(({ href, type, fetchpriority }) => ({
       href: href.startsWith('./') ? `${base}${href.slice(2)}` : href,
       type,
+      fetchpriority,
     }))
     .filter(({ href }) => !exclude.has(href));
   return resolved
-    .map(({ href, type }) => {
+    .map(({ href, type, fetchpriority }) => {
       const typed =
         type === undefined ? '' : ` type="${escapeAttribute(type)}"`;
-      return `<link rel="preload" href="${escapeAttribute(href)}" as="font"${typed} crossorigin>`;
+      const prioritized =
+        fetchpriority === undefined
+          ? ''
+          : ` fetchpriority="${escapeAttribute(fetchpriority)}"`;
+      return `<link rel="preload" href="${escapeAttribute(href)}" as="font"${typed}${prioritized} crossorigin>`;
     })
     .join('\n');
 }
@@ -87,14 +98,18 @@ export function renderFontPreloads(
  * pipeline gives the face's own `url()` beside this module.
  */
 export function fontPreloadsModule(preloads: readonly FontPreload[]): string {
-  const entries = preloads.map(({ href, type, faces }) => {
+  const entries = preloads.map(({ href, type, faces, fetchpriority }) => {
     const url = href.startsWith('./')
       ? `new URL(${JSON.stringify(href)}, import.meta.url).href`
       : JSON.stringify(href);
     const typed = type === undefined ? '' : `, type: ${JSON.stringify(type)}`;
     const declared =
       faces === undefined ? '' : `, faces: ${JSON.stringify(faces)}`;
-    return `  { href: ${url}${typed}${declared} },\n`;
+    const prioritized =
+      fetchpriority === undefined
+        ? ''
+        : `, fetchpriority: ${JSON.stringify(fetchpriority)}`;
+    return `  { href: ${url}${typed}${declared}${prioritized} },\n`;
   });
   return `export default [\n${entries.join('')}];\n`;
 }

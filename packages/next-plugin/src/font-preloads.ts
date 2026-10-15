@@ -15,8 +15,13 @@ import preloads from 'virtual:animus/font-preloads';
  * `next/font` too. Renders nothing; a no-op when no face preloads.
  */
 export function AnimusFontPreloads(): null {
-  for (const { href, type } of preloads) {
-    preload(href, { as: 'font', type, crossOrigin: '' });
+  for (const { href, type, fetchpriority } of preloads) {
+    preload(href, {
+      as: 'font',
+      type,
+      crossOrigin: '',
+      fetchPriority: fetchpriority,
+    });
   }
   return null;
 }
@@ -29,13 +34,14 @@ export function AnimusFontPreloadLinks(): ReactElement {
   return createElement(
     Fragment,
     null,
-    ...preloads.map(({ href, type }) =>
+    ...preloads.map(({ href, type, fetchpriority }) =>
       createElement('link', {
         key: href,
         rel: 'preload',
         href,
         as: 'font',
         type,
+        fetchPriority: fetchpriority,
         crossOrigin: '',
       })
     )

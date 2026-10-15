@@ -23,6 +23,8 @@ declare module 'virtual:animus/font-preloads' {
     /** The file's MIME type, where its format names a known one. */
     type?: string;
     faces?: PreloadedFontFace[];
+    /** The `fetchpriority` the `fontPreloads` option gives it. */
+    fetchpriority?: 'high' | 'low' | 'auto';
   }
   const preloads: ReadonlyArray<FontPreload>;
   export default preloads;

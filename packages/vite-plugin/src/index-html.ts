@@ -170,7 +170,7 @@ function fontPreloadTags(
   if (!ctx.served?.fontPreloads.length) return [];
   const existing = preloadedHrefs(html);
   const preloads = ctx.fontPreloads.filter(({ href }) => !existing.has(href));
-  return preloads.map(({ href, type }): HtmlTagDescriptor => {
+  return preloads.map(({ href, type, fetchpriority }): HtmlTagDescriptor => {
     const attrs: NonNullable<HtmlTagDescriptor['attrs']> = {
       rel: 'preload',
       href,
@@ -179,6 +179,7 @@ function fontPreloadTags(
     // An undefined attribute serializes as "undefined", a type that tells
     // the browser to refuse the preload.
     if (type !== undefined) attrs.type = type;
+    if (fetchpriority !== undefined) attrs.fetchpriority = fetchpriority;
     attrs.crossorigin = true;
     attrs[ANIMUS_PRELOAD_MARKER] = true;
     return { tag: 'link', attrs, injectTo: 'head-prepend' };

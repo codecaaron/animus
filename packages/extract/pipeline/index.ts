@@ -188,7 +188,11 @@ export {
   renderFontPreloads,
   substituteFontPreloads,
 } from './font-preloads';
-export type { FontPreload, PreloadedFontFace } from './font-preloads';
+export type {
+  FetchPriority,
+  FontPreload,
+  PreloadedFontFace,
+} from './font-preloads';
 export {
   splitStylesheet,
   STYLESHEET_SLICES,

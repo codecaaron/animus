@@ -129,6 +129,16 @@ animusExtract({
 });
 ```
 
+An entry's `fetchpriority` (`'high'`, `'low'` or `'auto'`) is written on the
+preloads of the faces it selects, in `index.html` and in
+`virtual:animus/font-preloads`; a file several entries select carries the
+strongest one given. A preload competes with the critical CSS and
+JavaScript, so give `'high'` only to the face the first screen paints with:
+
+```ts
+fontPreloads: [{ family: 'Apercu', weight: 400, fetchpriority: 'high' }],
+```
+
 `[]` preloads none. An entry no face matches reports
 `animus.style.font-preload-unmatched`; a malformed one, such as a weight
 range, reports `animus.style.font-preload-invalid`.

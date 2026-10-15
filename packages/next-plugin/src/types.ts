@@ -103,8 +103,9 @@ export interface AnimusNextOptions {
   closedDynamicImports?: ClosedDynamicImport[];
   /** The font faces this app preloads, in place of each typed face's own
    *  `preload` flag, so a face declared once for every product preloads only
-   *  where the app renders it: family names, or `{ family, weight?, style? }`
-   *  (see `FontPreloadEntry`). `[]` preloads none. */
+   *  where the app renders it: family names, or `{ family, weight?, style?,
+   *  unicodeRange?, fetchpriority? }` (see `FontPreloadEntry`). `[]`
+   *  preloads none. */
   fontPreloads?: FontPreloadEntry[];
   /**
    * Load third-party stylesheets into `anm-vendor`, a layer below every

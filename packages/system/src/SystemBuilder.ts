@@ -121,8 +121,8 @@ export interface FontFace {
    * into `index.html`; Next renders it through `AnimusFontPreloads`;
    * Rollup, webpack and the CLI emit a manifest for `renderFontPreloads`.
    * A host's `fontPreloads` option (family names, or `{ family, weight?,
-   * style?, unicodeRange? }`) decides instead of this flag, for an app that
-   * renders only some of a system's faces.
+   * style?, unicodeRange?, fetchpriority? }`) decides instead of this flag,
+   * for an app that renders only some of a system's faces.
    *
    * A preload competes with the critical CSS and JavaScript for the
    * connection: it trades first paint for no font swap. In consumer apps a

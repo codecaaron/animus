@@ -226,8 +226,8 @@ pub struct AnalysisContext {
     /// by name: their tags never match an Animus component by name.
     pub foreign_packages: Vec<String>,
     /// The faces the host preloads (its `fontPreloads` option: family
-    /// names, or `{ family, weight?, style? }`), in place of each typed
-    /// face's own `preload` flag; absent, the flags.
+    /// names, or `{ family, weight?, style?, unicodeRange?, fetchpriority? }`),
+    /// in place of each typed face's own `preload` flag; absent, the flags.
     pub font_preloads: Option<Vec<Value>>,
 }
 
@@ -11271,6 +11271,64 @@ mod tests {
                 ("/cyrillic.woff2", serde_json::json!([{ "family": "Inter", "weight": "400", "unicodeRange": "U+0400-045F" }])),
             ]
         );
+    }
+
+    /// Contract: an entry's `fetchpriority` reaches the preloads of the
+    /// faces it selects; a file several entries select carries the
+    /// strongest one given, and a value other than `high`, `low` or `auto`
+    /// is an invalid entry.
+    #[test]
+    fn a_preload_carries_the_fetchpriority_its_entries_give() {
+        let mut inputs = test_inputs();
+        let face = |url: &str, weight: &str| {
+            serde_json::json!({ "family": "Inter", "weight": weight, "src": [{ "url": url, "format": "woff2" }] })
+        };
+        inputs.global_style_blocks = Some(serde_json::json!({
+            "fonts": {
+                "styles": {},
+                "fontFaces": [face("/regular.woff2", "400"), face("/bold.woff2", "700"), face("/variable.woff2", "100 900")]
+            }
+        }));
+        let mut priorities = |entries: serde_json::Value| {
+            inputs.analysis_context.font_preloads = Some(entries.as_array().unwrap().clone());
+            let out = analyze(&[("a.tsx", "export const x = 1;\n")], &inputs);
+            let invalid =
+                out.diagnostics.iter().filter(|d| d.code.as_deref() == Some(crate::theme::FONT_PRELOAD_INVALID)).count();
+            let preloads = out
+                .font_preloads
+                .iter()
+                .map(|p| (p.href.clone(), serde_json::to_value(p).unwrap().get("fetchpriority").cloned()))
+                .collect::<Vec<_>>();
+            (preloads, invalid)
+        };
+        let some = |priority: &str| Some(serde_json::json!(priority));
+
+        let (preloads, invalid) = priorities(serde_json::json!([
+            { "family": "Inter", "weight": 400, "fetchpriority": "high" },
+            { "family": "Inter", "weight": 700 },
+            { "family": "Inter", "weight": 300, "fetchpriority": "low" },
+            { "family": "Inter", "weight": 600, "fetchpriority": "high" }
+        ]));
+        assert_eq!(
+            preloads,
+            [
+                ("/regular.woff2".to_string(), some("high")),
+                ("/bold.woff2".to_string(), None),
+                ("/variable.woff2".to_string(), some("high")),
+            ]
+        );
+        assert_eq!(invalid, 0);
+
+        // The variable face's range contains 700 as well.
+        let (preloads, invalid) = priorities(serde_json::json!([
+            { "family": "Inter", "weight": 400, "fetchpriority": "urgent" },
+            { "family": "Inter", "weight": 700, "fetchpriority": "auto" }
+        ]));
+        assert_eq!(
+            preloads,
+            [("/bold.woff2".to_string(), some("auto")), ("/variable.woff2".to_string(), some("auto"))]
+        );
+        assert_eq!(invalid, 1);
     }
 
     /// A host's `fontPreloads` decides which faces preload in place of each

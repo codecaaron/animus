@@ -2762,6 +2762,19 @@ pub struct FontPreload {
     pub faces: Vec<PreloadedFace>,
     /// The same faces, named as their reports name them.
     pub names: Vec<String>,
+    /// The strongest `fetchpriority` the host's entries selecting its faces
+    /// give; none where no entry gives one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetchpriority: Option<FetchPriority>,
+}
+
+/// A preload's `fetchpriority`, weakest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FetchPriority {
+    Low,
+    Auto,
+    High,
 }
 
 /// A face that preloads a file: its family, as a host's `fontPreloads`
@@ -2794,7 +2807,7 @@ pub struct FontPreloads {
 }
 
 /// One `fontPreloads` entry: a family name, or `{ family, weight?, style?,
-/// unicodeRange? }`.
+/// unicodeRange?, fetchpriority? }`.
 struct Selection {
     /// The entry as the host wrote it, for its reports.
     written: String,
@@ -2809,6 +2822,8 @@ struct Selection {
     /// The code points a face's declared `unicode-range` must cover; `None`,
     /// any range.
     unicode_range: Option<Vec<(u32, u32)>>,
+    /// The `fetchpriority` the preloads of the faces it selects carry.
+    fetchpriority: Option<FetchPriority>,
     matched: bool,
 }
 
@@ -2825,6 +2840,7 @@ impl Selection {
             weight: None,
             style: None,
             unicode_range: None,
+            fetchpriority: None,
             matched: false,
         };
         match entry {
@@ -2869,10 +2885,21 @@ impl Selection {
                         }
                     },
                 }
+                match fields.get("fetchpriority") {
+                    None => {}
+                    Some(priority) => match FetchPriority::deserialize(priority) {
+                        Ok(priority) => selection.fetchpriority = Some(priority),
+                        Err(_) => {
+                            selection.invalid =
+                                Some(format!("its `fetchpriority` {priority} is not `high`, `low` or `auto`"))
+                        }
+                    },
+                }
             }
             other => {
-                selection.invalid =
-                    Some(format!("it is {other}, not a family name or `{{ family, weight?, style?, unicodeRange? }}`"))
+                selection.invalid = Some(format!(
+                    "it is {other}, not a family name or `{{ family, weight?, style?, unicodeRange?, fetchpriority? }}`"
+                ))
             }
         }
         selection
@@ -2988,15 +3015,17 @@ impl FontPreloads {
         FontPreloads { selection: selection.map(|entries| entries.iter().map(Selection::of).collect()), list: Vec::new() }
     }
 
-    /// Whether the host selects `face`, when it selects faces.
-    fn selects(&mut self, face: &PreloadedFace) -> Option<bool> {
+    /// Whether the host selects `face`, when it selects faces, and the
+    /// strongest `fetchpriority` the entries selecting it give.
+    fn selects(&mut self, face: &PreloadedFace) -> Option<(bool, Option<FetchPriority>)> {
         let entries = self.selection.as_mut()?;
-        let mut any = false;
+        let (mut any, mut priority) = (false, None);
         for entry in entries.iter_mut().filter(|entry| entry.selects(face)) {
             entry.matched = true;
             any = true;
+            priority = priority.max(entry.fetchpriority);
         }
-        Some(any)
+        Some((any, priority))
     }
 
     /// The host's entries that select nothing, as written, and why: a
@@ -3066,7 +3095,7 @@ fn preload_source(sources: &[&Value]) -> Result<FontPreload, String> {
         .1
         .and_then(font_mime)
         .or_else(|| extension_of(url).as_deref().and_then(font_mime));
-    Ok(FontPreload { href: url.to_string(), mime, faces: Vec::new(), names: Vec::new() })
+    Ok(FontPreload { href: url.to_string(), mime, faces: Vec::new(), names: Vec::new(), fetchpriority: None })
 }
 
 /// A global block's typed font faces, each a `@font-face` rule: the family,
@@ -3147,12 +3176,12 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext, preloads: &mut FontPre
             style: descriptor("style"),
             unicode_range: descriptor("unicodeRange"),
         };
-        let asked = preloads.selects(&declared).unwrap_or_else(|| match obj.get("preload") {
-            None | Some(Value::Bool(false)) => false,
-            Some(Value::Bool(true)) => true,
+        let (asked, priority) = preloads.selects(&declared).unwrap_or_else(|| match obj.get("preload") {
+            None | Some(Value::Bool(false)) => (false, None),
+            Some(Value::Bool(true)) => (true, None),
             Some(other) => {
                 preload_dropped(format!("its `preload` {other} is not a boolean"));
-                false
+                (false, None)
             }
         });
         if asked {
@@ -3165,8 +3194,14 @@ fn render_font_faces(faces: &Value, ctx: &ResolveContext, preloads: &mut FontPre
                         if !known.faces.contains(&declared) {
                             known.faces.push(declared);
                         }
+                        known.fetchpriority = known.fetchpriority.max(priority);
                     }
-                    None => preloads.list.push(FontPreload { faces: vec![declared], names: vec![name.clone()], ..preload }),
+                    None => preloads.list.push(FontPreload {
+                        faces: vec![declared],
+                        names: vec![name.clone()],
+                        fetchpriority: priority,
+                        ..preload
+                    }),
                 },
                 Err(reason) => preload_dropped(reason),
             }

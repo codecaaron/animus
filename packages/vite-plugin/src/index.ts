@@ -132,8 +132,9 @@ export interface AnimusExtractOptions {
   closedDynamicImports?: ClosedDynamicImport[];
   /** The font faces this app preloads, in place of each typed face's own
    *  `preload` flag, so a face declared once for every product preloads only
-   *  where the app renders it: family names, or `{ family, weight?, style? }`
-   *  (see `FontPreloadEntry`). `[]` preloads none. */
+   *  where the app renders it: family names, or `{ family, weight?, style?,
+   *  unicodeRange?, fetchpriority? }` (see `FontPreloadEntry`). `[]`
+   *  preloads none. */
   fontPreloads?: FontPreloadEntry[];
   /** `'split'` builds the stylesheet as three consecutive files, each page
    *  linking them in order where it would link the one sheet `'single'`
