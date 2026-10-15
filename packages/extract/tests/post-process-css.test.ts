@@ -64,6 +64,28 @@ describe('postProcessCss', () => {
     );
   });
 
+  // Contract: targets that lower `:dir()` report it, and `keepDirSelector`
+  // keeps it as written.
+  test('a lowered :dir() is reported, and keepDirSelector keeps it', () => {
+    const css = '.a:dir(rtl) { margin-left: 4px; }';
+    const onLoweredDir = vi.fn();
+    const lowered = postProcessCss(css, {
+      minify: true,
+      targets: SAFARI15,
+      onLoweredDir,
+    });
+    expect(lowered).not.toContain(':dir(');
+    expect(onLoweredDir).toHaveBeenCalledTimes(1);
+    for (const opts of [
+      { targets: SAFARI15, keepDirSelector: true },
+      { targets: CHROME120 },
+    ]) {
+      const kept = postProcessCss(css, { minify: true, ...opts, onLoweredDir });
+      expect(kept).toBe('.a:dir(rtl){margin-left:4px}');
+    }
+    expect(onLoweredDir).toHaveBeenCalledTimes(1);
+  });
+
   test('empty input passes through untouched', () => {
     expect(postProcessCss('', { minify: true, targets: CHROME120 })).toBe('');
   });

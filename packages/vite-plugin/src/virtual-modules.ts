@@ -68,6 +68,7 @@ function lightningOptions(ctx: PluginContext) {
   return {
     minify: ctx.options.minify ?? ctx.emissionProd,
     targets: ctx.lcssTargets,
+    keepDirSelector: ctx.options.keepDirSelector,
     warnFn: (msg: string) => ctx.warn(msg),
   };
 }
@@ -99,6 +100,10 @@ export function stylesheetSource(ctx: PluginContext): string {
   const lcssOpts = lightningOptions(ctx);
   if (bridged) lcssOpts.minify = false;
   const processedBody = postProcessCss(body, lcssOpts);
+  // Only a build's minification lowers again.
+  if (ctx.isProd && !ctx.servedDirSelector) {
+    ctx.servedDirSelector = processedBody.includes(':dir(');
+  }
   return checked(ctx, [variables, processedBody].filter(Boolean).join('\n'));
 }
 

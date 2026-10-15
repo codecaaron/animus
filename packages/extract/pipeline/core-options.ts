@@ -92,6 +92,10 @@ export interface AnimusCoreOptions {
   prefixContextualVars?: boolean;
   /** Browser targets for CSS autoprefixing and syntax lowering. */
   targets?: string | string[];
+  /** Keeps `:dir()` as written where the targets would lower it to
+   *  `:lang()` over right-to-left language codes, which an element that sets
+   *  only `dir` does not match. */
+  keepDirSelector?: boolean;
   /** Minification control; `undefined` = minify in production mode only. */
   minify?: boolean;
   /** Forced-emission declarations for usage the scanner cannot observe. */
@@ -164,6 +168,7 @@ export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'prefix',
   'prefixContextualVars',
   'targets',
+  'keepDirSelector',
   'minify',
   'staticCss',
   'layers',
@@ -346,6 +351,7 @@ const CORE_VALUE_GATES: ReadonlyArray<{
   },
   { key: 'verbose', ok: isVerbose, expected: "a boolean or 'trace'" },
   { key: 'minify', ok: isBoolean, expected: 'a boolean' },
+  { key: 'keepDirSelector', ok: isBoolean, expected: 'a boolean' },
   { key: 'prefix', ok: isString, expected: 'a string' },
   {
     key: 'closedDynamicImports',

@@ -199,7 +199,12 @@ export { resolveAssetFile, resolveThroughPathAliases } from './resolve-asset';
 export { enforceExternalTokenContracts } from './correlate-external-tokens';
 export { buildPathAliasesJson } from './path-aliases';
 export type { LightningTargets } from './post-process-css';
-export { postProcessCss, resolveLightningTargets } from './post-process-css';
+export {
+  DIR_SELECTOR_FEATURE,
+  loweredDirMessage,
+  postProcessCss,
+  resolveLightningTargets,
+} from './post-process-css';
 export type {
   AnalysisOptions,
   EmitterConfig,

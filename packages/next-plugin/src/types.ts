@@ -62,6 +62,10 @@ export interface AnimusNextOptions {
   /** Browserslist query string or array. Falls back to the project's
    *  browserslist config, then to `defaults`. */
   targets?: string | string[];
+  /** Keeps `:dir()` as written where the targets would lower it to
+   *  `:lang()` over right-to-left language codes, which an element that sets
+   *  only `dir` does not match. */
+  keepDirSelector?: boolean;
   /** `true`/`false` force minification on or off; absent minifies in
    *  production. Autoprefixing applies either way. */
   minify?: boolean;

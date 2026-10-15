@@ -245,7 +245,7 @@ is reported too. Declare components in `.ts` or `.tsx` files and import them.
 
 - Transforms `@animus-ui/system` builder chains into static CSS (webpack loader or Turbopack loader rule)
 - Emits extracted CSS as a separate asset with `@layer` ordering
-- Post-processes the emitted sheet with Lightning CSS — autoprefixed for your `targets` (browserslist query; defaults to the project config), minified in production (`minify` overrides)
+- Post-processes the emitted sheet with Lightning CSS — autoprefixed for your `targets` (browserslist query; defaults to the project config), minified in production (`minify` overrides). Targets without `:dir()` lower it to `:lang()`, which an element that sets only `dir` does not match; the build warns, and `keepDirSelector: true` keeps it as written
 - Works with both App Router and Pages Router
 - Supports RSC — no runtime style injection means server components work out of the box
 

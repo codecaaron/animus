@@ -1,8 +1,10 @@
 import {
   assertKnownOptionKeys,
   assertSupportedEngine,
+  DIR_SELECTOR_FEATURE,
   isPathWithinRoot,
   keepsKitSourceEffects,
+  loweredDirMessage,
   resolveMode,
   sourceKitDependencies,
   splitStylesheet,
@@ -186,6 +188,12 @@ export interface AnimusExtractOptions {
    * to the project's browserslist config, then to `defaults`.
    */
   targets?: string | string[];
+  /** Keeps `:dir()` as written where the targets would lower it to
+   *  `:lang()` over right-to-left language codes, which an element that sets
+   *  only `dir` does not match. A build also excludes it from Vite's own
+   *  Lightning CSS minification (`css.lightningcss.exclude`), which lowers
+   *  for `build.cssTarget` across the bundle's CSS. */
+  keepDirSelector?: boolean;
   /** Absent minifies in production only; `false` still autoprefixes. */
   minify?: boolean;
   /**
@@ -318,13 +326,25 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         env.command === 'build' ? 'production' : 'development'
       );
       const define = { __ANIMUS_DEV__: mode === 'development' };
+      // Vite's CSS minification lowers for build.cssTarget on its own.
+      const keptDir: UserConfig = options.keepDirSelector
+        ? {
+            css: {
+              lightningcss: {
+                exclude:
+                  (userConfig.css?.lightningcss?.exclude ?? 0) |
+                  DIR_SELECTOR_FEATURE,
+              },
+            },
+          }
+        : {};
       const root = resolve(userConfig.root ?? process.cwd());
       const kits = await sourceKitConfig(
         root,
         resolve(root, options.system),
         ctx.kitEngine()
       );
-      if (!kits) return withVendor({ define });
+      if (!kits) return withVendor({ define, ...keptDir });
       const { roots, ...config } = kits;
       // Vite's watcher ignores every installed kit; these are appended to
       // the user's own ignored, and a disabled watcher stays disabled.
@@ -332,7 +352,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
         env.command === 'serve' && userConfig.server?.watch !== null
           ? { server: { watch: { ignored: kitWatchNegations(roots) } } }
           : {};
-      return withVendor({ define, ...config, ...watched });
+      return withVendor({ define, ...config, ...watched, ...keptDir });
     },
 
     async configureServer(server) {
@@ -360,6 +380,11 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     },
 
     async buildStart() {
+      // Each client build reports a :dir() its minification lowers once.
+      if (isClient(this)) {
+        ctx.servedDirSelector = false;
+        ctx.warnedLoweredDir = false;
+      }
       await (await vendor?.plugin())?.buildStart.call(this);
       await ctx.builds.open(this.environment ?? ctx.builds.single);
       await runBuildStart(
@@ -457,6 +482,25 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           placeStylesheetSlices(ctx, bundle, linkedSlices, (name, source) =>
             this.getFileName(this.emitFile({ type: 'asset', name, source }))
           );
+        }
+        if (ctx.servedDirSelector && !ctx.warnedLoweredDir && isClient(this)) {
+          const sheets = Object.values(bundle).flatMap((file) =>
+            file.type === 'asset' && file.fileName.endsWith('.css')
+              ? [file.source]
+              : []
+          );
+          if (
+            sheets.length > 0 &&
+            sheets.every(
+              (source) =>
+                !Buffer.from(source).toString('utf8').includes(':dir(')
+            )
+          ) {
+            ctx.warnedLoweredDir = true;
+            ctx.warn(
+              loweredDirMessage("Vite's CSS minification", 'build.cssTarget')
+            );
+          }
         }
         if (!ctx.served?.fontPreloads.length) return;
         for (const file of Object.values(bundle)) {

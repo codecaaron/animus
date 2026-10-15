@@ -92,21 +92,19 @@ export function resetAnalysisStartedPromise(key: SessionKey): void {
   if (state !== undefined) state.analysisStarted = null;
 }
 
-/** True for the build's first caller only: the one that reports its
- *  unmatched user excludes. */
-export function claimUnmatchedExcludeReport(key: SessionKey): boolean {
-  const state = joined(key);
-  if (state.unmatchedExcludesReported) return false;
-  state.unmatchedExcludesReported = true;
-  return true;
-}
+/**
+ * The reports a build makes once, whichever environment reaches them first:
+ * its unmatched user excludes (after its first full discovery, whether or
+ * not that pass publishes), what it extracted (from its first analysis), and
+ * the advisories about its inputs.
+ */
+export type BuildReport = 'unmatched-excludes' | 'extraction' | 'lowered-dir';
 
-/** True for the build's first caller only: the one that reports what the
- *  build extracted. */
-export function claimExtractionReport(key: SessionKey): boolean {
-  const state = joined(key);
-  if (state.extractionReported) return false;
-  state.extractionReported = true;
+/** True for the build's first caller of `report` only: the one that makes it. */
+export function claimReport(key: SessionKey, report: BuildReport): boolean {
+  const { reported } = joined(key);
+  if (reported.has(report)) return false;
+  reported.add(report);
   return true;
 }
 
@@ -534,6 +532,7 @@ const OPTION_CLASSES = {
   prefix: digestOf('prefix'),
   prefixContextualVars: digestOf('prefixContextualVars'),
   targets: digestOf('targets'),
+  keepDirSelector: digestOf('keepDirSelector'),
   minify: digestOf('minify'),
   staticCss: digestOf('staticCss'),
   layers: digestOf('layers'),
@@ -587,12 +586,8 @@ export interface SessionState {
   publication: RegistryPublication | null;
   /** The artifact directory of the session's last publication. */
   artifactDir: string | null;
-  /** Whether the build reported its unmatched user excludes: once, after
-   *  its first full discovery, whether or not that pass publishes. */
-  unmatchedExcludesReported: boolean;
-  /** Whether the build reported what it extracted: once, from its first
-   *  analysis, whichever environment ran it. */
-  extractionReported: boolean;
+  /** The once-per-build reports the build has made. */
+  reported: Set<BuildReport>;
 }
 
 const SESSION_REGISTRY = Symbol.for('animus.session-registry.v1');
@@ -655,8 +650,7 @@ export function joinSession(
       claimRecord: null,
       publication: null,
       artifactDir: null,
-      unmatchedExcludesReported: false,
-      extractionReported: false,
+      reported: new Set(),
     };
     sessions.set(id, state);
     return state;

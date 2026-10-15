@@ -73,6 +73,7 @@ import {
   loadSystemConfig,
   outputSourceGuard,
   outputSourceMessage,
+  loweredDirMessage,
   postProcessCss,
   readTsconfigAliasPairs,
   projectExternalFileOwners,
@@ -152,8 +153,7 @@ import {
   joinSession,
   sessionKey,
   getOwningWatchSession,
-  claimExtractionReport,
-  claimUnmatchedExcludeReport,
+  claimReport,
   getManifestJson,
   getSystemAuthority,
   holdBuildClaimRecord,
@@ -1927,7 +1927,7 @@ export class ExtractionSession {
       }
     }
     // Once per build: its first full discovery, whether or not it publishes.
-    if (claimUnmatchedExcludeReport(this.key)) {
+    if (claimReport(this.key, 'unmatched-excludes')) {
       for (const line of unmatchedExcludeLines(excludeMatcher)) {
         this.logger.error(line);
       }
@@ -2933,7 +2933,7 @@ export class ExtractionSession {
       (bt.jsonSerialize ?? 0) + (bt.rustExtract ?? 0) + (bt.jsonParse ?? 0);
     if (!devMode) bt.analysis = analysisMs;
     // Once per build, whichever environment analyses first.
-    if (manifest?.report && claimExtractionReport(this.key)) {
+    if (manifest?.report && claimReport(this.key, 'extraction')) {
       this.log(
         `Extracted ${manifest.report.components_extracted ?? '?'}/${manifest.report.components_total ?? '?'} components (${analysisMs}ms)`
       );
@@ -2970,7 +2970,15 @@ export class ExtractionSession {
     const processedBody = postProcessCss(body, {
       minify: this.options.minify ?? this.startupMode === 'production',
       targets: this.lcssTargets,
+      keepDirSelector: this.options.keepDirSelector,
       warnFn: (msg) => this.warn(msg),
+      onLoweredDir: () => {
+        if (claimReport(this.key, 'lowered-dir')) {
+          this.warn(
+            loweredDirMessage("Animus's CSS post-processing", 'targets')
+          );
+        }
+      },
     });
 
     const fullCss = [declaration, variables, processedBody]

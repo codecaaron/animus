@@ -116,6 +116,11 @@ export class PluginContext {
   logger: Logger | null = null;
 
   lcssTargets: LightningTargets = {};
+  /** Whether the stylesheet this client build served kept an authored
+   *  `:dir()`, which Vite's own CSS minification may still lower. */
+  servedDirSelector = false;
+  /** Whether this client build warned that its minification lowered one. */
+  warnedLoweredDir = false;
 
   pathAliasesJson: string | null = null;
 
@@ -383,6 +388,7 @@ export class PluginContext {
         prefix: options.prefix,
         prefixContextualVars: options.prefixContextualVars,
         targets: options.targets,
+        keepDirSelector: options.keepDirSelector,
         minify: options.minify,
         staticCss: options.staticCss,
         layers: options.layers,
