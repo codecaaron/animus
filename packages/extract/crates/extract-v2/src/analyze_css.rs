@@ -3510,19 +3510,19 @@ fn resolve_identity(
     by_bare_name(local)
 }
 
-/// Whether an analysed module may write through a binding it imports from
-/// the package `source` names: sets or deletes a member, or hands the object
-/// on whole.
-fn writes_into_package(files: &BTreeMap<String, FileFacts>, source: &str) -> bool {
-    let package = animus_system_loader::split_specifier(source).0;
-    let from_package = |source: &str| animus_system_loader::split_specifier(source).0 == package;
-    files.values().any(|ff| {
-        ff.imports.iter().any(|import| from_package(&import.source) && ff.unsafe_object_uses.contains_key(&import.local))
-            || ff
-                .namespace_imports
-                .iter()
-                .any(|(local, source)| from_package(source) && ff.written_namespaces.contains_key(local))
-    })
+/// The packages an analysed module may write into through a binding it
+/// imports from them: it sets or deletes a member, or hands the object on
+/// whole.
+fn written_packages(files: &BTreeMap<String, FileFacts>) -> FxHashSet<&str> {
+    files
+        .values()
+        .flat_map(|ff| {
+            let named = ff.imports.iter().filter(|import| ff.unsafe_object_uses.contains_key(&import.local));
+            let namespaces = ff.namespace_imports.iter().filter(|(local, _)| ff.written_namespaces.contains_key(*local));
+            named.map(|import| import.source.as_str()).chain(namespaces.map(|(_, source)| source.as_str()))
+        })
+        .map(|source| animus_system_loader::split_specifier(source).0)
+        .collect()
 }
 
 /// The source `root` is imported from in `ff`, by a named or a namespace
@@ -4712,7 +4712,6 @@ enum UncertainIdentity {
 enum TagClass {
     Ordinary,
     External,
-    Foreign,
     Nested,
     Member,
     OtherDeclaration,
@@ -4724,22 +4723,12 @@ enum TagClass {
 }
 
 impl TagClass {
-    /// Whether a tag of the kind gets a record of its own: a tag proven
-    /// foreign renders no Animus component, so the warning only counts it.
-    fn listed(self) -> bool {
-        self != TagClass::Foreign
-    }
-
     fn counted(self, n: usize) -> String {
         let (one, many) = match self {
             TagClass::Ordinary => ("ordinary component", "ordinary components"),
             TagClass::External => (
                 "import from a module extraction does not analyse",
                 "imports from modules extraction does not analyse",
-            ),
-            TagClass::Foreign => (
-                "tag of a package with no dependency path to Animus, which it does not list",
-                "tags of packages with no dependency path to Animus, which it does not list",
             ),
             TagClass::Nested => (
                 "parameter or binding inside a function",
@@ -4891,7 +4880,7 @@ fn identity_uncertainty_diagnostics(
         Some(IDENTITY_UNCERTAIN),
     );
     std::iter::once(summary)
-        .chain(records.into_iter().filter(|(class, ..)| class.listed()).map(|(.., record)| record))
+        .chain(records.into_iter().map(|(.., record)| record))
         .collect()
 }
 
@@ -5397,6 +5386,27 @@ fn imported_from_outside(
         })
 }
 
+/// Whether an uncertain tag is proven foreign, so renders no Animus
+/// component: an import from a package with no dependency path to Animus
+/// that the file hands no component (`foreign_import`), unless it is a member
+/// of an object from a package an analysed module writes into, where the app
+/// may have put one.
+fn proven_foreign(
+    ff: &FileFacts,
+    site: &crate::usage_facts::UncertainTag,
+    written: &FxHashSet<&str>,
+    inputs: &CssInputs,
+) -> bool {
+    let Some(tag) = site.tag.as_deref().filter(|_| site.origin == Some(TagOrigin::Import)) else {
+        return false;
+    };
+    let root = tag.split('.').next().unwrap_or(tag);
+    root_import_source(ff, root).is_some_and(|source| {
+        foreign_import(ff, tag, source, inputs)
+            && !(root != tag && written.contains(animus_system_loader::split_specifier(source).0))
+    })
+}
+
 /// What a tag usage cannot match to an Animus component is, as far as the
 /// file's scopes and the analysed declarations prove it.
 fn uncertain_tag_reason(
@@ -5430,11 +5440,6 @@ fn uncertain_tag_reason(
                 true => format!("is a member of '{root}', imported from '{source}'"),
                 false => format!("is imported from '{source}'"),
             };
-            // A member of an object the app writes into may be one it put
-            // there.
-            if foreign_import(ff, tag, source, inputs) && !(member && writes_into_package(files, source)) {
-                return (TagClass::Foreign, format!("{whose}, a package with no dependency path to Animus"));
-            }
             if resolve_import_source(file, source, files, inputs).is_none() {
                 return (class(TagClass::External), format!("{whose}, which extraction does not analyse"));
             }
@@ -6036,19 +6041,17 @@ fn confined_uses(
 #[derive(Default)]
 struct UsageIdentityPolicy {
     rendered_ids: FxHashSet<String>,
-    uncertain: bool,
     /// Keys that resolved to no component, until the file's sites take them.
     unattributed: Vec<String>,
 }
 
 impl UsageIdentityPolicy {
-    /// An unresolved key makes the run identity-uncertain and comes back
+    /// An unresolved key is a site of identity uncertainty and comes back
     /// as-is; dropping the record would delete the utility CSS it feeds.
     fn resolve_all(&mut self, key: &str, attribution: &IdsByBinding) -> Vec<String> {
         match attribution.get(key) {
             Some(ids) => ids.clone(),
             None => {
-                self.uncertain = true;
                 self.unattributed.push(key.to_string());
                 vec![key.to_string()]
             }
@@ -6060,7 +6063,6 @@ impl UsageIdentityPolicy {
         match attribution.get(key) {
             Some(ids) => ids.first().cloned(),
             None => {
-                self.uncertain = true;
                 self.unattributed.push(key.to_string());
                 None
             }
@@ -6103,7 +6105,6 @@ impl UsageIdentityPolicy {
     }
 
     fn attribute_result(&mut self, result: &mut UsageScanResult, attribution: &IdsByBinding) {
-        self.uncertain |= result.identity_uncertain;
         self.attribute_system_usages(&mut result.system_prop_usages, attribution);
         self.attribute_dynamic_usages(&mut result.dynamic_prop_usages, attribution);
 
@@ -6162,14 +6163,6 @@ impl UsageIdentityPolicy {
 
     fn include(&mut self, component_id: String) {
         self.rendered_ids.insert(component_id);
-    }
-
-    fn conservative_rendered_ids(&self, evaluated_ids: &FxHashSet<String>) -> FxHashSet<String> {
-        if self.uncertain {
-            evaluated_ids.clone()
-        } else {
-            self.rendered_ids.clone()
-        }
     }
 }
 
@@ -7759,6 +7752,7 @@ fn run_with_system_floor(
             .unwrap_or_default()
     };
     let mut uncertain_identities: Vec<(&String, UncertainIdentity)> = Vec::new();
+    let written_packages = written_packages(files);
 
     for path in order {
         if global_lookup.props.is_empty()
@@ -8046,15 +8040,19 @@ fn run_with_system_floor(
             all_custom_dynamic_usages.extend(custom_scan.dynamic_usages.iter().cloned());
         }
 
+        // A tag proven foreign renders no Animus component, so it leaves usage
+        // identity certain.
         uncertain_identities.extend(
             std::mem::take(&mut usage_result.uncertain_tags)
                 .into_iter()
+                .filter(|site| !proven_foreign(ff, site, &written_packages, inputs))
                 .map(UncertainIdentity::Tag)
                 .chain(identity_policy.unattributed.drain(..).map(UncertainIdentity::Unattributed))
                 .map(|site| (path, site)),
         );
         all_usage_results.push(usage_result);
     }
+    let identity_uncertain = !uncertain_identities.is_empty();
     // Development keeps every component anyway.
     if !inputs.dev_mode {
         diagnostics.extend(identity_uncertainty_diagnostics(&uncertain_identities, files, inputs, links, &mut object_members));
@@ -8430,7 +8428,7 @@ fn run_with_system_floor(
             identity_policy.include(parent_id.clone());
         }
     }
-    let reachable_ids = identity_policy.conservative_rendered_ids(&evaluated_ids);
+    let reachable_ids = if identity_uncertain { evaluated_ids.clone() } else { identity_policy.rendered_ids };
     let active_system_prop_names = collect_reachable_active_prop_names(
         sorted_ids.iter().filter_map(|component_id| {
             evaluated
@@ -8440,7 +8438,7 @@ fn run_with_system_floor(
                 })
         }),
         &reachable_ids,
-        identity_policy.uncertain,
+        identity_uncertain,
     );
     // Where the analysis sees every source in production, no direct `eval`
     // can read a binding by name, and every tag it cannot match is one that
@@ -8448,7 +8446,7 @@ fn run_with_system_floor(
     // modules. Otherwise only a component its own module confines is proven.
     // An element a call hands outside the analysis, and every component
     // staticCss forces, renders with props no analysed use shows.
-    let bounded_tags = match identity_policy.uncertain {
+    let bounded_tags = match identity_uncertain {
         true => {
             let unproven: std::collections::BTreeSet<String> = escaped_ids.iter().chain(&forced_ids).cloned().collect();
             bounded_prop_tags(
@@ -8467,7 +8465,7 @@ fn run_with_system_floor(
     };
     let usage_complete = !analysis_incomplete(files, inputs)
         && !files.values().any(|ff| ff.direct_eval)
-        && (!identity_policy.uncertain
+        && (!identity_uncertain
             || uncertainty_leaves_usage_proven(
                 &uncertain_identities,
                 files,
@@ -14242,43 +14240,42 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     /// Contract: a tag proven foreign (imported from a package with no
-    /// dependency path to Animus, and handed no component) gets no `info`
-    /// record of its own, and the warning counts it as a kind of its own; the
-    /// same tag where a file may hand it a component keeps its record.
+    /// dependency path to Animus, and handed no component) leaves usage
+    /// identity certain: it gets no record, and whole-component removal
+    /// runs. A component handed to one by reference, as a prop value, an
+    /// element or a child, stays with every option. The same tag where a file
+    /// may hand it a component through `as`, or a member of an object the app
+    /// writes into, keeps its record and turns removal off.
     #[test]
-    fn foreign_tags_are_counted_but_not_listed() {
-        let entries = [
-            ("src/r.tsx", RECIPE),
-            (
-                "src/app.tsx",
-                "import { Link } from 'router';\nimport { List } from 'icons';\n\
-                 export const App = () => <><Link /><List /></>;\n",
-            ),
-            (
-                "src/handed.tsx",
-                "import { List } from 'icons';\nconst X = () => null;\nexport const H = () => <List as={X} />;\n",
-            ),
-        ];
+    fn foreign_tags_leave_whole_component_removal_on() {
         let mut inputs = test_inputs();
         inputs.analysis_context.foreign_packages = vec!["icons".to_string()];
-        let reported: Vec<_> = analyze(&entries, &inputs)
-            .diagnostics
-            .into_iter()
-            .filter(|d| matches!(d.code.as_deref(), Some(IDENTITY_UNCERTAIN | IDENTITY_UNCERTAIN_TAG)))
-            .map(|d| (d.file, d.component, d.message.split(';').next().unwrap_or_default().to_string()))
-            .collect();
-        assert_eq!(reported.len(), 3, "{reported:#?}");
-        assert!(
-            reported[0].2.starts_with(
-                "off for this build: 3 tags in 2 files cannot be matched to an Animus component \
-                 (2 imports from modules extraction does not analyse, 1 tag of a package with no \
-                 dependency path to Animus, which it does not list)"
-            ),
-            "{reported:#?}"
-        );
+        // R's surviving `size` options, and the identity-uncertainty records.
+        let run = |app: &str| {
+            let app = format!("import {{ List }} from 'icons';\nimport {{ R }} from './r';\n{app}");
+            let out = analyze(&[("src/r.tsx", RECIPE), ("src/app.tsx", app.as_str())], &inputs);
+            let sizes = kept_sizes(&out, "src/r.tsx::R");
+            let records: Vec<_> = out
+                .diagnostics
+                .into_iter()
+                .filter(|d| matches!(d.code.as_deref(), Some(IDENTITY_UNCERTAIN | IDENTITY_UNCERTAIN_TAG)))
+                .map(|d| d.component)
+                .collect();
+            (sizes, records)
+        };
+        let every = vec!["sm", "md", "lg"];
+        assert_eq!(run("export const App = () => <List />;\n"), (vec![], vec![]));
+        for handed in [
+            "export const App = () => <List renderItem={R} />;\n",
+            "export const App = () => <List component={R} />;\n",
+            "export const App = () => <List icon={<R size=\"sm\" />} />;\n",
+            "export const App = () => <List><R size=\"sm\" /></List>;\n",
+        ] {
+            assert_eq!(run(handed), (every.clone(), vec![]), "{handed}");
+        }
         assert_eq!(
-            reported[1..].iter().map(|(file, tag, _)| (file.as_str(), tag.as_str())).collect::<Vec<_>>(),
-            [("src/app.tsx", "<Link>"), ("src/handed.tsx", "<List>")]
+            run("export const App = () => <List as={R} />;\n"),
+            (every, vec!["whole-component removal".to_string(), "<List>".to_string()])
         );
 
         // A member of an object the app writes into, in the rendering file or

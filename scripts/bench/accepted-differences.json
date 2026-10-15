@@ -31,8 +31,8 @@
     "row": "analysis:showcase",
     "fixture": "showcase-analysis",
     "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
-    "candidate": "5bc3b7764c8db93e2b2845ff3387597569bc3b62b43225c3b32df54f3fd1acdd",
-    "reason": "Beside the fileFacts difference above, only diagnostics differ: the 28 identity-uncertain-tag info lines for tags of packages with no dependency path to Animus (react-router-dom, lucide-react, @ark-ui/react, react, @mdx-js/react, prism-react-renderer) are gone, and the identity-uncertain warning counts them as their own kind; it still counts 64 tags."
+    "candidate": "c706e436035d56d6662c9fb77e3828e6aacb0d943a79395ec21de5b0c957ad1d",
+    "reason": "Beside the fileFacts difference above, only diagnostics differ: the 28 tags of packages with no dependency path to Animus (react-router-dom, lucide-react, @ark-ui/react, react, @mdx-js/react, prism-react-renderer) no longer leave usage identity uncertain, so they have no identity-uncertain-tag info lines and the identity-uncertain warning counts only the 36 tags in 17 files that still turn whole-component removal off. CSS and components are identical."
   },
   {
     "row": "build:vite-app",
