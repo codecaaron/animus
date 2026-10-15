@@ -1,7 +1,13 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import {
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import { builtinModules } from 'node:module';
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { bareSpecifierPackageName, exportsSubpaths } from './discover-packages';
 import { isJsonBlock, isJsonString, type JsonValue } from './tsconfig-paths';
@@ -59,13 +65,10 @@ const RESOLVED = '\0resolved:';
 
 /** A `package.json` by its bytes: a registry tarball's files carry one
  *  fixed modification time, so a swap of the same size keeps it. A lockfile
- *  by its size and modification time, which a write changes. A resolved
- *  key by the real path it resolves to. */
+ *  by its size and modification time, which a write changes. (A resolved
+ *  key is stamped by the real path it resolves to, in `Reads`.) */
 function read(path: string): FileRead {
   try {
-    if (path.startsWith(RESOLVED)) {
-      return { stamp: realpathSync.native(path.slice(RESOLVED.length)) };
-    }
     if (path.endsWith('package.json')) {
       const bytes = readFileSync(path);
       return {
@@ -78,6 +81,43 @@ function read(path: string): FileRead {
   } catch {
     return { stamp: 'absent' };
   }
+}
+
+/** What is at a path, through no link: `absent` only where the
+ *  filesystem says nothing is there. */
+type Entry = 'absent' | 'link' | 'present' | 'unknown';
+
+function readEntry(path: string): Entry {
+  try {
+    const entry = lstatSync(path, { throwIfNoEntry: false });
+    if (entry === undefined) return 'absent';
+    return entry.isSymbolicLink() ? 'link' : 'present';
+  } catch (error) {
+    return failedWith(error, ['ENOTDIR']) ? 'absent' : 'unknown';
+  }
+}
+
+/** Windows spells real paths with drive letters and junctions that the
+ *  snapshot does not model: there each lookup asks `realpath`. */
+const MODELLED_REAL_PATHS = process.platform !== 'win32';
+
+/** `path`'s real path; null where nothing is there, undefined where the
+ *  lookup failed otherwise. */
+function nativeRealPath(path: string): string | null | undefined {
+  try {
+    return realpathSync.native(path);
+  } catch (error) {
+    return failedWith(error, ['ENOENT', 'ENOTDIR']) ? null : undefined;
+  }
+}
+
+/** Whether a failed filesystem call threw one of `codes`. */
+function failedWith<Thrown>(error: Thrown, codes: readonly string[]): boolean {
+  return (
+    error instanceof Object &&
+    'code' in error &&
+    codes.some((code) => code === error.code)
+  );
 }
 
 /** Lockfiles whose change can move what is installed. */
@@ -117,8 +157,147 @@ class Reads {
   file(path: string): FileRead {
     let found = this.#files.get(path);
     if (found === undefined) {
-      found = read(path);
+      found = this.#read(path);
       this.#files.set(path, found);
+    }
+    return found;
+  }
+
+  /** `read`, less the reads an absence answers: a walk looks for each
+   *  dependency in every `node_modules` above a package, and most hold no
+   *  such package, where a failed read costs more than an `lstat`. A
+   *  manifest through a link is the one at its directory's real path, read
+   *  once for every link to it. */
+  #read(path: string): FileRead {
+    if (path.startsWith(RESOLVED)) {
+      return { stamp: this.#real(path.slice(RESOLVED.length)) ?? 'absent' };
+    }
+    if (this.#absent(path)) return { stamp: 'absent' };
+    if (!path.endsWith('package.json')) return read(path);
+    const dir = dirname(path);
+    const real = this.#real(dir);
+    return real === null || real === undefined || real === dir
+      ? read(path)
+      : this.file(join(real, basename(path)));
+  }
+
+  readonly #reals = new Map<string, string | null | undefined>();
+  readonly #physicals = new Map<string, string | null | undefined>();
+  readonly #entries = new Map<string, Entry>();
+  readonly #absences = new Map<string, boolean>();
+  readonly #modulesAbove = new Map<string, string[]>();
+
+  /** `realpathSync.native`'s answer for `path`: its real path, null where
+   *  nothing is there, undefined where the lookup failed otherwise. A link
+   *  is read and its target resolved once, however many links name it. */
+  #real(path: string): string | null | undefined {
+    if (this.#reals.has(path)) return this.#reals.get(path);
+    const spelled = this.#spelled(path);
+    if (spelled === undefined) return this.#native(path);
+    let found: string | null | undefined = null;
+    if (spelled !== null) {
+      const entry = this.#entry(spelled);
+      if (entry === 'link') found = this.#target(spelled);
+      else if (entry !== 'absent') return this.#native(path);
+    }
+    this.#reals.set(path, found);
+    return found;
+  }
+
+  /** A spelling of `path` through no link, where its real path is spelled
+   *  only as its directories are: null where nothing is there, undefined
+   *  where a lookup failed. Each directory costs one `lstat`. */
+  #physical(path: string): string | null | undefined {
+    if (this.#physicals.has(path)) return this.#physicals.get(path);
+    let found: string | null | undefined = path;
+    if (dirname(path) !== path) {
+      const spelled = this.#spelled(path);
+      found = spelled;
+      if (spelled !== null && spelled !== undefined) {
+        const entry = this.#entry(spelled);
+        if (entry === 'absent') found = null;
+        else if (entry === 'link') found = this.#target(spelled);
+        else if (entry === 'unknown') found = this.#native(spelled);
+      }
+    }
+    this.#physicals.set(path, found);
+    return found;
+  }
+
+  /** `path` in its directory's spelling through no link: null where that
+   *  directory is absent; undefined at the root, on Windows, or where a
+   *  lookup failed. */
+  #spelled(path: string): string | null | undefined {
+    const parent = dirname(path);
+    if (parent === path || !MODELLED_REAL_PATHS) return undefined;
+    const dir = this.#physical(parent);
+    if (dir === null || dir === undefined) return dir;
+    return dir === parent ? path : join(dir, basename(path));
+  }
+
+  /** The real path of link `path`, whose directory is spelled through no
+   *  link: its target's, resolved once. */
+  #target(path: string): string | null | undefined {
+    if (this.#reals.has(path)) return this.#reals.get(path);
+    let target: string;
+    try {
+      target = resolve(dirname(path), readlinkSync(path));
+    } catch {
+      return this.#native(path);
+    }
+    const found = this.#reals.has(target)
+      ? this.#reals.get(target)
+      : this.#native(target);
+    this.#reals.set(path, found);
+    return found;
+  }
+
+  /** `nativeRealPath`, recording the answer for `path`, and a real path's
+   *  ancestors as their own: no link lies on the way to them. */
+  #native(path: string): string | null | undefined {
+    const found = nativeRealPath(path);
+    for (
+      let real = found;
+      real !== null && real !== undefined && this.#physicals.get(real) !== real;
+      real = dirname(real)
+    ) {
+      this.#reals.set(real, real);
+      this.#physicals.set(real, real);
+    }
+    this.#reals.set(path, found);
+    return found;
+  }
+
+  #entry(path: string): Entry {
+    let entry = this.#entries.get(path);
+    if (entry === undefined) {
+      entry = readEntry(path);
+      this.#entries.set(path, entry);
+    }
+    return entry;
+  }
+
+  /** Whether the filesystem says nothing is at `path`. */
+  #absent(path: string): boolean {
+    let absent = this.#absences.get(path);
+    if (absent === undefined) {
+      const spelled = this.#spelled(path);
+      absent =
+        spelled === null ||
+        (spelled !== undefined && this.#entry(spelled) === 'absent');
+      this.#absences.set(path, absent);
+    }
+    return absent;
+  }
+
+  /** Every `node_modules` path at and above `dir`, nearest first. */
+  #modules(dir: string): string[] {
+    let found = this.#modulesAbove.get(dir);
+    if (found === undefined) {
+      const parent = dirname(dir);
+      found = [join(dir, 'node_modules')];
+      if (parent !== dir) found.push(...this.#modules(parent));
+      this.#modulesAbove.set(dir, found);
     }
     return found;
   }
@@ -201,6 +380,12 @@ class Reads {
         }
         return found;
       },
+      modules: (dir) => this.#modules(dir),
+      absent: (path) => {
+        const absent = this.#absent(path);
+        if (absent) files.add(path);
+        return absent;
+      },
     };
   }
 }
@@ -212,6 +397,11 @@ interface Lookups {
   /** The real path `path` resolves to through its symlinks. */
   resolve(path: string): string | null;
   manifest(dir: string): Manifest | null;
+  /** Every `node_modules` path at and above `dir`, nearest first. */
+  modules(dir: string): readonly string[];
+  /** Whether nothing is at `path`, read as a file where so: its stamp
+   *  records the absence. */
+  absent(path: string): boolean;
 }
 
 type Manifest = {
@@ -647,15 +837,18 @@ function decide(
 function installedPackage(
   name: string,
   from: string,
-  lookups: Pick<Lookups, 'exists' | 'resolve'>
+  lookups: Pick<Lookups, 'exists' | 'resolve' | 'modules' | 'absent'>
 ): string | null {
-  for (let dir = from; ; dir = dirname(dir)) {
-    const candidate = join(dir, 'node_modules', name);
+  for (const modules of lookups.modules(from)) {
+    // An absent `node_modules` holds no package: it stands in for every
+    // manifest it would hold.
+    if (lookups.absent(modules)) continue;
+    const candidate = join(modules, name);
     if (lookups.exists(join(candidate, 'package.json'))) {
       return lookups.resolve(candidate);
     }
-    if (dirname(dir) === dir) return null;
   }
+  return null;
 }
 
 function insideNodeModules(dir: string): boolean {

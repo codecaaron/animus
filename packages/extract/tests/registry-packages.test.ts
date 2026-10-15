@@ -82,7 +82,8 @@ test('a registry decision is read again once a manifest it read changes', () => 
 
 // Contract: a package is foreign to Animus unless it, or a package its
 // dependencies and peers name at any depth, is an Animus package; the answer
-// is read again once a manifest it read changes.
+// is read again once a manifest it read changes, or a nearer instance is
+// installed.
 test('a package is foreign to Animus until it or a package it names at any depth is an Animus package', () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-depends-')));
   roots.push(root);
@@ -133,6 +134,16 @@ test('a package is foreign to Animus until it or a package it names at any depth
       new Set()
     );
 
+  expect(foreign()).toEqual(['chakra', 'ui-kit']);
+
+  // A nearer instance, installed where the walk found no `node_modules`, is
+  // read.
+  write('node_modules/chakra/node_modules/emotion/package.json', {
+    name: 'emotion',
+    peerDependencies: { '@animus-ui/system': '^0.1.0' },
+  });
+  expect(foreign()).toEqual([]);
+  rmSync(join(root, 'node_modules/chakra/node_modules'), { recursive: true });
   expect(foreign()).toEqual(['chakra', 'ui-kit']);
 
   // A package is foreign only where every instance its importers reach is.
