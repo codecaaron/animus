@@ -14139,6 +14139,47 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(reported(true), vec![]);
     }
 
+    /// Contract: a tag proven foreign (imported from a package with no
+    /// dependency path to Animus, and handed no component) gets no `info`
+    /// record of its own, and the warning counts it as a kind of its own; the
+    /// same tag where a file may hand it a component keeps its record.
+    #[test]
+    fn foreign_tags_are_counted_but_not_listed() {
+        let entries = [
+            ("src/r.tsx", RECIPE),
+            (
+                "src/app.tsx",
+                "import { Link } from 'router';\nimport { List } from 'icons';\n\
+                 export const App = () => <><Link /><List /></>;\n",
+            ),
+            (
+                "src/handed.tsx",
+                "import { List } from 'icons';\nconst X = () => null;\nexport const H = () => <List as={X} />;\n",
+            ),
+        ];
+        let mut inputs = test_inputs();
+        inputs.analysis_context.foreign_packages = vec!["icons".to_string()];
+        let reported: Vec<_> = analyze(&entries, &inputs)
+            .diagnostics
+            .into_iter()
+            .filter(|d| matches!(d.code.as_deref(), Some(IDENTITY_UNCERTAIN | IDENTITY_UNCERTAIN_TAG)))
+            .map(|d| (d.file, d.component, d.message.split(';').next().unwrap_or_default().to_string()))
+            .collect();
+        assert_eq!(reported.len(), 3, "{reported:#?}");
+        assert!(
+            reported[0].2.starts_with(
+                "off for this build: 3 tags in 2 files cannot be matched to an Animus component \
+                 (2 imports from modules extraction does not analyse, 1 tag of a package with no \
+                 dependency path to Animus, which it does not list)"
+            ),
+            "{reported:#?}"
+        );
+        assert_eq!(
+            reported[1..].iter().map(|(file, tag, _)| (file.as_str(), tag.as_str())).collect::<Vec<_>>(),
+            [("src/app.tsx", "<Link>"), ("src/handed.tsx", "<List>")]
+        );
+    }
+
     /// A context load honours its recursion flag and filter, a glob its
     /// filename pattern, and a load into an analysed package opens only that
     /// package's components.
