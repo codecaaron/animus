@@ -47,5 +47,19 @@
     "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
     "candidate": "3a5605399bcfc17d0fb8581a057af892b7eaa67eb7419208ce5658a113914489",
     "reason": "Beside the fileFacts and diagnostics differences above, only two statics of src/pages/Examples.tsx differ: AS_CHILD_CODE and TOOLTIP_CODE are templates without substitutions, now evaluated to their cooked text, so an escaped \\` reads as `. CSS, components and diagnostics are identical."
+  },
+  {
+    "row": "analysis:showcase",
+    "fixture": "showcase-analysis",
+    "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
+    "candidate": "7d2b8e36c40995043ba370684c57c31188d0a255c575043d7818ef006dc6685f",
+    "reason": "Beside the differences above, the manifest gains runtime_tables, each dynamic prop records the names of the shared tables it reads (53 props), and Logo, the one component with a custom dynamic prop, references animusTables.keywords[\"fontSize\"] and its inline scale by key instead of inlining them. CSS, components and diagnostics are identical."
+  },
+  {
+    "row": "build:vite-app",
+    "fixture": "vite-app",
+    "baseline": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
+    "candidate": "373b31a80966a5d5eb6901424a479253cf0ded3a0025cf4045ec638e8d4f9eb9",
+    "reason": "Beside the differences above, the JS shrinks 613 bytes (251105 to 250492): scale and keyword tables ship once in the system-props module and configs reference them by name. The CSS is identical (cssDigest unchanged) and so are the diagnostics."
   }
 ]
