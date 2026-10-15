@@ -616,10 +616,10 @@ const UNSUPPORTED_TRANSFORM_REFERENCE: &str = "animus.props.unsupported-transfor
 const UNSUPPORTED_PROPS_CONFIG: &str = "animus.props.unsupported-config";
 const UNSUPPORTED_DEFAULT_EXPORT: &str = "animus.chain.unsupported-default-export";
 const UNSUPPORTED_NAMESPACE_ROOT: &str = "animus.chain.unsupported-namespace-root";
-/// A warning: a chain written as an object-literal property is never
+/// An error: a chain written as an object-literal property is never
 /// extracted, so its component renders without its styles.
 const UNSUPPORTED_OBJECT_MEMBER: &str = "animus.chain.unsupported-object-member";
-/// A warning: the same root reached through a barrel's local export of an
+/// An error: the same root reached through a barrel's local export of an
 /// import, which went unreported before the resolver followed it.
 const NAMESPACE_ROOT_THROUGH_BARREL: &str = "animus.chain.namespace-root-through-barrel";
 /// A configured transform rejected before registration loses its meaning
@@ -640,10 +640,10 @@ const STATIC_EVALUATION_UNAVAILABLE: &str = "animus.transform.static-evaluation-
 /// An error: a binding names a key the sealed transform registry lacks
 /// (spec §7.4 D10), an internal invariant failure; nothing is evaluated.
 const TRANSFORM_UNSEALED_BINDING: &str = "animus.transform.unsealed-binding";
-/// A warning: a chain built inside a function or render, or a builder a
+/// An error: a chain built inside a function or render, or a builder a
 /// later declaration completes, is never extracted, so its styles reach no
-/// stylesheet and the system builder stays in the bundle. Valid runtime
-/// uses exist, so build strictness never escalates it.
+/// stylesheet and the system builder stays in the bundle. A host that
+/// builds at runtime on purpose sets the code's level in `diagnostics`.
 const RUNTIME_BUILDER_REFERENCE: &str = "animus.extract.runtime-builder-reference";
 /// Retired: never emitted. A value a render routes to an extracted component
 /// through a declaration usage attribution misses now takes that
@@ -793,9 +793,9 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (crate::theme::FONT_PRELOAD_INVALID, "error"),
     (CLASS_NAME_WHITESPACE, "warn"),
     (INVALID_OPACITY_MODIFIER, "warn"),
-    (UNSUPPORTED_OBJECT_MEMBER, "warn"),
-    (NAMESPACE_ROOT_THROUGH_BARREL, "warn"),
-    (RUNTIME_BUILDER_REFERENCE, "warn"),
+    (UNSUPPORTED_OBJECT_MEMBER, "error"),
+    (NAMESPACE_ROOT_THROUGH_BARREL, "error"),
+    (RUNTIME_BUILDER_REFERENCE, "error"),
 ];
 
 pub(crate) fn diagnostic_severity_for_code(code: &str) -> &'static str {

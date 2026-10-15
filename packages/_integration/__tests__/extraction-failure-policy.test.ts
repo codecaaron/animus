@@ -189,10 +189,19 @@ export const textClass = ds.styles({ display: 'inline' }).asClass();
 export const Text = (p) => <span {...textClass.props(p)} />;
 export const labelClass = ds.styles({ display: 'block' }).asClass();
 export function Built(labelClass) { return labelClass.props({ tone: { property: 'color' } }).asElement('span'); }
+export const Parts = { Base: ds.styles({ cursor: 'help' }).asElement('div') };
 `,
 };
 
 const RUNTIME_BUILDER_REFERENCE = 'animus.extract.runtime-builder-reference';
+
+/** The codes of declarations whose whole component renders without its
+ *  styles. */
+const COMPONENT_DROPPING = [
+  RUNTIME_BUILDER_REFERENCE,
+  'animus.chain.namespace-root-through-barrel',
+  'animus.chain.unsupported-object-member',
+];
 
 /** Each classified declaration: its code, and the named reason and
  *  supported alternative its message must carry. */
@@ -398,7 +407,7 @@ describe.each([
         {
           kind: 'bail',
           code: 'animus.chain.namespace-root-through-barrel',
-          severity: 'warn',
+          severity: 'error',
           message: expect.stringContaining(
             "reads 'ds' through namespace import 'barrel', reached through fixtures/policy-barrel.ts"
           ),
@@ -463,19 +472,40 @@ describe.each([
       ['InRender', 'line 6'],
       ['staged', 'line 9'],
       ['Built', 'line 17'],
+      ['Parts', 'line 18'],
     ]);
     for (const diagnostic of runtime) {
       expect(diagnostic).toMatchObject({
         kind: 'warn',
-        severity: 'warn',
+        severity: 'error',
         file: RUNTIME_BUILDERS.path,
       });
     }
-    const { lines, thrown } = surface(analysis.manifest, true);
-    expect(thrown?.message).not.toContain(RUNTIME_BUILDER_REFERENCE);
-    expect(
-      lines.filter((line) => line.includes(RUNTIME_BUILDER_REFERENCE))
-    ).toHaveLength(4);
+  });
+
+  test('each diagnostic that drops a whole component fails a strict build and only warns otherwise', () => {
+    for (const [code, component] of [
+      [RUNTIME_BUILDER_REFERENCE, 'make'],
+      ['animus.chain.namespace-root-through-barrel', 'BarrelNamespace'],
+      ['animus.chain.unsupported-object-member', 'Parts.Base'],
+    ]) {
+      expect(
+        analysis.diagnostics.find(
+          (d) => d.code === code && d.component === component
+        ),
+        code
+      ).toMatchObject({ severity: 'error' });
+    }
+    const strict = surface(analysis.manifest, true);
+    const lenient = surface(analysis.manifest, false);
+    expect(lenient.thrown).toBeNull();
+    for (const code of COMPONENT_DROPPING) {
+      expect(strict.thrown?.message, code).toContain(code);
+      expect(
+        lenient.lines.some((line) => line.includes(code)),
+        code
+      ).toBe(true);
+    }
   });
 });
 
@@ -503,12 +533,15 @@ describe('the shared build-strictness policy over a real analysis', () => {
     }
   });
 
-  test('explicit true build strictness escalates every classified failure together and nothing else', () => {
+  test('explicit true build strictness escalates every classified failure and component drop together and nothing else', () => {
     const { lines, thrown } = surface(analysis.manifest, true);
     expect(thrown).not.toBeNull();
     const message = thrown!.message;
+    const dropped = analysis.diagnostics.filter((d) =>
+      COMPONENT_DROPPING.includes(d.code ?? '')
+    ).length;
     expect(message).toContain(
-      `[animus] strict: ${CLASSIFIED.length} error diagnostic(s)`
+      `[animus] strict: ${CLASSIFIED.length + dropped} error diagnostic(s)`
     );
     for (const expected of CLASSIFIED) {
       expect(message).toMatch(
