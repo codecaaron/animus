@@ -489,9 +489,15 @@ pub struct FileFacts {
     /// Each object binding the module passes whole to a module-scope
     /// function nothing writes, which the engine judges once every module's
     /// parameter readings are known: a hand-off to a parameter that does
-    /// more than read joins `unsafe_object_uses`.
+    /// more than read joins `unsafe_object_uses` and `written_bindings`.
     #[serde(skip)]
     pub(crate) object_handoffs: Vec<crate::usage_facts::Handoff>,
+    /// The bindings of `unsafe_object_uses` that are not namespaces, each
+    /// with its first use that may write into the object: a member set or
+    /// deleted, or the object handed on whole. Calling it, or a member of it
+    /// as a method, writes nothing.
+    #[serde(skip)]
+    pub(crate) written_bindings: BTreeMap<String, crate::usage_facts::ObjectUse>,
     /// Each namespace import some use may write through, with the first
     /// such use and what it names: a member written or deleted, a member's
     /// value (`ui.Fam`, `icons[name]`) handed on, exported, or bound to a
@@ -1200,7 +1206,8 @@ pub(crate) fn object_facts(program: &Program<'_>, scoping: &oxc::semantic::Scopi
 pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, objects: ObjectFacts) -> FileFacts {
     let source = ast.source();
     let ObjectFacts { props_forwarding, const_initializers, compose, uses } = objects;
-    let crate::usage_facts::ObjectUses { context_consts, unsafe_object_uses, object_handoffs, written_namespaces } = uses;
+    let crate::usage_facts::ObjectUses { context_consts, unsafe_object_uses, object_handoffs, written_namespaces, written_bindings } =
+        uses;
     let bindings = &lowered.bindings;
     let namespace_import_facts = crate::usage_facts::collect_namespace_import_facts(ast.module_record());
     // `export default X` of a module binding X names X.
@@ -1232,6 +1239,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         facades: const_initializers.facades,
         unsafe_object_uses,
         object_handoffs,
+        written_bindings,
         written_namespaces,
         param_readings: Arc::clone(&lowered.readings),
         dynamic_code: lowered.dynamic_code,

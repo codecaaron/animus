@@ -1751,6 +1751,7 @@ pub type WrittenNamespaces = BTreeMap<String, (String, ObjectUse)>;
 /// What a module's own source says may change the objects the member
 /// tables follow, and the contexts it builds among them: read from its parse
 /// and semantic build alone, before any static value is evaluated.
+#[derive(Default)]
 pub(crate) struct ObjectUses {
     /// See `FileFacts::context_consts`.
     pub context_consts: BTreeSet<String>,
@@ -1760,6 +1761,8 @@ pub(crate) struct ObjectUses {
     pub object_handoffs: Vec<Handoff>,
     /// See `FileFacts::written_namespaces`.
     pub written_namespaces: WrittenNamespaces,
+    /// See `FileFacts::written_bindings`.
+    pub written_bindings: BTreeMap<String, ObjectUse>,
 }
 
 /// The uses of `object_consts` and of the module's contexts that may change
@@ -1776,18 +1779,8 @@ pub(crate) fn object_uses(
     for context in &context_consts {
         watched.entry(context.as_str()).or_insert(false);
     }
-    let (unsafe_object_uses, object_handoffs, written_namespaces) =
-        unsafe_object_uses(program, scoping, &watched, assigned_targets);
-    ObjectUses { context_consts, unsafe_object_uses, object_handoffs, written_namespaces }
-}
-
-fn unsafe_object_uses(
-    program: &Program<'_>,
-    scoping: &Scoping,
-    object_consts: &BTreeMap<&str, bool>,
-    assigned_targets: &BTreeSet<&str>,
-) -> (BTreeMap<String, ObjectUse>, Vec<Handoff>, WrittenNamespaces) {
-    scan_object_uses(program, scoping, object_bindings(program, scoping, object_consts, assigned_targets))
+    let uses = scan_object_uses(program, scoping, object_bindings(program, scoping, &watched, assigned_targets));
+    ObjectUses { context_consts, ..uses }
 }
 
 /// See `FileFacts::written_namespaces`: the module's namespace imports
@@ -1797,30 +1790,31 @@ pub(crate) fn written_namespaces(program: &Program<'_>, scoping: &Scoping) -> Wr
         .into_iter()
         .filter(|(_, binding)| binding.namespace)
         .collect();
-    scan_object_uses(program, scoping, namespaces).2
+    scan_object_uses(program, scoping, namespaces).written_namespaces
 }
 
-fn scan_object_uses(
-    program: &Program<'_>,
-    scoping: &Scoping,
-    candidates: FxHashMap<SymbolId, ObjectBinding>,
-) -> (BTreeMap<String, ObjectUse>, Vec<Handoff>, WrittenNamespaces) {
+/// The uses of `candidates` that may change their objects; `context_consts`
+/// is left empty.
+fn scan_object_uses(program: &Program<'_>, scoping: &Scoping, candidates: FxHashMap<SymbolId, ObjectBinding>) -> ObjectUses {
     if candidates.is_empty() {
-        return (BTreeMap::new(), Vec::new(), BTreeMap::new());
+        return ObjectUses::default();
     }
     if scoping.root_unresolved_references().contains_key("eval") {
         // Direct eval can reach any binding by name.
         let what = ObjectUse { line: None, what: "can be changed by a direct eval".to_string() };
-        let written = candidates
+        let written_namespaces = candidates
             .values()
             .filter(|binding| binding.namespace)
             .map(|binding| (binding.name.clone(), (binding.name.clone(), what.clone())))
             .collect();
-        return (
-            candidates.into_values().map(|binding| (binding.name, what.clone())).collect(),
-            Vec::new(),
-            written,
-        );
+        let written_bindings =
+            candidates.values().filter(|binding| !binding.namespace).map(|binding| (binding.name.clone(), what.clone())).collect();
+        return ObjectUses {
+            unsafe_object_uses: candidates.into_values().map(|binding| (binding.name, what.clone())).collect(),
+            written_namespaces,
+            written_bindings,
+            ..ObjectUses::default()
+        };
     }
     let mut member_consts = MemberConsts {
         scoping,
@@ -1856,13 +1850,20 @@ fn scan_object_uses(
         style_uses: Vec::new(),
         member_consts: member_consts.consts,
         written_namespaces: BTreeMap::new(),
+        written_bindings: BTreeMap::new(),
         called_functions: None,
         returns: Vec::new(),
         local_aliases: FxHashMap::default(),
         element_arrays: FxHashMap::default(),
     };
     scan.visit_program(program);
-    (scan.uses, scan.handoffs, scan.written_namespaces)
+    ObjectUses {
+        unsafe_object_uses: scan.uses,
+        object_handoffs: scan.handoffs,
+        written_namespaces: scan.written_namespaces,
+        written_bindings: scan.written_bindings,
+        ..ObjectUses::default()
+    }
 }
 
 /// Each `const` a member of a namespace import initializes (`const Icon =
@@ -1975,6 +1976,7 @@ pub(crate) fn style_object_uses(
         style_uses: Vec::new(),
         member_consts: FxHashMap::default(),
         written_namespaces: BTreeMap::new(),
+        written_bindings: BTreeMap::new(),
         called_functions: Some(CalledFunctions::of(program)),
         returns: Vec::new(),
         local_aliases: FxHashMap::default(),
@@ -3693,6 +3695,8 @@ struct ObjectUseScan<'a, 's> {
     member_consts: FxHashMap<SymbolId, String>,
     /// See `FileFacts::written_namespaces`.
     written_namespaces: WrittenNamespaces,
+    /// See `FileFacts::written_bindings`; empty in style mode.
+    written_bindings: BTreeMap<String, ObjectUse>,
     /// In style mode, the module-scope functions nothing exports, and the
     /// `const` each call of one initializes.
     called_functions: Option<CalledFunctions>,
@@ -3974,10 +3978,17 @@ impl<'a> ObjectUseScan<'a, '_> {
             _ => {}
         }
         object_use(span, ancestors, false, self.global_object, false).filter(|what| {
-            !matches!(what.as_str(), "is called" | "is stored in an object" | "is stored in an array" | "is passed as a prop")
-                && !what.ends_with(" called as a method")
+            !writes_nothing(what)
+                && !matches!(what.as_str(), "is stored in an object" | "is stored in an array" | "is passed as a prop")
         })
     }
+}
+
+/// Whether the use `object_use` describes calls the object, or a member of
+/// it as a method: the callee is taken to leave the objects it holds as they
+/// are.
+fn writes_nothing(what: &str) -> bool {
+    what == "is called" || what.ends_with(" called as a method")
 }
 
 /// Records `namespace`'s first use that may write through it.
@@ -4238,9 +4249,9 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 }
             }
         } else {
-            if self.uses.contains_key(&binding.name)
-                || (binding.facade && top_level_write(ident.span, &self.ancestors))
-            {
+            let used = self.uses.contains_key(&binding.name);
+            let written = self.written_bindings.contains_key(&binding.name);
+            if (used && written) || (binding.facade && top_level_write(ident.span, &self.ancestors)) {
                 return;
             }
             // Passed to a module-scope function nothing writes: the engine
@@ -4259,7 +4270,19 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 });
                 return;
             }
-            (binding.name.clone(), object_use(ident.span, ancestors, true, self.global_object, assigned_target))
+            let Some(what) = object_use(ident.span, ancestors, true, self.global_object, assigned_target) else { return };
+            let writes = !written && !writes_nothing(&what);
+            if used && !writes {
+                return;
+            }
+            let used_at = ObjectUse { line: Some(self.line(ident.span)), what };
+            if writes {
+                self.written_bindings.insert(binding.name.clone(), used_at.clone());
+            }
+            if !used {
+                self.uses.insert(binding.name.clone(), used_at);
+            }
+            return;
         };
         let Some(what) = what else { return };
         let line = self.line(ident.span);

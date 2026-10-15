@@ -3517,7 +3517,7 @@ fn written_packages(files: &BTreeMap<String, FileFacts>) -> FxHashSet<&str> {
     files
         .values()
         .flat_map(|ff| {
-            let named = ff.imports.iter().filter(|import| ff.unsafe_object_uses.contains_key(&import.local));
+            let named = ff.imports.iter().filter(|import| ff.written_bindings.contains_key(&import.local));
             let namespaces = ff.namespace_imports.iter().filter(|(local, _)| ff.written_namespaces.contains_key(*local));
             named.map(|import| import.source.as_str()).chain(namespaces.map(|(_, source)| source.as_str()))
         })
@@ -5317,8 +5317,9 @@ fn names_context_provider(
 
 /// Judges each object hand-off the modules record: a hand-off to a function
 /// that does more than read that parameter is a use that may change the
-/// object, like any other, and joins `unsafe_object_uses` unless the module
-/// already has an earlier such use of the binding.
+/// object, like any other, and joins `unsafe_object_uses` and
+/// `written_bindings` unless the module already has an earlier such use of
+/// the binding there.
 pub(crate) fn judge_object_handoffs(
     files: &mut BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
@@ -5355,10 +5356,12 @@ pub(crate) fn judge_object_handoffs(
     for (path, binding, used) in unsafe_handoffs {
         let Some(ff) = files.get_mut(&path) else { continue };
         let later = |existing: &crate::usage_facts::ObjectUse| existing.line.is_some_and(|line| Some(line) > used.line);
-        match ff.unsafe_object_uses.get(&binding) {
-            Some(existing) if !later(existing) => {}
-            _ => {
-                ff.unsafe_object_uses.insert(binding, used);
+        for uses in [&mut ff.unsafe_object_uses, &mut ff.written_bindings] {
+            match uses.get(&binding) {
+                Some(existing) if !later(existing) => {}
+                _ => {
+                    uses.insert(binding.clone(), used.clone());
+                }
             }
         }
     }
@@ -14293,7 +14296,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
 
         // A member of an object the app writes into, in the rendering file or
         // in another, may be an Animus component: it keeps its record.
-        let written = |files: &[(&'static str, &'static str)]| {
+        let written = |files: &[(&str, &str)]| {
             let entries: Vec<_> = std::iter::once(("src/r.tsx", RECIPE)).chain(files.iter().copied()).collect();
             analyze(&entries, &inputs)
                 .diagnostics
@@ -14317,6 +14320,22 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ]),
             [("src/app.tsx".to_string(), "<Parts.Item>".to_string())]
         );
+
+        // Calling a function the package exports, or a member as a method,
+        // writes nothing into the package; a write after a call on the same
+        // binding still does.
+        let render = ("src/app.tsx", "import { Parts } from 'icons/parts';\nexport const App = () => <Parts.Item size=\"lg\" />;\n");
+        assert_eq!(written(&[("src/util.tsx", "import { parse, Parts } from 'icons/parts';\nparse('#fff');\nParts.reset();\n"), render]), []);
+        for write in [
+            "Parts.Item = R;\n",
+            "Object.assign(Parts, { Item: R });\n",
+            "register(Parts);\n",
+            "const keep = (o) => { o.Item = R; };\nkeep(Parts);\n",
+            "parse('#fff');\nparse.Item = R;\n",
+        ] {
+            let util = format!("import {{ parse, Parts }} from 'icons/parts';\nimport {{ R }} from './r';\n{write}");
+            assert_eq!(written(&[("src/util.tsx", util.as_str()), render]), [("src/app.tsx".to_string(), "<Parts.Item>".to_string())], "{write}");
+        }
     }
 
     /// A context load honours its recursion flag and filter, a glob its
