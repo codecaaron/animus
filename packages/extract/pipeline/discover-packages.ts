@@ -17,6 +17,8 @@ import { readKitDescriptor } from './kit-descriptor';
 import {
   INVALID_KIT_SOURCE_CONDITION,
   KIT_SYSTEM_NOT_INCLUDED,
+  KIT_UNREAD_SIDE_EFFECTS,
+  KIT_WITHOUT_SIDE_EFFECTS,
   KIT_WITHOUT_SOURCE_CONDITION,
   noKitFilesDiagnostics,
   PACKAGE_MISMATCH,
@@ -323,22 +325,31 @@ export function realPath(path: string): string {
   }
 }
 
+/** Why a package's `sideEffects` field gives Animus no answer: it is
+ *  absent, it is neither a boolean nor a list, or a glob in it uses syntax
+ *  this matcher lacks (braces, classes, negation, extglobs). */
+type UnreadSideEffects =
+  | { unread: 'absent' }
+  | { unread: 'value' }
+  | { unread: 'glob'; glob: string };
+
 /**
  * A package's `sideEffects` field, decoded the way Vite reads it: a boolean
  * as written, or the list's globs, one with no `/` matching the basename
- * anywhere and any other rooted at the package. Undefined without a readable
- * field, or with glob syntax this matcher lacks (braces, classes, negation,
- * extglobs), which leaves the bundler's side-effectful default.
+ * anywhere and any other rooted at the package. A field it cannot read
+ * leaves the bundler's own reading, and says why.
  */
 function readPackageSideEffects(
   pkgRoot: string
-): boolean | RegExp[] | undefined {
+): boolean | RegExp[] | UnreadSideEffects {
   const manifest = readPackageManifest(pkgRoot);
   const field = isJsonBlock(manifest) ? manifest.sideEffects : undefined;
   if (field === true || field === false) return field;
-  if (!Array.isArray(field)) return undefined;
+  if (field === undefined) return { unread: 'absent' };
+  if (!Array.isArray(field)) return { unread: 'value' };
   const globs = field.filter(isJsonString);
-  if (globs.some((glob) => /[{}[\]()!+@]/.test(glob))) return undefined;
+  const unread = globs.find((glob) => /[{}[\]()!+@]/.test(glob));
+  if (unread !== undefined) return { unread: 'glob', glob: unread };
   return globs.map((glob) =>
     globToRegExp(glob.includes('/') ? glob.replace(/^\.?\//, '') : `**/${glob}`)
   );
@@ -350,8 +361,44 @@ function readPackageSideEffects(
 export function fileSideEffects(absFile: string): boolean | undefined {
   const pkgRoot = findPackageRoot(absFile);
   const field = readPackageSideEffects(pkgRoot);
-  if (field === undefined || field === true || field === false) return field;
-  return matchesSideEffects(field, pkgRoot, [absFile]);
+  if (Array.isArray(field))
+    return matchesSideEffects(field, pkgRoot, [absFile]);
+  return field === true || field === false ? field : undefined;
+}
+
+/** The finding for a redirected kit whose `sideEffects` field gives no
+ *  answer. */
+function unreadSideEffectsDiagnostic(
+  packageName: string,
+  field: UnreadSideEffects
+): ManifestDiagnostic {
+  const remedy =
+    'add "sideEffects": false, or a list of the files that have side effects';
+  const keeps =
+    'so the bundler keeps every module of the source Animus redirects it to';
+  const [code, message] =
+    field.unread === 'absent'
+      ? [
+          KIT_WITHOUT_SIDE_EFFECTS,
+          `declares no "sideEffects" field, ${keeps}, builder code included — ${remedy}`,
+        ]
+      : field.unread === 'value'
+        ? [
+            KIT_UNREAD_SIDE_EFFECTS,
+            `its "sideEffects" field is neither a boolean nor a list, ${keeps} — ${remedy}`,
+          ]
+        : [
+            KIT_UNREAD_SIDE_EFFECTS,
+            `its "sideEffects" glob "${field.glob}" uses syntax Animus does not read (braces, classes, negation, extglobs), so Animus does not apply the list to the source it redirects the kit to — write each glob with *, ** and ? only`,
+          ];
+  return {
+    file: packageName,
+    component: 'kit',
+    kind: 'warn',
+    message,
+    code,
+    severity: severityFor(code),
+  };
 }
 
 /** Whether a `sideEffects` glob can name a code file: a last segment with
@@ -628,18 +675,23 @@ export async function collectExternalPackageSources(opts: {
     );
   };
   /** `replaced` names the entry the redirect stands in for; it is only
-   *  needed, and so only resolved, for a glob list. */
+   *  needed, and so only resolved, for a glob list. `packageName` names the
+   *  kit in its findings, as its other findings name it. */
   const redirect = async (
     specifier: string,
     srcEntry: string,
     pkgRoot: string,
+    packageName: string,
     replaced: () => Promise<string | null>
   ): Promise<void> => {
     sourceEntries.set(specifier, srcEntry);
     const field = readPackageSideEffects(pkgRoot);
-    if (field === undefined) return;
     if (field === true || field === false) {
       sourceEntrySideEffects.set(specifier, field);
+      return;
+    }
+    if (!Array.isArray(field)) {
+      reportFinding(pkgRoot, unreadSideEffectsDiagnostic(packageName, field));
       return;
     }
     // A list names the files the package ships, so it classifies the source
@@ -690,19 +742,21 @@ export async function collectExternalPackageSources(opts: {
   // Each finding once, by its package, code and message (which names the
   // entry and target), whichever specifier of the package reaches it.
   const reported = new Set<string>();
+  const reportFinding = (pkgRoot: string, finding: ManifestDiagnostic) => {
+    // Keyed by the package's real directory: two copies of one package
+    // report their own findings.
+    const key = `${realPath(pkgRoot)}\0${finding.code}\0${finding.message}`;
+    if (reported.has(key)) return;
+    reported.add(key);
+    diagnostics.push(finding);
+  };
   const report = (
     packageName: string,
     pkgRoot: string,
     condition: KitSourceCondition | null
   ): void => {
-    // Keyed by the package's real directory: two copies of one package
-    // report their own findings.
-    const copy = realPath(pkgRoot);
     for (const finding of sourceConditionDiagnostics(packageName, condition)) {
-      const key = `${copy}\0${finding.code}\0${finding.message}`;
-      if (reported.has(key)) continue;
-      reported.add(key);
-      diagnostics.push(finding);
+      reportFinding(pkgRoot, finding);
     }
   };
 
@@ -908,7 +962,7 @@ export async function collectExternalPackageSources(opts: {
       for (const [entry, target] of condition.entries) {
         const entrySpecifier = packageName + entry.slice(1);
         packageMap[entrySpecifier] = relative(rootDir, target);
-        await redirect(entrySpecifier, target, pkgRoot, () =>
+        await redirect(entrySpecifier, target, pkgRoot, packageName, () =>
           shippedEntry(entrySpecifier, pkgRoot, entry)
         );
       }
@@ -949,7 +1003,13 @@ export async function collectExternalPackageSources(opts: {
       if (srcEntry) {
         packageMap[specifier] = relative(rootDir, srcEntry);
         const replaced = absEntry;
-        await redirect(specifier, srcEntry, pkgRoot, async () => replaced);
+        await redirect(
+          specifier,
+          srcEntry,
+          pkgRoot,
+          packageName ?? specifier,
+          async () => replaced
+        );
       } else {
         packageMap[specifier] = relative(rootDir, absEntry);
       }
@@ -961,7 +1021,7 @@ export async function collectExternalPackageSources(opts: {
           const rootEntry = tableEntry('.');
           if (rootEntry) {
             packageMap[packageName] = relative(rootDir, rootEntry);
-            await redirect(packageName, rootEntry, pkgRoot, () =>
+            await redirect(packageName, rootEntry, pkgRoot, packageName, () =>
               shippedEntry(packageName, pkgRoot, '.')
             );
           }

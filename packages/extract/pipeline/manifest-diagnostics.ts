@@ -269,6 +269,16 @@ export const NO_KIT_FILES = 'animus.discovery.no-kit-files';
 export const KIT_WITHOUT_SOURCE_CONDITION =
   'animus.discovery.kit-without-source-condition';
 
+/** A kit Animus redirects to its source declares no `sideEffects` field, so
+ *  a bundler keeps every module of that source, builder code included. */
+export const KIT_WITHOUT_SIDE_EFFECTS =
+  'animus.discovery.kit-without-side-effects';
+
+/** A redirected kit's `sideEffects` field is one Animus cannot read: neither
+ *  a boolean nor a list, or a glob in syntax its matcher lacks. */
+export const KIT_UNREAD_SIDE_EFFECTS =
+  'animus.discovery.kit-unread-side-effects';
+
 /** A kit's `animus` export condition names a file that is missing or outside
  *  its package, so that entry is read from its runtime target instead. */
 export const INVALID_KIT_SOURCE_CONDITION =
@@ -458,6 +468,8 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [UNREADABLE_SOURCE_FILE, 'error'],
   [NO_KIT_FILES, 'warn'],
   [KIT_WITHOUT_SOURCE_CONDITION, 'warn'],
+  [KIT_WITHOUT_SIDE_EFFECTS, 'warn'],
+  [KIT_UNREAD_SIDE_EFFECTS, 'warn'],
   [INVALID_KIT_SOURCE_CONDITION, 'error'],
   [KIT_SYSTEM_NOT_INCLUDED, 'error'],
   [KIT_UNSUPPORTED_FORMAT, 'error'],

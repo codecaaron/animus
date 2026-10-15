@@ -28,6 +28,8 @@ import {
 import {
   INVALID_KIT_SOURCE_CONDITION,
   KIT_SYSTEM_NOT_INCLUDED,
+  KIT_UNREAD_SIDE_EFFECTS,
+  KIT_WITHOUT_SIDE_EFFECTS,
   KIT_WITHOUT_SOURCE_CONDITION,
   PACKAGE_MISMATCH,
   SYSTEM_INSTANCE_MISMATCH,
@@ -75,6 +77,17 @@ function makePackage(base: string, files: Record<string, string>): string {
 }
 
 const EXTENSIONS: ReadonlySet<string> = new Set(['.ts', '.tsx', '.mdx']);
+
+/** A result's findings less those about its `sideEffects` field, which
+ *  these fixtures leave out. */
+function sourceFindings(result: {
+  diagnostics: ReadonlyArray<{ file: string; code?: string }>;
+}) {
+  return result.diagnostics.filter(
+    (d) =>
+      d.code !== KIT_WITHOUT_SIDE_EFFECTS && d.code !== KIT_UNREAD_SIDE_EFFECTS
+  );
+}
 
 function collect(
   rootDir: string,
@@ -673,7 +686,7 @@ describe('collectExternalPackageSources', () => {
     ]);
     // The entry each specifier selects targets source, so a `require`- or
     // `types`-only sibling loses it no fidelity: only the guessed kit warns.
-    expect(result.diagnostics.map((d) => [d.file, d.code])).toEqual([
+    expect(sourceFindings(result).map((d) => [d.file, d.code])).toEqual([
       ['@acme/legacy', KIT_WITHOUT_SOURCE_CONDITION],
     ]);
   });
@@ -705,7 +718,7 @@ test('a manifest nested below the package is no package root', async () => {
   expect(result.entries.map((e) => e.path)).toEqual([
     'node_modules/nested/src/index.ts',
   ]);
-  expect(result.diagnostics.map((d) => [d.file, d.code])).toEqual([
+  expect(sourceFindings(result).map((d) => [d.file, d.code])).toEqual([
     ['nested', KIT_WITHOUT_SOURCE_CONDITION],
   ]);
 });
@@ -1208,7 +1221,7 @@ test.each([
     expect({
       rule: selection?.rule,
       root: selection?.root && relative(pkg, selection.root),
-      codes: result.diagnostics.map((d) => d.code),
+      codes: sourceFindings(result).map((d) => d.code),
     }).toEqual({ rule, root: rootDirName, codes });
   }
 );
@@ -1340,7 +1353,7 @@ test('a source-targeting wildcard entry is read as its source, with no finding',
         join(root, result.packageMap['source-wild/foo'] ?? '')
     ),
     loader: relative(pkg, loaded.path ?? ''),
-    findings: result.diagnostics.map((d) => d.code),
+    findings: sourceFindings(result).map((d) => d.code),
   }).toEqual({
     discovery: 'src/entries/foo.ts',
     loader: 'src/entries/foo.ts',
@@ -1422,7 +1435,7 @@ test('a source pattern beside a compiled root entry is read as its source', asyn
         join(root, result.packageMap['mixed-root/foo'] ?? '')
     ),
     loader: relative(pkg, loaded.path ?? ''),
-    findings: result.diagnostics.map((d) => d.code),
+    findings: sourceFindings(result).map((d) => d.code),
   }).toEqual({
     discovery: 'src/entries/foo.ts',
     loader: 'src/entries/foo.ts',
@@ -1666,5 +1679,61 @@ describe('a kit the system evaluates', () => {
     ]);
     // A file the load never read is no evaluated instance.
     expect(check(aliased, [])).toEqual([]);
+  });
+});
+
+// Contract: each kit Animus redirects to its source, and only such a kit,
+// reports once a `sideEffects` field that gives no answer: one absent, one
+// neither a boolean nor a list, or a glob the matcher cannot read.
+test('a redirected kit reports a sideEffects field that gives no answer', async () => {
+  const root = makeRoot();
+  const kit = (name: string, manifest: Record<string, JsonValue>) => {
+    const pkg = join(root, 'node_modules', name);
+    makePackage(pkg, {
+      'src/index.ts': 'export const A = 1;',
+      'src/sub.ts': 'export const B = 1;',
+    });
+    writeFileSync(
+      join(pkg, 'package.json'),
+      JSON.stringify({ name, ...manifest })
+    );
+    return join(pkg, 'dist', 'index.js');
+  };
+  const result = await collect(root, {
+    // Two entries of one kit, reported once.
+    absent: kit('absent', {
+      exports: {
+        '.': { animus: './src/index.ts', import: './dist/index.js' },
+        './sub': { animus: './src/sub.ts', import: './dist/sub.js' },
+      },
+    }),
+    'absent/sub': join(root, 'node_modules', 'absent', 'dist', 'sub.js'),
+    value: kit('value', { sideEffects: 'false' }),
+    glob: kit('glob', { sideEffects: ['./dist/{a,b}.js'] }),
+    none: kit('none', { sideEffects: false }),
+    list: kit('list', { sideEffects: ['./dist/register.js'] }),
+  });
+
+  expect(
+    result.diagnostics
+      .filter(
+        (d) =>
+          d.code === KIT_WITHOUT_SIDE_EFFECTS ||
+          d.code === KIT_UNREAD_SIDE_EFFECTS
+      )
+      .map((d) => [d.file, d.code, d.message.split(',')[0]])
+  ).toEqual([
+    ['absent', KIT_WITHOUT_SIDE_EFFECTS, 'declares no "sideEffects" field'],
+    [
+      'value',
+      KIT_UNREAD_SIDE_EFFECTS,
+      'its "sideEffects" field is neither a boolean nor a list',
+    ],
+    ['glob', KIT_UNREAD_SIDE_EFFECTS, 'its "sideEffects" glob "./dist/{a'],
+  ]);
+  expect([...result.sourceEntries.keys()]).toContain('absent/sub');
+  expect(Object.fromEntries(result.sourceEntrySideEffects)).toEqual({
+    none: false,
+    list: false,
   });
 });
