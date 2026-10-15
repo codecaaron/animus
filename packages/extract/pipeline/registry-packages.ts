@@ -101,6 +101,21 @@ function readEntry(path: string): Entry {
  *  snapshot does not model: there each lookup asks `realpath`. */
 const MODELLED_REAL_PATHS = process.platform !== 'win32';
 
+/** Whether link target `written` climbs (`..`) after naming a directory,
+ *  which may itself be a link. A separator either way only sends more
+ *  targets to the filesystem. */
+function climbsAfterName(written: string): boolean {
+  let named = false;
+  for (const segment of written.split(/[\\/]/)) {
+    if (segment === '..') {
+      if (named) return true;
+    } else if (segment !== '' && segment !== '.') {
+      named = true;
+    }
+  }
+  return false;
+}
+
 /** `path`'s real path; null where nothing is there, undefined where the
  *  lookup failed otherwise. */
 function nativeRealPath(path: string): string | null | undefined {
@@ -236,12 +251,17 @@ class Reads {
   }
 
   /** The real path of link `path`, whose directory is spelled through no
-   *  link: its target's, resolved once. */
+   *  link: its target's, resolved once. A `..` after a name in the target
+   *  climbs from where that name leads, which may be a link, so only the
+   *  filesystem resolves it; leading `..`s climb from the link's own
+   *  directory. */
   #target(path: string): string | null | undefined {
     if (this.#reals.has(path)) return this.#reals.get(path);
     let target: string;
     try {
-      target = resolve(dirname(path), readlinkSync(path));
+      const written = readlinkSync(path);
+      if (climbsAfterName(written)) return this.#native(path);
+      target = resolve(dirname(path), written);
     } catch {
       return this.#native(path);
     }

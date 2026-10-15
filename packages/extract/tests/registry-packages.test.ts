@@ -83,7 +83,7 @@ test('a registry decision is read again once a manifest it read changes', () => 
 // Contract: a package is foreign to Animus unless it, or a package its
 // dependencies and peers name at any depth, is an Animus package; the answer
 // is read again once a manifest it read changes, or a nearer instance is
-// installed.
+// installed; the walk resolves links the way the filesystem does.
 test('a package is foreign to Animus until it or a package it names at any depth is an Animus package', () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-depends-')));
   roots.push(root);
@@ -193,4 +193,41 @@ test('a package is foreign to Animus until it or a package it names at any depth
     'dir'
   );
   expect(foreign()).toEqual([]);
+
+  // A link target's `..` climbs from where the links before it lead, not
+  // from how the target is spelled.
+  write('node_modules/shim/package.json', {
+    name: 'shim',
+    dependencies: { lifted: '^1.0.0' },
+  });
+  write('hops/lifted/package.json', { name: 'lifted' });
+  write('nested/lifted/package.json', {
+    name: 'lifted',
+    peerDependencies: { '@animus-ui/system': '^0.1.0' },
+  });
+  mkdirSync(join(root, 'nested/one'));
+  symlinkSync('../nested/one', join(root, 'hops/deep'), 'dir');
+  const shim = () =>
+    foreignPackages(
+      [
+        {
+          name: 'shim',
+          roots: [realpathSync(join(root, 'node_modules/shim'))],
+        },
+      ],
+      new Set()
+    );
+  const lifted = join(root, 'node_modules/lifted');
+  symlinkSync('../hops/deep/../lifted', lifted, 'dir');
+  expect(shim()).toEqual([]);
+  // Relinked between calls, to the same real directory and to another.
+  for (const [target, answer] of [
+    ['../nested/lifted', []],
+    ['../hops/deep/../lifted', []],
+    ['../hops/lifted', ['shim']],
+  ] as const) {
+    rmSync(lifted);
+    symlinkSync(target, lifted, 'dir');
+    expect(shim()).toEqual(answer);
+  }
 });
