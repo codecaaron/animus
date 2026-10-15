@@ -64,7 +64,10 @@ export interface AnimusNextOptions {
   targets?: string | string[];
   /** Keeps `:dir()` as written where the targets would lower it to
    *  `:lang()` over right-to-left language codes, which an element that sets
-   *  only `dir` does not match. */
+   *  only `dir` does not match. It also adds `dir-selector` to
+   *  `experimental.lightningCssFeatures.exclude`, so Next's own Lightning CSS
+   *  pass (Turbopack's, or webpack's under `useLightningcss`) keeps it; a
+   *  Next without that key warns. */
   keepDirSelector?: boolean;
   /** `true`/`false` force minification on or off; absent minifies in
    *  production. Autoprefixing applies either way. */

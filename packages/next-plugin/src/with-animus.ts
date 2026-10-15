@@ -26,6 +26,7 @@ import {
   systemPropsPath,
 } from '@animus-ui/extract/session';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { createRequire } from 'module';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -105,8 +106,13 @@ interface NextConfigBoundary {
   webpack?: NextWebpackHook | null;
   turbopack?: TurbopackOptions;
   /** The legacy home of Turbopack's options, which Next still merges into
-   *  `turbopack` for a config written before the key moved. */
-  experimental?: { turbo?: { resolveExtensions?: string[] } };
+   *  `turbopack` for a config written before the key moved, and the
+   *  Lightning CSS pass's switches. */
+  experimental?: {
+    turbo?: { resolveExtensions?: string[] };
+    useLightningcss?: boolean;
+    lightningCssFeatures?: { include?: string[]; exclude?: string[] };
+  };
 }
 
 type CallableNextConfig = (
@@ -151,6 +157,7 @@ const PHASE_PRODUCTION_BUILD = 'phase-production-build';
 
 let warnedGitignore = false;
 let warnedUnstableTurbopack = false;
+let warnedLoweredDir = false;
 
 export function withAnimus(
   options: AnimusNextOptions
@@ -218,11 +225,13 @@ export function withAnimus(
   return <Config extends NextOwnedConfig>(
     authoredConfig: NextConfigInput<Config>
   ): WebpackNextConfig<Config> | TurbopackNextConfig<Config> => {
-    const nextConfig = withTranspiled(
-      authoredConfig,
-      transpiledPackages(appRoot)
-    );
     const turbopack = resolveTurbopackMode(options);
+    const nextConfig = withKeptDirSelector(
+      withTranspiled(authoredConfig, transpiledPackages(appRoot)),
+      options.keepDirSelector === true,
+      turbopack || 'TURBOPACK' in process.env,
+      appRoot
+    );
     // Refused whenever Turbopack runs, whatever Animus's own mode: Next
     // then never calls the webpack hook, so vendor CSS would ship
     // unlayered. Next sets TURBOPACK, possibly empty, so its presence
@@ -543,6 +552,66 @@ function withTranspiled<Config extends NextOwnedConfig>(
   const added = packages.filter((name) => !declared.includes(name));
   if (added.length === 0) return nextConfig;
   return { ...nextConfig, transpilePackages: [...declared, ...added] };
+}
+
+/**
+ * The config with Next's own Lightning CSS pass told to keep `:dir()`, as
+ * `keepDirSelector` keeps it in Animus's sheet: that pass, Turbopack's and
+ * webpack's under `experimental.useLightningcss`, lowers it again for the
+ * app's browserslist. The caller's other features stay. A Next whose
+ * `experimental.lightningCssFeatures` cannot name the feature is told, when
+ * its pass runs, rather than given a key it rejects.
+ */
+function withKeptDirSelector<Config extends NextOwnedConfig>(
+  nextConfig: NextConfigInput<Config>,
+  keep: boolean,
+  turbopack: boolean,
+  appRoot: string
+): NextConfigInput<Config> {
+  if (!keep) return nextConfig;
+  const experimental = nextConfig.experimental ?? {};
+  if (!nextNamesLightningCssFeature(appRoot, DIR_SELECTOR)) {
+    if ((turbopack || experimental.useLightningcss) && !warnedLoweredDir) {
+      warnedLoweredDir = true;
+      console.warn(
+        "[animus-extract] keepDirSelector keeps :dir() in Animus's stylesheet, but this Next has no experimental.lightningCssFeatures to keep it in its own Lightning CSS pass, which lowers it to :lang() for the app's browserslist: an element that sets only dir does not match. Upgrade Next, or raise the browserslist to browsers that support :dir() (Chrome 120, Firefox 49, Safari 16.4)."
+      );
+    }
+    return nextConfig;
+  }
+  const features = experimental.lightningCssFeatures ?? {};
+  const exclude = features.exclude ?? [];
+  if (exclude.includes(DIR_SELECTOR)) return nextConfig;
+  return {
+    ...nextConfig,
+    experimental: {
+      ...experimental,
+      lightningCssFeatures: {
+        ...features,
+        exclude: [...exclude, DIR_SELECTOR],
+      },
+    },
+  };
+}
+
+/** Next's name for the Lightning CSS feature that lowers `:dir()`. */
+const DIR_SELECTOR = 'dir-selector';
+
+/** Whether the app's Next takes `feature` in
+ *  `experimental.lightningCssFeatures`: its config module lists the names. */
+function nextNamesLightningCssFeature(
+  appRoot: string,
+  feature: string
+): boolean {
+  try {
+    const shared: { LIGHTNINGCSS_FEATURE_NAMES?: unknown } = createRequire(
+      join(appRoot, 'package.json')
+    )('next/dist/server/config-shared');
+    const names = shared.LIGHTNINGCSS_FEATURE_NAMES;
+    return Array.isArray(names) && names.includes(feature);
+  } catch {
+    return false;
+  }
 }
 
 /** The packages Next must transpile: the source kits the app depends on,

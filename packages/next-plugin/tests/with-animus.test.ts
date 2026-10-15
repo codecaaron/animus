@@ -4,7 +4,7 @@ import {
 } from '@animus-ui/extract/pipeline';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import {
@@ -107,6 +107,38 @@ describe('withAnimus', () => {
     }
     return ruleTest;
   }
+
+  // Contract: keepDirSelector keeps :dir() through Next's own Lightning CSS
+  // pass, merged into experimental.lightningCssFeatures.exclude beside the
+  // caller's features; without it the config is the caller's.
+  test("keepDirSelector excludes dir-selector from Next's Lightning CSS pass", () => {
+    const root = resolve(__dirname, '..');
+    const experimental = {
+      useLightningcss: true,
+      lightningCssFeatures: { include: ['nesting'], exclude: ['light-dark'] },
+    };
+    const configured = (keepDirSelector: boolean) => {
+      const wrapped = withAnimus({
+        system: './src/ds.ts',
+        root,
+        turbopack: 'off',
+        keepDirSelector,
+      })({ experimental });
+      if (!('webpack' in wrapped)) {
+        throw new Error('withAnimus returned the Turbopack branch');
+      }
+      return wrapped.experimental;
+    };
+
+    expect(configured(true)).toEqual({
+      useLightningcss: true,
+      lightningCssFeatures: {
+        include: ['nesting'],
+        exclude: ['light-dark', 'dir-selector'],
+      },
+    });
+    expect(configured(false)).toEqual(experimental);
+  });
 
   test('keeps native Svelte usage files out of the webpack transform loader', () => {
     const root = mkdtempSync(join(tmpdir(), 'animus-next-loader-scope-'));
