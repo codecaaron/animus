@@ -1192,14 +1192,30 @@ export function isPackageSpecifier(specifier: string): boolean {
  * reaches the engine only as its generated children.
  */
 export function importedKitDiagnostics(
-  ...args: Parameters<typeof importedPackages>
+  ...args: Parameters<typeof packageImports>
 ): ManifestDiagnostic[] {
-  return importedPackages(...args).diagnostics;
+  const imports = packageImports(...args);
+  if (imports === null) return [];
+  const [, engine] = args;
+  const diagnostics: ManifestDiagnostic[] = [];
+  for (const [name, { path, dir }] of imports.packages) {
+    const pkgRoot = imports.locatePackage(name, dir);
+    if (pkgRoot && declaresKitSource(engine, pkgRoot)) {
+      diagnostics.push({
+        file: path,
+        component: name,
+        kind: 'warn',
+        message: `the application imports this kit, but its system is not included in the application's system, so its components are not extracted — include the kit's system in the application's system: createSystem().extend(<the kit's system>)`,
+        code: KIT_SYSTEM_NOT_INCLUDED,
+        severity: severityFor(KIT_SYSTEM_NOT_INCLUDED),
+      });
+    }
+  }
+  return diagnostics;
 }
 
-/** What `importedPackages` finds. */
-export interface ImportedPackages {
-  diagnostics: ManifestDiagnostic[];
+/** What `taggedPackages` finds. */
+export interface TaggedPackages {
   /** Each package with the roots of every instance its importers of a
    *  possible tag locate. */
   located: Array<{ name: string; roots: string[] }>;
@@ -1208,13 +1224,51 @@ export interface ImportedPackages {
 }
 
 /**
- * The packages the application's own `files` import or re-export, past the
- * kits its system extends: `importedKitDiagnostics`' errors, and each other
- * package from which a file imports a name a JSX tag can have (capitalized),
- * with the root of every instance those files locate, where each is located
- * and none declares a kit source.
+ * Each package, past the kits its system extends, from which one of `files`
+ * imports a name a JSX tag can have (capitalized), with the root of every
+ * instance those files locate, where each is located and none declares a
+ * kit source.
  */
-export function importedPackages(
+export function taggedPackages(
+  ...args: Parameters<typeof packageImports>
+): TaggedPackages {
+  const [, engine, , systemKits] = args;
+  const located: Array<{ name: string; roots: string[] }> = [];
+  const kits = kitPackageNames(systemKits);
+  const imports = packageImports(...args);
+  if (imports === null) return { located, kits };
+  for (const [name, { tagDirs }] of imports.packages) {
+    // An instance located nowhere, or one that declares a kit source, keeps
+    // the package from being judged by its dependencies.
+    const roots: string[] = [];
+    for (const dir of tagDirs) {
+      const root = imports.locatePackage(name, dir);
+      if (root === null || declaresKitSource(engine, root)) {
+        roots.length = 0;
+        break;
+      }
+      if (!roots.includes(root)) roots.push(root);
+    }
+    if (roots.length > 0) located.push({ name, roots });
+  }
+  return { located, kits };
+}
+
+/** The package names the system's kit specifiers name. */
+function kitPackageNames(systemKits: readonly string[]): Set<string> {
+  return new Set(
+    systemKits
+      .filter((specifier) => !isAbsolute(specifier))
+      .map(bareSpecifierPackageName)
+  );
+}
+
+/**
+ * Each package `files` import or re-export, past the kits `systemKits`
+ * names: the directory of its first importer, and the directories of the
+ * files that import a possible tag from it. Null where nothing parses.
+ */
+function packageImports(
   files: ReadonlyArray<{ path: string; source: string; hash: string }>,
   engine: Pick<EngineApi, 'declaresKitSource' | 'locatePackage'>,
   rootDir: string,
@@ -1224,31 +1278,26 @@ export function importedPackages(
   factsOf: (
     files: ReadonlyArray<{ path: string; source: string; hash: string }>
   ) => ExtractModuleFactsResult
-): ImportedPackages {
-  const diagnostics: ManifestDiagnostic[] = [];
-  const located: Array<{ name: string; roots: string[] }> = [];
-  const kits = new Set(
-    systemKits
-      .filter((specifier) => !isAbsolute(specifier))
-      .map(bareSpecifierPackageName)
-  );
+): {
+  packages: Map<string, { path: string; dir: string; tagDirs: Set<string> }>;
+  locatePackage: (name: string, from: string) => string | null;
+} | null {
+  const kits = kitPackageNames(systemKits);
   const parsed = files.filter(({ path }) => isEngineTransformExtension(path));
-  if (parsed.length === 0) return { diagnostics, located, kits };
-  const locatePackage = nativePackageLocator(
-    engine,
-    declaredWorkspacePackages(rootDir)
-  );
+  if (parsed.length === 0) return null;
   let facts: ExtractModuleFactsResult;
   try {
     facts = factsOf(parsed);
   } catch {
-    return { diagnostics, located, kits };
+    return null;
   }
-  // Each package by its first importer, and the directories of the files
-  // that import a possible tag from it.
-  const imported = new Map<string, { path: string; tagDirs: Set<string> }>();
+  const packages = new Map<
+    string,
+    { path: string; dir: string; tagDirs: Set<string> }
+  >();
   for (const [path, file] of Object.entries(facts.files)) {
     if (file.parsePanicked) continue;
+    const dir = dirname(resolve(rootDir, path));
     const specifiers = [
       ...file.imports.map((fact) => [fact.source, fact.local] as const),
       ...file.exports.flatMap((fact) =>
@@ -1259,39 +1308,18 @@ export function importedPackages(
       if (!isPackageSpecifier(specifier)) continue;
       const name = bareSpecifierPackageName(specifier);
       if (kits.has(name)) continue;
-      const entry = imported.get(name) ?? { path, tagDirs: new Set() };
-      if (/^[A-Z]/.test(local))
-        entry.tagDirs.add(dirname(resolve(rootDir, path)));
-      imported.set(name, entry);
+      const entry = packages.get(name) ?? { path, dir, tagDirs: new Set() };
+      if (/^[A-Z]/.test(local)) entry.tagDirs.add(dir);
+      packages.set(name, entry);
     }
   }
-  for (const [name, { path, tagDirs }] of imported) {
-    const pkgRoot = locatePackage(name, dirname(resolve(rootDir, path)));
-    if (pkgRoot && declaresKitSource(engine, pkgRoot)) {
-      diagnostics.push({
-        file: path,
-        component: name,
-        kind: 'warn',
-        message: `the application imports this kit, but its system is not included in the application's system, so its components are not extracted — include the kit's system in the application's system: createSystem().extend(<the kit's system>)`,
-        code: KIT_SYSTEM_NOT_INCLUDED,
-        severity: severityFor(KIT_SYSTEM_NOT_INCLUDED),
-      });
-      continue;
-    }
-    // An instance located nowhere, or one that declares a kit source, keeps
-    // the package from being judged by its dependencies.
-    const roots: string[] = [];
-    for (const dir of tagDirs) {
-      const root = locatePackage(name, dir);
-      if (root === null || declaresKitSource(engine, root)) {
-        roots.length = 0;
-        break;
-      }
-      if (!roots.includes(root)) roots.push(root);
-    }
-    if (roots.length > 0) located.push({ name, roots });
-  }
-  return { diagnostics, located, kits };
+  return {
+    packages,
+    locatePackage: nativePackageLocator(
+      engine,
+      declaredWorkspacePackages(rootDir)
+    ),
+  };
 }
 
 /** A kit without the source condition, warned once, or each condition entry

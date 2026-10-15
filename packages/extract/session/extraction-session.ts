@@ -31,10 +31,11 @@ import {
 } from '../pipeline/alias-agreement';
 import {
   bareSpecifierPackageName,
-  importedPackages,
+  importedKitDiagnostics,
   isPackageSpecifier,
   packageInstanceOf,
   realPath,
+  taggedPackages,
 } from '../pipeline/discover-packages';
 import { nativeLoaderResolution } from '../pipeline/host-package-resolver';
 import {
@@ -1980,17 +1981,18 @@ export class ExtractionSession {
       kitMembers,
       diagnostics: discoveryDiagnostics,
     } = await kitRead;
-    const imported = importedPackages(
-      rawEntries,
-      this.engine(),
-      rootDir,
-      packageNames,
-      (entries) => this.corpus.facts(entries)
+    // Facts for parser-ready files: the ingestion's cached parse.
+    const factsOf = (entries: readonly FileEntry[]) =>
+      this.corpus.facts(entries);
+    discoveryDiagnostics.push(
+      ...importedKitDiagnostics(
+        rawEntries,
+        this.engine(),
+        rootDir,
+        packageNames,
+        factsOf
+      )
     );
-    discoveryDiagnostics.push(...imported.diagnostics);
-    // A package that names no Animus package, through its dependencies and
-    // peers, cannot render an Animus component its tags are named like.
-    this.foreignPackages = foreignPackages(imported.located, imported.kits);
 
     // Raw content hashes of every walked external file, keyed by absolute
     // path — recorded before MDX preprocessing so the diff sees raw bytes.
@@ -2194,6 +2196,18 @@ export class ExtractionSession {
       this.beginStatusAttempt();
       let accepted: SourceIngestionResult;
       const readEntries = this.withoutOutputSources(rawEntries);
+      // A package that names no Animus package, through its dependencies and
+      // peers, cannot render an Animus component its tags are named like.
+      // Its tags are read in every analysed source, a workspace package's as
+      // well as the application's, each instance located from its importers.
+      const tagged = taggedPackages(
+        readEntries,
+        this.engine(),
+        rootDir,
+        packageNames,
+        factsOf
+      );
+      this.foreignPackages = foreignPackages(tagged.located, tagged.kits);
       try {
         accepted = await this.corpus.prepare(readEntries);
         this.throwOnAbortedParse(accepted);
