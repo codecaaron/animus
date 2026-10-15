@@ -211,6 +211,30 @@ describe('manifest v2 version, contract hash, and CSS fragments', () => {
     expect(reversed.manifest.contractHash).toBe(forward.manifest.contractHash);
   });
 
+  // Contract: a theme hashes its contract on the first read of
+  // `contractHash`, never in `build()`, which runs in the browser too.
+  it('hashes the contract on first read, not in build()', () => {
+    const proc = ambients.process;
+    const original = proc!.getBuiltinModule;
+    const hook = Symbol.for('animus.sha256Hex');
+    let hashed = 0;
+    try {
+      proc!.getBuiltinModule = undefined;
+      Reflect.set(
+        globalThis,
+        hook,
+        (text: string) => `${++hashed}:${text.length}`
+      );
+      const { manifest } = buildSystemRegisteredFixture();
+      expect(hashed).toBe(0);
+      const hash = manifest.contractHash;
+      expect([hashed, manifest.contractHash]).toEqual([1, hash]);
+    } finally {
+      proc!.getBuiltinModule = original;
+      Reflect.deleteProperty(globalThis, hook);
+    }
+  });
+
   it('computes an identical contractHash when node:crypto is unavailable (pure fallback)', () => {
     // sha256Hex reads process.getBuiltinModule at call time; removing it forces
     // the pure fallback non-Node runtimes take, which must digest identically.

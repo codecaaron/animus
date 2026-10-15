@@ -420,7 +420,6 @@ interface CarriedManifestV2 {
   modeAliasDefinitions?: ModeAliasDefinition;
   registrations?: Record<string, ContextualVarRegistration>;
   emitterVersion?: number;
-  contractHash?: string;
   cssFragments?: ThemeCssFragment[];
 }
 
@@ -727,7 +726,6 @@ function reseedStateFromManifest(
         modeAliasDefinitions: manifest.modeAliasDefinitions,
         registrations: manifest.registrations,
         emitterVersion: manifest.emitterVersion,
-        contractHash: manifest.contractHash,
         cssFragments: manifest.cssFragments,
       };
       // Carried registrations become live state again, so an unmutated
@@ -1437,6 +1435,7 @@ export class ThemeBuilder<
     // Metadata only: `cssFragments` RECORDS the strings composed above and is
     // never the source of `variableCss`.
     let manifestV2Fields: Partial<ThemeManifest> = {};
+    let contract: string | undefined;
     if (!this._state.hasLegacyManifestSource) {
       const registrations = legacyRegistrations(this._state.properties);
       const cssFragments: ThemeCssFragment[] = [];
@@ -1454,6 +1453,18 @@ export class ThemeBuilder<
           cssText: baseVariableCss,
         });
       }
+      contract = canonicalContract({
+        tokenDefinitions,
+        emittedScales: [...emittedScales].sort(),
+        modeAliasDefinitions,
+        initialMode: typeof theme.mode === 'string' ? theme.mode : undefined,
+        registrations,
+        systemPreference,
+        browserColorScheme,
+        // Mode bases change emitted coverage, so they belong in the digest.
+        // `undefined` drops from JSON, so bases-free themes keep their hash.
+        modeBases,
+      });
       manifestV2Fields = {
         manifestVersion: 2,
         tokenDefinitions,
@@ -1461,18 +1472,8 @@ export class ThemeBuilder<
         modeAliasDefinitions,
         registrations,
         emitterVersion: EMITTER_VERSION,
-        contractHash: computeContractHash({
-          tokenDefinitions,
-          emittedScales: [...emittedScales].sort(),
-          modeAliasDefinitions,
-          initialMode: typeof theme.mode === 'string' ? theme.mode : undefined,
-          registrations,
-          systemPreference,
-          browserColorScheme,
-          // Mode bases change emitted coverage, so they belong in the digest.
-          // `undefined` drops from JSON, so bases-free themes keep their hash.
-          modeBases,
-        }),
+        // Hashed on first read, in its place among the keys: see below.
+        contractHash: '',
         cssFragments,
       };
     }
@@ -1503,6 +1504,7 @@ export class ThemeBuilder<
       ...(browserColorScheme ? { browserColorScheme } : {}),
       ...manifestV2Fields,
     };
+    if (contract !== undefined) defineContractHash(manifest, contract);
 
     Object.defineProperty(theme, 'manifest', {
       value: manifest,
@@ -2237,9 +2239,37 @@ interface ContractHashInput {
   modeBases: Record<string, string> | undefined;
 }
 
-/** Identical authored input ⇒ identical hash, across processes. */
-function computeContractHash(input: ContractHashInput): string {
-  return sha256Hex(JSON.stringify(canonicalize(input)));
+/** The contract a theme's hash digests: identical authored input ⇒
+ *  identical text, across processes. */
+function canonicalContract(input: ContractHashInput): string {
+  return JSON.stringify(canonicalize(input));
+}
+
+/**
+ * `manifest.contractHash` as the digest of `contract`, the text taken at
+ * build, hashed on first read and kept: no build reads it, and hashing every
+ * theme's contract cost each `build()` 2–4 ms, in the browser too. It stays
+ * an own enumerable property in its place, so the manifest's keys and JSON
+ * are unchanged; a write replaces it, and a frozen manifest still reads it.
+ */
+function defineContractHash(manifest: ThemeManifest, contract: string): void {
+  let text: string | undefined = contract;
+  let hash: string | undefined;
+  Object.defineProperty(manifest, 'contractHash', {
+    get() {
+      if (text !== undefined) {
+        hash = sha256Hex(text);
+        text = undefined;
+      }
+      return hash;
+    },
+    set(value: string | undefined) {
+      text = undefined;
+      hash = value;
+    },
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 interface SystemEmissionConfig {
