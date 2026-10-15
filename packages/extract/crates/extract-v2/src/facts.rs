@@ -1682,36 +1682,56 @@ pub(crate) fn extract_file_facts_from_static_maps(
                     facts.record_block_keys(obj, source, &mut Vec::new());
                 }
                 if stage.method == "variant" {
+                    let set_config = |facts: &mut StageFacts, cfg: eval::VariantStageConfig| {
+                        let mut value = StaticValue::Object(vec![
+                            ("prop".to_string(), StaticValue::String(cfg.prop)),
+                            ("defaultVariant".to_string(), cfg.default_variant.map_or(StaticValue::Null, StaticValue::String)),
+                            ("base".to_string(), cfg.base.unwrap_or(StaticValue::Null)),
+                            ("variants".to_string(), cfg.variants),
+                        ]);
+                        let lost = eval::take_unevaluated(&mut value);
+                        facts.value = Some(eval::plain(&value));
+                        facts.skipped.extend(lost);
+                    };
                     match object_index.get(key) {
                         Some(obj) => match eval::parse_variant_arg(obj, Some(statics)) {
                             Ok((cfg, skips)) => {
-                                let mut value = StaticValue::Object(vec![
-                                    ("prop".to_string(), StaticValue::String(cfg.prop)),
-                                    (
-                                        "defaultVariant".to_string(),
-                                        cfg.default_variant.map_or(StaticValue::Null, StaticValue::String),
-                                    ),
-                                    ("base".to_string(), cfg.base.unwrap_or(StaticValue::Null)),
-                                    ("variants".to_string(), cfg.variants),
-                                ]);
-                                let lost = eval::take_unevaluated(&mut value);
-                                facts.value = Some(eval::plain(&value));
                                 for skip in skips {
                                     facts.record_skip(skip, source);
                                 }
-                                facts.skipped.extend(lost);
+                                set_config(&mut facts, cfg);
                             }
                             Err(bail) => {
                                 facts.eval_error =
                                     Some(format!("variant eval failed: {}", bail.reason));
                             }
                         },
-                        None => {
-                            facts.config_identifier = identifier_index.get(key).cloned();
-                            facts.eval_error = Some(
-                                "variant eval failed: failed to parse variant config".to_string(),
-                            );
-                        }
+                        // A whole config through a const: read where it holds
+                        // exactly one static object.
+                        None => match identifier_index.get(key) {
+                            Some(name) => {
+                                let mut segments = name.split('.');
+                                let binding = segments.next().unwrap_or_default();
+                                let path: Vec<&str> = segments.collect();
+                                let read = match eval::static_value(statics, binding, &path) {
+                                    Some(Known::Exact(value)) => eval::variant_config_of(value),
+                                    Some(Known::Finite(_) | Known::Uncertain(_)) => Err(eval::uncertain_clause(statics, binding, &path)
+                                        .unwrap_or("its value may change before the build reads it")),
+                                    None => Err("it is not a module-level const of static values"),
+                                };
+                                match read {
+                                    Ok(cfg) => set_config(&mut facts, cfg),
+                                    Err(reason) => {
+                                        facts.config_identifier = Some(name.clone());
+                                        facts.eval_error = Some(format!("variant eval failed: {reason}"));
+                                    }
+                                }
+                            }
+                            None => {
+                                facts.eval_error =
+                                    Some("variant eval failed: failed to parse variant config".to_string());
+                            }
+                        },
                     }
                 } else {
                     let evaluated = match object_index.get(key) {

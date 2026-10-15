@@ -3092,9 +3092,11 @@ fn emit_eval_drop_bail(
         (DropCause::Unevaluable { config_identifier: Some(identifier) }, true) => (
             format!(
                 "chain dropped: .variant({identifier}) passes the whole variant config \
-                 through identifier '{identifier}', which extraction cannot evaluate; \
-                 {left} — write the config inline as .variant({{ prop: '…', variants: … }}); \
-                 its options table may stay a shared identifier (variants: TABLE)"
+                 through identifier '{identifier}', which extraction cannot evaluate: {}; \
+                 {left} — make '{identifier}' a module-level const of static values that \
+                 nothing changes, or write the config inline as \
+                 .variant({{ prop: '…', variants: … }})",
+                detail.strip_prefix("variant eval failed: ").unwrap_or(detail)
             ),
             Some(UNSUPPORTED_VARIANT_CONFIG_REFERENCE),
         ),

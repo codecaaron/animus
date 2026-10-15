@@ -19,11 +19,13 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 const CODE = 'animus.variant.unsupported-config-reference';
 
-/** `Button` with its whole variant config passed through an identifier. */
+/** `Button` with its whole variant config passed through an identifier the
+ *  module writes to. */
 function wholeAxisButtonSource(padding: string): string {
   return `import { ds } from './ds';
 
 const TONE_AXIS = { prop: 'tone', variants: { quiet: { opacity: 0.5 } } };
+TONE_AXIS.prop = 'mood';
 
 export const Button = ds
   .styles({ padding: '${padding}', bg: 'primary' })

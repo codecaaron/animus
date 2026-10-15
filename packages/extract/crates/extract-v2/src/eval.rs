@@ -692,6 +692,37 @@ pub fn parse_variant_arg(
     ))
 }
 
+/// The variant config a static object holds, read as `parse_variant_arg`
+/// reads one written inline, or why it is not one.
+pub fn variant_config_of(value: &StaticValue) -> Result<VariantStageConfig, &'static str> {
+    if !matches!(value, StaticValue::Object(_)) {
+        return Err("it is not an object");
+    }
+    let prop = match value.get("prop") {
+        None => "variant".to_string(),
+        Some(StaticValue::String(prop)) => prop.clone(),
+        Some(_) => return Err("its prop is not a static string"),
+    };
+    let default_variant = match value.get("defaultVariant") {
+        None => None,
+        Some(StaticValue::String(name)) => Some(name.clone()),
+        // A boolean variant's default names its key.
+        Some(StaticValue::Bool(flag)) => Some(flag.to_string()),
+        Some(_) => return Err("its defaultVariant is not a static string"),
+    };
+    let base = match value.get("base") {
+        None => None,
+        Some(base @ StaticValue::Object(_)) => Some(base.clone()),
+        Some(_) => return Err("its base is not a static object"),
+    };
+    let variants = match value.get("variants") {
+        None => StaticValue::Object(Vec::new()),
+        Some(variants @ StaticValue::Object(_)) => variants.clone(),
+        Some(_) => return Err("its variants are not a static object"),
+    };
+    Ok(VariantStageConfig { prop, default_variant, base, variants })
+}
+
 #[allow(dead_code)]
 pub fn parse_states_arg(
     obj: &ObjectExpression<'_>,

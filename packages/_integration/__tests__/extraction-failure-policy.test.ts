@@ -24,6 +24,8 @@ const AXIS = {
   path: 'fixtures/policy-axis.ts',
   source: `export const TONES = { x: { display: 'block' }, y: { display: 'flex' } };
 export const TONE_AXIS = { prop: 'tone', defaultVariant: 'x', variants: TONES };
+export const LOOSE_AXIS = { prop: 'tone', defaultVariant: 'x', variants: TONES };
+LOOSE_AXIS.prop = 'mood';
 export const SHARED_CFG = { property: 'width', transform: (value) => value * 2 };
 `,
 };
@@ -36,7 +38,7 @@ import { outside } from 'outside-kit';
 import * as barrel from './policy-barrel';
 import * as policy from './policy-system';
 import { ds } from './policy-system';
-import { SHARED_CFG, TONE_AXIS, TONES } from './policy-axis';
+import { LOOSE_AXIS, SHARED_CFG, TONES } from './policy-axis';
 
 const double = (value) => value * 2;
 let shift = (value) => value * 2;
@@ -92,8 +94,8 @@ export const StylingCollision = ds
   .asElement('div');
 export const OtherNamespace = other.lib.styles({ cursor: 'all-scroll' }).asElement('div');
 
-export const WholeAxis = ds.styles({ cursor: 'pointer' }).variant(TONE_AXIS).asElement('div');
-const UnusedWholeAxis = ds.styles({ cursor: 'help' }).variant(TONE_AXIS).asElement('div');
+export const WholeAxis = ds.styles({ cursor: 'pointer' }).variant(LOOSE_AXIS).asElement('div');
+const UnusedWholeAxis = ds.styles({ cursor: 'help' }).variant(LOOSE_AXIS).asElement('div');
 export const UnknownMethod = ds.styles({ cursor: 'wait' }).frobnicate().asElement('div');
 export const ReferencedTransform = ds
   .styles({ cursor: 'crosshair' })
@@ -114,12 +116,12 @@ export const SpreadConfig = ds
   .props({ inset: { ...base, transform: double } })
   .asElement('div');
 
-export const LookalikeAxis = lib.styles({ cursor: 'copy' }).variant(TONE_AXIS).asElement('div');
+export const LookalikeAxis = lib.styles({ cursor: 'copy' }).variant(LOOSE_AXIS).asElement('div');
 export const LookalikeTransform = lib
   .styles({ cursor: 'cell' })
   .props({ inset: { property: 'width', transform: shift } })
   .asElement('div');
-export const OutsideAxis = outside.styles({ cursor: 'alias' }).variant(TONE_AXIS).asElement('div');
+export const OutsideAxis = outside.styles({ cursor: 'alias' }).variant(LOOSE_AXIS).asElement('div');
 
 export const App = ({ inset }) => (
   <>
@@ -209,13 +211,13 @@ const CLASSIFIED = [
   {
     component: 'WholeAxis',
     code: 'animus.variant.unsupported-config-reference',
-    reason: "'TONE_AXIS'",
+    reason: "'LOOSE_AXIS'",
     alternative: 'inline',
   },
   {
     component: 'UnusedWholeAxis',
     code: 'animus.variant.unsupported-config-reference',
-    reason: "'TONE_AXIS'",
+    reason: "'LOOSE_AXIS'",
     alternative: 'inline',
   },
   {
@@ -564,7 +566,8 @@ describe('the shared build-strictness policy over a real analysis', () => {
       {
         path: 'fixtures/policy-valid.tsx',
         source: `import { ds } from './policy-system';
-import { TONES } from './policy-axis';
+import { TONE_AXIS, TONES } from './policy-axis';
+export const Axis = ds.styles({ cursor: 'zoom-in' }).variant(TONE_AXIS).asElement('div');
 export const Tone = ds
   .styles({ cursor: 'move' })
   .variant({ prop: 'tone', defaultVariant: 'x', variants: TONES })
@@ -573,7 +576,7 @@ export const Inset = ds
   .styles({ cursor: 'grab' })
   .props({ inset: { property: 'width', transform: (value) => value * 2 } })
   .asElement('div');
-export const App = ({ inset, ...rest }) => <><Tone /><Inset inset={inset} {...rest} /></>;
+export const App = ({ inset, ...rest }) => <><Axis tone="y" /><Tone /><Inset inset={inset} {...rest} /></>;
 `,
       },
     ]);
