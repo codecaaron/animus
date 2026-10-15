@@ -11041,6 +11041,42 @@ mod tests {
         );
     }
 
+    /// Contract: each preload names the faces that preload it as a host's
+    /// `fontPreloads` reads them: the family it matches, and the weight,
+    /// style and unicode-range each declares. A face the host leaves out is
+    /// not among them.
+    #[test]
+    fn a_preload_names_the_faces_that_preload_it() {
+        let mut inputs = test_inputs();
+        let face = |url: &str, extra: serde_json::Value| {
+            let mut face = serde_json::json!({ "family": "'Inter'", "src": [{ "url": url, "format": "woff2" }] });
+            face.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            face
+        };
+        inputs.global_style_blocks = Some(serde_json::json!({
+            "fonts": {
+                "styles": {},
+                "fontFaces": [
+                    face("/latin.woff2", serde_json::json!({ "weight": "400", "unicodeRange": "U+0000-00FF" })),
+                    face("/cyrillic.woff2", serde_json::json!({ "weight": "400", "unicodeRange": "U+0400-045F" })),
+                    face("/italic.woff2", serde_json::json!({ "weight": "400", "style": "italic" })),
+                    face("/bold.woff2", serde_json::json!({ "weight": "700" }))
+                ]
+            }
+        }));
+        inputs.analysis_context.font_preloads = Some(vec![serde_json::json!({ "family": "Inter", "weight": 400 })]);
+        let out = analyze(&[("a.tsx", "export const x = 1;\n")], &inputs);
+        let preloads: Vec<_> =
+            out.font_preloads.iter().map(|p| (p.href.as_str(), serde_json::to_value(&p.descriptors).unwrap())).collect();
+        assert_eq!(
+            preloads,
+            [
+                ("/latin.woff2", serde_json::json!([{ "family": "Inter", "weight": "400", "unicodeRange": "U+0000-00FF" }])),
+                ("/cyrillic.woff2", serde_json::json!([{ "family": "Inter", "weight": "400", "unicodeRange": "U+0400-045F" }])),
+            ]
+        );
+    }
+
     /// A host's `fontPreloads` decides which faces preload in place of each
     /// face's flag: a family name selects every face of the family; an
     /// object also its weight (contained in a face's declared range) and its

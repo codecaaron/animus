@@ -6,6 +6,7 @@ import {
   BRIDGE_SCRIPT_SRC,
   RESOLVED_BRIDGE_ID,
   VIRTUAL_BRIDGE_ID,
+  VIRTUAL_FONT_PRELOADS_ID,
 } from '../src/constants';
 import { animusExtract } from '../src/index';
 import {
@@ -13,7 +14,7 @@ import {
   duplicatedFontPreloads,
   injectHeadTags,
 } from '../src/index-html';
-import { loadVirtualModule } from '../src/virtual-modules';
+import { loadVirtualModule, resolveVirtualId } from '../src/virtual-modules';
 import { publicationWith } from './context-probe';
 import {
   contextWith,
@@ -156,6 +157,44 @@ describe('the bridge module is server-safe', () => {
 
     expect(accepted).toHaveLength(1);
     expect(() => accepted[0]({ default: '.x{}' })).not.toThrow();
+  });
+});
+
+// Contract: `virtual:animus/font-preloads` exports each file the build
+// preloads, at the href index.html preloads it, with the faces that preload
+// it, so a page can show the build's own selection.
+describe('the font-preloads module', () => {
+  test('exports the preloads index.html carries, with their faces', () => {
+    const faces = [
+      { family: 'Inter', weight: '400', unicodeRange: 'U+0000-00FF' },
+    ];
+    const ctx = contextWith({ isProd: true });
+    ctx.served = publicationWith({
+      fontPreloads: [
+        {
+          href: 'animus-asset:@acme/fonts/inter.woff2',
+          type: 'font/woff2',
+          faces,
+        },
+        { href: '/fonts/mono.woff2', faces: [{ family: 'Mono' }] },
+      ],
+    });
+    ctx.assetUrlBySpecifier.set(
+      '@acme/fonts/inter.woff2',
+      '__VITE_ASSET__inter__'
+    );
+    const id = resolveVirtualId(ctx, VIRTUAL_FONT_PRELOADS_ID);
+    expect(typeof id).toBe('string');
+    const exported = runInNewContext(
+      loadVirtualModule(ctx, id as string)!.replace('export default', 'm =')
+    );
+    expect(exported).toEqual([
+      { href: '__VITE_ASSET__inter__', type: 'font/woff2', faces },
+      { href: '/fonts/mono.woff2', faces: [{ family: 'Mono' }] },
+    ]);
+    expect(
+      buildIndexHtmlTags(ctx).map((tag) => tag.attrs?.href)
+    ).toEqual(exported.map(({ href }: { href: string }) => href));
   });
 });
 
