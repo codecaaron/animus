@@ -11041,6 +11041,56 @@ mod tests {
         );
     }
 
+    /// Contract: a `fontPreloads` entry's `unicodeRange` selects the faces
+    /// whose declared unicode-range covers it, so one subset of a family
+    /// split by script can be chosen; a face without one covers every code
+    /// point, and a malformed range is an invalid entry.
+    #[test]
+    fn a_unicode_range_selects_the_subsets_that_cover_it() {
+        let mut inputs = test_inputs();
+        let face = |family: &str, url: &str, range: Option<&str>| {
+            let mut face = serde_json::json!({ "family": family, "src": [{ "url": url, "format": "woff2" }] });
+            if let Some(range) = range {
+                face["unicodeRange"] = range.into();
+            }
+            face
+        };
+        inputs.global_style_blocks = Some(serde_json::json!({
+            "fonts": {
+                "styles": {},
+                "fontFaces": [
+                    face("Inter", "/latin.woff2", Some("U+0000-00FF, U+0131, U+0152-0153")),
+                    face("Inter", "/latin-ext.woff2", Some("U+0100-02BA, U+1E00-1EFF")),
+                    face("Inter", "/cyrillic.woff2", Some("u+0400-045f")),
+                    face("Plain", "/plain.woff2", None)
+                ]
+            }
+        }));
+        let mut selected = |entries: serde_json::Value| {
+            inputs.analysis_context.font_preloads = Some(entries.as_array().unwrap().clone());
+            let out = analyze(&[("a.tsx", "export const x = 1;\n")], &inputs);
+            let codes: Vec<String> = out
+                .diagnostics
+                .iter()
+                .filter_map(|d| d.code.clone().filter(|code| code.starts_with("animus.style.font-preload-")))
+                .collect();
+            (out.font_preloads.iter().map(|p| p.href.clone()).collect::<Vec<_>>(), codes)
+        };
+        let range = |family: &str, range: &str| serde_json::json!([{ "family": family, "unicodeRange": range }]);
+        assert_eq!(selected(range("Inter", "U+0000-00FF")).0, ["/latin.woff2"]);
+        assert_eq!(selected(range("Inter", "U+0041")).0, ["/latin.woff2"]);
+        assert_eq!(selected(range("Inter", "U+00??")).0, ["/latin.woff2"]);
+        assert_eq!(selected(range("Inter", "U+0100-01FF, U+1E00")).0, ["/latin-ext.woff2"]);
+        assert_eq!(selected(range("Inter", "U+0410")).0, ["/cyrillic.woff2"]);
+        assert_eq!(selected(range("Plain", "U+0410")).0, ["/plain.woff2"]);
+        // No one face covers a range two subsets split between them.
+        assert_eq!(selected(range("Inter", "U+0000-02BA")), (vec![], vec![crate::theme::FONT_PRELOAD_UNMATCHED.to_string()]));
+        for malformed in [serde_json::json!("latin"), serde_json::json!("U+0100-0041"), serde_json::json!(65)] {
+            let entries = serde_json::json!([{ "family": "Inter", "unicodeRange": malformed }]);
+            assert_eq!(selected(entries), (vec![], vec![crate::theme::FONT_PRELOAD_INVALID.to_string()]), "{malformed}");
+        }
+    }
+
     /// Contract: each preload names the faces that preload it as a host's
     /// `fontPreloads` reads them: the family it matches, and the weight,
     /// style and unicode-range each declares. A face the host leaves out is
