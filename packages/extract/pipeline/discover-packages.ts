@@ -44,6 +44,7 @@ import type { ExtensionOrder, ProbedFile } from './native-resolution';
 import type {
   ExtractExportFact,
   ExtractImportFact,
+  ExtractModuleFacts,
   ExtractModuleFactsResult,
 } from './source-ingestion';
 import type { JsonValue } from './tsconfig-paths';
@@ -1192,14 +1193,35 @@ export function isPackageSpecifier(specifier: string): boolean {
  * reaches the engine only as its generated children.
  */
 export function importedKitDiagnostics(
-  ...args: Parameters<typeof packageImports>
+  ...args: Parameters<typeof moduleImports>
 ): ManifestDiagnostic[] {
-  const imports = packageImports(...args);
+  const imports = moduleImports(...args);
   if (imports === null) return [];
-  const [, engine] = args;
+  const [, engine, rootDir] = args;
+  // Each package by its first importer.
+  const importers = new Map<string, string>();
+  for (const file of imports.files) {
+    if (file.parsePanicked) continue;
+    const specifiers = [
+      ...file.imports.map((fact) => fact.source),
+      ...file.exports.flatMap((fact) =>
+        fact.source === null ? [] : [fact.source]
+      ),
+    ];
+    for (const specifier of specifiers) {
+      if (!isPackageSpecifier(specifier)) continue;
+      const name = bareSpecifierPackageName(specifier);
+      if (!imports.kits.has(name) && !importers.has(name)) {
+        importers.set(name, file.path);
+      }
+    }
+  }
   const diagnostics: ManifestDiagnostic[] = [];
-  for (const [name, { path, dir }] of imports.packages) {
-    const pkgRoot = imports.locatePackage(name, dir);
+  for (const [name, path] of importers) {
+    const pkgRoot = imports.locatePackage(
+      name,
+      dirname(resolve(rootDir, path))
+    );
     if (pkgRoot && declaresKitSource(engine, pkgRoot)) {
       diagnostics.push({
         file: path,
@@ -1216,8 +1238,8 @@ export function importedKitDiagnostics(
 
 /** What `taggedPackages` finds. */
 export interface TaggedPackages {
-  /** Each package with the roots of every instance its importers of a
-   *  possible tag locate. */
+  /** Each package with the root of every instance the files that load it
+   *  locate. */
   located: Array<{ name: string; roots: string[] }>;
   /** The package names of the system's kits. */
   kits: Set<string>;
@@ -1225,31 +1247,62 @@ export interface TaggedPackages {
 
 /**
  * Each package, past the kits its system extends, from which one of `files`
- * imports a name a JSX tag can have (capitalized), with the root of every
- * instance those files locate, where each is located and none declares a
+ * imports a name a JSX tag can have (capitalized), named or as a namespace,
+ * with the root of every instance a file that loads it locates: by any
+ * import, re-export, `import()` or load call. A file that makes a computed
+ * load, or does not parse, may load any of them. A package is left out
+ * where a file that loads it locates no instance, or one that declares a
  * kit source.
  */
 export function taggedPackages(
-  ...args: Parameters<typeof packageImports>
+  ...args: Parameters<typeof moduleImports>
 ): TaggedPackages {
-  const [, engine, , systemKits] = args;
+  const [, engine, rootDir, systemKits] = args;
   const located: Array<{ name: string; roots: string[] }> = [];
   const kits = kitPackageNames(systemKits);
-  const imports = packageImports(...args);
+  const imports = moduleImports(...args);
   if (imports === null) return { located, kits };
-  for (const [name, { tagDirs }] of imports.packages) {
-    // An instance located nowhere, or one that declares a kit source, keeps
-    // the package from being judged by its dependencies.
-    const roots: string[] = [];
-    for (const dir of tagDirs) {
-      const root = imports.locatePackage(name, dir);
-      if (root === null || declaresKitSource(engine, root)) {
-        roots.length = 0;
-        break;
-      }
-      if (!roots.includes(root)) roots.push(root);
+  const tagged = new Set<string>();
+  // The directories of the files that load each package, and of those that
+  // may load any.
+  const loaders = new Map<string, Set<string>>();
+  const loadsAny = new Set<string>();
+  for (const file of imports.files) {
+    const dir = dirname(resolve(rootDir, file.path));
+    if (file.parsePanicked || file.computedLoad) loadsAny.add(dir);
+    for (const fact of [...file.imports, ...(file.namespaceImports ?? [])]) {
+      if (!/^[A-Z]/.test(fact.local) || !isPackageSpecifier(fact.source))
+        continue;
+      tagged.add(bareSpecifierPackageName(fact.source));
     }
-    if (roots.length > 0) located.push({ name, roots });
+    for (const specifier of file.loads ?? []) {
+      if (!isPackageSpecifier(specifier)) continue;
+      const name = bareSpecifierPackageName(specifier);
+      const dirs = loaders.get(name) ?? new Set<string>();
+      dirs.add(dir);
+      loaders.set(name, dirs);
+    }
+  }
+  for (const name of tagged) {
+    if (kits.has(name)) continue;
+    const roots: string[] = [];
+    const add = (root: string | null): boolean => {
+      if (root === null || declaresKitSource(engine, root)) return false;
+      if (!roots.includes(root)) roots.push(root);
+      return true;
+    };
+    // An instance a loader locates nowhere, or one that declares a kit
+    // source, keeps the package from being judged by its dependencies; a
+    // file that may load any package loads only the instances it locates.
+    const judged =
+      [...(loaders.get(name) ?? [])].every((dir) =>
+        add(imports.locatePackage(name, dir))
+      ) &&
+      [...loadsAny].every((dir) => {
+        const root = imports.locatePackage(name, dir);
+        return root === null || add(root);
+      });
+    if (judged && roots.length > 0) located.push({ name, roots });
   }
   return { located, kits };
 }
@@ -1263,12 +1316,9 @@ function kitPackageNames(systemKits: readonly string[]): Set<string> {
   );
 }
 
-/**
- * Each package `files` import or re-export, past the kits `systemKits`
- * names: the directory of its first importer, and the directories of the
- * files that import a possible tag from it. Null where nothing parses.
- */
-function packageImports(
+/** The engine's module facts for `files`, the kits `systemKits` names, and a
+ *  package locator. Null where nothing parses. */
+function moduleImports(
   files: ReadonlyArray<{ path: string; source: string; hash: string }>,
   engine: Pick<EngineApi, 'declaresKitSource' | 'locatePackage'>,
   rootDir: string,
@@ -1279,10 +1329,10 @@ function packageImports(
     files: ReadonlyArray<{ path: string; source: string; hash: string }>
   ) => ExtractModuleFactsResult
 ): {
-  packages: Map<string, { path: string; dir: string; tagDirs: Set<string> }>;
+  files: ExtractModuleFacts[];
+  kits: Set<string>;
   locatePackage: (name: string, from: string) => string | null;
 } | null {
-  const kits = kitPackageNames(systemKits);
   const parsed = files.filter(({ path }) => isEngineTransformExtension(path));
   if (parsed.length === 0) return null;
   let facts: ExtractModuleFactsResult;
@@ -1291,30 +1341,12 @@ function packageImports(
   } catch {
     return null;
   }
-  const packages = new Map<
-    string,
-    { path: string; dir: string; tagDirs: Set<string> }
-  >();
-  for (const [path, file] of Object.entries(facts.files)) {
-    if (file.parsePanicked) continue;
-    const dir = dirname(resolve(rootDir, path));
-    const specifiers = [
-      ...file.imports.map((fact) => [fact.source, fact.local] as const),
-      ...file.exports.flatMap((fact) =>
-        fact.source === null ? [] : [[fact.source, ''] as const]
-      ),
-    ];
-    for (const [specifier, local] of specifiers) {
-      if (!isPackageSpecifier(specifier)) continue;
-      const name = bareSpecifierPackageName(specifier);
-      if (kits.has(name)) continue;
-      const entry = packages.get(name) ?? { path, dir, tagDirs: new Set() };
-      if (/^[A-Z]/.test(local)) entry.tagDirs.add(dir);
-      packages.set(name, entry);
-    }
-  }
   return {
-    packages,
+    files: Object.entries(facts.files).map(([path, file]) => ({
+      ...file,
+      path,
+    })),
+    kits: kitPackageNames(systemKits),
     locatePackage: nativePackageLocator(
       engine,
       declaredWorkspacePackages(rootDir)

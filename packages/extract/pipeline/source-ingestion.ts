@@ -125,6 +125,15 @@ export interface ExtractModuleFacts {
   path: string;
   chains: ExtractModuleChainFact[];
   imports: ExtractImportFact[];
+  /** `import * as local from 'source'`; absent from an engine that does not
+   *  record it. */
+  namespaceImports?: ExtractImportFact[];
+  /** Each specifier the module loads at run time, written literally: an
+   *  import of any form, a re-export, an `import()` or a load call. */
+  loads?: string[];
+  /** The module makes a load whose specifier is computed, so it may load
+   *  any module. Absent when it makes none. */
+  computedLoad?: boolean;
   exports: ExtractExportFact[];
   parseDiagnostics: string[];
   /** The parser stopped at an unrecoverable error and yielded no chains,

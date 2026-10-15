@@ -671,6 +671,14 @@ pub struct ModuleFacts {
     pub path: String,
     pub chains: Vec<ModuleChain>,
     pub imports: Vec<ImportFact>,
+    pub namespace_imports: Vec<ImportFact>,
+    /// Each specifier the module loads at run time, written literally: an
+    /// import of any form, a re-export, an `import()` or a load call.
+    pub loads: Vec<String>,
+    /// The module makes a load whose specifier is computed, so it may load
+    /// any module.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub computed_load: bool,
     pub exports: Vec<crate::usage_facts::ExportFact>,
     pub parse_diagnostics: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -700,6 +708,7 @@ pub fn extract_module_facts(ast: &OwnedAst) -> ModuleFacts {
     let namespaces = crate::usage_facts::collect_namespace_import_facts(ast.module_record());
     let (chains, _) =
         module_chains(walked.chains, walked.member_parents, |root| namespaces.iter().any(|import| import.local == root));
+    let (loads, computed_load) = runtime_loads(ast.program());
     if chains.iter().any(resolver) {
         let full = extract_file_facts(ast);
         return ModuleFacts {
@@ -713,6 +722,9 @@ pub fn extract_module_facts(ast: &OwnedAst) -> ModuleFacts {
                 })
                 .collect(),
             imports: full.imports,
+            namespace_imports: namespaces,
+            loads,
+            computed_load,
             exports: full.exports,
             parse_diagnostics: full.parse_diagnostics,
             unbound_create_system_calls: full.unbound_create_system_calls,
@@ -724,12 +736,35 @@ pub fn extract_module_facts(ast: &OwnedAst) -> ModuleFacts {
         path: ast.path.clone(),
         chains: chains.into_iter().map(|descriptor| ModuleChain { descriptor, fatal_error: None }).collect(),
         imports: collect_import_facts(ast.module_record()),
+        namespace_imports: namespaces,
+        loads,
+        computed_load,
         exports: crate::usage_facts::collect_export_facts(ast.program()),
         parse_diagnostics: ast.diagnostics.clone(),
         unbound_create_system_calls: unbound_create_system_calls(ast),
         builder_references: builder_references(ast),
         parse_panicked: ast.panicked,
     }
+}
+
+/// The specifiers `program` loads at run time, written literally, and whether
+/// it makes a load whose specifier is computed.
+fn runtime_loads(program: &Program<'_>) -> (Vec<String>, bool) {
+    use crate::loads::{LoadKind, LoadTarget};
+    let mut specifiers = BTreeSet::new();
+    let mut computed = false;
+    for load in crate::loads::collect(program) {
+        if matches!(load.kind, LoadKind::Import { runtime: false, .. } | LoadKind::Reexport { runtime: false }) {
+            continue;
+        }
+        match load.target {
+            LoadTarget::Specifier(specifier) => {
+                specifiers.insert(specifier);
+            }
+            _ => computed = true,
+        }
+    }
+    (specifiers.into_iter().collect(), computed)
 }
 
 /// A module's chains in source order: the walked chains and each extension
