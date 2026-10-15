@@ -37,6 +37,22 @@ const RUNTIME_EXPECTED = [
 ];
 const RUNTIME_DECLARED = /["'`]--(?:tone|cap)["'`]/;
 
+/** `code` with each shared-table reference, `animusTables.<table>["<key>"]`,
+ *  replaced by the table it names, as the runtime reads it: a prefixed value
+ *  a config looks up lives in those tables. */
+function resolveTables(code, tables) {
+  return code.replace(
+    /animusTables\.(scaleValues|keywords|declarationScaleValues)\[("(?:[^"\\]|\\.)*")\]/g,
+    (reference, table, key) => {
+      const value = tables?.[table]?.[JSON.parse(key)];
+      if (value === undefined) {
+        throw new Error(`prefixed variant: no shared table for ${reference}`);
+      }
+      return JSON.stringify(value);
+    }
+  );
+}
+
 /** Whitespace removed around punctuation, so minified and readable output
  *  compare alike. */
 function normalize(text) {
@@ -93,16 +109,20 @@ try {
   if (build.status !== 0) {
     throw new Error(`prefixed build exited ${build.status}:\n${build.stderr}`);
   }
-  // The runtime config is the components' replacement code; the rest of
-  // the manifest records the authored source.
+  // The runtime config is the components' replacement code with the shared
+  // tables it references; the rest of the manifest records the authored
+  // source.
   const manifest = JSON.parse(
     readFileSync(join(outDir, 'manifest.json'), 'utf8')
   );
   assertPrefixed(
     readFileSync(join(outDir, 'styles.css'), 'utf8'),
-    Object.values(manifest.components)
-      .map((component) => component.replacement)
-      .join('\n')
+    resolveTables(
+      Object.values(manifest.components)
+        .map((component) => component.replacement)
+        .join('\n'),
+      manifest.runtime_tables
+    )
   );
 } finally {
   rmSync(outDir, { recursive: true, force: true });
