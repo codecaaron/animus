@@ -406,7 +406,7 @@ fn eval_expression_scoped(
                     return Ok(StaticValue::String(quasi.value.raw.to_string()));
                 }
             }
-            eval_asset_template(tpl, static_values, keyframes_eligible).ok_or_else(|| {
+            eval_static_template(tpl, static_values, keyframes_eligible).ok_or_else(|| {
                 BailError::new(UnevaluatedKind::Template, "template literal with expressions (non-static)")
             })
         }
@@ -1098,25 +1098,31 @@ fn eval_asset_call(
     Some(Ok(StaticValue::String(format!("{ASSET_PLACEHOLDER_PREFIX}{}", specifier.value))))
 }
 
-/// A template whose every expression is a static string or number and which
-/// carries an `asset()` placeholder, as its text. Other templates with
-/// expressions stay non-static.
-fn eval_asset_template(
+/// A template whose every expression is a static string or number, as its
+/// text. Outside an `asset()` placeholder, a number joins as JavaScript
+/// writes it, so one this cannot spell without an exponent keeps the
+/// template non-static.
+fn eval_static_template(
     tpl: &oxc::ast::ast::TemplateLiteral<'_>,
     static_values: Option<Statics<'_>>,
     keyframes_eligible: bool,
 ) -> Option<StaticValue> {
     let mut parts = Vec::with_capacity(tpl.expressions.len());
+    let mut exponent = false;
     for expression in &tpl.expressions {
         let mut skips = Vec::new();
         let part = match eval_expression_scoped(expression, &mut skips, static_values, keyframes_eligible).ok()? {
             StaticValue::String(text) => text,
-            StaticValue::Number(StaticNumber(number)) => number.to_string(),
+            StaticValue::Number(StaticNumber(number)) => {
+                let text = number.to_string();
+                exponent |= text.contains(['e', 'E']);
+                text
+            }
             _ => return None,
         };
         parts.push(part);
     }
-    if !parts.iter().any(|part| part.contains(ASSET_PLACEHOLDER_PREFIX)) {
+    if exponent && !parts.iter().any(|part| part.contains(ASSET_PLACEHOLDER_PREFIX)) {
         return None;
     }
     let mut text = String::new();
@@ -1685,6 +1691,19 @@ mod tests {
         assert!(val.get("animation").is_none());
         assert_eq!(skips.len(), 1);
         assert_eq!(skips[0].key, "animation");
+    }
+
+    /// Contract: a template whose every substitution is a static string or
+    /// number evaluates to its text, a number as JavaScript writes it; one
+    /// that needs an exponent keeps the skip.
+    #[test]
+    fn template_with_static_substitutions_evaluates() {
+        let (val, skips) = parse_obj_full("{ width: `${8}px`, inset: `${0.5}rem`, content: `\"${'絵'}\"`, top: `${1e-7}px` }");
+        assert_eq!(val["width"], "8px");
+        assert_eq!(val["inset"], "0.5rem");
+        assert_eq!(val["content"], "\"絵\"");
+        assert!(val.get("top").is_none());
+        assert_eq!(skips.iter().map(|skip| skip.key.as_str()).collect::<Vec<_>>(), ["top"]);
     }
 
     #[test]

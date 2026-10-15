@@ -2,7 +2,7 @@
   "corpusSha256": "98175374fca3e9c8f6e77aecaf85cca380275a25042d7908a3607e3bf84ca821",
   "engine": "v2",
   "mode": "production",
-  "refreshIntent": "mdx-usage-without-compiler-20261013",
+  "refreshIntent": "static-template-substitutions-20261015",
   "surfaceSchemaSha256": "43eb1265e97aab8497c11ca05e8a4159a6d4f4b69a6837a704e1d96fa75eb108",
   "units": {
     "extract-all": {
@@ -1348,12 +1348,10 @@
     },
     "parity/multibyte.tsx": {
       "code": {
-        "multibyte.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// oxc spans are BYTE offsets: a path that mixes char counts with byte spans\n// corrupts every replacement after the multi-byte text below.\nconst label = '日本語ラベル';\nconst がんばって = '頑張って 🔥🔥';\nexport const 見出し = createComponent('div', 'animus-見出し-44d4bcf4', {});\nexport const Tail = createComponent('span', 'animus-Tail-1564ec26', {});\nexport const App = () => (\n  <div title={label} aria-label={がんばって}>\n    <見出し>日本語テキスト 🗾</見出し>\n    <Tail />\n  </div>\n);\n\n"
+        "multibyte.tsx": "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n// oxc spans are BYTE offsets: a path that mixes char counts with byte spans\n// corrupts every replacement after the multi-byte text below.\nconst label = '日本語ラベル';\nconst がんばって = '頑張って 🔥🔥';\nexport const 見出し = createComponent('div', 'animus-見出し-44d4bcf4', {});\nexport const Tail = createComponent('span', 'animus-Tail-b9ddb40f', {});\nexport const App = () => (\n  <div title={label} aria-label={がんばって}>\n    <見出し>日本語テキスト 🗾</見出し>\n    <Tail />\n  </div>\n);\n\n"
       },
-      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-Tail-1564ec26 {\n    padding: 0.25rem;\n  }\n  .animus-見出し-44d4bcf4 {\n    display: flex;\n    content: \"こんにちは\";\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
-      "diagnostics": [
-        "multibyte.tsx|skip|Tail|[skip] Tail: property 'content' — template literal with expressions (non-static)"
-      ],
+      "css": "@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\n\n@layer anm-base {\n  .animus-Tail-b9ddb40f {\n    padding: 0.25rem;\n    content: \"絵文字🎌\";\n  }\n  .animus-見出し-44d4bcf4 {\n    display: flex;\n    content: \"こんにちは\";\n  }\n}\n\n@layer anm-variants {\n  @layer standalone, composed;\n  @layer composed {\n  }\n}\n\n",
+      "diagnostics": [],
       "hasComponents": {
         "multibyte.tsx": true
       },
@@ -1362,10 +1360,10 @@
           "multibyte.tsx::Tail",
           "multibyte.tsx::見出し"
         ],
-        "componentFragmentsJson": "{\"multibyte.tsx::Tail\":{\"base\":\"  .animus-Tail-1564ec26 {\\n    padding: 0.25rem;\\n  }\\n\"},\"multibyte.tsx::見出し\":{\"base\":\"  .animus-見出し-44d4bcf4 {\\n    display: flex;\\n    content: \\\"こんにちは\\\";\\n  }\\n\"}}",
+        "componentFragmentsJson": "{\"multibyte.tsx::Tail\":{\"base\":\"  .animus-Tail-b9ddb40f {\\n    padding: 0.25rem;\\n    content: \\\"絵文字🎌\\\";\\n  }\\n\"},\"multibyte.tsx::見出し\":{\"base\":\"  .animus-見出し-44d4bcf4 {\\n    display: flex;\\n    content: \\\"こんにちは\\\";\\n  }\\n\"}}",
         "dynamicPropsJson": "{}",
         "reverseProvenanceEdges": [],
-        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-Tail-1564ec26 {\\n    padding: 0.25rem;\\n  }\\n  .animus-見出し-44d4bcf4 {\\n    display: flex;\\n    content: \\\"こんにちは\\\";\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
+        "sheetsJson": "{\"base\":\"@layer anm-base {\\n  .animus-Tail-b9ddb40f {\\n    padding: 0.25rem;\\n    content: \\\"絵文字🎌\\\";\\n  }\\n  .animus-見出し-44d4bcf4 {\\n    display: flex;\\n    content: \\\"こんにちは\\\";\\n  }\\n}\\n\",\"compounds\":\"\",\"custom\":\"\",\"declaration\":\"@layer anm-global, anm-base, anm-variants, anm-compounds, anm-states, anm-system, anm-custom;\\n\",\"global\":\"@layer anm-global {\\nbody {\\n  font-family: {fonts.base};\\n  margin: 0;\\n}\\n@keyframes anm-ember {\\n  0% {\\n    opacity: 0;\\n  }\\n  100% {\\n    opacity: 1;\\n  }\\n}\\n}\\n\",\"states\":\"\",\"system\":\"\",\"variants\":\"@layer anm-variants {\\n  @layer standalone, composed;\\n  @layer composed {\\n  }\\n}\\n\"}",
         "systemPropMapJson": "{}"
       },
       "parseCount": 1
