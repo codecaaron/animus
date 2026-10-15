@@ -41,7 +41,10 @@ describe('createGlobalStyles fontFaces', () => {
   // { fontFaces })` makes: those faces and no style rules.
   it('takes an array of faces alone as a block of those faces', () => {
     const fontFaces = [
-      { family: 'Inter', src: [{ url: '/fonts/inter.woff2', format: 'woff2' }] },
+      {
+        family: 'Inter',
+        src: [{ url: '/fonts/inter.woff2', format: 'woff2' }],
+      },
     ];
 
     expect(createGlobalStyles(fontFaces)).toEqual(

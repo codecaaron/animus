@@ -11105,7 +11105,7 @@ mod tests {
         inputs.analysis_context.font_preloads = Some(vec![serde_json::json!({ "family": "Inter", "weight": 400 })]);
         let out = analyze(&[("a.tsx", "export const x = 1;\n")], &inputs);
         let preloads: Vec<_> =
-            out.font_preloads.iter().map(|p| (p.href.as_str(), serde_json::to_value(&p.descriptors).unwrap())).collect();
+            out.font_preloads.iter().map(|p| (p.href.as_str(), serde_json::to_value(&p.faces).unwrap())).collect();
         assert_eq!(
             preloads,
             [

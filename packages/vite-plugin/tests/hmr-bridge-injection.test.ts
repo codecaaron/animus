@@ -5,6 +5,7 @@ import { describe, expect, test } from 'vitest';
 import {
   BRIDGE_SCRIPT_SRC,
   RESOLVED_BRIDGE_ID,
+  RESOLVED_FONT_PRELOADS_ID,
   VIRTUAL_BRIDGE_ID,
   VIRTUAL_FONT_PRELOADS_ID,
 } from '../src/constants';
@@ -183,18 +184,22 @@ describe('the font-preloads module', () => {
       '@acme/fonts/inter.woff2',
       '__VITE_ASSET__inter__'
     );
-    const id = resolveVirtualId(ctx, VIRTUAL_FONT_PRELOADS_ID);
-    expect(typeof id).toBe('string');
+    expect(resolveVirtualId(ctx, VIRTUAL_FONT_PRELOADS_ID)).toBe(
+      RESOLVED_FONT_PRELOADS_ID
+    );
     const exported = runInNewContext(
-      loadVirtualModule(ctx, id as string)!.replace('export default', 'm =')
+      loadVirtualModule(ctx, RESOLVED_FONT_PRELOADS_ID)!.replace(
+        'export default',
+        'm ='
+      )
     );
     expect(exported).toEqual([
       { href: '__VITE_ASSET__inter__', type: 'font/woff2', faces },
       { href: '/fonts/mono.woff2', faces: [{ family: 'Mono' }] },
     ]);
-    expect(
-      buildIndexHtmlTags(ctx).map((tag) => tag.attrs?.href)
-    ).toEqual(exported.map(({ href }: { href: string }) => href));
+    expect(buildIndexHtmlTags(ctx).map((tag) => tag.attrs?.href)).toEqual(
+      exported.map(({ href }: { href: string }) => href)
+    );
   });
 });
 
