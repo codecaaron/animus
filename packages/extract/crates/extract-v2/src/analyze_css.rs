@@ -3698,7 +3698,7 @@ fn foreign_import(ff: &FileFacts, local: &str, source: &str, inputs: &CssInputs)
         {
             spread.is_some()
                 || attrs.iter().any(|attr| {
-                    (attr.name == "asChild" && element_child.is_none())
+                    (attr.name == "asChild" && as_child_element(ff, *element_child, inputs).is_none())
                         || (attr.name == "as" && !matches!(attr.static_value, Some(Value::String(_))))
                 })
         }
@@ -3707,6 +3707,21 @@ fn foreign_import(ff: &FileFacts, local: &str, source: &str, inputs: &CssInputs)
         }
         _ => false,
     })
+}
+
+/// The opening span of the one element a site's `asChild` renders in its
+/// place with the site's props, unless that element is itself a tag of a
+/// package with no dependency path to Animus, which may pass them on again.
+fn as_child_element(ff: &FileFacts, element_child: Option<(u32, u32)>, inputs: &CssInputs) -> Option<(u32, u32)> {
+    let child = element_child?;
+    let foreign = ff.usage_for_analysis().iter().any(|fact| match fact {
+        UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), span, .. } if *span == child => {
+            let root = tag.split('.').next().unwrap_or(tag);
+            root_import_source(ff, root).is_some_and(|source| foreign_package(source, inputs))
+        }
+        _ => false,
+    });
+    (!foreign).then_some(child)
 }
 
 /// Whether `source` names a package with no dependency path to Animus.
@@ -3733,10 +3748,13 @@ fn as_child_renders<'f>(ff: &'f FileFacts, inputs: &CssInputs) -> (Vec<UsageFact
             spread: None,
             span,
             origin: Some(TagOrigin::Import),
-            element_child: Some(child_span),
+            element_child,
             ..
         } = fact
         else {
+            continue;
+        };
+        let Some(child_span) = as_child_element(ff, *element_child, inputs) else {
             continue;
         };
         let root = tag.split('.').next().unwrap_or(tag);
@@ -3747,7 +3765,7 @@ fn as_child_renders<'f>(ff: &'f FileFacts, inputs: &CssInputs) -> (Vec<UsageFact
         }
         // The child's fact follows its parent's.
         let Some(UsageFact::Element { tag: child, origin, .. }) =
-            usage[index + 1..].iter().find(|fact| matches!(fact, UsageFact::Element { span, .. } if span == child_span))
+            usage[index + 1..].iter().find(|fact| matches!(fact, UsageFact::Element { span, .. } if *span == child_span))
         else {
             continue;
         };
@@ -14553,8 +14571,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// code may write; so does one element `asChild` renders in the tag's
     /// place with the tag's props, and a host element there reaches nothing.
     /// The same tag where a file may hand it a component through `as`, or
-    /// `asChild` over children other than one element, or a member of an
-    /// object the app writes into, keeps its record and turns removal off.
+    /// `asChild` over children other than one element (or over another
+    /// foreign tag, which may pass the props on), or a member of an object
+    /// the app writes into, keeps its record and turns removal off.
     #[test]
     fn foreign_tags_leave_whole_component_removal_on() {
         let mut inputs = test_inputs();
@@ -14595,6 +14614,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "export const App = () => <List as={R} />;\n",
             "export const App = () => <List asChild><R /><R /></List>;\n",
             "export const App = () => <List asChild>{<R />}</List>;\n",
+            // Another foreign tag may pass the props on again.
+            "export const App = () => <List asChild><List.Item asChild><R /></List.Item></List>;\n",
         ] {
             assert_eq!(run(handing), (every.clone(), p.clone(), records.clone()), "{handing}");
         }
