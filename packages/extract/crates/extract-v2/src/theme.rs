@@ -1222,18 +1222,28 @@ fn resolve_entry(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDecla
             record_dropped_key(ctx, DroppedStyleKey::AtRulePlacement { key: at_rule.clone(), within, lost, block: block.clone() });
             return declarations;
         }
-        record_dropped_key(
-            ctx,
-            match value.as_object() {
-                Some(entries) if ctx.config.contains_key(key) => non_responsive_object(key, entries, ctx),
-                _ => DroppedStyleKey::UnrecognizedKey(key.to_string()),
-            },
-        );
+        // A prop's empty object writes nothing, so it loses nothing.
+        let dropped = match value.as_object() {
+            Some(entries) if ctx.config.contains_key(key) => (!entries.is_empty())
+                .then(|| DroppedStyleKey::NonResponsiveObject(non_breakpoint_keys(key, entries, ctx, true))),
+            _ => Some(DroppedStyleKey::UnrecognizedKey(key.to_string())),
+        };
+        if let Some(dropped) = dropped {
+            record_dropped_key(ctx, dropped);
+        }
     }
     declarations
 }
 
-fn non_responsive_object(key: &str, entries: &Map<String, Value>, ctx: &ResolveContext) -> DroppedStyleKey {
+/// The keys of `entries`, a prop's object value, that are not breakpoints.
+/// Written in a style block (`block`), an object whose every key is a prop
+/// or a CSS property reads as a block of styles.
+pub(crate) fn non_breakpoint_keys(
+    key: &str,
+    entries: &Map<String, Value>,
+    ctx: &ResolveContext,
+    block: bool,
+) -> NonBreakpointKeys {
     let alias_kind = |entry: &str| {
         if ctx.condition_aliases.contains_key(entry) {
             Some("condition")
@@ -1251,12 +1261,8 @@ fn non_responsive_object(key: &str, entries: &Map<String, Value>, ctx: &ResolveC
     let width = |name: &String| ctx.theme.get(&format!("breakpoints.{name}")).and_then(|px| px.parse::<u32>().ok());
     let mut breakpoints: Vec<String> = ctx.breakpoint_keys.iter().cloned().collect();
     breakpoints.sort_by_cached_key(|name| (width(name), name.clone()));
-    DroppedStyleKey::NonResponsiveObject(NonBreakpointKeys {
-        prop: key.to_string(),
-        unknown,
-        breakpoints,
-        styles: !entries.is_empty() && entries.keys().all(|entry| ctx.config.contains_key(entry)),
-    })
+    let styles = block && entries.keys().all(|entry| ctx.config.contains_key(entry) || is_css_property(entry));
+    NonBreakpointKeys { prop: key.to_string(), unknown, breakpoints, styles }
 }
 
 fn push_nested_breakpoint_group(
@@ -2013,6 +2019,8 @@ fn admitted_without_token(value: &Value, config: &PropConfig) -> bool {
 struct CssKeywords {
     globals: Vec<String>,
     properties: FxHashMap<String, Vec<String>>,
+    #[serde(rename = "propertyNames")]
+    property_names: FxHashSet<String>,
 }
 
 /// Generated from the public strict types and checked against
@@ -2023,6 +2031,11 @@ fn css_keyword_table() -> &'static CssKeywords {
         serde_json::from_str(include_str!("css_keywords.json"))
             .expect("css_keywords.json is generated valid JSON")
     })
+}
+
+/// Whether `key` names a CSS property the public types know.
+pub(crate) fn is_css_property(key: &str) -> bool {
+    css_keyword_table().property_names.contains(key)
 }
 
 /// The CSS-wide keywords followed by `property`'s own keywords.

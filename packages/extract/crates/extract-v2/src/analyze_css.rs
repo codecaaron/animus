@@ -29,7 +29,7 @@ use crate::facts::FileFacts;
 use crate::identity::ImportBinding;
 use animus_system_loader::module_table::{ExportLookup, Request, Terminal};
 use crate::jsx_scan::{
-    ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult,
+    ComponentUsageConfig, ComposeFamilyInfo, DynamicPropUsage, SystemPropUsage, UsageScanResult, WrittenProp,
 };
 use crate::pipeline::process_chain_facts;
 use crate::reconcile::{build_ledger, identify_prospective_eliminations, reconcile, VariantConfigMap};
@@ -2185,15 +2185,11 @@ fn non_breakpoint_key(file: &str, component: &str, keys: &crate::theme::NonBreak
         [] => "the theme defines none".to_string(),
         names => format!("the theme defines {}", quoted(names)),
     };
-    let mut message = if unknown.is_empty() {
-        format!("prop '{prop}' was given an empty object, {lost} — give it a value or an object of breakpoint keys")
-    } else {
-        format!(
-            "prop '{prop}' was given an object with keys that are not breakpoints ({}), {lost} — key it by \
-             '_' and breakpoints ({theme}), or give it a value",
-            quoted(unknown.iter().map(|(key, _)| key))
-        )
-    };
+    let mut message = format!(
+        "prop '{prop}' was given an object with keys that are not breakpoints ({}), {lost} — key it by '_' and \
+         breakpoints ({theme}), or give it a value",
+        quoted(unknown.iter().map(|(key, _)| key))
+    );
     let (aliases, others): (Vec<_>, Vec<_>) = unknown.iter().partition(|(_, kind)| kind.is_some());
     if let [(alias, Some(kind)), ..] = aliases.as_slice() {
         let named = match aliases.len() {
@@ -8294,29 +8290,23 @@ fn run_with_system_floor(
             _ => None,
         })
         .collect();
-    // An empty object writes nothing, so a render loses nothing to it.
+    // The runtime gives each key of an object a prop is given a breakpoint's
+    // slot, unless extraction gives the whole value a class, which only a
+    // value resolving to declarations as written can take: no transform sees
+    // an object. An empty object writes nothing, so it loses nothing.
     let non_breakpoint_keys = |config: &PropConfigMap, prop_name: &str, value: &Value| {
-        let entries = value.as_object()?;
-        if entries.is_empty()
-            || !config.contains_key(prop_name)
-            || crate::theme::is_responsive_value(value, resolve_ctx.breakpoint_keys)
-        {
+        let entries = value.as_object().filter(|entries| !entries.is_empty())?;
+        let prop_config = config.get(prop_name)?;
+        if crate::theme::is_responsive_value(value, resolve_ctx.breakpoint_keys) {
             return None;
         }
-        let dropped = crate::theme::DroppedStyleKeySink::default();
-        let failures = TransformFailureSink::default();
-        let ctx = ResolveContext {
-            config,
-            dropped_keys: Some(&dropped),
-            transform_failures: Some(&failures),
-            token_misses: None,
-            ..resolve_ctx
-        };
-        resolve_styles(&serde_json::json!({ prop_name: value }), &ctx, true);
-        dropped.into_inner().into_iter().find_map(|dropped| match dropped.dropped {
-            crate::theme::DroppedStyleKey::NonResponsiveObject(keys) => Some(keys),
-            _ => None,
-        })
+        let ctx =
+            ResolveContext { config, transform_failures: None, token_misses: None, dropped_keys: None, ..resolve_ctx };
+        let transformed = prop_config.transform_fn_source.is_some() || prop_config.bound_definition().is_some();
+        if !transformed && !crate::theme::resolve_prop(prop_name, value, &ctx).is_empty() {
+            return None;
+        }
+        Some(crate::theme::non_breakpoint_keys(prop_name, entries, &ctx, false))
     };
     // A literal that misses a strict scale gets no class; it is reported at
     // each of its `uses`, at its offset and naming the component it renders,
@@ -8330,6 +8320,18 @@ fn run_with_system_floor(
                           component: &str,
                           (prop_name, value, uses): (&str, &Value, &[(u32, &str, Reach<'_>)]),
                           diagnostics: &mut Vec<CssDiagnostic>| {
+        // An object keyed by something other than a breakpoint has no rule at
+        // that key, whether extraction or the runtime resolves it: it is
+        // reported at each use.
+        if let Some(keys) = non_breakpoint_keys(config, prop_name, value) {
+            let report = |renders: &str| non_breakpoint_key(file, renders, &keys, "so no rule applies it");
+            match uses {
+                [] => diagnostics.push(report(component)),
+                uses => diagnostics.extend(
+                    uses.iter().map(|&(at, renders, reach)| miss_by_reach(report(renders), renders, reach).at(at)),
+                ),
+            }
+        }
         let prop_config = config.get(prop_name);
         let miss = prop_config.and_then(|prop_config| {
             strict_token_miss_of(prop_name, prop_config, value, &resolve_ctx)
@@ -8345,18 +8347,6 @@ fn run_with_system_floor(
         }
         if prop_config.is_some_and(|prop_config| !extracts_configured_value(prop_config, value, &resolve_ctx)) {
             return None;
-        }
-        // An object keyed by something other than a breakpoint gets no class,
-        // and the runtime's slot has no rule at that key: it is reported at
-        // each use, by the rule a style block's value is.
-        if let Some(keys) = non_breakpoint_keys(config, prop_name, value) {
-            let report = |renders: &str| non_breakpoint_key(file, renders, &keys, "so no rule applies it");
-            match uses {
-                [] => diagnostics.push(report(component)),
-                uses => diagnostics.extend(
-                    uses.iter().map(|&(at, renders, reach)| miss_by_reach(report(renders), renders, reach).at(at)),
-                ),
-            }
         }
         // A raw keyframes key is reported at each use that writes it.
         let usage_quiet = ResolveContext { config, ..quiet_ctx };
@@ -8765,6 +8755,10 @@ fn run_with_system_floor(
                 .chain(identity_policy.unattributed.drain(..).map(UncertainIdentity::Unattributed))
                 .map(|site| (path, site)),
         );
+        let file: std::sync::Arc<str> = path.as_str().into();
+        for written in &mut usage_result.written_props {
+            written.file = Some(std::sync::Arc::clone(&file));
+        }
         all_usage_results.push(usage_result);
     }
     let identity_uncertain = !uncertain_identities.is_empty();
@@ -9256,6 +9250,18 @@ fn run_with_system_floor(
     // Only project-wide uses record the conditions runtime values write.
     let narrows_slots = project_uses.is_some();
     let confined_uses = project_uses.unwrap_or_else(|| confined_uses(files, &chain_lookup, &evaluated_ids));
+    // An object written for a prop a component passes on, keyed by something
+    // other than a breakpoint, is reported where it is written, once.
+    let report_passed_on = |diagnostics: &mut Vec<CssDiagnostic>, written: &WrittenProp, value: &Value| {
+        let (Some(file), Some(keys)) = (&written.file, non_breakpoint_keys(&inputs.config, &written.prop, value)) else {
+            return;
+        };
+        let record =
+            non_breakpoint_key(file, binding_of(&written.binding), &keys, "so no rule applies it").at(written.at);
+        if !diagnostics.iter().any(|d| d.code == record.code && d.file == record.file && d.offset == record.offset) {
+            diagnostics.push(record);
+        }
+    };
     // A literal a component forwards to an `.asComponent()` target's inner
     // component takes that component's static class; it is reported, if at
     // all, where it is written.
@@ -9275,7 +9281,51 @@ fn run_with_system_floor(
                     (&written.prop, value, &[]),
                     &mut Vec::new(),
                 ));
+                report_passed_on(&mut diagnostics, written, value);
             }
+        }
+    }
+    // An `.asComponent()` target that is itself a component receives each
+    // prop its outer component does not take, through every such target.
+    let targets: FxHashMap<&str, Vec<String>> = sorted_ids
+        .iter()
+        .filter_map(|id| {
+            let (file_path, chain_idx) = chain_lookup.get(id.as_str())?;
+            let descriptor = &files[*file_path].chains[*chain_idx].descriptor;
+            (descriptor.terminal == TerminalKind::AsComponent && !descriptor.tag.is_empty()).then(|| {
+                let ids = resolve_declared_identity(file_path, &descriptor.tag, files, inputs, links, &evaluated_ids);
+                (id.as_str(), ids)
+            })
+        })
+        .collect();
+    let takes = |id: &str, prop: &str| {
+        evaluated.get(id).is_some_and(|(_, _, _, active_props, _, custom_configs, _)| {
+            active_props.as_ref().is_some_and(|props| props.contains(prop))
+                || custom_configs.as_ref().is_some_and(|configs| configs.contains_key(prop))
+        })
+    };
+    for written in all_usage_results.iter().flat_map(|result| &result.written_props) {
+        let Some(value) = written.literal.as_ref().filter(|value| value.is_object()) else { continue };
+        if !targets.contains_key(written.binding.as_str()) || takes(&written.binding, &written.prop) {
+            continue;
+        }
+        let mut seen = FxHashSet::default();
+        let mut reaching: Vec<&str> = vec![&written.binding];
+        let mut received = false;
+        while let Some(outer) = reaching.pop() {
+            for target in targets.get(outer).into_iter().flatten() {
+                if !seen.insert(target.as_str()) {
+                    continue;
+                }
+                if takes(target, &written.prop) {
+                    received = true;
+                } else {
+                    reaching.push(target);
+                }
+            }
+        }
+        if received {
+            report_passed_on(&mut diagnostics, written, value);
         }
     }
     let utility_classes =

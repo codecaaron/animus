@@ -85,6 +85,10 @@ pub struct WrittenProp {
     /// For any other value, the conditions it can write (`_` for the base
     /// and breakpoint names); `None` when its shape is unknown.
     pub conditions: Option<std::collections::BTreeSet<String>>,
+    /// The file it is written in, once the analysis knows it, and the byte
+    /// offset of its attribute or call there.
+    pub file: Option<std::sync::Arc<str>>,
+    pub at: u32,
 }
 
 pub(crate) fn is_component_like_identifier(name: &str) -> bool {

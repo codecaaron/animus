@@ -1,8 +1,9 @@
 /**
  * Derives the CSS keywords a strict scale prop admits beside its tokens from
  * the public type contract (`PropertyValues<{ property }, false>` over the
- * pinned csstype), writes the extractor's `css_keywords.json`, and with
- * `--check` fails when the file differs from a fresh derivation.
+ * pinned csstype), and the property names it covers, writes the extractor's
+ * `css_keywords.json`, and with `--check` fails when the file differs from a
+ * fresh derivation.
  *
  * Usage: node packages/extract/scripts/css-keywords.ts [--write | --check]
  */
@@ -23,6 +24,8 @@ export interface CssKeywords {
   globals: string[];
   /** Each property's own keywords, globals excluded; absent when it has none. */
   properties: Record<string, string[]>;
+  /** Every property the public types name. */
+  propertyNames: string[];
 }
 
 /** A probe's expected error: `Symbol()` rejected at the declared name. */
@@ -190,6 +193,7 @@ export function deriveCssKeywords(): CssKeywords {
     properties: Object.fromEntries(
       Object.entries(properties).sort(([a], [b]) => (a < b ? -1 : 1))
     ),
+    propertyNames: [...names].sort(),
   };
 }
 

@@ -812,6 +812,10 @@ test('a responsive value whose key is not a breakpoint is reported where it is w
 export const Box = ds.system({ space: true }).asElement('div');
 export const Card = ds.styles({ p: { _: 8, wide: 16 } } as any).asElement('div');
 export const App = () => <><Box p={{ _: 8, wide: 16 } as any} /><Box p={{ _: 8, md: 16 }} /><Card /></>;
+export const Outer = ds.styles({}).asComponent(Box);
+export const Tone = ds.props({ tone: { property: 'color', transform: (v: number) => \`\${v}px\` } }).asElement('div');
+export const Empty = ds.styles({ p: {} } as any).asElement('div');
+export const More = () => <><Outer p={{ _: 8, wide: 16 } as any} /><Tone tone={{ _: 8, wide: 16 } as any} /><Empty /></>;
 `,
     },
   ]);
@@ -825,14 +829,18 @@ export const App = () => <><Box p={{ _: 8, wide: 16 } as any} /><Box p={{ _: 8, 
       d.column,
       d.severity,
     ]);
-  expect(reported).toEqual([
-    ['Card', 3, 21, 'error'],
+  // A value passed on to a component that takes it, and one a transform
+  // takes, are reported where they are written; an empty object loses nothing.
+  expect(reported.sort()).toEqual([
     ['Box', 4, 33, 'error'],
+    ['Card', 3, 21, 'error'],
+    ['Outer', 8, 36, 'error'],
+    ['Tone', 8, 74, 'error'],
   ]);
   expect(() => surfaceManifestDiagnostics(manifest, () => {})).not.toThrow();
   expect(() =>
     surfaceManifestDiagnostics(manifest, () => {}, { strict: true })
-  ).toThrow(/2 error diagnostic/);
+  ).toThrow(/4 error diagnostic/);
 });
 
 test('a block key given no block, and a block under a global at-rule selector, are reported and fail a strict build', () => {

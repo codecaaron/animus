@@ -7728,6 +7728,8 @@ pub fn filter_usage_scan(
                             prop: attr.name.clone(),
                             literal,
                             conditions: attr.conditions.clone(),
+                            file: None,
+                            at: attr.at,
                         };
                         match attr.proven_values() {
                             Some(values) => result.written_props.extend(values.map(|value| write(Some(value.clone())))),
@@ -7889,6 +7891,8 @@ pub fn filter_usage_scan(
                                     prop: prop.clone(),
                                     literal: literal.clone(),
                                     conditions: conditions.clone(),
+                                    file: None,
+                                    at: *at,
                                 });
                                 let system = active.is_some_and(|active| active.contains(prop));
                                 if literal.is_none() && system && seen.insert(format!("__dynamic__:{prop}")) {
