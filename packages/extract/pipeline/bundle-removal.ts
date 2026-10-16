@@ -4,6 +4,7 @@ import { keptDirFeatures } from './post-process-css';
 
 import type { ManifestComponentDescriptor } from './manifest-schema';
 import type { LightningTargets } from './post-process-css';
+import type { Rule, Selector } from 'lightningcss';
 
 /** A class's component class: the name before a derived suffix
  *  (`{class}--size-sm`), or the name itself. */
@@ -194,21 +195,128 @@ export function unbundledComponents(
   return removed;
 }
 
+/** Why a removed component's rule stayed. */
+export type KeptRuleReason = 'shared-list' | 'conditional';
+
+/** What removing components' rules did to one style sheet. */
+export interface RuleRemoval {
+  /** The sheet without the removed rules; `null` when no rule goes. */
+  css: string | null;
+  /** Each removed class at least one of whose rules went. */
+  went: Set<string>;
+  /** Each removed class a kept rule names, and why that rule stayed:
+   *  another selector in its list needs no removed class
+   *  (`'shared-list'`), or the class sits only where a selector can match
+   *  without it (`'conditional'`). */
+  kept: Map<string, KeptRuleReason>;
+}
+
+/**
+ * The classes of `classes` that `selector` needs an element to carry: each
+ * one it names outside a pseudo-class's argument, or a class derived from
+ * one (`{class}--…`), and those an `:is()` or `:where()` needs where every
+ * alternative in it needs one, since such a list matches only what one of
+ * its alternatives matches. Empty when the selector may match without any.
+ * `:not()` and `:has()` never need one.
+ */
+function neededClasses(
+  selector: Selector,
+  classes: ReadonlySet<string>
+): string[] {
+  const needed: string[] = [];
+  for (const part of selector) {
+    if (part.type === 'class') {
+      const stem = classStem(part.name);
+      if (classes.has(stem)) needed.push(stem);
+    } else if (
+      part.type === 'pseudo-class' &&
+      (part.kind === 'is' || part.kind === 'where')
+    ) {
+      const alternatives = part.selectors.map((alternative) =>
+        neededClasses(alternative, classes)
+      );
+      if (alternatives.every((alternative) => alternative.length > 0)) {
+        needed.push(...alternatives.flat());
+      }
+    }
+  }
+  return needed;
+}
+
+/** Calls `visit` with every class name `selector` holds, inside any
+ *  pseudo-class's or pseudo-element's argument too. */
+function eachClass(selector: Selector, visit: (name: string) => void): void {
+  for (const part of selector) {
+    if (part.type === 'class') visit(part.name);
+    else if (
+      part.type === 'pseudo-class' &&
+      (part.kind === 'not' ||
+        part.kind === 'is' ||
+        part.kind === 'where' ||
+        part.kind === 'any' ||
+        part.kind === 'has')
+    ) {
+      for (const inner of part.selectors) eachClass(inner, visit);
+    } else if ('selector' in part) eachClass(part.selector, visit);
+    else if ('of' in part && part.of) {
+      for (const inner of part.of) eachClass(inner, visit);
+    }
+  }
+}
+
 /**
  * `css` without each rule all of whose selectors need an element carrying
- * one of `classes` (or a class derived from one, `{class}--…`); `null` when
- * no rule goes. Only a class the selector itself requires counts: one inside
- * `:not()`, `:is()`, `:where()` or `:has()` may match without it. A rule
- * with another selector stays whole, since Lightning CSS cannot hand back
- * every rule it reads. Throws when the sheet does not parse.
+ * one of `classes` (or a class derived from one, `{class}--…`), and without
+ * each `@media`, `@supports` or `@container` rule that removal empties. A
+ * rule with another selector stays whole, since Lightning CSS cannot hand
+ * back every rule it reads. Throws when the sheet does not parse.
  */
 export function removeComponentRules(
   css: string,
   classes: ReadonlySet<string>,
   opts: { targets: LightningTargets; keepDirSelector?: boolean }
-): string | null {
-  if (![...classes].some((name) => css.includes(name))) return null;
-  let removed = false;
+): RuleRemoval {
+  const went = new Set<string>();
+  const kept = new Map<string, KeptRuleReason>();
+  if (![...classes].some((name) => css.includes(name))) {
+    return { css: null, went, kept };
+  }
+  const needsOf = (selectors: Selector[]) =>
+    selectors.map((selector) => neededClasses(selector, classes));
+  const everyNeeds = (needs: string[][]) =>
+    needs.every((needed) => needed.length > 0);
+  // Whether `rule` goes: a style rule every selector of which needs a
+  // removed class, or a `@media`, `@supports` or `@container` rule removal
+  // empties, which applies nothing. An emptied `@layer` block stays, since
+  // it still places its layer in the layer order; a second minifying pass
+  // would drop the emptied at-rules too, but would also rewrite such a block
+  // and what else it finds.
+  const goes = (rule: Rule): boolean =>
+    rule.type === 'style'
+      ? everyNeeds(needsOf(rule.value.selectors))
+      : (rule.type === 'media' ||
+          rule.type === 'supports' ||
+          rule.type === 'container') &&
+        rule.value.rules.length > 0 &&
+        rule.value.rules.every(goes);
+  // Notes the classes each style rule in a rule that goes needs, since
+  // Lightning CSS visits nothing inside a rule a visitor drops.
+  const record = (rule: Rule): void => {
+    if (rule.type === 'style') {
+      for (const name of needsOf(rule.value.selectors).flat()) went.add(name);
+    } else if (
+      rule.type === 'media' ||
+      rule.type === 'supports' ||
+      rule.type === 'container'
+    ) {
+      for (const inner of rule.value.rules) record(inner);
+    }
+  };
+  const drop = (rule: Rule) => {
+    if (!goes(rule)) return;
+    record(rule);
+    return [];
+  };
   const code = lcssTransform({
     filename: 'animus-bundle-removal.css',
     code: Buffer.from(css),
@@ -218,18 +326,27 @@ export function removeComponentRules(
     visitor: {
       Rule: {
         style(rule) {
-          const needed = rule.value.selectors.every((selector) =>
-            selector.some(
-              (part) =>
-                part.type === 'class' && classes.has(classStem(part.name))
-            )
-          );
-          if (!needed) return;
-          removed = true;
-          return [];
+          const needs = needsOf(rule.value.selectors);
+          if (everyNeeds(needs)) {
+            for (const name of needs.flat()) went.add(name);
+            return [];
+          }
+          const needed = new Set(needs.flat());
+          for (const selector of rule.value.selectors) {
+            eachClass(selector, (name) => {
+              const stem = classStem(name);
+              if (!classes.has(stem)) return;
+              if (needed.has(stem)) kept.set(stem, 'shared-list');
+              else if (!kept.has(stem)) kept.set(stem, 'conditional');
+            });
+          }
         },
+        media: drop,
+        supports: drop,
+        container: drop,
       },
     },
   }).code.toString();
-  return removed ? code : null;
+  // A rule goes only where a style rule goes, which notes its classes.
+  return { css: went.size > 0 ? code : null, went, kept };
 }

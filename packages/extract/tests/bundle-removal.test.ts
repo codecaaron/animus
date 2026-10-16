@@ -24,35 +24,70 @@ const component = (
 
 describe('removeComponentRules', () => {
   // Contract: a rule goes only where every selector requires an element
-  // carrying a removed component's class, or a class derived from it; a
-  // class inside `:not()`, `:is()`, `:where()` or `:has()` requires nothing,
-  // and every other rule, keyframes included, stays whole.
+  // carrying a removed component's class, or a class derived from it, outside
+  // a pseudo-class's argument or in an `:is()` or `:where()` every
+  // alternative of which requires one; a class inside `:not()` or `:has()`
+  // requires nothing, and every other rule, keyframes included, stays whole.
+  // A class counts as gone only where one of its rules went, and a kept rule
+  // naming it says why it stayed.
   test('removes only the rules every selector of which needs a removed class', () => {
     const css = [
-      '@layer anm-base{.dead{color:red}.live{color:blue}}',
+      '@layer anm-base{.dead{color:red}.live{color:blue}:where(.dead){margin:0}}',
       '@layer anm-variants{.dead--size-sm{padding:1px}.live--size-sm{padding:2px}}',
       '@layer anm-compounds{.live--x .dead{margin:0}.dead,.live{order:1}}',
-      '@layer anm-states{.live:not(.dead){gap:1px}:is(.dead,.live) span{gap:2px}}',
+      '@layer anm-states{.live:not(.dead){gap:1px}:is(.dead,.live) span{gap:2px}:is(.dead,.dead--size-sm) b{gap:3px}.live:has(.dead){gap:4px}.live:not(.cond){gap:5px}}',
       '@layer anm-system{.u_a{gap:4px}}',
       '@keyframes dead{to{opacity:1}}',
     ].join('');
-    const out = removeComponentRules(css, new Set(['dead']), { targets: {} });
+    const {
+      css: out,
+      went,
+      kept,
+    } = removeComponentRules(css, new Set(['dead', 'cond']), { targets: {} });
     expect(out).not.toBeNull();
-    expect(out).not.toMatch(/\.dead\{|\.dead--size-sm|\.live--x \.dead/);
-    for (const kept of [
+    expect(out).not.toMatch(
+      /\.dead\{|\.dead--size-sm\{|\.live--x \.dead|:where\(\.dead\)|:is\(\.dead,\.dead--size-sm\)/
+    );
+    for (const stays of [
       '.live{color:#00f}',
       '.live--size-sm{padding:2px}',
       '.dead,.live{order:1}',
       '.live:not(.dead){gap:1px}',
       ':is(.dead,.live) span{gap:2px}',
+      '.live:has(.dead){gap:4px}',
+      '.live:not(.cond){gap:5px}',
       '.u_a{gap:4px}',
       '@keyframes dead',
     ]) {
-      expect(out).toContain(kept);
+      expect(out).toContain(stays);
     }
+    expect([...went]).toEqual(['dead']);
+    expect(Object.fromEntries(kept)).toEqual({
+      dead: 'shared-list',
+      cond: 'conditional',
+    });
     expect(
-      removeComponentRules(css, new Set(['other']), { targets: {} })
+      removeComponentRules(css, new Set(['other']), { targets: {} }).css
     ).toBeNull();
+  });
+
+  // Contract: a `@media`, `@supports` or `@container` rule removal empties
+  // goes with the rules it held; one that keeps a rule stays, and so does an
+  // emptied `@layer` block, which still places its layer in the layer order.
+  test('drops an at-rule removal empties and keeps @layer blocks', () => {
+    const { css: out } = removeComponentRules(
+      [
+        '@layer anm-base{@media (min-width:1px){.dead{color:red}}}',
+        '@layer anm-states{.live{color:red}}',
+        '@supports (display:grid){@container (min-width:2px){.dead:hover{color:red}}}',
+        '@media (min-width:3px){.dead{color:red}.live{color:red}}',
+      ].join(''),
+      new Set(['dead']),
+      { targets: {} }
+    );
+    expect(out).toBe(
+      '@layer anm-base{}@layer anm-states{.live{color:red}}@media (width>=3px){.live{color:red}}'
+    );
   });
 });
 

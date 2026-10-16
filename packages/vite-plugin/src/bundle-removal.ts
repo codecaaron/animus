@@ -10,6 +10,7 @@ import { posix } from 'node:path';
 import { sliceIdOf } from './index-html';
 
 import type { PluginContext } from './context';
+import type { KeptRuleReason, RuleRemoval } from '@animus-ui/extract/pipeline';
 import type { Rolldown } from 'vite';
 
 /** What a build that removes unbundled components does to its slices. */
@@ -95,12 +96,16 @@ export function bundleRemoval(
   const classes = new Set(removed.values());
   let characters = 0;
   const renamed = new Map<string, string>();
+  // A component counts as removed once one of its rules went; one a kept
+  // rule names is kept whole, sharing a selector list taking precedence.
+  const went = new Set<string>();
+  const kept = new Map<string, KeptReason>();
   return {
     replace(file) {
       const css = Buffer.from(file.source).toString('utf8');
-      let pruned: string | null;
+      let removal: RuleRemoval;
       try {
-        pruned = removeComponentRules(css, classes, {
+        removal = removeComponentRules(css, classes, {
           targets: ctx.lcssTargets,
           keepDirSelector: ctx.options.keepDirSelector,
         });
@@ -108,8 +113,18 @@ export function bundleRemoval(
         ctx.warn(
           `[animus-extract] removeUnbundledComponents kept ${file.fileName} whole: Lightning CSS could not read it (${error instanceof Error ? error.message : String(error)})`
         );
+        for (const name of classes) {
+          if (css.includes(name) && !kept.has(name)) {
+            kept.set(name, 'unreadable');
+          }
+        }
         return null;
       }
+      for (const name of removal.went) went.add(name);
+      for (const [name, reason] of removal.kept) {
+        if (!kept.has(name) || reason === 'shared-list') kept.set(name, reason);
+      }
+      const { css: pruned } = removal;
       if (pruned === null) return null;
       characters += css.length - pruned.length;
       // Beside the file it replaces, so each relative url() still resolves,
@@ -144,17 +159,47 @@ export function bundleRemoval(
         }
         file.source = text;
       }
-      if (ctx.tracing) {
-        for (const [id, className] of removed) {
+      let count = 0;
+      let ruleless = 0;
+      const whole = new Map<KeptReason, number>();
+      for (const [id, className] of removed) {
+        const reason = kept.get(className);
+        if (went.has(className)) {
+          count += 1;
           ctx.trace(`removed ${id} (${className}): no output file includes it`);
+        } else if (reason === undefined) {
+          ruleless += 1;
+          ctx.trace(
+            `${id} (${className}): no output file includes it, and no rule names it`
+          );
+        } else {
+          whole.set(reason, (whole.get(reason) ?? 0) + 1);
+          ctx.trace(
+            `kept ${id} (${className}) whole, though no output file includes it: ${KEPT_WHOLE[reason]}`
+          );
         }
       }
+      const keptWhole = [...whole]
+        .map(([reason, n]) => `${KEPT_WHOLE[reason]}: ${n}`)
+        .join(', ');
+      const wholeCount = [...whole.values()].reduce((sum, n) => sum + n, 0);
       ctx.info(
-        `removed the CSS of ${removed.size} of ${Object.keys(components).length} components no output file includes (${characters} characters of the stylesheet)`
+        `removed the CSS of ${count} of ${Object.keys(components).length} components no output file includes (${characters} characters of the stylesheet)${wholeCount > 0 ? `; kept ${wholeCount} more whole (${keptWhole})` : ''}${ruleless > 0 ? `; with no rules to remove: ${ruleless}` : ''}`
       );
     },
   };
 }
+
+/** Why the rules of a component no output file includes all stayed. */
+type KeptReason = KeptRuleReason | 'unreadable';
+
+/** Each reason, as the trace and the build's report print it. */
+const KEPT_WHOLE = {
+  'shared-list': 'shares a selector list with a kept component',
+  conditional:
+    'named only where a selector can match without it (inside :not(), :has(), or an :is() or :where() with an alternative that does not need it)',
+  unreadable: 'in a stylesheet Lightning CSS could not read',
+} satisfies Record<KeptReason, string>;
 
 /** How many times `needle` occurs in `text`. */
 function occurrences(text: string, needle: string): number {

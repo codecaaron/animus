@@ -323,8 +323,10 @@ export type {
 export { adaptedOriginals } from './probe-evidence';
 export type {
   EvidenceText,
+  KeptRuleReason,
   OutputEvidence,
   OutputFile,
+  RuleRemoval,
 } from './bundle-removal';
 export {
   outputEvidence,
