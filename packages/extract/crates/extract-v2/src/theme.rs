@@ -146,14 +146,8 @@ fn cascade_order<'a>(obj: &'a Map<String, Value>, config: &PropConfigMap) -> Vec
     let broader = |a: usize, b: usize| {
         !resets[b].is_empty() && resets[a].len() > resets[b].len() && resets[a].is_superset(&resets[b])
     };
-    let mut pending: Vec<usize> = (0..entries.len()).collect();
-    let mut ordered = Vec::with_capacity(entries.len());
-    while !pending.is_empty() {
-        // Strict containment is acyclic, so some entry is always free.
-        let free = pending.iter().position(|&entry| !pending.iter().any(|&other| broader(other, entry))).unwrap_or(0);
-        ordered.push(entries[pending.remove(free)]);
-    }
-    ordered
+    // Strict containment is acyclic, so some entry is always free.
+    crate::declarations::precedence_order(entries.len(), broader).into_iter().map(|entry| entries[entry]).collect()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

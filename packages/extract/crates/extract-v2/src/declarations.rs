@@ -3,6 +3,7 @@
 //! prop's records are validated against the effective scale and lowered to
 //! CSS once, so its binding classes and its runtime writes read one table.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, OnceLock};
 
@@ -188,6 +189,29 @@ pub(crate) fn shorthand_rank(css_property: &str) -> Option<usize> {
         order
     });
     order.iter().position(|name| *name == css_property)
+}
+
+/// A utility rule's place in its layer's cascade, from the properties it
+/// declares: by the first shorthand among those they reset, then broadest
+/// first, so it precedes every rule whose properties its own strictly
+/// contain; rules that only overlap keep the shorthands' order, then the
+/// first property each declares.
+pub(crate) fn utility_rule_key(properties: &[&str]) -> (usize, Reverse<usize>, String) {
+    let resets = reset_set(properties.iter().copied());
+    let rank = resets.iter().filter_map(|property| shorthand_rank(property)).min();
+    (rank.unwrap_or(usize::MAX), Reverse(resets.len()), properties.first().unwrap_or(&"").to_string())
+}
+
+/// Indices `0..len` in order, each first one that no other remaining index
+/// must precede; a cycle breaks at the first remaining index.
+pub(crate) fn precedence_order(len: usize, precedes: impl Fn(usize, usize) -> bool) -> Vec<usize> {
+    let mut pending: Vec<usize> = (0..len).collect();
+    let mut ordered = Vec::with_capacity(len);
+    while !pending.is_empty() {
+        let free = pending.iter().position(|&index| !pending.iter().any(|&other| precedes(other, index))).unwrap_or(0);
+        ordered.push(pending.remove(free));
+    }
+    ordered
 }
 
 /// A longhand both properties set, if one is or contains the other.

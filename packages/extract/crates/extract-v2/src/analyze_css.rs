@@ -535,9 +535,9 @@ pub struct ComponentDescriptor {
     /// part in.
     pub definition_fingerprint: String,
     /// The props it accepts in authoring order: its variant props, its
-    /// states, its system props in the system's registration order, then
-    /// its custom props in declaration order. Built only for a host that
-    /// publishes the prop-order file.
+    /// states, its system props in the system's authoring ranks
+    /// (`system_authoring_ranks`), then its custom props in declaration
+    /// order. Built only for a host that publishes the prop-order file.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub authoring_order: Vec<OrderedProp>,
 }
@@ -942,7 +942,7 @@ fn authoring_order(
     css: &ComponentCss,
     active_props: Option<&FxHashSet<String>>,
     custom_props: &[String],
-    prop_order: &FxHashMap<String, usize>,
+    system_ranks: &FxHashMap<String, usize>,
     descriptor: &crate::chain_walk::ChainDescriptor,
 ) -> Vec<OrderedProp> {
     let mut system: Vec<&str> = active_props
@@ -951,7 +951,7 @@ fn authoring_order(
         .map(String::as_str)
         .filter(|name| !custom_props.iter().any(|custom| custom == name))
         .collect();
-    system.sort_by_key(|name| (prop_order.get(*name).copied().unwrap_or(usize::MAX), *name));
+    system.sort_by_key(|name| (system_ranks.get(*name).copied().unwrap_or(usize::MAX), *name));
     let staged = css
         .variants
         .iter()
@@ -981,6 +981,50 @@ fn authoring_order(
             rank,
             forwarded: forwarded(name, stage),
         })
+        .collect()
+}
+
+/// Each system prop's authoring rank: the system's registration order,
+/// except that of two props writing a common property, the one that takes
+/// effect ranks later. That is the prop superseding the other, else the one
+/// whose utility rule the system layer emits later (`utility_rule_key`), so
+/// a shorthand ranks before every longhand it covers and a written tag reads
+/// in the order its rules apply.
+fn system_authoring_ranks(
+    config: &PropConfigMap,
+    prop_order: &FxHashMap<String, usize>,
+    superseded: &BTreeMap<String, Vec<String>>,
+) -> FxHashMap<String, usize> {
+    let mut names: Vec<&String> = prop_order.keys().collect();
+    names.sort_by_key(|name| prop_order[*name]);
+    let written: Vec<Vec<String>> = names
+        .iter()
+        .map(|name| {
+            let current_var = config.get(*name).and_then(|prop| prop.current_var.clone());
+            crate::theme::entry_properties(name, config).into_iter().chain(current_var).collect()
+        })
+        .collect();
+    let properties: Vec<Vec<&str>> = written.iter().map(|set| set.iter().map(String::as_str).collect()).collect();
+    let resets: Vec<_> = properties.iter().map(|set| crate::declarations::reset_set(set.iter().copied())).collect();
+    let keys: Vec<_> = properties.iter().map(|set| crate::declarations::utility_rule_key(set)).collect();
+    let supersedes =
+        |later: usize, earlier: usize| superseded.get(names[earlier]).is_some_and(|by| by.contains(names[later]));
+    let precedes: Vec<Vec<bool>> = (0..names.len())
+        .map(|a| {
+            (0..names.len())
+                .map(|b| {
+                    a != b
+                        && !resets[a].is_disjoint(&resets[b])
+                        && (supersedes(b, a) || !supersedes(a, b) && keys[a] < keys[b])
+                })
+                .collect()
+        })
+        .collect();
+    // A cycle, should supersession ever close one, breaks at registration.
+    crate::declarations::precedence_order(names.len(), |a, b| precedes[a][b])
+        .into_iter()
+        .enumerate()
+        .map(|(rank, prop)| (names[prop].clone(), rank))
         .collect()
 }
 
@@ -9754,6 +9798,10 @@ fn run_with_system_floor(
     // Interned in sorted order, so a key's first claimant is stable.
     let mut prop_name_lists = crate::assemble::PropNameLists::default();
     let system_superseded = crate::assemble::system_superseded_props(&inputs.config, &inputs.prop_order);
+    let system_ranks = inputs
+        .analysis_context
+        .prop_order
+        .then(|| system_authoring_ranks(&inputs.config, &inputs.prop_order, &system_superseded));
     for component_id in &sorted_ids {
         let Some((_, _, _, active_props, group_names, custom_configs, compound_configs)) =
             evaluated.get(component_id)
@@ -10494,17 +10542,18 @@ fn run_with_system_floor(
                     .map(|p| p.system_prop_names.clone())
                     .unwrap_or_default(),
                 definition_fingerprint: definition_fingerprints[component_id].clone(),
-                authoring_order: if inputs.analysis_context.prop_order {
-                    authoring_order(
-                        component_css,
-                        active_props.as_ref(),
-                        custom_order.get(component_id).map_or(&[][..], Vec::as_slice),
-                        &inputs.prop_order,
-                        &chain.descriptor,
-                    )
-                } else {
-                    Vec::new()
-                },
+                authoring_order: system_ranks
+                    .as_ref()
+                    .map(|ranks| {
+                        authoring_order(
+                            component_css,
+                            active_props.as_ref(),
+                            custom_order.get(component_id).map_or(&[][..], Vec::as_slice),
+                            ranks,
+                            &chain.descriptor,
+                        )
+                    })
+                    .unwrap_or_default(),
             },
         );
         files_map
@@ -18918,10 +18967,13 @@ export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} 
 
     /// `wide` and `tall` share one configured callable, in different groups;
     /// `inset` binds a callable no other prop shares.
+    /// `pt` is registered before its shorthand `p`, and `py` after `pt`,
+    /// which it supersedes though its rule precedes `pt`'s.
     /// Contract: a component's authoring order is its variant props, its
     /// states, its system props in the system's registration order (not its
-    /// groups' order), then its custom props in declaration order, the
-    /// inherited first; a tag resolves through an aliased or namespace
+    /// groups' order) except that a shorthand ranks before every longhand it
+    /// covers and a prop after each one it supersedes, then its custom props
+    /// in declaration order, the inherited first; a tag resolves through an aliased or namespace
     /// import, and a name also bound in a nested scope does not resolve. A
     /// host that does not publish the prop-order file gets neither. A prop
     /// the target receives as written (`data-*`, `aria-*`, a variant or
@@ -18933,8 +18985,11 @@ export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} 
             None,
             None,
             None,
-            Some(r#"{"p": {"property": "padding"}, "bg": {"property": "background-color"}, "px": {"property": "padding-inline"}}"#),
-            Some(r#"{"space": ["px", "p"], "color": ["bg"]}"#),
+            Some(
+                r#"{"pt": {"property": "paddingTop"}, "p": {"property": "padding"}, "bg": {"property": "background-color"},
+                "px": {"property": "padding-inline"}, "py": {"property": "padding", "properties": ["paddingTop", "paddingBottom"]}}"#,
+            ),
+            Some(r#"{"space": ["py", "px", "pt", "p"], "color": ["bg"]}"#),
             None,
             None,
             None,
@@ -18977,8 +19032,9 @@ export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} 
             out.components[id].authoring_order.iter().map(|prop| (prop.name.clone(), prop.stage)).collect()
         };
         let expected = |custom: &[&str]| -> Vec<(String, &str)> {
-            [("tone", "variants"), ("active", "states"), ("p", "system"), ("bg", "system"), ("px", "system")]
+            [("tone", "variants"), ("active", "states")]
                 .into_iter()
+                .chain(["p", "pt", "bg", "px", "py"].map(|name| (name, "system")))
                 .chain(custom.iter().map(|name| (*name, "custom")))
                 .map(|(name, stage)| (name.to_string(), stage))
                 .collect()

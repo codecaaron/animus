@@ -82,11 +82,11 @@ Obligations a driver or host carries that no exported type expresses.
 
 ## Prop-order lint rule
 
-`@animus-ui/extract/oxlint` is an [Oxlint](https://oxc.rs/docs/guide/usage/linter/js-plugins.html) JS plugin with one rule, `animus/prop-order`. It orders the props an Animus component tag is written with by stage, then within the stage by registration:
+`@animus-ui/extract/oxlint` is an [Oxlint](https://oxc.rs/docs/guide/usage/linter/js-plugins.html) JS plugin with one rule, `animus/prop-order`. It orders the props an Animus component tag is written with by stage, then within the stage:
 
 1. variant props (variants and compounds), in the order the chain declares them;
 2. states, in declaration order;
-3. system props, in the system's registration order (not the order of the groups that admit them);
+3. system props, in the system's registration order (not the order of the groups that admit them), except that of two props that write a common CSS property, the one that takes effect comes later: a shorthand before every longhand it covers, as the system layer emits their rules, and an alias the system defines later, which applies in place of the earlier one, after it;
 4. custom props, in declaration order, inherited ones first.
 
 This is a readability convention. The stylesheet does not follow JSX attribute order, so the rule changes no CSS.

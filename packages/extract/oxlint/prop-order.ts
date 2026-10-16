@@ -1,8 +1,8 @@
 /**
  * `animus/prop-order`: orders the props an Animus component tag is written
  * with by stage — variants and compounds, states, system props, custom
- * props — and within a stage by registration order, as the prop-order file
- * an analysis publishes records it. A readability convention: CSS emission
+ * props — and within a stage by the rank the prop-order file an analysis
+ * publishes records for each prop. A readability convention: CSS emission
  * does not follow JSX attribute order.
  *
  * Only a tag the analysis resolved to exactly one component is checked, and

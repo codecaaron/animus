@@ -2,7 +2,6 @@
 //! component ids, sorted declarations, topological cascade ranks.
 
 use std::borrow::Cow;
-use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
 use std::sync::{Arc, LazyLock};
@@ -1537,21 +1536,18 @@ fn render_utility_layer(
         0
     };
     // A rule precedes every rule whose properties its own contain, so a
-    // longhand beats each shorthand that resets it on the same element: rules
-    // rank by the first shorthand they reset, then by breadth, the properties
-    // they reset in all. Rules that only overlap keep the shorthands' order
-    // (the border sides before its aspects), then the first property each
-    // declares. The condition, then the rule kind, order the rest: a
-    // breakpoint declaration still follows a base atomic rule.
+    // longhand beats each shorthand that resets it on the same element
+    // (`utility_rule_key`; the border sides precede its aspects). The
+    // condition, then the rule kind, order the rest: a breakpoint
+    // declaration still follows a base atomic rule. The prop-order file
+    // ranks system props by the same key.
     entries.sort_by_cached_key(|(kind, key, _, styles)| {
         let declarations = match styles.breakpoint_groups().next() {
             Some((_, decls)) if styles.declarations.is_empty() => decls,
             _ => &styles.declarations,
         };
-        let resets = crate::declarations::reset_set(declarations.iter().map(|d| d.property.as_str()));
-        let rank = resets.iter().filter_map(|property| crate::declarations::shorthand_rank(property)).min();
-        let first = declarations.first().map(|d| d.property.clone()).unwrap_or_default();
-        (rank.unwrap_or(usize::MAX), Reverse(resets.len()), first, bp_order(styles), *kind, key.clone())
+        let properties: Vec<&str> = declarations.iter().map(|d| d.property.as_str()).collect();
+        (crate::declarations::utility_rule_key(&properties), bp_order(styles), *kind, key.clone())
     });
     for (_, _, class_name, styles) in &entries {
         write_utility_rule(&mut css, class_name, styles, breakpoints);

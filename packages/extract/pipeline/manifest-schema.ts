@@ -20,10 +20,9 @@ export interface ManifestComponentDescriptor {
   system_prop_names: string[];
   /** The definition's fingerprint, which its location takes no part in. */
   definition_fingerprint: string;
-  /** The props it accepts in authoring order: its variant props, its
-   *  states, its system props in the system's registration order, then its
-   *  custom props in declaration order. Present only where the host
-   *  publishes the prop-order file and the component accepts a prop. */
+  /** The props it accepts in authoring order, as the extract README's
+   *  prop-order section states it. Present only where the host publishes
+   *  the prop-order file and the component accepts a prop. */
   authoring_order?: ManifestOrderedProp[];
 }
 
