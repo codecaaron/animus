@@ -22,7 +22,7 @@ use crate::static_value::StaticValue;
 use crate::jsx_scan::{
     classify_jsx_attribute_as_variant_value, create_element_literals, create_element_props, eval_jsx_attribute_value, eval_property_key,
     eval_static_expression, make_json_number,
-    is_component_like_identifier, jsx_member_path, ComponentUsageConfig, CustomPropScanResult,
+    is_component_like_identifier, jsx_member_path, ComponentUsageConfig, ComposeFamilyInfo, CustomPropScanResult,
     DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage, record_written,
     UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage, WrittenProp,
 };
@@ -984,6 +984,7 @@ pub(crate) fn collect_enriched_usage(
     module_path: &str,
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
+    compose: &[ComposeFamilyInfo],
 ) -> EnrichedUsage {
     let static_values = crate::eval::Statics::of(static_values, module_path);
     let exported: FxHashSet<&str> = exports.iter().filter_map(|e| e.local.as_deref()).collect();
@@ -1071,6 +1072,11 @@ pub(crate) fn collect_enriched_usage(
             let mut scan = EscapeScan {
                 scoping,
                 chains,
+                slot_values: compose
+                    .iter()
+                    .filter(|family| family.addressable())
+                    .flat_map(|family| family.slot_values.iter().copied())
+                    .collect(),
                 react: &react,
                 namespaces: collect_namespace_imports(module).into_keys().collect(),
                 imports: named_import_locals(module),
@@ -5309,6 +5315,9 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
 struct EscapeScan<'a, 's> {
     scoping: &'s Scoping,
     chains: &'s [&'s ChainDescriptor],
+    /// See `ComposeFamilyInfo::slot_values`, for every family of the
+    /// module's facts that usage follows (`ComposeFamilyInfo::addressable`).
+    slot_values: FxHashSet<(u32, u32)>,
     react: &'s ReactNames,
     /// Namespace imports: `ui.Button` can name a component whatever the
     /// namespace is called.
@@ -5352,7 +5361,7 @@ impl<'a> Visit<'a> for EscapeScan<'a, '_> {
         if !self.is_candidate(name) {
             return;
         }
-        let path = escape_path(name, ident.span, &self.ancestors, self.chains, self.react);
+        let path = escape_path(name, ident.span, &self.ancestors, self.chains, &self.slot_values, self.react);
         if let Some(path) = path {
             self.escapes.insert(path);
         }
@@ -5366,6 +5375,7 @@ fn escape_path(
     span: oxc::span::Span,
     ancestors: &[AstKind<'_>],
     chains: &[&ChainDescriptor],
+    slot_values: &FxHashSet<(u32, u32)>,
     react: &ReactNames,
 ) -> Option<String> {
     use oxc::span::GetSpan;
@@ -5415,17 +5425,12 @@ fn escape_path(
                 return (!initializes_top_level_const(current, std::iter::once(parent).chain(rest)))
                     .then_some(path);
             }
-            // A compose() family's slots render through its member tags; any
-            // other object member is not followed.
+            // A slot of a compose() family usage follows renders through its
+            // member tags; any other object member is not followed, nor is
+            // a slot of a compose() call whose family usage cannot follow.
             AstKind::ObjectProperty(property) if property.value.span() == current => {
-                let Some(AstKind::ObjectExpression(object)) = rest.next() else {
-                    return Some(path);
-                };
-                let slot = matches!(rest.next(), Some(AstKind::CallExpression(call))
-                    if call.arguments.first().map(GetSpan::span) == Some(object.span)
-                        && matches!(crate::chain_walk::unwrap_type_assertions(&call.callee), Expression::Identifier(id)
-                            if matches!(id.name.as_str(), "compose" | "composeWithContext")));
-                return (!slot).then_some(path);
+                let value = property.value.span();
+                return (!slot_values.contains(&(value.start, value.end))).then_some(path);
             }
             _ => return Some(path),
         }
@@ -7184,7 +7189,7 @@ pub fn collect_usage_facts_with_statics(
     module_path: &str,
 ) -> Vec<UsageFact> {
     let built = SemanticBuilder::new().build(program).semantic.into_scoping();
-    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[])
+    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[], &[])
         .usage
 }
 

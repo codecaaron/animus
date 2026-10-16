@@ -19,6 +19,10 @@ pub struct ComposeFamilyInfo {
     pub root_binding: String,
     /// (slot name, binding name) pairs for every slot, Root included.
     pub slots: Vec<(String, String)>,
+    /// Byte range of each slot's value in `slots`: a reference there
+    /// renders through the family's member tags.
+    #[serde(skip)]
+    pub slot_values: Vec<(u32, u32)>,
     /// A slot property is a spread, or has a key or value this scan cannot
     /// read: the family may hold members `slots` does not list.
     #[serde(skip)]
@@ -29,6 +33,15 @@ pub struct ComposeFamilyInfo {
     /// Byte range of the `compose()` call expression.
     pub span: (u32, u32),
     pub name: String,
+}
+
+impl ComposeFamilyInfo {
+    /// Whether usage can name the family, so its member tags render its
+    /// slots: a binding holds it, or it is the module's default export.
+    /// Usage follows no other family (`const { Root } = compose(…)`).
+    pub fn addressable(&self) -> bool {
+        self.family_binding.is_some() || self.default_export
+    }
 }
 
 /// Scan top-level statements for `compose(...)` calls. compose wraps slot
@@ -133,6 +146,7 @@ fn extract_compose_family(
     };
 
     let mut slots: Vec<(String, String)> = Vec::new();
+    let mut slot_values: Vec<(u32, u32)> = Vec::new();
     let mut root_binding = String::new();
     let mut open = false;
 
@@ -146,7 +160,10 @@ fn extract_compose_family(
                 }
             };
             let binding_name = match &prop.value {
-                Expression::Identifier(id) => id.name.to_string(),
+                Expression::Identifier(id) => {
+                    slot_values.push((id.span.start, id.span.end));
+                    id.name.to_string()
+                }
                 _ => {
                     open = true;
                     continue;
@@ -189,6 +206,7 @@ fn extract_compose_family(
         default_export: false,
         root_binding,
         slots,
+        slot_values,
         open,
         shared_keys,
         context,

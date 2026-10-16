@@ -1941,6 +1941,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &ast.path,
         &descriptors,
         &structural.exports,
+        &structural.compose,
     );
 
     FileFacts {

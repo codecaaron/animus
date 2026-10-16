@@ -14688,6 +14688,33 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         (sizes, states)
     }
 
+    /// Contract: a compose slot whose family usage cannot be followed keeps
+    /// every option. A slot renders through its family's member tags only
+    /// where usage follows the family; elsewhere (a wrapped or nested
+    /// compose() call, a cast callee or slot, no `Root`, a destructured
+    /// family) the component escapes, while a followed family's slot keeps
+    /// only what its renders write.
+    #[test]
+    fn a_compose_slot_whose_family_usage_cannot_be_followed_keeps_every_option() {
+        let render = ("d.tsx", "import { R } from './r';\nexport const D = () => <R size=\"sm\" busy />;\n");
+        let app = ("app.tsx", "import { Page } from './page';\nexport const App = () => <Page.Root size=\"lg\" active />;\n");
+        let kept = |page: &str| {
+            let page = format!("import {{ R }} from './r';\n{page}");
+            kept_options(&[("r.tsx", RECIPE), render, ("page.tsx", page.as_str()), app])
+        };
+        assert_eq!(kept("export const Page = compose({ Root: R });\n"), (vec!["sm", "lg"], vec!["active", "busy"]));
+        for page in [
+            "const useFrame = () => null;\nexport const Page = Object.assign(compose({ Root: R }), { useFrame });\n",
+            "const make = () => compose({ Root: R });\nexport const Page = make();\n",
+            "export const Page = (compose as any)({ Root: R });\n",
+            "export const Page = compose({ Root: R as any });\n",
+            "export const Page = compose({ Item: R });\n",
+            "export const { Root } = compose({ Root: R });\nexport const Page = { Root };\n",
+        ] {
+            assert_eq!(kept(page), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{page}");
+        }
+    }
+
     #[test]
     fn a_family_star_exported_twice_or_openly_names_no_member() {
         // `ui.Card` is ambiguous through two stars, or open beside an
