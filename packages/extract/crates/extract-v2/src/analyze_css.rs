@@ -3654,24 +3654,41 @@ fn written_packages(
             });
         }
     };
+    // A file's writes, in source order, each with the binding it starts from
+    // and what it is said of.
+    enum Start<'f> {
+        Binding(&'f str),
+        Namespace(&'f String, Option<&'f str>),
+        Member(&'f str, Option<&'f str>),
+    }
     for (path, ff) in files {
-        for (binding, used) in &ff.written_bindings {
-            origins.binding(path, binding);
-            record(&mut origins, path, binding, &|| used.clone());
-        }
-        for binding in ff.assigned_aliases.values() {
-            origins.binding(path, binding);
-            let assigned = || ObjectUse { line: None, what: "is the target of an `Object.assign`".to_string() };
-            record(&mut origins, path, binding, &assigned);
-        }
-        for (local, (subject, used)) in &ff.written_namespaces {
-            if let Some(source) = ff.namespace_imports.get(local) {
-                origins.import(path, source, subject.strip_prefix(&format!("{local}.")));
-                record(&mut origins, path, subject, &|| used.clone());
+        let mut uses: Vec<(Start, &str, ObjectUse)> = Vec::new();
+        uses.extend(ff.written_bindings.iter().map(|(binding, used)| (Start::Binding(binding), binding.as_str(), used.clone())));
+        uses.extend(ff.assigned_aliases.iter().map(|(alias, binding)| {
+            let used = ObjectUse {
+                line: None,
+                at: ff.assigned_alias_offsets.get(alias).copied(),
+                what: "is the target of an `Object.assign`".to_string(),
+            };
+            (Start::Binding(binding), binding.as_str(), used)
+        }));
+        uses.extend(ff.written_namespaces.iter().filter_map(|(local, (subject, used))| {
+            let source = ff.namespace_imports.get(local)?;
+            let member = subject.strip_prefix(&format!("{local}.")).map(|member| &subject[subject.len() - member.len()..]);
+            Some((Start::Namespace(source, member), subject.as_str(), used.clone()))
+        }));
+        uses.extend(ff.written_members.iter().map(|(binding, (subject, used))| {
+            let member = subject.strip_prefix(&format!("{binding}.")).map(|member| &subject[subject.len() - member.len()..]);
+            (Start::Member(binding, member), subject.as_str(), used.clone())
+        }));
+        // A use with no offset (a direct `eval`) comes last.
+        uses.sort_by_key(|(_, _, used)| used.at.unwrap_or(u32::MAX));
+        for (start, subject, used) in uses {
+            match start {
+                Start::Binding(binding) => origins.binding(path, binding),
+                Start::Namespace(source, member) => origins.import(path, source, member),
+                Start::Member(binding, member) => origins.member(path, binding, member),
             }
-        }
-        for (binding, (subject, used)) in &ff.written_members {
-            origins.member(path, binding, subject.strip_prefix(&format!("{binding}.")));
             record(&mut origins, path, subject, &|| used.clone());
         }
     }
@@ -3831,6 +3848,9 @@ enum Handoff {
     /// `asChild` over one element that is itself a tag of a package with no
     /// dependency path to Animus, which may pass the props on.
     AsChildForeign,
+    /// `asChild` over one element whose tag names a parameter or local
+    /// spelled like a tag of such a package, which extraction cannot follow.
+    AsChildUnresolved,
     /// A `createElement` call of it.
     CreateElement,
     /// A `cloneElement` call of an element of it.
@@ -3843,6 +3863,10 @@ impl Handoff {
             Handoff::Spread => "this render spreads props into it, which can hand it a component through `as` or `children`",
             Handoff::As => "this render hands it a component through `as`",
             Handoff::AsChild => "this render puts its children in its place (`asChild`), and they are not one element",
+            Handoff::AsChildUnresolved => {
+                "this render puts its one child in its place (`asChild`), and that child is a parameter or local \
+                 extraction cannot follow, which may pass the props on"
+            }
             Handoff::AsChildForeign => {
                 "this render puts its one child in its place (`asChild`), and that child is itself a tag of a \
                  package extraction does not analyse, which may pass the props on"
@@ -3887,7 +3911,12 @@ fn handoffs<'f>(
                 None => attrs.iter().find_map(|attr| match attr.name.as_str() {
                     "as" if !matches!(attr.static_value, Some(Value::String(_))) => Some(Handoff::As),
                     "asChild" if element_child.is_none() => Some(Handoff::AsChild),
-                    "asChild" if as_child_element(ff, *element_child, inputs).is_none() => Some(Handoff::AsChildForeign),
+                    "asChild" if as_child_element(ff, *element_child, inputs).is_none() => {
+                        Some(match child_origin(ff, *element_child) {
+                            Some(TagOrigin::Import) => Handoff::AsChildForeign,
+                            _ => Handoff::AsChildUnresolved,
+                        })
+                    }
                     _ => None,
                 }),
             };
@@ -3903,12 +3932,22 @@ fn handoffs<'f>(
     })
 }
 
+/// Why `first_handoff` found renders but named none of the import's.
+#[derive(Debug, Clone, Copy)]
+enum Unattributed {
+    /// A render of another binding of the name hands that name a component.
+    Shadowed,
+    /// Only clones, which a parameter or local of the same name keeps from
+    /// being attributed to the import.
+    Clone,
+}
+
 /// The renders in `ff` that may hand the tag `local` a component: `None`
 /// without any, else the first in source order whose tag names the module's
-/// import, or `Err` where only renders of another binding of the name do. A
-/// clone's fact names no binding (its element's does), so it counts only
-/// where no element of that name binds it elsewhere.
-fn first_handoff(ff: &FileFacts, local: &str, inputs: &CssInputs) -> Option<Result<Handed, ()>> {
+/// import, or why none does. A clone's fact names no binding (its element's
+/// does), so it counts only where no element of that name binds it
+/// elsewhere.
+fn first_handoff(ff: &FileFacts, local: &str, inputs: &CssInputs) -> Option<Result<Handed, Unattributed>> {
     let all: Vec<_> = handoffs(ff, local, inputs).collect();
     if all.is_empty() {
         return None;
@@ -3918,6 +3957,8 @@ fn first_handoff(ff: &FileFacts, local: &str, inputs: &CssInputs) -> Option<Resu
             matches!(fact, UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), origin, .. }
                 if tag == local && *origin != Some(TagOrigin::Import))
         });
+    let other_binding =
+        all.iter().any(|(handed, origin)| !matches!(handed.how, Handoff::Clone) && *origin != Some(TagOrigin::Import));
     let first = all
         .into_iter()
         .filter(|(handed, origin)| match handed.how {
@@ -3926,7 +3967,16 @@ fn first_handoff(ff: &FileFacts, local: &str, inputs: &CssInputs) -> Option<Resu
         })
         .map(|(handed, _)| handed)
         .min_by_key(|handed| handed.at);
-    Some(first.ok_or(()))
+    Some(first.ok_or(if other_binding { Unattributed::Shadowed } else { Unattributed::Clone }))
+}
+
+/// Where the first name of the element at `element_child` is bound.
+fn child_origin(ff: &FileFacts, element_child: Option<(u32, u32)>) -> Option<TagOrigin> {
+    let child = element_child?;
+    ff.usage_for_analysis().iter().find_map(|fact| match fact {
+        UsageFact::Element { span, origin, .. } if *span == child => *origin,
+        _ => None,
+    })
 }
 
 /// The opening span of the one element a site's `asChild` renders in its
@@ -5287,6 +5337,11 @@ fn identity_uncertainty_diagnostics(
                             "a render of a parameter or local of this name hands that name a component, and \
                              extraction reads every render of a name",
                         ),
+                        ForeignCause::UnattributedClone => reason.push_str(
+                            "a `cloneElement` call of an element of this name can hand it a component, and a \
+                             parameter or local of the same name keeps extraction from telling that element names \
+                             the import",
+                        ),
                         ForeignCause::Written(by) => {
                             reason.push_str("an analysed module writes into it or hands part of it on (");
                             reason.push_str(&by.to_string());
@@ -5890,6 +5945,9 @@ enum ForeignCause {
     /// Only renders of another binding of its name (a parameter or a local)
     /// hand that name a component, and the rule reads every render of it.
     Shadowed,
+    /// Only clones of its elements may hand it a component, and a parameter
+    /// or local of the same name keeps them from being attributed to it.
+    UnattributedClone,
     /// It is a member of an object from the package, which an analysed
     /// module writes into or hands part of on, where the app may have put
     /// one of ours.
@@ -5918,8 +5976,9 @@ fn foreign_site(
         return Foreign::Uncertain(ForeignCause::Written(Rc::clone(by)));
     }
     match handoff {
-        Some(_) => Foreign::Uncertain(ForeignCause::Shadowed),
-        None => Foreign::Proven,
+        Some(Err(Unattributed::Shadowed)) => Foreign::Uncertain(ForeignCause::Shadowed),
+        Some(Err(Unattributed::Clone)) => Foreign::Uncertain(ForeignCause::UnattributedClone),
+        Some(Ok(_)) | None => Foreign::Proven,
     }
 }
 
@@ -15045,10 +15104,16 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ),
             ("export const B = (List) => <List as={R} />;", "<List />", "a render of a parameter or local of this name"),
             ("export const B = () => <List asChild><List.Item /></List>;", "<List asChild>", "child is itself a tag of a package"),
+            ("export const B = (Child) => <List asChild><Child /></List>;", "<List asChild>", "child is a parameter or local"),
+            (
+                "const e = <List />;\nexport const B = (p) => cloneElement(e, p);\nexport const C = (List) => <List />;",
+                "<List />",
+                "keeps extraction from telling that element names the import",
+            ),
         ];
         for (body, site, how) in handing {
             let app = format!(
-                "import {{ createElement, cloneElement }} from 'react';\nimport {{ List }} from 'icons';\n\
+                "import {{ createElement, cloneElement }} from 'react';\nimport {{ List, Child }} from 'icons';\n\
                  import {{ R }} from './r';\nexport const A = () => <List />;\n{body}\n"
             );
             let out = analyze(&[("src/r.tsx", recipe.as_str()), ("src/app.tsx", app.as_str())], &inputs);
@@ -15087,6 +15152,29 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 ("src/app.tsx", "import { Parts } from 'icons';\nexport const App = () => <Parts.Item size=\"lg\" />;\n"),
             ]),
             [("src/app.tsx".to_string(), "<Parts.Item>".to_string())]
+        );
+
+        // The record names the first write into the package in source order,
+        // whatever binding or namespace it is written through.
+        let first_write = |app: &str| {
+            let entries = [("src/r.tsx", RECIPE), ("src/app.tsx", app)];
+            let out = analyze(&entries, &inputs);
+            let record = out.diagnostics.into_iter().find(|d| d.code.as_deref() == Some(IDENTITY_UNCERTAIN_TAG));
+            record.map(|d| d.message).unwrap_or_default()
+        };
+        assert!(
+            first_write(
+                "import { R } from './r';\nimport { Parts as A, Parts as Z } from 'icons';\nZ.Item = R;\nA.Item = R;\n\
+                 export const App = () => <A.Item />;\n"
+            )
+            .contains("(Z has its member Item assigned in src/app.tsx on line 3)")
+        );
+        assert!(
+            first_write(
+                "import { R } from './r';\nimport * as I from 'icons';\nimport { Parts } from 'icons';\nI.Parts.Item = R;\n\
+                 Parts.Item = R;\nexport const App = () => <Parts.Item />;\n"
+            )
+            .contains("on line 4)")
         );
 
         // Calling a function the package exports, or a member as a method,

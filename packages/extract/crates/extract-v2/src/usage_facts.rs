@@ -959,6 +959,9 @@ pub struct ObjectUse {
     /// 1-based line of the use; `None` for a direct `eval`, which can reach
     /// any binding.
     pub line: Option<usize>,
+    /// Byte offset of the use, which orders uses on one line; `None` where
+    /// `line` is.
+    pub at: Option<u32>,
     /// What the use does, said of the object: `is passed to decorate()`.
     pub what: String,
 }
@@ -1816,7 +1819,7 @@ fn scan_object_uses(program: &Program<'_>, scoping: &Scoping, candidates: FxHash
     }
     if scoping.root_unresolved_references().contains_key("eval") {
         // Direct eval can reach any binding by name.
-        let what = ObjectUse { line: None, what: "can be changed by a direct eval".to_string() };
+        let what = ObjectUse { line: None, at: None, what: "can be changed by a direct eval".to_string() };
         let written_namespaces = candidates
             .values()
             .filter(|binding| binding.namespace)
@@ -1974,7 +1977,7 @@ pub(crate) fn style_object_uses(
         return StyleObjectFacts::default();
     }
     if scoping.root_unresolved_references().contains_key("eval") {
-        let what = ObjectUse { line: None, what: "can be changed by a direct eval".to_string() };
+        let what = ObjectUse { line: None, at: None, what: "can be changed by a direct eval".to_string() };
         let names: BTreeSet<String> = candidates.into_values().map(|binding| binding.name).collect();
         let uses = names.into_iter().map(|name| (name, what.clone(), UseAt::WHOLE)).collect();
         return StyleObjectFacts { uses, ..StyleObjectFacts::default() };
@@ -3954,7 +3957,7 @@ impl<'a> ObjectUseScan<'a, '_> {
                         nested: false,
                         within,
                         holder,
-                        used: ObjectUse { line, what: format!("{name} {what}") },
+                        used: ObjectUse { line, at: Some(ident.span.start), what: format!("{name} {what}") },
                     });
                     None
                 }
@@ -3967,7 +3970,7 @@ impl<'a> ObjectUseScan<'a, '_> {
         if let Some((at, what)) = use_at {
             let alias = &self.local_aliases[&symbol];
             let what = format!("{}, and {what}", alias.used.what);
-            self.style_uses.push((alias.binding.clone(), ObjectUse { line, what }, at));
+            self.style_uses.push((alias.binding.clone(), ObjectUse { line, at: Some(ident.span.start), what }, at));
         }
     }
 
@@ -4072,7 +4075,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
         if let Some(namespace) = self.member_consts.get(&symbol).cloned() {
             let write = reference.is_value().then(|| self.member_value_write(ident.span, self.ancestors.iter().rev()));
             if let Some(what) = write.flatten() {
-                let used = ObjectUse { line: Some(self.line(ident.span)), what };
+                let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
                 written_through(&mut self.written_namespaces, &namespace, ident.name.to_string(), used);
             }
         }
@@ -4094,7 +4097,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                         match style_object_use(member.span, &self.ancestors[..at], &names, self.global_object) {
                             StyleUse::Read => return,
                             StyleUse::FlatRead(what) => {
-                                self.flat_reads.push((key, ObjectUse { line: Some(self.line(ident.span)), what }));
+                                self.flat_reads.push((key, ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what }));
                                 return;
                             }
                             StyleUse::StoredIn { .. } => (key, "is stored in an object".to_string(), UseAt::WHOLE),
@@ -4110,6 +4113,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 if let Some((call, path, pairs)) = entries_of(ident.span, &self.ancestors, self.global_object) {
                     let used = ObjectUse {
                         line: Some(self.line(ident.span)),
+                        at: Some(ident.span.start),
                         what: format!("is read by Object.{}()", if pairs { "entries" } else { "values" }),
                     };
                     let base: Vec<String> =
@@ -4134,7 +4138,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                         StyleUse::Unsafe(what) => what,
                         _ => "is returned from a function".to_string(),
                     };
-                    let used = ObjectUse { line: Some(self.line(ident.span)), what };
+                    let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
                     self.returns.push((binding.name.clone(), function, at, used));
                     return;
                 }
@@ -4145,7 +4149,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                         return;
                     }
                     StyleUse::FlatRead(what) => {
-                        self.flat_reads.push((binding.name.clone(), ObjectUse { line: Some(self.line(ident.span)), what }));
+                        self.flat_reads.push((binding.name.clone(), ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what }));
                         return;
                     }
                     StyleUse::Unsafe(what) => (binding.name.clone(), what, UseAt::WHOLE),
@@ -4163,7 +4167,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                             nested,
                             within,
                             holder,
-                            used: ObjectUse { line: Some(self.line(ident.span)), what },
+                            used: ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what },
                         });
                         return;
                     }
@@ -4171,7 +4175,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                         // A member kept in a function's own `const` is
                         // judged by that `const`'s uses.
                         if let Some((local, function)) = local_alias_target(ident.span, &self.ancestors) {
-                            let used = ObjectUse { line: Some(self.line(ident.span)), what };
+                            let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
                             let base = handed_path(&at);
                             self.local_aliases.insert(local, LocalAlias { binding: binding.name.clone(), base, function, used, seen: 0 });
                             return;
@@ -4202,7 +4206,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 }
             };
             let line = self.line(ident.span);
-            self.style_uses.push((key, ObjectUse { line: Some(line), what }, at));
+            self.style_uses.push((key, ObjectUse { line: Some(line), at: Some(ident.span.start), what }, at));
             return;
         }
         // React's `useContext` and `use` read the context they receive.
@@ -4237,7 +4241,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
             }
             if let Some(what) = object_use(span, ancestors, false, self.global_object, true) {
                 let line = self.line(ident.span);
-                self.uses.insert(key, ObjectUse { line: Some(line), what });
+                self.uses.insert(key, ObjectUse { line: Some(line), at: Some(ident.span.start), what });
             }
         }
         let assigned_target = binding.targets.iter().any(String::is_empty);
@@ -4250,7 +4254,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 Some(AstKind::StaticMemberExpression(member)) if member.object.span() == span => {
                     let key = format!("{namespace}.{}", member.property.name);
                     if let Some(what) = self.member_value_write(member.span, ancestors.clone()) {
-                        let used = ObjectUse { line: Some(self.line(ident.span)), what };
+                        let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
                         written_through(&mut self.written_namespaces, &namespace, key.clone(), used);
                     }
                     if self.uses.contains_key(&key) {
@@ -4262,14 +4266,14 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 // Some member a key names at runtime.
                 Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == span => {
                     if let Some(what) = self.member_value_write(member.span, ancestors) {
-                        let used = ObjectUse { line: Some(self.line(ident.span)), what };
+                        let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
                         written_through(&mut self.written_namespaces, &namespace, format!("a member of {namespace}"), used);
                     }
                     (namespace, Some("is used as a whole namespace".to_string()))
                 }
                 _ => {
                     let what = "is used as a whole namespace".to_string();
-                    let used = ObjectUse { line: Some(self.line(ident.span)), what: what.clone() };
+                    let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what: what.clone() };
                     written_through(&mut self.written_namespaces, &namespace, namespace.clone(), used);
                     (namespace, Some(what))
                 }
@@ -4290,7 +4294,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 };
                 if let Some((span, subject)) = member {
                     if let Some(what) = self.member_value_write(span, rest) {
-                        let used = ObjectUse { line: Some(self.line(ident.span)), what };
+                        let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
                         self.written_members.insert(binding.name.clone(), (subject, used));
                     }
                 }
@@ -4305,7 +4309,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
             if let Some((callee, index)) = fixed_call_argument(ident.span, &self.ancestors, self.scoping) {
                 self.handoffs.push(Handoff {
                     binding: binding.name.clone(),
-                    used: ObjectUse { line: Some(self.line(ident.span)), what: format!("is passed to {callee}()") },
+                    used: ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what: format!("is passed to {callee}()") },
                     callee,
                     calls: 1,
                     index,
@@ -4321,7 +4325,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
             if used && !writes {
                 return;
             }
-            let used_at = ObjectUse { line: Some(self.line(ident.span)), what };
+            let used_at = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
             if writes {
                 self.written_bindings.insert(binding.name.clone(), used_at.clone());
             }
@@ -4332,7 +4336,7 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
         };
         let Some(what) = what else { return };
         let line = self.line(ident.span);
-        self.uses.entry(key).or_insert(ObjectUse { line: Some(line), what });
+        self.uses.entry(key).or_insert(ObjectUse { line: Some(line), at: Some(ident.span.start), what });
     }
 }
 

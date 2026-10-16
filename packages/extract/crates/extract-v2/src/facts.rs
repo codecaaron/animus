@@ -451,6 +451,9 @@ pub struct FileFacts {
     /// identity does not follow them.
     #[serde(skip)]
     pub assigned_aliases: BTreeMap<String, String>,
+    /// Byte offset of each `assigned_aliases` declaration.
+    #[serde(skip)]
+    pub(crate) assigned_alias_offsets: BTreeMap<String, u32>,
     /// Top-level `const X = Object.assign(T, …)` facades whose target `T` is
     /// a binding or a member path of one (`Root`, `Fam.Root`): X → T. X is
     /// T itself, with the sources' members written onto it.
@@ -966,6 +969,7 @@ fn serialized(value: &StaticValue) -> Option<Value> {
 struct ConstInitializerFacts {
     aliases: BTreeMap<String, String>,
     assigned: BTreeMap<String, String>,
+    assigned_at: BTreeMap<String, u32>,
     targets: BTreeMap<String, String>,
     roots: BTreeMap<String, String>,
     objects: BTreeMap<String, BTreeMap<String, String>>,
@@ -1243,6 +1247,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         builder_import_references: Vec::new(),
         aliases: const_initializers.aliases,
         assigned_aliases: const_initializers.assigned,
+        assigned_alias_offsets: const_initializers.assigned_at,
         assigned_targets: const_initializers.targets,
         props_forwarding,
         declaration_roots: const_initializers.roots,
@@ -1324,6 +1329,7 @@ fn collect_const_initializers(
             }
             if let Some(target) = object_assign_target(init).filter(|_| native_object) {
                 facts.assigned.insert(name.to_string(), target.to_string());
+                facts.assigned_at.insert(name.to_string(), d.span.start);
             }
             let target = assigned_target(init).filter(|_| native_object);
             if let Some(root) = expression_root(init) {
