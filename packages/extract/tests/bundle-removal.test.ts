@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
 import {
+  outputEvidence,
   removeComponentRules,
   shippedClasses,
   unbundledComponents,
@@ -125,5 +126,65 @@ describe('shippedClasses', () => {
         'animus-Inside-11111111',
       ].sort()
     );
+  });
+});
+
+describe('outputEvidence', () => {
+  // Contract: every output file but the skipped style sheets and media is
+  // evidence, and so is the decoded payload of each data URL in one, nested
+  // too; bytes that are no UTF-8 text, in a file or a data URL, are named
+  // as unreadable, which keeps every component.
+  test('every output text and decoded data URL is evidence, and unreadable data keeps everything', () => {
+    const inner = Buffer.from('{"className":"c-nested"}').toString('base64');
+    const json = Buffer.from(
+      `{"className":"c-json","more":"data:application/json;base64,${inner}"}`
+    ).toString('base64');
+    const { texts, unreadable } = outputEvidence(
+      [
+        {
+          fileName: 'assets/index.js',
+          code: `fetch("data:application/json;base64,${json}")`,
+        },
+        {
+          fileName: 'assets/classes.json',
+          bytes: Buffer.from('{"className":"c-asset"}'),
+        },
+        {
+          fileName: 'assets/page.html',
+          code: '<a href="data:text/plain,c-percent%2Dx">',
+        },
+        { fileName: 'assets/animus-components.css', code: '.c-skipped{}' },
+        { fileName: 'assets/logo.png', bytes: new Uint8Array([0xff, 0xfe]) },
+      ],
+      new Set(['assets/animus-components.css'])
+    );
+    expect(unreadable).toBeNull();
+    const all = texts.join('\n');
+    for (const name of ['c-json', 'c-nested', 'c-asset', 'c-percent-x']) {
+      expect(all).toContain(name);
+    }
+    expect(all).not.toContain('c-skipped');
+    expect(
+      outputEvidence(
+        [
+          {
+            fileName: 'assets/blob.bin',
+            bytes: new Uint8Array([0xff, 0xfe]),
+          },
+        ],
+        new Set()
+      ).unreadable
+    ).toBe('assets/blob.bin');
+    expect(
+      outputEvidence(
+        [
+          {
+            fileName: 'a.js',
+            code: `x="data:application/octet-stream;base64,${Buffer.from([0xff, 0xfe]).toString('base64')}"`,
+          },
+        ],
+        new Set()
+      ).unreadable
+    ).toBe('a data URL in a.js');
   });
 });

@@ -271,6 +271,18 @@ function linkingInstead(tag: string, href: string, attributes = ''): string {
     .replace(/\s*\/?>$/, `${attributes}>`);
 }
 
+/** The slice `file` holds, by its id, or a path to it from the root, as
+ *  Vite versions spell it. */
+export function sliceIdOf(
+  file: Rolldown.OutputAsset | Rolldown.OutputChunk,
+  sliceIds: readonly string[]
+): string | undefined {
+  if (file.type !== 'asset') return undefined;
+  return sliceIds.find((slice) =>
+    file.originalFileNames.some((name) => name.endsWith(slice))
+  );
+}
+
 /**
  * Puts a split build's slices where the single stylesheet would have been.
  * The stylesheet module held only a marker rule, so it kept its place in
@@ -302,10 +314,7 @@ export function placeStylesheetSlices(
     ) {
       carriers.push(file);
     }
-    // The id, or a path to it from the root, as Vite versions spell it.
-    const id = sliceIds.find((slice) =>
-      file.originalFileNames.some((name) => name.endsWith(slice))
-    );
+    const id = sliceIdOf(file, sliceIds);
     if (id === undefined) continue;
     const css = rewrite?.(
       Buffer.from(file.source).toString('utf8'),

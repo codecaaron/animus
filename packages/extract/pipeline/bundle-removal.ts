@@ -12,6 +12,76 @@ function classStem(name: string): string {
   return stem > 0 ? name.slice(0, stem) : name;
 }
 
+/** Output files whose bytes no script reads as text: images, fonts, audio
+ *  and video, by extension. */
+const MEDIA_FILE =
+  /\.(?:png|jpe?g|gif|webp|avif|ico|bmp|tiff?|woff2?|ttf|otf|eot|mp3|mp4|m4a|wav|ogg|oga|webm|flac|mov)$/i;
+
+/** A data URL's media type that is no text: an image other than SVG, a
+ *  font, audio or video. */
+const MEDIA_TYPE =
+  /^(?:image\/(?!svg\+xml)|font\/|audio\/|video\/|application\/(?:font-|x-font-))/i;
+
+/** A data URL as a script, page or style sheet writes it: its media type,
+ *  whether base64, and its payload up to a quote, a parenthesis or space. */
+const DATA_URL =
+  /data:([\w.+-]+\/[\w.+-]+)?((?:;[\w.+-]+=[\w.+-]+)*)(;base64)?,([^\s"'`()<>\\]*)/gi;
+
+/** One output file: a script's code, or any other file's bytes. */
+export interface OutputFile {
+  fileName: string;
+  code?: string;
+  bytes?: Uint8Array;
+}
+
+/** What a build's output can read class names from. */
+export interface OutputEvidence {
+  /** Each readable output text and decoded data URL payload. */
+  texts: string[];
+  /** The first file or data URL whose bytes are no UTF-8 text, which the
+   *  scan cannot read; `null` when every one is read. */
+  unreadable: string | null;
+}
+
+/**
+ * Everything the build's output can read class names from, as text: each
+ * output file but `skipped` (Animus's own style sheets) and media files,
+ * and the decoded payload of every data URL in them, nested too. Bytes no
+ * UTF-8 text spells are `unreadable`, and removal then keeps everything.
+ */
+export function outputEvidence(
+  files: Iterable<OutputFile>,
+  skipped: ReadonlySet<string>
+): OutputEvidence {
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const texts: string[] = [];
+  const pending: Array<{ origin: string; text: string }> = [];
+  for (const { fileName, code, bytes } of files) {
+    if (skipped.has(fileName) || MEDIA_FILE.test(fileName)) continue;
+    try {
+      pending.push({ origin: fileName, text: code ?? decoder.decode(bytes) });
+    } catch {
+      return { texts, unreadable: fileName };
+    }
+  }
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    texts.push(next.text);
+    for (const [, type, , base64, payload] of next.text.matchAll(DATA_URL)) {
+      if (type !== undefined && MEDIA_TYPE.test(type)) continue;
+      const origin = `a data URL in ${next.origin}`;
+      try {
+        const text = base64
+          ? decoder.decode(Buffer.from(payload!, 'base64'))
+          : decodeURIComponent(payload!);
+        pending.push({ origin, text });
+      } catch {
+        return { texts, unreadable: origin };
+      }
+    }
+  }
+  return { texts, unreadable: null };
+}
+
 /** A class name a scan can prove absent: one only ASCII letters, digits,
  *  `_` and `-` spell, which no output escapes. */
 const PROVABLE_NAME = /^[A-Za-z0-9_-]+$/;

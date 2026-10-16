@@ -525,7 +525,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           this.getFileName(this.emitFile({ type: 'asset', name, source }));
         if (linkedSlices.length > 0 && isClient(this)) {
           const removal = removes
-            ? bundleRemoval(ctx, bundle, otherEnvironments)
+            ? bundleRemoval(ctx, bundle, linkedSlices, otherEnvironments)
             : null;
           placeStylesheetSlices(
             ctx,

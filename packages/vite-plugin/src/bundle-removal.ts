@@ -1,8 +1,11 @@
 import {
+  outputEvidence,
   removeComponentRules,
   shippedClasses,
   unbundledComponents,
 } from '@animus-ui/extract/pipeline';
+
+import { sliceIdOf } from './index-html';
 
 import type { PluginContext } from './context';
 import type { Rolldown } from 'vite';
@@ -19,11 +22,15 @@ export interface BundleRemoval {
  * The removal of every component no output file of this client build
  * includes, or `null` where the build keeps every component: it bundles
  * another environment beside the client (`otherEnvironments`), whose output
- * may render what the client's does not, or leaves a module external.
+ * may render what the client's does not, leaves a module external, or
+ * carries data the scan cannot read as text. Every output file but the
+ * stylesheet's slices (`sliceIds`) and media is evidence, data URLs
+ * decoded.
  */
 export function bundleRemoval(
   ctx: PluginContext,
   bundle: Rolldown.OutputBundle,
+  sliceIds: readonly string[],
   otherEnvironments: readonly string[]
 ): BundleRemoval | null {
   const manifest = ctx.storedManifest;
@@ -33,12 +40,23 @@ export function bundleRemoval(
     ctx.info(`kept every component's CSS: ${blocker}`);
     return null;
   }
-  const texts: string[] = [];
-  for (const file of Object.values(bundle)) {
-    if (file.type === 'chunk') texts.push(file.code);
-    else if (/\.(?:[cm]?js|html?)$/.test(file.fileName)) {
-      texts.push(Buffer.from(file.source).toString('utf8'));
-    }
+  const { texts, unreadable } = outputEvidence(
+    Object.values(bundle).map((file) =>
+      file.type === 'chunk'
+        ? { fileName: file.fileName, code: file.code }
+        : { fileName: file.fileName, bytes: Buffer.from(file.source) }
+    ),
+    new Set(
+      Object.values(bundle)
+        .filter((file) => sliceIdOf(file, sliceIds) !== undefined)
+        .map((file) => file.fileName)
+    )
+  );
+  if (unreadable !== null) {
+    ctx.info(
+      `kept every component's CSS: ${unreadable} holds data the scan cannot read as text, which may name a class`
+    );
+    return null;
   }
   const components = manifest.components;
   const removed = unbundledComponents(
