@@ -927,8 +927,9 @@ pub struct CssOutput {
     /// analysed component, as written (`B`, `ui.Box`, `Card.Body`) → it;
     /// built only for a host that publishes the prop-order file.
     pub tag_components: BTreeMap<String, BTreeMap<String, String>>,
-    /// The `systemPropNames` lists runtime configs reference (`PropNameLists`).
-    pub prop_name_lists: BTreeMap<String, crate::assemble::PropNameList>,
+    /// Each `systemPropNames` list runtime configs reference, by key, as its
+    /// source in the system-props module (`PropNameLists`).
+    pub prop_name_lists: BTreeMap<String, String>,
     /// Every system prop → the later-defined props that take effect over it
     /// (`system_superseded_props`), which a config references.
     pub superseded_by: BTreeMap<String, Vec<String>>,
@@ -7844,7 +7845,7 @@ fn run_with_system_floor(
                                     .unwrap_or_default();
                                 compound_configs.push((
                                     sorted,
-                                    format!("{}--compound-{}", component_css.class_name, idx),
+                                    crate::css::compound_class(&component_css.class_name, idx),
                                 ));
                                 idx += 1;
                             }
@@ -7957,7 +7958,7 @@ fn run_with_system_floor(
                             merged_configs.append(&mut compound_configs);
                             for (idx, (_, class)) in merged_configs.iter_mut().enumerate() {
                                 *class =
-                                    format!("{}--compound-{}", component_css.class_name, idx);
+                                    crate::css::compound_class(&component_css.class_name, idx);
                             }
                             compound_configs = merged_configs;
                         }
@@ -9622,6 +9623,7 @@ fn run_with_system_floor(
         FxHashMap::default();
     // Interned in sorted order, so a key's first claimant is stable.
     let mut prop_name_lists = crate::assemble::PropNameLists::default();
+    let system_superseded = crate::assemble::system_superseded_props(&inputs.config, &inputs.prop_order);
     for component_id in &sorted_ids {
         let Some((_, _, _, active_props, group_names, custom_configs, compound_configs)) =
             evaluated.get(component_id)
@@ -9715,19 +9717,14 @@ fn run_with_system_floor(
                 .then(|| name_scopes[component_id].clone()),
             prop_names_key: None,
         };
-        payload.superseded_by = crate::assemble::superseded_props(
-            &payload,
-            &inputs.group_registry,
-            &inputs.config,
-            &inputs.prop_order,
-        );
+        payload.superseded_by = crate::assemble::superseded_props(&payload, &inputs.group_registry, &system_superseded);
         payload.prop_names_key = crate::assemble::prop_name_list(&payload, &inputs.group_registry)
             .and_then(|list| prop_name_lists.intern(list));
         replacement_configs.insert(component_id.clone(), payload);
     }
     // Shipped only where some config references it.
     let superseded_by = if replacement_configs.values().any(|payload| !payload.superseded_by.is_empty()) {
-        crate::assemble::system_superseded_props(&inputs.config, &inputs.prop_order)
+        system_superseded
     } else {
         BTreeMap::new()
     };
@@ -10428,7 +10425,7 @@ fn run_with_system_floor(
         font_preloads: font_preloads.list,
         runtime_tables,
         tag_components,
-        prop_name_lists: prop_name_lists.0,
+        prop_name_lists: prop_name_lists.into_sources(),
         superseded_by,
     }
 }

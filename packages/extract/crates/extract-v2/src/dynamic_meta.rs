@@ -137,7 +137,7 @@ impl RuntimeTables {
 
 /// The key `table` is filed under; `None`, leaving it inline, when that key
 /// already holds other content.
-fn file<T: Clone + PartialEq + Serialize>(
+pub(crate) fn file<T: Clone + PartialEq + Serialize>(
     tables: &mut BTreeMap<String, T>,
     name: Option<String>,
     table: &T,

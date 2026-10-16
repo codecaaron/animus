@@ -17,7 +17,7 @@ export interface ClassResolverConfig {
   customPropMap?: Record<string, Record<string, string>>;
   customDynamicConfig?: EmittedDynamicPropConfig;
   /** The class prefix and name scope a `customDynamicConfig` entry without
-   *  its `varName` and `slotClass` derives them from (`withDerivedNames`). */
+   *  its `varName` and `slotClass` derives them from (`resolveConfig`). */
   scope?: readonly [prefix: string, scope: string];
   /** Callback props whose `customPropMap` keys are `typedValueKey`s. */
   typedCustomProps?: readonly string[];
@@ -28,7 +28,7 @@ export interface ClassResolverConfig {
    *  property it writes. Of props that one element sets on one CSS
    *  property, the later-defined takes effect, so a superseded prop applies
    *  no class and no slot value. An extracted config references the
-   *  system's one table, which `withDerivedNames` narrows to the system
+   *  system's one table, which `resolveConfig` narrows to the system
    *  props the component lists and does not own. */
   supersededBy?: Record<string, readonly string[]>;
   /** Set only by a builder terminal that ran without Animus compiling it:
@@ -840,6 +840,8 @@ function withoutAbsentBreakpoints(value: unknown): unknown {
   return present.length > 0 ? Object.fromEntries(present) : undefined;
 }
 
+let encoder: TextEncoder | undefined;
+
 /**
  * A prop name as a slot-name segment, as the extractor's `slot_segment`
  * writes it: a name of ASCII letters and digits in kebab spelling, any other
@@ -850,81 +852,97 @@ export function slotSegment(name: string): string {
     return `${name.replace(/[A-Z]/g, (ch) => `-${ch.toLowerCase()}`)}_`;
   }
   let hex = '--';
-  for (const byte of new TextEncoder().encode(name)) {
+  for (const byte of (encoder ??= new TextEncoder()).encode(name)) {
     hex += byte.toString(16).padStart(2, '0');
   }
   return `${hex}_`;
 }
+
+/** Whether the component owns `prop`: a custom prop resolves only through
+ *  its own config, never the system's. */
+function ownsProp(
+  config: Pick<ClassResolverConfig, 'customPropMap' | 'customDynamicConfig'>,
+  prop: string
+): boolean {
+  return (
+    config.customPropMap?.[prop] !== undefined ||
+    config.customDynamicConfig?.[prop] !== undefined
+  );
+}
+
+type NamedCompound = CompoundConfig & { className: string };
 
 /** A config whose every name is spelled out, as `resolveClasses` reads it. */
 export type ResolvedConfig = Omit<
   ClassResolverConfig,
   'compounds' | 'customDynamicConfig'
 > & {
-  compounds?: (CompoundConfig & { className: string })[];
+  compounds?: NamedCompound[];
   customDynamicConfig?: DynamicPropConfig;
 };
 
+type EmittedEntry = EmittedDynamicPropConfig[string];
+
+function hasNames(dc: EmittedEntry): dc is DynamicPropConfig[string] {
+  return dc.kind === 'declarations' || dc.slotClass !== undefined;
+}
+
 /**
- * The config with every name an extracted config leaves to the runtime
- * spelled out, once per component: compound `i`'s class
- * `{class}--compound-{i}`, a custom slot's variable
- * `--{prefix}-{segment}{scope}` and class `{prefix}-dyn-{segment}{scope}`.
- * Each admitted prop is named once, at its first position: an extracted
- * config lists every admitted group's props, and groups can share one, as
- * flexbox and grid share `alignItems`. `supersededBy` keeps only the
- * system props the component lists and does not own, as the extractor's
- * `superseded_props` does.
+ * The config as `resolveClasses` reads it, built once per component:
+ * - every name an extracted config leaves to the runtime spelled out:
+ *   compound `i`'s class `{class}--compound-{i}`, a custom slot's variable
+ *   `--{prefix}-{segment}{scope}` and class `{prefix}-dyn-{segment}{scope}`;
+ * - each admitted prop named once, at its first position: an extracted
+ *   config lists every admitted group's props, and groups can share one, as
+ *   flexbox and grid share `alignItems`;
+ * - `supersededBy` narrowed to the system props the component lists and
+ *   does not own, as the extractor's `superseded_props` narrows it.
  */
-export function withDerivedNames(
+export function resolveConfig(
   className: string,
   config: ClassResolverConfig
 ): ResolvedConfig {
   const { compounds, customDynamicConfig: dynamic, scope } = config;
-  const names = config.systemPropNames;
-  const unique = names && [...new Set(names)];
+  const listed = new Set(config.systemPropNames);
   const resolved: ResolvedConfig = {
     ...config,
     compounds: compounds?.map((compound, index) =>
       compound.className === undefined
         ? { ...compound, className: `${className}--compound-${index}` }
-        : (compound as CompoundConfig & { className: string })
+        : (compound as NamedCompound)
     ),
-    customDynamicConfig: dynamic as DynamicPropConfig | undefined,
+    customDynamicConfig: undefined,
   };
-  if (unique && unique.length !== names.length) {
-    resolved.systemPropNames = unique;
+  if (config.systemPropNames && listed.size !== config.systemPropNames.length) {
+    resolved.systemPropNames = [...listed];
   }
-  if (config.supersededBy) {
-    const listed = new Set(unique);
-    const custom = (prop: string) =>
-      config.customPropMap?.[prop] !== undefined ||
-      dynamic?.[prop] !== undefined;
-    const own: Record<string, readonly string[]> = {};
-    for (const prop of listed) {
-      if (custom(prop)) continue;
-      const later = config.supersededBy[prop]?.filter(
-        (name) => listed.has(name) && !custom(name)
-      );
-      if (later?.length) own[prop] = later;
-    }
-    resolved.supersededBy = own;
-  }
-  if (dynamic && scope) {
-    const [prefix, suffix] = scope;
+  if (dynamic) {
+    const [prefix, suffix] = scope ?? [];
     const entries: DynamicPropConfig = {};
     for (const [prop, dc] of Object.entries(dynamic)) {
+      if (hasNames(dc)) {
+        entries[prop] = dc;
+        continue;
+      }
       const segment = slotSegment(prop);
-      entries[prop] =
-        dc.kind === 'declarations' || dc.slotClass !== undefined
-          ? (dc as DynamicPropConfig[string])
-          : {
-              ...dc,
-              varName: `--${prefix}-${segment}${suffix}`,
-              slotClass: `${prefix}-dyn-${segment}${suffix}`,
-            };
+      entries[prop] = {
+        ...dc,
+        varName: `--${prefix}-${segment}${suffix}`,
+        slotClass: `${prefix}-dyn-${segment}${suffix}`,
+      };
     }
     resolved.customDynamicConfig = entries;
+  }
+  if (config.supersededBy) {
+    const own: Record<string, readonly string[]> = {};
+    for (const [prop, later] of Object.entries(config.supersededBy)) {
+      if (!listed.has(prop) || ownsProp(config, prop)) continue;
+      const kept = later.filter(
+        (name) => listed.has(name) && !ownsProp(config, name)
+      );
+      if (kept.length > 0) own[prop] = kept;
+    }
+    resolved.supersededBy = own;
   }
   return resolved;
 }
@@ -964,9 +982,7 @@ export function resolveClasses(
       const key = serializeValueKey(propValue);
       // A custom prop resolves only through its own config, so a same-named
       // system class or slot cannot apply a value that config rejects.
-      const customOwned =
-        customPropMap?.[propName] !== undefined ||
-        customDynamicConfig?.[propName] !== undefined;
+      const customOwned = ownsProp(config, propName);
       const [classMap, typedProps] = customOwned
         ? [customPropMap, config.typedCustomProps]
         : [systemPropMap, config.typedSystemProps];

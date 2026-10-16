@@ -53,21 +53,19 @@ pub(crate) fn prop_name_list(
 /// its content's hash: a list no config uses stays out of the bundle, and
 /// adding a component leaves every other config's reference unchanged.
 #[derive(Debug, Default)]
-pub struct PropNameLists(pub BTreeMap<String, PropNameList>);
+pub struct PropNameLists(BTreeMap<String, PropNameList>);
 
 impl PropNameLists {
     /// The key `list` is filed under; `None`, leaving it inline, when its
     /// hash already keys another list.
     pub fn intern(&mut self, list: PropNameList) -> Option<String> {
         let key = format!("{:08x}", crate::ids::fnv1a_json(crate::ids::FNV_OFFSET, &list) as u32);
-        match self.0.entry(key) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                let key = entry.key().clone();
-                entry.insert(list);
-                Some(key)
-            }
-            std::collections::btree_map::Entry::Occupied(entry) => (*entry.get() == list).then(|| entry.key().clone()),
-        }
+        crate::dynamic_meta::file(&mut self.0, Some(key), &list)
+    }
+
+    /// Each list's source in the system-props module, by key.
+    pub fn into_sources(self) -> BTreeMap<String, String> {
+        self.0.into_iter().map(|(key, list)| (key, render_prop_name_list(&list, "systemPropGroups"))).collect()
     }
 }
 
@@ -97,40 +95,43 @@ fn prop_walk(p: &ReplacementPayload, group_registry: &FxHashMap<String, Vec<Stri
 /// included; a partial overlap keeps both, and the stylesheet's order
 /// decides, as it does for a shorthand and its longhand. Custom and
 /// declaration props take no part.
+///
+/// This is the system's table (`system_superseded_props`) narrowed to the
+/// system props a component lists and does not own, as the runtime narrows
+/// it; a config references the table only where the narrowing keeps some.
 pub(crate) fn superseded_props(
     p: &ReplacementPayload,
     group_registry: &FxHashMap<String, Vec<String>>,
-    config: &PropConfigMap,
-    prop_order: &FxHashMap<String, usize>,
+    system: &BTreeMap<String, Vec<String>>,
 ) -> BTreeMap<String, Vec<String>> {
     let custom = |name: &str| {
         p.custom_prop_class_map.as_ref().is_some_and(|cpm| cpm.contains_key(name))
             || p.custom_dynamic_config.as_ref().is_some_and(|cdc| cdc.contains_key(name))
     };
-    let names = prop_walk(p, group_registry).into_iter().filter(|name| !custom(name));
-    supersession(names, config, prop_order)
+    let listed: FxHashSet<String> = prop_walk(p, group_registry).into_iter().filter(|name| !custom(name)).collect();
+    system
+        .iter()
+        .filter(|(name, _)| listed.contains(*name))
+        .filter_map(|(name, later)| {
+            let later: Vec<String> = later.iter().filter(|prop| listed.contains(*prop)).cloned().collect();
+            (!later.is_empty()).then(|| (name.clone(), later))
+        })
+        .collect()
 }
 
-/// `superseded_props` over every system prop: a component's table is this
-/// one narrowed to the system props it lists and does not own, which the
-/// runtime does once per component.
+/// Every system prop → the later-defined props that supersede it.
 pub(crate) fn system_superseded_props(
     config: &PropConfigMap,
     prop_order: &FxHashMap<String, usize>,
 ) -> BTreeMap<String, Vec<String>> {
-    supersession(config.keys().cloned(), config, prop_order)
-}
-
-fn supersession(
-    names: impl Iterator<Item = String>,
-    config: &PropConfigMap,
-    prop_order: &FxHashMap<String, usize>,
-) -> BTreeMap<String, Vec<String>> {
-    let mut writes: Vec<(usize, String, BTreeSet<&str>)> = names
-        .filter_map(|name| {
-            let prop = config.get(&name).filter(|prop| prop.declaration_binding().is_none())?;
+    let mut writes: Vec<(usize, &String, BTreeSet<&str>)> = config
+        .iter()
+        .filter_map(|(name, prop)| {
+            if prop.declaration_binding().is_some() {
+                return None;
+            }
             let properties = prop.css_properties().iter().map(String::as_str).chain(prop.current_var.as_deref());
-            Some((*prop_order.get(&name)?, name, properties.collect()))
+            Some((*prop_order.get(name)?, name, properties.collect()))
         })
         .collect();
     writes.sort_by_key(|(position, ..)| *position);
@@ -139,10 +140,10 @@ fn supersession(
         let later: Vec<String> = writes[index + 1..]
             .iter()
             .filter(|(_, _, later)| properties.is_subset(later))
-            .map(|(_, later, _)| later.clone())
+            .map(|(_, later, _)| (*later).clone())
             .collect();
         if !later.is_empty() {
-            superseded.insert(name.clone(), later);
+            superseded.insert((*name).clone(), later);
         }
     }
     superseded
@@ -206,7 +207,7 @@ pub(super) fn build_config(
                             .unwrap_or_default();
                         compounds.push(json!({
                             "conditions": sorted,
-                            "className": format!("{class_name}--compound-{compound_index}"),
+                            "className": crate::css::compound_class(&class_name, compound_index),
                         }));
                         compound_index += 1;
                     }
@@ -254,7 +255,7 @@ pub(super) fn build_config(
     // The runtime names compound `i` `{class}--compound-{i}`; a name it
     // would not derive ships.
     for (index, compound) in compounds.iter_mut().enumerate() {
-        if compound["className"] == format!("{class_name}--compound-{index}") {
+        if compound["className"] == crate::css::compound_class(&class_name, index) {
             compound.as_object_mut().expect("a compound is an object").remove("className");
         }
     }
@@ -272,13 +273,10 @@ pub(super) fn build_config(
         return Ok(config.render());
     };
 
-    match (&p.prop_names_key, prop_name_list(p, group_registry)) {
-        (Some(key), _) => config.insert("systemPropNames", Field::Script(names.prop_name_list(key).to_string())),
-        (None, Some(list)) if list.groups.is_empty() => config.insert("systemPropNames", json!(list.names)),
-        (None, Some(list)) => {
-            config.insert("systemPropNames", Field::Script(render_prop_name_list(&list, &names.system_prop_groups.to_string())))
-        }
-        (None, None) => {}
+    if let Some(key) = &p.prop_names_key {
+        config.insert("systemPropNames", Field::Script(names.prop_name_list(key).to_string()));
+    } else if let Some(list) = prop_name_list(p, group_registry) {
+        config.insert("systemPropNames", Field::Script(render_prop_name_list(&list, &names.system_prop_groups.to_string())));
     }
 
     // The system's one table, which the runtime narrows to this component.
@@ -314,14 +312,20 @@ pub(super) fn build_config(
         // The runtime derives each slot's variable and class from the scope
         // (`css::slot_names`); a pair it would not derive, such as a shared
         // slot's, ships.
-        let derived = |prop: &str, meta: &crate::dynamic_meta::ValuePropMeta| {
-            p.slot_scope.as_deref().is_some_and(|scope| {
-                let (var_name, slot_class) = crate::css::slot_names(prefix, prop, scope);
-                meta.var_name == var_name && meta.slot_class == slot_class
-            })
+        let derived: FxHashSet<&String> = match p.slot_scope.as_deref() {
+            Some(scope) => cdc
+                .iter()
+                .filter(|(prop, meta)| {
+                    meta.value().is_some_and(|meta| {
+                        let (var_name, slot_class) = crate::css::slot_names(prefix, prop, scope);
+                        meta.var_name == var_name && meta.slot_class == slot_class
+                    })
+                })
+                .map(|(prop, _)| prop)
+                .collect(),
+            None => FxHashSet::default(),
         };
-        let any_derived = cdc.iter().any(|(prop, meta)| meta.value().is_some_and(|meta| derived(prop, meta)));
-        if let (true, Some(scope)) = (any_derived, &p.slot_scope) {
+        if let (false, Some(scope)) = (derived.is_empty(), &p.slot_scope) {
             config.insert("scope", json!([prefix, scope]));
         }
         let mut dynamic = ObjectLiteral::default();
@@ -349,7 +353,7 @@ pub(super) fn build_config(
                 }
             };
             let mut fields = ObjectLiteral::default();
-            if !derived(prop_name, meta) {
+            if !derived.contains(prop_name) {
                 fields.insert("varName", json!(meta.var_name));
                 fields.insert("slotClass", json!(meta.slot_class));
             }
@@ -398,9 +402,12 @@ pub(super) fn build_config(
     Ok(config.render())
 }
 
-/// A list with groups as source: their lists, read from `groups`, then its
-/// other names.
-pub fn render_prop_name_list(list: &PropNameList, groups: &str) -> String {
+/// A list as source: its groups' lists, read from `groups`, then its other
+/// names; without groups, the names alone.
+fn render_prop_name_list(list: &PropNameList, groups: &str) -> String {
+    if list.groups.is_empty() {
+        return json!(list.names).to_string();
+    }
     let mut parts: Vec<String> = list.groups.iter().map(|g| format!("{groups}.{g}")).collect();
     if !list.names.is_empty() {
         parts.push(json!(list.names).to_string());

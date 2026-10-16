@@ -13,7 +13,7 @@ import {
   type DynamicPropConfig,
   resolveClasses,
   type SystemPropMap,
-  withDerivedNames,
+  resolveConfig,
 } from './resolveClasses';
 import { reportUncompiledRender } from './uncompiled';
 
@@ -250,7 +250,7 @@ export function createComponent(
   systemPropMap?: SystemPropMap,
   dynamicPropConfig?: DynamicPropConfig
 ): AnimusComponent {
-  const config = withDerivedNames(className, componentConfig);
+  const config = resolveConfig(className, componentConfig);
   const variantProps = config.variants ? Object.keys(config.variants) : [];
   const stateProps = config.states || [];
   const systemPropNames = config.systemPropNames || [];

@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 
-import { withDerivedNames } from '../../system/src/runtime/resolveClasses';
+import { resolveConfig } from '../../system/src/runtime/resolveClasses';
 import { inlineTables, runPipeline } from './run-pipeline';
 
 import type { ClassResolverConfig } from '../../system/src/runtime/resolveClasses';
@@ -45,7 +45,7 @@ export const App = ({ v }) => (
 
   for (const id of ['Parent', 'Child']) {
     const [className, emitted] = configOf(id);
-    const resolved = withDerivedNames(className, emitted);
+    const resolved = resolveConfig(className, emitted);
     expect(emitted.compounds?.every((c) => c.className === undefined)).toBe(
       true
     );

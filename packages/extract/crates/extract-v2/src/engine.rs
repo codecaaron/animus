@@ -59,7 +59,7 @@ struct AnalyzeResult<'a> {
     tag_components: &'a std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     /// Present only where a runtime config references a shared list.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    prop_name_lists: &'a std::collections::BTreeMap<String, assemble::PropNameList>,
+    prop_name_lists: &'a std::collections::BTreeMap<String, String>,
     /// Present only where a runtime config references it.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     superseded_by: &'a std::collections::BTreeMap<String, Vec<String>>,

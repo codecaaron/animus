@@ -3,11 +3,7 @@
  * the engine's, never a transcription choice. One spelling per field.
  */
 
-import type {
-  DynamicPropMeta,
-  PropNameList,
-  RuntimeTables,
-} from './dynamic-prop-config';
+import type { DynamicPropMeta, RuntimeTables } from './dynamic-prop-config';
 import type { FontPreload, PreloadedFontFace } from './font-preloads';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 import type { ExtractFileFacts } from './source-ingestion';
@@ -148,10 +144,10 @@ export interface ProjectManifest {
    *  `animusTables` export, each by the key its meta's `tables` names;
    *  absent where none is referenced. */
   runtime_tables?: RuntimeTables;
-  /** key → a `systemPropNames` list runtime configs reference from the
-   *  system-props module's `systemPropNames_{key}` export; absent where none
-   *  is referenced. */
-  prop_name_lists?: Record<string, PropNameList>;
+  /** key → the source of a `systemPropNames` list runtime configs
+   *  reference from the system-props module's `systemPropNames_{key}`
+   *  export; absent where none is referenced. */
+  prop_name_lists?: Record<string, string>;
   /** Every system prop → the later-defined props that take effect over it,
    *  which runtime configs reference from the `supersededBy` export; absent
    *  where none is referenced. */

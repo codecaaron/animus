@@ -3,7 +3,6 @@ import { buildDynamicPropConfig } from './dynamic-prop-config';
 import type {
   DynamicPropConfig,
   DynamicPropMeta,
-  PropNameList,
   RuntimeTables,
   TableKeys,
 } from './dynamic-prop-config';
@@ -57,7 +56,7 @@ function dynamicPropConfigSource(
           : `animusTables.${field}[${JSON.stringify(key)}]`;
       return `${JSON.stringify(field)}:${source}`;
     });
-    if ('transformId' in entry && entry.transformId !== undefined) {
+    if ('transformId' in entry && entry.transformId) {
       fields.push(
         `"transform":transforms[${JSON.stringify(entry.transformId)}]`
       );
@@ -67,22 +66,14 @@ function dynamicPropConfigSource(
   return `{${entries.join(',')}}`;
 }
 
-/** Each shared `systemPropNames` list as its own export, so a bundle keeps
- *  only the lists its components reference. */
+/** Each shared `systemPropNames` list, its source as analysis rendered it,
+ *  as its own export, so a bundle keeps only the lists its components
+ *  reference. */
 function propNameListsSource(
-  lists: Record<string, PropNameList> | undefined
+  lists: ProjectManifest['prop_name_lists']
 ): string {
   return Object.entries(lists ?? {})
-    .map(([key, { groups = [], names = [] }]) => {
-      const list =
-        groups.length === 0
-          ? JSON.stringify(names)
-          : `[].concat(${[
-              ...groups.map((group) => `systemPropGroups.${group}`),
-              ...(names.length > 0 ? [JSON.stringify(names)] : []),
-            ].join(',')})`;
-      return `export const systemPropNames_${key} = ${list};\n`;
-    })
+    .map(([key, list]) => `export const systemPropNames_${key} = ${list};\n`)
     .join('');
 }
 
@@ -106,7 +97,7 @@ export function buildSystemPropsModule(opts: {
     `export const systemPropGroups = ${opts.groupRegistryJson};\n` +
     propNameListsSource(opts.propNameLists) +
     // A config narrows the system's one table to its own props.
-    (opts.supersededBy && Object.keys(opts.supersededBy).length > 0
+    (opts.supersededBy
       ? `export const supersededBy = ${JSON.stringify(opts.supersededBy)};\n`
       : '') +
     `export const transforms = ${transformsSource(opts.admittedTransforms)};\n` +

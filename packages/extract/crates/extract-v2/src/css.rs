@@ -99,6 +99,12 @@ pub fn slot_segment(name: &str) -> String {
     segment
 }
 
+/// Compound `index`'s class under the component class `class`, which the
+/// runtime derives the same way, so a config omits it wherever it equals this.
+pub fn compound_class(class: &str, index: usize) -> String {
+    format!("{class}--compound-{index}")
+}
+
 /// A value prop's slot variable and slot class under `scope` (empty for a
 /// system prop's). The runtime derives the same pair from the scope a config
 /// ships, so a config omits the pair wherever it equals this one.
@@ -486,7 +492,7 @@ pub fn generate_css_sheets_ordered(
         if !component.compounds.is_empty() {
             let mut frag = String::with_capacity(512);
             for (index, styles) in component.compounds.iter().enumerate() {
-                let selector = format!("{}--compound-{}", component.class_name, index);
+                let selector = compound_class(&component.class_name, index);
                 write_rule_block(&mut frag, &selector, styles, breakpoints);
             }
             if !frag.is_empty() {
@@ -584,7 +590,7 @@ fn generate_layer_content(
             }
             LayerKind::Compounds => {
                 for (index, styles) in component.compounds.iter().enumerate() {
-                    let selector = format!("{}--compound-{}", component.class_name, index);
+                    let selector = compound_class(&component.class_name, index);
                     write_rule_block(&mut output, &selector, styles, breakpoints);
                 }
             }

@@ -17,7 +17,7 @@ mod config;
 mod source_edit;
 
 use config::build_config;
-pub use config::{prop_name_list_export, render_prop_name_list, PropNameList, PropNameLists};
+pub use config::{prop_name_list_export, PropNameLists};
 pub(crate) use config::{prop_name_list, superseded_props, system_superseded_props};
 
 pub use source_edit::{
