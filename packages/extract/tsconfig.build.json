@@ -9,5 +9,5 @@
     "module": "ESNext",
     "moduleResolution": "bundler"
   },
-  "include": ["pipeline/**/*.ts", "session/**/*.ts"]
+  "include": ["pipeline/**/*.ts", "session/**/*.ts", "oxlint/**/*.ts"]
 }

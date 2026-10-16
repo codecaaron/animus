@@ -24,6 +24,8 @@
     "dist",
     "index-v2.js",
     "index-v2.d.ts",
+    "oxlint.d.ts",
+    "oxlint.d.mts",
     "crates/extract-v2/*.node",
     "crates/extract-v2/index.d.ts"
   ],
@@ -42,6 +44,16 @@
     "./session": {
       "types": "./dist/session/index.d.ts",
       "default": "./dist/session.cjs"
+    },
+    "./oxlint": {
+      "import": {
+        "types": "./oxlint.d.mts",
+        "default": "./dist/oxlint.mjs"
+      },
+      "require": {
+        "types": "./oxlint.d.ts",
+        "default": "./dist/oxlint.cjs"
+      }
     }
   },
   "publishConfig": {

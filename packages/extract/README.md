@@ -80,6 +80,33 @@ Obligations a driver or host carries that no exported type expresses.
 - In dev mode the manifest reports what reconciliation would have eliminated instead of eliminating it, as `report.eliminated_details` entries carrying `kind: "prospective_component"`. That turns a JSX-scanner blind spot into an authoring-time diagnostic rather than missing CSS in a production build.
 - `build:extract-v2` checks rustc against `rust-toolchain.toml` before building the shipped binary; `build:v2:debug` skips the check on purpose because it builds a developer-profile binary.
 
+## Prop-order lint rule
+
+`@animus-ui/extract/oxlint` is an [Oxlint](https://oxc.rs/docs/guide/usage/linter/js-plugins.html) JS plugin with one rule, `animus/prop-order`. It orders the props an Animus component tag is written with by stage, then within the stage by registration:
+
+1. variant props (variants and compounds), in the order the chain declares them;
+2. states, in declaration order;
+3. system props, in the system's registration order (not the order of the groups that admit them);
+4. custom props, in declaration order, inherited ones first.
+
+This is a readability convention. The stylesheet does not follow JSX attribute order, so the rule changes no CSS.
+
+```json
+{
+  "jsPlugins": [{ "name": "animus", "specifier": "@animus-ui/extract/oxlint" }],
+  "rules": { "animus/prop-order": "warn" }
+}
+```
+
+The plugin must resolve from the config file's directory. Under an install that does not hoist `@animus-ui/extract`, add it as a direct dev dependency.
+
+The rule reads `.animus/prop-order.json` at the project root. A host writes it after every analysis only when asked to, with `propOrderFile: true` in its options (the Vite, Next and unplugin hosts, or `animus.config` for `animus build`); off, no file is written and the analysis builds none of its data. `animus prop-order` writes only this file, from one analysis and without a dev server, whatever the option says. Keep `.animus/` out of version control. The file records each component's accepted props with their stage and rank, which component each written tag resolves to (imports, aliases such as `Box as B`, namespace members such as `ui.Box`, re-exports, family members), and the content hash of every analysed file, of the system module's inputs, and of the configuration resolution reads (`package.json`, the tsconfig chain, the build's config files). By default the rule uses the nearest such file above the linted file; the option `{ "orderFile": "path/to/.animus/prop-order.json" }` names one, relative to the working directory. Its paths are relative to the directory that holds `.animus`, so the rule reads a file only at `<root>/.animus/prop-order.json` and reports any other location as unusable.
+
+- **Missing or stale file.** If the file is missing or unreadable, or a recorded file no longer matches its hash, the rule reports that (again only when it changes) and orders nothing until the file is usable. A long-lived process, such as an editor's, rechecks the disk at most once a second. A running dev server with `propOrderFile: true` regenerates it on save. Otherwise rerun `animus prop-order`, including after `oxlint --fix`, since fixing a file changes it.
+- **Unresolved tags.** A tag the analysis did not resolve to exactly one component is skipped. So is a name the file also binds inside a function or block.
+- **Attributes that stay put.** A spread, a prop the component does not accept, and a prop its target receives as written never move: a `data-*` or `aria-*` prop, which Animus always forwards, or a variant or state an `.asComponent()` target is forwarded, since the target can see the order they arrive in. Each run of the other accepted props between them is ordered on its own.
+- **When the rule fixes.** It fixes a tag only when moving props cannot change what it evaluates: every value a literal (a sign is allowed only on a number), no comment inside the tag, no repeated prop, and no `as` or `asChild`. Any other out-of-order tag gets a diagnostic without a fix.
+
 ## License
 
 MIT
