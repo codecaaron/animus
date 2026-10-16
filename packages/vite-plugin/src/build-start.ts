@@ -169,6 +169,10 @@ export async function runBuildStart(
       ctx.log(
         `Delivery: split mode — static ${staticSize} bytes, components ${componentSize} bytes (adopted stylesheet)`
       );
+    } else if (ctx.splitsStylesheet) {
+      ctx.log(
+        'Delivery: split mode (production), linking each slice from the page'
+      );
     } else {
       ctx.log('Delivery: single file mode (production)');
     }
