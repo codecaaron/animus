@@ -23,9 +23,11 @@ const MEDIA_TYPE =
   /^(?:image\/(?!svg\+xml)|font\/|audio\/|video\/|application\/(?:font-|x-font-))/i;
 
 /** A data URL as a script, page or style sheet writes it: its media type,
- *  whether base64, and its payload up to a quote, a parenthesis or space. */
+ *  whether base64, and its literal payload, up to a quote, a parenthesis,
+ *  space or a template substitution (`${…}`), whose text is evidence where
+ *  it is written. */
 const DATA_URL =
-  /data:([\w.+-]+\/[\w.+-]+)?((?:;[\w.+-]+=[\w.+-]+)*)(;base64)?,([^\s"'`()<>\\]*)/gi;
+  /data:([\w.+-]+\/[\w.+-]+)?((?:;[\w.+-]+=[\w.+-]+)*)(;base64)?,([^\s"'`()<>\\$]*)/gi;
 
 /** One output file: a script's code, or any other file's bytes. */
 export interface OutputFile {
@@ -70,8 +72,11 @@ export function outputEvidence(
       if (type !== undefined && MEDIA_TYPE.test(type)) continue;
       const origin = `a data URL in ${next.origin}`;
       try {
+        // Base64 stops at the first character outside its alphabet.
         const text = base64
-          ? decoder.decode(Buffer.from(payload!, 'base64'))
+          ? decoder.decode(
+              Buffer.from(/^[A-Za-z0-9+/=_-]*/.exec(payload!)![0], 'base64')
+            )
           : decodeURIComponent(payload!);
         pending.push({ origin, text });
       } catch {

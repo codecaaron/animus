@@ -159,6 +159,19 @@ describe('outputEvidence', () => {
       new Set(['assets/animus-components.css'])
     );
     expect(unreadable).toBeNull();
+    // A template substitution is no payload: its text is evidence where it
+    // is written.
+    expect(
+      outputEvidence(
+        [
+          {
+            fileName: 'a.js',
+            code: 'x=`data:text/html;charset=UTF-8;base64,${ya}`;y=`data:application/json;base64,${zb}`',
+          },
+        ],
+        new Set()
+      ).unreadable
+    ).toBeNull();
     const all = texts.join('\n');
     for (const name of ['c-json', 'c-nested', 'c-asset', 'c-percent-x']) {
       expect(all).toContain(name);
