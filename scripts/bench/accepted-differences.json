@@ -61,5 +61,19 @@
     "baseline": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
     "candidate": "373b31a80966a5d5eb6901424a479253cf0ded3a0025cf4045ec638e8d4f9eb9",
     "reason": "Beside the differences above, the JS shrinks 613 bytes (251105 to 250492): scale and keyword tables ship once in the system-props module and configs reference them by name. The CSS is identical (cssDigest unchanged) and so are the diagnostics."
+  },
+  {
+    "row": "analysis:showcase",
+    "fixture": "showcase-analysis",
+    "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
+    "candidate": "46132b02615a0dec8ec0187dc60f26bc2b1c7cc42ae064e3c44abb2e2a9b870b",
+    "reason": "Beside the differences above, emitted configs carry one [prefix, scope] pair instead of slot variable and class names the runtime can derive, compound class names the runtime derives are omitted, each systemPropNames list ships once as a named export of the system-props module, supersededBy references one system table, and transforms are bound per entry instead of by a per-module loop. Class names and CSS are unchanged."
+  },
+  {
+    "row": "build:vite-app",
+    "fixture": "vite-app",
+    "baseline": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
+    "candidate": "48a479211bdaed71df8612dd7b60dbeb53046b447eec84b683a94f09b99cba45",
+    "reason": "Beside the differences above, the JS changes size because configs derive slot and compound names at runtime and system prop name lists, supersededBy and transform bindings ship once in the system-props module. The CSS is identical (cssDigest unchanged)."
   }
 ]
