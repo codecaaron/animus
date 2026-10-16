@@ -8905,6 +8905,12 @@ fn run_with_system_floor(
                 escaped_ids.extend(resolve_declared_identity(&declaring, &binding, files, inputs, links, &evaluated_ids));
             }
         }
+        // A compose family a top-level `const X = Object.assign(F, …)` takes as
+        // its target hands over its slots: `X` does not copy the target's
+        // members, so usage reaches no slot through it.
+        for target in ff.assigned_targets.values() {
+            escaped_ids.extend(object_members.family_slots(path, target));
+        }
         // Through the file's own declarations and imports only: an outside
         // package's `R` never opens a project component named `R`.
         for name in names {
@@ -14692,8 +14698,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// every option. A slot renders through its family's member tags only
     /// where usage follows the family; elsewhere (a wrapped or nested
     /// compose() call, a cast callee or slot, no `Root`, a destructured
-    /// family) the component escapes, while a followed family's slot keeps
-    /// only what its renders write.
+    /// family, a family an `Object.assign` call takes as its target) the
+    /// component escapes, while a followed family's slot keeps only what its
+    /// renders write.
     #[test]
     fn a_compose_slot_whose_family_usage_cannot_be_followed_keeps_every_option() {
         let render = ("d.tsx", "import { R } from './r';\nexport const D = () => <R size=\"sm\" busy />;\n");
@@ -14710,6 +14717,12 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "export const Page = compose({ Root: R as any });\n",
             "export const Page = compose({ Item: R });\n",
             "export const { Root } = compose({ Root: R });\nexport const Page = { Root };\n",
+            "const F = compose({ Root: R }, { name: 'F', shared: {} });\nexport const Page = Object.assign(F, { useFrame: () => null });\n",
+            "const F = compose({ Root: R });\nconst A = F;\nexport const Page = Object.assign(A, { useFrame: () => null });\n",
+            "const F = composeWithContext({ Root: R });\nexport const Page = Object.assign(F, { useFrame: () => null });\n",
+            "const Object = globalThis.Object;\nconst F = compose({ Root: R });\nexport const Page = Object.assign(F, { useFrame: () => null });\n",
+            "const F = compose({ Root: R });\nexport const Page = (Object.assign)(F, { useFrame: () => null });\n",
+            "const F = compose({ Root: R });\nexport const { Root: Root2, ...Page } = Object.assign(F, { useFrame: () => null });\n",
         ] {
             assert_eq!(kept(page), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{page}");
         }

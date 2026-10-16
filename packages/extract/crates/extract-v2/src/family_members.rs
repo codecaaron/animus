@@ -514,6 +514,18 @@ impl<'f> ObjectMembers<'f> {
         self.member(file, name).as_ref().and_then(Member::component).cloned().into_iter().collect()
     }
 
+    /// The components a compose family's slots render, where `name` (a
+    /// binding of `file` or a namespace path) names one, through `const`
+    /// aliases, imports and re-exports; empty for anything else.
+    pub(crate) fn family_slots(&mut self, file: &str, name: &str) -> Vec<String> {
+        match self.object_at(file, name) {
+            Some(family @ Object::Family(_)) => {
+                self.table(&family).members.values().filter_map(Member::component).cloned().collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// The object a binding of `file` or a namespace path names.
     fn object_at(&mut self, file: &str, path: &str) -> Option<Object> {
         let files = self.files;

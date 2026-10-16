@@ -459,6 +459,10 @@ pub struct FileFacts {
     /// T itself, with the sources' members written onto it.
     #[serde(skip)]
     pub(crate) assigned_targets: BTreeMap<String, String>,
+    /// Byte range of each `assigned_targets` call: usage follows its target
+    /// through the `const` it initializes.
+    #[serde(skip)]
+    pub(crate) assigned_target_calls: BTreeSet<(u32, u32)>,
     /// Top-level function components that spread their props into a tag,
     /// and those a top-level object literal holds, as `X.key`.
     #[serde(skip)]
@@ -973,6 +977,7 @@ struct ConstInitializerFacts {
     assigned: BTreeMap<String, String>,
     assigned_at: BTreeMap<String, u32>,
     targets: BTreeMap<String, String>,
+    target_calls: BTreeSet<(u32, u32)>,
     roots: BTreeMap<String, String>,
     objects: BTreeMap<String, BTreeMap<String, String>>,
     facades: BTreeMap<String, Vec<FacadeEntry>>,
@@ -1117,15 +1122,16 @@ fn member_path(expression: &Expression<'_>) -> Option<String> {
     }
 }
 
-/// `T` in `Object.assign(T, …)` when it is a binding or a member path of one.
-fn assigned_target(init: &Expression<'_>) -> Option<String> {
+/// `T` in `Object.assign(T, …)` when it is a binding or a member path of one,
+/// with the call's byte range.
+fn assigned_target(init: &Expression<'_>) -> Option<(String, (u32, u32))> {
     let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(init) else {
         return None;
     };
     if !is_object_assign(&call.callee) {
         return None;
     }
-    member_path(call.arguments.first()?.as_expression()?)
+    Some((member_path(call.arguments.first()?.as_expression()?)?, (call.span.start, call.span.end)))
 }
 
 /// `Y` in `Object.assign(Y, …)`.
@@ -1251,6 +1257,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         assigned_aliases: const_initializers.assigned,
         assigned_alias_offsets: const_initializers.assigned_at,
         assigned_targets: const_initializers.targets,
+        assigned_target_calls: const_initializers.target_calls,
         props_forwarding,
         declaration_roots: const_initializers.roots,
         global_keys: BTreeMap::new(),
@@ -1353,8 +1360,9 @@ fn collect_const_initializers(
             {
                 facts.facades.insert(name.to_string(), entries);
             }
-            if let Some(target) = target {
+            if let Some((target, call)) = target {
                 facts.targets.insert(name.to_string(), target);
+                facts.target_calls.insert(call);
             }
         }
     };
@@ -1942,6 +1950,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &descriptors,
         &structural.exports,
         &structural.compose,
+        &structural.assigned_target_calls,
     );
 
     FileFacts {

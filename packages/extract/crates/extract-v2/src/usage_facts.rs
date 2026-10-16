@@ -985,6 +985,7 @@ pub(crate) fn collect_enriched_usage(
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
     compose: &[ComposeFamilyInfo],
+    assigned_target_calls: &BTreeSet<(u32, u32)>,
 ) -> EnrichedUsage {
     let static_values = crate::eval::Statics::of(static_values, module_path);
     let exported: FxHashSet<&str> = exports.iter().filter_map(|e| e.local.as_deref()).collect();
@@ -1077,6 +1078,7 @@ pub(crate) fn collect_enriched_usage(
                     .filter(|family| family.addressable())
                     .flat_map(|family| family.slot_values.iter().copied())
                     .collect(),
+                assigned_target_calls,
                 react: &react,
                 namespaces: collect_namespace_imports(module).into_keys().collect(),
                 imports: named_import_locals(module),
@@ -5318,6 +5320,8 @@ struct EscapeScan<'a, 's> {
     /// See `ComposeFamilyInfo::slot_values`, for every family of the
     /// module's facts that usage follows (`ComposeFamilyInfo::addressable`).
     slot_values: FxHashSet<(u32, u32)>,
+    /// See `FileFacts::assigned_target_calls`.
+    assigned_target_calls: &'s BTreeSet<(u32, u32)>,
     react: &'s ReactNames,
     /// Namespace imports: `ui.Button` can name a component whatever the
     /// namespace is called.
@@ -5361,7 +5365,7 @@ impl<'a> Visit<'a> for EscapeScan<'a, '_> {
         if !self.is_candidate(name) {
             return;
         }
-        let path = escape_path(name, ident.span, &self.ancestors, self.chains, &self.slot_values, self.react);
+        let path = escape_path(name, ident.span, &self.ancestors, self.chains, &self.slot_values, self.assigned_target_calls, self.react);
         if let Some(path) = path {
             self.escapes.insert(path);
         }
@@ -5376,6 +5380,7 @@ fn escape_path(
     ancestors: &[AstKind<'_>],
     chains: &[&ChainDescriptor],
     slot_values: &FxHashSet<(u32, u32)>,
+    assigned_target_calls: &BTreeSet<(u32, u32)>,
     react: &ReactNames,
 ) -> Option<String> {
     use oxc::span::GetSpan;
@@ -5411,10 +5416,9 @@ fn escape_path(
                 if react.calls(&call.callee, "createElement") {
                     return None;
                 }
-                let callee = crate::chain_walk::unwrap_type_assertions(&call.callee);
-                let object_assign = matches!(callee, Expression::StaticMemberExpression(member)
-                    if member.object.is_specific_id("Object") && member.property.name == "assign");
-                return (!(object_assign && initializes_top_level_const(call.span, rest))).then_some(path);
+                // So is the target of an `Object.assign` call the facts read as
+                // a top-level `const`'s initializer.
+                return (!assigned_target_calls.contains(&(call.span.start, call.span.end))).then_some(path);
             }
             // `const B = R` at the top level is followed: `<B>` renders as `R`.
             // A destructuring declarator reads members, which nothing follows.
@@ -7189,7 +7193,7 @@ pub fn collect_usage_facts_with_statics(
     module_path: &str,
 ) -> Vec<UsageFact> {
     let built = SemanticBuilder::new().build(program).semantic.into_scoping();
-    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[], &[])
+    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[], &[], &BTreeSet::new())
         .usage
 }
 
