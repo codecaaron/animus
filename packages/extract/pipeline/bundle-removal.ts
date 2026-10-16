@@ -228,7 +228,8 @@ export interface RuleRemoval {
    *  another selector in its list needs no removed class
    *  (`'shared-list'`), the rule holds nested rules removal cannot prove
    *  unused (`'nested'`), or the class sits only where a selector can match
-   *  without it (`'conditional'`). */
+   *  without it, or in a pseudo's argument removal does not read, such as
+   *  `:host()` (`'conditional'`). */
   kept: Map<string, KeptRuleReason>;
 }
 
@@ -284,6 +285,8 @@ function eachClass(selector: Selector, visit: (name: string) => void): void {
         part.kind === 'has')
     ) {
       for (const inner of part.selectors) eachClass(inner, visit);
+    } else if (part.type === 'pseudo-class' && part.kind === 'host') {
+      if (part.selectors) eachClass(part.selectors, visit);
     } else if ('selector' in part) eachClass(part.selector, visit);
     else if ('of' in part && part.of) {
       for (const inner of part.of) eachClass(inner, visit);

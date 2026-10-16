@@ -198,7 +198,7 @@ const KEPT_WHOLE = {
   'shared-list': 'shares a selector list with a kept component',
   nested: 'a rule naming it holds nested rules removal cannot prove unused',
   conditional:
-    'named only where a selector can match without it (inside :not(), :has(), or an :is() or :where() with an alternative that does not need it)',
+    'named only where a selector can match without it, or inside a pseudo whose argument removal does not read (:not(), :has(), :host(), ::slotted(), :nth-child(… of …), or an :is() or :where() with an alternative that does not need it)',
   unreadable: 'in a stylesheet Lightning CSS could not read',
 } satisfies Record<KeptReason, string>;
 

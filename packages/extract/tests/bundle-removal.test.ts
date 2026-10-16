@@ -29,13 +29,13 @@ describe('removeComponentRules', () => {
   // alternative of which requires one; a class inside `:not()` or `:has()`
   // requires nothing, and every other rule, keyframes included, stays whole.
   // A class counts as gone only where one of its rules went, and a kept rule
-  // naming it says why it stayed.
+  // naming it says why it stayed, in a pseudo's argument (`:host()`) too.
   test('removes only the rules every selector of which needs a removed class', () => {
     const css = [
       '@layer anm-base{.dead{color:red}.live{color:blue}:where(.dead){margin:0}}',
       '@layer anm-variants{.dead--size-sm{padding:1px}.live--size-sm{padding:2px}}',
       '@layer anm-compounds{.live--x .dead{margin:0}.dead,.live{order:1}}',
-      '@layer anm-states{.live:not(.dead){gap:1px}:is(.dead,.live) span{gap:2px}:is(.dead,.dead--size-sm) b{gap:3px}.live:has(.dead){gap:4px}.live:not(.cond){gap:5px}}',
+      '@layer anm-states{.live:not(.dead){gap:1px}:is(.dead,.live) span{gap:2px}:is(.dead,.dead--size-sm) b{gap:3px}.live:has(.dead){gap:4px}.live:not(.cond){gap:5px}:host(.hosted){gap:6px}}',
       '@layer anm-system{.u_a{gap:4px}}',
       '@keyframes dead{to{opacity:1}}',
     ].join('');
@@ -43,7 +43,9 @@ describe('removeComponentRules', () => {
       css: out,
       went,
       kept,
-    } = removeComponentRules(css, new Set(['dead', 'cond']), { targets: {} });
+    } = removeComponentRules(css, new Set(['dead', 'cond', 'hosted']), {
+      targets: {},
+    });
     expect(out).not.toBeNull();
     expect(out).not.toMatch(
       /\.dead\{|\.dead--size-sm\{|\.live--x \.dead|:where\(\.dead\)|:is\(\.dead,\.dead--size-sm\)/
@@ -56,6 +58,7 @@ describe('removeComponentRules', () => {
       ':is(.dead,.live) span{gap:2px}',
       '.live:has(.dead){gap:4px}',
       '.live:not(.cond){gap:5px}',
+      ':host(.hosted){gap:6px}',
       '.u_a{gap:4px}',
       '@keyframes dead',
     ]) {
@@ -65,6 +68,7 @@ describe('removeComponentRules', () => {
     expect(Object.fromEntries(kept)).toEqual({
       dead: 'shared-list',
       cond: 'conditional',
+      hosted: 'conditional',
     });
     expect(
       removeComponentRules(css, new Set(['other']), { targets: {} }).css
