@@ -132,12 +132,15 @@ impl GeneratedNames {
         Self::chosen(|name| name.to_string())
     }
 
-    /// Names that no identifier in `source` spells.
+    /// Names that no identifier in `source` spells once its Unicode escapes
+    /// are decoded: `createComponent\u00241` binds `createComponent$1`, and
+    /// leaves `createComponent` free.
     pub fn free_in(source: &str) -> Self {
+        let source = decode_unicode_escapes(source);
         Self::chosen(|name| {
             std::iter::once(name.to_string())
                 .chain((1..).map(|n| format!("{name}${n}")))
-                .find(|candidate| !spells_identifier(source, candidate))
+                .find(|candidate| !spells_identifier(&source, candidate))
                 .expect("an unbounded sequence has a free name")
         })
     }
@@ -157,6 +160,41 @@ impl GeneratedNames {
             animus_tables: local("animusTables"),
         }
     }
+}
+
+/// `source` with each `\uXXXX` and `\u{X…}` escape replaced by the
+/// character it encodes, as an identifier written with escapes names it.
+/// Escapes in strings and comments decode too; neither binds a name.
+fn decode_unicode_escapes(source: &str) -> std::borrow::Cow<'_, str> {
+    if !source.contains("\\u") {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    let mut decoded = String::with_capacity(source.len());
+    let mut rest = source;
+    while let Some(at) = rest.find("\\u") {
+        decoded.push_str(&rest[..at]);
+        let after = &rest[at + 2..];
+        let (digits, consumed) = match after.strip_prefix('{') {
+            Some(braced) => braced.find('}').map_or(("", 0), |end| (&braced[..end], end + 2)),
+            None => (after.get(..4).unwrap_or(""), 4),
+        };
+        let encoded = Some(digits)
+            .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_hexdigit()))
+            .and_then(|digits| u32::from_str_radix(digits, 16).ok())
+            .and_then(char::from_u32);
+        match encoded {
+            Some(character) => {
+                decoded.push(character);
+                rest = &after[consumed..];
+            }
+            None => {
+                decoded.push_str("\\u");
+                rest = after;
+            }
+        }
+    }
+    decoded.push_str(rest);
+    std::borrow::Cow::Owned(decoded)
 }
 
 /// Whether `name` occurs in `source` as a whole identifier: in code, a

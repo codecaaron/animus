@@ -2451,11 +2451,27 @@ mod tests {
             assert!(code.contains(&format!("{factory} as {alias}")), "{factory} arrives under an alias: {code}");
             assert!(code.contains(&format!("{alias}(")), "the generated call uses {alias}: {code}");
         }
-        // Parsed as JavaScript: oxc reports a redeclared binding only
-        // outside TypeScript, and this module carries no type syntax.
+        assert_binds_each_name_once(&code);
+
+        // `\u0024` is `$`: the module binds `createComponent$1`, never the
+        // plain name, so neither spelling may decide which name is free.
+        let escaped = "const createComponent\\u00241 = 'user';\n\
+            const createClassResolver\\u{24}1 = 'user';\n\
+            export const C = ds.styles({ p: 1 }).asElement('div');\n\
+            export const card = ds.styles({ p: 1 }).asClass();\n\
+            export const App = () => <C title={createComponent\\u00241 + createClassResolver\\u{24}1} />;\n";
+        let code = transform_source(escaped);
+        assert!(code.contains("import { createComponent, createClassResolver } from"), "{code}");
+        assert_binds_each_name_once(&code);
+    }
+
+    /// Parses `code` as JavaScript, where oxc reports a redeclared binding,
+    /// and asserts it parses and its module scope binds each decoded name
+    /// once, which an escaped spelling of a generated name would break.
+    fn assert_binds_each_name_once(code: &str) {
         let ast = crate::owned_ast::OwnedAst::parse(
             "directive.jsx".into(),
-            code.clone(),
+            code.to_string(),
             &crate::owned_ast::ParseCounter::new(0),
         );
         let semantic =
@@ -2467,6 +2483,15 @@ mod tests {
             .chain(semantic.diagnostics.iter().map(ToString::to_string))
             .collect();
         assert!(errors.is_empty(), "{errors:?}\n{code}");
+        let scoping = semantic.semantic.scoping();
+        let mut module_names: Vec<&str> = scoping
+            .symbol_ids()
+            .filter(|symbol| scoping.symbol_scope_id(*symbol) == scoping.root_scope_id())
+            .map(|symbol| scoping.symbol_name(symbol))
+            .collect();
+        module_names.sort_unstable();
+        let repeated: Vec<&&str> = module_names.windows(2).filter(|pair| pair[0] == pair[1]).map(|pair| &pair[0]).collect();
+        assert!(repeated.is_empty(), "bound twice: {repeated:?}\n{code}");
     }
 
     #[test]
