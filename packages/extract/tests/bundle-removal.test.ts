@@ -96,7 +96,10 @@ describe('removeComponentRules keeps kept rules', () => {
   // Contract: removal changes no kept rule. The trimmed sheet is the
   // original, byte for byte, less each rule that went and each at-rule it
   // emptied, whatever browser targets printed it: here Safari 16's
-  // `-webkit-` prefixes beside their standard properties.
+  // `-webkit-` prefixes beside their standard properties. A sheet that
+  // declares its encoding stays whole, since a cut could change how it is
+  // decoded: a misplaced `@charset` a cut would bring to the start, or a
+  // byte-order mark the first rule's range would take.
   test('removal changes no kept rule', () => {
     const live =
       '.live{-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}.link:hover{-webkit-text-decoration-color:red;text-decoration-color:red}';
@@ -106,6 +109,23 @@ describe('removeComponentRules keeps kept rules', () => {
     expect(removeComponentRules(css, new Set(['dead'])).css).toBe(
       `${live}${media}.u{content:"}"}`
     );
+    for (const declared of [
+      '.dead{color:green}@charset "iso-8859-1";.live:after{content:"é"}\n',
+      '\uFEFF.dead{color:red}.é{color:#00f}',
+    ]) {
+      const { css: out, refused } = removeComponentRules(
+        declared,
+        new Set(['dead'])
+      );
+      expect(out).toBeNull();
+      expect(refused).toMatch(/encoding/);
+    }
+    expect(
+      removeComponentRules(
+        '.dead{color:red}.live:after{content:"@charset"}',
+        new Set(['dead'])
+      ).css
+    ).toBe('.live:after{content:"@charset"}');
   });
 });
 

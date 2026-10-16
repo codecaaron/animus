@@ -327,36 +327,74 @@ function unquotedUrl(css: string, at: number): boolean {
   return at >= 3 && UNQUOTED_URL.test(css);
 }
 
+/** The index of the last character of the token at `at` when it is one
+ *  whose text is no CSS syntax: an escape, a string, a comment or an
+ *  unquoted `url()` argument, any of which may hold braces or `@`. `at`
+ *  for any other character; -1 for one that never closes. */
+function literalEnd(css: string, at: number): number {
+  const c = css[at];
+  if (c === '\\') return at + 1;
+  if (c === '"' || c === "'") return stringEnd(css, at);
+  if (c === '/' && css[at + 1] === '*') {
+    const close = css.indexOf('*/', at + 2);
+    return close < 0 ? -1 : close + 1;
+  }
+  if (c === '(' && unquotedUrl(css, at)) {
+    let i = at + 1;
+    for (; i < css.length && css[i] !== ')'; i++) {
+      if (css[i] === '\\') i++;
+    }
+    return i < css.length ? i : -1;
+  }
+  return at;
+}
+
 /**
  * The index just past the rule that starts at `start`: past the `}` that
- * closes the block it opens, skipping strings, comments, escapes and
- * unquoted `url()`s, which may hold braces. -1 when no block closes.
+ * closes the block it opens, outside its literals (`literalEnd`). -1 when
+ * no block closes.
  */
 function ruleEnd(css: string, start: number): number {
   let depth = 0;
   for (let i = start; i < css.length; i++) {
-    const c = css[i];
-    if (c === '\\') {
-      i++;
-    } else if (c === '"' || c === "'") {
-      i = stringEnd(css, i);
-      if (i < 0) return -1;
-    } else if (c === '/' && css[i + 1] === '*') {
-      i = css.indexOf('*/', i + 2) + 1;
-      if (i <= 0) return -1;
-    } else if (c === '(' && unquotedUrl(css, i)) {
-      for (i++; i < css.length && css[i] !== ')'; i++) {
-        if (css[i] === '\\') i++;
-      }
-    } else if (c === '{') {
+    const end = literalEnd(css, i);
+    if (end < 0) return -1;
+    if (end !== i) {
+      i = end;
+    } else if (css[i] === '{') {
       depth++;
-    } else if (c === '}') {
+    } else if (css[i] === '}') {
       depth--;
       if (depth === 0) return i + 1;
       if (depth < 0) return -1;
     }
   }
   return -1;
+}
+
+/** `@charset`, as an at-rule's name. */
+const CHARSET = /@charset/iy;
+
+/**
+ * Whether `css` declares its encoding: it starts with a byte-order mark,
+ * which the first rule's range would take with it, or holds `@charset`
+ * outside its literals, which a cut could bring to the start of the file,
+ * where it decides how a browser reads the bytes.
+ */
+function declaresEncoding(css: string): boolean {
+  if (css.charCodeAt(0) === 0xfeff) return true;
+  if (!/@charset/i.test(css)) return false;
+  for (let i = 0; i < css.length; i++) {
+    const end = literalEnd(css, i);
+    if (end < 0) return true;
+    if (end !== i) {
+      i = end;
+      continue;
+    }
+    CHARSET.lastIndex = i;
+    if (CHARSET.test(css)) return true;
+  }
+  return false;
 }
 
 /** The rules nested in `rule`. */
@@ -404,8 +442,8 @@ function eachRule(css: string, visit: (rule: Rule) => [] | void): void {
  * rule with another selector stays whole. The rules that go are cut from
  * the text, never reprinted, so every rule kept is byte for byte what the
  * build wrote; when the sheet then reads as anything but its rules less
- * those cut, it stays whole (`refused`). Throws when the sheet does not
- * parse.
+ * those cut, or declares its encoding, it stays whole (`refused`). Throws
+ * when the sheet does not parse.
  */
 export function removeComponentRules(
   css: string,
@@ -521,6 +559,11 @@ export function removeComponentRules(
     kept,
     refused: why,
   });
+  if (declaresEncoding(css)) {
+    return refuse(
+      'it declares its encoding (a byte-order mark or @charset), which cutting rules could change'
+    );
+  }
   let trimmed = '';
   let from = 0;
   for (const start of cutStarts.sort((a, b) => a - b)) {
