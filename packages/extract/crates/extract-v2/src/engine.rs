@@ -1589,15 +1589,16 @@ impl ExtractEngine {
                     .map(|k| format!("\"{}\"", k))
                     .collect();
                 format!(
-                    "createComposedFamilyWithContext({}, {{ name: \"{}\", sharedKeys: [{}] }})",
+                    "{}({}, {{ name: \"{}\", sharedKeys: [{}] }})",
+                    names.create_composed_family_with_context,
                     slots_obj,
                     family.name,
                     shared_keys_str.join(", ")
                 )
             } else {
                 format!(
-                    "createComposedFamily({}, {{ name: \"{}\" }})",
-                    slots_obj, family.name
+                    "{}({}, {{ name: \"{}\" }})",
+                    names.create_composed_family, slots_obj, family.name
                 )
             };
             replacements.push((family.span.0, family.span.1, text));
@@ -1607,29 +1608,22 @@ impl ExtractEngine {
             return Ok(serde_json::json!({ "code": source, "hasComponents": false }).to_string());
         }
 
-        let mut virtual_imports: Vec<String> = Vec::new();
-        let mut import = |needed: bool, export: &str, local: &str| {
-            if needed {
-                virtual_imports.push(if export == local { local.to_string() } else { format!("{export} as {local}") });
-            }
+        let needed = |imports: &[(bool, &assemble::GeneratedName)]| -> Vec<String> {
+            imports.iter().filter(|(needed, _)| *needed).map(|(_, name)| name.specifier()).collect()
         };
-        import(import_needs.system_prop_map, "systemPropMap", &names.system_prop_map);
-        import(import_needs.system_prop_groups, "systemPropGroups", &names.system_prop_groups);
-        import(import_needs.typed_system_props, "typedSystemProps", &names.typed_system_props);
-        import(import_needs.dynamic_prop_config, "dynamicPropConfig", &names.dynamic_prop_config);
-        import(import_needs.transforms, "transforms", &names.transforms);
-        import(import_needs.runtime_tables, "animusTables", &names.animus_tables);
-
-        let mut system_imports: Vec<&str> = Vec::new();
-        if import_needs.create_component {
-            system_imports.push("createComponent");
-        }
-        if import_needs.class_resolver {
-            system_imports.push("createClassResolver");
-        }
-        if has_compose_replacements {
-            system_imports.push("createComposedFamily");
-        }
+        let virtual_imports = needed(&[
+            (import_needs.system_prop_map, &names.system_prop_map),
+            (import_needs.system_prop_groups, &names.system_prop_groups),
+            (import_needs.typed_system_props, &names.typed_system_props),
+            (import_needs.dynamic_prop_config, &names.dynamic_prop_config),
+            (import_needs.transforms, &names.transforms),
+            (import_needs.runtime_tables, &names.animus_tables),
+        ]);
+        let system_imports = needed(&[
+            (import_needs.create_component, &names.create_component),
+            (import_needs.class_resolver, &names.create_class_resolver),
+            (has_compose_replacements, &names.create_composed_family),
+        ]);
         let system_import_str = format!(
             "import {{ {} }} from '{}';\n",
             system_imports.join(", "),
@@ -1645,7 +1639,8 @@ impl ExtractEngine {
         }
         let compose_ctx_import_str = if has_compose_context_replacements {
             format!(
-                "import {{ createComposedFamilyWithContext }} from '{}';\n",
+                "import {{ {} }} from '{}';\n",
+                names.create_composed_family_with_context.specifier(),
                 derive_compose_context_import(&self.opts.runtime_import)
             )
         } else {
@@ -2428,16 +2423,34 @@ mod tests {
     }
 
     /// Contract: a generated import never collides with the module's own
-    /// bindings. A module that already binds `animusTables` gets the shared
-    /// tables under a free alias, and the whole transformed module parses.
+    /// bindings. A module that already binds `animusTables` and every runtime
+    /// factory gets each under a free alias that the generated calls use, and
+    /// the whole transformed module parses.
     #[test]
     fn generated_imports_never_collide_with_module_bindings() {
-        let source = "const animusTables = 'user';\n\
+        let source = "import { compose } from '@animus-ui/system';\n\
+            import { composeWithContext } from '@animus-ui/system/compose-with-context';\n\
+            const animusTables = 'user';\n\
+            const createComponent = 1, createClassResolver = 2;\n\
+            const createComposedFamily = 3, createComposedFamilyWithContext = 4;\n\
             export const C = ds.props({ tone: { property: 'color', scale: { x: 'red' } } }).asElement('div');\n\
-            export const App = ({ v }) => <C tone={v} title={animusTables} />;\n";
+            export const card = ds.styles({ p: 1 }).asClass();\n\
+            const Root = ds.styles({}).asElement('div');\n\
+            const Slot = ds.styles({}).asElement('div');\n\
+            export const Fam = compose({ Root }, { name: 'Card' });\n\
+            export const Ctx = composeWithContext({ Root: Slot }, { name: 'Ctx', shared: {} });\n\
+            export const own = [animusTables, createComponent, createClassResolver, createComposedFamily, createComposedFamilyWithContext];\n\
+            export const App = ({ v }) => <C tone={v} />;\n";
         let code = transform_source(source);
 
         assert!(code.contains("animusTables as "), "the tables arrive under an alias: {code}");
+        for factory in
+            ["createComponent", "createClassResolver", "createComposedFamily", "createComposedFamilyWithContext"]
+        {
+            let alias = format!("{factory}$1");
+            assert!(code.contains(&format!("{factory} as {alias}")), "{factory} arrives under an alias: {code}");
+            assert!(code.contains(&format!("{alias}(")), "the generated call uses {alias}: {code}");
+        }
         // Parsed as JavaScript: oxc reports a redeclared binding only
         // outside TypeScript, and this module carries no type syntax.
         let ast = crate::owned_ast::OwnedAst::parse(

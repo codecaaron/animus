@@ -232,7 +232,7 @@ pub(super) fn build_config(
     // One generated list, shared by every component, names the system props
     // whose static keys are typed.
     if p.reads_typed_system_props {
-        config.insert("typedSystemProps", Field::Script(names.typed_system_props.clone()));
+        config.insert("typedSystemProps", Field::Script(names.typed_system_props.to_string()));
     }
 
     if let Some(ref cdc) = p.custom_dynamic_config {

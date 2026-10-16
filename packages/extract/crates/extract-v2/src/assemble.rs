@@ -85,18 +85,44 @@ pub(crate) fn component_class_name(
         .unwrap_or_else(|| class_name_for(filename, binding, prefix))
 }
 
-/// The local names a transformed module gives the system-props module's
-/// exports: each export's own name, or the first free `name$n` where the
-/// module already uses that name, so a generated import never collides
-/// with the module's own bindings.
+/// The local names a transformed module gives every import the transform
+/// generates, from the system-props module and from the runtime: each
+/// export's own name, or the first free `name$n` where the module already
+/// uses that name, so a generated import never collides with the module's
+/// own bindings.
 #[derive(Debug, Clone)]
 pub struct GeneratedNames {
-    pub system_prop_map: String,
-    pub system_prop_groups: String,
-    pub typed_system_props: String,
-    pub dynamic_prop_config: String,
-    pub transforms: String,
-    pub animus_tables: String,
+    pub create_component: GeneratedName,
+    pub create_class_resolver: GeneratedName,
+    pub create_composed_family: GeneratedName,
+    pub create_composed_family_with_context: GeneratedName,
+    pub system_prop_map: GeneratedName,
+    pub system_prop_groups: GeneratedName,
+    pub typed_system_props: GeneratedName,
+    pub dynamic_prop_config: GeneratedName,
+    pub transforms: GeneratedName,
+    pub animus_tables: GeneratedName,
+}
+
+/// One generated import: the export it reads and the local name the module
+/// binds it to, which is what generated code writes.
+#[derive(Debug, Clone)]
+pub struct GeneratedName {
+    export: &'static str,
+    local: String,
+}
+
+impl GeneratedName {
+    /// The import specifier, `export` or `export as local`.
+    pub fn specifier(&self) -> String {
+        if self.export == self.local { self.local.clone() } else { format!("{} as {}", self.export, self.local) }
+    }
+}
+
+impl std::fmt::Display for GeneratedName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.local)
+    }
 }
 
 impl GeneratedNames {
@@ -117,7 +143,12 @@ impl GeneratedNames {
     }
 
     fn chosen(local: impl Fn(&str) -> String) -> Self {
+        let local = |export: &'static str| GeneratedName { export, local: local(export) };
         Self {
+            create_component: local("createComponent"),
+            create_class_resolver: local("createClassResolver"),
+            create_composed_family: local("createComposedFamily"),
+            create_composed_family_with_context: local("createComposedFamilyWithContext"),
             system_prop_map: local("systemPropMap"),
             system_prop_groups: local("systemPropGroups"),
             typed_system_props: local("typedSystemProps"),
@@ -150,43 +181,23 @@ pub fn generate_replacement(
     let d = &chain.descriptor;
     let class_name = component_class_name(filename, &d.binding, prefix, payload);
     let config = build_config(filename, &d.binding, chain, prefix, payload, group_registry, names)?;
-    let maps = |dynamic: bool| {
-        if dynamic {
-            format!("{}, {}", names.system_prop_map, names.dynamic_prop_config)
-        } else {
-            names.system_prop_map.clone()
-        }
-    };
     let has_system_props = payload.is_some_and(|p| !p.system_prop_names.is_empty());
     let has_dynamic_props = payload.is_some_and(|p| p.has_dynamic_props);
+    let maps = match (has_system_props, has_dynamic_props) {
+        (true, true) => format!(", {}, {}", names.system_prop_map, names.dynamic_prop_config),
+        (true, false) => format!(", {}", names.system_prop_map),
+        (false, _) => String::new(),
+    };
 
     Ok(if d.terminal == TerminalKind::AsClass {
-        if has_system_props && has_dynamic_props {
-            format!(
-                "createClassResolver('{}', {}, {})",
-                class_name, config, maps(true)
-            )
-        } else if has_system_props {
-            format!("createClassResolver('{}', {}, {})", class_name, config, maps(false))
-        } else {
-            format!("createClassResolver('{}', {})", class_name, config)
-        }
+        format!("{}('{}', {}{})", names.create_class_resolver, class_name, config, maps)
     } else {
         let tag = if d.terminal == TerminalKind::AsComponent {
             d.tag.clone()
         } else {
             format!("'{}'", d.tag)
         };
-        if has_system_props && has_dynamic_props {
-            format!(
-                "createComponent({}, '{}', {}, {})",
-                tag, class_name, config, maps(true)
-            )
-        } else if has_system_props {
-            format!("createComponent({}, '{}', {}, {})", tag, class_name, config, maps(false))
-        } else {
-            format!("createComponent({}, '{}', {})", tag, class_name, config)
-        }
+        format!("{}({}, '{}', {}{})", names.create_component, tag, class_name, config, maps)
     })
 }
 
