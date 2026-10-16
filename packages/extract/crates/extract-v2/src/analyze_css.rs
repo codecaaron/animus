@@ -3691,6 +3691,7 @@ fn written_packages(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
+    evaluated_ids: &FxHashSet<String>,
 ) -> FxHashMap<String, Rc<WrittenBy>> {
     if inputs.analysis_context.foreign_packages.is_empty() {
         return FxHashMap::default();
@@ -3723,9 +3724,19 @@ fn written_packages(
             };
             (Start::Binding(binding), binding.as_str(), used)
         }));
-        uses.extend(ff.written_member_uses.iter().map(|written| {
+        // A value handed to an `.asComponent()` terminal is written only where
+        // the call survives: the transform turns the chains it evaluated into
+        // `createComponent()`, which writes nothing into the component it
+        // wraps, and leaves any other call as written.
+        let surviving = ff
+            .wrapped_uses
+            .iter()
+            .filter(|wrapped| !evaluated_ids.contains(&format!("{path}::{}", wrapped.chain)))
+            .map(|wrapped| (&wrapped.written, wrapped.whole));
+        uses.extend(ff.written_member_uses.iter().map(|written| (written, false)).chain(surviving).map(|(written, whole)| {
             let member = written.member.as_deref();
             let start = match ff.namespace_imports.get(&written.binding) {
+                _ if whole => Start::Binding(&written.binding),
                 Some(source) => Start::Namespace(source, member),
                 None => Start::Member(&written.binding, member),
             };
@@ -8444,7 +8455,7 @@ fn run_with_system_floor(
             .unwrap_or_default()
     };
     let mut uncertain_identities: Vec<(&String, UncertainIdentity)> = Vec::new();
-    let written_packages = written_packages(files, inputs, links);
+    let written_packages = written_packages(files, inputs, links, &evaluated_ids);
 
     for path in order {
         if global_lookup.props.is_empty()
@@ -15464,10 +15475,12 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     /// Contract: passing a foreign component to an Animus terminal does not
-    /// make its package written. An extractable `.asComponent()` wraps and
-    /// renders the component it takes and writes nothing into it, so the
-    /// package's member tags stay proven foreign; a write after the same
-    /// call, or a hand-off anywhere else, still keeps them uncertain.
+    /// make its package written. The transform turns an `.asComponent()`
+    /// chain it evaluates into `createComponent()`, which renders the
+    /// component it takes and writes nothing into it, so the package's member
+    /// tags stay proven foreign. A call the transform leaves in place (a
+    /// lookalike builder, a chain whose stages fail), a write after the same
+    /// call, or a hand-off anywhere else still keeps them uncertain.
     #[test]
     fn passing_a_foreign_component_to_an_animus_terminal_does_not_make_its_package_written() {
         let mut inputs = test_inputs();
@@ -15481,6 +15494,17 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(records(wrap), 0);
         assert_eq!(records(&format!("{wrap}Parts.Item.x = R;\n")), 1);
         assert_eq!(records(&format!("{wrap}register(Parts.Item);\n")), 1);
+        let imports = "import { Parts } from 'icons/parts';\nimport { R } from './r';\n";
+        let lookalike = format!(
+            "{imports}const builders = {{ fake: {{ extend() {{ return this; }}, asComponent(c) {{ c.Animus = R; return c; }} }} }};\n\
+             export const P = builders.fake.extend().asComponent(Parts.Item);\n"
+        );
+        assert_eq!(records(&lookalike), 1);
+        let failing = format!(
+            "{imports}const fake = {{ styles(value) {{ return this; }}, asComponent(c) {{ c.Animus = R; return c; }} }};\n\
+             export const P = fake.styles(globalThis.styleConfig).asComponent(Parts.Item);\n"
+        );
+        assert_eq!(records(&failing), 1);
     }
 
     /// A context load honours its recursion flag and filter, a glob its

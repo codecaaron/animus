@@ -1786,6 +1786,23 @@ pub(crate) struct WrittenMember {
     pub used: ObjectUse,
 }
 
+/// See `FileFacts::wrapped_uses`.
+#[derive(Debug, Clone)]
+pub(crate) struct WrappedUse {
+    /// The write the use is unless the call is Animus's: through a member of
+    /// the binding, or of the whole binding (`written_bindings`).
+    pub written: WrittenMember,
+    pub whole: bool,
+    /// The binding of the chain whose `.asComponent()` takes the value.
+    pub chain: String,
+}
+
+impl WrittenMember {
+    fn new(binding: &str, member: Option<&str>, subject: String, used: ObjectUse) -> Self {
+        WrittenMember { binding: binding.to_string(), member: member.map(str::to_string), subject, used }
+    }
+}
+
 /// Records the first use that may write through `binding`'s `member`.
 fn written_member(written: &mut Vec<WrittenMember>, binding: &str, member: Option<&str>, subject: String, used: ObjectUse) {
     if !written.iter().any(|known| known.binding == binding && known.member.as_deref() == member) {
@@ -1811,6 +1828,8 @@ pub(crate) struct ObjectUses {
     pub written_bindings: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::written_member_uses`.
     pub written_member_uses: Vec<WrittenMember>,
+    /// See `FileFacts::wrapped_uses`.
+    pub wrapped_uses: Vec<WrappedUse>,
 }
 
 /// The uses of `object_consts` and of the module's contexts that may change
@@ -1820,7 +1839,7 @@ pub(crate) fn object_uses(
     scoping: &Scoping,
     object_consts: &BTreeMap<&str, bool>,
     assigned_targets: &BTreeSet<&str>,
-    wrapped: FxHashSet<(u32, u32)>,
+    wrapped: FxHashMap<(u32, u32), String>,
 ) -> ObjectUses {
     let context_consts = context_consts(program, scoping, &ReactImports::of(program, scoping));
     // A context is watched as an object too: its `Provider` must stay React's.
@@ -1839,7 +1858,7 @@ pub(crate) fn written_namespaces(program: &Program<'_>, scoping: &Scoping) -> Wr
         .into_iter()
         .filter(|(_, binding)| binding.namespace)
         .collect();
-    scan_object_uses(program, scoping, namespaces, FxHashSet::default()).written_namespaces
+    scan_object_uses(program, scoping, namespaces, FxHashMap::default()).written_namespaces
 }
 
 /// The uses of `candidates` that may change their objects; `context_consts`
@@ -1848,7 +1867,7 @@ fn scan_object_uses(
     program: &Program<'_>,
     scoping: &Scoping,
     candidates: FxHashMap<SymbolId, ObjectBinding>,
-    wrapped: FxHashSet<(u32, u32)>,
+    wrapped: FxHashMap<(u32, u32), String>,
 ) -> ObjectUses {
     if candidates.is_empty() {
         return ObjectUses::default();
@@ -1916,6 +1935,7 @@ fn scan_object_uses(
         local_aliases: FxHashMap::default(),
         element_arrays: FxHashMap::default(),
         wrapped,
+        wrapped_uses: Vec::new(),
     };
     scan.visit_program(program);
     ObjectUses {
@@ -1924,6 +1944,7 @@ fn scan_object_uses(
         written_namespaces: scan.written_namespaces,
         written_bindings: scan.written_bindings,
         written_member_uses: scan.written_member_uses,
+        wrapped_uses: scan.wrapped_uses,
         ..ObjectUses::default()
     }
 }
@@ -2044,7 +2065,8 @@ pub(crate) fn style_object_uses(
         returns: Vec::new(),
         local_aliases: FxHashMap::default(),
         element_arrays: FxHashMap::default(),
-        wrapped: FxHashSet::default(),
+        wrapped: FxHashMap::default(),
+        wrapped_uses: Vec::new(),
     };
     scan.visit_program(program);
     // An alias with a use the scan did not judge (one written before the
@@ -3775,10 +3797,10 @@ struct ObjectUseScan<'a, 's> {
     /// In style mode, each function's own `const` that holds an array of an
     /// object binding's members (`Object.entries(o).filter(…)`).
     element_arrays: FxHashMap<SymbolId, ElementArray>,
-    /// Byte range of each extractable `.asComponent()` terminal's argument:
-    /// the runtime wraps and renders that component and writes nothing into
-    /// it, so passing it there writes nothing; empty in style mode.
-    wrapped: FxHashSet<(u32, u32)>,
+    /// See `chain_walk::wrapped_components`; empty in style mode.
+    wrapped: FxHashMap<(u32, u32), String>,
+    /// See `FileFacts::wrapped_uses`; empty in style mode.
+    wrapped_uses: Vec<WrappedUse>,
 }
 
 /// A function's own `const` holding an array whose elements are an object
@@ -4020,6 +4042,19 @@ impl<'a> ObjectUseScan<'a, '_> {
         self.lines.get_or_init(|| crate::facts::LineStarts::of(self.source)).line(span.start as usize)
     }
 
+    /// The chain whose `.asComponent()` takes the value at `span` as its
+    /// argument, given the ancestors above it.
+    fn wrapped_at<'b>(&self, span: Span, mut ancestors: impl Iterator<Item = &'b AstKind<'a>>) -> Option<String>
+    where
+        'a: 'b,
+    {
+        if self.wrapped.is_empty() {
+            return None;
+        }
+        let (current, _) = peel_wrappers(span, &mut ancestors);
+        self.wrapped.get(&(current.start, current.end)).cloned()
+    }
+
     /// A destructuring at `span`, which binds members' values to names the
     /// scan does not follow, which may write through them. The other object
     /// facts read it as a read.
@@ -4042,9 +4077,6 @@ impl<'a> ObjectUseScan<'a, '_> {
         'a: 'b,
     {
         let (current, parent) = peel_wrappers(span, &mut ancestors.clone());
-        if self.wrapped.contains(&(current.start, current.end)) {
-            return None;
-        }
         match parent {
             Some(AstKind::ExportSpecifier(_) | AstKind::ExportDefaultDeclaration(_)) => {
                 return Some("is exported".to_string());
@@ -4072,18 +4104,28 @@ fn writes_nothing(what: &str) -> bool {
     what == "is called" || what.ends_with(" called as a method")
 }
 
-/// Records a use that may write through `namespace`'s `member`, and the
-/// namespace's first such use.
+/// Records `write`, a use that may write through a member of its binding:
+/// one that hands it to the `.asComponent()` terminal of `chain` among
+/// `wrapped`, a write only where that call survives the transform, and any
+/// other as `written_member` does.
+fn written_or_wrapped(members: &mut Vec<WrittenMember>, wrapped: &mut Vec<WrappedUse>, chain: Option<String>, write: WrittenMember) {
+    match chain {
+        Some(chain) => wrapped.push(WrappedUse { written: write, whole: false, chain }),
+        None => written_member(members, &write.binding, write.member.as_deref(), write.subject, write.used),
+    }
+}
+
+/// Records `write`, a use that may write through a member of a namespace,
+/// as `written_or_wrapped` does, and the namespace's first such use.
 fn written_through(
-    written: &mut WrittenNamespaces,
+    namespaces: &mut WrittenNamespaces,
     members: &mut Vec<WrittenMember>,
-    namespace: &str,
-    member: Option<&str>,
-    subject: String,
-    used: ObjectUse,
+    wrapped: &mut Vec<WrappedUse>,
+    chain: Option<String>,
+    write: WrittenMember,
 ) {
-    written_member(members, namespace, member, subject.clone(), used.clone());
-    written.entry(namespace.to_string()).or_insert((subject, used));
+    namespaces.entry(write.binding.clone()).or_insert_with(|| (write.subject.clone(), write.used.clone()));
+    written_or_wrapped(members, wrapped, chain, write);
 }
 
 /// What a use is said of: `X.key`, or `a member of X` for a member a key
@@ -4139,7 +4181,9 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
             if let Some(what) = write.flatten() {
                 let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
                 let subject = ident.name.to_string();
-                written_through(&mut self.written_namespaces, &mut self.written_member_uses, &namespace, None, subject, used);
+                let chain = self.wrapped_at(ident.span, self.ancestors.iter().rev());
+                let write = WrittenMember::new(&namespace, None, subject, used);
+                written_through(&mut self.written_namespaces, &mut self.written_member_uses, &mut self.wrapped_uses, chain, write);
             }
         }
         let Some(binding) = self.candidates.get(&symbol).cloned() else { return };
@@ -4319,7 +4363,9 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                     let name = Some(member.property.name.as_str());
                     if let Some(what) = self.member_value_write(member.span, ancestors.clone()) {
                         let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
-                        written_through(&mut self.written_namespaces, &mut self.written_member_uses, &namespace, name, key.clone(), used);
+                        let chain = self.wrapped_at(member.span, ancestors.clone());
+                        let write = WrittenMember::new(&namespace, name, key.clone(), used);
+                        written_through(&mut self.written_namespaces, &mut self.written_member_uses, &mut self.wrapped_uses, chain, write);
                     } else if !destructured_members(member.span, ancestors.clone()).is_empty() {
                         let used = self.destructured(ident.span);
                         written_member(&mut self.written_member_uses, &namespace, name, key.clone(), used);
@@ -4335,7 +4381,9 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                     let subject = member_subject(&namespace, None);
                     if let Some(what) = self.member_value_write(member.span, ancestors.clone()) {
                         let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
-                        written_through(&mut self.written_namespaces, &mut self.written_member_uses, &namespace, None, subject, used);
+                        let chain = self.wrapped_at(member.span, ancestors.clone());
+                        let write = WrittenMember::new(&namespace, None, subject, used);
+                        written_through(&mut self.written_namespaces, &mut self.written_member_uses, &mut self.wrapped_uses, chain, write);
                     } else if !destructured_members(member.span, ancestors).is_empty() {
                         let used = self.destructured(ident.span);
                         written_member(&mut self.written_member_uses, &namespace, None, subject, used);
@@ -4345,7 +4393,9 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 _ => {
                     let what = "is used as a whole namespace".to_string();
                     let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what: what.clone() };
-                    written_through(&mut self.written_namespaces, &mut self.written_member_uses, &namespace, None, namespace.clone(), used);
+                    let chain = self.wrapped_at(ident.span, self.ancestors.iter().rev());
+                    let write = WrittenMember::new(&namespace, None, namespace.clone(), used);
+                    written_through(&mut self.written_namespaces, &mut self.written_member_uses, &mut self.wrapped_uses, chain, write);
                     (namespace, Some(what))
                 }
             }
@@ -4362,12 +4412,14 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 _ => None,
             };
             if let Some((span, name)) = member {
+                let wrapping = self.wrapped_at(span, rest.clone());
                 let used = match self.member_value_write(span, rest.clone()) {
                     Some(what) => Some(ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what }),
                     None => (!destructured_members(span, rest).is_empty()).then(|| self.destructured(ident.span)),
                 };
                 if let Some(used) = used {
-                    written_member(&mut self.written_member_uses, &binding.name, name, member_subject(&binding.name, name), used);
+                    let write = WrittenMember::new(&binding.name, name, member_subject(&binding.name, name), used);
+                    written_or_wrapped(&mut self.written_member_uses, &mut self.wrapped_uses, wrapping, write);
                 }
             }
             for name in destructured_members(ident.span, ancestors.clone()) {
@@ -4396,15 +4448,23 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 });
                 return;
             }
-            let wrapped = self.wrapped.contains(&(span.start, span.end));
+            let wrapping = self.wrapped.get(&(span.start, span.end)).cloned();
             let Some(what) = object_use(ident.span, ancestors, true, self.global_object, assigned_target) else { return };
-            let writes = !written && !wrapped && !writes_nothing(&what);
+            let writes = !written && !writes_nothing(&what);
             if used && !writes {
                 return;
             }
             let used_at = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
             if writes {
-                self.written_bindings.insert(binding.name.clone(), used_at.clone());
+                match wrapping {
+                    Some(chain) => {
+                        let written = WrittenMember::new(&binding.name, None, binding.name.clone(), used_at.clone());
+                        self.wrapped_uses.push(WrappedUse { written, whole: true, chain });
+                    }
+                    None => {
+                        self.written_bindings.insert(binding.name.clone(), used_at.clone());
+                    }
+                }
             }
             if !used {
                 self.uses.insert(binding.name.clone(), used_at);

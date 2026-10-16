@@ -249,17 +249,18 @@ fn declared_chains(program: &Program<'_>, builders: &StagedBuilders<'_, '_>) -> 
     DeclaredChains { chains, member_parents, member_rooted, default_export_span }
 }
 
-/// Byte range of each argument an extractable `.asComponent()` terminal of
-/// a top-level chain wraps, read from the declarations alone.
-pub fn wrapped_components(program: &Program<'_>) -> FxHashSet<(u32, u32)> {
+/// Byte range of each argument an `.asComponent()` terminal of a top-level
+/// chain takes, with the chain's binding, read from the declarations alone.
+/// Whether the call is Animus's own is known only once the analysis decides
+/// which chains it replaces.
+pub fn wrapped_components(program: &Program<'_>) -> FxHashMap<(u32, u32), String> {
     let builders = staged_builders(program);
     let declared = declared_chains(program, &builders);
     declared
         .chains
-        .iter()
-        .chain(declared.member_parents.iter().map(|(_, chain)| chain))
-        .filter(|chain| chain.extractable)
-        .filter_map(|chain| chain.target)
+        .into_iter()
+        .chain(declared.member_parents.into_iter().map(|(_, chain)| chain))
+        .filter_map(|chain| Some((chain.target?, chain.binding)))
         .collect()
 }
 

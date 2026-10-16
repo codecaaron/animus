@@ -513,6 +513,13 @@ pub struct FileFacts {
     /// one use per namespace, it tells each member written apart.
     #[serde(skip)]
     pub(crate) written_member_uses: Vec<crate::usage_facts::WrittenMember>,
+    /// Each use that hands a binding, or a member of one, to an
+    /// `.asComponent()` terminal of the module's chains, with the write it
+    /// is unless the call is Animus's: kept out of `written_bindings` and
+    /// `written_member_uses` until the analysis knows which chains it
+    /// replaces. `written_namespaces` records it as any other use.
+    #[serde(skip)]
+    pub(crate) wrapped_uses: Vec<crate::usage_facts::WrappedUse>,
     /// Each namespace import some use may write through, with the first
     /// such use and what it names: a member written or deleted, a member's
     /// value (`ui.Fam`, `icons[name]`) handed on, exported, or bound to a
@@ -1212,8 +1219,7 @@ pub(crate) fn object_facts(program: &Program<'_>, scoping: &oxc::semantic::Scopi
     // Assigned facades' targets (`Root`, `Fam.Root`): a write to one after
     // the facade is built changes the facade too.
     let assigned_targets: BTreeSet<&str> = const_initializers.targets.values().map(String::as_str).collect();
-    // The components the module's extractable `.asComponent()` terminals
-    // wrap, which the runtime only renders.
+    // The components the module's `.asComponent()` terminals take.
     let wrapped = chain_walk::wrapped_components(program);
     let uses = crate::usage_facts::object_uses(program, scoping, &object_consts, &assigned_targets, wrapped);
     ObjectFacts { props_forwarding, const_initializers, compose, uses }
@@ -1234,6 +1240,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         written_namespaces,
         written_bindings,
         written_member_uses,
+        wrapped_uses,
     } = uses;
     let bindings = &lowered.bindings;
     let namespace_import_facts = crate::usage_facts::collect_namespace_import_facts(ast.module_record());
@@ -1270,6 +1277,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         object_handoffs,
         written_bindings,
         written_member_uses,
+        wrapped_uses,
         written_namespaces,
         param_readings: Arc::clone(&lowered.readings),
         dynamic_code: lowered.dynamic_code,
