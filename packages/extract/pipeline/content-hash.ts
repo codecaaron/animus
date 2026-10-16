@@ -5,13 +5,19 @@ export function contentHash(source: string | Buffer): string {
   return createHash('md5').update(source).digest('hex');
 }
 
+/** A file's text, or null when it cannot be read. */
+export function fileTextOrNull(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
 /** A file's content hash, or '' when it cannot be read. */
 export function fileHashOrEmpty(path: string): string {
-  try {
-    return contentHash(readFileSync(path, 'utf-8'));
-  } catch {
-    return '';
-  }
+  const text = fileTextOrNull(path);
+  return text === null ? '' : contentHash(text);
 }
 
 /** The first file whose content neither has its recorded hash nor one

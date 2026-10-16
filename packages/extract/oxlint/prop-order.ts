@@ -14,8 +14,8 @@
  * every value literal, no comment inside the tag, no repeated prop, and no
  * `as` or `asChild`. A missing, stale or unreadable prop-order file is
  * reported when that changes, and nothing is ordered until it is usable. A
- * file the rule's own fixes rewrote still matches the analysis that read
- * it: reordering those props changes nothing the analysis records.
+ * file any of the rule's own fixes rewrote still matches the analysis that
+ * read it: reordering those props changes nothing the analysis records.
  */
 
 import { defineRule } from '@oxlint/plugins';
@@ -24,7 +24,7 @@ import { basename, dirname, join, relative, resolve } from 'path';
 
 import {
   contentHash,
-  fileHashOrEmpty,
+  fileTextOrNull,
   firstChangedFile,
 } from '../pipeline/content-hash';
 import {
@@ -41,10 +41,12 @@ import {
 import type { PropOrderFile } from '../session/prop-order';
 import type { Context, ESTree, Fixer } from '@oxlint/plugins';
 
+/** How to get a usable file: `animus prop-order` ships only in the CLI
+ *  package, which a project that builds through a plugin may not have. */
 const REFRESH =
-  'Run `animus prop-order`, or a dev server with `propOrderFile: true`, to regenerate it; until then no props are ordered.';
+  'Set `propOrderFile: true` in the Animus plugin options so any build or dev server writes it, or run `animus prop-order` from `@animus-ui/cli`; until then no props are ordered.';
 
-const MISSING = `No Animus prop-order file (${ANIMUS_ARTIFACT_DIR}/${PROP_ORDER_ARTIFACT}) was found above this file. Set \`propOrderFile: true\` in the Animus plugin options so every build and dev server writes it, or run \`animus prop-order\`; until then no props are ordered.`;
+const MISSING = `No Animus prop-order file (${ANIMUS_ARTIFACT_DIR}/${PROP_ORDER_ARTIFACT}) was found above this file. ${REFRESH}`;
 
 /** How long a lint process trusts what it last saw of the disk: the
  *  prop-order file's location, and whether its recorded files still match.
@@ -94,24 +96,72 @@ interface PropOrderOptions {
 const cachedOrders = new Map<string, CachedOrder>();
 /** By directory: the prop-order file found from there, or none. */
 const locatedOrders = new Map<string, LocatedOrder>();
-/** By path: the hash this process's fixes give the text a prop-order file
- *  recorded for it, so a run's fixes leave the files it has yet to lint
- *  fresh. */
-const fixedHashes = new Map<string, { recorded: string; fixed: string }>();
+/** A range of the source and the text that replaces it. */
+type Edit = [range: [number, number], text: string];
+
+/** The text a prop-order file recorded for one path, as this process read
+ *  it, and every fix the rule offered on that text. */
+interface FixBaseline {
+  recorded: string;
+  original: string;
+  /** By range and text. A fix reorders its range, so keeps its length. */
+  fixes: Map<string, Edit>;
+  /** The hashes of texts already found to be its fixes. */
+  accepted: Set<string>;
+  /** The hash of the disk text last found not to be one, until another fix
+   *  is kept: a file changed for good is not reread at every recheck. */
+  rejected: string | null;
+}
+
+/** By path: what lets a run's fixes, any of them, leave the files it has
+ *  yet to lint fresh. */
+const fixBaselines = new Map<string, FixBaseline>();
 /** Each problem's last report, by kind: a problem is reported again only
  *  when it changes, or after it was resolved. */
 const reportedProblems = new Map<string, string>();
 
-/** The text at `path` hashes to `actual`: what the analysis read, or that
- *  with the rule's fixes applied. */
-function matchesRecorded(
-  path: string,
-  recorded: string,
-  actual: string
-): boolean {
-  if (actual === recorded) return true;
-  const fixed = fixedHashes.get(path);
-  return fixed?.recorded === recorded && fixed.fixed === actual;
+/** The fixes kept for `path`, where they are fixes of its recorded text. */
+function baselineOf(path: string, recorded: string): FixBaseline | undefined {
+  const baseline = fixBaselines.get(path);
+  return baseline?.recorded === recorded ? baseline : undefined;
+}
+
+/** `text`, which hashes to `hash`, is the baseline's text with some of its
+ *  fixes applied, each where it was offered: what Oxlint writes when a
+ *  directive suppresses a fix, or an editor applies one. */
+function isOwnFix(baseline: FixBaseline, text: string, hash: string): boolean {
+  const { original, fixes, accepted } = baseline;
+  if (text.length !== original.length) return false;
+  if (accepted.has(hash)) return true;
+  // The texts align, as each fix keeps its length. Fixes offered under two
+  // orders can share or cross a range, so walk the fixes' bounds from the
+  // start: each stretch is crossed as recorded, or by a fix whose text is
+  // there.
+  const bounds = new Set([0, text.length]);
+  const fixedFrom = new Map<number, number[]>();
+  for (const [[start, end], replacement] of fixes.values()) {
+    bounds.add(start).add(end);
+    if (text.slice(start, end) === replacement) {
+      fixedFrom.set(start, [...(fixedFrom.get(start) ?? []), end]);
+    }
+  }
+  const points = [...bounds].sort((a, b) => a - b);
+  const reached = new Set([0]);
+  for (const [index, at] of points.entries()) {
+    if (!reached.has(at)) continue;
+    const next = points[index + 1];
+    if (
+      next !== undefined &&
+      text.slice(at, next) === original.slice(at, next)
+    ) {
+      reached.add(next);
+    }
+    for (const end of fixedFrom.get(at) ?? []) reached.add(end);
+  }
+  // More fixes only add texts, so one found stays found.
+  if (!reached.has(text.length)) return false;
+  accepted.add(hash);
+  return true;
 }
 
 /** The file at `path` on disk, first read as `actual`, still matches. */
@@ -120,16 +170,26 @@ function diskMatchesRecorded(
   recorded: string,
   actual: string
 ): boolean {
-  let hash = actual;
-  for (let read = 1; !matchesRecorded(path, recorded, hash); read++) {
-    if (read === SETTLE_READS || fixedHashes.get(path)?.recorded !== recorded) {
+  if (actual === recorded) return true;
+  const baseline = baselineOf(path, recorded);
+  if (baseline === undefined || actual === baseline.rejected) return false;
+  if (baseline.accepted.has(actual)) return true;
+  for (let read = 1; ; read++) {
+    const text = fileTextOrNull(path) ?? '';
+    const hash = contentHash(text);
+    if (isOwnFix(baseline, text, hash)) return true;
+    if (read === SETTLE_READS) {
+      baseline.rejected = hash;
       return false;
     }
     Atomics.wait(settleClock, 0, 0, SETTLE_MS);
-    hash = fileHashOrEmpty(path);
   }
-  return true;
 }
+
+/** The file being linted as it stands, read as the analysis reads it:
+ *  Oxlint's source text leaves out a byte order mark. */
+const sourceText = (context: Context): string =>
+  (context.sourceCode.hasBOM ? '\uFEFF' : '') + context.sourceCode.text;
 
 function reportChanged(
   key: string,
@@ -283,9 +343,9 @@ interface LintedFile {
   /** Tag as written → its component's ranks; empty where nothing in the
    *  file can be ordered. */
   ranks: Map<string, Map<string, number>>;
-  /** Its path and the hash the prop-order file records for it; null
-   *  without ranks. */
-  stamp: { path: string; recorded: string } | null;
+  /** Its recorded hash, where its text is the recorded one: only fixes
+   *  offered on that text are kept, so each is a fix of it. */
+  recorded: string | null;
 }
 
 /** The file being linted. A prop its target receives as written is left
@@ -296,7 +356,7 @@ function lintedFile(
   context: Context
 ): LintedFile {
   const ranks = new Map<string, Map<string, number>>();
-  const unordered = { ranks, stamp: null };
+  const unordered = { ranks, recorded: null };
   const order = orderFor(node, context);
   if (order === null) return unordered;
   const path = resolve(context.cwd, context.filename);
@@ -304,12 +364,14 @@ function lintedFile(
   const tags = order.file.tags[file];
   const recorded = order.file.files[file];
   if (tags === undefined) return unordered;
+  const text = sourceText(context);
+  const hash = contentHash(text);
+  const exact = hash === recorded;
+  const baseline =
+    exact || recorded === undefined ? undefined : baselineOf(path, recorded);
   // The file has changed since the analysis read it, as an editor's buffer
   // does before the next analysis.
-  if (
-    recorded === undefined ||
-    !matchesRecorded(path, recorded, contentHash(context.sourceCode.text))
-  ) {
+  if (!exact && (baseline === undefined || !isOwnFix(baseline, text, hash))) {
     reportStale(
       order.path,
       `${file} changed since it was written`,
@@ -325,7 +387,34 @@ function lintedFile(
       ranks.set(tag, new Map(ordered.map((prop) => [prop.name, prop.rank])));
     }
   }
-  return { ranks, stamp: { path, recorded } };
+  return { ranks, recorded: exact ? hash : null };
+}
+
+/** Keeps `fixes`, offered on the linted file's recorded text, as its own. */
+function keepFixes(
+  recorded: string,
+  fixes: readonly Edit[],
+  context: Context
+): void {
+  const path = resolve(context.cwd, context.filename);
+  let baseline = baselineOf(path, recorded);
+  if (baseline === undefined) {
+    baseline = {
+      recorded,
+      original: sourceText(context),
+      fixes: new Map(),
+      accepted: new Set(),
+      rejected: null,
+    };
+    fixBaselines.set(path, baseline);
+  }
+  baseline.rejected = null;
+  // The baseline holds the byte order mark the fixes' ranges leave out.
+  const shift = context.sourceCode.hasBOM ? 1 : 0;
+  for (const [[start, end], replacement] of fixes) {
+    const range: [number, number] = [start + shift, end + shift];
+    baseline.fixes.set(`${range}:${replacement}`, [range, replacement]);
+  }
 }
 
 /** The tag as written (`Box`, `ui.Box`, `Card.Body`); null for a namespaced
@@ -421,21 +510,6 @@ function unorderedRuns(
     );
 }
 
-/** A range of the source and the text that replaces it. */
-type Edit = [range: [number, number], text: string];
-
-/** `text` with `edits` applied, which arrive in source order, as the
- *  visitor meets their tags, and do not overlap. */
-function applyEdits(text: string, edits: readonly Edit[]): string {
-  let applied = '';
-  let at = 0;
-  for (const [[start, end], replacement] of edits) {
-    applied += text.slice(at, start) + replacement;
-    at = end;
-  }
-  return applied + text.slice(at);
-}
-
 /** The run rewritten in order, each gap between attributes kept where it
  *  was. */
 function orderedText(run: Run, context: Context): string {
@@ -474,24 +548,9 @@ export const propOrderRule = defineRule({
   createOnce(context) {
     /** Per file, resolved at its first component tag. */
     let linted: LintedFile | null = null;
-    /** The file's fixes so far. */
-    let edits: Edit[] = [];
     return {
       before() {
         linted = null;
-        edits = [];
-      },
-      after() {
-        // Only a file with ranks has fixes, and so a stamp.
-        if (edits.length === 0 || !linted?.stamp) return;
-        const { path, recorded } = linted.stamp;
-        // Fixes are offered only on the recorded text, so they always give
-        // the same one.
-        if (fixedHashes.get(path)?.recorded === recorded) return;
-        fixedHashes.set(path, {
-          recorded,
-          fixed: contentHash(applyEdits(context.sourceCode.text, edits)),
-        });
       },
       JSXOpeningElement(node) {
         const tag = tagText(node.name);
@@ -521,7 +580,9 @@ export const propOrderRule = defineRule({
           ],
           orderedText(run, context),
         ]);
-        edits.push(...fixes);
+        if (linted.recorded !== null) {
+          keepFixes(linted.recorded, fixes, context);
+        }
         context.report({
           node,
           message,
