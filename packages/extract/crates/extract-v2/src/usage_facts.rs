@@ -4348,8 +4348,9 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 }
             }
             for name in destructured_members(ident.span, ancestors.clone()) {
-                let (subject, used) = (member_subject(&binding.name, name.as_deref()), self.destructured(ident.span));
-                written_member(&mut self.written_member_uses, &binding.name, name.as_deref(), subject, used);
+                // The binding is what is destructured; the member is only selected.
+                let used = self.destructured(ident.span);
+                written_member(&mut self.written_member_uses, &binding.name, name.as_deref(), binding.name.clone(), used);
             }
             let used = self.uses.contains_key(&binding.name);
             let written = self.written_bindings.contains_key(&binding.name);
