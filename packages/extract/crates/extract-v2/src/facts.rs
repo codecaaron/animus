@@ -501,12 +501,14 @@ pub struct FileFacts {
     /// as a method, writes nothing.
     #[serde(skip)]
     pub(crate) written_bindings: BTreeMap<String, crate::usage_facts::ObjectUse>,
-    /// The bindings of `written_bindings`' kind with a member whose value
-    /// some use may write through, as `written_namespaces` records it for a
-    /// namespace. It says nothing of the binding's own object; it matters
-    /// where the binding is another module's namespace.
+    /// Every member of an import, namespace import or module-scope `const`
+    /// whose value some use may write through, each with its first such
+    /// use: one `written_namespaces` would record for a namespace, and a
+    /// member a destructuring binds; a member a key names at runtime, or the
+    /// object used whole, as `None`. Unlike `written_namespaces`, which keeps
+    /// one use per namespace, it tells each member written apart.
     #[serde(skip)]
-    pub(crate) written_members: crate::usage_facts::WrittenNamespaces,
+    pub(crate) written_member_uses: Vec<crate::usage_facts::WrittenMember>,
     /// Each namespace import some use may write through, with the first
     /// such use and what it names: a member written or deleted, a member's
     /// value (`ui.Fam`, `icons[name]`) handed on, exported, or bound to a
@@ -1222,7 +1224,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         object_handoffs,
         written_namespaces,
         written_bindings,
-        written_members,
+        written_member_uses,
     } = uses;
     let bindings = &lowered.bindings;
     let namespace_import_facts = crate::usage_facts::collect_namespace_import_facts(ast.module_record());
@@ -1257,7 +1259,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         unsafe_object_uses,
         object_handoffs,
         written_bindings,
-        written_members,
+        written_member_uses,
         written_namespaces,
         param_readings: Arc::clone(&lowered.readings),
         dynamic_code: lowered.dynamic_code,

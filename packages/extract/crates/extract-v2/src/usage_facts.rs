@@ -1763,6 +1763,28 @@ struct ObjectBinding {
 /// See `FileFacts::written_namespaces`.
 pub type WrittenNamespaces = BTreeMap<String, (String, ObjectUse)>;
 
+/// See `FileFacts::written_member_uses`.
+#[derive(Debug, Clone)]
+pub(crate) struct WrittenMember {
+    /// The binding written through: an import, a namespace import or a
+    /// module-scope `const`.
+    pub binding: String,
+    /// The member of its object whose value the use may write through, or
+    /// `None` for a member a key names at runtime and for the object used
+    /// whole.
+    pub member: Option<String>,
+    /// What the use is said of.
+    pub subject: String,
+    pub used: ObjectUse,
+}
+
+/// Records the first use that may write through `binding`'s `member`.
+fn written_member(written: &mut Vec<WrittenMember>, binding: &str, member: Option<&str>, subject: String, used: ObjectUse) {
+    if !written.iter().any(|known| known.binding == binding && known.member.as_deref() == member) {
+        written.push(WrittenMember { binding: binding.to_string(), member: member.map(str::to_string), subject, used });
+    }
+}
+
 /// See `FileFacts::unsafe_object_uses`.
 /// What a module's own source says may change the objects the member
 /// tables follow, and the contexts it builds among them: read from its parse
@@ -1779,8 +1801,8 @@ pub(crate) struct ObjectUses {
     pub written_namespaces: WrittenNamespaces,
     /// See `FileFacts::written_bindings`.
     pub written_bindings: BTreeMap<String, ObjectUse>,
-    /// See `FileFacts::written_members`.
-    pub written_members: WrittenNamespaces,
+    /// See `FileFacts::written_member_uses`.
+    pub written_member_uses: Vec<WrittenMember>,
 }
 
 /// The uses of `object_consts` and of the module's contexts that may change
@@ -1827,16 +1849,15 @@ fn scan_object_uses(program: &Program<'_>, scoping: &Scoping, candidates: FxHash
             .collect();
         let written_bindings =
             candidates.values().filter(|binding| !binding.namespace).map(|binding| (binding.name.clone(), what.clone())).collect();
-        let written_members = candidates
+        let written_member_uses = candidates
             .values()
-            .filter(|binding| !binding.namespace)
-            .map(|binding| (binding.name.clone(), (format!("a member of {}", binding.name), what.clone())))
+            .map(|binding| WrittenMember { binding: binding.name.clone(), member: None, subject: binding.name.clone(), used: what.clone() })
             .collect();
         return ObjectUses {
             unsafe_object_uses: candidates.into_values().map(|binding| (binding.name, what.clone())).collect(),
             written_namespaces,
             written_bindings,
-            written_members,
+            written_member_uses,
             ..ObjectUses::default()
         };
     }
@@ -1875,7 +1896,7 @@ fn scan_object_uses(program: &Program<'_>, scoping: &Scoping, candidates: FxHash
         member_consts: member_consts.consts,
         written_namespaces: BTreeMap::new(),
         written_bindings: BTreeMap::new(),
-        written_members: BTreeMap::new(),
+        written_member_uses: Vec::new(),
         called_functions: None,
         returns: Vec::new(),
         local_aliases: FxHashMap::default(),
@@ -1887,7 +1908,7 @@ fn scan_object_uses(program: &Program<'_>, scoping: &Scoping, candidates: FxHash
         object_handoffs: scan.handoffs,
         written_namespaces: scan.written_namespaces,
         written_bindings: scan.written_bindings,
-        written_members: scan.written_members,
+        written_member_uses: scan.written_member_uses,
         ..ObjectUses::default()
     }
 }
@@ -2003,7 +2024,7 @@ pub(crate) fn style_object_uses(
         member_consts: FxHashMap::default(),
         written_namespaces: BTreeMap::new(),
         written_bindings: BTreeMap::new(),
-        written_members: BTreeMap::new(),
+        written_member_uses: Vec::new(),
         called_functions: Some(CalledFunctions::of(program)),
         returns: Vec::new(),
         local_aliases: FxHashMap::default(),
@@ -3724,8 +3745,8 @@ struct ObjectUseScan<'a, 's> {
     written_namespaces: WrittenNamespaces,
     /// See `FileFacts::written_bindings`; empty in style mode.
     written_bindings: BTreeMap<String, ObjectUse>,
-    /// See `FileFacts::written_members`; empty in style mode.
-    written_members: WrittenNamespaces,
+    /// See `FileFacts::written_member_uses`; empty in style mode.
+    written_member_uses: Vec<WrittenMember>,
     /// In style mode, the module-scope functions nothing exports, and the
     /// `const` each call of one initializes.
     called_functions: Option<CalledFunctions>,
@@ -3979,6 +4000,14 @@ impl<'a> ObjectUseScan<'a, '_> {
         self.lines.get_or_init(|| crate::facts::LineStarts::of(self.source)).line(span.start as usize)
     }
 
+    /// A destructuring at `span`, which binds members' values to names the
+    /// scan does not follow, which may write through them. The other object
+    /// facts read it as a read.
+    fn destructured(&self, span: Span) -> ObjectUse {
+        let what = "is destructured into bindings extraction does not follow".to_string();
+        ObjectUse { line: Some(self.line(span)), at: Some(span.start), what }
+    }
+
     /// How a use may write the member value at `span`, read through a
     /// member of a namespace import or a `const` it initializes: writing
     /// through it, handing it on or exporting it. Initializing a `const` in
@@ -4020,14 +4049,24 @@ fn writes_nothing(what: &str) -> bool {
     what == "is called" || what.ends_with(" called as a method")
 }
 
-/// Records `namespace`'s first use that may write through it.
+/// Records a use that may write through `namespace`'s `member`, and the
+/// namespace's first such use.
 fn written_through(
     written: &mut WrittenNamespaces,
+    members: &mut Vec<WrittenMember>,
     namespace: &str,
+    member: Option<&str>,
     subject: String,
     used: ObjectUse,
 ) {
+    written_member(members, namespace, member, subject.clone(), used.clone());
     written.entry(namespace.to_string()).or_insert((subject, used));
+}
+
+/// What a use is said of: `X.key`, or `a member of X` for a member a key
+/// names at runtime or any member.
+fn member_subject(binding: &str, member: Option<&str>) -> String {
+    member.map_or_else(|| format!("a member of {binding}"), |member| format!("{binding}.{member}"))
 }
 
 impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
@@ -4076,7 +4115,8 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
             let write = reference.is_value().then(|| self.member_value_write(ident.span, self.ancestors.iter().rev()));
             if let Some(what) = write.flatten() {
                 let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
-                written_through(&mut self.written_namespaces, &namespace, ident.name.to_string(), used);
+                let subject = ident.name.to_string();
+                written_through(&mut self.written_namespaces, &mut self.written_member_uses, &namespace, None, subject, used);
             }
         }
         let Some(binding) = self.candidates.get(&symbol).cloned() else { return };
@@ -4253,9 +4293,13 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 Some(AstKind::JSXMemberExpression(_)) => return,
                 Some(AstKind::StaticMemberExpression(member)) if member.object.span() == span => {
                     let key = format!("{namespace}.{}", member.property.name);
+                    let name = Some(member.property.name.as_str());
                     if let Some(what) = self.member_value_write(member.span, ancestors.clone()) {
                         let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
-                        written_through(&mut self.written_namespaces, &namespace, key.clone(), used);
+                        written_through(&mut self.written_namespaces, &mut self.written_member_uses, &namespace, name, key.clone(), used);
+                    } else if !destructured_members(member.span, ancestors.clone()).is_empty() {
+                        let used = self.destructured(ident.span);
+                        written_member(&mut self.written_member_uses, &namespace, name, key.clone(), used);
                     }
                     if self.uses.contains_key(&key) {
                         return;
@@ -4265,39 +4309,47 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 }
                 // Some member a key names at runtime.
                 Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == span => {
-                    if let Some(what) = self.member_value_write(member.span, ancestors) {
+                    let subject = member_subject(&namespace, None);
+                    if let Some(what) = self.member_value_write(member.span, ancestors.clone()) {
                         let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
-                        written_through(&mut self.written_namespaces, &namespace, format!("a member of {namespace}"), used);
+                        written_through(&mut self.written_namespaces, &mut self.written_member_uses, &namespace, None, subject, used);
+                    } else if !destructured_members(member.span, ancestors).is_empty() {
+                        let used = self.destructured(ident.span);
+                        written_member(&mut self.written_member_uses, &namespace, None, subject, used);
                     }
                     (namespace, Some("is used as a whole namespace".to_string()))
                 }
                 _ => {
                     let what = "is used as a whole namespace".to_string();
                     let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what: what.clone() };
-                    written_through(&mut self.written_namespaces, &namespace, namespace.clone(), used);
+                    written_through(&mut self.written_namespaces, &mut self.written_member_uses, &namespace, None, namespace.clone(), used);
                     (namespace, Some(what))
                 }
             }
         } else {
-            // A member's value written through, as through a namespace's.
-            if !self.written_members.contains_key(&binding.name) {
-                let mut rest = ancestors.clone();
-                let (span, parent) = peel_wrappers(ident.span, &mut rest);
-                let member = match parent {
-                    Some(AstKind::StaticMemberExpression(member)) if member.object.span() == span => {
-                        Some((member.span, format!("{}.{}", binding.name, member.property.name)))
-                    }
-                    Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == span => {
-                        Some((member.span, format!("a member of {}", binding.name)))
-                    }
-                    _ => None,
-                };
-                if let Some((span, subject)) = member {
-                    if let Some(what) = self.member_value_write(span, rest) {
-                        let used = ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what };
-                        self.written_members.insert(binding.name.clone(), (subject, used));
-                    }
+            // A member's value written through, as through a namespace's, or
+            // bound by a destructuring.
+            let mut rest = ancestors.clone();
+            let (span, parent) = peel_wrappers(ident.span, &mut rest);
+            let member = match parent {
+                Some(AstKind::StaticMemberExpression(member)) if member.object.span() == span => {
+                    Some((member.span, Some(member.property.name.as_str())))
                 }
+                Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == span => Some((member.span, None)),
+                _ => None,
+            };
+            if let Some((span, name)) = member {
+                let used = match self.member_value_write(span, rest.clone()) {
+                    Some(what) => Some(ObjectUse { line: Some(self.line(ident.span)), at: Some(ident.span.start), what }),
+                    None => (!destructured_members(span, rest).is_empty()).then(|| self.destructured(ident.span)),
+                };
+                if let Some(used) = used {
+                    written_member(&mut self.written_member_uses, &binding.name, name, member_subject(&binding.name, name), used);
+                }
+            }
+            for name in destructured_members(ident.span, ancestors.clone()) {
+                let (subject, used) = (member_subject(&binding.name, name.as_deref()), self.destructured(ident.span));
+                written_member(&mut self.written_member_uses, &binding.name, name.as_deref(), subject, used);
             }
             let used = self.uses.contains_key(&binding.name);
             let written = self.written_bindings.contains_key(&binding.name);
@@ -4596,6 +4648,34 @@ fn in_own_assign_source<'b, 'a: 'b>(ancestors: &mut impl Iterator<Item = &'b Ast
     object_assign
         && call.arguments.iter().skip(1).any(|argument| argument.span() == current)
         && initializes_top_level_const(call.span, ancestors)
+}
+
+/// The members a destructuring of the object at `span` binds (`const { A,
+/// B: b } = X`, `({ A } = X)`): each static key, and `None` for a computed
+/// key or a rest element, which may take any member. Empty when the use is
+/// no destructuring.
+fn destructured_members<'b, 'a: 'b>(span: Span, mut ancestors: impl Iterator<Item = &'b AstKind<'a>>) -> Vec<Option<String>> {
+    use oxc::ast::ast::{AssignmentTarget, AssignmentTargetProperty, BindingPattern};
+    let (current, parent) = peel_wrappers(span, &mut ancestors);
+    let key = |key: &oxc::ast::ast::PropertyKey<'_>, computed: bool| {
+        if computed { None } else { key.static_name().map(|name| name.to_string()) }
+    };
+    match parent {
+        Some(AstKind::VariableDeclarator(declarator)) if declarator.init.as_ref().map(GetSpan::span) == Some(current) => {
+            let BindingPattern::ObjectPattern(pattern) = &declarator.id else { return Vec::new() };
+            let keys = pattern.properties.iter().map(|property| key(&property.key, property.computed));
+            keys.chain(pattern.rest.is_some().then_some(None)).collect()
+        }
+        Some(AstKind::AssignmentExpression(assignment)) if assignment.right.span() == current => {
+            let AssignmentTarget::ObjectAssignmentTarget(target) = &assignment.left else { return Vec::new() };
+            let keys = target.properties.iter().map(|property| match property {
+                AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(id) => Some(id.binding.name.to_string()),
+                AssignmentTargetProperty::AssignmentTargetPropertyProperty(property) => key(&property.name, property.computed),
+            });
+            keys.chain(target.rest.is_some().then_some(None)).collect()
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// What a use of one member of an object (`X.key`, at `span`) may do to

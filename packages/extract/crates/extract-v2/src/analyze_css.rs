@@ -3681,10 +3681,12 @@ fn resolve_identity(
 }
 
 /// The packages an analysed module may write into: it sets or deletes a
-/// member of an object a package exports, or hands the object on whole,
-/// through an import of it, a `const` alias of one, an `Object.assign` that
-/// initializes a `const` with it as the target, or another module's export
-/// of it.
+/// member of an object a package exports, writes through a member's value
+/// or binds it by destructuring, or hands the object on whole, through an
+/// import of it, a `const` alias of one, an `Object.assign` that initializes
+/// a `const` with it as the target, or another module's export of it. Every
+/// member written through a binding counts, since the members of another
+/// module's namespace may come from different packages.
 fn written_packages(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
@@ -3721,14 +3723,13 @@ fn written_packages(
             };
             (Start::Binding(binding), binding.as_str(), used)
         }));
-        uses.extend(ff.written_namespaces.iter().filter_map(|(local, (subject, used))| {
-            let source = ff.namespace_imports.get(local)?;
-            let member = subject.strip_prefix(&format!("{local}.")).map(|member| &subject[subject.len() - member.len()..]);
-            Some((Start::Namespace(source, member), subject.as_str(), used.clone()))
-        }));
-        uses.extend(ff.written_members.iter().map(|(binding, (subject, used))| {
-            let member = subject.strip_prefix(&format!("{binding}.")).map(|member| &subject[subject.len() - member.len()..]);
-            (Start::Member(binding, member), subject.as_str(), used.clone())
+        uses.extend(ff.written_member_uses.iter().map(|written| {
+            let member = written.member.as_deref();
+            let start = match ff.namespace_imports.get(&written.binding) {
+                Some(source) => Start::Namespace(source, member),
+                None => Start::Member(&written.binding, member),
+            };
+            (start, written.subject.as_str(), written.used.clone())
         }));
         // A use with no offset (a direct `eval`) comes last.
         uses.sort_by_key(|(_, _, used)| used.at.unwrap_or(u32::MAX));
@@ -3782,25 +3783,29 @@ impl WrittenOrigins<'_> {
         }
     }
 
-    /// Member `member` of module `path`'s binding (any member when `None`),
-    /// where the binding is another module's namespace: that module's export.
+    /// Member `member` of module `path`'s binding (any member when `None`):
+    /// where the binding is another module's namespace, that module's
+    /// export, and otherwise part of what the binding itself holds.
     fn member(&mut self, path: &str, binding: &str, member: Option<&str>) {
         use animus_system_loader::module_table::{ExportLookup, Terminal};
         let files = self.files;
         let held = resolve_alias_terminal(path, binding, files);
-        let Some(import) = files.get(path).and_then(|ff| ff.imports.iter().find(|import| import.local == held)) else {
-            return;
-        };
-        let crate::link::Named::Module(target) = crate::link::named(path, &import.source, files, self.inputs) else {
-            return;
-        };
-        match self.links.resolve_export(&target, &import.imported) {
-            Some(ExportLookup::Resolved(Terminal::Namespace(module))) => {
+        let import = files.get(path).and_then(|ff| ff.imports.iter().find(|import| import.local == held));
+        let namespace = import.and_then(|import| {
+            let crate::link::Named::Module(target) = crate::link::named(path, &import.source, files, self.inputs) else {
+                return None;
+            };
+            match self.links.resolve_export(&target, &import.imported) {
+                Some(ExportLookup::Resolved(Terminal::Namespace(module))) => Some(module),
+                _ => None,
+            }
+        });
+        match namespace {
+            Some(module) => {
                 let namespace = self.links.paths[module].clone();
                 self.export(&namespace, member);
             }
-            Some(ExportLookup::Resolved(Terminal::External { module, export: None })) => self.package(&module),
-            _ => {}
+            None => self.binding(path, binding),
         }
     }
 
@@ -15383,6 +15388,38 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 [("src/app.tsx".to_string(), "<Parts.Item>".to_string())],
                 "{kit}{writer}"
             );
+        }
+    }
+
+    /// Contract: a write through a default import's member, a destructured
+    /// default import, or a nested member keeps the foreign tag
+    /// identity-uncertain, as a write through the export itself does, also
+    /// through another module's export of it. So does a write through a
+    /// later member of another module's namespace whose first member written
+    /// comes from another package.
+    #[test]
+    fn writes_through_members_keep_foreign_tags_identity_uncertain() {
+        let mut inputs = test_inputs();
+        inputs.analysis_context.foreign_packages = vec!["icons".to_string()];
+        let item = ("import { Parts } from 'icons/parts';\nexport const App = () => <Parts.Item />;\n", "<Parts.Item>");
+        let sub = ("import { Parts } from 'icons/parts';\nexport const App = () => <Parts.Item.Sub />;\n", "<Parts.Item.Sub>");
+        let barrel = "export { Foo } from 'other';\nexport { Parts } from 'icons/parts';\n";
+        for ((app, tag), kit, write) in [
+            (item, "", "import Icons from 'icons/parts';\nIcons.Parts.Item = R;\n"),
+            (item, "", "import Icons from 'icons/parts';\nconst { Parts: P } = Icons;\nP.Item = R;\n"),
+            (sub, "", "import { Parts } from 'icons/parts';\nParts.Item.Sub = R;\n"),
+            (sub, "export { Parts as Kit } from 'icons/parts';\n", "import { Kit } from './kit';\nKit.Item.Sub = R;\n"),
+            (item, barrel, "import * as kit from './kit';\nkit.Foo.x = 1;\nkit.Parts.Item = R;\n"),
+        ] {
+            let write = format!("import {{ R }} from './r';\n{write}");
+            let entries = [("src/r.tsx", RECIPE), ("src/kit.tsx", kit), ("src/util.tsx", write.as_str()), ("src/app.tsx", app)];
+            let records: Vec<_> = analyze(&entries, &inputs)
+                .diagnostics
+                .into_iter()
+                .filter(|d| d.code.as_deref() == Some(IDENTITY_UNCERTAIN_TAG))
+                .map(|d| (d.file, d.component))
+                .collect();
+            assert_eq!(records, [("src/app.tsx".to_string(), tag.to_string())], "{write}");
         }
     }
 
