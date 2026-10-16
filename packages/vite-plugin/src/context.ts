@@ -390,6 +390,7 @@ export class PluginContext {
         prefixContextualVars: options.prefixContextualVars,
         targets: options.targets,
         keepDirSelector: options.keepDirSelector,
+        shortClassNames: options.shortClassNames,
         minify: options.minify,
         staticCss: options.staticCss,
         layers: options.layers,

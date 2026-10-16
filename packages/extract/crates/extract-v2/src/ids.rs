@@ -23,9 +23,14 @@ impl std::io::Write for Fnv1a {
     }
 }
 
+/// FNV-1a over bytes, truncated to u32.
+pub fn content_hash_u32(input: &str) -> u32 {
+    fnv1a(FNV_OFFSET, input) as u32
+}
+
 /// FNV-1a over bytes, truncated to u32 hex.
 pub fn content_hash(input: &str) -> String {
-    format!("{:08x}", fnv1a(FNV_OFFSET, input) as u32)
+    format!("{:08x}", content_hash_u32(input))
 }
 
 /// The prefix of the class names the engine generates. A host's own prefix
@@ -113,6 +118,50 @@ pub fn class_names(definitions: &[(&str, &str)], prefix: &str) -> Vec<String> {
         .collect()
 }
 
+/// `n` in base 36, lowercase.
+pub fn base36(mut n: u64) -> String {
+    let mut digits = Vec::new();
+    loop {
+        digits.push(char::from_digit((n % 36) as u32, 36).expect("a digit below 36"));
+        n /= 36;
+        if n == 0 {
+            break;
+        }
+    }
+    digits.iter().rev().collect()
+}
+
+/// The short production class of each `(binding, identity)`, in order:
+/// `{prefix}-{id}`, `id` the base 36 of the pair's 32-bit hash, or of its
+/// full 64-bit hash for every pair whose 32-bit id another pair also takes.
+/// The pairs that share a readable name (`class_names`) share a short one,
+/// and only a colliding pair changes another's.
+pub fn short_class_names(definitions: &[(&str, &str)], prefix: &str) -> Vec<String> {
+    let hash = |(binding, identity): &(&str, &str)| fnv1a(fnv1a(fnv1a(FNV_OFFSET, binding), "\0"), identity);
+    let mut pairs_by_id: rustc_hash::FxHashMap<u32, rustc_hash::FxHashSet<(&str, &str)>> = Default::default();
+    for definition in definitions {
+        pairs_by_id.entry(hash(definition) as u32).or_default().insert(*definition);
+    }
+    definitions
+        .iter()
+        .map(|definition| {
+            let hash = hash(definition);
+            let id = match pairs_by_id[&(hash as u32)].len() {
+                1 => base36(u64::from(hash as u32)),
+                _ => base36(hash),
+            };
+            format!("{prefix}-{id}")
+        })
+        .collect()
+}
+
+/// The short name of a utility class whose canonical CSS hashes to `hash`:
+/// `{prefix}_{id}` for a system utility, `{prefix}__{id}` for a custom one.
+pub fn short_utility_name(prefix: &str, custom: bool, hash: u32) -> String {
+    let separator = if custom { "__" } else { "_" };
+    format!("{prefix}{separator}{}", base36(u64::from(hash)))
+}
+
 /// A class name's whole suffix, 8 or 16 hex.
 pub fn class_suffix(class_name: &str) -> &str {
     class_name.rsplit('-').next().unwrap_or(class_name)
@@ -190,5 +239,36 @@ mod tests {
         assert_eq!(names[0], names[3], "copies of one definition share theirs");
         assert!(class_suffix(&names[0]).len() == 16 && class_suffix(&names[2]).len() == 16);
         assert_eq!(names[1], make_class_name("Card", "system:other", "animus"));
+    }
+
+    /// Contract: a short class id depends only on its own definition and
+    /// binding, so adding a component renames no other; copies share one,
+    /// and two definitions whose 32-bit ids collide both take 64-bit ids.
+    #[test]
+    fn short_class_ids_are_stable_and_never_shared_by_two_definitions() {
+        let names = short_class_names(&[("Button", "s:a"), ("Card", "s:b"), ("Button", "s:a")], "x");
+        assert_eq!(names[0], names[2]);
+        assert!(names.iter().all(|name| name.starts_with("x-") && name.len() <= 9), "{names:?}");
+        let grown = short_class_names(&[("Button", "s:a"), ("Badge", "s:c"), ("Card", "s:b")], "x");
+        assert_eq!((&grown[0], &grown[2]), (&names[0], &names[1]));
+        assert_ne!(short_class_names(&[("Btn", "s:a")], "x")[0], names[0], "bindings keep apart, as readable names do");
+        // Two definitions whose 32-bit ids collide.
+        let mut by_id: rustc_hash::FxHashMap<String, String> = Default::default();
+        let (first, second) = (0u32..)
+            .map(|n| format!("s:{n:x}"))
+            .find_map(|identity| {
+                let id = short_class_names(&[("B", &identity)], "x").remove(0);
+                match by_id.get(&id) {
+                    Some(earlier) => Some((earlier.clone(), identity)),
+                    None => {
+                        by_id.insert(id, identity);
+                        None
+                    }
+                }
+            })
+            .expect("a 32-bit id collides within 2^32 identities");
+        let widened = short_class_names(&[("B", &first), ("B", &second)], "x");
+        assert_ne!(widened[0], widened[1]);
+        assert!(widened.iter().all(|name| name.len() > 9), "{widened:?}");
     }
 }

@@ -196,6 +196,13 @@ export interface AnimusExtractOptions {
    *  Lightning CSS minification (`css.lightningcss.exclude`), which lowers
    *  for `build.cssTarget` across the bundle's CSS. */
   keepDirSelector?: boolean;
+  /** Production names each component and utility class by a short stable
+   *  id under `prefix` (a letter, then letters and digits): `{prefix}-{id}`
+   *  and `{prefix}_{id}`. Each id derives from what the readable name hashes,
+   *  so an added component renames no other, and variant, compound, state
+   *  and breakpoint suffixes are kept. Development keeps the readable names.
+   *  Two builds on one page take different prefixes. */
+  shortClassNames?: { prefix: string };
   /** Absent minifies in production only; `false` still autoprefixes. */
   minify?: boolean;
   /**

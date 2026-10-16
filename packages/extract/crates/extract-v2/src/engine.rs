@@ -93,6 +93,11 @@ pub struct EngineOptions {
     /// prop that writes only properties registered with a numeric syntax
     /// takes a number without a unit.
     pub property_records_json: Option<String>,
+    /// Production names components `{prefix}-{id}` and utilities
+    /// `{prefix}_{id}`, short ids of what their names hash today, under this
+    /// prefix: a letter, then letters and digits. Development keeps the
+    /// readable names.
+    pub short_class_prefix: Option<String>,
 }
 
 struct ResolvedOptions {
@@ -978,6 +983,9 @@ impl ExtractEngine {
             .map_err(napi::Error::from_reason)?;
         css_inputs
             .set_property_records(o.property_records_json.as_deref())
+            .map_err(napi::Error::from_reason)?;
+        css_inputs
+            .set_short_class_prefix(o.short_class_prefix.as_deref())
             .map_err(napi::Error::from_reason)?;
         Ok(ExtractEngine {
             opts: ResolvedOptions {

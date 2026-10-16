@@ -2836,6 +2836,7 @@ export class ExtractionSession {
           this.delivery.systemPropsModuleId === SESSION_ARTIFACT
             ? systemPropsPath(this.sessionDir)
             : this.delivery.systemPropsModuleId,
+        shortClassPrefix: this.options.shortClassNames?.prefix,
       },
       pathAliasesJson: this.pathAliasesJson,
       staticCssJson: this.staticCssJson,

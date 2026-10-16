@@ -175,6 +175,7 @@ interface V2ExtractEngineConfig {
   analysisContextJson?: string;
   generatedNamesJson?: string;
   propertyRecordsJson?: string;
+  shortClassPrefix?: string;
   devMode: boolean;
 }
 
@@ -315,12 +316,14 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         store.setSentSources(sent);
 
         // SAFETY: `emitterConfigJson` is animus's own wire with exactly these
-        // three keys; dropping one silently rewires the runtime or css import.
+        // keys; dropping one silently rewires the runtime or css import, or
+        // the class names.
         const emitterConfig = emitterConfigJson
           ? (JSON.parse(emitterConfigJson) as {
               runtime_import?: string;
               css_module_id?: string;
               system_props_module_id?: string;
+              short_class_prefix?: string;
             })
           : {};
 
@@ -352,6 +355,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           analysisContextJson,
           generatedNamesJson,
           propertyRecordsJson,
+          shortClassPrefix: emitterConfig.short_class_prefix,
           devMode,
         };
         // SAFETY: `native` is the loaded engine module, whose generated

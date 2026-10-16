@@ -91,6 +91,13 @@ export interface EngineOptions {
    * takes a number without a unit.
    */
   propertyRecordsJson?: string
+  /**
+   * Production names components `{prefix}-{id}` and utilities
+   * `{prefix}_{id}`, short ids of what their names hash today, under this
+   * prefix: a letter, then letters and digits. Development keeps the
+   * readable names.
+   */
+  shortClassPrefix?: string
 }
 
 /** Probe identity: proves the binary loads and its oxc linkage parses. */

@@ -107,7 +107,7 @@ pub fn binding_segment(binding: &str) -> String {
     if is_plain_name(binding) { format!("{binding}_") } else { slot_segment(binding) }
 }
 
-fn is_plain_name(name: &str) -> bool {
+pub(crate) fn is_plain_name(name: &str) -> bool {
     name.starts_with(|ch: char| ch.is_ascii_alphabetic()) && name.chars().all(|ch| ch.is_ascii_alphanumeric())
 }
 
@@ -1406,7 +1406,7 @@ fn add_utility_class(
     ctx: &ResolveContext,
     seen: &mut FxHashMap<String, (String, ResolvedStyles)>,
     class_map: &mut UtilityClassMap,
-    class_prefix: &str,
+    naming: UtilityNaming<'_>,
     namespace: &str,
     value_key: fn(&Value) -> String,
 ) {
@@ -1428,11 +1428,32 @@ fn add_utility_class(
         usage.prop_name
     );
 
-    if let Some(class_name) = intern_utility_class(resolved, seen, class_prefix, namespace) {
+    if let Some(class_name) = intern_utility_class(resolved, seen, naming, namespace) {
         class_map
             .entry(usage.prop_name.clone())
             .or_default()
             .insert(value_key(&usage.value), class_name);
+    }
+}
+
+/// How a layer's utility classes are named: `{prefix}-{namespace}-{hash}`,
+/// or short under the prefix production names classes short with.
+#[derive(Clone, Copy)]
+struct UtilityNaming<'a> {
+    class_prefix: &'a str,
+    short: Option<&'a str>,
+}
+
+impl UtilityNaming<'_> {
+    fn name(self, namespace: &str, canonical: &str) -> String {
+        match self.short {
+            Some(prefix) => crate::ids::short_utility_name(
+                prefix,
+                namespace == CUSTOM_UTILITY_NAMESPACE,
+                crate::ids::content_hash_u32(canonical),
+            ),
+            None => format!("{}-{namespace}-{}", self.class_prefix, content_hash(canonical)),
+        }
     }
 }
 
@@ -1441,17 +1462,15 @@ fn add_utility_class(
 fn intern_utility_class(
     resolved: ResolvedStyles,
     seen: &mut FxHashMap<String, (String, ResolvedStyles)>,
-    class_prefix: &str,
+    naming: UtilityNaming<'_>,
     namespace: &str,
 ) -> Option<String> {
     let canonical = canonical_css_for_hash(&resolved);
     if canonical.is_empty() {
         return None;
     }
-    let entry = seen.entry(canonical).or_insert_with_key(|canonical| {
-        let hash = content_hash(canonical);
-        (format!("{class_prefix}-{namespace}-{hash}"), resolved)
-    });
+    let entry =
+        seen.entry(canonical).or_insert_with_key(|canonical| (naming.name(namespace, canonical), resolved));
     Some(entry.0.clone())
 }
 
@@ -1720,6 +1739,7 @@ pub fn resolve_utility_classes(
     usages: &[UtilityInput],
     ctx: &ResolveContext,
     class_prefix: &str,
+    short: Option<&str>,
 ) -> ResolvedUtilities {
     let mut class_map = UtilityClassMap::new();
     let mut seen = FxHashMap::default();
@@ -1737,7 +1757,7 @@ pub fn resolve_utility_classes(
             ctx,
             &mut seen,
             &mut class_map,
-            class_prefix,
+            UtilityNaming { class_prefix, short },
             SYSTEM_UTILITY_NAMESPACE,
             value_key(typed.contains(&usage.prop_name)),
         );
@@ -1806,6 +1826,7 @@ pub fn resolve_custom_prop_classes(
     configs: &FxHashMap<&str, &PropConfigMap>,
     ctx: &ResolveContext,
     class_prefix: &str,
+    short: Option<&str>,
     mut resolved: impl FnMut(&str, Vec<TransformFailure>),
 ) -> ResolvedCustomUtilities {
     let mut class_map: HashMap<String, UtilityClassMap> = HashMap::new();
@@ -1831,7 +1852,15 @@ pub fn resolve_custom_prop_classes(
             continue;
         }
         let typed_keys = config.get(&usage.prop_name).is_some_and(|c| c.keys_typed());
-        add_utility_class(usage, &owner_ctx, &mut seen, classes, class_prefix, CUSTOM_UTILITY_NAMESPACE, value_key(typed_keys));
+        add_utility_class(
+            usage,
+            &owner_ctx,
+            &mut seen,
+            classes,
+            UtilityNaming { class_prefix, short },
+            CUSTOM_UTILITY_NAMESPACE,
+            value_key(typed_keys),
+        );
         if typed_keys && classes.contains_key(&usage.prop_name) {
             typed.entry(owner.clone()).or_default().insert(usage.prop_name.clone());
         }
@@ -2491,7 +2520,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus", None).render(&bp, None, &[]);
         assert!(out.css.contains("@layer anm-system {"));
         assert!(out.css.contains("padding: 0.5rem;"));
         assert!(out.css.contains(".animus-u-"));
@@ -2505,7 +2534,7 @@ mod tests {
             prop_name: "mt".to_string(),
             value: json!({ "_": 8, "sm": 16 }),
         }];
-        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus", None).render(&bp, None, &[]);
         assert!(out.css.contains("margin-top: 0.5rem;"));
         assert!(out.css.contains("@media (min-width: 768px)"));
         assert!(out.css.contains("margin-top: 1rem;"));
@@ -2519,8 +2548,8 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out1 = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
-        let out2 = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
+        let out1 = resolve_utility_classes(&usages, &tc.ctx(), "animus", None).render(&bp, None, &[]);
+        let out2 = resolve_utility_classes(&usages, &tc.ctx(), "animus", None).render(&bp, None, &[]);
         assert_eq!(out1.css, out2.css);
         let map1 = &out1.class_map["p"]["8"];
         let map2 = &out2.class_map["p"]["8"];
@@ -2541,7 +2570,7 @@ mod tests {
                 value: json!(16),
             },
         ];
-        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus", None).render(&bp, None, &[]);
         let class_8 = &out.class_map["p"]["8"];
         let class_16 = &out.class_map["p"]["16"];
         assert_ne!(class_8, class_16);
@@ -2577,7 +2606,7 @@ mod tests {
         )];
         let configs: FxHashMap<&str, &PropConfigMap> =
             [("a.tsx::A", &tc.config)].into_iter().collect();
-        let out = resolve_custom_prop_classes(&usages, &configs, &tc.ctx(), "animus", |_, _| {}).render(&bp, None, &[]);
+        let out = resolve_custom_prop_classes(&usages, &configs, &tc.ctx(), "animus", None, |_, _| {}).render(&bp, None, &[]);
         assert!(out.class_map["a.tsx::A"]["p"].contains_key("8"));
         assert!(out.css.contains("@layer anm-custom {"));
         assert!(!out.css.contains("@layer anm-system {"));
@@ -2591,7 +2620,7 @@ mod tests {
             prop_name: "p".to_string(),
             value: json!(8),
         }];
-        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, None, &[]);
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus", None).render(&bp, None, &[]);
         assert!(out.class_map.contains_key("p"));
         let p_map = &out.class_map["p"];
         assert!(p_map.contains_key("8"));
@@ -2775,7 +2804,7 @@ mod tests {
         let tc = TestUtilCtx::new(utility_config(), utility_theme(), &bp);
         let slots = build_variable_slot_entries(&dynamic_props, &bp, &SlotConditions::default());
         let usages = vec![UtilityInput { prop_name: "p".to_string(), value: json!(8) }];
-        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus").render(&bp, Some(slots), &[]);
+        let out = resolve_utility_classes(&usages, &tc.ctx(), "animus", None).render(&bp, Some(slots), &[]);
         assert!(out.css.contains("animus-dyn-p"));
         assert!(out.css.contains("animus-u-"));
         assert_eq!(out.css.matches("@layer anm-system {").count(), 1);

@@ -97,6 +97,13 @@ export interface AnimusCoreOptions {
    *  `:lang()` over right-to-left language codes, which an element that sets
    *  only `dir` does not match. */
   keepDirSelector?: boolean;
+  /** Production names each component and utility class by a short stable
+   *  id under `prefix` (a letter, then letters and digits): `{prefix}-{id}`
+   *  and `{prefix}_{id}`. Each id derives from what the readable name hashes,
+   *  so an added component renames no other, and variant, compound, state
+   *  and breakpoint suffixes are kept. Development keeps the readable names.
+   *  Two builds on one page take different prefixes. */
+  shortClassNames?: { prefix: string };
   /** Minification control; `undefined` = minify in production mode only. */
   minify?: boolean;
   /** Forced-emission declarations for usage the scanner cannot observe. */
@@ -174,6 +181,7 @@ export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'prefixContextualVars',
   'targets',
   'keepDirSelector',
+  'shortClassNames',
   'minify',
   'staticCss',
   'layers',
@@ -296,7 +304,8 @@ type CoreOptionValue =
   | boolean
   | readonly string[]
   | DiagnosticLevels
-  | readonly ClosedDynamicImport[];
+  | readonly ClosedDynamicImport[]
+  | { prefix: string };
 
 /**
  * Options are foreign JS, so a boxed `String`/`Boolean` must not pass: a
@@ -321,6 +330,17 @@ const isDiagnosticLevels = (value: unknown): value is DiagnosticLevels =>
   Object.values(Object(value)).every(
     (level) => isString(level) && DIAGNOSTIC_LEVELS.has(level)
   );
+
+const isShortClassNames = (value: unknown): value is { prefix: string } => {
+  if (Object.prototype.toString.call(value) !== '[object Object]') return false;
+  const fields = new Map(Object.entries(Object(value)));
+  const prefix = fields.get('prefix');
+  return (
+    fields.size === 1 &&
+    isString(prefix) &&
+    /^[A-Za-z][A-Za-z0-9]*$/.test(prefix)
+  );
+};
 
 const isStringOrStringArray = (
   value: unknown
@@ -357,6 +377,11 @@ const CORE_VALUE_GATES: ReadonlyArray<{
   { key: 'verbose', ok: isVerbose, expected: "a boolean or 'trace'" },
   { key: 'minify', ok: isBoolean, expected: 'a boolean' },
   { key: 'keepDirSelector', ok: isBoolean, expected: 'a boolean' },
+  {
+    key: 'shortClassNames',
+    ok: isShortClassNames,
+    expected: '{ prefix } with a letter, then letters and digits',
+  },
   { key: 'prefix', ok: isString, expected: 'a string' },
   {
     key: 'closedDynamicImports',

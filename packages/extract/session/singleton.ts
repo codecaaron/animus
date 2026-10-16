@@ -537,6 +537,7 @@ const OPTION_CLASSES = {
   prefixContextualVars: digestOf('prefixContextualVars'),
   targets: digestOf('targets'),
   keepDirSelector: digestOf('keepDirSelector'),
+  shortClassNames: digestOf('shortClassNames'),
   minify: digestOf('minify'),
   staticCss: digestOf('staticCss'),
   layers: digestOf('layers'),

@@ -146,6 +146,10 @@ pub struct CssInputs {
     /// component props alike.
     pub declaration_scales: DeclarationScales,
     pub dev_mode: bool,
+    /// Production names components and utilities `{prefix}-{id}` and
+    /// `{prefix}_{id}` (`ids::short_class_names`) under this prefix, which
+    /// keeps two builds on one page apart; `None` keeps the readable names.
+    pub short_class_prefix: Option<String>,
     /// The custom properties the theme registers with a numeric syntax,
     /// `<integer>` or `<number>`, with `--`: a number written to one needs
     /// no unit.
@@ -418,9 +422,28 @@ impl CssInputs {
             config_only: Default::default(),
             package_openings: Default::default(),
             dev_mode,
+            short_class_prefix: None,
             numeric_properties: FxHashSet::default(),
             system_hash,
         })
+    }
+
+    /// Names production classes short under `prefix`: a letter, then
+    /// letters and digits, so the first `-` or `_` of a name ends it.
+    pub fn set_short_class_prefix(&mut self, prefix: Option<&str>) -> Result<(), String> {
+        let Some(prefix) = prefix else { return Ok(()) };
+        if !crate::css::is_plain_name(prefix) {
+            return Err(format!(
+                "EngineOptions.shortClassPrefix: '{prefix}' is not a letter followed by letters and digits"
+            ));
+        }
+        self.short_class_prefix = Some(prefix.to_string());
+        Ok(())
+    }
+
+    /// The prefix production names classes short under, if any.
+    pub(crate) fn short_classes(&self) -> Option<&str> {
+        self.short_class_prefix.as_deref().filter(|_| !self.dev_mode)
     }
 
     /// Reads the theme's property records for the custom properties it
@@ -7252,6 +7275,11 @@ fn run_with_system_floor(
         false => crate::ids::name_scopes(&definitions, &ordered_class_names),
     };
     let name_scopes: FxHashMap<&String, String> = identities.iter().map(|(id, _, _)| *id).zip(scopes).collect();
+    // Short names replace only the class; prop names keep their scopes.
+    let ordered_class_names = match inputs.short_classes() {
+        Some(prefix) => crate::ids::short_class_names(&definitions, prefix),
+        None => ordered_class_names,
+    };
     let class_names: FxHashMap<&String, String> =
         identities.iter().map(|(id, _, _)| *id).zip(ordered_class_names).collect();
     let identity_of: FxHashMap<&str, &str> =
@@ -8878,7 +8906,8 @@ fn run_with_system_floor(
             }
         }
     }
-    let utility_classes = resolve_utility_classes(&all_utility_inputs, &resolve_ctx, class_prefix);
+    let utility_classes =
+        resolve_utility_classes(&all_utility_inputs, &resolve_ctx, class_prefix, inputs.short_classes());
     // A system prop keeps its slot while any component it is active on can
     // receive a value without a utility class; a same-named custom prop takes
     // that component's values instead.
@@ -9025,6 +9054,7 @@ fn run_with_system_floor(
         &custom_configs_by_id,
         &resolve_ctx,
         class_prefix,
+        inputs.short_classes(),
         &mut attribute_callback_failures,
     );
 
