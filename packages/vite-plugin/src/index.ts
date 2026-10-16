@@ -347,6 +347,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   // Every environment a build of the whole app builds beside the client,
   // whose output may render what the client's does not.
   let otherEnvironments: string[] = [];
+  // The manifests this build writes, where removal relinks a replaced slice.
+  let manifests = new Set<string>();
 
   // A split client build's slices, cut once in `buildStart`, and the ids of
   // those it emitted, in link order.
@@ -408,6 +410,19 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       otherEnvironments = config.builder
         ? Object.keys(config.environments).filter((name) => name !== 'client')
         : [];
+      const { manifest, ssrManifest } = config.build;
+      manifests = new Set([
+        ...(manifest === true
+          ? ['.vite/manifest.json']
+          : manifest
+            ? [manifest]
+            : []),
+        ...(ssrManifest === true
+          ? ['.vite/ssr-manifest.json']
+          : ssrManifest
+            ? [ssrManifest]
+            : []),
+      ]);
       (await vendor?.plugin())?.configResolved.call(this, config);
     },
 
@@ -525,16 +540,18 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           this.getFileName(this.emitFile({ type: 'asset', name, source }));
         if (linkedSlices.length > 0 && isClient(this)) {
           const removal = removes
-            ? bundleRemoval(ctx, bundle, linkedSlices, otherEnvironments)
+            ? bundleRemoval(ctx, bundle, linkedSlices, {
+                otherEnvironments,
+                manifests,
+                emit: (asset) => this.emitFile(asset),
+              })
             : null;
           placeStylesheetSlices(
             ctx,
             bundle,
             linkedSlices,
             emitAsset,
-            removal
-              ? (file) => removal.replace(file, (asset) => this.emitFile(asset))
-              : undefined
+            removal ? (file) => removal.replace(file) : undefined
           );
           removal?.finish();
         }

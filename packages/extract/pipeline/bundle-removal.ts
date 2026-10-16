@@ -29,17 +29,22 @@ const MEDIA_TYPE =
 const DATA_URL =
   /data:([\w.+-]+\/[\w.+-]+)?((?:;[\w.+-]+=[\w.+-]+)*)(;base64)?,([^\s"'`()<>\\$]*)/gi;
 
-/** One output file: a script's code, or any other file's bytes. */
-export interface OutputFile {
+/** One output file: a text's code, or another file's bytes. */
+export type OutputFile =
+  | { fileName: string; code: string }
+  | { fileName: string; bytes: Uint8Array };
+
+/** One text the output can read class names from: a file's, or a data
+ *  URL's payload, under the output file it is written in. */
+export interface EvidenceText {
   fileName: string;
-  code?: string;
-  bytes?: Uint8Array;
+  text: string;
 }
 
 /** What a build's output can read class names from. */
 export interface OutputEvidence {
   /** Each readable output text and decoded data URL payload. */
-  texts: string[];
+  texts: EvidenceText[];
   /** The first file or data URL whose bytes are no UTF-8 text, which the
    *  scan cannot read; `null` when every one is read. */
   unreadable: string | null;
@@ -56,18 +61,21 @@ export function outputEvidence(
   skipped: ReadonlySet<string>
 ): OutputEvidence {
   const decoder = new TextDecoder('utf-8', { fatal: true });
-  const texts: string[] = [];
-  const pending: Array<{ origin: string; text: string }> = [];
-  for (const { fileName, code, bytes } of files) {
+  const texts: EvidenceText[] = [];
+  const pending: Array<EvidenceText & { origin: string }> = [];
+  for (const file of files) {
+    const { fileName } = file;
     if (skipped.has(fileName) || MEDIA_FILE.test(fileName)) continue;
     try {
-      pending.push({ origin: fileName, text: code ?? decoder.decode(bytes) });
+      const text = 'code' in file ? file.code : decoder.decode(file.bytes);
+      pending.push({ fileName, origin: fileName, text });
     } catch {
       return { texts, unreadable: fileName };
     }
   }
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    texts.push(next.text);
+    texts.push({ fileName: next.fileName, text: next.text });
+    if (!/data:/i.test(next.text)) continue;
     for (const [, type, , base64, payload] of next.text.matchAll(DATA_URL)) {
       if (type !== undefined && MEDIA_TYPE.test(type)) continue;
       const origin = `a data URL in ${next.origin}`;
@@ -78,7 +86,7 @@ export function outputEvidence(
               Buffer.from(/^[A-Za-z0-9+/=_-]*/.exec(payload!)![0], 'base64')
             )
           : decodeURIComponent(payload!);
-        pending.push({ origin, text });
+        pending.push({ fileName: next.fileName, origin, text });
       } catch {
         return { texts, unreadable: origin };
       }
@@ -96,37 +104,48 @@ const PROVABLE_NAME = /^[A-Za-z0-9_-]+$/;
  * spelling occurs anywhere in an output text, and each one the scan cannot
  * prove absent. A name with any other character (`Café`, `$Box`) may be
  * spelled escaped (`\u00e9`, `\$`, `&#233;`, `%C3%A9`), so it always
- * counts as named. Every occurrence of a name starts with its prefix
- * (`animus-`, a `shortClassNames` prefix), so only the text there is read.
+ * counts as named, as does a name without a `-`. Every occurrence of a name
+ * starts with its prefix, its text through the first `-` (`animus-`, a
+ * `shortClassNames` prefix), so only the text there is read.
  */
 export function shippedClasses(
   texts: Iterable<string>,
   classNames: Iterable<string>
 ): Set<string> {
   const shipped = new Set<string>();
-  const lengths = new Map<string, Set<number>>();
+  const lengths = new Map<string, number[]>();
   const candidates = new Set<string>();
   for (const name of classNames) {
-    if (!PROVABLE_NAME.test(name)) {
+    const prefix = name.slice(0, name.indexOf('-') + 1);
+    if (!PROVABLE_NAME.test(name) || prefix === '') {
       shipped.add(name);
       continue;
     }
     candidates.add(name);
-    const prefix = name.slice(0, name.indexOf('-') + 1);
-    let known = lengths.get(prefix);
-    if (known === undefined) lengths.set(prefix, (known = new Set()));
-    known.add(name.length);
+    const known = lengths.get(prefix) ?? [];
+    if (!known.includes(name.length)) known.push(name.length);
+    lengths.set(prefix, known);
   }
+  const provable = /[A-Za-z0-9_-]*/y;
+  let found = 0;
   for (const text of texts) {
     for (const [prefix, sizes] of lengths) {
       for (
         let at = text.indexOf(prefix);
-        at !== -1;
+        at !== -1 && found < candidates.size;
         at = text.indexOf(prefix, at + 1)
       ) {
+        // A name occurring here spells only provable characters, so it
+        // lies within the run of them that starts here.
+        provable.lastIndex = at;
+        const run = provable.exec(text)![0].length;
         for (const size of sizes) {
+          if (size > run) continue;
           const name = text.slice(at, at + size);
-          if (candidates.has(name)) shipped.add(name);
+          if (candidates.has(name) && !shipped.has(name)) {
+            shipped.add(name);
+            found += 1;
+          }
         }
       }
     }

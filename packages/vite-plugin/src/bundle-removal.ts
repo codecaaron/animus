@@ -1,10 +1,10 @@
 import {
+  contentHash,
   outputEvidence,
   removeComponentRules,
   shippedClasses,
   unbundledComponents,
 } from '@animus-ui/extract/pipeline';
-import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 
 import { sliceIdOf } from './index-html';
@@ -16,12 +16,9 @@ import type { Rolldown } from 'vite';
 export interface BundleRemoval {
   /** Emits `file` without the removed components' rules, beside it under a
    *  name its new content hashes, and returns that name; `null` keeps it. */
-  replace(
-    file: Rolldown.OutputAsset,
-    emit: (asset: Rolldown.EmittedAsset) => void
-  ): string | null;
-  /** Points every JSON file of the output (Vite's manifests) at each
-   *  replacement where it named the file replaced, then reports. */
+  replace(file: Rolldown.OutputAsset): string | null;
+  /** Points Vite's manifests and chunk metadata at each replacement where
+   *  they named the file replaced, then reports. */
   finish(): void;
 }
 
@@ -29,73 +26,77 @@ export interface BundleRemoval {
  * The removal of every component no output file of this client build
  * includes, or `null` where the build keeps every component: it bundles
  * another environment beside the client (`otherEnvironments`), whose output
- * may render what the client's does not, leaves a module external, or
- * carries data the scan cannot read as text. Every output file but the
- * stylesheet's slices (`sliceIds`) and media is evidence, data URLs
- * decoded.
+ * may render what the client's does not; it leaves a module external; it
+ * carries data the scan cannot read as text; or an output file other than
+ * Vite's `manifests` names a stylesheet slice, which a replacement would
+ * leave naming a deleted file. Every output file but the slices
+ * (`sliceIds`) and media is evidence, data URLs decoded.
  */
 export function bundleRemoval(
   ctx: PluginContext,
   bundle: Rolldown.OutputBundle,
   sliceIds: readonly string[],
-  otherEnvironments: readonly string[]
+  context: {
+    otherEnvironments: readonly string[];
+    manifests: ReadonlySet<string>;
+    emit: (asset: Rolldown.EmittedAsset) => void;
+  }
 ): BundleRemoval | null {
   const manifest = ctx.storedManifest;
   if (!manifest) return null;
-  const blocker = removalBlocker(bundle, otherEnvironments);
-  if (blocker !== null) {
-    ctx.info(`kept every component's CSS: ${blocker}`);
+  const keep = (why: string) => {
+    ctx.info(`kept every component's CSS: ${why}`);
     return null;
-  }
-  const slices = Object.values(bundle).filter(
-    (file) => sliceIdOf(file, sliceIds) !== undefined
+  };
+  const blocker = removalBlocker(bundle, context.otherEnvironments);
+  if (blocker !== null) return keep(blocker);
+  const slices = new Set(
+    Object.values(bundle)
+      .filter((file) => sliceIdOf(file, sliceIds) !== undefined)
+      .map((file) => file.fileName)
   );
-  // A replaced slice is relinked from pages and JSON manifests only.
-  const naming = Object.values(bundle).find(
-    (file) =>
-      !slices.includes(file) &&
-      !file.fileName.endsWith('.json') &&
-      slices.some((slice) =>
-        (file.type === 'chunk'
-          ? file.code
-          : Buffer.from(file.source).toString('utf8')
-        ).includes(posix.basename(slice.fileName))
-      )
-  );
-  if (naming !== undefined) {
-    ctx.info(
-      `kept every component's CSS: ${naming.fileName} names a stylesheet file, which a replacement would leave it naming`
-    );
-    return null;
-  }
   const { texts, unreadable } = outputEvidence(
     Object.values(bundle).map((file) =>
       file.type === 'chunk'
         ? { fileName: file.fileName, code: file.code }
         : { fileName: file.fileName, bytes: Buffer.from(file.source) }
     ),
-    new Set(slices.map((file) => file.fileName))
+    slices
   );
   if (unreadable !== null) {
-    ctx.info(
-      `kept every component's CSS: ${unreadable} holds data the scan cannot read as text, which may name a class`
+    return keep(
+      `${unreadable} holds data the scan cannot read as text, which may name a class`
     );
-    return null;
+  }
+  // A replaced slice is relinked from pages and Vite's manifests only, and a
+  // manifest only where it names the slice's whole file name.
+  for (const { fileName, text } of texts) {
+    for (const slice of slices) {
+      const named = occurrences(text, posix.basename(slice));
+      const relinked = context.manifests.has(fileName)
+        ? occurrences(text, JSON.stringify(slice).slice(1, -1))
+        : 0;
+      if (named > relinked) {
+        return keep(
+          `${fileName} names ${slice}, which a replacement would leave it naming`
+        );
+      }
+    }
   }
   const components = manifest.components;
   const removed = unbundledComponents(
     components,
     shippedClasses(
-      texts,
+      texts.map(({ text }) => text),
       Object.values(components).map((component) => component.class_name)
     ),
     new Set(Object.keys(ctx.options.staticCss?.components ?? {}))
   );
   const classes = new Set(removed.values());
-  let bytes = 0;
+  let characters = 0;
   const renamed = new Map<string, string>();
   return {
-    replace(file, emit) {
+    replace(file) {
       const css = Buffer.from(file.source).toString('utf8');
       let pruned: string | null;
       try {
@@ -110,11 +111,12 @@ export function bundleRemoval(
         return null;
       }
       if (pruned === null) return null;
-      bytes += css.length - pruned.length;
+      characters += css.length - pruned.length;
       // Beside the file it replaces, so each relative url() still resolves,
       // whatever an `assetFileNames` callback would choose.
-      const fileName = siblingFileName(file.fileName, pruned);
-      emit({
+      const extension = posix.extname(file.fileName);
+      const fileName = `${file.fileName.slice(0, -extension.length)}-${contentHash(pruned).slice(0, 8)}${extension}`;
+      context.emit({
         type: 'asset',
         fileName,
         name: file.names[0],
@@ -126,15 +128,21 @@ export function bundleRemoval(
     },
     finish() {
       for (const file of Object.values(bundle)) {
-        if (file.type !== 'asset' || !file.fileName.endsWith('.json')) continue;
-        const text = Buffer.from(file.source).toString('utf8');
-        let relinked = text;
+        const imported = file.viteMetadata?.importedCss;
         for (const [before, after] of renamed) {
-          relinked = relinked
-            .split(JSON.stringify(before).slice(1, -1))
-            .join(JSON.stringify(after).slice(1, -1));
+          if (imported?.delete(before)) imported.add(after);
         }
-        if (relinked !== text) file.source = relinked;
+        if (file.type !== 'asset' || !context.manifests.has(file.fileName)) {
+          continue;
+        }
+        let text = Buffer.from(file.source).toString('utf8');
+        for (const [before, after] of renamed) {
+          text = text.replaceAll(
+            JSON.stringify(before).slice(1, -1),
+            JSON.stringify(after).slice(1, -1)
+          );
+        }
+        file.source = text;
       }
       if (ctx.tracing) {
         for (const [id, className] of removed) {
@@ -142,20 +150,23 @@ export function bundleRemoval(
         }
       }
       ctx.info(
-        `removed the CSS of ${removed.size} of ${Object.keys(components).length} components no output file includes (${bytes} bytes of the stylesheet)`
+        `removed the CSS of ${removed.size} of ${Object.keys(components).length} components no output file includes (${characters} characters of the stylesheet)`
       );
     },
   };
 }
 
-/** `fileName`'s directory and name, followed by a hash of `source`. */
-function siblingFileName(fileName: string, source: string): string {
-  const extension = posix.extname(fileName);
-  const hash = createHash('sha256')
-    .update(source)
-    .digest('base64url')
-    .slice(0, 8);
-  return `${fileName.slice(0, fileName.length - extension.length)}-${hash}${extension}`;
+/** How many times `needle` occurs in `text`. */
+function occurrences(text: string, needle: string): number {
+  let count = 0;
+  for (
+    let at = text.indexOf(needle);
+    at !== -1;
+    at = text.indexOf(needle, at + 1)
+  ) {
+    count += 1;
+  }
+  return count;
 }
 
 /** Why a client build keeps every component, or `null`. */

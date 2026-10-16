@@ -321,7 +321,11 @@ export type {
   ListedLoad,
 } from './host-expansions';
 export { adaptedOriginals } from './probe-evidence';
-export type { OutputEvidence, OutputFile } from './bundle-removal';
+export type {
+  EvidenceText,
+  OutputEvidence,
+  OutputFile,
+} from './bundle-removal';
 export {
   outputEvidence,
   removeComponentRules,

@@ -172,7 +172,7 @@ describe('outputEvidence', () => {
         new Set()
       ).unreadable
     ).toBeNull();
-    const all = texts.join('\n');
+    const all = texts.map(({ text }) => text).join('\n');
     for (const name of ['c-json', 'c-nested', 'c-asset', 'c-percent-x']) {
       expect(all).toContain(name);
     }
