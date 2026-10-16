@@ -64,8 +64,18 @@ impl PropNameLists {
     }
 
     /// Each list's source in the system-props module, by key.
+    /// A list with groups reads them in a pure call, so a bundle drops a
+    /// list no component references.
     pub fn into_sources(self) -> BTreeMap<String, String> {
-        self.0.into_iter().map(|(key, list)| (key, render_prop_name_list(&list, "systemPropGroups"))).collect()
+        self.0
+            .into_iter()
+            .map(|(key, list)| {
+                let source = render_prop_name_list(&list, "systemPropGroups");
+                let source =
+                    if list.groups.is_empty() { source } else { format!("/* @__PURE__ */ (() => {source})()") };
+                (key, source)
+            })
+            .collect()
     }
 }
 
@@ -464,7 +474,16 @@ impl ObjectLiteral {
             if index > 0 {
                 out.push(',');
             }
-            out.push_str(&crate::evaluator::js_string_literal(key));
+            // A `__proto__:` key sets the prototype; a computed one defines
+            // the own property a prop named `__proto__` needs.
+            let literal = crate::evaluator::js_string_literal(key);
+            if key == "__proto__" {
+                out.push('[');
+                out.push_str(&literal);
+                out.push(']');
+            } else {
+                out.push_str(&literal);
+            }
             out.push(':');
             match value {
                 Field::Json(value) => out.push_str(&value.to_string()),

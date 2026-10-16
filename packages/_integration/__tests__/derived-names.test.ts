@@ -7,7 +7,7 @@ import type { ClassResolverConfig } from '../../system/src/runtime/resolveClasse
 
 // Contract: a slot class and variable the runtime builds from a config's
 // scope, and a compound class it builds from the compound's position, equal
-// the names the stylesheet declares.
+// the names the stylesheet declares, for every prop, `__proto__` included.
 test('names derived from a scope and a position equal the emitted names', () => {
   const path = 'fixtures/derived-names.tsx';
   const source = `import { ds } from './setup';
@@ -20,12 +20,13 @@ export const Parent = ds
     'x-tone': { property: 'borderColor' },
     lift: { property: 'height' },
     raise: { property: 'height' },
+    ['__proto__']: { property: 'outlineColor' },
   })
   .asElement('div');
 export const Child = Parent.extend().compound({ size: 'sm' }, { display: 'inline' }).asElement('section');
 export const App = ({ v }) => (
   <>
-    <Parent size="sm" tone={v} x-tone={v} lift={v} raise={v} />
+    <Parent size="sm" tone={v} x-tone={v} lift={v} raise={v} __proto__={v} />
     <Child size="lg" tone={v} />
   </>
 );`;
@@ -63,6 +64,15 @@ export const App = ({ v }) => (
   const dynamic = parent.customDynamicConfig ?? {};
   // A name that is not ASCII letters and digits derives through its hex.
   expect(dynamic['x-tone']).not.toHaveProperty('slotClass');
+  // A prop named `__proto__` is an own entry before and after resolution.
+  expect(Object.hasOwn(dynamic, '__proto__')).toBe(true);
+  const [parentClass] = configOf('Parent');
+  expect(
+    Object.hasOwn(
+      resolveConfig(parentClass, parent).customDynamicConfig ?? {},
+      '__proto__'
+    )
+  ).toBe(true);
   // `raise` shares `lift`'s slot, so its names ship.
   expect(dynamic.lift).not.toHaveProperty('slotClass');
   expect(dynamic.raise).toHaveProperty('slotClass');

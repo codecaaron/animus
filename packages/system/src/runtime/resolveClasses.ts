@@ -916,33 +916,35 @@ export function resolveConfig(
   if (config.systemPropNames && listed.size !== config.systemPropNames.length) {
     resolved.systemPropNames = [...listed];
   }
+  // `Object.fromEntries` defines own properties, so a prop named
+  // `__proto__` stays an entry rather than becoming the map's prototype.
   if (dynamic) {
     const [prefix, suffix] = scope ?? [];
-    const entries: DynamicPropConfig = {};
-    for (const [prop, dc] of Object.entries(dynamic)) {
-      if (hasNames(dc)) {
-        entries[prop] = dc;
-        continue;
-      }
-      const segment = slotSegment(prop);
-      entries[prop] = {
-        ...dc,
-        varName: `--${prefix}-${segment}${suffix}`,
-        slotClass: `${prefix}-dyn-${segment}${suffix}`,
-      };
-    }
-    resolved.customDynamicConfig = entries;
+    resolved.customDynamicConfig = Object.fromEntries(
+      Object.entries(dynamic).map(([prop, dc]) => {
+        if (hasNames(dc)) return [prop, dc];
+        const segment = slotSegment(prop);
+        return [
+          prop,
+          {
+            ...dc,
+            varName: `--${prefix}-${segment}${suffix}`,
+            slotClass: `${prefix}-dyn-${segment}${suffix}`,
+          },
+        ];
+      })
+    );
   }
   if (config.supersededBy) {
-    const own: Record<string, readonly string[]> = {};
-    for (const [prop, later] of Object.entries(config.supersededBy)) {
-      if (!listed.has(prop) || ownsProp(config, prop)) continue;
-      const kept = later.filter(
-        (name) => listed.has(name) && !ownsProp(config, name)
-      );
-      if (kept.length > 0) own[prop] = kept;
-    }
-    resolved.supersededBy = own;
+    resolved.supersededBy = Object.fromEntries(
+      Object.entries(config.supersededBy).flatMap(([prop, later]) => {
+        if (!listed.has(prop) || ownsProp(config, prop)) return [];
+        const kept = later.filter(
+          (name) => listed.has(name) && !ownsProp(config, name)
+        );
+        return kept.length > 0 ? [[prop, kept]] : [];
+      })
+    );
   }
   return resolved;
 }

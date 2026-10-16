@@ -2482,6 +2482,36 @@ mod tests {
         let code = transform_source(escaped);
         assert!(code.contains("import { createComponent, createClassResolver } from"), "{code}");
         assert_binds_each_name_once(&code);
+
+        // The system-props module's `supersededBy` and each shared list take
+        // their names the same way.
+        let sized = |prelude: &str| {
+            let mut engine = ExtractEngine::new(Some(EngineOptions {
+                config_json: Some(
+                    r#"{"height":{"property":"height"},"h":{"property":"height"},"rawH":{"property":"height"}}"#.into(),
+                ),
+                group_registry_json: Some(r#"{"sizes":["height","h","rawH"]}"#.into()),
+                ..Default::default()
+            }))
+            .unwrap();
+            let source = format!(
+                "{prelude}export const C = ds.system({{ sizes: true }}).asElement('div');\n\
+                 export const App = ({{ v }}) => <C height={{v}} h=\"2px\" />;\n"
+            );
+            engine.analyze(serde_json::json!([{ "path": "directive.tsx", "source": source }]).to_string(), None).unwrap();
+            let result: serde_json::Value =
+                serde_json::from_str(&engine.transform_file("directive.tsx".to_string()).unwrap()).unwrap();
+            result["code"].as_str().unwrap().to_string()
+        };
+        let plain = sized("");
+        let list = plain.split("systemPropNames_").nth(1).and_then(|rest| rest.get(..8)).expect("a shared list").to_string();
+        let code = sized(&format!(
+            "const supersededBy\\u00241 = 'user';\nconst systemPropNames_{list}\\u00241 = 'user';\n\
+             export const own = [supersededBy\\u00241, systemPropNames_{list}\\u00241];\n"
+        ));
+        assert!(code.contains(&format!("supersededBy, systemPropNames_{list} }}")), "{code}");
+        assert!(code.contains(r#""supersededBy":supersededBy"#) && !code.contains("supersededBy$1"), "{code}");
+        assert_binds_each_name_once(&code);
     }
 
     /// Parses `code` as JavaScript, where oxc reports a redeclared binding,
