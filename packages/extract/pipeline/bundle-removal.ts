@@ -1,9 +1,6 @@
 import { transform as lcssTransform } from 'lightningcss';
 
-import { keptDirFeatures } from './post-process-css';
-
 import type { ManifestComponentDescriptor } from './manifest-schema';
-import type { LightningTargets } from './post-process-css';
 import type { Rule, Selector } from 'lightningcss';
 
 /** A class's component class: the name before a derived suffix
@@ -224,6 +221,9 @@ export interface RuleRemoval {
   css: string | null;
   /** Each removed class at least one of whose rules went. */
   went: Set<string>;
+  /** Why the sheet stays whole, though some of its rules would go: a cut
+   *  that would change a rule kept; `null` otherwise. */
+  refused: string | null;
   /** Each removed class a kept rule names, and why that rule stayed:
    *  another selector in its list needs no removed class
    *  (`'shared-list'`), the rule holds nested rules removal cannot prove
@@ -294,22 +294,101 @@ function eachClass(selector: Selector, visit: (name: string) => void): void {
   }
 }
 
+/** Where each line of `css` starts, as CSS breaks lines: at `\n`,
+ *  `\r\n`, `\r` and `\f`. */
+function lineStarts(css: string): number[] {
+  const starts = [0];
+  for (let i = 0; i < css.length; i++) {
+    const c = css[i];
+    if (c === '\r' && css[i + 1] === '\n') continue;
+    if (c === '\n' || c === '\r' || c === '\f') starts.push(i + 1);
+  }
+  return starts;
+}
+
+/** The index of the end of `css`'s string that opens at `at`, its closing
+ *  quote, escapes skipped; -1 when it never closes. */
+function stringEnd(css: string, at: number): number {
+  const quote = css[at];
+  for (let i = at + 1; i < css.length; i++) {
+    if (css[i] === '\\') i++;
+    else if (css[i] === quote) return i;
+  }
+  return -1;
+}
+
+/**
+ * The index just past the rule that starts at `start`: past the `}` that
+ * closes the block it opens, skipping strings, comments, escapes and
+ * unquoted `url()`s, which may hold braces. -1 when no block closes.
+ */
+function ruleEnd(css: string, start: number): number {
+  let depth = 0;
+  for (let i = start; i < css.length; i++) {
+    const c = css[i];
+    if (c === '\\') {
+      i++;
+    } else if (c === '"' || c === "'") {
+      i = stringEnd(css, i);
+      if (i < 0) return -1;
+    } else if (c === '/' && css[i + 1] === '*') {
+      i = css.indexOf('*/', i + 2) + 1;
+      if (i <= 0) return -1;
+    } else if (
+      c === '(' &&
+      /(?:^|[^\w-])url$/i.test(css.slice(Math.max(0, i - 4), i)) &&
+      !/^\s*["']/.test(css.slice(i + 1, i + 64))
+    ) {
+      for (i++; i < css.length && css[i] !== ')'; i++) {
+        if (css[i] === '\\') i++;
+      }
+    } else if (c === '{') {
+      depth++;
+    } else if (c === '}') {
+      depth--;
+      if (depth === 0) return i + 1;
+      if (depth < 0) return -1;
+    }
+  }
+  return -1;
+}
+
+/** A rule's own content, without the rules nested in it or any source
+ *  location, to compare a sheet's rules before and after removal. */
+function ruleKey(rule: Rule): string {
+  return JSON.stringify(rule, (key, value) =>
+    key === 'loc' || key === 'rules' ? undefined : value
+  );
+}
+
+/** Calls `visit` with every rule of `css`, in source order; a rule `visit`
+ *  returns `[]` for is not looked inside. */
+function eachRule(css: string, visit: (rule: Rule) => [] | undefined): void {
+  lcssTransform({
+    filename: 'animus-bundle-removal.css',
+    code: Buffer.from(css),
+    visitor: { Rule: visit },
+  });
+}
+
 /**
  * `css` without each rule all of whose selectors need an element carrying
  * one of `classes` (or a class derived from one, `{class}--…`), and without
  * each `@media`, `@supports` or `@container` rule that removal empties. A
- * rule with another selector stays whole, since Lightning CSS cannot hand
- * back every rule it reads. Throws when the sheet does not parse.
+ * rule with another selector stays whole. The rules that go are cut from
+ * the text, never reprinted, so every rule kept is byte for byte what the
+ * build wrote; when the sheet then reads as anything but its rules less
+ * those cut, it stays whole (`refused`). Throws when the sheet does not
+ * parse.
  */
 export function removeComponentRules(
   css: string,
-  classes: ReadonlySet<string>,
-  opts: { targets: LightningTargets; keepDirSelector?: boolean }
+  classes: ReadonlySet<string>
 ): RuleRemoval {
   const went = new Set<string>();
   const kept = new Map<string, KeptRuleReason>();
   if (![...classes].some((name) => css.includes(name))) {
-    return { css: null, went, kept };
+    return { css: null, went, kept, refused: null };
   }
   const needsOf = (selectors: Selector[], parent: readonly string[] = []) =>
     selectors.map((selector) => neededClasses(selector, classes, parent));
@@ -360,50 +439,70 @@ export function removeComponentRules(
         return null;
     }
   };
-  const drop = (rule: Rule) => {
-    const gone = goneClasses(rule);
-    if (gone === null) return;
+  const starts = lineStarts(css);
+  const cuts: Array<[number, number]> = [];
+  const keys: string[] = [];
+  let refused: string | null = null;
+  const cut = (loc: { line: number; column: number }, gone: string[]): [] => {
+    const start = (starts[loc.line] ?? Number.NaN) + loc.column - 1;
+    const end = ruleEnd(css, start);
+    if (end < 0) refused ??= 'a removed rule does not end where it should';
+    cuts.push([start, end]);
     for (const name of gone) went.add(name);
     return [];
   };
-  const code = lcssTransform({
-    filename: 'animus-bundle-removal.css',
-    code: Buffer.from(css),
-    minify: true,
-    targets: opts.targets,
-    ...(opts.keepDirSelector && keptDirFeatures()),
-    visitor: {
-      Rule: {
-        style(rule) {
-          const dropped = drop(rule);
-          if (dropped) return dropped;
-          const needs = needsOf(rule.value.selectors);
-          const needed = new Set(needs.flat());
-          // Every selector needing a removed class, the rule stayed for a
-          // rule nested in it.
-          const nested = everyNeeds(needs);
-          for (const selector of rule.value.selectors) {
-            eachClass(selector, (name) => {
-              const stem = classStem(name);
-              if (!classes.has(stem)) return;
-              noteKept(
-                kept,
-                stem,
-                !needed.has(stem)
-                  ? 'conditional'
-                  : nested
-                    ? 'nested'
-                    : 'shared-list'
-              );
-            });
-          }
-        },
-        media: drop,
-        supports: drop,
-        container: drop,
-      },
-    },
-  }).code.toString();
-  // A rule goes only where a style rule goes, which notes its classes.
-  return { css: went.size > 0 ? code : null, went, kept };
+  eachRule(css, (rule) => {
+    switch (rule.type) {
+      case 'style':
+      case 'media':
+      case 'supports':
+      case 'container': {
+        const gone = goneClasses(rule);
+        if (gone !== null) return cut(rule.value.loc, gone);
+      }
+    }
+    keys.push(ruleKey(rule));
+    if (rule.type !== 'style') return;
+    const needs = needsOf(rule.value.selectors);
+    const needed = new Set(needs.flat());
+    // Every selector needing a removed class, the rule stayed for a rule
+    // nested in it.
+    const nested = everyNeeds(needs);
+    for (const selector of rule.value.selectors) {
+      eachClass(selector, (name) => {
+        const stem = classStem(name);
+        if (!classes.has(stem)) return;
+        noteKept(
+          kept,
+          stem,
+          !needed.has(stem) ? 'conditional' : nested ? 'nested' : 'shared-list'
+        );
+      });
+    }
+    return undefined;
+  });
+  if (cuts.length === 0) return { css: null, went, kept, refused: null };
+  let trimmed = '';
+  let from = 0;
+  for (const [start, end] of cuts.sort(([a], [b]) => a - b)) {
+    trimmed += css.slice(from, start);
+    from = end;
+  }
+  trimmed += css.slice(from);
+  // The trimmed sheet must read as the same rules, in the same order, less
+  // those cut: a cut that ended anywhere else changed a rule kept.
+  const after: string[] = [];
+  try {
+    eachRule(trimmed, (rule) => {
+      after.push(ruleKey(rule));
+      return undefined;
+    });
+  } catch {
+    refused ??= 'the sheet no longer reads once its removed rules are cut';
+  }
+  if (after.length !== keys.length || after.some((key, i) => key !== keys[i])) {
+    refused ??= 'cutting its removed rules would change a rule it keeps';
+  }
+  if (refused !== null) return { css: null, went: new Set(), kept, refused };
+  return { css: trimmed, went, kept, refused: null };
 }

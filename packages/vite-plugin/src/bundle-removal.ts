@@ -98,27 +98,31 @@ export function bundleRemoval(
   let characters = 0;
   const renamed = new Map<string, string>();
   // A component counts as removed once one of its rules went; one a kept
-  // rule names, or a file Lightning CSS could not read, is kept whole.
+  // rule names, or a file kept whole, is kept whole.
   const went = new Set<string>();
   const kept = new Map<string, KeptRuleReason>();
-  const unread = new Set<string>();
+  const wholeFiles = new Set<string>();
+  const keepFile = (css: string) => {
+    for (const name of classes) {
+      if (css.includes(name)) wholeFiles.add(name);
+    }
+    return null;
+  };
   return {
     replace(file) {
       const css = Buffer.from(file.source).toString('utf8');
       let removal: RuleRemoval;
       try {
-        removal = removeComponentRules(css, classes, {
-          targets: ctx.lcssTargets,
-          keepDirSelector: ctx.options.keepDirSelector,
-        });
+        removal = removeComponentRules(css, classes);
       } catch (error) {
         ctx.warn(
           `[animus-extract] removeUnbundledComponents kept ${file.fileName} whole: Lightning CSS could not read it (${error instanceof Error ? error.message : String(error)})`
         );
-        for (const name of classes) {
-          if (css.includes(name)) unread.add(name);
-        }
-        return null;
+        return keepFile(css);
+      }
+      if (removal.refused !== null) {
+        ctx.info(`kept ${file.fileName} whole: ${removal.refused}`);
+        return keepFile(css);
       }
       for (const name of removal.went) went.add(name);
       for (const [name, reason] of removal.kept) noteKept(kept, name, reason);
@@ -163,7 +167,7 @@ export function bundleRemoval(
       for (const [id, className] of removed) {
         const reason: KeptReason | undefined =
           kept.get(className) ??
-          (unread.has(className) ? 'unreadable' : undefined);
+          (wholeFiles.has(className) ? 'whole-file' : undefined);
         if (went.has(className)) {
           count += 1;
           ctx.trace(`removed ${id} (${className}): no output file includes it`);
@@ -191,7 +195,7 @@ export function bundleRemoval(
 }
 
 /** Why the rules of a component no output file includes all stayed. */
-type KeptReason = KeptRuleReason | 'unreadable';
+type KeptReason = KeptRuleReason | 'whole-file';
 
 /** Each reason, as the trace and the build's report print it. */
 const KEPT_WHOLE = {
@@ -199,7 +203,7 @@ const KEPT_WHOLE = {
   nested: 'a rule naming it holds nested rules removal cannot prove unused',
   conditional:
     'named only where a selector can match without it, or in a pseudo-class argument removal does not read, such as :not(), :has(), :host(), or an :is() or :where() with an alternative that does not need it',
-  unreadable: 'in a stylesheet Lightning CSS could not read',
+  'whole-file': 'in a stylesheet removal kept whole',
 } satisfies Record<KeptReason, string>;
 
 /** How many times `needle` occurs in `text`. */

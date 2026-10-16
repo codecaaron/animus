@@ -43,15 +43,13 @@ describe('removeComponentRules', () => {
       css: out,
       went,
       kept,
-    } = removeComponentRules(css, new Set(['dead', 'cond', 'hosted']), {
-      targets: {},
-    });
+    } = removeComponentRules(css, new Set(['dead', 'cond', 'hosted']));
     expect(out).not.toBeNull();
     expect(out).not.toMatch(
       /\.dead\{|\.dead--size-sm\{|\.live--x \.dead|:where\(\.dead\)|:is\(\.dead,\.dead--size-sm\)/
     );
     for (const stays of [
-      '.live{color:#00f}',
+      '.live{color:blue}',
       '.live--size-sm{padding:2px}',
       '.dead,.live{order:1}',
       '.live:not(.dead){gap:1px}',
@@ -70,9 +68,7 @@ describe('removeComponentRules', () => {
       cond: 'conditional',
       hosted: 'conditional',
     });
-    expect(
-      removeComponentRules(css, new Set(['other']), { targets: {} }).css
-    ).toBeNull();
+    expect(removeComponentRules(css, new Set(['other'])).css).toBeNull();
   });
 
   // Contract: a `@media`, `@supports` or `@container` rule removal empties
@@ -87,12 +83,28 @@ describe('removeComponentRules', () => {
         '@supports (display:grid){@container (min-width:2px){.deep:hover{color:red}}}',
         '@media (min-width:3px){.dead{color:red}.live{color:red}}',
       ].join(''),
-      new Set(['dead', 'deep']),
-      { targets: {} }
+      new Set(['dead', 'deep'])
     );
     expect([...went].sort()).toEqual(['dead', 'deep']);
     expect(out).toBe(
-      '@layer anm-base{}@layer anm-states{.live{color:red}}@media (width>=3px){.live{color:red}}'
+      '@layer anm-base{}@layer anm-states{.live{color:red}}@media (min-width:3px){.live{color:red}}'
+    );
+  });
+});
+
+describe('removeComponentRules keeps kept rules', () => {
+  // Contract: removal changes no kept rule. The trimmed sheet is the
+  // original, byte for byte, less each rule that went and each at-rule it
+  // emptied, whatever browser targets printed it: here Safari 16's
+  // `-webkit-` prefixes beside their standard properties.
+  test('removal changes no kept rule', () => {
+    const live =
+      '.live{-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}.link:hover{-webkit-text-decoration-color:red;text-decoration-color:red}';
+    const media =
+      '@media (min-width:1px){.live{-webkit-text-decoration:underline;text-decoration:underline}}';
+    const css = `${live}.dead{-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}.dead:after{content:"}{"}@media (min-width:1px){.dead{color:red}.live{-webkit-text-decoration:underline;text-decoration:underline}}@supports (display:grid){.dead{display:grid}}.u{content:"}"}`;
+    expect(removeComponentRules(css, new Set(['dead'])).css).toBe(
+      `${live}${media}.u{content:"}"}`
     );
   });
 });
@@ -112,27 +124,19 @@ describe('removeComponentRules over nested rules', () => {
       '@media (min-width:1px){.dead{:not(&){color:red}}}',
     ];
     for (const css of keep) {
-      const {
-        css: out,
-        went,
-        kept,
-      } = removeComponentRules(css, classes, {
-        targets: {},
-      });
+      const { css: out, went, kept } = removeComponentRules(css, classes);
       expect(out).toBeNull();
       expect(went.size).toBe(0);
       expect(kept.get('dead')).toBe('nested');
     }
     const layered = removeComponentRules(
       ':is(.dead,.gone){@layer first{color:red}}@media (min-width:1px){.dead{@layer third{color:red}}}@layer second{.live{color:#00f}}@layer first{.live{color:red}}',
-      classes,
-      { targets: {} }
+      classes
     ).css;
     expect(layered).toBeNull();
     const { css: out, went } = removeComponentRules(
       '@media (min-width:2px){.dead{color:red;&:hover{color:#00f}& .gone{color:red}@media (min-width:1px){color:green}}}.live{color:red}',
-      classes,
-      { targets: {} }
+      classes
     );
     expect(out).toBe('.live{color:red}');
     expect([...went].sort()).toEqual(['dead', 'gone']);
