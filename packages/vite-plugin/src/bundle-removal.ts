@@ -1,5 +1,6 @@
 import {
   contentHash,
+  noteKept,
   outputEvidence,
   removeComponentRules,
   shippedClasses,
@@ -97,9 +98,10 @@ export function bundleRemoval(
   let characters = 0;
   const renamed = new Map<string, string>();
   // A component counts as removed once one of its rules went; one a kept
-  // rule names is kept whole, sharing a selector list taking precedence.
+  // rule names, or a file Lightning CSS could not read, is kept whole.
   const went = new Set<string>();
-  const kept = new Map<string, KeptReason>();
+  const kept = new Map<string, KeptRuleReason>();
+  const unread = new Set<string>();
   return {
     replace(file) {
       const css = Buffer.from(file.source).toString('utf8');
@@ -114,16 +116,12 @@ export function bundleRemoval(
           `[animus-extract] removeUnbundledComponents kept ${file.fileName} whole: Lightning CSS could not read it (${error instanceof Error ? error.message : String(error)})`
         );
         for (const name of classes) {
-          if (css.includes(name) && !kept.has(name)) {
-            kept.set(name, 'unreadable');
-          }
+          if (css.includes(name)) unread.add(name);
         }
         return null;
       }
       for (const name of removal.went) went.add(name);
-      for (const [name, reason] of removal.kept) {
-        if (!kept.has(name) || reason === 'shared-list') kept.set(name, reason);
-      }
+      for (const [name, reason] of removal.kept) noteKept(kept, name, reason);
       const { css: pruned } = removal;
       if (pruned === null) return null;
       characters += css.length - pruned.length;
@@ -163,7 +161,9 @@ export function bundleRemoval(
       let ruleless = 0;
       const whole = new Map<KeptReason, number>();
       for (const [id, className] of removed) {
-        const reason = kept.get(className);
+        const reason: KeptReason | undefined =
+          kept.get(className) ??
+          (unread.has(className) ? 'unreadable' : undefined);
         if (went.has(className)) {
           count += 1;
           ctx.trace(`removed ${id} (${className}): no output file includes it`);
@@ -196,6 +196,7 @@ type KeptReason = KeptRuleReason | 'unreadable';
 /** Each reason, as the trace and the build's report print it. */
 const KEPT_WHOLE = {
   'shared-list': 'shares a selector list with a kept component',
+  nested: 'a rule naming it holds nested rules removal cannot prove unused',
   conditional:
     'named only where a selector can match without it (inside :not(), :has(), or an :is() or :where() with an alternative that does not need it)',
   unreadable: 'in a stylesheet Lightning CSS could not read',

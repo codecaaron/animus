@@ -329,6 +329,7 @@ export type {
   RuleRemoval,
 } from './bundle-removal';
 export {
+  noteKept,
   outputEvidence,
   removeComponentRules,
   shippedClasses,

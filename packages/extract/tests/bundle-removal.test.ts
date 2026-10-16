@@ -93,6 +93,46 @@ describe('removeComponentRules', () => {
   });
 });
 
+describe('removeComponentRules over nested rules', () => {
+  // Contract: a style rule goes only with every rule nested in it. A nested
+  // rule's `&` may match outside its parent (`:not(&)`, `:is(&, .live)`),
+  // so it goes only where its own selector needs a removed class, and a
+  // nested `@layer` block never goes, since it places its layer in the
+  // layer order; through a wrapping `@media` too.
+  test('a style rule goes only with every rule nested in it', () => {
+    const classes = new Set(['dead', 'gone']);
+    const keep = [
+      ':is(.dead,.gone){:not(&){color:red}}',
+      '.dead{:is(&,.live){color:red}}',
+      '@media (min-width:1px){.dead{:not(&){color:red}}}',
+    ];
+    for (const css of keep) {
+      const {
+        css: out,
+        went,
+        kept,
+      } = removeComponentRules(css, classes, {
+        targets: {},
+      });
+      expect(out).toBeNull();
+      expect(went.size).toBe(0);
+      expect(kept.get('dead')).toBe('nested');
+    }
+    const layered = removeComponentRules(
+      ':is(.dead,.gone){@layer first{color:red}}@media (min-width:1px){.dead{@layer third{color:red}}}@layer second{.live{color:#00f}}@layer first{.live{color:red}}',
+      classes,
+      { targets: {} }
+    ).css;
+    expect(layered).toBeNull();
+    const { css: out } = removeComponentRules(
+      '.dead{color:red;&:hover{color:#00f}& .gone{color:red}@media (min-width:1px){color:green}}.live{color:red}',
+      classes,
+      { targets: {} }
+    );
+    expect(out).toBe('.live{color:red}');
+  });
+});
+
 describe('unbundledComponents', () => {
   // Contract: a component is removed only when no output file names its
   // class, or a class derived from it; `staticCss` keeps one by binding,

@@ -196,7 +196,27 @@ export function unbundledComponents(
 }
 
 /** Why a removed component's rule stayed. */
-export type KeptRuleReason = 'shared-list' | 'conditional';
+export type KeptRuleReason = 'shared-list' | 'nested' | 'conditional';
+
+/** Which reason a class keeps when several rules stay for different ones. */
+const KEPT_RANK = {
+  conditional: 0,
+  nested: 1,
+  'shared-list': 2,
+} satisfies Record<KeptRuleReason, number>;
+
+/** Notes in `kept` that a rule naming `name` stayed for `reason`, unless a
+ *  higher-ranked reason is already noted. */
+export function noteKept(
+  kept: Map<string, KeptRuleReason>,
+  name: string,
+  reason: KeptRuleReason
+): void {
+  const noted = kept.get(name);
+  if (noted === undefined || KEPT_RANK[reason] > KEPT_RANK[noted]) {
+    kept.set(name, reason);
+  }
+}
 
 /** What removing components' rules did to one style sheet. */
 export interface RuleRemoval {
@@ -206,7 +226,8 @@ export interface RuleRemoval {
   went: Set<string>;
   /** Each removed class a kept rule names, and why that rule stayed:
    *  another selector in its list needs no removed class
-   *  (`'shared-list'`), or the class sits only where a selector can match
+   *  (`'shared-list'`), the rule holds nested rules removal cannot prove
+   *  unused (`'nested'`), or the class sits only where a selector can match
    *  without it (`'conditional'`). */
   kept: Map<string, KeptRuleReason>;
 }
@@ -216,24 +237,30 @@ export interface RuleRemoval {
  * one it names outside a pseudo-class's argument, or a class derived from
  * one (`{class}--…`), and those an `:is()` or `:where()` needs where every
  * alternative in it needs one, since such a list matches only what one of
- * its alternatives matches. Empty when the selector may match without any.
- * `:not()` and `:has()` never need one.
+ * its alternatives matches. A nested rule's `&` needs what its parent
+ * rule's selectors all need (`parent`), since the element it stands for
+ * matches the parent; `null` where they need none or are unknown. Empty
+ * when the selector may match without any. `:not()` and `:has()` never
+ * need one.
  */
 function neededClasses(
   selector: Selector,
-  classes: ReadonlySet<string>
+  classes: ReadonlySet<string>,
+  parent: readonly string[] | null
 ): string[] {
   const needed: string[] = [];
   for (const part of selector) {
     if (part.type === 'class') {
       const stem = classStem(part.name);
       if (classes.has(stem)) needed.push(stem);
+    } else if (part.type === 'nesting' && parent !== null) {
+      needed.push(...parent);
     } else if (
       part.type === 'pseudo-class' &&
       (part.kind === 'is' || part.kind === 'where')
     ) {
       const alternatives = part.selectors.map((alternative) =>
-        neededClasses(alternative, classes)
+        neededClasses(alternative, classes, parent)
       );
       if (alternatives.every((alternative) => alternative.length > 0)) {
         needed.push(...alternatives.flat());
@@ -281,24 +308,50 @@ export function removeComponentRules(
   if (![...classes].some((name) => css.includes(name))) {
     return { css: null, went, kept };
   }
-  const needsOf = (selectors: Selector[]) =>
-    selectors.map((selector) => neededClasses(selector, classes));
+  const needsOf = (
+    selectors: Selector[],
+    parent: readonly string[] | null = null
+  ) => selectors.map((selector) => neededClasses(selector, classes, parent));
   const everyNeeds = (needs: string[][]) =>
     needs.every((needed) => needed.length > 0);
   // Whether `rule` goes: a style rule every selector of which needs a
-  // removed class, or a `@media`, `@supports` or `@container` rule removal
-  // empties, which applies nothing. An emptied `@layer` block stays, since
-  // it still places its layer in the layer order; a second minifying pass
-  // would drop the emptied at-rules too, but would also rewrite such a block
-  // and what else it finds.
-  const goes = (rule: Rule): boolean =>
-    rule.type === 'style'
-      ? everyNeeds(needsOf(rule.value.selectors))
-      : (rule.type === 'media' ||
-          rule.type === 'supports' ||
-          rule.type === 'container') &&
-        rule.value.rules.length > 0 &&
-        rule.value.rules.every(goes);
+  // removed class and every rule nested in which goes too, or a `@media`,
+  // `@supports` or `@container` rule removal empties, which applies nothing.
+  // `parent` is what the enclosing style rule's selectors all need, when
+  // `rule` is nested in one that may go. A nested rule's `&` may match
+  // outside its parent (`:not(&)`), so it goes only where its selector
+  // needs a removed class, `&` counting outside a pseudo-class only; the
+  // declarations nested in a style rule are that rule's. An emptied
+  // `@layer` block stays, since it still places its layer in the layer
+  // order, nested in a style rule too; a second minifying pass would drop
+  // the emptied at-rules, but would also rewrite such a block and what else
+  // it finds.
+  const goes = (
+    rule: Rule,
+    parent: readonly string[] | null = null
+  ): boolean => {
+    switch (rule.type) {
+      case 'style': {
+        const needs = needsOf(rule.value.selectors, parent);
+        const own = needs.flat();
+        return (
+          everyNeeds(needs) &&
+          (rule.value.rules ?? []).every((inner) => goes(inner, own))
+        );
+      }
+      case 'nested-declarations':
+        return parent !== null;
+      case 'media':
+      case 'supports':
+      case 'container':
+        return (
+          rule.value.rules.length > 0 &&
+          rule.value.rules.every((inner) => goes(inner, parent))
+        );
+      default:
+        return false;
+    }
+  };
   // Notes the classes each style rule in a rule that goes needs, since
   // Lightning CSS visits nothing inside a rule a visitor drops.
   const record = (rule: Rule): void => {
@@ -327,17 +380,25 @@ export function removeComponentRules(
       Rule: {
         style(rule) {
           const needs = needsOf(rule.value.selectors);
-          if (everyNeeds(needs)) {
+          if (goes(rule)) {
             for (const name of needs.flat()) went.add(name);
             return [];
           }
           const needed = new Set(needs.flat());
+          const nested = everyNeeds(needs);
           for (const selector of rule.value.selectors) {
             eachClass(selector, (name) => {
               const stem = classStem(name);
               if (!classes.has(stem)) return;
-              if (needed.has(stem)) kept.set(stem, 'shared-list');
-              else if (!kept.has(stem)) kept.set(stem, 'conditional');
+              noteKept(
+                kept,
+                stem,
+                !needed.has(stem)
+                  ? 'conditional'
+                  : nested
+                    ? 'nested'
+                    : 'shared-list'
+              );
             });
           }
         },
