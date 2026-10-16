@@ -57,6 +57,12 @@ struct AnalyzeResult<'a> {
     /// Present only for a host that publishes the prop-order file.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     tag_components: &'a std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    /// Present only where a runtime config references a shared list.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    prop_name_lists: &'a std::collections::BTreeMap<String, assemble::PropNameList>,
+    /// Present only where a runtime config references it.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    superseded_by: &'a std::collections::BTreeMap<String, Vec<String>>,
     timing: serde_json::Value,
 }
 
@@ -120,6 +126,9 @@ struct ReplacementImportNeeds {
     dynamic_prop_config: bool,
     transforms: bool,
     runtime_tables: bool,
+    superseded_by: bool,
+    /// The keys of the shared `systemPropNames` lists the configs reference.
+    prop_name_lists: std::collections::BTreeSet<String>,
     /// Import declarations, by span, whose imported callback a replacement no
     /// longer references because its delivery was pruned: with that last use
     /// gone, TypeScript elides the declaration and its module's effects.
@@ -215,19 +224,23 @@ fn replacement_import_needs(
 
         let has_system_props = !payload.system_prop_names.is_empty();
         needs.system_prop_map |= has_system_props;
-        needs.system_prop_groups |= !payload.system_group_names.is_empty();
+        match &payload.prop_names_key {
+            Some(key) => {
+                needs.prop_name_lists.insert(key.clone());
+            }
+            None => needs.system_prop_groups |= !payload.system_group_names.is_empty(),
+        }
+        needs.superseded_by |= !payload.superseded_by.is_empty();
         needs.typed_system_props |= has_system_props && payload.reads_typed_system_props;
         needs.dynamic_prop_config |= has_system_props && payload.has_dynamic_props;
 
-        needs.transforms |= needs.dynamic_prop_config
-            || payload
-                .custom_dynamic_config
-                .as_ref()
-                .is_some_and(|config| {
-                    config.values().filter_map(crate::dynamic_meta::DynamicPropMeta::value).any(|meta| {
-                        meta.transform_id.is_some()
-                    })
-                });
+        // The system-props module binds the system's own transforms.
+        needs.transforms |= payload.custom_dynamic_config.as_ref().is_some_and(|config| {
+            config
+                .values()
+                .filter_map(crate::dynamic_meta::DynamicPropMeta::value)
+                .any(|meta| meta.transform_id.is_some())
+        });
 
         needs.runtime_tables |= payload
             .custom_dynamic_config
@@ -1498,6 +1511,8 @@ impl ExtractEngine {
             font_preloads: &css.font_preloads,
             runtime_tables: &css.runtime_tables,
             tag_components: &css.tag_components,
+            prop_name_lists: &css.prop_name_lists,
+            superseded_by: &css.superseded_by,
             timing: serde_json::json!({ "parseCount": self.parse_count }),
         });
         self.cross = Some(cross);
@@ -1557,7 +1572,10 @@ impl ExtractEngine {
             return Ok(serde_json::json!({ "code": source, "hasComponents": false }).to_string());
         }
 
-        let names = assemble::GeneratedNames::free_in(source);
+        let names = assemble::GeneratedNames::free_in(
+            source,
+            file_payloads.values().filter_map(|payload| payload.prop_names_key.as_ref()),
+        );
         let replacements = assemble::assemble_replacements(
             &path,
             file_facts,
@@ -1620,14 +1638,18 @@ impl ExtractEngine {
         let needed = |imports: &[(bool, &assemble::GeneratedName)]| -> Vec<String> {
             imports.iter().filter(|(needed, _)| *needed).map(|(_, name)| name.specifier()).collect()
         };
-        let virtual_imports = needed(&[
+        let lists: Vec<assemble::GeneratedName> =
+            import_needs.prop_name_lists.iter().map(|key| names.prop_name_list(key)).collect();
+        let mut virtual_imports = needed(&[
             (import_needs.system_prop_map, &names.system_prop_map),
             (import_needs.system_prop_groups, &names.system_prop_groups),
             (import_needs.typed_system_props, &names.typed_system_props),
             (import_needs.dynamic_prop_config, &names.dynamic_prop_config),
             (import_needs.transforms, &names.transforms),
             (import_needs.runtime_tables, &names.animus_tables),
+            (import_needs.superseded_by, &names.superseded_by),
         ]);
+        virtual_imports.extend(lists.iter().map(assemble::GeneratedName::specifier));
         let system_imports = needed(&[
             (import_needs.create_component, &names.create_component),
             (import_needs.class_resolver, &names.create_class_resolver),
@@ -1661,21 +1683,9 @@ impl ExtractEngine {
                 virtual_imports.join(", "),
                 self.opts.system_props_module_id
             );
-            let binding_loop = if import_needs.dynamic_prop_config {
-                format!(
-                    "for (const [k, v] of Object.entries({})) {{ if (v.transformId) v.transform = {}[v.transformId]; }}\n",
-                    names.dynamic_prop_config, names.transforms
-                )
-            } else {
-                String::new()
-            };
             format!(
-                "{}{}{}{}import '{}';\n",
-                system_import_str,
-                compose_ctx_import_str,
-                virtual_import,
-                binding_loop,
-                self.opts.css_module_id
+                "{}{}{}import '{}';\n",
+                system_import_str, compose_ctx_import_str, virtual_import, self.opts.css_module_id
             )
         } else {
             format!(
@@ -2565,7 +2575,8 @@ export const App = () => <Box tone="red" />;
         assert!(needs.system_prop_map);
         assert!(needs.system_prop_groups);
         assert!(needs.dynamic_prop_config);
-        assert!(needs.transforms);
+        // The system-props module binds the system's own transforms.
+        assert!(!needs.transforms);
     }
 
     #[test]

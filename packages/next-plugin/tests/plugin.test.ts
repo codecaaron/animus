@@ -522,8 +522,8 @@ describe('production run (full pipeline)', () => {
     expect(sysProps).toBe(
       'export const systemPropMap = {"m":{"8":"anm-m-8"}};\n' +
         'export const systemPropGroups = {"groups":{}};\n' +
-        'export const dynamicPropConfig = {"color":{"varName":"--anm-color","slotClass":"anm-color-slot","property":"color","transformName":"toColor","scaleValues":{"primary":"#00f"}},"p":{"varName":"--anm-p","slotClass":"anm-p-slot","property":"padding"}};\n' +
-        'export const transforms = {};\n'
+        'export const transforms = {};\n' +
+        'export const dynamicPropConfig = {"color":{"varName":"--anm-color","slotClass":"anm-color-slot","property":"color","transformName":"toColor","scaleValues":{"primary":"#00f"}},"p":{"varName":"--anm-p","slotClass":"anm-p-slot","property":"padding"}};\n'
     );
   });
 

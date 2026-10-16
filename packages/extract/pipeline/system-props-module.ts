@@ -3,6 +3,7 @@ import { buildDynamicPropConfig } from './dynamic-prop-config';
 import type {
   DynamicPropConfig,
   DynamicPropMeta,
+  PropNameList,
   RuntimeTables,
   TableKeys,
 } from './dynamic-prop-config';
@@ -35,7 +36,8 @@ function transformsSource(
 }
 
 /** The system's dynamic config as source, each table its meta keys in
- *  `animusTables` referenced there rather than inlined. */
+ *  `animusTables` referenced there rather than inlined, and each bound
+ *  transform read from the module's `transforms`. */
 function dynamicPropConfigSource(
   config: DynamicPropConfig,
   dynamicProps: Record<string, DynamicPropMeta>
@@ -55,9 +57,33 @@ function dynamicPropConfigSource(
           : `animusTables.${field}[${JSON.stringify(key)}]`;
       return `${JSON.stringify(field)}:${source}`;
     });
+    if ('transformId' in entry && entry.transformId !== undefined) {
+      fields.push(
+        `"transform":transforms[${JSON.stringify(entry.transformId)}]`
+      );
+    }
     return `${JSON.stringify(prop)}:{${fields.join(',')}}`;
   });
   return `{${entries.join(',')}}`;
+}
+
+/** Each shared `systemPropNames` list as its own export, so a bundle keeps
+ *  only the lists its components reference. */
+function propNameListsSource(
+  lists: Record<string, PropNameList> | undefined
+): string {
+  return Object.entries(lists ?? {})
+    .map(([key, { groups = [], names = [] }]) => {
+      const list =
+        groups.length === 0
+          ? JSON.stringify(names)
+          : `[].concat(${[
+              ...groups.map((group) => `systemPropGroups.${group}`),
+              ...(names.length > 0 ? [JSON.stringify(names)] : []),
+            ].join(',')})`;
+      return `export const systemPropNames_${key} = ${list};\n`;
+    })
+    .join('');
 }
 
 export function buildSystemPropsModule(opts: {
@@ -67,6 +93,8 @@ export function buildSystemPropsModule(opts: {
   admittedTransforms: ProjectManifest['admitted_transforms'];
   typedSystemProps: ProjectManifest['typed_system_props'];
   runtimeTables: RuntimeTables | undefined;
+  propNameLists?: ProjectManifest['prop_name_lists'];
+  supersededBy?: ProjectManifest['superseded_by'];
 }): string {
   const dynamicPropConfig = buildDynamicPropConfig(opts.dynamicProps);
   return (
@@ -76,8 +104,13 @@ export function buildSystemPropsModule(opts: {
       : '') +
     `export const systemPropMap = ${opts.systemPropMapJson};\n` +
     `export const systemPropGroups = ${opts.groupRegistryJson};\n` +
-    `export const dynamicPropConfig = ${dynamicPropConfigSource(dynamicPropConfig, opts.dynamicProps)};\n` +
+    propNameListsSource(opts.propNameLists) +
+    // A config narrows the system's one table to its own props.
+    (opts.supersededBy && Object.keys(opts.supersededBy).length > 0
+      ? `export const supersededBy = ${JSON.stringify(opts.supersededBy)};\n`
+      : '') +
     `export const transforms = ${transformsSource(opts.admittedTransforms)};\n` +
+    `export const dynamicPropConfig = ${dynamicPropConfigSource(dynamicPropConfig, opts.dynamicProps)};\n` +
     // Only a component reading a typed system prop imports the list.
     (opts.typedSystemProps.length > 0
       ? `export const typedSystemProps = ${JSON.stringify(opts.typedSystemProps)};\n`

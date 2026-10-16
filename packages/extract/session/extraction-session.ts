@@ -3036,6 +3036,8 @@ export class ExtractionSession {
       admittedTransforms: manifest?.admitted_transforms ?? {},
       typedSystemProps: manifest?.typed_system_props ?? [],
       runtimeTables: manifest?.runtime_tables,
+      propNameLists: manifest?.prop_name_lists,
+      supersededBy: manifest?.superseded_by,
     });
 
     // Payloads first, then the commit, then the epoch LAST and only when its

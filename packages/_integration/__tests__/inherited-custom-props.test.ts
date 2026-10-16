@@ -142,7 +142,7 @@ describe('custom props inherited through extend()', () => {
         }
       )
     );
-    const { transforms, animusTables } = await import(
+    const shared = await import(
       `data:text/javascript,${encodeURIComponent(
         buildSystemPropsModule({
           systemPropMapJson: '{}',
@@ -151,17 +151,18 @@ describe('custom props inherited through extend()', () => {
           admittedTransforms: manifest.admitted_transforms,
           typedSystemProps: manifest.typed_system_props,
           runtimeTables: manifest.runtime_tables,
+          propNameLists: manifest.prop_name_lists,
+          supersededBy: manifest.superseded_by,
         })
       )}`
     );
     // Each replacement runs with only its own module's bindings in scope, so
     // a callback carried into another module as text cannot resolve.
     const runtime = {
+      ...shared,
       createComponent,
       systemPropMap: {},
       dynamicPropConfig: {},
-      transforms,
-      animusTables,
     };
     const instantiate = (
       file: { path: string },

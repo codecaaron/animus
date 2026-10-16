@@ -5,7 +5,7 @@ import { renderToString } from 'react-dom/server';
 import { expect, test, vi } from 'vitest';
 
 import { assertNoUnresolvedTokens } from './assert-no-unresolved-tokens';
-import { runPipeline } from './run-pipeline';
+import { inlineTables, runPipeline } from './run-pipeline';
 
 import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
 
@@ -51,8 +51,10 @@ export const Measured = ({ height }: { height: number }) => <Panel placeholderHe
     .map((d: ManifestDiagnostic) => [d.component, d.severity, d.dropped]);
   expect(warned).toEqual([['Panel', 'warn', '120']]);
 
-  const replacement: string =
-    manifest.components['unitless.tsx::Panel'].replacement;
+  const replacement = inlineTables(
+    manifest,
+    manifest.components['unitless.tsx::Panel'].replacement
+  );
   const [, className, config] =
     /createComponent\('div', '([^']+)', (\{.*\}), systemPropMap/.exec(
       replacement
@@ -153,8 +155,10 @@ export const Measured = ({ lines }: { lines: number }) => <Text lineClamp={lines
     ['Text', "prop 'tone'"],
   ]);
 
-  const replacement: string =
-    manifest.components['clamp.tsx::Text'].replacement;
+  const replacement = inlineTables(
+    manifest,
+    manifest.components['clamp.tsx::Text'].replacement
+  );
   const [, className, config] =
     /createComponent\('p', '([^']+)', (\{.*\}), systemPropMap/.exec(
       replacement

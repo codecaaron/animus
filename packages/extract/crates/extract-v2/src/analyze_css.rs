@@ -927,6 +927,11 @@ pub struct CssOutput {
     /// analysed component, as written (`B`, `ui.Box`, `Card.Body`) → it;
     /// built only for a host that publishes the prop-order file.
     pub tag_components: BTreeMap<String, BTreeMap<String, String>>,
+    /// The `systemPropNames` lists runtime configs reference (`PropNameLists`).
+    pub prop_name_lists: BTreeMap<String, crate::assemble::PropNameList>,
+    /// Every system prop → the later-defined props that take effect over it
+    /// (`system_superseded_props`), which a config references.
+    pub superseded_by: BTreeMap<String, Vec<String>>,
 }
 
 /// A component's props in authoring order (`ComponentDescriptor`): a name
@@ -9615,6 +9620,8 @@ fn run_with_system_floor(
 
     let mut replacement_configs: FxHashMap<String, crate::assemble::ReplacementPayload> =
         FxHashMap::default();
+    // Interned in sorted order, so a key's first claimant is stable.
+    let mut prop_name_lists = crate::assemble::PropNameLists::default();
     for component_id in &sorted_ids {
         let Some((_, _, _, active_props, group_names, custom_configs, compound_configs)) =
             evaluated.get(component_id)
@@ -9706,6 +9713,7 @@ fn run_with_system_floor(
             slot_scope: per_component_custom_dynamic
                 .contains_key(component_id)
                 .then(|| name_scopes[component_id].clone()),
+            prop_names_key: None,
         };
         payload.superseded_by = crate::assemble::superseded_props(
             &payload,
@@ -9713,8 +9721,16 @@ fn run_with_system_floor(
             &inputs.config,
             &inputs.prop_order,
         );
+        payload.prop_names_key = crate::assemble::prop_name_list(&payload, &inputs.group_registry)
+            .and_then(|list| prop_name_lists.intern(list));
         replacement_configs.insert(component_id.clone(), payload);
     }
+    // Shipped only where some config references it.
+    let superseded_by = if replacement_configs.values().any(|payload| !payload.superseded_by.is_empty()) {
+        crate::assemble::system_superseded_props(&inputs.config, &inputs.prop_order)
+    } else {
+        BTreeMap::new()
+    };
 
     let variant_configs_for_ledger: VariantConfigMap = usage_sources
         .configs
@@ -10412,6 +10428,8 @@ fn run_with_system_floor(
         font_preloads: font_preloads.list,
         runtime_tables,
         tag_components,
+        prop_name_lists: prop_name_lists.0,
+        superseded_by,
     }
 }
 

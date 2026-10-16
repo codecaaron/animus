@@ -3,7 +3,7 @@ import { createSystem, createTheme, size } from '@animus-ui/system';
 import { expect, test } from 'vitest';
 
 import { resolveClasses } from '../../system/src/runtime/resolveClasses';
-import { analyzeProject, transformFile } from './run-pipeline';
+import { analyzeProject, inlineTables, transformFile } from './run-pipeline';
 
 /**
  * Props alike in the properties they write, the current variable and the
@@ -42,7 +42,7 @@ const manifest = JSON.parse(
 );
 const css: string = manifest.css;
 const dynamicProps = buildDynamicPropConfig(manifest.dynamic_props);
-const code = transformFile(path, source).code;
+const code = inlineTables(manifest, transformFile(path, source).code);
 const tables = [...code.matchAll(/"supersededBy":(\{[^}]*\})/g)].map(
   ([, table]) => JSON.parse(table)
 );

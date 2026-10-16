@@ -25,6 +25,57 @@ fn extra_prop_names(p: &ReplacementPayload, group_registry: &FxHashMap<String, V
     names.into_iter().collect()
 }
 
+/// A config's `systemPropNames` as it ships: its groups' lists, then the
+/// other names; without groups, the names alone.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct PropNameList {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
+}
+
+pub(crate) fn prop_name_list(
+    p: &ReplacementPayload,
+    group_registry: &FxHashMap<String, Vec<String>>,
+) -> Option<PropNameList> {
+    if !p.system_group_names.is_empty() {
+        Some(PropNameList { groups: p.system_group_names.clone(), names: extra_prop_names(p, group_registry) })
+    } else if !p.system_prop_names.is_empty() {
+        Some(PropNameList { groups: Vec::new(), names: p.system_prop_names.clone() })
+    } else {
+        None
+    }
+}
+
+/// The `systemPropNames` lists configs share, each shipped once in the
+/// system-props module as its own export, `systemPropNames_{key}`, keyed by
+/// its content's hash: a list no config uses stays out of the bundle, and
+/// adding a component leaves every other config's reference unchanged.
+#[derive(Debug, Default)]
+pub struct PropNameLists(pub BTreeMap<String, PropNameList>);
+
+impl PropNameLists {
+    /// The key `list` is filed under; `None`, leaving it inline, when its
+    /// hash already keys another list.
+    pub fn intern(&mut self, list: PropNameList) -> Option<String> {
+        let key = format!("{:08x}", crate::ids::fnv1a_json(crate::ids::FNV_OFFSET, &list) as u32);
+        match self.0.entry(key) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                let key = entry.key().clone();
+                entry.insert(list);
+                Some(key)
+            }
+            std::collections::btree_map::Entry::Occupied(entry) => (*entry.get() == list).then(|| entry.key().clone()),
+        }
+    }
+}
+
+/// The export of the shared list keyed `key`.
+pub fn prop_name_list_export(key: &str) -> String {
+    format!("systemPropNames_{key}")
+}
+
 /// A config's `systemPropNames`, each at its first position: its groups'
 /// lists, then the other names.
 fn prop_walk(p: &ReplacementPayload, group_registry: &FxHashMap<String, Vec<String>>) -> Vec<String> {
@@ -56,9 +107,26 @@ pub(crate) fn superseded_props(
         p.custom_prop_class_map.as_ref().is_some_and(|cpm| cpm.contains_key(name))
             || p.custom_dynamic_config.as_ref().is_some_and(|cdc| cdc.contains_key(name))
     };
-    let mut writes: Vec<(usize, String, BTreeSet<&str>)> = prop_walk(p, group_registry)
-        .into_iter()
-        .filter(|name| !custom(name))
+    let names = prop_walk(p, group_registry).into_iter().filter(|name| !custom(name));
+    supersession(names, config, prop_order)
+}
+
+/// `superseded_props` over every system prop: a component's table is this
+/// one narrowed to the system props it lists and does not own, which the
+/// runtime does once per component.
+pub(crate) fn system_superseded_props(
+    config: &PropConfigMap,
+    prop_order: &FxHashMap<String, usize>,
+) -> BTreeMap<String, Vec<String>> {
+    supersession(config.keys().cloned(), config, prop_order)
+}
+
+fn supersession(
+    names: impl Iterator<Item = String>,
+    config: &PropConfigMap,
+    prop_order: &FxHashMap<String, usize>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut writes: Vec<(usize, String, BTreeSet<&str>)> = names
         .filter_map(|name| {
             let prop = config.get(&name).filter(|prop| prop.declaration_binding().is_none())?;
             let properties = prop.css_properties().iter().map(String::as_str).chain(prop.current_var.as_deref());
@@ -204,32 +272,32 @@ pub(super) fn build_config(
         return Ok(config.render());
     };
 
-    if !p.system_group_names.is_empty() {
-        let mut concat_parts: Vec<String> = p
-            .system_group_names
-            .iter()
-            .map(|g| format!("{}.{}", names.system_prop_groups, g))
-            .collect();
-        let extra_names = extra_prop_names(p, group_registry);
-        if !extra_names.is_empty() {
-            concat_parts.push(json!(extra_names).to_string());
+    match (&p.prop_names_key, prop_name_list(p, group_registry)) {
+        (Some(key), _) => config.insert("systemPropNames", Field::Script(names.prop_name_list(key).to_string())),
+        (None, Some(list)) if list.groups.is_empty() => config.insert("systemPropNames", json!(list.names)),
+        (None, Some(list)) => {
+            config.insert("systemPropNames", Field::Script(render_prop_name_list(&list, &names.system_prop_groups.to_string())))
         }
-        config.insert(
-            "systemPropNames",
-            Field::Script(format!("[].concat({})", concat_parts.join(","))),
-        );
-    } else if !p.system_prop_names.is_empty() {
-        config.insert("systemPropNames", json!(p.system_prop_names));
+        (None, None) => {}
     }
 
+    // The system's one table, which the runtime narrows to this component.
     if !p.superseded_by.is_empty() {
-        config.insert("supersededBy", json!(p.superseded_by));
+        config.insert("supersededBy", Field::Script(names.superseded_by.to_string()));
     }
 
     if let Some(ref cpm) = p.custom_prop_class_map {
-        let sorted_cpm: BTreeMap<&String, BTreeMap<&String, &String>> =
-            cpm.iter().map(|(k, v)| (k, v.iter().collect())).collect();
-        config.insert("customPropMap", json!(sorted_cpm));
+        // A prop without classes is listed so the runtime treats it as the
+        // component's own; one with a dynamic entry already is.
+        let dynamic = |prop: &String| p.custom_dynamic_config.as_ref().is_some_and(|cdc| cdc.contains_key(prop));
+        let sorted_cpm: BTreeMap<&String, BTreeMap<&String, &String>> = cpm
+            .iter()
+            .filter(|(prop, classes)| !classes.is_empty() || !dynamic(prop))
+            .map(|(k, v)| (k, v.iter().collect()))
+            .collect();
+        if !sorted_cpm.is_empty() {
+            config.insert("customPropMap", json!(sorted_cpm));
+        }
     }
 
     if !p.typed_custom_props.is_empty() {
@@ -328,6 +396,16 @@ pub(super) fn build_config(
     }
 
     Ok(config.render())
+}
+
+/// A list with groups as source: their lists, read from `groups`, then its
+/// other names.
+pub fn render_prop_name_list(list: &PropNameList, groups: &str) -> String {
+    let mut parts: Vec<String> = list.groups.iter().map(|g| format!("{groups}.{g}")).collect();
+    if !list.names.is_empty() {
+        parts.push(json!(list.names).to_string());
+    }
+    format!("[].concat({})", parts.join(","))
 }
 
 /// A table the system-props module's `animusTables` export holds under

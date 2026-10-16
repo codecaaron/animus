@@ -435,7 +435,9 @@ export const App = (props) => <><C {...props} /><Wrap p="sm" /><Box p={8} /><S q
   expect(replacement('C')).toMatch(
     /"customDynamicConfig":\{"p":\{[^}]*"strict":true[^}]*"scaleValues":\{"sm":"1px"\}/
   );
-  expect(replacement('C')).toMatch(/"customPropMap":\{"p":\{\}/);
+  // The dynamic entry marks `p` as the component's own; no empty class map
+  // repeats it.
+  expect(replacement('C')).not.toContain('"customPropMap"');
   expect(replacement('S')).not.toContain('customDynamicConfig');
 });
 

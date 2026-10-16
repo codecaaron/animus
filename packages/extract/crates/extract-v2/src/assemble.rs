@@ -17,7 +17,8 @@ mod config;
 mod source_edit;
 
 use config::build_config;
-pub(crate) use config::superseded_props;
+pub use config::{prop_name_list_export, render_prop_name_list, PropNameList, PropNameLists};
+pub(crate) use config::{prop_name_list, superseded_props, system_superseded_props};
 
 pub use source_edit::{
     consumed_import_removals, directive_and_imports, directive_prefix_and_body,
@@ -64,6 +65,9 @@ pub struct ReplacementPayload {
     /// The name scope of the component's custom slots
     /// (`css::slot_names`), present when it has any.
     pub slot_scope: Option<String>,
+    /// The key of the shared `systemPropNames` list the config references
+    /// (`PropNameLists`); absent, the list is inline.
+    pub prop_names_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -105,13 +109,16 @@ pub struct GeneratedNames {
     pub dynamic_prop_config: GeneratedName,
     pub transforms: GeneratedName,
     pub animus_tables: GeneratedName,
+    pub superseded_by: GeneratedName,
+    /// Each shared `systemPropNames` list the module references, by key.
+    prop_name_lists: FxHashMap<String, GeneratedName>,
 }
 
 /// One generated import: the export it reads and the local name the module
 /// binds it to, which is what generated code writes.
 #[derive(Debug, Clone)]
 pub struct GeneratedName {
-    export: &'static str,
+    export: String,
     local: String,
 }
 
@@ -132,36 +139,54 @@ impl GeneratedNames {
     /// Each export under its own name, for replacement text no module
     /// surrounds.
     pub fn exports() -> Self {
-        Self::chosen(|name| name.to_string())
+        Self::chosen(|name| name.to_string(), [])
     }
 
     /// Names that no identifier in `source` spells once its Unicode escapes
     /// are decoded: `createComponent\u00241` binds `createComponent$1`, and
-    /// leaves `createComponent` free.
-    pub fn free_in(source: &str) -> Self {
+    /// leaves `createComponent` free; for the fixed exports and the shared
+    /// lists keyed `list_keys`.
+    pub fn free_in<'a>(source: &str, list_keys: impl IntoIterator<Item = &'a String>) -> Self {
         let source = decode_unicode_escapes(source);
-        Self::chosen(|name| {
-            std::iter::once(name.to_string())
-                .chain((1..).map(|n| format!("{name}${n}")))
-                .find(|candidate| !spells_identifier(&source, candidate))
-                .expect("an unbounded sequence has a free name")
-        })
+        Self::chosen(
+            |name| {
+                std::iter::once(name.to_string())
+                    .chain((1..).map(|n| format!("{name}${n}")))
+                    .find(|candidate| !spells_identifier(&source, candidate))
+                    .expect("an unbounded sequence has a free name")
+            },
+            list_keys,
+        )
     }
 
-    fn chosen(local: impl Fn(&str) -> String) -> Self {
-        let local = |export: &'static str| GeneratedName { export, local: local(export) };
+    fn chosen<'a>(local: impl Fn(&str) -> String, list_keys: impl IntoIterator<Item = &'a String>) -> Self {
+        let name = |export: String| GeneratedName { local: local(&export), export };
         Self {
-            create_component: local("createComponent"),
-            create_class_resolver: local("createClassResolver"),
-            create_composed_family: local("createComposedFamily"),
-            create_composed_family_with_context: local("createComposedFamilyWithContext"),
-            system_prop_map: local("systemPropMap"),
-            system_prop_groups: local("systemPropGroups"),
-            typed_system_props: local("typedSystemProps"),
-            dynamic_prop_config: local("dynamicPropConfig"),
-            transforms: local("transforms"),
-            animus_tables: local("animusTables"),
+            create_component: name("createComponent".into()),
+            create_class_resolver: name("createClassResolver".into()),
+            create_composed_family: name("createComposedFamily".into()),
+            create_composed_family_with_context: name("createComposedFamilyWithContext".into()),
+            system_prop_map: name("systemPropMap".into()),
+            system_prop_groups: name("systemPropGroups".into()),
+            typed_system_props: name("typedSystemProps".into()),
+            dynamic_prop_config: name("dynamicPropConfig".into()),
+            transforms: name("transforms".into()),
+            animus_tables: name("animusTables".into()),
+            superseded_by: name("supersededBy".into()),
+            prop_name_lists: list_keys
+                .into_iter()
+                .map(|key| (key.clone(), name(config::prop_name_list_export(key))))
+                .collect(),
         }
+    }
+
+    /// The import of the shared list keyed `key`: the one `free_in` chose,
+    /// or the export's own name.
+    pub fn prop_name_list(&self, key: &str) -> GeneratedName {
+        self.prop_name_lists.get(key).cloned().unwrap_or_else(|| {
+            let export = config::prop_name_list_export(key);
+            GeneratedName { local: export.clone(), export }
+        })
     }
 }
 

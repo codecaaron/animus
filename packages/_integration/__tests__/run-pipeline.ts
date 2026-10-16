@@ -91,11 +91,28 @@ export function transformFile(path: string, source: string) {
   return engineApi().transformFile(source, path, '');
 }
 
-/** `code` with each shared-table reference, `animusTables.<table>["<key>"]`,
- *  replaced by the table it names, as the runtime reads it. */
+/** `code` with each reference to shared system-props data replaced by the
+ *  value it names, as the runtime reads it: a table,
+ *  `animusTables.<table>["<key>"]`; a prop-name list, `systemPropNames_<key>`
+ *  (one with groups reads `systemPropGroups`); the `supersededBy` table. */
 export function inlineTables(manifest: ProjectManifest, code: string): string {
   const tables = manifest.runtime_tables;
-  return code.replace(
+  const lists = manifest.prop_name_lists ?? {};
+  const shared = code
+    .replace(/\bsystemPropNames_([0-9a-f]{8})\b/g, (reference, key: string) => {
+      const list = lists[key];
+      if (list === undefined)
+        throw new Error(`no shared list for ${reference}`);
+      const names = JSON.stringify(list.names ?? []);
+      return list.groups?.length
+        ? `[].concat(${[...list.groups.map((g) => `systemPropGroups.${g}`), names].join(',')})`
+        : names;
+    })
+    .replace(
+      /:supersededBy\b/g,
+      `:${JSON.stringify(manifest.superseded_by ?? {})}`
+    );
+  return shared.replace(
     /animusTables\.(scaleValues|keywords|declarationScaleValues)\[("(?:[^"\\]|\\.)*")\]/g,
     (reference, table: string, literal: string) => {
       const key = String(JSON.parse(literal));

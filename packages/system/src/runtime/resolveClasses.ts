@@ -27,7 +27,9 @@ export interface ClassResolverConfig {
   /** System prop → the props the system defines after it that write every
    *  property it writes. Of props that one element sets on one CSS
    *  property, the later-defined takes effect, so a superseded prop applies
-   *  no class and no slot value. */
+   *  no class and no slot value. An extracted config references the
+   *  system's one table, which `withDerivedNames` narrows to the system
+   *  props the component lists and does not own. */
   supersededBy?: Record<string, readonly string[]>;
   /** Set only by a builder terminal that ran without Animus compiling it:
    *  what each render of the component reports. */
@@ -870,7 +872,9 @@ export type ResolvedConfig = Omit<
  * `--{prefix}-{segment}{scope}` and class `{prefix}-dyn-{segment}{scope}`.
  * Each admitted prop is named once, at its first position: an extracted
  * config lists every admitted group's props, and groups can share one, as
- * flexbox and grid share `alignItems`.
+ * flexbox and grid share `alignItems`. `supersededBy` keeps only the
+ * system props the component lists and does not own, as the extractor's
+ * `superseded_props` does.
  */
 export function withDerivedNames(
   className: string,
@@ -890,6 +894,21 @@ export function withDerivedNames(
   };
   if (unique && unique.length !== names.length) {
     resolved.systemPropNames = unique;
+  }
+  if (config.supersededBy) {
+    const listed = new Set(unique);
+    const custom = (prop: string) =>
+      config.customPropMap?.[prop] !== undefined ||
+      dynamic?.[prop] !== undefined;
+    const own: Record<string, readonly string[]> = {};
+    for (const prop of listed) {
+      if (custom(prop)) continue;
+      const later = config.supersededBy[prop]?.filter(
+        (name) => listed.has(name) && !custom(name)
+      );
+      if (later?.length) own[prop] = later;
+    }
+    resolved.supersededBy = own;
   }
   if (dynamic && scope) {
     const [prefix, suffix] = scope;

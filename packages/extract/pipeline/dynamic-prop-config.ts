@@ -41,6 +41,12 @@ export interface RuntimeTables {
   >;
 }
 
+/** A config's `systemPropNames`: its groups' lists, then its other names. */
+export interface PropNameList {
+  groups?: readonly string[];
+  names?: readonly string[];
+}
+
 interface DeclarationPropMeta {
   kind: 'declarations';
   slotClass: string;
