@@ -9,11 +9,11 @@
  * an attribute the component does not accept, a prop its target receives as
  * written (`data-*`, `aria-*`, a variant or state an `.asComponent()` target
  * is forwarded), or a spread stays where it is: each run of the other
- * accepted props between them is ordered on its own. A fix
- * is offered only where moving props cannot change what the tag evaluates:
- * every value literal, no comment inside the tag, no repeated prop, and no
- * `as` or `asChild`. A missing, stale or unreadable prop-order file is
- * reported when that changes, and nothing is ordered until it is usable. A
+ * accepted props between them is ordered on its own. A fix is offered only
+ * where moving props cannot change what the tag evaluates: every value in
+ * a run it reorders literal, no comment inside the tag, no repeated prop,
+ * and no `as` or `asChild`. A missing, stale or unreadable prop-order file
+ * is reported when that changes, and nothing is ordered until it is usable. A
  * file any of the rule's own fixes rewrote still matches the analysis that
  * read it: reordering those props changes nothing the analysis records.
  */
@@ -40,6 +40,10 @@ import {
 
 import type { PropOrderFile } from '../session/prop-order';
 import type { Context, ESTree, Fixer } from '@oxlint/plugins';
+
+/** The order the rule asks for, as its messages name it. */
+const PROP_ORDER =
+  "Animus's prop order (variants, then states, then system props, then custom props)";
 
 /** How to get a usable file: `animus prop-order` ships only in the CLI
  *  package, which a project that builds through a plugin may not have. */
@@ -452,9 +456,10 @@ function isLiteralValue(value: ESTree.JSXAttributeValue | null): boolean {
   );
 }
 
-/** Why a tag's props may not be moved, or null when they may. */
+/** Why a tag's `runs` may not be reordered, or null when they may. */
 function fixBlocker(
   node: ESTree.JSXOpeningElement,
+  runs: readonly Run[],
   context: Context
 ): string | null {
   if (context.sourceCode.getCommentsInside(node).length > 0) {
@@ -465,11 +470,15 @@ function fixBlocker(
   if (names.includes('asChild')) return '`asChild`';
   const written = names.filter((name) => name !== null);
   if (new Set(written).size !== written.length) return 'a repeated prop';
-  const nonLiteral = node.attributes.some(
-    (attribute) =>
-      attribute.type === 'JSXAttribute' && !isLiteralValue(attribute.value)
+  // Moving a value past another expression can change the order they
+  // evaluate in, so any non-literal in a run the fix reorders blocks it; one
+  // that stays put, or sits in a run already in order, cannot.
+  const moving = runs.some((run) =>
+    run.written.some(({ attribute }) => !isLiteralValue(attribute.value))
   );
-  return nonLiteral ? 'a non-literal value' : null;
+  return moving
+    ? 'a non-literal value among the props the fix would move'
+    : null;
 }
 
 /** One accepted prop as written. */
@@ -534,8 +543,7 @@ export const propOrderRule = defineRule({
     type: 'layout',
     fixable: 'code',
     docs: {
-      description:
-        "Order an Animus component's props by stage, then by the system's registration order.",
+      description: `Order an Animus component's props in ${PROP_ORDER}.`,
     },
     schema: [
       {
@@ -564,8 +572,8 @@ export const propOrderRule = defineRule({
         const expected = runs
           .map((run) => run.ordered.map(({ name }) => name).join(', '))
           .join('; ');
-        const message = `Order <${tag}>'s props by stage (variants, states, system, custom), then the system's order: ${expected}.`;
-        const blocker = fixBlocker(node, context);
+        const message = `Order <${tag}>'s props in ${PROP_ORDER}: ${expected}.`;
+        const blocker = fixBlocker(node, runs, context);
         if (blocker !== null) {
           context.report({
             node,
