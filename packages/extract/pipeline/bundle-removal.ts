@@ -12,33 +12,47 @@ function classStem(name: string): string {
   return stem > 0 ? name.slice(0, stem) : name;
 }
 
+/** A class name a scan can prove absent: one only ASCII letters, digits,
+ *  `_` and `-` spell, which no output escapes. */
+const PROVABLE_NAME = /^[A-Za-z0-9_-]+$/;
+
 /**
- * Which of `classNames` the build's output names, itself or through a name
- * derived from it (`{class}--size-sm`): each output text is searched for
- * the classes' prefixes (`animus-`, a `shortClassNames` prefix), and each
- * whole token found there read once.
+ * Which of `classNames` the build's output may name: each one whose exact
+ * spelling occurs anywhere in an output text, and each one the scan cannot
+ * prove absent. A name with any other character (`Café`, `$Box`) may be
+ * spelled escaped (`\u00e9`, `\$`, `&#233;`, `%C3%A9`), so it always
+ * counts as named. Every occurrence of a name starts with its prefix
+ * (`animus-`, a `shortClassNames` prefix), so only the text there is read.
  */
 export function shippedClasses(
   texts: Iterable<string>,
   classNames: Iterable<string>
 ): Set<string> {
-  const candidates = new Set(classNames);
-  const prefixes = new Set(
-    [...candidates].map((name) => name.slice(0, name.indexOf('-') + 1))
-  );
   const shipped = new Set<string>();
-  const token = /[\w-]*/y;
+  const lengths = new Map<string, Set<number>>();
+  const candidates = new Set<string>();
+  for (const name of classNames) {
+    if (!PROVABLE_NAME.test(name)) {
+      shipped.add(name);
+      continue;
+    }
+    candidates.add(name);
+    const prefix = name.slice(0, name.indexOf('-') + 1);
+    let known = lengths.get(prefix);
+    if (known === undefined) lengths.set(prefix, (known = new Set()));
+    known.add(name.length);
+  }
   for (const text of texts) {
-    for (const prefix of prefixes) {
+    for (const [prefix, sizes] of lengths) {
       for (
         let at = text.indexOf(prefix);
-        at !== -1 && shipped.size < candidates.size;
-        at = text.indexOf(prefix, at + prefix.length)
+        at !== -1;
+        at = text.indexOf(prefix, at + 1)
       ) {
-        if (at > 0 && /[\w-]/.test(text[at - 1]!)) continue;
-        token.lastIndex = at;
-        const name = classStem(token.exec(text)![0]);
-        if (candidates.has(name)) shipped.add(name);
+        for (const size of sizes) {
+          const name = text.slice(at, at + size);
+          if (candidates.has(name)) shipped.add(name);
+        }
       }
     }
   }

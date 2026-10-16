@@ -68,12 +68,9 @@ describe('unbundledComponents', () => {
       'a::Parent': component('Parent', 'c-parent', 'a::Root'),
       'a::Child': component('Child', 'c-child', 'a::Parent'),
       'a::Gone': component('Gone', 'c-gone'),
-      'a::Prefixed': component('Prefixed', 'c-gone2'),
     };
     const shipped = shippedClasses(
-      [
-        'z(Tag,"c-shipped",{}); x=`${"c-derived--size-sm"}`; y("c-child"); "abc-gone2"',
-      ],
+      ['z(Tag,"c-shipped",{}); x=`${"c-derived--size-sm"}`; y("c-child")'],
       Object.values(components).map((c) => c.class_name)
     );
     const removed = unbundledComponents(
@@ -81,7 +78,7 @@ describe('unbundledComponents', () => {
       shipped,
       new Set(['Forced'])
     );
-    expect([...removed.keys()]).toEqual(['a::Gone', 'a::Prefixed']);
+    expect([...removed.keys()]).toEqual(['a::Gone']);
   });
 });
 
@@ -102,5 +99,31 @@ describe('unbundledComponents by class', () => {
       new Set()
     );
     expect([...removed.keys()]).toEqual(['a::Gone']);
+  });
+});
+
+describe('shippedClasses', () => {
+  // Contract: removal keeps any candidate whose literal it cannot prove
+  // absent: a name found anywhere in the output, even inside a longer
+  // token, and a name with a character an output may escape (`é`, `$`),
+  // found or not.
+  test('removal keeps any candidate whose literal it cannot prove absent', () => {
+    const names = [
+      'animus-Café-a20deb9c',
+      'animus-$Box-5ad1e15c',
+      'animus-Inside-11111111',
+      'animus-Gone-22222222',
+    ];
+    const shipped = shippedClasses(
+      ['x="xanimus-Inside-11111111z"; y=`animus-Caf\\u00e9-a20deb9c`'],
+      names
+    );
+    expect([...shipped].sort()).toEqual(
+      [
+        'animus-$Box-5ad1e15c',
+        'animus-Café-a20deb9c',
+        'animus-Inside-11111111',
+      ].sort()
+    );
   });
 });
