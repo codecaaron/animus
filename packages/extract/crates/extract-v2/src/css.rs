@@ -1493,8 +1493,8 @@ pub const CSS_WIDE_KEYWORDS: [&str; 5] = ["initial", "inherit", "unset", "revert
 
 /// Rule kinds within one condition of a layer: declaration consuming rules
 /// precede atomic rules, so a same-condition atomic outranks a declaration.
-pub(crate) const DECLARATION_RULE: u8 = 0;
-pub(crate) const ATOMIC_RULE: u8 = 1;
+const DECLARATION_RULE: u8 = 0;
+const ATOMIC_RULE: u8 = 1;
 
 /// Each rule orders by its readable name, which a short utility name keeps
 /// as its key, so the cascade is the same under either.
@@ -1540,7 +1540,7 @@ fn render_utility_layer(
     // (`utility_rule_key`; the border sides precede its aspects). The
     // condition, then the rule kind, order the rest: a breakpoint
     // declaration still follows a base atomic rule. The prop-order file
-    // ranks system props by the same key and kind (`authoring_rank`).
+    // ranks system props by the same key (`authoring_rank`).
     entries.sort_by_cached_key(|(kind, key, _, styles)| {
         let declarations = match styles.breakpoint_groups().next() {
             Some((_, decls)) if styles.declarations.is_empty() => decls,

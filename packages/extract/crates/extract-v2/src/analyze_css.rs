@@ -18934,8 +18934,9 @@ export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} 
     /// which it supersedes though its rule precedes `pt`'s. The last cases
     /// register their props in the order written: `c`, `a`, `b` apply in a
     /// cycle once `b` supersedes `a`; `d`'s consuming rule precedes `h`'s
-    /// atomic one; the class names, so the values, order `a` and `b`'s rules,
-    /// and `--x` is left out for a value reading it.
+    /// atomic one at one condition but follows a base one from a breakpoint;
+    /// the class names, so the values, order `a` and `b`'s rules, and `--x`
+    /// is left out for a value reading it.
     /// Contract: a component's authoring order is its variant props, its
     /// states, its system props in the system's registration order (not its
     /// groups' order) except that a shorthand ranks before every longhand it
@@ -19065,9 +19066,8 @@ export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} 
         assert_eq!(ranks, ranked(&[("c", 0), ("a", 0), ("b", 0)]));
         let declaration = r#"{"h": {"property": "height"}, "d": {"kind": "declarations", "scale": "single", "members": ["height"]}}"#;
         let scales = r#"{"single": {"kind": "declarations", "members": ["height"], "values": {"loud": {"height": "33px"}}}}"#;
-        let (ranks, css) = case(declaration, r#"["h", "d"]"#, r#"<Box h="11px" d="loud" />"#, Some(scales));
-        assert_eq!(ranks, ranked(&[("d", 0), ("h", 1)]));
-        assert!(emitted_before(&css, "height: var(", "height: 11px"), "{css}");
+        let (ranks, _) = case(declaration, r#"["h", "d"]"#, r#"<Box h="11px" d="loud" />"#, Some(scales));
+        assert_eq!(ranks, ranked(&[("h", 0), ("d", 0)]));
         let classes = r#"{"a": {"property": "height", "properties": ["height", "width"]},
             "b": {"property": "height", "properties": ["height", "maxWidth"]}}"#;
         let (ranks, _) = case(classes, r#"["a", "b"]"#, r#"<Box a="1px" b="2px" />"#, None);

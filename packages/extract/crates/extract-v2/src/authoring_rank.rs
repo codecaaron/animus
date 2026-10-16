@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
 use rustc_hash::FxHashMap;
 
-use crate::css::{ATOMIC_RULE, DECLARATION_RULE};
 use crate::declarations::{reset_set, utility_rule_key};
 use crate::property_names::ContextualVarsMap;
 use crate::theme::PropConfigMap;
@@ -26,40 +25,39 @@ enum Applies {
 }
 
 /// A utility rule a prop can emit: the properties it resets, and its place
-/// among the system layer's rules of one condition.
+/// among the system layer's rules. Where two places are equal, the rules'
+/// conditions or class names, so their values, order them: a declaration's
+/// consuming rule precedes the atomic rules of its condition but follows a
+/// base one from a breakpoint.
 struct Rule {
     resets: BTreeSet<String>,
-    place: ((usize, Reverse<usize>, String), u8),
+    place: (usize, Reverse<usize>, String),
 }
 
 impl Rule {
-    fn new(properties: &[&str], kind: u8) -> Self {
+    fn new(properties: &[&str]) -> Self {
         let resets = reset_set(properties.iter().copied()).into_iter().map(str::to_string).collect();
-        Rule { resets, place: (utility_rule_key(properties), kind) }
+        Rule { resets, place: utility_rule_key(properties) }
     }
 }
 
 /// The rules a prop's values can emit: a declaration prop's consuming rule
-/// per member, which precedes the atomic rules of its condition, or a value
-/// prop's one rule, with its current variable and, for a value that reads
+/// per member, or a value prop's one rule, with its current variable and, for a value that reads
 /// it (`writes_current_var`), without.
 fn rules(name: &str, config: &PropConfigMap, contextual_vars: &ContextualVarsMap) -> Vec<Rule> {
     let Some(prop) = config.get(name) else {
         return Vec::new();
     };
     if let Some(binding) = prop.declaration_binding() {
-        let member = |member: &crate::declarations::DeclarationMember| {
-            Rule::new(&[member.css_property.as_str()], DECLARATION_RULE)
-        };
-        return binding.members.iter().map(member).collect();
+        return binding.members.iter().map(|member| Rule::new(&[member.css_property.as_str()])).collect();
     }
     let properties = prop.emitted_properties(contextual_vars);
     let mut emitted: Vec<&str> = properties.iter().map(String::as_str).collect();
-    let mut rules = vec![Rule::new(&emitted, ATOMIC_RULE)];
+    let mut rules = vec![Rule::new(&emitted)];
     if let Some(current_var) = &prop.current_var {
         let current_var = contextual_vars.emitted_property(current_var);
         emitted.push(&current_var);
-        rules.push(Rule::new(&emitted, ATOMIC_RULE));
+        rules.push(Rule::new(&emitted));
     }
     rules
 }
@@ -75,7 +73,6 @@ fn applies(a: &[Rule], b: &[Rule]) -> Option<Applies> {
         let outcome = match ra.place.cmp(&rb.place) {
             Ordering::Less => Applies::Before,
             Ordering::Greater => Applies::After,
-            // The rules' class names decide, which their values make.
             Ordering::Equal => Applies::Either,
         };
         found = Some(match found {
