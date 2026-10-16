@@ -1866,6 +1866,71 @@ mod tests {
         serde_json::from_str(&result).unwrap()
     }
 
+    /// Contract: every component a production analysis emits CSS for is
+    /// named, in its file's transformed code, by its class as a string
+    /// literal: plain, extended, `asComponent`, `asClass`, a compose
+    /// family's slots, one whose compound and slot names the runtime
+    /// derives from its class, short class names, and an installed kit's
+    /// prebuilt definitions. A build's removal of components no output file
+    /// names (`removeUnbundledComponents`) reads that literal as the only way
+    /// the class enters a page.
+    #[test]
+    fn every_definition_passes_its_class_name_as_a_literal() {
+        let files = serde_json::json!([
+            {
+                "path": "app.tsx",
+                "source": "import { compose } from '@animus-ui/system';\n\
+                    const Link = (props) => <a {...props} />;\n\
+                    export const Box = ds.styles({ display: 'flex' }).asElement('div');\n\
+                    export const Ext = Box.extend().styles({ display: 'grid' }).asElement('section');\n\
+                    export const Anchor = ds.styles({ display: 'block' }).asComponent(Link);\n\
+                    export const cls = ds.styles({ display: 'inline' }).asClass();\n\
+                    export const Derived = ds.styles({ display: 'flex' })\n\
+                      .variant({ prop: 'size', variants: { sm: { display: 'grid' }, lg: { display: 'block' } } })\n\
+                      .states({ active: { display: 'inline' } })\n\
+                      .compound({ size: 'sm', active: true }, { display: 'contents' })\n\
+                      .props({ tone: { property: 'color' } })\n\
+                      .asElement('div');\n\
+                    const Root = ds.styles({ display: 'flex' }).asElement('div');\n\
+                    const Body = ds.styles({ display: 'grid' }).asElement('div');\n\
+                    export const Card = compose({ Root, Body }, { name: 'Card' });\n\
+                    export const App = () => <><Box /><Ext /><Anchor /><Derived size={x} active tone={y} /><Card.Root><Card.Body /></Card.Root><div className={cls()} /></>;\n",
+            },
+            {
+                "path": "node_modules/kit/dist/index.js",
+                "source": "export const KitButton = ds.styles({ display: 'flex' }).variant({ prop: 'size', variants: { sm: { display: 'grid' } } }).asElement('button');\n",
+            },
+        ])
+        .to_string();
+        for short in [None, Some("x")] {
+            let mut engine = ExtractEngine::new(Some(EngineOptions {
+                dev_mode: Some(false),
+                short_class_prefix: short.map(str::to_string),
+                external_dirs_json: Some(r#"["node_modules/kit"]"#.to_string()),
+                ..Default::default()
+            }))
+            .unwrap();
+            let manifest: serde_json::Value =
+                serde_json::from_str(&engine.analyze(files.clone(), None).unwrap()).unwrap();
+            let components = manifest["components"].as_object().unwrap();
+            let ids: Vec<&String> = components.keys().collect();
+            for expected in ["::Box", "::Ext", "::Anchor", "::cls", "::Derived", "::Root", "::Body", "::KitButton"] {
+                assert!(ids.iter().any(|id| id.ends_with(expected)), "{expected} missing from {ids:?}");
+            }
+            for (id, component) in components {
+                let class = component["class_name"].as_str().unwrap();
+                let file = component["file"].as_str().unwrap();
+                let result: serde_json::Value =
+                    serde_json::from_str(&engine.transform_file(file.to_string()).unwrap()).unwrap();
+                let code = result["code"].as_str().unwrap();
+                assert!(
+                    code.contains(&format!("'{class}'")) || code.contains(&format!("\"{class}\"")),
+                    "{id} ({class}, short {short:?}) has no class literal in:\n{code}"
+                );
+            }
+        }
+    }
+
     fn transform_source(source: &str) -> String {
         transform_result(source)["code"]
             .as_str()
