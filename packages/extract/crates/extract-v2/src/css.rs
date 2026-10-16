@@ -1483,20 +1483,29 @@ pub const CSS_WIDE_KEYWORDS: [&str; 5] = ["initial", "inherit", "unset", "revert
 const DECLARATION_RULE: u8 = 0;
 const ATOMIC_RULE: u8 = 1;
 
+/// Each rule orders by its readable name, which a short utility name keeps
+/// as its key, so the cascade is the same under either.
 fn render_utility_layer(
     seen: FxHashMap<String, (String, ResolvedStyles)>,
     breakpoints: &BreakpointMap,
-    layer_name: &str,
+    (layer_name, namespace): (&str, &str),
     slot_entries: Option<Vec<(String, ResolvedStyles, String)>>,
     declarations: &DeclarationUsage,
     class_prefix: &str,
 ) -> String {
-    let mut entries: Vec<(u8, String, ResolvedStyles)> =
-        seen.into_values().map(|(name, styles)| (ATOMIC_RULE, name, styles)).collect();
+    let readable = UtilityNaming { class_prefix, short: None };
+    let mut entries: Vec<(u8, String, String, ResolvedStyles)> = seen
+        .into_iter()
+        .map(|(canonical, (name, styles))| (ATOMIC_RULE, readable.name(namespace, &canonical), name, styles))
+        .collect();
     for (slot_class, slot_styles, _slot_css_prop) in slot_entries.into_iter().flatten() {
-        entries.push((ATOMIC_RULE, slot_class, slot_styles));
+        entries.push((ATOMIC_RULE, slot_class.clone(), slot_class, slot_styles));
     }
-    entries.extend(declaration_consuming_rules(declarations, breakpoints, class_prefix));
+    entries.extend(
+        declaration_consuming_rules(declarations, breakpoints, class_prefix)
+            .into_iter()
+            .map(|(kind, name, styles)| (kind, name.clone(), name, styles)),
+    );
     let binding_classes = render_binding_classes(declarations, class_prefix);
 
     let mut css = String::new();
@@ -1520,7 +1529,7 @@ fn render_utility_layer(
     // (the border sides before its aspects), then the first property each
     // declares. The condition, then the rule kind, order the rest: a
     // breakpoint declaration still follows a base atomic rule.
-    entries.sort_by_cached_key(|(kind, name, styles)| {
+    entries.sort_by_cached_key(|(kind, key, _, styles)| {
         let declarations = match styles.breakpoint_groups().next() {
             Some((_, decls)) if styles.declarations.is_empty() => decls,
             _ => &styles.declarations,
@@ -1528,9 +1537,9 @@ fn render_utility_layer(
         let resets = crate::declarations::reset_set(declarations.iter().map(|d| d.property.as_str()));
         let rank = resets.iter().filter_map(|property| crate::declarations::shorthand_rank(property)).min();
         let first = declarations.first().map(|d| d.property.clone()).unwrap_or_default();
-        (rank.unwrap_or(usize::MAX), Reverse(resets.len()), first, bp_order(styles), *kind, name.clone())
+        (rank.unwrap_or(usize::MAX), Reverse(resets.len()), first, bp_order(styles), *kind, key.clone())
     });
-    for (_, class_name, styles) in &entries {
+    for (_, _, class_name, styles) in &entries {
         write_utility_rule(&mut css, class_name, styles, breakpoints);
     }
     writeln!(css, "}}").unwrap();
@@ -1682,7 +1691,7 @@ impl ResolvedUtilities {
         let css = render_utility_layer(
             self.seen,
             breakpoints,
-            &layer_name("system"),
+            (&layer_name("system"), SYSTEM_UTILITY_NAMESPACE),
             slot_entries,
             &self.declarations,
             &self.class_prefix,
@@ -1812,7 +1821,7 @@ impl ResolvedCustomUtilities {
         let css = render_utility_layer(
             self.seen,
             breakpoints,
-            &layer_name("custom"),
+            (&layer_name("custom"), CUSTOM_UTILITY_NAMESPACE),
             slot_entries,
             &self.declarations,
             &self.class_prefix,

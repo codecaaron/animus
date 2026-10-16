@@ -14701,6 +14701,35 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(reported(true), vec![]);
     }
 
+    /// Contract: short names emit utility rules in the same order as
+    /// readable names, so the cascade is unchanged: the short CSS, each name
+    /// mapped back to its readable one, is the readable CSS.
+    #[test]
+    fn short_names_keep_the_readable_rule_order() {
+        let source = "export const Box = ds.system({ space: true }).asElement('div');\n\
+                      export const cls = ds.system({ space: true }).asClass();\n\
+                      export const App = () => <><Box p=\"1px\" className={cls({ p: '3px' })} /><Box p=\"3px\" /></>;\n";
+        let readable = analyze(&[("app.tsx", source)], &test_inputs());
+        let mut inputs = test_inputs();
+        inputs.set_short_class_prefix(Some("app")).unwrap();
+        let short = analyze(&[("app.tsx", source)], &inputs);
+        let mut names: FxHashMap<String, String> = FxHashMap::default();
+        for (prop, keys) in &short.system_prop_map {
+            for (key, name) in keys {
+                names.insert(name.clone(), readable.system_prop_map[prop][key].clone());
+            }
+        }
+        for (id, component) in &short.components {
+            names.insert(component.class_name.clone(), readable.components[id].class_name.clone());
+        }
+        let token = regex::Regex::new(r"\.(app[-_][a-z0-9_]+?)(--|\b)").unwrap();
+        let mapped = token.replace_all(&short.css, |found: &regex::Captures| {
+            format!(".{}{}", names.get(&found[1]).unwrap_or_else(|| panic!("unmapped {}", &found[1])), &found[2])
+        });
+        assert!(short.css.contains(".app_"), "{}", short.css);
+        assert_eq!(mapped, readable.css);
+    }
+
     /// Contract: a tag proven foreign (imported from a package with no
     /// dependency path to Animus, and handed no component) leaves usage
     /// identity certain: it gets no record, and whole-component removal

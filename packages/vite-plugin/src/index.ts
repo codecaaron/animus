@@ -199,8 +199,9 @@ export interface AnimusExtractOptions {
   /** Production names each component and utility class by a short stable
    *  id under `prefix` (a letter, then letters and digits): `{prefix}-{id}`
    *  and `{prefix}_{id}`. Each id derives from what the readable name hashes,
-   *  so an added component renames no other, and variant, compound, state
-   *  and breakpoint suffixes are kept. Development keeps the readable names.
+   *  so an added component renames no other, except in the rare case that
+   *  its 32-bit id collides with one, when both take 64-bit ids. Variant,
+   *  compound, state and breakpoint suffixes are kept. Development keeps the readable names.
    *  Two builds on one page take different prefixes. */
   shortClassNames?: { prefix: string };
   /** Absent minifies in production only; `false` still autoprefixes. */

@@ -241,11 +241,12 @@ mod tests {
         assert_eq!(names[1], make_class_name("Card", "system:other", "animus"));
     }
 
-    /// Contract: a short class id depends only on its own definition and
-    /// binding, so adding a component renames no other; copies share one,
-    /// and two definitions whose 32-bit ids collide both take 64-bit ids.
+    /// Contract: a short class id depends on its own definition and binding,
+    /// so adding a component renames no other unless their 32-bit ids
+    /// collide, when both take 64-bit ids; copies share one, and two
+    /// definitions never do.
     #[test]
-    fn short_class_ids_are_stable_and_never_shared_by_two_definitions() {
+    fn short_class_ids_widen_only_on_collision_and_are_never_shared_by_two_definitions() {
         let names = short_class_names(&[("Button", "s:a"), ("Card", "s:b"), ("Button", "s:a")], "x");
         assert_eq!(names[0], names[2]);
         assert!(names.iter().all(|name| name.starts_with("x-") && name.len() <= 9), "{names:?}");

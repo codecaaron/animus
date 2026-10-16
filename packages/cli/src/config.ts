@@ -247,6 +247,12 @@ function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
       keepDirSelector: isConfigBoolean(raw.keepDirSelector)
         ? raw.keepDirSelector
         : undefined,
+      // assertKnownOptionKeys checked its shape above.
+      shortClassNames:
+        isConfigRecord(raw.shortClassNames) &&
+        isConfigString(raw.shortClassNames.prefix)
+          ? { prefix: raw.shortClassNames.prefix }
+          : undefined,
       minify: isConfigBoolean(raw.minify) ? raw.minify : undefined,
       staticCss: configStaticCss(raw.staticCss),
       layers: isConfigStringArray(raw.layers) ? raw.layers : undefined,
@@ -430,6 +436,7 @@ export async function resolveCliConfig(
     prefixContextualVars: pick('prefixContextualVars', undefined),
     targets: pick('targets', flags.targets),
     keepDirSelector: pick('keepDirSelector', undefined),
+    shortClassNames: pick('shortClassNames', undefined),
     minify: pick('minify', undefined),
     staticCss: pick('staticCss', undefined),
     layers: pick('layers', undefined),
@@ -482,6 +489,7 @@ export function projectResolvedConfig(config: ResolvedCliConfig) {
     verbose: config.options.verbose ?? false,
     targets: config.options.targets ?? null,
     keepDirSelector: config.options.keepDirSelector ?? false,
+    shortClassNames: config.options.shortClassNames ?? null,
     minify: config.options.minify ?? null,
     prefix: config.options.prefix ?? null,
     prefixContextualVars: config.options.prefixContextualVars ?? false,
