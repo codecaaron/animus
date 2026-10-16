@@ -240,21 +240,21 @@ export interface RuleRemoval {
  * alternative in it needs one, since such a list matches only what one of
  * its alternatives matches. A nested rule's `&` needs what its parent
  * rule's selectors all need (`parent`), since the element it stands for
- * matches the parent; `null` where they need none or are unknown. Empty
+ * matches the parent; none where they need none or are unknown. Empty
  * when the selector may match without any. `:not()` and `:has()` never
  * need one.
  */
 function neededClasses(
   selector: Selector,
   classes: ReadonlySet<string>,
-  parent: readonly string[] | null
+  parent: readonly string[]
 ): string[] {
   const needed: string[] = [];
   for (const part of selector) {
     if (part.type === 'class') {
       const stem = classStem(part.name);
       if (classes.has(stem)) needed.push(stem);
-    } else if (part.type === 'nesting' && parent !== null) {
+    } else if (part.type === 'nesting') {
       needed.push(...parent);
     } else if (
       part.type === 'pseudo-class' &&
@@ -311,72 +311,59 @@ export function removeComponentRules(
   if (![...classes].some((name) => css.includes(name))) {
     return { css: null, went, kept };
   }
-  const needsOf = (
-    selectors: Selector[],
-    parent: readonly string[] | null = null
-  ) => selectors.map((selector) => neededClasses(selector, classes, parent));
+  const needsOf = (selectors: Selector[], parent: readonly string[] = []) =>
+    selectors.map((selector) => neededClasses(selector, classes, parent));
   const everyNeeds = (needs: string[][]) =>
     needs.every((needed) => needed.length > 0);
-  // Whether `rule` goes: a style rule every selector of which needs a
-  // removed class and every rule nested in which goes too, or a `@media`,
-  // `@supports` or `@container` rule removal empties, which applies nothing.
-  // `parent` is what the enclosing style rule's selectors all need, when
-  // `rule` is nested in one that may go. A nested rule's `&` may match
-  // outside its parent (`:not(&)`), so it goes only where its selector
-  // needs a removed class, `&` counting outside a pseudo-class only; the
-  // declarations nested in a style rule are that rule's. An emptied
-  // `@layer` block stays, since it still places its layer in the layer
-  // order, nested in a style rule too; a second minifying pass would drop
-  // the emptied at-rules, but would also rewrite such a block and what else
-  // it finds.
-  const goes = (
+  // The classes the style rules in `rule` need when it goes, nested ones
+  // too, since Lightning CSS visits nothing inside a rule a visitor drops;
+  // `null` when it stays. A style rule goes when every selector of it needs
+  // a removed class and every rule nested in it goes too; `parent` is what
+  // the enclosing style rule's selectors all need. A nested rule's `&` may
+  // match outside its parent (`:not(&)`), so it goes only where its
+  // selector needs a removed class, `&` counting outside a pseudo-class
+  // only; the declarations nested in a style rule are that rule's. A
+  // `@media`, `@supports` or `@container` rule goes when removal empties it,
+  // since it then applies nothing.
+  const goneClasses = (
     rule: Rule,
-    parent: readonly string[] | null = null
-  ): boolean => {
+    parent: readonly string[] = []
+  ): string[] | null => {
+    const gone: string[] = [];
+    const all = (rules: Rule[], within: readonly string[]) =>
+      rules.every((inner) => {
+        const inside = goneClasses(inner, within);
+        if (inside !== null) gone.push(...inside);
+        return inside !== null;
+      });
     switch (rule.type) {
       case 'style': {
         const needs = needsOf(rule.value.selectors, parent);
+        if (!everyNeeds(needs)) return null;
         const own = needs.flat();
-        return (
-          everyNeeds(needs) &&
-          (rule.value.rules ?? []).every((inner) => goes(inner, own))
-        );
+        gone.push(...own);
+        return all(rule.value.rules ?? [], own) ? gone : null;
       }
       case 'nested-declarations':
-        return parent !== null;
+        return parent.length > 0 ? gone : null;
       case 'media':
       case 'supports':
       case 'container':
-        return (
-          rule.value.rules.length > 0 &&
-          rule.value.rules.every((inner) => goes(inner, parent))
-        );
+        return rule.value.rules.length > 0 && all(rule.value.rules, parent)
+          ? gone
+          : null;
       default:
-        return false;
-    }
-  };
-  // Notes the classes each style rule in a rule that goes needs, nested
-  // style rules too, since Lightning CSS visits nothing inside a rule a
-  // visitor drops.
-  const record = (
-    rule: Rule,
-    parent: readonly string[] | null = null
-  ): void => {
-    if (rule.type === 'style') {
-      const own = needsOf(rule.value.selectors, parent).flat();
-      for (const name of own) went.add(name);
-      for (const inner of rule.value.rules ?? []) record(inner, own);
-    } else if (
-      rule.type === 'media' ||
-      rule.type === 'supports' ||
-      rule.type === 'container'
-    ) {
-      for (const inner of rule.value.rules) record(inner, parent);
+        // An emptied `@layer` block stays, nested in a style rule too, since
+        // it still places its layer in the layer order; a second minifying
+        // pass would drop the emptied at-rules, but would also rewrite such
+        // a block and what else it finds.
+        return null;
     }
   };
   const drop = (rule: Rule) => {
-    if (!goes(rule)) return;
-    record(rule);
+    const gone = goneClasses(rule);
+    if (gone === null) return;
+    for (const name of gone) went.add(name);
     return [];
   };
   const code = lcssTransform({
@@ -392,6 +379,8 @@ export function removeComponentRules(
           if (dropped) return dropped;
           const needs = needsOf(rule.value.selectors);
           const needed = new Set(needs.flat());
+          // Every selector needing a removed class, the rule stayed for a
+          // rule nested in it.
           const nested = everyNeeds(needs);
           for (const selector of rule.value.selectors) {
             eachClass(selector, (name) => {
