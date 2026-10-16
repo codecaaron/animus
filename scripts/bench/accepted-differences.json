@@ -75,5 +75,19 @@
     "baseline": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
     "candidate": "48a479211bdaed71df8612dd7b60dbeb53046b447eec84b683a94f09b99cba45",
     "reason": "Beside the differences above, the JS changes size because configs derive slot and compound names at runtime and system prop name lists, supersededBy and transform bindings ship once in the system-props module. The CSS is identical (cssDigest unchanged)."
+  },
+  {
+    "row": "loader:large-closure",
+    "fixture": "large-closure",
+    "baseline": "b77350a204af2ec160c30ccd73193a5eff4534718b4cf91372e1ec8e436c827f",
+    "candidate": "d84067f7ccfe19c3bf47c16c17471f7092e3ae4cf4cad783cd7851e796e81c56",
+    "reason": "The loader records the system module's dependency files and their content digest. The derived-names release changes @animus-ui/system's runtime (configs derive slot and compound names, and shared system data is read from the system-props module), so the recorded system package files differ. The loader's evaluated system value is unchanged."
+  },
+  {
+    "row": "loader:showcase",
+    "fixture": "showcase",
+    "baseline": "a8a1ca0432e44e05f7625623cbcdede1773ec0340b0f5a06a3f33daff178dbd4",
+    "candidate": "7ca9d9bb0e9939bae3779861a3bfb00933b17a60038ad6358a1b53a4aaf0fd39",
+    "reason": "The loader records the system module's dependency files and their content digest. The derived-names release changes @animus-ui/system's runtime (configs derive slot and compound names, and shared system data is read from the system-props module), so the recorded system package files differ. The loader's evaluated system value is unchanged."
   }
 ]
