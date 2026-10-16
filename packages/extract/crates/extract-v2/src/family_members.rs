@@ -745,8 +745,7 @@ impl<'f> ObjectMembers<'f> {
         let config_files = crate::analyze_css::config_files(files, inputs);
         for (module, ff) in files.iter().filter(|(module, _)| !config_files.contains(*module)) {
             for (name, used) in &ff.unsafe_object_uses {
-                let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
-                let reason = format!("{name} {} in {module}{line}", used.what);
+                let reason = used.said(name, module);
                 let reach: Reach = match name.split_once('.') {
                     // A member of a namespace import.
                     // A module the analysis cannot find may re-export any
@@ -804,8 +803,7 @@ impl<'f> ObjectMembers<'f> {
                 let Some(UnreadNamespace::Package(identity)) = self.unread_namespace(module, ff, namespace) else {
                     continue;
                 };
-                let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
-                let reason = format!("{subject} {} in {module}{line}", used.what);
+                let reason = used.said(subject, module);
                 if let Some(unread) = crate::link::unread_package(&identity, files, inputs) {
                     let opening = || crate::link::PackageOpening::namespace_write(module, used.line, namespace, &identity);
                     crate::link::open_unread(&mut flow, unread, &reason, inputs, opening, &mut |flow, target, reason| {

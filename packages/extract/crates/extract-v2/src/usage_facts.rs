@@ -963,6 +963,15 @@ pub struct ObjectUse {
     pub what: String,
 }
 
+impl ObjectUse {
+    /// The use said of `subject` in `file`: `x is passed to decorate() in
+    /// a.tsx on line 3`.
+    pub fn said(&self, subject: &str, file: &str) -> String {
+        let line = self.line.map_or(String::new(), |line| format!(" on line {line}"));
+        format!("{subject} {} in {file}{line}", self.what)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_enriched_usage(
     built: Scoping,

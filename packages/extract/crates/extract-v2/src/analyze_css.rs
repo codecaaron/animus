@@ -4,6 +4,7 @@
 use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -39,7 +40,7 @@ use crate::theme::{
     unresolved_alias, unresolved_alias_spans, writes_token_reference, UnresolvedAlias,
 };
 
-use crate::usage_facts::{is_animus_system_specifier, TagFact, TagOrigin, UsageFact, UsageResidueRecord};
+use crate::usage_facts::{is_animus_system_specifier, ObjectUse, TagFact, TagOrigin, UsageFact, UsageResidueRecord};
 
 type ComponentPropSetMap = FxHashMap<String, FxHashSet<String>>;
 
@@ -3639,25 +3640,57 @@ fn written_packages(
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
-) -> FxHashSet<String> {
+) -> FxHashMap<String, Rc<WrittenBy>> {
     if inputs.analysis_context.foreign_packages.is_empty() {
-        return FxHashSet::default();
+        return FxHashMap::default();
     }
-    let mut origins = WrittenOrigins { files, inputs, links, seen: FxHashSet::default(), packages: FxHashSet::default() };
-    for (path, ff) in files {
-        for binding in ff.written_bindings.keys().chain(ff.assigned_aliases.values()) {
-            origins.binding(path, binding);
+    let mut origins = WrittenOrigins { files, inputs, links, seen: FxHashSet::default(), packages: Vec::new() };
+    let mut written: FxHashMap<String, Rc<WrittenBy>> = FxHashMap::default();
+    // Each package keeps the first use that reaches it.
+    let mut record = |origins: &mut WrittenOrigins, file: &str, subject: &str, used: &dyn Fn() -> ObjectUse| {
+        for package in origins.packages.drain(..) {
+            written.entry(package).or_insert_with(|| {
+                Rc::new(WrittenBy { file: file.to_string(), subject: subject.to_string(), used: used() })
+            });
         }
-        for (local, (subject, _)) in &ff.written_namespaces {
+    };
+    for (path, ff) in files {
+        for (binding, used) in &ff.written_bindings {
+            origins.binding(path, binding);
+            record(&mut origins, path, binding, &|| used.clone());
+        }
+        for binding in ff.assigned_aliases.values() {
+            origins.binding(path, binding);
+            let assigned = || ObjectUse { line: None, what: "is the target of an `Object.assign`".to_string() };
+            record(&mut origins, path, binding, &assigned);
+        }
+        for (local, (subject, used)) in &ff.written_namespaces {
             if let Some(source) = ff.namespace_imports.get(local) {
                 origins.import(path, source, subject.strip_prefix(&format!("{local}.")));
+                record(&mut origins, path, subject, &|| used.clone());
             }
         }
-        for (binding, (subject, _)) in &ff.written_members {
+        for (binding, (subject, used)) in &ff.written_members {
             origins.member(path, binding, subject.strip_prefix(&format!("{binding}.")));
+            record(&mut origins, path, subject, &|| used.clone());
         }
     }
-    origins.packages
+    written
+}
+
+/// The use that makes a package written, said of what it does to which
+/// binding, where.
+#[derive(Debug)]
+struct WrittenBy {
+    file: String,
+    subject: String,
+    used: ObjectUse,
+}
+
+impl std::fmt::Display for WrittenBy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.used.said(&self.subject, &self.file))
+    }
 }
 
 /// Follows a written object to the packages that export it.
@@ -3666,7 +3699,8 @@ struct WrittenOrigins<'f> {
     inputs: &'f CssInputs,
     links: &'f crate::link::ProjectLinks,
     seen: FxHashSet<(String, String)>,
-    packages: FxHashSet<String>,
+    /// The packages reached since the caller last took them.
+    packages: Vec<String>,
 }
 
 impl WrittenOrigins<'_> {
@@ -3762,7 +3796,7 @@ impl WrittenOrigins<'_> {
     fn package(&mut self, identity: &str) {
         let specifiers = self.inputs.package_map.iter().filter(|(_, entry)| *entry == identity).map(|(specifier, _)| specifier.as_str());
         for specifier in std::iter::once(identity).chain(specifiers) {
-            self.packages.insert(animus_system_loader::split_specifier(specifier).0.to_string());
+            self.packages.push(animus_system_loader::split_specifier(specifier).0.to_string());
         }
     }
 }
@@ -3792,8 +3826,11 @@ enum Handoff {
     Spread,
     /// `as` other than a string.
     As,
-    /// `asChild` over children other than one element of ours or a host's.
+    /// `asChild` over children other than one element.
     AsChild,
+    /// `asChild` over one element that is itself a tag of a package with no
+    /// dependency path to Animus, which may pass the props on.
+    AsChildForeign,
     /// A `createElement` call of it.
     CreateElement,
     /// A `cloneElement` call of an element of it.
@@ -3806,6 +3843,10 @@ impl Handoff {
             Handoff::Spread => "this render spreads props into it, which can hand it a component through `as` or `children`",
             Handoff::As => "this render hands it a component through `as`",
             Handoff::AsChild => "this render puts its children in its place (`asChild`), and they are not one element",
+            Handoff::AsChildForeign => {
+                "this render puts its one child in its place (`asChild`), and that child is itself a tag of a \
+                 package extraction does not analyse, which may pass the props on"
+            }
             Handoff::CreateElement => "this `createElement` call can hand it a component in its props",
             Handoff::Clone => "this `cloneElement` call can override its props, a component through `as` or `children` among them",
         }
@@ -3845,7 +3886,8 @@ fn handoffs<'f>(
                 Some(_) => Some(Handoff::Spread),
                 None => attrs.iter().find_map(|attr| match attr.name.as_str() {
                     "as" if !matches!(attr.static_value, Some(Value::String(_))) => Some(Handoff::As),
-                    "asChild" if as_child_element(ff, *element_child, inputs).is_none() => Some(Handoff::AsChild),
+                    "asChild" if element_child.is_none() => Some(Handoff::AsChild),
+                    "asChild" if as_child_element(ff, *element_child, inputs).is_none() => Some(Handoff::AsChildForeign),
                     _ => None,
                 }),
             };
@@ -3861,22 +3903,30 @@ fn handoffs<'f>(
     })
 }
 
-/// The first render, in source order, that may hand the tag `local` a
-/// component where `local` names the module's import. A clone's fact names
-/// no binding (its element's does), so it counts only where no element of
-/// that name binds it elsewhere.
-fn first_handoff(ff: &FileFacts, local: &str, inputs: &CssInputs) -> Option<Handed> {
-    let shadowed = ff.usage_for_analysis().iter().any(|fact| {
-        matches!(fact, UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), origin, .. }
-            if tag == local && *origin != Some(TagOrigin::Import))
-    });
-    handoffs(ff, local, inputs)
+/// The renders in `ff` that may hand the tag `local` a component: `None`
+/// without any, else the first in source order whose tag names the module's
+/// import, or `Err` where only renders of another binding of the name do. A
+/// clone's fact names no binding (its element's does), so it counts only
+/// where no element of that name binds it elsewhere.
+fn first_handoff(ff: &FileFacts, local: &str, inputs: &CssInputs) -> Option<Result<Handed, ()>> {
+    let all: Vec<_> = handoffs(ff, local, inputs).collect();
+    if all.is_empty() {
+        return None;
+    }
+    let shadowed = all.iter().any(|(handed, _)| matches!(handed.how, Handoff::Clone))
+        && ff.usage_for_analysis().iter().any(|fact| {
+            matches!(fact, UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), origin, .. }
+                if tag == local && *origin != Some(TagOrigin::Import))
+        });
+    let first = all
+        .into_iter()
         .filter(|(handed, origin)| match handed.how {
             Handoff::Clone => !shadowed,
             _ => *origin == Some(TagOrigin::Import),
         })
         .map(|(handed, _)| handed)
-        .min_by_key(|handed| handed.at)
+        .min_by_key(|handed| handed.at);
+    Some(first.ok_or(()))
 }
 
 /// The opening span of the one element a site's `asChild` renders in its
@@ -5101,7 +5151,7 @@ fn unread_create_element_props(file: &str, ff: &FileFacts, renders: impl Fn(&Usa
 enum UncertainIdentity {
     /// With the render that may hand it a component, for a tag of a package
     /// with no dependency path to Animus.
-    Tag(crate::usage_facts::UncertainTag, Option<Handed>),
+    Tag(crate::usage_facts::UncertainTag, Option<ForeignCause>),
     /// A name the scan read as a component that resolved to none: an import
     /// that declares no extracted component, named like one elsewhere.
     Unattributed(String),
@@ -5177,9 +5227,9 @@ fn identity_uncertainty_diagnostics(
             continue;
         };
         // Whether the use is written as a call: it is named as written.
-        let (tag, written_as_call, default_props, origin, at, shared_name, handed) = match site {
-            UncertainIdentity::Tag(site, handed) => {
-                (site.tag.as_deref(), site.written_as_call, site.default_props, site.origin, Some(site.at), false, *handed)
+        let (tag, written_as_call, default_props, origin, at, shared_name, cause) = match site {
+            UncertainIdentity::Tag(site, cause) => {
+                (site.tag.as_deref(), site.written_as_call, site.default_props, site.origin, Some(site.at), false, cause.as_ref())
             }
             UncertainIdentity::Unattributed(name) => match first_site_of(ff, name) {
                 Some((written_as_call, origin, at)) => {
@@ -5193,8 +5243,12 @@ fn identity_uncertainty_diagnostics(
             continue;
         }
         // A tag of a package with no dependency path to Animus is uncertain
-        // only where a render may hand it a component: the record names the
-        // first such render, which may not be the tag's first.
+        // only for a cause: the record names it, and sits at the first render
+        // that hands the tag a component, which may not be the tag's first.
+        let handed = match cause {
+            Some(ForeignCause::Handed(handed)) => Some(*handed),
+            _ => None,
+        };
         let (at, written_as_call, default_props) = match handed {
             Some(handed) => (Some(handed.at), handed.written_as_call, false),
             None => (at, written_as_call, default_props),
@@ -5225,9 +5279,20 @@ fn identity_uncertainty_diagnostics(
                          extraction cannot prove unchanged since it was built ({why})"
                     );
                 }
-                if let Some(handed) = handed {
+                if let Some(cause) = cause {
                     reason.push_str("; its package has no dependency path to Animus, but ");
-                    reason.push_str(handed.how.describe());
+                    match cause {
+                        ForeignCause::Handed(handed) => reason.push_str(handed.how.describe()),
+                        ForeignCause::Shadowed => reason.push_str(
+                            "a render of a parameter or local of this name hands that name a component, and \
+                             extraction reads every render of a name",
+                        ),
+                        ForeignCause::Written(by) => {
+                            reason.push_str("an analysed module writes into it or hands part of it on (");
+                            reason.push_str(&by.to_string());
+                            reason.push_str("), and the app may have put one of ours into a member");
+                        }
+                    }
                 }
                 if shared_name {
                     reason.push_str(", and shares its name with an Animus component another file declares");
@@ -5809,19 +5874,32 @@ fn imported_from_outside(
 enum Foreign {
     /// It renders no Animus component: the file hands it none.
     Proven,
-    /// A render of the import may hand it a component, the first of them
-    /// here.
-    Handed(Handed),
-    /// Not such a tag; a member of an object from such a package that an
-    /// analysed module writes into, where the app may have put one; or one
-    /// whose name only another binding's renders hand a component.
+    /// It may render one of ours, for this cause.
+    Uncertain(ForeignCause),
+    /// Not such a tag.
     No,
+}
+
+/// Why a tag of a package with no dependency path to Animus may render one
+/// of ours.
+#[derive(Debug, Clone)]
+enum ForeignCause {
+    /// A render of the import may hand it a component, the first of them in
+    /// source order.
+    Handed(Handed),
+    /// Only renders of another binding of its name (a parameter or a local)
+    /// hand that name a component, and the rule reads every render of it.
+    Shadowed,
+    /// It is a member of an object from the package, which an analysed
+    /// module writes into or hands part of on, where the app may have put
+    /// one of ours.
+    Written(Rc<WrittenBy>),
 }
 
 fn foreign_site(
     ff: &FileFacts,
     site: &crate::usage_facts::UncertainTag,
-    written: &FxHashSet<String>,
+    written: &FxHashMap<String, Rc<WrittenBy>>,
     inputs: &CssInputs,
 ) -> Foreign {
     let Some(tag) = site.tag.as_deref().filter(|_| site.origin == Some(TagOrigin::Import)) else {
@@ -5830,13 +5908,19 @@ fn foreign_site(
     let Some(source) = foreign_root_source(ff, tag, inputs) else {
         return Foreign::No;
     };
-    if tag.contains('.') && written.contains(animus_system_loader::split_specifier(source).0) {
-        return Foreign::No;
+    // A render that hands this binding a component is named before a write
+    // into the package, which is named before a render of another binding.
+    let handoff = first_handoff(ff, tag, inputs);
+    if let Some(Ok(handed)) = handoff {
+        return Foreign::Uncertain(ForeignCause::Handed(handed));
     }
-    if handoffs(ff, tag, inputs).next().is_none() {
-        return Foreign::Proven;
+    if let Some(by) = written.get(animus_system_loader::split_specifier(source).0).filter(|_| tag.contains('.')) {
+        return Foreign::Uncertain(ForeignCause::Written(Rc::clone(by)));
     }
-    first_handoff(ff, tag, inputs).map_or(Foreign::No, Foreign::Handed)
+    match handoff {
+        Some(_) => Foreign::Uncertain(ForeignCause::Shadowed),
+        None => Foreign::Proven,
+    }
 }
 
 /// What a tag usage cannot match to an Animus component is, as far as the
@@ -8530,7 +8614,7 @@ fn run_with_system_floor(
                 .into_iter()
                 .filter_map(|site| match foreign_site(ff, &site, &written_packages, inputs) {
                     Foreign::Proven => None,
-                    Foreign::Handed(handed) => Some(UncertainIdentity::Tag(site, Some(handed))),
+                    Foreign::Uncertain(cause) => Some(UncertainIdentity::Tag(site, Some(cause))),
                     Foreign::No => Some(UncertainIdentity::Tag(site, None)),
                 })
                 .chain(identity_policy.unattributed.drain(..).map(UncertainIdentity::Unattributed))
@@ -14959,7 +15043,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 "cloneElement(e, p)",
                 "`cloneElement` call can override",
             ),
-            ("export const B = (List) => <List as={R} />;", "<List />", "which extraction does not analyse; extraction"),
+            ("export const B = (List) => <List as={R} />;", "<List />", "a render of a parameter or local of this name"),
+            ("export const B = () => <List asChild><List.Item /></List>;", "<List asChild>", "child is itself a tag of a package"),
         ];
         for (body, site, how) in handing {
             let app = format!(
@@ -14981,7 +15066,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 .diagnostics
                 .into_iter()
                 .filter(|d| d.code.as_deref() == Some(IDENTITY_UNCERTAIN_TAG))
-                .map(|d| (d.file, d.component))
+                .map(|d| {
+                    // The record names the write that keeps the member uncertain.
+                    assert!(d.message.contains("writes into it or hands part of it on (") && d.message.contains("Item"), "{}", d.message);
+                    (d.file, d.component)
+                })
                 .collect::<Vec<_>>()
         };
         assert_eq!(

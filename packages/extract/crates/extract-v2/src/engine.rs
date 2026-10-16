@@ -703,10 +703,7 @@ fn record_style_changes(
         }
     };
     let nested_members = |target: &(String, String)| members_at(target, &[], &object_like);
-    let said = |file: &str, name: &str, used: &crate::usage_facts::ObjectUse| {
-        let line = used.line.map_or(String::new(), |line| format!(" on line {line}"));
-        format!("{name} {} in {file}{line}", used.what)
-    };
+    let said = |file: &str, name: &str, used: &crate::usage_facts::ObjectUse| used.said(name, file);
     use crate::flow::{ChangeKind, FlowBuilder, ObjectId, ReasonId, Region, RegionAtom};
     let object = |(file, local): (String, String)| ObjectId { module: file, binding: local };
     // Each object a module exports, under each name it exports it as.
