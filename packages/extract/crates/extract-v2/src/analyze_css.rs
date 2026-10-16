@@ -2397,16 +2397,34 @@ fn raw_keyframe_alias(
     )
 }
 
-/// `finding`, made at a render whose tag `renders` matches an Animus
-/// component by name alone, as the possible miss it is.
-fn possible_system_prop_miss(finding: CssDiagnostic, renders: &str) -> CssDiagnostic {
+/// How a use's render reaches the Animus component it is counted for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reach<'a> {
+    Proven,
+    /// By the render's tag name alone.
+    ByName,
+    /// Written on this foreign tag, whose `asChild` passes its props to its
+    /// one element child.
+    AsChild(&'a str),
+}
+
+/// `finding`, made at a render that `reach`es the Animus component `renders`
+/// names: as it is where proven, and otherwise as the possible miss it is.
+fn miss_by_reach(finding: CssDiagnostic, renders: &str, reach: Reach<'_>) -> CssDiagnostic {
+    let how = match reach {
+        Reach::Proven => return finding,
+        Reach::ByName => format!(
+            "<{renders}> matches an Animus component only by name, so it may render another \
+             library's component; if it is the Animus one"
+        ),
+        Reach::AsChild(tag) => format!(
+            "<{tag} asChild> passes this prop to its child <{renders}> only if it merges its \
+             props into that child, as `asChild` conventionally does; if it does"
+        ),
+    };
     CssDiagnostic {
         kind: "warn".to_string(),
-        message: format!(
-            "<{renders}> matches an Animus component only by name, so it may render another \
-             library's component; if it is the Animus one, {}",
-            finding.message
-        ),
+        message: format!("{how}, {}", finding.message),
         code: Some(POSSIBLE_SYSTEM_PROP_MISS.to_string()),
         severity: Some(diagnostic_severity_for_code(POSSIBLE_SYSTEM_PROP_MISS).to_string()),
         ..finding
@@ -3665,18 +3683,23 @@ fn root_import_source<'a>(ff: &'a FileFacts, root: &str) -> Option<&'a String> {
 /// package with no dependency path to Animus (the host's `foreignPackages`),
 /// which renders no Animus component its name matches. One the file may hand
 /// a component, which can take its props, is not: a render with a component
-/// through `as`, with `asChild`, or with a spread that can deliver any prop,
-/// and a `createElement` call of it.
+/// through `as`, with a spread that can deliver any prop, or with `asChild`
+/// over children other than one element, and a `createElement` call of it.
+/// The one element `asChild` renders in its place is a child the tag
+/// receives: one of ours keeps every option and a slot for each system prop
+/// (`opaque_delivery`), whatever props the tag merges into it.
 fn foreign_import(ff: &FileFacts, local: &str, source: &str, inputs: &CssInputs) -> bool {
-    let package = animus_system_loader::split_specifier(source).0;
-    if !inputs.analysis_context.foreign_packages.iter().any(|foreign| foreign == package) {
+    if !foreign_package(source, inputs) {
         return false;
     }
     !ff.usage_for_analysis().iter().any(|fact| match fact {
-        UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), attrs, spread, .. } if tag == local => {
+        UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), attrs, spread, element_child, .. }
+            if tag == local =>
+        {
             spread.is_some()
                 || attrs.iter().any(|attr| {
-                    attr.name == "asChild" || (attr.name == "as" && !matches!(attr.static_value, Some(Value::String(_))))
+                    (attr.name == "asChild" && element_child.is_none())
+                        || (attr.name == "as" && !matches!(attr.static_value, Some(Value::String(_))))
                 })
         }
         UsageFact::CreateElement { ident, member, .. } => {
@@ -3684,6 +3707,64 @@ fn foreign_import(ff: &FileFacts, local: &str, source: &str, inputs: &CssInputs)
         }
         _ => false,
     })
+}
+
+/// Whether `source` names a package with no dependency path to Animus.
+fn foreign_package(source: &str, inputs: &CssInputs) -> bool {
+    let package = animus_system_loader::split_specifier(source).0;
+    inputs.analysis_context.foreign_packages.iter().any(|foreign| foreign == package)
+}
+
+/// The renders a foreign tag's `asChild` makes: at each site with one element
+/// child, that child with the tag's own props, after props the tag's code adds
+/// that usage cannot list. With them, the offset of each prop passed so, and
+/// the tag that passes it.
+fn as_child_renders<'f>(ff: &'f FileFacts, inputs: &CssInputs) -> (Vec<UsageFact>, FxHashMap<u32, &'f str>) {
+    let mut renders = Vec::new();
+    let mut passed = FxHashMap::default();
+    if inputs.analysis_context.foreign_packages.is_empty() {
+        return (renders, passed);
+    }
+    let usage = ff.usage_for_analysis();
+    for (index, fact) in usage.iter().enumerate() {
+        let UsageFact::Element {
+            tag: TagFact::Ident(tag) | TagFact::Member(tag),
+            attrs,
+            spread: None,
+            span,
+            origin: Some(TagOrigin::Import),
+            element_child: Some(child_span),
+            ..
+        } = fact
+        else {
+            continue;
+        };
+        let root = tag.split('.').next().unwrap_or(tag);
+        if !attrs.iter().any(|attr| attr.name == "asChild")
+            || !root_import_source(ff, root).is_some_and(|source| foreign_package(source, inputs))
+        {
+            continue;
+        }
+        // The child's fact follows its parent's.
+        let Some(UsageFact::Element { tag: child, origin, .. }) =
+            usage[index + 1..].iter().find(|fact| matches!(fact, UsageFact::Element { span, .. } if span == child_span))
+        else {
+            continue;
+        };
+        let attrs: Vec<_> =
+            attrs.iter().filter(|attr| !matches!(attr.name.as_str(), "asChild" | "children" | "key")).cloned().collect();
+        passed.extend(attrs.iter().map(|attr| (attr.at, tag.as_str())));
+        renders.push(UsageFact::Element {
+            tag: child.clone(),
+            spread: Some(attrs.len()),
+            attrs,
+            span: *span,
+            origin: *origin,
+            written_as_call: false,
+            element_child: None,
+        });
+    }
+    (renders, passed)
 }
 
 /// Whether the root `root` of a dotted path in `file` names a namespace the
@@ -7775,7 +7856,7 @@ fn run_with_system_floor(
     let admitted_input = |config: &PropConfigMap,
                           file: &str,
                           component: &str,
-                          (prop_name, value, uses): (&str, &Value, &[(u32, &str, bool)]),
+                          (prop_name, value, uses): (&str, &Value, &[(u32, &str, Reach<'_>)]),
                           diagnostics: &mut Vec<CssDiagnostic>| {
         let prop_config = config.get(prop_name);
         let miss = prop_config.and_then(|prop_config| {
@@ -7784,9 +7865,8 @@ fn run_with_system_floor(
         if let Some(miss) = miss {
             match uses {
                 [] => diagnostics.push(strict_token_miss(file, component, &miss)),
-                uses => diagnostics.extend(uses.iter().map(|&(at, renders, proven)| {
-                    let finding = strict_token_miss(file, renders, &miss);
-                    if proven { finding } else { possible_system_prop_miss(finding, renders) }.at(at)
+                uses => diagnostics.extend(uses.iter().map(|&(at, renders, reach)| {
+                    miss_by_reach(strict_token_miss(file, renders, &miss), renders, reach).at(at)
                 })),
             }
             return None;
@@ -7835,8 +7915,9 @@ fn run_with_system_floor(
             }
             // Written only where no render is proven, it is a possible miss.
             match uses {
-                [(_, renders, _), ..] if uses.iter().all(|&(_, _, proven)| !proven) => {
-                    diagnostics.extend(findings.into_iter().map(|finding| possible_system_prop_miss(finding, renders)));
+                [(_, renders, reach), ..] if uses.iter().all(|&(.., reach)| reach != Reach::Proven) => {
+                    diagnostics
+                        .extend(findings.into_iter().map(|finding| miss_by_reach(finding, renders, *reach)));
                 }
                 _ => diagnostics.extend(findings),
             }
@@ -8072,7 +8153,7 @@ fn run_with_system_floor(
             &takes_system_prop,
         );
         for RoutedValue { prop, value, component, uses } in &routed {
-            let uses: Vec<_> = uses.iter().map(|at| (*at, component.as_str(), true)).collect();
+            let uses: Vec<_> = uses.iter().map(|at| (*at, component.as_str(), Reach::Proven)).collect();
             all_utility_inputs.extend(admitted_input(&inputs.config, path, component, (prop, value, &uses), &mut diagnostics));
         }
         diagnostics.extend(untracked_clone_props(path, ff));
@@ -8083,8 +8164,22 @@ fn run_with_system_floor(
             _ => false,
         }));
 
+        // A foreign tag's `asChild` passes its props to its one element child.
+        let (as_child, passed) = as_child_renders(ff, inputs);
+        let usage: std::borrow::Cow<[UsageFact]> = if as_child.is_empty() {
+            ff.usage_for_analysis().into()
+        } else {
+            [ff.usage_for_analysis(), &as_child].concat().into()
+        };
+        let reach = |at: u32, tag: &str| {
+            if possible(tag) {
+                Reach::ByName
+            } else {
+                passed.get(&at).map_or(Reach::Proven, |&parent| Reach::AsChild(parent))
+            }
+        };
         let mut usage_result = crate::usage_facts::filter_usage_scan(
-            ff.usage_for_analysis(),
+            &usage,
             &lookup.props,
             &lookup.custom_props,
             &lookup.configs,
@@ -8092,10 +8187,10 @@ fn run_with_system_floor(
             &proxies,
         );
         // Read before attribution names each use's component instead of its tag.
-        let possible_uses: Vec<Vec<u32>> = usage_result
+        let reaches: Vec<Vec<Reach>> = usage_result
             .system_prop_usages
             .iter()
-            .map(|usage| usage.uses.iter().filter(|(_, tag)| possible(tag)).map(|(at, _)| *at).collect())
+            .map(|usage| usage.uses.iter().map(|(at, tag)| reach(*at, tag)).collect())
             .collect();
         identity_policy.attribute_result(&mut usage_result, &lookup.attribution);
 
@@ -8112,9 +8207,13 @@ fn run_with_system_floor(
                 }),
         );
 
-        for (usage, possible_uses) in usage_result.system_prop_usages.iter().zip(&possible_uses) {
-            let uses: Vec<_> =
-                usage.uses.iter().map(|(at, binding)| (*at, binding_of(binding), !possible_uses.contains(at))).collect();
+        for (usage, reaches) in usage_result.system_prop_usages.iter().zip(&reaches) {
+            let uses: Vec<_> = usage
+                .uses
+                .iter()
+                .zip(reaches)
+                .map(|((at, binding), reach)| (*at, binding_of(binding), *reach))
+                .collect();
             all_utility_inputs.extend(admitted_input(
                 &inputs.config,
                 path,
@@ -8126,7 +8225,7 @@ fn run_with_system_floor(
 
         if !lookup.custom_props.is_empty() {
             let mut custom_scan = crate::usage_facts::filter_custom_prop_scan(
-                ff.usage_for_analysis(),
+                &usage,
                 &lookup.custom_props,
                 member_expr_bindings,
                 &proxies,
@@ -8134,7 +8233,7 @@ fn run_with_system_floor(
             custom_scan
                 .dynamic_usages
                 .extend(crate::usage_facts::uncertain_custom_renders(
-                    ff.usage_for_analysis(),
+                    &usage,
                     &lookup.custom_props,
                     member_expr_bindings,
                     &proxies,
@@ -8151,7 +8250,7 @@ fn run_with_system_floor(
                         continue;
                     };
                     let uses: Vec<_> =
-                        usage.uses.iter().map(|(at, tag)| (*at, binding_of(&owner), !possible(tag))).collect();
+                        usage.uses.iter().map(|(at, tag)| (*at, binding_of(&owner), reach(*at, tag))).collect();
                     let input = admitted_input(
                         config,
                         path,
@@ -14451,9 +14550,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// runs. A component handed to one by reference, as a prop value, an
     /// element or a child, or through an alias or an object holding it, stays
     /// with every option and a slot for each system prop, which the foreign
-    /// code may write. The same tag where a file may hand it a component
-    /// through `as`, or a member of an object the app writes into, keeps its
-    /// record and turns removal off.
+    /// code may write; so does one element `asChild` renders in the tag's
+    /// place with the tag's props, and a host element there reaches nothing.
+    /// The same tag where a file may hand it a component through `as`, or
+    /// `asChild` over children other than one element, or a member of an
+    /// object the app writes into, keeps its record and turns removal off.
     #[test]
     fn foreign_tags_leave_whole_component_removal_on() {
         let mut inputs = test_inputs();
@@ -14487,10 +14588,16 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         ] {
             assert_eq!(run(handed), (every.clone(), p.clone(), vec![]), "{handed}");
         }
-        assert_eq!(
-            run("export const App = () => <List as={R} />;\n"),
-            (every, p, vec!["whole-component removal".to_string(), "<List>".to_string()])
-        );
+        assert_eq!(run("export const App = () => <List asChild size=\"lg\"><R size=\"sm\" /></List>;\n"), (every.clone(), p.clone(), vec![]));
+        assert_eq!(run("export const App = () => <List asChild p={8}><button /></List>;\n"), (vec![], vec![], vec![]));
+        let records = vec!["whole-component removal".to_string(), "<List>".to_string()];
+        for handing in [
+            "export const App = () => <List as={R} />;\n",
+            "export const App = () => <List asChild><R /><R /></List>;\n",
+            "export const App = () => <List asChild>{<R />}</List>;\n",
+        ] {
+            assert_eq!(run(handing), (every.clone(), p.clone(), records.clone()), "{handing}");
+        }
 
         // A member of an object the app writes into, in the rendering file or
         // in another, may be an Animus component: it keeps its record.

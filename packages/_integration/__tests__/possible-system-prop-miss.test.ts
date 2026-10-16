@@ -73,8 +73,9 @@ function misses(manifest: { diagnostics?: ManifestDiagnostic[] }) {
 // render matched to it by name alone is an
 // `animus.usage.possible-system-prop-miss` warning; a tag of a package the
 // host finds has no dependency path to Animus (`foreignPackages`) matches no
-// Animus component by name, unless the file may hand it a component (`as`,
-// `asChild`, an open spread).
+// Animus component by name, unless the file may hand it a component (`as`, an
+// open spread); a prop it passes through `asChild` to an Animus child is a
+// possible miss there.
 describe('strict misses by the certainty of their render', () => {
   let named: ReturnType<typeof runPipeline>;
   let foreign: ReturnType<typeof runPipeline>;

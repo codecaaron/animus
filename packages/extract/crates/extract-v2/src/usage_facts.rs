@@ -3,7 +3,7 @@
 
 use oxc::ast::ast::{
     Argument, CallExpression, Expression, IdentifierReference, ImportDeclarationSpecifier,
-    JSXAttributeItem, JSXAttributeName, JSXElementName, JSXOpeningElement, Program, Statement,
+    JSXAttributeItem, JSXAttributeName, JSXChild, JSXElementName, JSXOpeningElement, Program, Statement,
 };
 use oxc::ast::AstKind;
 use oxc::ast_visit::Visit;
@@ -159,6 +159,10 @@ pub enum UsageFact {
         /// element: a diagnostic names it as written.
         #[serde(skip)]
         written_as_call: bool,
+        /// The opening-element span of the one element the children are,
+        /// which `asChild` renders in this element's place.
+        #[serde(skip)]
+        element_child: Option<(u32, u32)>,
     },
     /// createElement(X, ...) / React.createElement(X, ...): the first
     /// argument as a raw name or dotted key (None = unattributable form).
@@ -5688,7 +5692,8 @@ impl<'a> FactCollector<'a, '_> {
         // The element's children are its `children` prop, written after every
         // attribute: they replace a `children` attribute or one a spread
         // delivers.
-        attrs.extend(children_attribute(children));
+        let children = written_children(children);
+        attrs.extend(children_attribute(&children));
         self.facts.push(UsageFact::Element {
             tag,
             attrs,
@@ -5696,17 +5701,19 @@ impl<'a> FactCollector<'a, '_> {
             span: (elem.span.start, elem.span.end),
             origin,
             written_as_call: crate::lower_create_element::written_as_call(self.source, elem.span.start),
+            element_child: match children.as_slice() {
+                [JSXChild::Element(child)] => Some((child.opening_element.span.start, child.opening_element.span.end)),
+                _ => None,
+            },
         });
     }
 }
 
-/// The `children` prop an element's children write, if it has any: a single
-/// text on one line or a single string literal as itself, and anything else
-/// as a value usage cannot list. Text of whitespace and line breaks, and an
-/// empty `{}`, are no children, as in JSX.
-fn children_attribute(children: &[oxc::ast::ast::JSXChild<'_>]) -> Option<AttrFact> {
-    use oxc::ast::ast::{JSXChild, JSXExpression};
-    let written: Vec<&JSXChild<'_>> = children
+/// An element's children as JSX passes them: text of whitespace and line
+/// breaks, and an empty `{}`, are no children.
+fn written_children<'c, 'a>(children: &'c [JSXChild<'a>]) -> Vec<&'c JSXChild<'a>> {
+    use oxc::ast::ast::JSXExpression;
+    children
         .iter()
         .filter(|child| match child {
             JSXChild::Text(text) => !(text.value.trim().is_empty() && text.value.contains('\n')),
@@ -5715,11 +5722,17 @@ fn children_attribute(children: &[oxc::ast::ast::JSXChild<'_>]) -> Option<AttrFa
             }
             _ => true,
         })
-        .collect();
+        .collect()
+}
+
+/// The `children` prop the written children write, if any: a single text on
+/// one line or a single string literal as itself, and anything else as a
+/// value usage cannot list.
+fn children_attribute(written: &[&JSXChild<'_>]) -> Option<AttrFact> {
     let first = written.first()?;
     let at = first.span().start;
     let end = written.last().map_or(at, |child| child.span().end);
-    let literal = match written.as_slice() {
+    let literal = match written {
         // An entity (`&#109;`) reads as another character at runtime.
         [JSXChild::Text(text)] if !text.value.contains('\n') && !text.value.contains('&') => {
             Some(text.value.to_string())
@@ -7643,7 +7656,7 @@ pub fn filter_usage_scan(
                 result.open_components.insert(binding.clone());
                 record_unwritten_options(&mut result, &mut fully_open, &binding, config, &FxHashSet::default(), true);
             }
-            UsageFact::Element { tag, attrs, spread, span, origin, written_as_call } => {
+            UsageFact::Element { tag, attrs, spread, span, origin, written_as_call, .. } => {
                 let uncertain = |result: &mut UsageScanResult, name: &str| {
                     result.identity_uncertain = true;
                     result.uncertain_tags.push(UncertainTag {
