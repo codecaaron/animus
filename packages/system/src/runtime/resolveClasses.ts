@@ -5,7 +5,8 @@ interface VariantConfig {
 
 interface CompoundConfig {
   conditions: Record<string, string | string[]>;
-  className: string;
+  /** Absent, the runtime names compound `i` `{class}--compound-{i}`. */
+  className?: string;
 }
 
 export interface ClassResolverConfig {
@@ -14,7 +15,10 @@ export interface ClassResolverConfig {
   states?: string[];
   systemPropNames?: string[];
   customPropMap?: Record<string, Record<string, string>>;
-  customDynamicConfig?: DynamicPropConfig;
+  customDynamicConfig?: EmittedDynamicPropConfig;
+  /** The class prefix and name scope a `customDynamicConfig` entry without
+   *  its `varName` and `slotClass` derives them from (`withDerivedNames`). */
+  scope?: readonly [prefix: string, scope: string];
   /** Callback props whose `customPropMap` keys are `typedValueKey`s. */
   typedCustomProps?: readonly string[];
   /** System props bound to a configured transform, whose `systemPropMap`
@@ -87,6 +91,16 @@ type DeclarationConfig = DeclarationDynamicPropConfig & {
 export type DynamicPropConfig = Record<
   string,
   ValueDynamicPropConfig | DeclarationConfig
+>;
+
+/** A component's custom entries as extraction emits them: a value entry
+ *  without its `varName` and `slotClass` derives them from the config's
+ *  `scope`. */
+type EmittedDynamicPropConfig = Record<
+  string,
+  | (Omit<ValueDynamicPropConfig, 'varName' | 'slotClass'> &
+      Partial<Pick<ValueDynamicPropConfig, 'varName' | 'slotClass'>>)
+  | DeclarationConfig
 >;
 
 import {
@@ -444,7 +458,7 @@ function applyVariantClasses(
 function applyCompoundClasses(
   classes: string[],
   props: Record<string, any>,
-  config: ClassResolverConfig
+  config: ResolvedConfig
 ): void {
   if (!config.compounds) return;
   for (const compound of config.compounds) {
@@ -825,25 +839,81 @@ function withoutAbsentBreakpoints(value: unknown): unknown {
 }
 
 /**
- * The config with each admitted prop named once, at its first position. An
- * extracted config lists every admitted group's props, and groups can share
- * one, as flexbox and grid share `alignItems`.
+ * A prop name as a slot-name segment, as the extractor's `slot_segment`
+ * writes it: a name of ASCII letters and digits in kebab spelling, any other
+ * as `--` and the hex of its UTF-8 bytes, each ended by `_`.
  */
-export function withUniqueSystemPropNames(
+export function slotSegment(name: string): string {
+  if (/^[A-Za-z][A-Za-z0-9]*$/.test(name)) {
+    return `${name.replace(/[A-Z]/g, (ch) => `-${ch.toLowerCase()}`)}_`;
+  }
+  let hex = '--';
+  for (const byte of new TextEncoder().encode(name)) {
+    hex += byte.toString(16).padStart(2, '0');
+  }
+  return `${hex}_`;
+}
+
+/** A config whose every name is spelled out, as `resolveClasses` reads it. */
+export type ResolvedConfig = Omit<
+  ClassResolverConfig,
+  'compounds' | 'customDynamicConfig'
+> & {
+  compounds?: (CompoundConfig & { className: string })[];
+  customDynamicConfig?: DynamicPropConfig;
+};
+
+/**
+ * The config with every name an extracted config leaves to the runtime
+ * spelled out, once per component: compound `i`'s class
+ * `{class}--compound-{i}`, a custom slot's variable
+ * `--{prefix}-{segment}{scope}` and class `{prefix}-dyn-{segment}{scope}`.
+ * Each admitted prop is named once, at its first position: an extracted
+ * config lists every admitted group's props, and groups can share one, as
+ * flexbox and grid share `alignItems`.
+ */
+export function withDerivedNames(
+  className: string,
   config: ClassResolverConfig
-): ClassResolverConfig {
+): ResolvedConfig {
+  const { compounds, customDynamicConfig: dynamic, scope } = config;
   const names = config.systemPropNames;
-  if (!names) return config;
-  const unique = [...new Set(names)];
-  return unique.length === names.length
-    ? config
-    : { ...config, systemPropNames: unique };
+  const unique = names && [...new Set(names)];
+  const resolved: ResolvedConfig = {
+    ...config,
+    compounds: compounds?.map((compound, index) =>
+      compound.className === undefined
+        ? { ...compound, className: `${className}--compound-${index}` }
+        : (compound as CompoundConfig & { className: string })
+    ),
+    customDynamicConfig: dynamic as DynamicPropConfig | undefined,
+  };
+  if (unique && unique.length !== names.length) {
+    resolved.systemPropNames = unique;
+  }
+  if (dynamic && scope) {
+    const [prefix, suffix] = scope;
+    const entries: DynamicPropConfig = {};
+    for (const [prop, dc] of Object.entries(dynamic)) {
+      const segment = slotSegment(prop);
+      entries[prop] =
+        dc.kind === 'declarations' || dc.slotClass !== undefined
+          ? (dc as DynamicPropConfig[string])
+          : {
+              ...dc,
+              varName: `--${prefix}-${segment}${suffix}`,
+              slotClass: `${prefix}-dyn-${segment}${suffix}`,
+            };
+    }
+    resolved.customDynamicConfig = entries;
+  }
+  return resolved;
 }
 
 export function resolveClasses(
   baseClassName: string,
   props: Record<string, any>,
-  config: ClassResolverConfig,
+  config: ResolvedConfig,
   systemPropMap?: SystemPropMap,
   dynamicPropConfig?: DynamicPropConfig
 ): ClassResolution {

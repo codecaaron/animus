@@ -17,7 +17,7 @@ use crate::chain_merge::{
 };
 use crate::chain_walk::{MemberParentExtension, TerminalKind};
 use crate::css::{
-    build_variable_slot_entries, css_property_name, generate_composed_compound_css, slot_segment,
+    build_variable_slot_entries, css_property_name, generate_composed_compound_css,
     generate_composed_variant_css, generate_css_sheets_ordered, layer_name, layer_order,
     resolve_custom_prop_classes, resolve_utility_classes, slot_property_registrations, wrap_layer, BreakpointMap, ComponentCss, ComposeFamilyRef, CompoundConditionMap,
     CssFragmentStore, CssSheets, UtilityInput, VariantCss,
@@ -9245,12 +9245,12 @@ fn run_with_system_floor(
                 );
                 continue;
             }
-            let segment = slot_segment(prop_name);
+            let (var_name, slot_class) = crate::css::slot_names(class_prefix, prop_name, "");
             dynamic_props.insert(
                 prop_name.clone(),
                 DynamicPropMeta::new(
-                    format!("--{class_prefix}-{segment}"),
-                    format!("{class_prefix}-dyn-{segment}"),
+                    var_name,
+                    slot_class,
                     prop_config,
                     &inputs.theme,
                     &inputs.contextual_vars,
@@ -9473,12 +9473,12 @@ fn run_with_system_floor(
                 // The component's name scope follows the segment's `_`: its
                 // slot never shares a name with a system prop's or another
                 // component's.
-                let segment = slot_segment(prop_name);
+                let (var_name, slot_class) = crate::css::slot_names(class_prefix, prop_name, scope);
                 component_dynamic.insert(
                     prop_name.clone(),
                     DynamicPropMeta::new(
-                        format!("--{class_prefix}-{segment}{scope}"),
-                        format!("{class_prefix}-dyn-{segment}{scope}"),
+                        var_name,
+                        slot_class,
                         prop_config,
                         &inputs.theme,
                         &inputs.contextual_vars,
@@ -9703,6 +9703,9 @@ fn run_with_system_floor(
                 })
             }),
             superseded_by: BTreeMap::new(),
+            slot_scope: per_component_custom_dynamic
+                .contains_key(component_id)
+                .then(|| name_scopes[component_id].clone()),
         };
         payload.superseded_by = crate::assemble::superseded_props(
             &payload,
@@ -12328,7 +12331,9 @@ mod tests {
         );
         let dynamic_card = dynamic.components.values().next().unwrap();
         assert!(dynamic_card.replacement.contains("customDynamicConfig"));
-        assert!(dynamic_card.replacement.contains("animus-dyn-"));
+        // The runtime derives the slot's names from the scope.
+        assert!(dynamic_card.replacement.contains(r#""scope":["animus","Card_"#), "{}", dynamic_card.replacement);
+        assert!(!dynamic_card.replacement.contains("animus-dyn-"));
         assert!(dynamic.sheets.custom.contains("@layer anm-custom"));
         assert!(!dynamic.dynamic_props.contains_key("size"));
     }

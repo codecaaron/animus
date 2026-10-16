@@ -4,7 +4,7 @@ import {
   type DynamicPropConfig,
   resolveClasses,
   type SystemPropMap,
-  withUniqueSystemPropNames,
+  withDerivedNames,
 } from './resolveClasses.js';
 import { reportUncompiledRender } from './uncompiled.js';
 
@@ -55,7 +55,7 @@ export function createClassResolver(
   systemPropMap?: SystemPropMap,
   dynamicPropConfig?: DynamicPropConfig
 ): ClassResolver {
-  const config = withUniqueSystemPropNames(resolverConfig);
+  const config = withDerivedNames(className, resolverConfig);
   const resolveAttributes = (
     props?: Record<string, unknown>
   ): ClassResolverAttributes => {

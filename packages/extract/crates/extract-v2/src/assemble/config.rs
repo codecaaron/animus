@@ -183,6 +183,13 @@ pub(super) fn build_config(
     if !variants.is_empty() {
         config.insert("variants", Value::Object(variants));
     }
+    // The runtime names compound `i` `{class}--compound-{i}`; a name it
+    // would not derive ships.
+    for (index, compound) in compounds.iter_mut().enumerate() {
+        if compound["className"] == format!("{class_name}--compound-{index}") {
+            compound.as_object_mut().expect("a compound is an object").remove("className");
+        }
+    }
     if !compounds.is_empty() {
         config.insert("compounds", json!(compounds));
     }
@@ -236,6 +243,19 @@ pub(super) fn build_config(
     }
 
     if let Some(ref cdc) = p.custom_dynamic_config {
+        // The runtime derives each slot's variable and class from the scope
+        // (`css::slot_names`); a pair it would not derive, such as a shared
+        // slot's, ships.
+        let derived = |prop: &str, meta: &crate::dynamic_meta::ValuePropMeta| {
+            p.slot_scope.as_deref().is_some_and(|scope| {
+                let (var_name, slot_class) = crate::css::slot_names(prefix, prop, scope);
+                meta.var_name == var_name && meta.slot_class == slot_class
+            })
+        };
+        let any_derived = cdc.iter().any(|(prop, meta)| meta.value().is_some_and(|meta| derived(prop, meta)));
+        if let (true, Some(scope)) = (any_derived, &p.slot_scope) {
+            config.insert("scope", json!([prefix, scope]));
+        }
         let mut dynamic = ObjectLiteral::default();
         let mut sorted_keys: Vec<&String> = cdc.keys().collect();
         sorted_keys.sort();
@@ -261,8 +281,10 @@ pub(super) fn build_config(
                 }
             };
             let mut fields = ObjectLiteral::default();
-            fields.insert("varName", json!(meta.var_name));
-            fields.insert("slotClass", json!(meta.slot_class));
+            if !derived(prop_name, meta) {
+                fields.insert("varName", json!(meta.var_name));
+                fields.insert("slotClass", json!(meta.slot_class));
+            }
             fields.insert("property", json!(meta.property));
             if !meta.properties.is_empty() {
                 fields.insert("properties", json!(meta.properties));

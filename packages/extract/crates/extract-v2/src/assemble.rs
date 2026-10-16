@@ -61,6 +61,9 @@ pub struct ReplacementPayload {
     /// System prop → the later-defined props that take effect over it when
     /// one element sets both (`superseded_props`).
     pub superseded_by: BTreeMap<String, Vec<String>>,
+    /// The name scope of the component's custom slots
+    /// (`css::slot_names`), present when it has any.
+    pub slot_scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -323,7 +326,8 @@ mod tests {
         assert!(text.contains(r#""conditions":{"size":"sm","variant":"ghost"}"#), "got {text}");
         assert!(text.contains(r#""variants":{"size":{"options":["sm","lg"],"default":"sm"}}"#) || text.contains(r#""variants":{"size":{"default":"sm","options":["sm","lg"]}}"#), "got {text}");
         assert!(text.contains(r#""states":["loading"]"#));
-        assert!(text.contains("--compound-0"));
+        // A positional compound name is the runtime's to derive.
+        assert!(!text.contains("--compound-0"), "got {text}");
     }
 
     #[test]

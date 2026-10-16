@@ -154,15 +154,22 @@ const asVariants = (
   return variants;
 };
 
+/** A compound without a `className` is named, as the runtime names it,
+ *  `{class}--compound-{i}` from its position. */
 const asCompounds = (
-  value: ManifestJsonValue | undefined
+  value: ManifestJsonValue | undefined,
+  className: string
 ): CompoundConfig[] | undefined => {
   if (!Array.isArray(value)) return undefined;
   const compounds: CompoundConfig[] = [];
-  for (const entry of value) {
+  for (const [index, entry] of value.entries()) {
     if (!isManifestJsonObject(entry)) continue;
+    const name =
+      entry.className === undefined
+        ? `${className}--compound-${index}`
+        : entry.className;
     if (
-      !isManifestJsonString(entry.className) ||
+      !isManifestJsonString(name) ||
       !isManifestJsonObject(entry.conditions)
     ) {
       continue;
@@ -174,7 +181,7 @@ const asCompounds = (
         conditions[prop] = expected.filter(isManifestJsonString);
       }
     }
-    compounds.push({ conditions, className: entry.className });
+    compounds.push({ conditions, className: name });
   }
   return compounds;
 };
@@ -200,7 +207,7 @@ export const parseConfig = (
 
   if (isManifestJsonObject(parsed)) {
     const variants = asVariants(parsed.variants);
-    const compounds = asCompounds(parsed.compounds);
+    const compounds = asCompounds(parsed.compounds, record.class_name);
     const states = asStrings(parsed.states);
     const config: ReplacementConfig = {};
     if (variants !== undefined) config.variants = variants;
@@ -212,7 +219,10 @@ export const parseConfig = (
   }
 
   const variants = asVariants(jsonAt(text, 'variants', id));
-  const compounds = asCompounds(jsonAt(text, 'compounds', id));
+  const compounds = asCompounds(
+    jsonAt(text, 'compounds', id),
+    record.class_name
+  );
   const states = asStrings(jsonAt(text, 'states', id));
 
   const config: ReplacementConfig = {};

@@ -99,6 +99,14 @@ pub fn slot_segment(name: &str) -> String {
     segment
 }
 
+/// A value prop's slot variable and slot class under `scope` (empty for a
+/// system prop's). The runtime derives the same pair from the scope a config
+/// ships, so a config omits the pair wherever it equals this one.
+pub fn slot_names(prefix: &str, prop: &str, scope: &str) -> (String, String) {
+    let segment = slot_segment(prop);
+    (format!("--{prefix}-{segment}{scope}"), format!("{prefix}-dyn-{segment}{scope}"))
+}
+
 /// A component's binding as the slot-name segment after its prop's: as
 /// written when it is ASCII letters and digits (`Button` → `Button_`), and
 /// otherwise as `slot_segment` writes such a name (`Track$1` →
