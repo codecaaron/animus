@@ -67,6 +67,13 @@ export const ANIMUS_ARTIFACT_DIR = '.animus';
  *  here is a change in the emitter, both bundler arms and that harvest. */
 export const ANIMUS_CSS_MODULE_ID = '.animus/styles.css';
 
+/** Artifact-dir-relative name of the prop-order file the lint rule reads. */
+export const PROP_ORDER_ARTIFACT = 'prop-order.json';
+
+export function propOrderPath(rootDir: string): string {
+  return join(rootDir, ANIMUS_ARTIFACT_DIR, PROP_ORDER_ARTIFACT);
+}
+
 export function sessionsRootDir(rootDir: string): string {
   return join(rootDir, ANIMUS_ARTIFACT_DIR, 'sessions');
 }

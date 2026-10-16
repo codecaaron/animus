@@ -538,6 +538,7 @@ const OPTION_CLASSES = {
   targets: digestOf('targets'),
   keepDirSelector: digestOf('keepDirSelector'),
   shortClassNames: digestOf('shortClassNames'),
+  propOrderFile: digestOf('propOrderFile'),
   minify: digestOf('minify'),
   staticCss: digestOf('staticCss'),
   layers: digestOf('layers'),

@@ -29,6 +29,7 @@ import {
   packageInstanceFinding,
   packageReadRecord,
 } from '../pipeline/alias-agreement';
+import { fileHashOrEmpty, firstChangedFile } from '../pipeline/content-hash';
 import {
   bareSpecifierPackageName,
   importedKitDiagnostics,
@@ -116,6 +117,7 @@ import { foreignPackages } from '../pipeline/registry-packages';
 import { moduleFactsCall } from '../pipeline/source-ingestion';
 import { systemInstanceMismatches } from '../pipeline/system-instances';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
+import { buildPropOrderFile } from './prop-order';
 import {
   checkLockLiveness,
   holdDirectoryClaim,
@@ -145,6 +147,7 @@ import {
   STYLES_ARTIFACT,
   SYSTEM_PROPS_ARTIFACT,
   fontPreloadsPath,
+  propOrderPath,
   systemPropsPath,
 } from './session-paths';
 import {
@@ -281,6 +284,24 @@ import type {
 } from './session-paths';
 
 const SESSION_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** A file's text, or null when it cannot be read. */
+function readTextOrNull(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+/** Write-then-rename, so a reader never sees a torn file; the pid in the
+ *  tmp name keeps writers apart, and the directory is made on the way. */
+function writeAtomically(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmpPath = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
+  writeFileSync(tmpPath, content);
+  renameSync(tmpPath, path);
+}
 
 const STATUS_WATCHDOG_MS = 2000;
 
@@ -491,26 +512,6 @@ interface SystemDependencies {
   /** Paths the load looked for and found absent. */
   missing: string[];
   hashes: Map<string, string>;
-}
-
-/** A file's content hash, or '' when it cannot be read. */
-function fileHashOrEmpty(path: string): string {
-  try {
-    return contentHash(readFileSync(path, 'utf-8'));
-  } catch {
-    return '';
-  }
-}
-
-/** The first file whose content no longer has its recorded hash: an
- *  unreadable or deleted file reads as '', which mismatches a real one. */
-function firstChangedFile(
-  hashes: ReadonlyMap<string, string>
-): string | undefined {
-  for (const [path, hash] of hashes) {
-    if (fileHashOrEmpty(path) !== hash) return path;
-  }
-  return undefined;
 }
 
 /** How a session fingerprints an asset's bytes, of a file or of bytes
@@ -772,6 +773,9 @@ export class ExtractionSession {
   // carry no modified/removed sets (webpack's first watchRun).
   private systemDependencyHashes: Map<string, string> = new Map();
   private lastSystemPropsHash: string | null = null;
+  /** Where this session's last analysis left the prop-order file holding
+   *  its bytes, or null. */
+  propOrderWrittenTo: string | null = null;
   private artifactRecords: SessionArtifactRecords = {
     manifest: null,
     inputs: null,
@@ -2859,6 +2863,7 @@ export class ExtractionSession {
         ),
         unbundledComputedImports: this.host.unbundledComputedImports,
         openings: [...this.ingestionOpenings],
+        propOrder: this.options.propOrderFile === true,
         foreignPackages: this.foreignPackages,
         packageDirs: this.externalPackageDirs.map((dir) =>
           relative(this.rootDir!, dir)
@@ -3097,6 +3102,7 @@ export class ExtractionSession {
       this.writeFontPreloadsModule(fontPreloads);
 
     this.publishAnalysisCommit(epoch, generation);
+    if (manifest) this.publishPropOrder(manifest, fileEntries);
     this.publishReplacementEpoch(epoch);
     // Staged last: an attempt that fails before here commits nothing.
     this.stagedPublication = {
@@ -3634,17 +3640,55 @@ export class ExtractionSession {
     }
   }
 
+  /** The lint rule's prop-order file, `<root>/.animus/prop-order.json`,
+   *  written where `propOrderFile` asks for it and only when its bytes
+   *  change; a host that serves its results from memory still writes it. No
+   *  build reads it, so a failed write warns and the build goes on. */
+  private publishPropOrder(
+    manifest: ProjectManifest,
+    fileEntries: readonly FileEntry[]
+  ): void {
+    if (this.rootDir === null || this.options.propOrderFile !== true) return;
+    // What decides each tag's component and each component's props beside
+    // the sources: the system module's inputs and the configuration the
+    // resolution reads (package.json, tsconfig, the build's config files).
+    const witnesses = new Map([
+      ...this.systemDependencyHashes,
+      ...this.configInputHashes,
+      ...this.buildConfigFiles.map((file): [string, string] => [
+        file,
+        fileHashOrEmpty(file),
+      ]),
+    ]);
+    const content = `${JSON.stringify(
+      buildPropOrderFile(
+        this.rootDir,
+        manifest,
+        fileEntries,
+        witnesses,
+        this.ingestionAdapted
+      )
+    )}\n`;
+    const path = propOrderPath(this.rootDir);
+    // The disk, not this session's last write: another session, or a hand,
+    // may have replaced the file since.
+    if (readTextOrNull(path) === content) {
+      this.propOrderWrittenTo = path;
+      return;
+    }
+    try {
+      writeAtomically(path, content);
+      this.propOrderWrittenTo = path;
+    } catch (error) {
+      this.warn(`prop-order file not written to ${path}: ${String(error)}`);
+    }
+  }
+
   /** Write one artifact write-then-rename, so a cross-process reader never
    *  sees a torn file; the tmp name carries the pid to keep writers apart. */
   private writeSessionArtifact(name: string, content: string): void {
-    if (this.persistArtifacts) {
-      const dir = this.sessionDir;
-      // Unconditional: mkdirSync(recursive) is a no-op when the dir exists.
-      mkdirSync(dir, { recursive: true });
-      const tmpPath = join(dir, `.${name}.${process.pid}.tmp`);
-      writeFileSync(tmpPath, content);
-      renameSync(tmpPath, join(dir, name));
-    }
+    if (this.persistArtifacts)
+      writeAtomically(join(this.sessionDir, name), content);
     this.onArtifactWrite?.(name, content);
   }
 

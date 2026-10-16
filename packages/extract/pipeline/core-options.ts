@@ -108,6 +108,9 @@ export interface AnimusCoreOptions {
    *  compound, state and breakpoint suffixes are kept. Development keeps the readable names.
    *  Two builds on one page take different prefixes. */
   shortClassNames?: { prefix: string };
+  /** Writes `.animus/prop-order.json`, which the `animus/prop-order` lint
+   *  rule reads, after every analysis; off by default. */
+  propOrderFile?: boolean;
   /** Minification control; `undefined` = minify in production mode only. */
   minify?: boolean;
   /** Forced-emission declarations for usage the scanner cannot observe. */
@@ -186,6 +189,7 @@ export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'targets',
   'keepDirSelector',
   'shortClassNames',
+  'propOrderFile',
   'minify',
   'staticCss',
   'layers',
@@ -386,6 +390,7 @@ const CORE_VALUE_GATES: ReadonlyArray<{
     ok: isShortClassNames,
     expected: '{ prefix } with a letter, then letters and digits',
   },
+  { key: 'propOrderFile', ok: isBoolean, expected: 'a boolean' },
   { key: 'prefix', ok: isString, expected: 'a string' },
   {
     key: 'closedDynamicImports',

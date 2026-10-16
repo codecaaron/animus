@@ -391,6 +391,7 @@ export class PluginContext {
         targets: options.targets,
         keepDirSelector: options.keepDirSelector,
         shortClassNames: options.shortClassNames,
+        propOrderFile: options.propOrderFile,
         minify: options.minify,
         staticCss: options.staticCss,
         layers: options.layers,

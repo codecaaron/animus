@@ -34,6 +34,9 @@ Usage:
   animus watch [options]      Long-lived watch: republish on change; ready,
                               per-cycle failures, and degradation on stderr
   animus print-config [opts]  Print the fully resolved configuration (JSON)
+  animus prop-order [opts]    Write only .animus/prop-order.json, which the
+                              animus/prop-order lint rule reads, without a
+                              dev server
 
 Options:
   --system <path>     SystemInstance module (required unless configured)
@@ -151,7 +154,8 @@ export async function main(
   if (
     command !== 'build' &&
     command !== 'watch' &&
-    command !== 'print-config'
+    command !== 'print-config' &&
+    command !== 'prop-order'
   ) {
     reportUsageError(`Unknown command '${command}'`);
     return;
@@ -184,6 +188,12 @@ export async function main(
 
     if (command === 'build') {
       await runBuild(config, { kit: values.kit === true });
+      process.exitCode = EXIT_OK;
+      return;
+    }
+
+    if (command === 'prop-order') {
+      await runBuild(config, { propOrderOnly: true });
       process.exitCode = EXIT_OK;
       return;
     }

@@ -253,6 +253,9 @@ function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
         isConfigString(raw.shortClassNames.prefix)
           ? { prefix: raw.shortClassNames.prefix }
           : undefined,
+      propOrderFile: isConfigBoolean(raw.propOrderFile)
+        ? raw.propOrderFile
+        : undefined,
       minify: isConfigBoolean(raw.minify) ? raw.minify : undefined,
       staticCss: configStaticCss(raw.staticCss),
       layers: isConfigStringArray(raw.layers) ? raw.layers : undefined,
@@ -437,6 +440,7 @@ export async function resolveCliConfig(
     targets: pick('targets', flags.targets),
     keepDirSelector: pick('keepDirSelector', undefined),
     shortClassNames: pick('shortClassNames', undefined),
+    propOrderFile: pick('propOrderFile', undefined),
     minify: pick('minify', undefined),
     staticCss: pick('staticCss', undefined),
     layers: pick('layers', undefined),
@@ -490,6 +494,7 @@ export function projectResolvedConfig(config: ResolvedCliConfig) {
     targets: config.options.targets ?? null,
     keepDirSelector: config.options.keepDirSelector ?? false,
     shortClassNames: config.options.shortClassNames ?? null,
+    propOrderFile: config.options.propOrderFile ?? false,
     minify: config.options.minify ?? null,
     prefix: config.options.prefix ?? null,
     prefixContextualVars: config.options.prefixContextualVars ?? false,

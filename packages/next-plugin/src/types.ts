@@ -80,6 +80,9 @@ export interface AnimusNextOptions {
    *  compound, state and breakpoint suffixes are kept. Development keeps the readable names.
    *  Two builds on one page take different prefixes. */
   shortClassNames?: { prefix: string };
+  /** Writes `.animus/prop-order.json`, which the `animus/prop-order` lint
+   *  rule reads, after every analysis; off by default. */
+  propOrderFile?: boolean;
   /** `true`/`false` force minification on or off; absent minifies in
    *  production. Autoprefixing applies either way. */
   minify?: boolean;

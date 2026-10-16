@@ -20,6 +20,11 @@ export interface ManifestComponentDescriptor {
   system_prop_names: string[];
   /** The definition's fingerprint, which its location takes no part in. */
   definition_fingerprint: string;
+  /** The props it accepts in authoring order: its variant props, its
+   *  states, its system props in the system's registration order, then its
+   *  custom props in declaration order. Present only where the host
+   *  publishes the prop-order file and the component accepts a prop. */
+  authoring_order?: ManifestOrderedProp[];
 }
 
 export interface ManifestSheets {
@@ -154,7 +159,24 @@ export interface ProjectManifest {
   /** The font files the emitted faces ask to preload, in emission order;
    *  absent where none does. */
   font_preloads?: ManifestFontPreload[];
+  /** File → each tag written there as JSX that renders exactly one
+   *  analysed component, as written (`B`, `ui.Box`, `Card.Body`) → it.
+   *  Present only where the host publishes the prop-order file and a tag
+   *  resolves. */
+  tag_components?: Record<string, Record<string, string>>;
   timing: ManifestTiming;
+}
+
+/** One prop a component accepts, at its place in the authoring order. */
+export interface ManifestOrderedProp {
+  name: string;
+  /** `variants` covers variants and compounds. */
+  stage: 'variants' | 'states' | 'system' | 'custom';
+  rank: number;
+  /** The prop reaches the rendered target as written (`data-*`, `aria-*`,
+   *  or a variant or state an `.asComponent()` target is forwarded), so the
+   *  order it is written in can be observed there; absent, it does not. */
+  forwarded?: true;
 }
 
 /** A preloaded font file and the faces that preload it, by their flags or

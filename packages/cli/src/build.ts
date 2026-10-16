@@ -16,9 +16,10 @@ import {
   getSharedCss,
   getSharedFontPreloads,
   getSharedSystemProps,
+  propOrderPath,
 } from '@animus-ui/extract/session';
 import { existsSync, rmSync, writeFileSync } from 'fs';
-import { join, relative, resolve } from 'path';
+import { dirname, join, relative, resolve } from 'path';
 
 import { installShutdownSignals } from './signals';
 import {
@@ -238,6 +239,10 @@ export function reportDiscoveryOutcomes(
 export interface BuildFlags {
   /** Also write the kit descriptor at the root. */
   kit?: boolean;
+  /** Write only the prop-order file the `animus/prop-order` lint rule
+   *  reads: no artifact directory is claimed or published, so a running
+   *  build's output stays as it is. */
+  propOrderOnly?: boolean;
 }
 
 /** Writes the analysed kit's descriptor at the root, from the manifest the
@@ -262,7 +267,11 @@ export async function runBuild(
 
   await runPreflight(config);
 
-  const release = acquireLock(outDir);
+  const release = flags.propOrderOnly ? () => {} : acquireLock(outDir);
+  // The command writes the file whatever the configuration says.
+  const run: ResolvedCliConfig = flags.propOrderOnly
+    ? { ...config, options: { ...config.options, propOrderFile: true } }
+    : config;
   // Hoisted so the ending reads this session's own tree: the shared
   // singleton slot can name another session's in a multi-session process.
   let session: ExtractionSession | null = null;
@@ -275,12 +284,29 @@ export async function runBuild(
     },
   });
   try {
-    session = createCliSession(config);
+    session = createCliSession(run);
 
     try {
       await session.runFullPipeline();
     } catch (error) {
       throw new ExtractionFailure(String(error));
+    }
+
+    if (flags.propOrderOnly) {
+      const path = propOrderPath(config.root);
+      // This run's write, never a file an earlier run left.
+      if (session.propOrderWrittenTo !== path) {
+        throw new ExtractionFailure(
+          `Analysis wrote no prop-order file at ${path}`
+        );
+      }
+      reportDiscoveryOutcomes(config, session);
+      err(`prop order → ${path}`);
+      return {
+        outDir: dirname(path),
+        componentCount: session.lastComponentCount ?? 0,
+        fileCount: getAnalyzedHashes(session.key)?.size ?? 0,
+      };
     }
 
     const { componentCount, fileCount } = publishSharedPayloads(

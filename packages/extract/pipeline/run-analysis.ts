@@ -131,6 +131,10 @@ export interface AnalysisContext {
   /** The host's `fontPreloads` entries, in place of each face's own
    *  `preload` flag; omitted, the flags decide. */
   fontPreloads?: FontPreloadEntry[];
+  /** The host publishes the prop-order file (`propOrderFile`), so the
+   *  manifest carries each component's authoring order and each file's tag
+   *  table; omitted, it carries neither. */
+  propOrder?: boolean;
 }
 
 /**
@@ -218,7 +222,8 @@ export function analysisContextJson(
       context?.configFiles?.length ||
       context?.closedDynamicImports?.length ||
       context?.foreignPackages?.length ||
-      context?.fontPreloads
+      context?.fontPreloads ||
+      context?.propOrder
     )
   ) {
     return undefined;
@@ -242,6 +247,8 @@ export function analysisContextJson(
     closedDynamicImports: context.closedDynamicImports ?? [],
     foreignPackages: context.foreignPackages ?? [],
     fontPreloads: context.fontPreloads,
+    // Omitted when off, so the wire is what it was without the option.
+    propOrder: context.propOrder === true ? true : undefined,
   } satisfies AnalysisContextWire;
   return JSON.stringify(wire);
 }

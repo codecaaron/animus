@@ -52,6 +52,8 @@ export {
   replacementEpochPath,
   SESSION_ASSETS_DIR,
   sessionArtifactDir,
+  PROP_ORDER_ARTIFACT,
+  propOrderPath,
   STYLES_ARTIFACT,
   stylesPath,
   SYSTEM_PROPS_ARTIFACT,
@@ -63,6 +65,8 @@ export type {
   AnalysisStatus,
   SessionEnvelope,
 } from './session-paths';
+export { PROP_ORDER_SCHEMA_VERSION } from './prop-order';
+export type { PropOrderFile } from './prop-order';
 export {
   runSessionPipeline,
   startTurbopackWatcher,

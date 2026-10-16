@@ -54,6 +54,9 @@ struct AnalyzeResult<'a> {
     /// Present only where a runtime config references a shared table.
     #[serde(skip_serializing_if = "crate::dynamic_meta::RuntimeTables::is_empty")]
     runtime_tables: &'a crate::dynamic_meta::RuntimeTables,
+    /// Present only for a host that publishes the prop-order file.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    tag_components: &'a std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     timing: serde_json::Value,
 }
 
@@ -1497,6 +1500,7 @@ impl ExtractEngine {
             missing_inputs: &css.missing_inputs,
             font_preloads: &css.font_preloads,
             runtime_tables: &css.runtime_tables,
+            tag_components: &css.tag_components,
             timing: serde_json::json!({ "parseCount": self.parse_count }),
         });
         self.cross = Some(cross);

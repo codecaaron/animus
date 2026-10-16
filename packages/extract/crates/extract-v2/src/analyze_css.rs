@@ -233,6 +233,9 @@ pub struct AnalysisContext {
     /// names, or `{ family, weight?, style?, unicodeRange?, fetchpriority? }`),
     /// in place of each typed face's own `preload` flag; absent, the flags.
     pub font_preloads: Option<Vec<Value>>,
+    /// The host publishes the prop-order file (`propOrderFile`): each
+    /// component's authoring order and each file's tag table are built.
+    pub prop_order: bool,
 }
 
 /// Whether the probe base or candidate `path` names one of the system's
@@ -530,6 +533,12 @@ pub struct ComponentDescriptor {
     /// The component's definition fingerprint, which its location takes no
     /// part in.
     pub definition_fingerprint: String,
+    /// The props it accepts in authoring order: its variant props, its
+    /// states, its system props in the system's registration order, then
+    /// its custom props in declaration order. Built only for a host that
+    /// publishes the prop-order file.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub authoring_order: Vec<OrderedProp>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -862,6 +871,20 @@ pub(crate) fn diagnostic(
     }
 }
 
+/// One prop a component accepts, at its place in the authoring order.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct OrderedProp {
+    pub name: String,
+    /// `variants` (variants and compounds), `states`, `system` or `custom`.
+    pub stage: &'static str,
+    pub rank: usize,
+    /// The prop reaches the rendered target as written, so the order it is
+    /// written in can be observed there: a `data-*` or `aria-*` prop, or a
+    /// variant or state an `.asComponent()` target receives.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub forwarded: bool,
+}
+
 pub struct CssOutput {
     pub css: String,
     pub sheets: CssSheets,
@@ -899,6 +922,58 @@ pub struct CssOutput {
     pub font_preloads: Vec<crate::theme::FontPreload>,
     /// The tables runtime configs reference (`RuntimeTables`).
     pub runtime_tables: crate::dynamic_meta::RuntimeTables,
+    /// File → each tag written there as JSX that renders exactly one
+    /// analysed component, as written (`B`, `ui.Box`, `Card.Body`) → it;
+    /// built only for a host that publishes the prop-order file.
+    pub tag_components: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+/// A component's props in authoring order (`ComponentDescriptor`): a name
+/// keeps its first stage, and a custom prop replaces a same-named system one.
+fn authoring_order(
+    css: &ComponentCss,
+    active_props: Option<&FxHashSet<String>>,
+    custom_props: &[String],
+    prop_order: &FxHashMap<String, usize>,
+    descriptor: &crate::chain_walk::ChainDescriptor,
+) -> Vec<OrderedProp> {
+    let mut system: Vec<&str> = active_props
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .filter(|name| !custom_props.iter().any(|custom| custom == name))
+        .collect();
+    system.sort_by_key(|name| (prop_order.get(*name).copied().unwrap_or(usize::MAX), *name));
+    let staged = css
+        .variants
+        .iter()
+        .map(|variant| (variant.prop.as_str(), "variants"))
+        .chain(css.states.iter().map(|(name, _)| (name.as_str(), "states")))
+        .chain(system.into_iter().map(|name| (name, "system")))
+        .chain(custom_props.iter().map(|name| (name.as_str(), "custom")));
+    // As the runtime's `forwardProps` passes them on.
+    let forwarded = |name: &str, stage: &str| {
+        name.starts_with("data-")
+            || name.starts_with("aria-")
+            || (descriptor.terminal == TerminalKind::AsComponent
+                && matches!(stage, "variants" | "states")
+                && match &descriptor.forward {
+                    Some(crate::chain_walk::Forward::All) => true,
+                    Some(crate::chain_walk::Forward::Names(names)) => names.iter().any(|forwarded| forwarded == name),
+                    None => false,
+                })
+    };
+    let mut seen = FxHashSet::default();
+    staged
+        .filter(|(name, _)| seen.insert(*name))
+        .enumerate()
+        .map(|(rank, (name, stage))| OrderedProp {
+            name: name.to_string(),
+            stage,
+            rank,
+            forwarded: forwarded(name, stage),
+        })
+        .collect()
 }
 
 pub fn extract_breakpoints(theme: &FlatTheme) -> BreakpointMap {
@@ -7221,6 +7296,9 @@ fn run_with_system_floor(
         Vec<(BTreeMap<String, Value>, String)>, // POST-MERGE compound configs
     );
     let mut evaluated: FxHashMap<String, EvalEntry> = FxHashMap::default();
+    // Each component's custom props in declaration order, the inherited
+    // first.
+    let mut custom_order: FxHashMap<String, Vec<String>> = FxHashMap::default();
     // Each component's skipped (stage, key) pairs, its own and those it
     // inherits without setting itself.
     let mut skipped_keys: FxHashMap<String, Vec<(String, String)>> = FxHashMap::default();
@@ -7802,6 +7880,31 @@ fn run_with_system_floor(
                     &inherited_collisions,
                     admitted_by,
                 ));
+                // Built only for a host that publishes the prop-order file.
+                if inputs.analysis_context.prop_order {
+                    let mut custom_props: Vec<String> = parent_map
+                        .get(component_id)
+                        .and_then(|parent| custom_order.get(parent))
+                        .cloned()
+                        .unwrap_or_default();
+                    let declared = chain
+                        .stages
+                        .iter()
+                        .filter(|stage| stage.method == "props")
+                        .filter_map(|stage| stage.value.as_ref()?.as_object())
+                        .flat_map(|props| props.keys());
+                    for name in declared {
+                        if !custom_props.contains(name) {
+                            custom_props.push(name.clone());
+                        }
+                    }
+                    let configured = custom_configs.iter().flat_map(|configs| configs.keys());
+                    let mut undeclared: Vec<&String> = configured.filter(|name| !custom_props.contains(name)).collect();
+                    undeclared.sort();
+                    custom_props.extend(undeclared.into_iter().cloned());
+                    custom_props.retain(|name| custom_configs.as_ref().is_some_and(|configs| configs.contains_key(name)));
+                    custom_order.insert(component_id.clone(), custom_props);
+                }
                 evaluated.insert(
                     component_id.clone(),
                     (
@@ -8634,6 +8737,46 @@ fn run_with_system_floor(
             }
         }
     }
+    // A tag also bound inside a function or block somewhere in its file may
+    // name another binding there, so only top-level tags resolve; and a
+    // component some module may have changed or handed on (a family member
+    // reassigned) may no longer be what the tag renders.
+    let tag_components: BTreeMap<String, BTreeMap<String, String>> = files
+        .iter()
+        .filter(|_| inputs.analysis_context.prop_order)
+        .filter_map(|(path, ff)| {
+            let mut top_level: BTreeMap<&str, bool> = BTreeMap::new();
+            for fact in ff.usage_for_analysis() {
+                if let UsageFact::Element {
+                    tag: TagFact::Ident(tag) | TagFact::Member(tag),
+                    origin,
+                    written_as_call: false,
+                    ..
+                } = fact
+                {
+                    if tag.starts_with(|first: char| first.is_ascii_lowercase()) && !tag.contains('.') {
+                        continue;
+                    }
+                    let bound = matches!(origin, Some(TagOrigin::Import | TagOrigin::TopLevel));
+                    *top_level.entry(tag.as_str()).or_insert(true) &= bound;
+                }
+            }
+            let tags: BTreeMap<String, String> = top_level
+                .into_iter()
+                .filter(|(_, bound)| *bound)
+                .filter_map(|(tag, _)| {
+                    let mut ids = receiver_ids(path, ff, tag);
+                    ids.sort();
+                    ids.dedup();
+                    match ids.as_slice() {
+                        [only] if !changed_ids.contains(only) => Some((tag.to_string(), only.clone())),
+                        _ => None,
+                    }
+                })
+                .collect();
+            (!tags.is_empty()).then(|| (path.clone(), tags))
+        })
+        .collect();
     let (delivered_ids, delivered_tags) = opaque_delivery(
         files,
         inputs,
@@ -10028,7 +10171,7 @@ fn run_with_system_floor(
         let Some((file_path, chain_idx)) = chain_lookup.get(component_id.as_str()) else {
             continue;
         };
-        let Some((component_css, binding, terminal, _, _, _, _)) = evaluated.get(component_id)
+        let Some((component_css, binding, terminal, active_props, _, _, _)) = evaluated.get(component_id)
         else {
             continue;
         };
@@ -10062,6 +10205,17 @@ fn run_with_system_floor(
                     .map(|p| p.system_prop_names.clone())
                     .unwrap_or_default(),
                 definition_fingerprint: definition_fingerprints[component_id].clone(),
+                authoring_order: if inputs.analysis_context.prop_order {
+                    authoring_order(
+                        component_css,
+                        active_props.as_ref(),
+                        custom_order.get(component_id).map_or(&[][..], Vec::as_slice),
+                        &inputs.prop_order,
+                        &chain.descriptor,
+                    )
+                } else {
+                    Vec::new()
+                },
             },
         );
         files_map
@@ -10111,6 +10265,7 @@ fn run_with_system_floor(
         missing_inputs,
         font_preloads: font_preloads.list,
         runtime_tables,
+        tag_components,
     }
 }
 
@@ -18436,6 +18591,97 @@ export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} 
 
     /// `wide` and `tall` share one configured callable, in different groups;
     /// `inset` binds a callable no other prop shares.
+    /// Contract: a component's authoring order is its variant props, its
+    /// states, its system props in the system's registration order (not its
+    /// groups' order), then its custom props in declaration order, the
+    /// inherited first; a tag resolves through an aliased or namespace
+    /// import, and a name also bound in a nested scope does not resolve. A
+    /// host that does not publish the prop-order file gets neither. A prop
+    /// the target receives as written (`data-*`, `aria-*`, a variant or
+    /// state an `.asComponent()` target is forwarded) is marked forwarded,
+    /// and a reassigned family member is never published as one component.
+    #[test]
+    fn prop_order_follows_stages_then_registration_and_tags_resolve_as_written() {
+        let inputs = CssInputs::from_json(
+            None,
+            None,
+            None,
+            Some(r#"{"p": {"property": "padding"}, "bg": {"property": "background-color"}, "px": {"property": "padding-inline"}}"#),
+            Some(r#"{"space": ["px", "p"], "color": ["bg"]}"#),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        let ui = "export const Box = ds.styles({ display: 'flex' })\n\
+            .variant({ prop: 'tone', variants: { calm: { display: 'block' }, loud: { display: 'grid' } } })\n\
+            .states({ active: { display: 'inline' } })\n\
+            .system({ space: true, color: true })\n\
+            .props({ lift: { property: 'margin-top' }, glow: { property: 'opacity' } })\n\
+            .asElement('div');\n\
+            export const Big = Box.extend().props({ aura: { property: 'outline-width' } }).asElement('div');\n\
+            export const Other = ds.styles({ display: 'grid' }).asElement('div');\n\
+            function Target(props) { return <span {...props} />; }\n\
+            export const Fwd = ds.variant({ prop: 'data-tone', variants: { calm: { display: 'block' } } })\n\
+            .variant({ prop: 'size', variants: { sm: { display: 'grid' } } })\n\
+            .states({ busy: { display: 'inline' }, open: { display: 'flex' } })\n\
+            .asComponent(Target, { forward: ['busy'] });\n";
+        let app = "import { Box as B } from './ui';\n\
+            import * as ui from './ui';\n\
+            export const App = () => <><B tone=\"calm\" active p={1} lift={1} /><ui.Big glow={1} aura={1} loud /></>;\n\
+            export const Shadow = ({ B }) => <B />;\n\
+            export const Named = () => <ui.Box bg=\"x\" />;\n";
+        let aliased = "import { Box as B } from './ui';\nexport const Page = () => <B tone=\"loud\" />;\n";
+        let forwarding = "import { Fwd } from './ui';\n\
+            export const App = () => <Fwd data-tone=\"calm\" size=\"sm\" busy open />;\n";
+        let entries = [("ui.tsx", ui), ("app.tsx", app), ("page.tsx", aliased), ("fwd.tsx", forwarding)];
+        let off = analyze(&entries, &inputs);
+        assert!(off.tag_components.is_empty() && off.components.values().all(|c| c.authoring_order.is_empty()));
+        let mut inputs = inputs;
+        inputs.analysis_context.prop_order = true;
+        let out = analyze(&entries, &inputs);
+        let order = |id: &str| -> Vec<(String, &str)> {
+            out.components[id].authoring_order.iter().map(|prop| (prop.name.clone(), prop.stage)).collect()
+        };
+        let expected = |custom: &[&str]| -> Vec<(String, &str)> {
+            [("tone", "variants"), ("active", "states"), ("p", "system"), ("bg", "system"), ("px", "system")]
+                .into_iter()
+                .chain(custom.iter().map(|name| (*name, "custom")))
+                .map(|(name, stage)| (name.to_string(), stage))
+                .collect()
+        };
+        assert_eq!(order("ui.tsx::Box"), expected(&["lift", "glow"]));
+        assert_eq!(order("ui.tsx::Big"), expected(&["lift", "glow", "aura"]));
+        assert!(out.components["ui.tsx::Box"].authoring_order.iter().enumerate().all(|(rank, prop)| prop.rank == rank));
+        let tags = &out.tag_components["app.tsx"];
+        assert_eq!(tags.get("ui.Big").map(String::as_str), Some("ui.tsx::Big"), "{tags:?}");
+        assert_eq!(tags.get("ui.Box").map(String::as_str), Some("ui.tsx::Box"), "{tags:?}");
+        assert!(!tags.contains_key("B"), "B is also a parameter in this file: {tags:?}");
+        assert_eq!(out.tag_components["page.tsx"].get("B").map(String::as_str), Some("ui.tsx::Box"));
+        let forwarded: Vec<(&str, bool)> = out.components["ui.tsx::Fwd"]
+            .authoring_order
+            .iter()
+            .map(|prop| (prop.name.as_str(), prop.forwarded))
+            .collect();
+        assert_eq!(forwarded, [("data-tone", true), ("size", false), ("busy", true), ("open", false)]);
+        assert!(out.components["ui.tsx::Box"].authoring_order.iter().all(|prop| !prop.forwarded));
+
+        let family = "import { compose } from '@animus-ui/system';\n\
+            import { Box, Other } from './ui';\n\
+            const Family = compose({ Root: Box }, { name: 'F' });\n\
+            Family.Root = Other;\n\
+            export const App = () => <Family.Root p={8} />;\n";
+        let out = analyze(&[("ui.tsx", ui), ("family.tsx", family)], &inputs);
+        let reassigned = out.tag_components.get("family.tsx");
+        assert!(reassigned.is_none_or(|tags| !tags.contains_key("Family.Root")), "{reassigned:?}");
+    }
+
     fn split_group_inputs() -> CssInputs {
         let mut inputs = CssInputs::from_json(
             None,

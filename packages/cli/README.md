@@ -31,7 +31,13 @@ on unsupported platforms.
 animus build --root . --system ./src/ds.ts --strict
 animus watch --root . --system ./src/ds.ts
 animus print-config --root . --system ./src/ds.ts
+animus prop-order --root . --system ./src/ds.ts
 ```
+
+`animus prop-order` writes only `<root>/.animus/prop-order.json`. The
+[`animus/prop-order` lint rule](../extract/README.md#prop-order-lint-rule)
+reads it, and the command needs no dev server; `animus build` writes the
+same file when the config sets `propOrderFile: true`.
 
 Configuration lives in `animus.config.{json,mjs,js,ts}` (probed in that
 order; `.ts` needs Node >= 23.6 native type stripping — older runtimes get
