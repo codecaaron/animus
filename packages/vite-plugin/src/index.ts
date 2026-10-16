@@ -532,9 +532,11 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
             bundle,
             linkedSlices,
             emitAsset,
-            removal?.rewrite
+            removal
+              ? (file) => removal.replace(file, (asset) => this.emitFile(asset))
+              : undefined
           );
-          removal?.report();
+          removal?.finish();
         }
         if (ctx.servedDirSelector && !ctx.warnedLoweredDir && isClient(this)) {
           const sheets = Object.values(bundle).flatMap((file) =>

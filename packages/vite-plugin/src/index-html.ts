@@ -298,9 +298,8 @@ export function placeStylesheetSlices(
   bundle: Rolldown.OutputBundle,
   sliceIds: readonly string[],
   emitAsset: (name: string, source: string) => string,
-  /** Each slice's CSS as it ships, or `null` to ship Vite's file as it is;
-   *  a changed slice is emitted again, under the hash of what it holds. */
-  rewrite?: (css: string, fileName: string) => string | null
+  /** The file emitted in a slice's place, or `null` to ship Vite's own. */
+  replace?: (file: Rolldown.OutputAsset) => string | null
 ): void {
   const fileOf = new Map<string, string>();
   const pages: Rolldown.OutputAsset[] = [];
@@ -316,16 +315,13 @@ export function placeStylesheetSlices(
     }
     const id = sliceIdOf(file, sliceIds);
     if (id === undefined) continue;
-    const css = rewrite?.(
-      Buffer.from(file.source).toString('utf8'),
-      file.fileName
-    );
-    if (css === undefined || css === null) {
+    const replacement = replace?.(file);
+    if (replacement === undefined || replacement === null) {
       fileOf.set(id, file.fileName);
       continue;
     }
     delete bundle[file.fileName];
-    fileOf.set(id, emitAsset(file.names[0] ?? 'animus.css', css));
+    fileOf.set(id, replacement);
   }
   const slices = sliceIds.map((id) => {
     const fileName = fileOf.get(id);

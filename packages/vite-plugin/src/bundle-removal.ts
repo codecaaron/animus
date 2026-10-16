@@ -4,6 +4,8 @@ import {
   shippedClasses,
   unbundledComponents,
 } from '@animus-ui/extract/pipeline';
+import { createHash } from 'node:crypto';
+import { posix } from 'node:path';
 
 import { sliceIdOf } from './index-html';
 
@@ -12,10 +14,14 @@ import type { Rolldown } from 'vite';
 
 /** What a build that removes unbundled components does to its slices. */
 export interface BundleRemoval {
-  /** A slice's CSS without the removed components' rules; `null` keeps it. */
-  rewrite(css: string, fileName: string): string | null;
-  /** Reports what the rewrites removed. */
-  report(): void;
+  /** Emits `file` without the removed components' rules, beside it under a
+   *  name its new content hashes, and returns that name; `null` keeps it. */
+  replace(
+    file: Rolldown.OutputAsset,
+    emit: (asset: Rolldown.EmittedAsset) => void
+  ): string | null;
+  /** Reports what the replacements removed. */
+  finish(): void;
 }
 
 /**
@@ -70,7 +76,8 @@ export function bundleRemoval(
   const classes = new Set(removed.values());
   let bytes = 0;
   return {
-    rewrite(css, fileName) {
+    replace(file, emit) {
+      const css = Buffer.from(file.source).toString('utf8');
       let pruned: string | null;
       try {
         pruned = removeComponentRules(css, classes, {
@@ -79,14 +86,25 @@ export function bundleRemoval(
         });
       } catch (error) {
         ctx.warn(
-          `[animus-extract] removeUnbundledComponents kept ${fileName} whole: Lightning CSS could not read it (${error instanceof Error ? error.message : String(error)})`
+          `[animus-extract] removeUnbundledComponents kept ${file.fileName} whole: Lightning CSS could not read it (${error instanceof Error ? error.message : String(error)})`
         );
         return null;
       }
-      if (pruned !== null) bytes += css.length - pruned.length;
-      return pruned;
+      if (pruned === null) return null;
+      bytes += css.length - pruned.length;
+      // Beside the file it replaces, so each relative url() still resolves,
+      // whatever an `assetFileNames` callback would choose.
+      const fileName = siblingFileName(file.fileName, pruned);
+      emit({
+        type: 'asset',
+        fileName,
+        name: file.names[0],
+        originalFileName: file.originalFileNames[0],
+        source: pruned,
+      });
+      return fileName;
     },
-    report() {
+    finish() {
       if (ctx.tracing) {
         for (const [id, className] of removed) {
           ctx.trace(`removed ${id} (${className}): no output file includes it`);
@@ -97,6 +115,16 @@ export function bundleRemoval(
       );
     },
   };
+}
+
+/** `fileName`'s directory and name, followed by a hash of `source`. */
+function siblingFileName(fileName: string, source: string): string {
+  const extension = posix.extname(fileName);
+  const hash = createHash('sha256')
+    .update(source)
+    .digest('base64url')
+    .slice(0, 8);
+  return `${fileName.slice(0, fileName.length - extension.length)}-${hash}${extension}`;
 }
 
 /** Why a client build keeps every component, or `null`. */
