@@ -352,17 +352,23 @@ export function removeComponentRules(
         return false;
     }
   };
-  // Notes the classes each style rule in a rule that goes needs, since
-  // Lightning CSS visits nothing inside a rule a visitor drops.
-  const record = (rule: Rule): void => {
+  // Notes the classes each style rule in a rule that goes needs, nested
+  // style rules too, since Lightning CSS visits nothing inside a rule a
+  // visitor drops.
+  const record = (
+    rule: Rule,
+    parent: readonly string[] | null = null
+  ): void => {
     if (rule.type === 'style') {
-      for (const name of needsOf(rule.value.selectors).flat()) went.add(name);
+      const own = needsOf(rule.value.selectors, parent).flat();
+      for (const name of own) went.add(name);
+      for (const inner of rule.value.rules ?? []) record(inner, own);
     } else if (
       rule.type === 'media' ||
       rule.type === 'supports' ||
       rule.type === 'container'
     ) {
-      for (const inner of rule.value.rules) record(inner);
+      for (const inner of rule.value.rules) record(inner, parent);
     }
   };
   const drop = (rule: Rule) => {
@@ -379,11 +385,9 @@ export function removeComponentRules(
     visitor: {
       Rule: {
         style(rule) {
+          const dropped = drop(rule);
+          if (dropped) return dropped;
           const needs = needsOf(rule.value.selectors);
-          if (goes(rule)) {
-            for (const name of needs.flat()) went.add(name);
-            return [];
-          }
           const needed = new Set(needs.flat());
           const nested = everyNeeds(needs);
           for (const selector of rule.value.selectors) {

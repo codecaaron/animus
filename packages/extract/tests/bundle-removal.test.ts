@@ -98,7 +98,8 @@ describe('removeComponentRules over nested rules', () => {
   // rule's `&` may match outside its parent (`:not(&)`, `:is(&, .live)`),
   // so it goes only where its own selector needs a removed class, and a
   // nested `@layer` block never goes, since it places its layer in the
-  // layer order; through a wrapping `@media` too.
+  // layer order; through a wrapping `@media` too. Every class a rule that
+  // went with its parent needs counts as gone.
   test('a style rule goes only with every rule nested in it', () => {
     const classes = new Set(['dead', 'gone']);
     const keep = [
@@ -124,12 +125,13 @@ describe('removeComponentRules over nested rules', () => {
       { targets: {} }
     ).css;
     expect(layered).toBeNull();
-    const { css: out } = removeComponentRules(
-      '.dead{color:red;&:hover{color:#00f}& .gone{color:red}@media (min-width:1px){color:green}}.live{color:red}',
+    const { css: out, went } = removeComponentRules(
+      '@media (min-width:2px){.dead{color:red;&:hover{color:#00f}& .gone{color:red}@media (min-width:1px){color:green}}}.live{color:red}',
       classes,
       { targets: {} }
     );
     expect(out).toBe('.live{color:red}');
+    expect([...went].sort()).toEqual(['dead', 'gone']);
   });
 });
 
