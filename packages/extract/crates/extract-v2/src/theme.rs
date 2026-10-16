@@ -342,6 +342,10 @@ pub type StrictTokenMissSink = RefCell<Vec<StrictTokenMiss>>;
 /// A style-object key whose block no rule emits, so its styling is lost.
 pub const UNRECOGNIZED_STYLE_KEY: &str = "animus.style.unrecognized-key";
 
+/// A prop's value written as an object with a key that is neither `_` nor a
+/// theme breakpoint, in a style block or at a render: no rule applies it.
+pub const NON_BREAKPOINT_KEY: &str = "animus.style.non-breakpoint-key";
+
 /// Two keys of one style block that set one CSS property at one condition.
 pub const KEYS_SHARE_PROPERTY: &str = "animus.style.keys-share-property";
 
@@ -392,7 +396,7 @@ pub enum DroppedStyleKey {
     /// `_name` is neither a registered selector nor a condition alias.
     UnregisteredAlias(String),
     /// A registered prop given an object whose keys are not all breakpoints.
-    NonResponsiveObject(String),
+    NonResponsiveObject(NonBreakpointKeys),
     /// Any other key, such as an HTML element name written without `&`.
     UnrecognizedKey(String),
     /// An at-rule extraction does not support, with the block it holds.
@@ -426,6 +430,18 @@ pub enum DroppedStyleKey {
     SharedProperty { overridden: String, winner: String, property: String, rule: CascadeRule },
 }
 
+/// A prop's object value with keys that are not breakpoints: each such key
+/// with the kind of alias it is, if one (`unknown`), the theme's breakpoints
+/// by width, and whether every key is a prop, so the object reads as a block
+/// of styles.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NonBreakpointKeys {
+    pub prop: String,
+    pub unknown: Vec<(String, Option<&'static str>)>,
+    pub breakpoints: Vec<String>,
+    pub styles: bool,
+}
+
 /// Why the later of two keys on one property follows the other.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CascadeRule {
@@ -445,8 +461,8 @@ impl DroppedStyleKey {
     pub fn key(&self) -> &str {
         match self {
             Self::UnregisteredAlias(key)
-            | Self::NonResponsiveObject(key)
             | Self::UnrecognizedKey(key)
+            | Self::NonResponsiveObject(NonBreakpointKeys { prop: key, .. })
             | Self::UnsupportedAtRule { key, .. }
             | Self::AtRulePlacement { key, .. }
             | Self::UnitlessCustomProperty { prop: key, .. }
@@ -1199,24 +1215,48 @@ fn resolve_entry(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDecla
     let failures = || ctx.transform_failures.map_or(0, |sink| sink.borrow().len());
     let failures_before = failures();
     let declarations = resolve_prop(key, value, ctx);
-    if declarations.is_empty() && value.is_object() && failures() == failures_before {
+    if declarations.is_empty() && value.is_object() && failures() == failures_before && ctx.dropped_keys.is_some() {
         if let Some((at_rule, block)) = value.as_object().into_iter().flatten().find(|(entry, _)| only_wraps_rules(entry, ctx)) {
             let within = format!("the value of '{key}'");
             let lost = format!("'{key}'");
             record_dropped_key(ctx, DroppedStyleKey::AtRulePlacement { key: at_rule.clone(), within, lost, block: block.clone() });
             return declarations;
         }
-        let key = key.to_string();
         record_dropped_key(
             ctx,
-            if ctx.config.contains_key(&key) {
-                DroppedStyleKey::NonResponsiveObject(key)
-            } else {
-                DroppedStyleKey::UnrecognizedKey(key)
+            match value.as_object() {
+                Some(entries) if ctx.config.contains_key(key) => non_responsive_object(key, entries, ctx),
+                _ => DroppedStyleKey::UnrecognizedKey(key.to_string()),
             },
         );
     }
     declarations
+}
+
+fn non_responsive_object(key: &str, entries: &Map<String, Value>, ctx: &ResolveContext) -> DroppedStyleKey {
+    let alias_kind = |entry: &str| {
+        if ctx.condition_aliases.contains_key(entry) {
+            Some("condition")
+        } else if ctx.selector_aliases.contains_key(entry) {
+            Some("selector")
+        } else {
+            None
+        }
+    };
+    let unknown = entries
+        .keys()
+        .filter(|entry| *entry != "_" && !ctx.breakpoint_keys.contains(*entry))
+        .map(|entry| (entry.clone(), alias_kind(entry)))
+        .collect();
+    let width = |name: &String| ctx.theme.get(&format!("breakpoints.{name}")).and_then(|px| px.parse::<u32>().ok());
+    let mut breakpoints: Vec<String> = ctx.breakpoint_keys.iter().cloned().collect();
+    breakpoints.sort_by_cached_key(|name| (width(name), name.clone()));
+    DroppedStyleKey::NonResponsiveObject(NonBreakpointKeys {
+        prop: key.to_string(),
+        unknown,
+        breakpoints,
+        styles: !entries.is_empty() && entries.keys().all(|entry| ctx.config.contains_key(entry)),
+    })
 }
 
 fn push_nested_breakpoint_group(

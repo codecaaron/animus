@@ -804,6 +804,37 @@ export const reset = { __brand: 'GlobalStyleBlock', styles: { html: { '@bogus (.
   ).toThrow(/6 error diagnostic/);
 });
 
+test('a responsive value whose key is not a breakpoint is reported where it is written, and fails a strict build', () => {
+  const { manifest } = runPipeline([
+    {
+      path: 'non-breakpoint.tsx',
+      source: `import { ds } from '../setup';
+export const Box = ds.system({ space: true }).asElement('div');
+export const Card = ds.styles({ p: { _: 8, wide: 16 } } as any).asElement('div');
+export const App = () => <><Box p={{ _: 8, wide: 16 } as any} /><Box p={{ _: 8, md: 16 }} /><Card /></>;
+`,
+    },
+  ]);
+  const reported = manifest.diagnostics
+    .filter(
+      (d: { code?: string }) => d.code === 'animus.style.non-breakpoint-key'
+    )
+    .map((d: ManifestDiagnostic) => [
+      d.component,
+      d.line,
+      d.column,
+      d.severity,
+    ]);
+  expect(reported).toEqual([
+    ['Card', 3, 21, 'error'],
+    ['Box', 4, 33, 'error'],
+  ]);
+  expect(() => surfaceManifestDiagnostics(manifest, () => {})).not.toThrow();
+  expect(() =>
+    surfaceManifestDiagnostics(manifest, () => {}, { strict: true })
+  ).toThrow(/2 error diagnostic/);
+});
+
 test('a block key given no block, and a block under a global at-rule selector, are reported and fail a strict build', () => {
   const { manifest } = runPipeline(
     [

@@ -813,6 +813,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (STATIC_CSS_UNKNOWN_NAME, "warn"),
     (STATIC_CSS_INVALID_SHAPE, "warn"),
     (crate::theme::UNRECOGNIZED_STYLE_KEY, "warn"),
+    (crate::theme::NON_BREAKPOINT_KEY, "error"),
     (crate::theme::KEYS_SHARE_PROPERTY, "warn"),
     (crate::theme::UNSUPPORTED_AT_RULE, "error"),
     (crate::theme::UNITLESS_CUSTOM_PROPERTY, "warn"),
@@ -2084,22 +2085,14 @@ fn dropped_style_key(
         [one] => format!("so its block is not emitted here or in {one}, which inherits it"),
         _ => format!("so its block is not emitted here or in {}, which inherit it", inheritors.join(", ")),
     };
-    // `'& p'` is the fix only for a key spelled like an HTML element.
-    let element_hint = |key: &str| {
-        let element = key.chars().next().is_some_and(|c| c.is_ascii_lowercase())
-            && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-        if element { format!("; for the {key} element, write the selector '& {key}'") } else { String::new() }
-    };
     let message = match dropped {
         DroppedStyleKey::UnregisteredAlias(key) => format!(
             "style key '{key}' is not a registered selector or condition alias, {not_emitted} — \
              register the alias in the system, or fix its name"
         ),
-        DroppedStyleKey::NonResponsiveObject(key) => format!(
-            "prop '{key}' was given an object whose keys are not breakpoints, {not_emitted} — give \
-             it a value or an object of breakpoint keys{}",
-            element_hint(key)
-        ),
+        DroppedStyleKey::NonResponsiveObject(keys) => {
+            return non_breakpoint_key(file, component, keys, &not_emitted);
+        }
         DroppedStyleKey::UnitlessCustomProperty { prop, value, properties } => {
             return unitless_custom_property(file, component, prop, value, properties);
         }
@@ -2167,6 +2160,57 @@ fn dropped_style_key(
         }
     };
     diagnostic(file, component, "warn", message, Some(crate::theme::UNRECOGNIZED_STYLE_KEY))
+}
+
+/// `'& p'` is the fix only for a key spelled like an HTML element.
+fn element_hint(key: &str) -> String {
+    let element = key.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+        && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    if element { format!("; for the {key} element, write the selector '& {key}'") } else { String::new() }
+}
+
+/// Names as a list of quoted names.
+fn quoted<'a>(names: impl IntoIterator<Item = &'a String>) -> String {
+    names.into_iter().map(|name| format!("'{name}'")).collect::<Vec<_>>().join(", ")
+}
+
+/// A prop's object value with keys that are not breakpoints, and what is
+/// lost for it (`lost`): in a style block its block, at a render the value.
+/// An alias key is written as a style key instead; any other key becomes a
+/// breakpoint once the theme adds it. Only an object whose keys are all
+/// props reads as a block meant for an element the prop is named like.
+fn non_breakpoint_key(file: &str, component: &str, keys: &crate::theme::NonBreakpointKeys, lost: &str) -> CssDiagnostic {
+    let crate::theme::NonBreakpointKeys { prop, unknown, breakpoints, styles } = keys;
+    let theme = match breakpoints.as_slice() {
+        [] => "the theme defines none".to_string(),
+        names => format!("the theme defines {}", quoted(names)),
+    };
+    let mut message = if unknown.is_empty() {
+        format!("prop '{prop}' was given an empty object, {lost} — give it a value or an object of breakpoint keys")
+    } else {
+        format!(
+            "prop '{prop}' was given an object with keys that are not breakpoints ({}), {lost} — key it by \
+             '_' and breakpoints ({theme}), or give it a value",
+            quoted(unknown.iter().map(|(key, _)| key))
+        )
+    };
+    let (aliases, others): (Vec<_>, Vec<_>) = unknown.iter().partition(|(_, kind)| kind.is_some());
+    if let [(alias, Some(kind)), ..] = aliases.as_slice() {
+        let named = match aliases.len() {
+            1 => format!("'{alias}' is a {kind}: write it"),
+            _ => format!("{} are aliases: write each", quoted(aliases.iter().map(|(alias, _)| alias))),
+        };
+        let _ = write!(message, "; {named} in styles as {{ {alias}: {{ {prop}: … }} }}");
+        if aliases.iter().any(|(_, kind)| *kind == Some("condition")) {
+            message.push_str(", or add a breakpoint with addBreakpoints and key by it");
+        }
+    }
+    if *styles {
+        message.push_str(&element_hint(prop));
+    } else if !others.is_empty() {
+        let _ = write!(message, "; to key by {}, add it to the theme with addBreakpoints", quoted(others.iter().map(|(key, _)| key)));
+    }
+    diagnostic(file, component, "warn", message, Some(crate::theme::NON_BREAKPOINT_KEY))
 }
 
 /// A number a prop writes unitless to its custom properties.
@@ -8250,6 +8294,30 @@ fn run_with_system_floor(
             _ => None,
         })
         .collect();
+    // An empty object writes nothing, so a render loses nothing to it.
+    let non_breakpoint_keys = |config: &PropConfigMap, prop_name: &str, value: &Value| {
+        let entries = value.as_object()?;
+        if entries.is_empty()
+            || !config.contains_key(prop_name)
+            || crate::theme::is_responsive_value(value, resolve_ctx.breakpoint_keys)
+        {
+            return None;
+        }
+        let dropped = crate::theme::DroppedStyleKeySink::default();
+        let failures = TransformFailureSink::default();
+        let ctx = ResolveContext {
+            config,
+            dropped_keys: Some(&dropped),
+            transform_failures: Some(&failures),
+            token_misses: None,
+            ..resolve_ctx
+        };
+        resolve_styles(&serde_json::json!({ prop_name: value }), &ctx, true);
+        dropped.into_inner().into_iter().find_map(|dropped| match dropped.dropped {
+            crate::theme::DroppedStyleKey::NonResponsiveObject(keys) => Some(keys),
+            _ => None,
+        })
+    };
     // A literal that misses a strict scale gets no class; it is reported at
     // each of its `uses`, at its offset and naming the component it renders,
     // which the shared utility stream no longer knows. A value whose
@@ -8277,6 +8345,18 @@ fn run_with_system_floor(
         }
         if prop_config.is_some_and(|prop_config| !extracts_configured_value(prop_config, value, &resolve_ctx)) {
             return None;
+        }
+        // An object keyed by something other than a breakpoint gets no class,
+        // and the runtime's slot has no rule at that key: it is reported at
+        // each use, by the rule a style block's value is.
+        if let Some(keys) = non_breakpoint_keys(config, prop_name, value) {
+            let report = |renders: &str| non_breakpoint_key(file, renders, &keys, "so no rule applies it");
+            match uses {
+                [] => diagnostics.push(report(component)),
+                uses => diagnostics.extend(
+                    uses.iter().map(|&(at, renders, reach)| miss_by_reach(report(renders), renders, reach).at(at)),
+                ),
+            }
         }
         // A raw keyframes key is reported at each use that writes it.
         let usage_quiet = ResolveContext { config, ..quiet_ctx };
