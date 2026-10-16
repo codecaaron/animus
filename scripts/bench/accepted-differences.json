@@ -23,9 +23,9 @@
   {
     "row": "build:vite-app",
     "fixture": "vite-app",
-    "baseline": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
-    "candidate": "212a5480244c3f25a83c6d6c405e06e5eecccf78c601a7bf80c4c345f9bd6398",
-    "reason": "The JS grows 196 bytes (250909 to 251105): runtime compound-variant matching compares the prop value as a string, so a boolean prop matches its \"true\"/\"false\" key, and an asComponent() target receives the variants and states its terminal forwards, each with its default. The CSS is identical (cssDigest unchanged)."
+    "baseline": "d03eaa3296e0d23e68d0388403ab97408dd8782cfb08f553e0de46033fa05ee1",
+    "candidate": "924550f924601e4d0a13b53fac2741971bc869164baf815edacf32843e83f9e4",
+    "reason": "The JS differs in size because runtime compound-variant matching compares the prop value as a string, an asComponent() target receives the variants and states its terminal forwards, configs derive slot and compound names at runtime, and scale and keyword tables, system prop name lists, supersededBy and transform bindings ship once in the system-props module. One identity-uncertain-tag info line fewer: a tag of a package with no dependency path to Animus is counted in the identity-uncertain warning, not listed. Both sides build with the checkout toolchain, whose rolldown 1.2.14 (vite-plus 1.3.0) adds a third argument, t.exports, to its CommonJS-interop helper: 10 bytes on each side. The CSS is identical (cssDigest unchanged)."
   },
   {
     "row": "analysis:showcase",
@@ -33,13 +33,6 @@
     "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
     "candidate": "c706e436035d56d6662c9fb77e3828e6aacb0d943a79395ec21de5b0c957ad1d",
     "reason": "Beside the fileFacts difference above, only diagnostics differ: the 28 tags of packages with no dependency path to Animus (react-router-dom, lucide-react, @ark-ui/react, react, @mdx-js/react, prism-react-renderer) no longer leave usage identity uncertain, so they have no identity-uncertain-tag info lines and the identity-uncertain warning counts only the 36 tags in 17 files that still turn whole-component removal off. CSS and components are identical."
-  },
-  {
-    "row": "build:vite-app",
-    "fixture": "vite-app",
-    "baseline": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
-    "candidate": "41ea47ec68341096d1406645e478623f669df2b05104292de85d77702078c840",
-    "reason": "Beside the 196 JS bytes above, one identity-uncertain-tag info line fewer: a tag of a package with no dependency path to Animus is counted in the identity-uncertain warning, not listed."
   },
   {
     "row": "analysis:showcase",
@@ -56,25 +49,11 @@
     "reason": "Beside the differences above, the manifest gains runtime_tables, each dynamic prop records the names of the shared tables it reads (53 props), and Logo, the one component with a custom dynamic prop, references animusTables.keywords[\"fontSize\"] and its inline scale by key instead of inlining them. CSS, components and diagnostics are identical."
   },
   {
-    "row": "build:vite-app",
-    "fixture": "vite-app",
-    "baseline": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
-    "candidate": "373b31a80966a5d5eb6901424a479253cf0ded3a0025cf4045ec638e8d4f9eb9",
-    "reason": "Beside the differences above, the JS shrinks 613 bytes (251105 to 250492): scale and keyword tables ship once in the system-props module and configs reference them by name. The CSS is identical (cssDigest unchanged) and so are the diagnostics."
-  },
-  {
     "row": "analysis:showcase",
     "fixture": "showcase-analysis",
     "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
     "candidate": "46132b02615a0dec8ec0187dc60f26bc2b1c7cc42ae064e3c44abb2e2a9b870b",
     "reason": "Beside the differences above, emitted configs carry one [prefix, scope] pair instead of slot variable and class names the runtime can derive, compound class names the runtime derives are omitted, each systemPropNames list ships once as a named export of the system-props module, supersededBy references one system table, and transforms are bound per entry instead of by a per-module loop. Class names and CSS are unchanged."
-  },
-  {
-    "row": "build:vite-app",
-    "fixture": "vite-app",
-    "baseline": "8fc147c7f4ae3648b4f8f672ce1282456ffa11ec5fa9b77099f667ef461e8608",
-    "candidate": "48a479211bdaed71df8612dd7b60dbeb53046b447eec84b683a94f09b99cba45",
-    "reason": "Beside the differences above, the JS changes size because configs derive slot and compound names at runtime and system prop name lists, supersededBy and transform bindings ship once in the system-props module. The CSS is identical (cssDigest unchanged)."
   },
   {
     "row": "loader:large-closure",
