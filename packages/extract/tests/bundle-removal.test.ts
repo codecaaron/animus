@@ -74,17 +74,19 @@ describe('removeComponentRules', () => {
   // Contract: a `@media`, `@supports` or `@container` rule removal empties
   // goes with the rules it held; one that keeps a rule stays, and so does an
   // emptied `@layer` block, which still places its layer in the layer order.
+  // A class whose rules went with an at-rule counts as gone.
   test('drops an at-rule removal empties and keeps @layer blocks', () => {
-    const { css: out } = removeComponentRules(
+    const { css: out, went } = removeComponentRules(
       [
         '@layer anm-base{@media (min-width:1px){.dead{color:red}}}',
         '@layer anm-states{.live{color:red}}',
-        '@supports (display:grid){@container (min-width:2px){.dead:hover{color:red}}}',
+        '@supports (display:grid){@container (min-width:2px){.deep:hover{color:red}}}',
         '@media (min-width:3px){.dead{color:red}.live{color:red}}',
       ].join(''),
-      new Set(['dead']),
+      new Set(['dead', 'deep']),
       { targets: {} }
     );
+    expect([...went].sort()).toEqual(['dead', 'deep']);
     expect(out).toBe(
       '@layer anm-base{}@layer anm-states{.live{color:red}}@media (width>=3px){.live{color:red}}'
     );
