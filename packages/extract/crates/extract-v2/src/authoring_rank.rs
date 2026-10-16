@@ -126,7 +126,7 @@ impl SystemPrecedence {
     /// share a group, in registration order; a prop the system does not
     /// register comes last, by name.
     pub(crate) fn order<'a>(&mut self, admitted: &[&'a str]) -> Vec<(&'a str, usize)> {
-        let (mut known, mut unknown): (Vec<(usize, &'a str)>, Vec<(usize, &'a str)>) = admitted
+        let (mut known, mut unknown): (Vec<_>, Vec<_>) = admitted
             .iter()
             .map(|name| (self.positions.get(*name).copied().unwrap_or(usize::MAX), *name))
             .partition(|(position, _)| *position != usize::MAX);
