@@ -1820,6 +1820,7 @@ pub(crate) fn object_uses(
     scoping: &Scoping,
     object_consts: &BTreeMap<&str, bool>,
     assigned_targets: &BTreeSet<&str>,
+    wrapped: FxHashSet<(u32, u32)>,
 ) -> ObjectUses {
     let context_consts = context_consts(program, scoping, &ReactImports::of(program, scoping));
     // A context is watched as an object too: its `Provider` must stay React's.
@@ -1827,7 +1828,7 @@ pub(crate) fn object_uses(
     for context in &context_consts {
         watched.entry(context.as_str()).or_insert(false);
     }
-    let uses = scan_object_uses(program, scoping, object_bindings(program, scoping, &watched, assigned_targets));
+    let uses = scan_object_uses(program, scoping, object_bindings(program, scoping, &watched, assigned_targets), wrapped);
     ObjectUses { context_consts, ..uses }
 }
 
@@ -1838,12 +1839,17 @@ pub(crate) fn written_namespaces(program: &Program<'_>, scoping: &Scoping) -> Wr
         .into_iter()
         .filter(|(_, binding)| binding.namespace)
         .collect();
-    scan_object_uses(program, scoping, namespaces).written_namespaces
+    scan_object_uses(program, scoping, namespaces, FxHashSet::default()).written_namespaces
 }
 
 /// The uses of `candidates` that may change their objects; `context_consts`
 /// is left empty.
-fn scan_object_uses(program: &Program<'_>, scoping: &Scoping, candidates: FxHashMap<SymbolId, ObjectBinding>) -> ObjectUses {
+fn scan_object_uses(
+    program: &Program<'_>,
+    scoping: &Scoping,
+    candidates: FxHashMap<SymbolId, ObjectBinding>,
+    wrapped: FxHashSet<(u32, u32)>,
+) -> ObjectUses {
     if candidates.is_empty() {
         return ObjectUses::default();
     }
@@ -1909,6 +1915,7 @@ fn scan_object_uses(program: &Program<'_>, scoping: &Scoping, candidates: FxHash
         returns: Vec::new(),
         local_aliases: FxHashMap::default(),
         element_arrays: FxHashMap::default(),
+        wrapped,
     };
     scan.visit_program(program);
     ObjectUses {
@@ -2037,6 +2044,7 @@ pub(crate) fn style_object_uses(
         returns: Vec::new(),
         local_aliases: FxHashMap::default(),
         element_arrays: FxHashMap::default(),
+        wrapped: FxHashSet::default(),
     };
     scan.visit_program(program);
     // An alias with a use the scan did not judge (one written before the
@@ -3767,6 +3775,10 @@ struct ObjectUseScan<'a, 's> {
     /// In style mode, each function's own `const` that holds an array of an
     /// object binding's members (`Object.entries(o).filter(…)`).
     element_arrays: FxHashMap<SymbolId, ElementArray>,
+    /// Byte range of each extractable `.asComponent()` terminal's argument:
+    /// the runtime wraps and renders that component and writes nothing into
+    /// it, so passing it there writes nothing; empty in style mode.
+    wrapped: FxHashSet<(u32, u32)>,
 }
 
 /// A function's own `const` holding an array whose elements are an object
@@ -4030,6 +4042,9 @@ impl<'a> ObjectUseScan<'a, '_> {
         'a: 'b,
     {
         let (current, parent) = peel_wrappers(span, &mut ancestors.clone());
+        if self.wrapped.contains(&(current.start, current.end)) {
+            return None;
+        }
         match parent {
             Some(AstKind::ExportSpecifier(_) | AstKind::ExportDefaultDeclaration(_)) => {
                 return Some("is exported".to_string());
@@ -4381,8 +4396,9 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 });
                 return;
             }
+            let wrapped = self.wrapped.contains(&(span.start, span.end));
             let Some(what) = object_use(ident.span, ancestors, true, self.global_object, assigned_target) else { return };
-            let writes = !written && !writes_nothing(&what);
+            let writes = !written && !wrapped && !writes_nothing(&what);
             if used && !writes {
                 return;
             }

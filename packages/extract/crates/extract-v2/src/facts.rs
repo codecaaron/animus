@@ -1212,7 +1212,10 @@ pub(crate) fn object_facts(program: &Program<'_>, scoping: &oxc::semantic::Scopi
     // Assigned facades' targets (`Root`, `Fam.Root`): a write to one after
     // the facade is built changes the facade too.
     let assigned_targets: BTreeSet<&str> = const_initializers.targets.values().map(String::as_str).collect();
-    let uses = crate::usage_facts::object_uses(program, scoping, &object_consts, &assigned_targets);
+    // The components the module's extractable `.asComponent()` terminals
+    // wrap, which the runtime only renders.
+    let wrapped = chain_walk::wrapped_components(program);
+    let uses = crate::usage_facts::object_uses(program, scoping, &object_consts, &assigned_targets, wrapped);
     ObjectFacts { props_forwarding, const_initializers, compose, uses }
 }
 

@@ -166,11 +166,51 @@ pub fn walk_program(program: &Program<'_>) -> Vec<ChainDescriptor> {
 
 pub fn walk_program_facts(program: &Program<'_>) -> WalkedProgram {
     let builders = staged_builders(program);
+    let DeclaredChains { chains, member_parents, member_rooted, default_export_span } = declared_chains(program, &builders);
+    let staged_builders = staged_builder_facts(program, &builders);
+    let mut unwalked = UnwalkedChains {
+        taken: chains
+            .iter()
+            .map(|chain| chain.span)
+            .chain(default_export_span)
+            .chain(continued_builder_spans(&chains, &staged_builders, &builders))
+            .collect(),
+        enclosing: None,
+        found: Vec::new(),
+    };
+    for stmt in &program.body {
+        unwalked.enclosing = statement_binding(stmt);
+        unwalked.visit_statement(stmt);
+    }
+    let bound = binding_counts(program);
+    for chain in &mut unwalked.found {
+        chain.root_bound_once = bound.get(chain.root.as_str()) == Some(&1);
+    }
+    WalkedProgram {
+        chains,
+        member_parents,
+        member_rooted,
+        default_export: default_export_span.map(|(start, _)| start),
+        unwalked: unwalked.found,
+        staged_builders,
+    }
+}
+
+/// The chains a module's top-level declarations write, and the span of a
+/// default export that is one, recognised by their shape alone.
+struct DeclaredChains {
+    chains: Vec<ChainDescriptor>,
+    member_parents: Vec<(MemberParentExtension, ChainDescriptor)>,
+    member_rooted: Vec<MemberRootedChain>,
+    default_export_span: Option<(u32, u32)>,
+}
+
+fn declared_chains(program: &Program<'_>, builders: &StagedBuilders<'_, '_>) -> DeclaredChains {
     let mut chains = Vec::new();
     let mut member_parents = Vec::new();
     let mut member_rooted = Vec::new();
     let mut default_export_span = None;
-    let mut record = |declarator: &VariableDeclarator<'_>| match try_extract_chain(declarator, &builders) {
+    let mut record = |declarator: &VariableDeclarator<'_>| match try_extract_chain(declarator, builders) {
         Some(WalkedChain::Chain(chain)) => chains.push(chain),
         Some(WalkedChain::MemberParent(extension, chain)) => member_parents.push((extension, chain)),
         Some(WalkedChain::MemberRooted(chain)) => member_rooted.push(chain),
@@ -206,33 +246,21 @@ pub fn walk_program_facts(program: &Program<'_>) -> WalkedProgram {
             _ => {}
         }
     }
-    let staged_builders = staged_builder_facts(program, &builders);
-    let mut unwalked = UnwalkedChains {
-        taken: chains
-            .iter()
-            .map(|chain| chain.span)
-            .chain(default_export_span)
-            .chain(continued_builder_spans(&chains, &staged_builders, &builders))
-            .collect(),
-        enclosing: None,
-        found: Vec::new(),
-    };
-    for stmt in &program.body {
-        unwalked.enclosing = statement_binding(stmt);
-        unwalked.visit_statement(stmt);
-    }
-    let bound = binding_counts(program);
-    for chain in &mut unwalked.found {
-        chain.root_bound_once = bound.get(chain.root.as_str()) == Some(&1);
-    }
-    WalkedProgram {
-        chains,
-        member_parents,
-        member_rooted,
-        default_export: default_export_span.map(|(start, _)| start),
-        unwalked: unwalked.found,
-        staged_builders,
-    }
+    DeclaredChains { chains, member_parents, member_rooted, default_export_span }
+}
+
+/// Byte range of each argument an extractable `.asComponent()` terminal of
+/// a top-level chain wraps, read from the declarations alone.
+pub fn wrapped_components(program: &Program<'_>) -> FxHashSet<(u32, u32)> {
+    let builders = staged_builders(program);
+    let declared = declared_chains(program, &builders);
+    declared
+        .chains
+        .iter()
+        .chain(declared.member_parents.iter().map(|(_, chain)| chain))
+        .filter(|chain| chain.extractable)
+        .filter_map(|chain| chain.target)
+        .collect()
 }
 
 /// The initializers of the builders a walked chain continued, directly or
@@ -405,13 +433,20 @@ fn try_walk_chain(
             String::new()
         }
     };
-    let forward = match terminal {
-        TerminalKind::AsComponent => extract_forward(call).unwrap_or_else(|reason| {
-            extractable = false;
-            bail_reason.get_or_insert(format!("asComponent options: {reason}"));
-            None
-        }),
-        _ => None,
+    let (forward, target) = match terminal {
+        TerminalKind::AsComponent => {
+            let forward = extract_forward(call).unwrap_or_else(|reason| {
+                extractable = false;
+                bail_reason.get_or_insert(format!("asComponent options: {reason}"));
+                None
+            });
+            let target = call.arguments.first().map(|argument| {
+                let span = oxc::span::GetSpan::span(argument);
+                (span.start, span.end)
+            });
+            (forward, target)
+        }
+        _ => (None, None),
     };
     let mut has_extend_marker = false;
     let chain_end = call.span;
@@ -460,6 +495,7 @@ fn try_walk_chain(
         extends_from,
         followed_builder,
         forward,
+        target,
     };
     Some(match member_parent {
         Some(extension) => WalkedChain::MemberParent(extension, chain),

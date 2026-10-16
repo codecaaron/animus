@@ -15463,6 +15463,26 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// Contract: passing a foreign component to an Animus terminal does not
+    /// make its package written. An extractable `.asComponent()` wraps and
+    /// renders the component it takes and writes nothing into it, so the
+    /// package's member tags stay proven foreign; a write after the same
+    /// call, or a hand-off anywhere else, still keeps them uncertain.
+    #[test]
+    fn passing_a_foreign_component_to_an_animus_terminal_does_not_make_its_package_written() {
+        let mut inputs = test_inputs();
+        inputs.analysis_context.foreign_packages = vec!["icons".to_string()];
+        let render = "import { Parts } from 'icons/parts';\nexport const App = () => <Parts.Item />;\n";
+        let records = |wrapping: &str| {
+            let entries = [("src/r.tsx", RECIPE), ("src/wrap.tsx", wrapping), ("src/app.tsx", render)];
+            analyze(&entries, &inputs).diagnostics.into_iter().filter(|d| d.code.as_deref() == Some(IDENTITY_UNCERTAIN_TAG)).count()
+        };
+        let wrap = "import { Parts } from 'icons/parts';\nimport { R } from './r';\nexport const P = ds.styles({}).asComponent(Parts.Item);\n";
+        assert_eq!(records(wrap), 0);
+        assert_eq!(records(&format!("{wrap}Parts.Item.x = R;\n")), 1);
+        assert_eq!(records(&format!("{wrap}register(Parts.Item);\n")), 1);
+    }
+
     /// A context load honours its recursion flag and filter, a glob its
     /// filename pattern, and a load into an analysed package opens only that
     /// package's components.

@@ -8,7 +8,7 @@ mod terminal;
 mod walk;
 
 pub(crate) use expr::unwrap_type_assertions;
-pub use walk::{terminal_kind, walk_program, walk_program_facts, WalkedProgram};
+pub use walk::{terminal_kind, walk_program, walk_program_facts, wrapped_components, WalkedProgram};
 pub(crate) use walk::CHAIN_METHODS;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -44,6 +44,10 @@ pub struct ChainDescriptor {
     /// The variants and states an `.asComponent()` target receives.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forward: Option<Forward>,
+    /// Byte range of an `.asComponent()` terminal's argument, the component
+    /// it wraps.
+    #[serde(skip)]
+    pub target: Option<(u32, u32)>,
 }
 
 /// An `.asComponent()` terminal's `forward`: every variant and state, or
