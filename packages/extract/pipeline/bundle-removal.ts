@@ -50,8 +50,9 @@ export function shippedClasses(
  * render: a component's transformed definition names its class as a string
  * literal, so a build that drops the definition drops every use of the
  * class. Kept are a component the output names (`shipped`), one
- * `staticCss` declares, and every parent of a kept extension. Returns each
- * removed component's id and class.
+ * `staticCss` declares, every parent of a kept extension, and every
+ * component sharing a kept one's class. Returns each removed component's id
+ * and class.
  */
 export function unbundledComponents(
   components: Record<string, ManifestComponentDescriptor>,
@@ -71,9 +72,16 @@ export function unbundledComponents(
       at = components[at]?.extends_from ?? null;
     }
   }
+  // CSS belongs to a class, which copies of one definition share: a class
+  // any kept component carries stays, whatever other id carries it too.
+  const keptClasses = new Set(
+    [...kept].map((id) => components[id]!.class_name)
+  );
   const removed = new Map<string, string>();
   for (const [id, component] of Object.entries(components)) {
-    if (!kept.has(id)) removed.set(id, component.class_name);
+    if (!keptClasses.has(component.class_name)) {
+      removed.set(id, component.class_name);
+    }
   }
   return removed;
 }

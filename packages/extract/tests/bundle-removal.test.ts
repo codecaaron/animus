@@ -84,3 +84,23 @@ describe('unbundledComponents', () => {
     expect([...removed.keys()]).toEqual(['a::Gone', 'a::Prefixed']);
   });
 });
+
+describe('unbundledComponents by class', () => {
+  // Contract: a class any kept component owns is never removed, though
+  // another id that carries it is unkept: copies of one definition share
+  // their class, and with it their CSS.
+  test('a class any kept component owns is never removed', () => {
+    const components = {
+      'one::Parent': component('Parent', 'c-parent'),
+      'two::Parent': component('Parent', 'c-parent'),
+      'a::Child': component('Child', 'c-child', 'one::Parent'),
+      'a::Gone': component('Gone', 'c-gone'),
+    };
+    const removed = unbundledComponents(
+      components,
+      new Set(['c-child']),
+      new Set()
+    );
+    expect([...removed.keys()]).toEqual(['a::Gone']);
+  });
+});
