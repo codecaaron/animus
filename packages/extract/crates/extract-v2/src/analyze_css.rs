@@ -535,9 +535,9 @@ pub struct ComponentDescriptor {
     /// part in.
     pub definition_fingerprint: String,
     /// The props it accepts in authoring order: its variant props, its
-    /// states, its system props in the system's authoring ranks
-    /// (`system_authoring_ranks`), then its custom props in declaration
-    /// order. Built only for a host that publishes the prop-order file.
+    /// states, its system props in the order their rules apply
+    /// (`authoring_rank`), then its custom props in declaration order. Built
+    /// only for a host that publishes the prop-order file.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub authoring_order: Vec<OrderedProp>,
 }
@@ -938,27 +938,28 @@ pub struct CssOutput {
 
 /// A component's props in authoring order (`ComponentDescriptor`): a name
 /// keeps its first stage, and a custom prop replaces a same-named system one.
+/// Each prop takes the next rank, except that system props in one group
+/// share one, so the lint rule keeps them as written.
 fn authoring_order(
     css: &ComponentCss,
     active_props: Option<&FxHashSet<String>>,
     custom_props: &[String],
-    system_ranks: &FxHashMap<String, usize>,
+    precedence: &mut crate::authoring_rank::SystemPrecedence,
     descriptor: &crate::chain_walk::ChainDescriptor,
 ) -> Vec<OrderedProp> {
-    let mut system: Vec<&str> = active_props
+    let admitted: Vec<&str> = active_props
         .into_iter()
         .flatten()
         .map(String::as_str)
         .filter(|name| !custom_props.iter().any(|custom| custom == name))
         .collect();
-    system.sort_by_key(|name| (system_ranks.get(*name).copied().unwrap_or(usize::MAX), *name));
     let staged = css
         .variants
         .iter()
-        .map(|variant| (variant.prop.as_str(), "variants"))
-        .chain(css.states.iter().map(|(name, _)| (name.as_str(), "states")))
-        .chain(system.into_iter().map(|name| (name, "system")))
-        .chain(custom_props.iter().map(|name| (name.as_str(), "custom")));
+        .map(|variant| (variant.prop.as_str(), "variants", None))
+        .chain(css.states.iter().map(|(name, _)| (name.as_str(), "states", None)))
+        .chain(precedence.order(&admitted).into_iter().map(|(name, group)| (name, "system", Some(group))))
+        .chain(custom_props.iter().map(|name| (name.as_str(), "custom", None)));
     // As the runtime's `forwardProps` passes them on.
     let forwarded = |name: &str, stage: &str| {
         name.starts_with("data-")
@@ -972,59 +973,17 @@ fn authoring_order(
                 })
     };
     let mut seen = FxHashSet::default();
+    let (mut rank, mut previous) = (0, None);
     staged
-        .filter(|(name, _)| seen.insert(*name))
+        .filter(|(name, ..)| seen.insert(*name))
         .enumerate()
-        .map(|(rank, (name, stage))| OrderedProp {
-            name: name.to_string(),
-            stage,
-            rank,
-            forwarded: forwarded(name, stage),
+        .map(|(index, (name, stage, group))| {
+            if index > 0 && (group.is_none() || group != previous) {
+                rank += 1;
+            }
+            previous = group;
+            OrderedProp { name: name.to_string(), stage, rank, forwarded: forwarded(name, stage) }
         })
-        .collect()
-}
-
-/// Each system prop's authoring rank: the system's registration order,
-/// except that of two props writing a common property, the one that takes
-/// effect ranks later. That is the prop superseding the other, else the one
-/// whose utility rule the system layer emits later (`utility_rule_key`), so
-/// a shorthand ranks before every longhand it covers and a written tag reads
-/// in the order its rules apply.
-fn system_authoring_ranks(
-    config: &PropConfigMap,
-    prop_order: &FxHashMap<String, usize>,
-    superseded: &BTreeMap<String, Vec<String>>,
-) -> FxHashMap<String, usize> {
-    let mut names: Vec<&String> = prop_order.keys().collect();
-    names.sort_by_key(|name| prop_order[*name]);
-    let written: Vec<Vec<String>> = names
-        .iter()
-        .map(|name| {
-            let current_var = config.get(*name).and_then(|prop| prop.current_var.clone());
-            crate::theme::entry_properties(name, config).into_iter().chain(current_var).collect()
-        })
-        .collect();
-    let properties: Vec<Vec<&str>> = written.iter().map(|set| set.iter().map(String::as_str).collect()).collect();
-    let resets: Vec<_> = properties.iter().map(|set| crate::declarations::reset_set(set.iter().copied())).collect();
-    let keys: Vec<_> = properties.iter().map(|set| crate::declarations::utility_rule_key(set)).collect();
-    let supersedes =
-        |later: usize, earlier: usize| superseded.get(names[earlier]).is_some_and(|by| by.contains(names[later]));
-    let precedes: Vec<Vec<bool>> = (0..names.len())
-        .map(|a| {
-            (0..names.len())
-                .map(|b| {
-                    a != b
-                        && !resets[a].is_disjoint(&resets[b])
-                        && (supersedes(b, a) || !supersedes(a, b) && keys[a] < keys[b])
-                })
-                .collect()
-        })
-        .collect();
-    // A cycle, should supersession ever close one, breaks at registration.
-    crate::declarations::precedence_order(names.len(), |a, b| precedes[a][b])
-        .into_iter()
-        .enumerate()
-        .map(|(rank, prop)| (names[prop].clone(), rank))
         .collect()
 }
 
@@ -9798,10 +9757,14 @@ fn run_with_system_floor(
     // Interned in sorted order, so a key's first claimant is stable.
     let mut prop_name_lists = crate::assemble::PropNameLists::default();
     let system_superseded = crate::assemble::system_superseded_props(&inputs.config, &inputs.prop_order);
-    let system_ranks = inputs
-        .analysis_context
-        .prop_order
-        .then(|| system_authoring_ranks(&inputs.config, &inputs.prop_order, &system_superseded));
+    let mut system_precedence = inputs.analysis_context.prop_order.then(|| {
+        crate::authoring_rank::SystemPrecedence::new(
+            &inputs.config,
+            &inputs.prop_order,
+            &inputs.contextual_vars,
+            &system_superseded,
+        )
+    });
     for component_id in &sorted_ids {
         let Some((_, _, _, active_props, group_names, custom_configs, compound_configs)) =
             evaluated.get(component_id)
@@ -10542,14 +10505,14 @@ fn run_with_system_floor(
                     .map(|p| p.system_prop_names.clone())
                     .unwrap_or_default(),
                 definition_fingerprint: definition_fingerprints[component_id].clone(),
-                authoring_order: system_ranks
-                    .as_ref()
-                    .map(|ranks| {
+                authoring_order: system_precedence
+                    .as_mut()
+                    .map(|precedence| {
                         authoring_order(
                             component_css,
                             active_props.as_ref(),
                             custom_order.get(component_id).map_or(&[][..], Vec::as_slice),
-                            ranks,
+                            precedence,
                             &chain.descriptor,
                         )
                     })
@@ -18968,12 +18931,19 @@ export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} 
     /// `wide` and `tall` share one configured callable, in different groups;
     /// `inset` binds a callable no other prop shares.
     /// `pt` is registered before its shorthand `p`, and `py` after `pt`,
-    /// which it supersedes though its rule precedes `pt`'s.
+    /// which it supersedes though its rule precedes `pt`'s. The last cases
+    /// register their props in the order written: `c`, `a`, `b` apply in a
+    /// cycle once `b` supersedes `a`; `d`'s consuming rule precedes `h`'s
+    /// atomic one; the class names, so the values, order `a` and `b`'s rules,
+    /// and `--x` is left out for a value reading it.
     /// Contract: a component's authoring order is its variant props, its
     /// states, its system props in the system's registration order (not its
     /// groups' order) except that a shorthand ranks before every longhand it
     /// covers and a prop after each one it supersedes, then its custom props
-    /// in declaration order, the inherited first; a tag resolves through an aliased or namespace
+    /// in declaration order, the inherited first. A rank never contradicts
+    /// the order the applicable rules are emitted in: props whose rules the
+    /// component admits in a cycle, or in an order their values decide,
+    /// share one. A tag resolves through an aliased or namespace
     /// import, and a name also bound in a nested scope does not resolve. A
     /// host that does not publish the prop-order file gets neither. A prop
     /// the target receives as written (`data-*`, `aria-*`, a variant or
@@ -19063,6 +19033,48 @@ export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} 
         let out = analyze(&[("ui.tsx", ui), ("family.tsx", family)], &inputs);
         let reassigned = out.tag_components.get("family.tsx");
         assert!(reassigned.is_none_or(|tags| !tags.contains_key("Family.Root")), "{reassigned:?}");
+
+        let case = |config: &str, admitted: &str, tag: &str, scales: Option<&str>| {
+            let groups = format!(r#"{{"all": {admitted}}}"#);
+            let mut inputs = CssInputs::from_json(
+                None, None, None, Some(config), Some(&groups), None, None, None, None, None, None, None, None, false,
+            )
+            .unwrap();
+            inputs.bind_declarations(scales).unwrap();
+            inputs.analysis_context.prop_order = true;
+            let source =
+                format!("export const Box = ds.system({{ all: true }}).asElement('div');\nexport const App = () => {tag};\n");
+            let out = analyze(&[("case.tsx", &source)], &inputs);
+            let order = &out.components["case.tsx::Box"].authoring_order;
+            let ranks: Vec<(String, usize)> = order.iter().map(|prop| (prop.name.clone(), prop.rank)).collect();
+            (ranks, out.css)
+        };
+        let ranked = |ranks: &[(&str, usize)]| -> Vec<(String, usize)> {
+            ranks.iter().map(|(name, rank)| (name.to_string(), *rank)).collect()
+        };
+        let emitted_before = |css: &str, first: &str, then: &str| {
+            let at = |declaration: &str| css.find(declaration).unwrap_or_else(|| panic!("{declaration} in {css}"));
+            at(first) < at(then)
+        };
+        let cycle = r#"{"c": {"property": "opacity", "properties": ["opacity", "height"]}, "a": {"property": "height"},
+            "b": {"property": "height", "properties": ["height", "width"]}}"#;
+        let (ranks, css) = case(cycle, r#"["b", "c"]"#, r#"<Box b="22px" c={0} />"#, None);
+        assert_eq!(ranks, ranked(&[("b", 0), ("c", 1)]));
+        assert!(emitted_before(&css, "width: 22px", "opacity: 0"), "{css}");
+        let (ranks, _) = case(cycle, r#"["a", "b", "c"]"#, r#"<Box a="11px" b="22px" c={0} />"#, None);
+        assert_eq!(ranks, ranked(&[("c", 0), ("a", 0), ("b", 0)]));
+        let declaration = r#"{"h": {"property": "height"}, "d": {"kind": "declarations", "scale": "single", "members": ["height"]}}"#;
+        let scales = r#"{"single": {"kind": "declarations", "members": ["height"], "values": {"loud": {"height": "33px"}}}}"#;
+        let (ranks, css) = case(declaration, r#"["h", "d"]"#, r#"<Box h="11px" d="loud" />"#, Some(scales));
+        assert_eq!(ranks, ranked(&[("d", 0), ("h", 1)]));
+        assert!(emitted_before(&css, "height: var(", "height: 11px"), "{css}");
+        let classes = r#"{"a": {"property": "height", "properties": ["height", "width"]},
+            "b": {"property": "height", "properties": ["height", "maxWidth"]}}"#;
+        let (ranks, _) = case(classes, r#"["a", "b"]"#, r#"<Box a="1px" b="2px" />"#, None);
+        assert_eq!(ranks, ranked(&[("a", 0), ("b", 0)]));
+        let current = r#"{"a": {"property": "height", "currentVar": "--x"}, "b": {"property": "height"}}"#;
+        let (ranks, _) = case(current, r#"["a", "b"]"#, r#"<Box a="var(--x)" b="11px" />"#, None);
+        assert_eq!(ranks, ranked(&[("a", 0), ("b", 0)]));
     }
 
     fn split_group_inputs() -> CssInputs {

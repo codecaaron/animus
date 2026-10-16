@@ -15,7 +15,7 @@ import type {
 } from '../pipeline/manifest-schema';
 
 /** Bumped when the file's shape or its order's meaning changes. */
-export const PROP_ORDER_SCHEMA_VERSION = 1;
+export const PROP_ORDER_SCHEMA_VERSION = 2;
 
 export interface PropOrderFile {
   schemaVersion: number;

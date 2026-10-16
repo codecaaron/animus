@@ -146,8 +146,14 @@ fn cascade_order<'a>(obj: &'a Map<String, Value>, config: &PropConfigMap) -> Vec
     let broader = |a: usize, b: usize| {
         !resets[b].is_empty() && resets[a].len() > resets[b].len() && resets[a].is_superset(&resets[b])
     };
-    // Strict containment is acyclic, so some entry is always free.
-    crate::declarations::precedence_order(entries.len(), broader).into_iter().map(|entry| entries[entry]).collect()
+    let mut pending: Vec<usize> = (0..entries.len()).collect();
+    let mut ordered = Vec::with_capacity(entries.len());
+    while !pending.is_empty() {
+        // Strict containment is acyclic, so some entry is always free.
+        let free = pending.iter().position(|&entry| !pending.iter().any(|&other| broader(other, entry))).unwrap_or(0);
+        ordered.push(entries[pending.remove(free)]);
+    }
+    ordered
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -201,6 +207,15 @@ impl PropConfig {
         } else {
             &self.properties
         }
+    }
+
+    /// The properties a value of a value prop declares, as emitted, its
+    /// current variable aside.
+    pub fn emitted_properties(&self, contextual_vars: &ContextualVarsMap) -> Vec<String> {
+        let emitted = |property: &String| {
+            contextual_vars.emitted_property(&crate::css::css_property_name(property)).into_owned()
+        };
+        self.css_properties().iter().map(emitted).collect()
     }
 
     /// Whether every property the prop sets is a custom property.
@@ -1629,12 +1644,9 @@ fn resolve_single_prop(
     let resolved_value = finish_value(&resolved, value, prop_config, theme, variable_map, contextual_vars);
 
     let mut declarations: Vec<CssDeclaration> = prop_config
-        .css_properties()
-        .iter()
-        .map(|css_prop| CssDeclaration {
-            property: contextual_vars.emitted_property(&crate::css::css_property_name(css_prop)).into_owned(),
-            value: resolved_value.clone(),
-        })
+        .emitted_properties(contextual_vars)
+        .into_iter()
+        .map(|property| CssDeclaration { property, value: resolved_value.clone() })
         .collect();
 
     if let Some(current_var) = &prop_config.current_var {

@@ -86,7 +86,7 @@ Obligations a driver or host carries that no exported type expresses.
 
 1. variant props (variants and compounds), in the order the chain declares them;
 2. states, in declaration order;
-3. system props, in the system's registration order (not the order of the groups that admit them), except that of two props that write a common CSS property, the one that takes effect comes later: a shorthand before every longhand it covers, as the system layer emits their rules, and an alias the system defines later, which applies in place of the earlier one, after it;
+3. system props, in the system's registration order (not the order of the groups that admit them), except that of two props that write a common CSS property, the one that takes effect comes later: a shorthand before every longhand it covers, as the system layer emits their rules, and an alias the system defines later, which applies in place of the earlier one, after it. Props whose order their values decide, or whose rules the component admits in a cycle, share a rank, and the rule keeps them as written;
 4. custom props, in declaration order, inherited ones first.
 
 This is a readability convention. The stylesheet does not follow JSX attribute order, so the rule changes no CSS.

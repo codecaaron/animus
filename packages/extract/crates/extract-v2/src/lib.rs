@@ -69,6 +69,7 @@ pub(crate) mod selector_subject;
 pub mod static_value;
 pub mod transforms;
 pub mod analyze_css;
+pub(crate) mod authoring_rank;
 pub mod theme;
 
 use std::collections::BTreeMap;

@@ -202,18 +202,6 @@ pub(crate) fn utility_rule_key(properties: &[&str]) -> (usize, Reverse<usize>, S
     (rank.unwrap_or(usize::MAX), Reverse(resets.len()), properties.first().unwrap_or(&"").to_string())
 }
 
-/// Indices `0..len` in order, each first one that no other remaining index
-/// must precede; a cycle breaks at the first remaining index.
-pub(crate) fn precedence_order(len: usize, precedes: impl Fn(usize, usize) -> bool) -> Vec<usize> {
-    let mut pending: Vec<usize> = (0..len).collect();
-    let mut ordered = Vec::with_capacity(len);
-    while !pending.is_empty() {
-        let free = pending.iter().position(|&index| !pending.iter().any(|&other| precedes(other, index))).unwrap_or(0);
-        ordered.push(pending.remove(free));
-    }
-    ordered
-}
-
 /// A longhand both properties set, if one is or contains the other.
 fn shared_longhand(a: &str, b: &str) -> Option<String> {
     let a_longhands = expansion(a);
