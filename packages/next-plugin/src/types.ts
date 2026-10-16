@@ -48,9 +48,12 @@ export interface AnimusNextOptions {
    *  import; replaces the `app/layout.*` / `pages/_app.*` detection. */
   cssImportTarget?: string;
   verbose?: boolean | 'trace';
-  /** Namespace prefix for the names Animus generates: theme token
-   *  variables, classes and slots. Contextual variables keep their declared
-   *  names unless `prefixContextualVars` is set. */
+  /** Namespace prefix for the custom properties the theme generates: each
+   *  token variable becomes `--${prefix}-…` wherever it is defined,
+   *  registered or read. Contextual variables keep their declared names
+   *  unless `prefixContextualVars` is set. Class names, slot classes and
+   *  slot variables keep `animus-`; `shortClassNames.prefix` names classes
+   *  short in production, independently of this one. */
   prefix?: string;
   /** With `prefix` set, contextual variables take the prefixed name
    *  everywhere Animus emits them, while authors keep writing the declared
