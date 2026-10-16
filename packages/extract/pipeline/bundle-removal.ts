@@ -317,6 +317,16 @@ function stringEnd(css: string, at: number): number {
   return -1;
 }
 
+/** `url(` written before an unquoted argument. */
+const UNQUOTED_URL = /(?<![\w-])url\((?!\s*["'])/iy;
+
+/** Whether the `(` at `at` opens an unquoted `url()`, whose argument may
+ *  hold a brace. */
+function unquotedUrl(css: string, at: number): boolean {
+  UNQUOTED_URL.lastIndex = at - 3;
+  return at >= 3 && UNQUOTED_URL.test(css);
+}
+
 /**
  * The index just past the rule that starts at `start`: past the `}` that
  * closes the block it opens, skipping strings, comments, escapes and
@@ -334,11 +344,7 @@ function ruleEnd(css: string, start: number): number {
     } else if (c === '/' && css[i + 1] === '*') {
       i = css.indexOf('*/', i + 2) + 1;
       if (i <= 0) return -1;
-    } else if (
-      c === '(' &&
-      /(?:^|[^\w-])url$/i.test(css.slice(Math.max(0, i - 4), i)) &&
-      !/^\s*["']/.test(css.slice(i + 1, i + 64))
-    ) {
+    } else if (c === '(' && unquotedUrl(css, i)) {
       for (i++; i < css.length && css[i] !== ')'; i++) {
         if (css[i] === '\\') i++;
       }
@@ -353,17 +359,37 @@ function ruleEnd(css: string, start: number): number {
   return -1;
 }
 
-/** A rule's own content, without the rules nested in it or any source
- *  location, to compare a sheet's rules before and after removal. */
-function ruleKey(rule: Rule): string {
-  return JSON.stringify(rule, (key, value) =>
+/** The rules nested in `rule`. */
+function childRules(rule: Rule): Rule[] {
+  switch (rule.type) {
+    case 'style':
+      return rule.value.rules ?? [];
+    case 'media':
+    case 'supports':
+    case 'container':
+    case 'layer-block':
+    case 'scope':
+    case 'starting-style':
+    case 'moz-document':
+      return rule.value.rules;
+    default:
+      return [];
+  }
+}
+
+/** A rule's own content and how many rules it holds (`children`), without
+ *  the rules themselves or any source location, to compare a sheet's rules
+ *  before and after removal: a cut that took or left a brace changes what
+ *  some rule holds. */
+function ruleKey(rule: Rule, children: number): string {
+  return `${children}:${JSON.stringify(rule, (key, value) =>
     key === 'loc' || key === 'rules' ? undefined : value
-  );
+  )}`;
 }
 
 /** Calls `visit` with every rule of `css`, in source order; a rule `visit`
  *  returns `[]` for is not looked inside. */
-function eachRule(css: string, visit: (rule: Rule) => [] | undefined): void {
+function eachRule(css: string, visit: (rule: Rule) => [] | void): void {
   lcssTransform({
     filename: 'animus-bundle-removal.css',
     code: Buffer.from(css),
@@ -440,28 +466,35 @@ export function removeComponentRules(
     }
   };
   const starts = lineStarts(css);
-  const cuts: Array<[number, number]> = [];
-  const keys: string[] = [];
-  let refused: string | null = null;
-  const cut = (loc: { line: number; column: number }, gone: string[]): [] => {
-    const start = (starts[loc.line] ?? Number.NaN) + loc.column - 1;
-    const end = ruleEnd(css, start);
-    if (end < 0) refused ??= 'a removed rule does not end where it should';
-    cuts.push([start, end]);
-    for (const name of gone) went.add(name);
-    return [];
-  };
-  eachRule(css, (rule) => {
+  // Where a rule the visitor drops starts, and the classes it takes; `null`
+  // for a rule that stays.
+  const drops = (
+    rule: Rule
+  ): { loc: { line: number; column: number }; gone: string[] } | null => {
     switch (rule.type) {
       case 'style':
       case 'media':
       case 'supports':
       case 'container': {
         const gone = goneClasses(rule);
-        if (gone !== null) return cut(rule.value.loc, gone);
+        return gone === null ? null : { loc: rule.value.loc, gone };
       }
+      default:
+        return null;
     }
-    keys.push(ruleKey(rule));
+  };
+  const cutStarts: number[] = [];
+  const keys: string[] = [];
+  eachRule(css, (rule) => {
+    const dropped = drops(rule);
+    if (dropped !== null) {
+      const { line, column } = dropped.loc;
+      cutStarts.push((starts[line] ?? Number.NaN) + column - 1);
+      for (const name of dropped.gone) went.add(name);
+      return [];
+    }
+    const children = childRules(rule).filter((child) => drops(child) === null);
+    keys.push(ruleKey(rule, children.length));
     if (rule.type !== 'style') return;
     const needs = needsOf(rule.value.selectors);
     const needed = new Set(needs.flat());
@@ -479,30 +512,37 @@ export function removeComponentRules(
         );
       });
     }
-    return undefined;
   });
-  if (cuts.length === 0) return { css: null, went, kept, refused: null };
+  if (cutStarts.length === 0) return { css: null, went, kept, refused: null };
+  // Nothing goes from a sheet that stays whole.
+  const refuse = (why: string): RuleRemoval => ({
+    css: null,
+    went: new Set(),
+    kept,
+    refused: why,
+  });
   let trimmed = '';
   let from = 0;
-  for (const [start, end] of cuts.sort(([a], [b]) => a - b)) {
+  for (const start of cutStarts.sort((a, b) => a - b)) {
+    const end = ruleEnd(css, start);
+    if (end < 0) return refuse('a removed rule does not end where it should');
     trimmed += css.slice(from, start);
     from = end;
   }
   trimmed += css.slice(from);
-  // The trimmed sheet must read as the same rules, in the same order, less
-  // those cut: a cut that ended anywhere else changed a rule kept.
+  // The trimmed sheet must read as the same rules, each holding the same
+  // number, in the same order, less those cut: a cut that ended anywhere
+  // else changed a rule kept.
   const after: string[] = [];
   try {
     eachRule(trimmed, (rule) => {
-      after.push(ruleKey(rule));
-      return undefined;
+      after.push(ruleKey(rule, childRules(rule).length));
     });
   } catch {
-    refused ??= 'the sheet no longer reads once its removed rules are cut';
+    return refuse('the sheet no longer reads once its removed rules are cut');
   }
-  if (after.length !== keys.length || after.some((key, i) => key !== keys[i])) {
-    refused ??= 'cutting its removed rules would change a rule it keeps';
+  if (after.join('\n') !== keys.join('\n')) {
+    return refuse('cutting its removed rules would change a rule it keeps');
   }
-  if (refused !== null) return { css: null, went: new Set(), kept, refused };
   return { css: trimmed, went, kept, refused: null };
 }

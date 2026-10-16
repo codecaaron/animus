@@ -98,7 +98,7 @@ export function bundleRemoval(
   let characters = 0;
   const renamed = new Map<string, string>();
   // A component counts as removed once one of its rules went; one a kept
-  // rule names, or a file kept whole, is kept whole.
+  // rule names, or one in a file removal leaves whole, is kept whole.
   const went = new Set<string>();
   const kept = new Map<string, KeptRuleReason>();
   const wholeFiles = new Set<string>();
