@@ -20,7 +20,8 @@ export interface BundleRemoval {
     file: Rolldown.OutputAsset,
     emit: (asset: Rolldown.EmittedAsset) => void
   ): string | null;
-  /** Reports what the replacements removed. */
+  /** Points every JSON file of the output (Vite's manifests) at each
+   *  replacement where it named the file replaced, then reports. */
   finish(): void;
 }
 
@@ -46,17 +47,34 @@ export function bundleRemoval(
     ctx.info(`kept every component's CSS: ${blocker}`);
     return null;
   }
+  const slices = Object.values(bundle).filter(
+    (file) => sliceIdOf(file, sliceIds) !== undefined
+  );
+  // A replaced slice is relinked from pages and JSON manifests only.
+  const naming = Object.values(bundle).find(
+    (file) =>
+      !slices.includes(file) &&
+      !file.fileName.endsWith('.json') &&
+      slices.some((slice) =>
+        (file.type === 'chunk'
+          ? file.code
+          : Buffer.from(file.source).toString('utf8')
+        ).includes(posix.basename(slice.fileName))
+      )
+  );
+  if (naming !== undefined) {
+    ctx.info(
+      `kept every component's CSS: ${naming.fileName} names a stylesheet file, which a replacement would leave it naming`
+    );
+    return null;
+  }
   const { texts, unreadable } = outputEvidence(
     Object.values(bundle).map((file) =>
       file.type === 'chunk'
         ? { fileName: file.fileName, code: file.code }
         : { fileName: file.fileName, bytes: Buffer.from(file.source) }
     ),
-    new Set(
-      Object.values(bundle)
-        .filter((file) => sliceIdOf(file, sliceIds) !== undefined)
-        .map((file) => file.fileName)
-    )
+    new Set(slices.map((file) => file.fileName))
   );
   if (unreadable !== null) {
     ctx.info(
@@ -75,6 +93,7 @@ export function bundleRemoval(
   );
   const classes = new Set(removed.values());
   let bytes = 0;
+  const renamed = new Map<string, string>();
   return {
     replace(file, emit) {
       const css = Buffer.from(file.source).toString('utf8');
@@ -102,9 +121,21 @@ export function bundleRemoval(
         originalFileName: file.originalFileNames[0],
         source: pruned,
       });
+      renamed.set(file.fileName, fileName);
       return fileName;
     },
     finish() {
+      for (const file of Object.values(bundle)) {
+        if (file.type !== 'asset' || !file.fileName.endsWith('.json')) continue;
+        const text = Buffer.from(file.source).toString('utf8');
+        let relinked = text;
+        for (const [before, after] of renamed) {
+          relinked = relinked
+            .split(JSON.stringify(before).slice(1, -1))
+            .join(JSON.stringify(after).slice(1, -1));
+        }
+        if (relinked !== text) file.source = relinked;
+      }
       if (ctx.tracing) {
         for (const [id, className] of removed) {
           ctx.trace(`removed ${id} (${className}): no output file includes it`);
