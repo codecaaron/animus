@@ -519,6 +519,10 @@ function unorderedRuns(
     );
 }
 
+/** The run's props as they should be written. */
+const runOrder = (run: Run): string =>
+  run.ordered.map(({ name }) => name).join(', ');
+
 /** The run rewritten in order, each gap between attributes kept where it
  *  was. */
 function orderedText(run: Run, context: Context): string {
@@ -569,15 +573,13 @@ export const propOrderRule = defineRule({
         if (ranks === undefined) return;
         const runs = unorderedRuns(node, ranks);
         if (runs.length === 0) return;
-        const expected = runs
-          .map((run) => run.ordered.map(({ name }) => name).join(', '))
-          .join('; ');
-        const message = `Order <${tag}>'s props in ${PROP_ORDER}: ${expected}.`;
+        const message = (expected: string): string =>
+          `Order <${tag}>'s props in ${PROP_ORDER}: ${expected}.`;
         const blocker = fixBlocker(node, runs, context);
         if (blocker !== null) {
           context.report({
             node,
-            message: `${message} Not fixed automatically: the tag has ${blocker}.`,
+            message: `${message(runs.map(runOrder).join('; '))} Not fixed automatically: the tag has ${blocker}.`,
           });
           return;
         }
@@ -591,12 +593,16 @@ export const propOrderRule = defineRule({
         if (linted.recorded !== null) {
           keepFixes(linted.recorded, fixes, context);
         }
-        context.report({
-          node,
-          message,
-          fix: (fixer: Fixer) =>
-            fixes.map(([range, text]) => fixer.replaceTextRange(range, text)),
-        });
+        // A report per run, each with its one replacement: Oxlint merges a
+        // report's fixes into one range, which would enclose what stays put
+        // between the runs, and a nested tag's fix with it.
+        for (const [index, [range, text]] of fixes.entries()) {
+          context.report({
+            node,
+            message: message(runOrder(runs[index])),
+            fix: (fixer: Fixer) => fixer.replaceTextRange(range, text),
+          });
+        }
       },
     };
   },
