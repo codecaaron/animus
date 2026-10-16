@@ -14,13 +14,19 @@ export function fileHashOrEmpty(path: string): string {
   }
 }
 
-/** The first file whose content no longer has its recorded hash: an
- *  unreadable or deleted file reads as '', which mismatches a real one. */
+/** The first file whose content neither has its recorded hash nor one
+ *  `matches` accepts for it: an unreadable or deleted file reads as '',
+ *  which mismatches a real one. */
 export function firstChangedFile(
-  hashes: Iterable<readonly [string, string]>
+  hashes: Iterable<readonly [string, string]>,
+  matches: (path: string, recorded: string, actual: string) => boolean = (
+    _path,
+    recorded,
+    actual
+  ) => actual === recorded
 ): string | undefined {
   for (const [path, hash] of hashes) {
-    if (fileHashOrEmpty(path) !== hash) return path;
+    if (!matches(path, hash, fileHashOrEmpty(path))) return path;
   }
   return undefined;
 }

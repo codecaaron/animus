@@ -13,14 +13,20 @@
  * is offered only where moving props cannot change what the tag evaluates:
  * every value literal, no comment inside the tag, no repeated prop, and no
  * `as` or `asChild`. A missing, stale or unreadable prop-order file is
- * reported when that changes, and nothing is ordered until it is usable.
+ * reported when that changes, and nothing is ordered until it is usable. A
+ * file the rule's own fixes rewrote still matches the analysis that read
+ * it: reordering those props changes nothing the analysis records.
  */
 
 import { defineRule } from '@oxlint/plugins';
 import { readFileSync, statSync } from 'fs';
 import { basename, dirname, join, relative, resolve } from 'path';
 
-import { contentHash, firstChangedFile } from '../pipeline/content-hash';
+import {
+  contentHash,
+  fileHashOrEmpty,
+  firstChangedFile,
+} from '../pipeline/content-hash';
 import {
   decodePropOrderFile,
   posixPath,
@@ -42,9 +48,16 @@ const MISSING = `No Animus prop-order file (${ANIMUS_ARTIFACT_DIR}/${PROP_ORDER_
 
 /** How long a lint process trusts what it last saw of the disk: the
  *  prop-order file's location, and whether its recorded files still match.
- *  A lint run reads the disk once; a long-lived editor process sees edits
- *  within this. */
+ *  A long-lived editor process sees edits within this; a long `--fix` run
+ *  rechecks while it writes its fixes. */
 const RECHECK_MS = 1000;
+
+/** How often, and how far apart, a file this process fixed is read again
+ *  before it counts as changed: Oxlint empties a file before it writes the
+ *  fixes, and a read can land in between. */
+const SETTLE_READS = 5;
+const SETTLE_MS = 5;
+const settleClock = new Int32Array(new SharedArrayBuffer(4));
 
 /** A prop-order file whose recorded files all still match the disk. */
 interface FreshOrder {
@@ -81,9 +94,42 @@ interface PropOrderOptions {
 const cachedOrders = new Map<string, CachedOrder>();
 /** By directory: the prop-order file found from there, or none. */
 const locatedOrders = new Map<string, LocatedOrder>();
+/** By path: the hash this process's fixes give the text a prop-order file
+ *  recorded for it, so a run's fixes leave the files it has yet to lint
+ *  fresh. */
+const fixedHashes = new Map<string, { recorded: string; fixed: string }>();
 /** Each problem's last report, by kind: a problem is reported again only
  *  when it changes, or after it was resolved. */
 const reportedProblems = new Map<string, string>();
+
+/** The text at `path` hashes to `actual`: what the analysis read, or that
+ *  with the rule's fixes applied. */
+function matchesRecorded(
+  path: string,
+  recorded: string,
+  actual: string
+): boolean {
+  if (actual === recorded) return true;
+  const fixed = fixedHashes.get(path);
+  return fixed?.recorded === recorded && fixed.fixed === actual;
+}
+
+/** The file at `path` on disk, first read as `actual`, still matches. */
+function diskMatchesRecorded(
+  path: string,
+  recorded: string,
+  actual: string
+): boolean {
+  let hash = actual;
+  for (let read = 1; !matchesRecorded(path, recorded, hash); read++) {
+    if (read === SETTLE_READS || fixedHashes.get(path)?.recorded !== recorded) {
+      return false;
+    }
+    Atomics.wait(settleClock, 0, 0, SETTLE_MS);
+    hash = fileHashOrEmpty(path);
+  }
+  return true;
+}
 
 function reportChanged(
   key: string,
@@ -154,7 +200,8 @@ function checkOrder(path: string, file: PropOrderFile | string): ReadOrder {
     Object.entries(file.files).map(([recorded, hash]) => [
       join(root, recorded),
       hash,
-    ])
+    ]),
+    diskMatchesRecorded
   );
   if (changed !== undefined) {
     return {
@@ -230,32 +277,46 @@ function orderFor(
   return read.fresh;
 }
 
-/** Tag as written → its component's ranks, for the file being linted;
- *  empty where nothing in it can be ordered. A prop its target receives as
- *  written is left out, so it stays where it is, as an unknown prop does:
- *  the target can see the order props are written in. */
-function fileRanks(
+/** The file being linted, as the rule reads it at its first component
+ *  tag. */
+interface LintedFile {
+  /** Tag as written → its component's ranks; empty where nothing in the
+   *  file can be ordered. */
+  ranks: Map<string, Map<string, number>>;
+  /** Its path and the hash the prop-order file records for it; null
+   *  without ranks. */
+  stamp: { path: string; recorded: string } | null;
+}
+
+/** The file being linted. A prop its target receives as written is left
+ *  out of its ranks, so it stays where it is, as an unknown prop does: the
+ *  target can see the order props are written in. */
+function lintedFile(
   node: ESTree.JSXOpeningElement,
   context: Context
-): Map<string, Map<string, number>> {
+): LintedFile {
   const ranks = new Map<string, Map<string, number>>();
+  const unordered = { ranks, stamp: null };
   const order = orderFor(node, context);
-  if (order === null) return ranks;
-  const file = posixPath(
-    relative(order.root, resolve(context.cwd, context.filename))
-  );
+  if (order === null) return unordered;
+  const path = resolve(context.cwd, context.filename);
+  const file = posixPath(relative(order.root, path));
   const tags = order.file.tags[file];
-  if (tags === undefined) return ranks;
+  const recorded = order.file.files[file];
+  if (tags === undefined) return unordered;
   // The file has changed since the analysis read it, as an editor's buffer
   // does before the next analysis.
-  if (contentHash(context.sourceCode.text) !== order.file.files[file]) {
+  if (
+    recorded === undefined ||
+    !matchesRecorded(path, recorded, contentHash(context.sourceCode.text))
+  ) {
     reportStale(
       order.path,
       `${file} changed since it was written`,
       node,
       context
     );
-    return ranks;
+    return unordered;
   }
   for (const [tag, id] of Object.entries(tags)) {
     const props = order.file.components[id];
@@ -264,7 +325,7 @@ function fileRanks(
       ranks.set(tag, new Map(ordered.map((prop) => [prop.name, prop.rank])));
     }
   }
-  return ranks;
+  return { ranks, stamp: { path, recorded } };
 }
 
 /** The tag as written (`Box`, `ui.Box`, `Card.Body`); null for a namespaced
@@ -360,6 +421,21 @@ function unorderedRuns(
     );
 }
 
+/** A range of the source and the text that replaces it. */
+type Edit = [range: [number, number], text: string];
+
+/** `text` with `edits` applied, which arrive in source order, as the
+ *  visitor meets their tags, and do not overlap. */
+function applyEdits(text: string, edits: readonly Edit[]): string {
+  let applied = '';
+  let at = 0;
+  for (const [[start, end], replacement] of edits) {
+    applied += text.slice(at, start) + replacement;
+    at = end;
+  }
+  return applied + text.slice(at);
+}
+
 /** The run rewritten in order, each gap between attributes kept where it
  *  was. */
 function orderedText(run: Run, context: Context): string {
@@ -397,17 +473,32 @@ export const propOrderRule = defineRule({
   },
   createOnce(context) {
     /** Per file, resolved at its first component tag. */
-    let ranksByTag: Map<string, Map<string, number>> | null = null;
+    let linted: LintedFile | null = null;
+    /** The file's fixes so far. */
+    let edits: Edit[] = [];
     return {
       before() {
-        ranksByTag = null;
+        linted = null;
+        edits = [];
+      },
+      after() {
+        // Only a file with ranks has fixes, and so a stamp.
+        if (edits.length === 0 || !linted?.stamp) return;
+        const { path, recorded } = linted.stamp;
+        // Fixes are offered only on the recorded text, so they always give
+        // the same one.
+        if (fixedHashes.get(path)?.recorded === recorded) return;
+        fixedHashes.set(path, {
+          recorded,
+          fixed: contentHash(applyEdits(context.sourceCode.text, edits)),
+        });
       },
       JSXOpeningElement(node) {
         const tag = tagText(node.name);
         // A lowercase name renders an element, never a component.
         if (tag === null || (/^[a-z]/.test(tag) && !tag.includes('.'))) return;
-        ranksByTag ??= fileRanks(node, context);
-        const ranks = ranksByTag.get(tag);
+        linted ??= lintedFile(node, context);
+        const ranks = linted.ranks.get(tag);
         if (ranks === undefined) return;
         const runs = unorderedRuns(node, ranks);
         if (runs.length === 0) return;
@@ -423,19 +514,19 @@ export const propOrderRule = defineRule({
           });
           return;
         }
+        const fixes = runs.map((run): Edit => [
+          [
+            run.written[0].attribute.range[0],
+            run.written[run.written.length - 1].attribute.range[1],
+          ],
+          orderedText(run, context),
+        ]);
+        edits.push(...fixes);
         context.report({
           node,
           message,
           fix: (fixer: Fixer) =>
-            runs.map((run) =>
-              fixer.replaceTextRange(
-                [
-                  run.written[0].attribute.range[0],
-                  run.written[run.written.length - 1].attribute.range[1],
-                ],
-                orderedText(run, context)
-              )
-            ),
+            fixes.map(([range, text]) => fixer.replaceTextRange(range, text)),
         });
       },
     };
