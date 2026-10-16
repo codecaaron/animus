@@ -152,8 +152,11 @@ export interface AnimusExtractOptions {
    *  CSS of every component whose definition no output file includes, so it
    *  can never render; a component `staticCss` declares, and a parent of
    *  one kept, stay. A build that bundles another environment beside the
-   *  client, or leaves a module external, keeps every component. Off by
-   *  default, and in development. */
+   *  client, or leaves a module external, keeps every component. Scripts a
+   *  plugin emits after Animus's `generateBundle` are not seen, and a
+   *  stylesheet shared with code outside the build (micro-frontends, module
+   *  federation) is unsupported with this on. Off by default, and in
+   *  development. */
   removeUnbundledComponents?: boolean;
   /**
    * Substrings, or globs when `*`/`?` present. Replaces the defaults `dist`,
