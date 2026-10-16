@@ -321,5 +321,10 @@ export type {
   ListedLoad,
 } from './host-expansions';
 export { adaptedOriginals } from './probe-evidence';
+export {
+  removeComponentRules,
+  shippedClasses,
+  unbundledComponents,
+} from './bundle-removal';
 export type { ServedFiles } from './served-files';
 export { droppedExtensionMessage, servedFiles } from './served-files';

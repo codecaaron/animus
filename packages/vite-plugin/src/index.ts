@@ -1,4 +1,5 @@
 import {
+  AnimusConfigError,
   assertKnownOptionKeys,
   assertSupportedEngine,
   isPathWithinRoot,
@@ -15,6 +16,7 @@ import { resolve } from 'path';
 import { mergeConfig } from 'vite';
 
 import { runBuildStart } from './build-start';
+import { bundleRemoval } from './bundle-removal';
 import { applyResolvedConfig } from './config';
 import {
   RESOLVED_CSS_ID,
@@ -146,6 +148,13 @@ export interface AnimusExtractOptions {
    *  hash. Needs a page Vite builds from HTML to link the stylesheet; the
    *  dev server keeps one sheet. */
   stylesheets?: StylesheetDelivery;
+  /** With `stylesheets: 'split'`, removes from the stylesheet's files the
+   *  CSS of every component whose definition no output file includes, so it
+   *  can never render; a component `staticCss` declares, and a parent of
+   *  one kept, stay. A build that bundles another environment beside the
+   *  client, or leaves a module external, keeps every component. Off by
+   *  default, and in development. */
+  removeUnbundledComponents?: boolean;
   /**
    * Substrings, or globs when `*`/`?` present. Replaces the defaults `dist`,
    * `.test.`, `.spec.`; `node_modules`, `.next`, `.animus` always apply.
@@ -285,7 +294,12 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   const optionRecord: AnimusExtractOptionRecord = options;
   assertKnownOptionKeys(
     optionRecord,
-    ['verify', 'appearanceBootstrap', 'quarantine'],
+    [
+      'verify',
+      'appearanceBootstrap',
+      'quarantine',
+      'removeUnbundledComponents',
+    ],
     [
       {
         key: 'root',
@@ -298,6 +312,13 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       warn: (message) => console.warn(`[animus-extract] ${message}`),
     }
   );
+  // Only `true` removes: any other value keeps every component's CSS.
+  const removes = options.removeUnbundledComponents === true;
+  if (removes && options.stylesheets !== 'split') {
+    throw new AnimusConfigError(
+      "removeUnbundledComponents needs stylesheets: 'split': it removes CSS from the stylesheet's own files, which only a split build emits after its scripts."
+    );
+  }
 
   // `quarantine` puts `anm-vendor` first in the layer order Animus's own
   // stylesheet declares, whichever stylesheet the page loads first.
@@ -319,6 +340,10 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       ? (await layergate.stylesheetHead.call(context, RESOLVED_CSS_ID)) + sheet
       : sheet;
   }
+
+  // Every environment a build of the whole app builds beside the client,
+  // whose output may render what the client's does not.
+  let otherEnvironments: string[] = [];
 
   // A split client build's slices, cut once in `buildStart`, and the ids of
   // those it emitted, in link order.
@@ -377,6 +402,9 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
 
     async configResolved(config) {
       applyResolvedConfig(ctx, config);
+      otherEnvironments = config.builder
+        ? Object.keys(config.environments).filter((name) => name !== 'client')
+        : [];
       (await vendor?.plugin())?.configResolved.call(this, config);
     },
 
@@ -490,10 +518,20 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     generateBundle: {
       order: 'post',
       handler(_output, bundle) {
+        const emitAsset = (name: string, source: string) =>
+          this.getFileName(this.emitFile({ type: 'asset', name, source }));
         if (linkedSlices.length > 0 && isClient(this)) {
-          placeStylesheetSlices(ctx, bundle, linkedSlices, (name, source) =>
-            this.getFileName(this.emitFile({ type: 'asset', name, source }))
+          const removal = removes
+            ? bundleRemoval(ctx, bundle, otherEnvironments)
+            : null;
+          placeStylesheetSlices(
+            ctx,
+            bundle,
+            linkedSlices,
+            emitAsset,
+            removal?.rewrite
           );
+          removal?.report();
         }
         if (ctx.servedDirSelector && !ctx.warnedLoweredDir && isClient(this)) {
           const sheets = Object.values(bundle).flatMap((file) =>

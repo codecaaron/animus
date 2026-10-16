@@ -16,6 +16,7 @@ const typescriptTestTargets = [
   'packages/oracle/__tests__',
   'packages/extract/tests/session',
   'packages/extract/tests/asset-placeholders.test.ts',
+  'packages/extract/tests/bundle-removal.test.ts',
   'packages/extract/tests/core-options.test.ts',
   'packages/extract/tests/css-keywords.test.ts',
   'packages/extract/tests/correlate-external-tokens.test.ts',
