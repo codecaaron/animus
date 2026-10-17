@@ -55,6 +55,16 @@ ds.styles({ position: firstThatWorks('sticky', 'stickyy') });
 // @ts-expect-error — one member is no fallback list
 firstThatWorks('sticky');
 
+// Contract: the artifact factories take exact keys, so an invalid key
+// beside a valid one is a type error, before the factory throws on it.
+const artifacts = createSystem().build();
+// @ts-expect-error — `color` is no @position-try descriptor
+artifacts.createPositionTry({ bad: { width: '100px', color: 'red' } });
+artifacts.createViewTransitions({
+  // @ts-expect-error — `wrongSlot` is no view-transition slot
+  bad: { group: { opacity: 0 }, wrongSlot: { opacity: 1 } },
+});
+
 // Contract: a hand-written ref of the public shape, with no `toJSON`,
 // stays a valid keyframes reference.
 const handWritten: KeyframeRef<'pulse'> = {

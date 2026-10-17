@@ -21,6 +21,7 @@ import {
 import { serializeBlock } from './named';
 import {
   type PositionTries,
+  type PositionTryDescriptor,
   type PositionTryDescriptors,
   positionTries as positionTriesImpl,
 } from './positionTry';
@@ -194,7 +195,12 @@ export type CreateKeyframesFactory<
 export type CreatePositionTryFactory = <
   Map extends Record<string, PositionTryDescriptors>,
 >(
-  tries: Map
+  tries: Map & {
+    // Exact keys: a descriptor beside the accepted ones is a type error.
+    readonly [N in keyof Map]: {
+      readonly [K in Exclude<keyof Map[N], PositionTryDescriptor>]: never;
+    };
+  }
 ) => PositionTries<Map>;
 
 /** View transitions, each a class whose `group`, `imagePair`, `old` and
@@ -212,6 +218,9 @@ export type CreateViewTransitionsFactory<
       Transitions[N][S],
       PropReg
     >;
+  } & {
+    // Exact keys: a slot beside the four is a type error.
+    readonly [S in Exclude<keyof Transitions[N], ViewTransitionSlot>]: never;
   };
 }) => ViewTransitions<{
   readonly [N in keyof Transitions]: ViewTransitionSlots;
