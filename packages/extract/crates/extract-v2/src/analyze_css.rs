@@ -2104,10 +2104,13 @@ fn dropped_style_key(
             element_hint(key)
         ),
         DroppedStyleKey::UnsupportedAtRule { key, .. } => {
+            let placed =
+                crate::theme::GLOBAL_DECLARATION_AT_RULES.iter().map(|name| format!("@{name}")).collect::<Vec<_>>().join(", ");
             let message = format!(
                 "style key '{key}' is an at-rule extraction does not support, {not_emitted} — \
-                 extraction supports @media, @container, @supports, @scope and @starting-style; fix the \
-                 at-rule's name, or write the block in a stylesheet of its own"
+                 extraction supports @media, @container, @supports, @scope and @starting-style, and at a \
+                 global block's top level also @keyframes and the at-rules that hold declarations \
+                 ({placed}); fix the at-rule's name, or write the block in a stylesheet of its own"
             );
             return diagnostic(file, component, "warn", message, Some(crate::theme::UNSUPPORTED_AT_RULE));
         }
@@ -11926,6 +11929,41 @@ mod tests {
             "{:#?}",
             out.diagnostics
         );
+    }
+
+    /// Contract: an at-rule key a global block cannot place is dropped with
+    /// a diagnostic, keeping the rest. Printed as a block, `@charset` takes
+    /// the sheet after it under a minifier.
+    #[test]
+    fn an_at_rule_key_a_global_block_cannot_place_is_dropped_with_a_diagnostic_keeping_the_rest() {
+        let mut inputs = test_inputs();
+        inputs.global_style_blocks = Some(serde_json::json!({
+            "base": {
+                "styles": {
+                    "@charset \"iso-8859-1\"": { "tabSize": 4 },
+                    "body": { "tabSize": 2 },
+                    "@import url(x.css)": { "tabSize": 4 },
+                    "@layer reset": { "tabSize": 4 },
+                    "@-webkit-keyframes spin": { "to": { "opacity": 0 } },
+                    "@page :first": { "marginTop": "1cm" },
+                    "@PROPERTY --x": { "syntax": "'<length>'", "inherits": false, "initialValue": "0px" },
+                    "@font-face": { "fontFamily": "Mona", "src": "local(Arial)" }
+                }
+            }
+        }));
+        let out = analyze(&[("a.tsx", "export const x = 1;\n")], &inputs);
+        let global = &out.sheets.global;
+        for kept in ["body {\n  tab-size: 2;\n}", "@page :first {", "@PROPERTY --x {", "@font-face {"] {
+            assert!(global.contains(kept), "{kept} missing:\n{global}");
+        }
+        assert!(!global.contains("tab-size: 4") && !global.contains("spin"), "{global}");
+        let dropped: Vec<&str> = out
+            .diagnostics
+            .iter()
+            .filter(|d| d.code.as_deref() == Some(crate::theme::UNSUPPORTED_AT_RULE))
+            .map(|d| d.message.split('\'').nth(1).unwrap())
+            .collect();
+        assert_eq!(dropped, ["@charset \"iso-8859-1\"", "@import url(x.css)", "@layer reset", "@-webkit-keyframes spin"]);
     }
 
     /// Contract: a `fontPreloads` entry's `unicodeRange` selects the faces

@@ -359,7 +359,9 @@ pub const NON_BREAKPOINT_KEY: &str = "animus.style.non-breakpoint-key";
 pub const KEYS_SHARE_PROPERTY: &str = "animus.style.keys-share-property";
 
 /// A style-object at-rule key other than `@media`, `@container`,
-/// `@supports`, `@scope` and `@starting-style`, whose block is not emitted.
+/// `@supports`, `@scope` and `@starting-style`, or at a global block's top
+/// level other than these, `@keyframes` and `GLOBAL_DECLARATION_AT_RULES`,
+/// whose block is not emitted.
 pub const UNSUPPORTED_AT_RULE: &str = "animus.style.unsupported-at-rule";
 /// A number on a prop that writes only custom properties and binds no
 /// transform: a custom property has no unit context, so it stays unitless.
@@ -2539,6 +2541,10 @@ pub fn resolve_global_block(
             continue;
         }
 
+        if selector.starts_with('@') && !global_places_at_rule(selector) {
+            record_dropped_key_at(ctx, &[], DroppedStyleKey::UnsupportedAtRule { key: selector.clone(), block: style_obj.clone() });
+            continue;
+        }
         let Some(style_map) = style_obj.as_object() else {
             record_non_block(ctx, &[], selector, style_obj);
             continue;
@@ -2583,6 +2589,30 @@ pub fn resolve_global_block(
     }
 
     rules.join("\n\n")
+}
+
+/// The at-rules whose block holds declarations, which a global block's top
+/// level emits as written.
+pub(crate) const GLOBAL_DECLARATION_AT_RULES: &[&str] = &[
+    "font-face",
+    "page",
+    "property",
+    "counter-style",
+    "font-palette-values",
+    "view-transition",
+    "position-try",
+    "color-profile",
+];
+
+/// Whether a global block's top level places the at-rule `key`: one of
+/// `GLOBAL_DECLARATION_AT_RULES`, or a condition, which resolves as before.
+/// Any other, such as `@charset` or `@import`, would print as a block that
+/// is no valid CSS, and a host's minifier can drop the rest of the sheet
+/// with it.
+fn global_places_at_rule(key: &str) -> bool {
+    let declares = crate::css_tokens::identifier_at(key, 1)
+        .is_some_and(|(name, _)| GLOBAL_DECLARATION_AT_RULES.iter().any(|placed| name.eq_ignore_ascii_case(placed)));
+    declares || condition_from_raw_key(key).is_some()
 }
 
 /// One rule, its declarations indented under it, at `depth` levels deep.
