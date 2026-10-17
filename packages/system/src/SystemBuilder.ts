@@ -23,6 +23,12 @@ import {
   positionTries as positionTriesImpl,
 } from './positionTry';
 import {
+  type ViewTransitions,
+  type ViewTransitionSlot,
+  type ViewTransitionSlots,
+  viewTransitions as viewTransitionsImpl,
+} from './viewTransition';
+import {
   BUILT_IN_SELECTORS,
   mergeSelectors,
   type SelectorAliasMap,
@@ -189,6 +195,26 @@ export type CreatePositionTryFactory = <
   tries: Map
 ) => PositionTries<Map>;
 
+/** View transitions, each a class whose `group`, `imagePair`, `old` and
+ *  `new` slots style its view-transition pseudo-elements. */
+export type CreateViewTransitionsFactory<
+  PropReg extends Record<string, SystemProp> = Record<string, SystemProp>,
+> = <
+  Transitions extends Record<
+    string,
+    Partial<Record<ViewTransitionSlot, AbstractProps>>
+  >,
+>(transitions: {
+  readonly [N in keyof Transitions]: {
+    readonly [S in keyof Transitions[N]]: ThemedCSSInputProps<
+      Transitions[N][S],
+      PropReg
+    >;
+  };
+}) => ViewTransitions<{
+  readonly [N in keyof Transitions]: ViewTransitionSlots;
+}>;
+
 type IncludableSystem = {
   toConfig(): SerializedConfig;
   /**
@@ -224,6 +250,12 @@ export interface RegisterablePositionTries {
   readonly __tries: object;
 }
 
+/** The shape `registerViewTransitions` accepts; the brand is structural. */
+export interface RegisterableViewTransitions {
+  readonly __brand: 'ViewTransitions';
+  readonly __transitions: object;
+}
+
 export interface RegisterableGlobalStyles {
   readonly __brand: 'GlobalStyleBlock';
   readonly styles: object;
@@ -247,6 +279,16 @@ export type PositionTryData = Record<
 export interface VocabularyPositionTryEntry {
   readonly name: string;
   readonly tries: PositionTryData;
+}
+
+export type ViewTransitionData = Record<
+  string,
+  { readonly name: string; readonly slots: ViewTransitionSlots }
+>;
+
+export interface VocabularyViewTransitionEntry {
+  readonly name: string;
+  readonly transitions: ViewTransitionData;
 }
 
 export interface VocabularyGlobalStyleEntry {
@@ -281,7 +323,8 @@ export interface VocabularyLegacyVerbEntry {
 /**
  * The registration record a sealed system carries, in declaration order.
  * The loader reads registered collections exclusively from here. Version 2
- * marks a record holding a kind version 1 lacks (position tries), so a
+ * marks a record holding a kind version 1 lacks (position tries or view
+ * transitions), so a
  * loader that reads only version 1 fails loud instead of dropping it; any
  * other record stays version 1.
  */
@@ -290,13 +333,15 @@ export interface VocabularyRecord {
   readonly keyframes: readonly VocabularyKeyframesEntry[];
   /** Absent from a version 1 record. */
   readonly positionTries?: readonly VocabularyPositionTryEntry[];
+  /** Absent from a version 1 record. */
+  readonly viewTransitions?: readonly VocabularyViewTransitionEntry[];
   readonly globalStyles: readonly VocabularyGlobalStyleEntry[];
   readonly collisions: readonly VocabularyCollisionEntry[];
   readonly legacyVerbs: readonly VocabularyLegacyVerbEntry[];
 }
 
-/** ONE name-space across every kind: a global-style block, a keyframes
- *  collection and a position-try collection cannot share a registered name. */
+/** ONE name-space across every kind: no two registered collections or
+ *  global-style blocks share a name, whatever their kinds. */
 type VocabularyEntryState =
   | {
       kind: 'keyframes';
@@ -311,6 +356,12 @@ type VocabularyEntryState =
       origin: string;
     }
   | {
+      kind: 'viewTransitions';
+      name: string;
+      transitions: ViewTransitionData;
+      origin: string;
+    }
+  | {
       kind: 'globalStyles';
       name: string;
       styles: GlobalStyleMap;
@@ -322,6 +373,11 @@ type VocabularyEntryState =
 type VocabularyEntryInput =
   | { kind: 'keyframes'; name: string; frames: KeyframesFrameData }
   | { kind: 'positionTry'; name: string; tries: PositionTryData }
+  | {
+      kind: 'viewTransitions';
+      name: string;
+      transitions: ViewTransitionData;
+    }
   | {
       kind: 'globalStyles';
       name: string;
@@ -346,6 +402,7 @@ function legacyVerbWitness(
   const names = [
     ...record.keyframes.map((entry) => entry.name),
     ...(record.positionTries ?? []).map((entry) => entry.name),
+    ...(record.viewTransitions ?? []).map((entry) => entry.name),
     ...record.globalStyles.map((entry) => entry.name),
   ];
   if (names.length === 0) return null;
@@ -480,6 +537,7 @@ export interface SystemBundle<
   createGlobalStyles: GlobalStylesFactory<PropReg>;
   createKeyframes: CreateKeyframesFactory<PropReg>;
   createPositionTry: CreatePositionTryFactory;
+  createViewTransitions: CreateViewTransitionsFactory<PropReg>;
   /**
    * The registration key must equal the collection's module-scope export
    * name — references resolve by export name. Registration is linear.
@@ -495,6 +553,19 @@ export interface SystemBundle<
    * keyframes; each fallback position emits one `@position-try` rule.
    */
   registerPositionTry<M extends Record<string, RegisterablePositionTries>>(
+    map: M &
+      LiteralKeyMap<M> & {
+        [K in Extract<keyof M, Vocab>]: VocabularyNameCollision<K & string>;
+      }
+  ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab | (keyof M & string)>;
+  /**
+   * Keys equal the collection's module-scope export name, as for
+   * keyframes; each transition's slots emit view-transition pseudo-element
+   * rules scoped to its class.
+   */
+  registerViewTransitions<
+    M extends Record<string, RegisterableViewTransitions>,
+  >(
     map: M &
       LiteralKeyMap<M> & {
         [K in Extract<keyof M, Vocab>]: VocabularyNameCollision<K & string>;
@@ -1124,6 +1195,11 @@ export class SystemBuilder<
         name: entry.name,
         tries: entry.tries,
       })),
+      ...(sourceRecord.viewTransitions ?? []).map((entry) => ({
+        kind: 'viewTransitions' as const,
+        name: entry.name,
+        transitions: entry.transitions,
+      })),
       ...sourceRecord.globalStyles.map((entry) => ({
         kind: 'globalStyles' as const,
         name: entry.name,
@@ -1471,6 +1547,12 @@ export class SystemBuilder<
     const createKeyframes = ((frames: Record<string, KeyframeFrameMap>) =>
       keyframesImpl(frames)) as CreateKeyframesFactory<PropReg>;
     const createPositionTry: CreatePositionTryFactory = positionTriesImpl;
+    const createViewTransitions = ((
+      transitions: Record<string, ViewTransitionSlots>
+    ) =>
+      viewTransitionsImpl(
+        transitions
+      )) as CreateViewTransitionsFactory<PropReg>;
 
     const makeBundle = (
       entries: readonly VocabularyEntryState[],
@@ -1571,6 +1653,55 @@ export class SystemBuilder<
         return registerEntries('registerPositionTry', incoming);
       };
 
+      const registerViewTransitions = (
+        map: Record<string, RegisterableViewTransitions>
+      ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
+        const incoming: VocabularyEntryInput[] = [];
+        for (const [name, collection] of Object.entries(map)) {
+          if (
+            !collection ||
+            (collection as { __brand?: unknown }).__brand !==
+              'ViewTransitions' ||
+            typeof (collection as { __transitions?: unknown })
+              .__transitions !== 'object'
+          ) {
+            throw new TypeError(
+              `registerViewTransitions: "${name}" is not a ` +
+                'createViewTransitions collection — register the factory ' +
+                'return value itself.'
+            );
+          }
+          const transitions = (
+            collection as { __transitions: ViewTransitionData }
+          ).__transitions;
+          // Frozen two levels deep (each slot's block); deeper blocks stay
+          // aliased, as a global-style block's do.
+          incoming.push({
+            kind: 'viewTransitions',
+            name,
+            transitions: Object.freeze(
+              Object.fromEntries(
+                Object.entries(transitions).map(([key, entry]) => [
+                  key,
+                  Object.freeze({
+                    name: entry.name,
+                    slots: Object.freeze(
+                      Object.fromEntries(
+                        Object.entries(entry.slots).map(([slot, block]) => [
+                          slot,
+                          Object.freeze({ ...block }),
+                        ])
+                      )
+                    ),
+                  }),
+                ])
+              )
+            ),
+          });
+        }
+        return registerEntries('registerViewTransitions', incoming);
+      };
+
       const registerGlobalStyles = (
         map: Record<string, RegisterableGlobalStyles>
       ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
@@ -1638,10 +1769,19 @@ export class SystemBuilder<
         const positionTries = entries
           .filter((entry) => entry.kind === 'positionTry')
           .map((entry) => Object.freeze({ name: entry.name, tries: entry.tries }));
+        const viewTransitions = entries
+          .filter((entry) => entry.kind === 'viewTransitions')
+          .map((entry) =>
+            Object.freeze({ name: entry.name, transitions: entry.transitions })
+          );
         const record: VocabularyRecord = Object.freeze({
-          version: positionTries.length > 0 ? 2 : 1,
+          version:
+            positionTries.length > 0 || viewTransitions.length > 0 ? 2 : 1,
           ...(positionTries.length > 0
             ? { positionTries: Object.freeze(positionTries) }
+            : {}),
+          ...(viewTransitions.length > 0
+            ? { viewTransitions: Object.freeze(viewTransitions) }
             : {}),
           keyframes: Object.freeze(
             entries
@@ -1705,6 +1845,7 @@ export class SystemBuilder<
         for (const member of [
           'registerKeyframes',
           'registerPositionTry',
+          'registerViewTransitions',
           'registerGlobalStyles',
         ]) {
           Object.defineProperty(sealed, member, {
@@ -1726,8 +1867,10 @@ export class SystemBuilder<
         createGlobalStyles,
         createKeyframes,
         createPositionTry,
+        createViewTransitions,
         registerKeyframes,
         registerPositionTry,
+        registerViewTransitions,
         registerGlobalStyles,
         seal,
       } as SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab>;

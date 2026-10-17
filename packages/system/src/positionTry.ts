@@ -55,11 +55,13 @@ export type PositionTryDescriptors = {
   readonly [K in PositionTryDescriptor]?: PropertyTypes[K];
 };
 
+/** Prints, and serializes, as the generated name. */
 export interface PositionTryRef<Name extends string> {
   readonly __brand: 'PositionTryRef';
   readonly __name: Name;
   toString(): string;
   valueOf(): string;
+  toJSON(): string;
 }
 
 export type PositionTries<Map extends Record<string, PositionTryDescriptors>> =
@@ -108,6 +110,7 @@ export function positionTries<
       __name: key,
       toString: () => name,
       valueOf: () => name,
+      toJSON: () => name,
     };
   }
   // SAFETY: `tries` and `refs` hold exactly the keys of `map`, each entry

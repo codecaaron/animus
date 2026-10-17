@@ -283,14 +283,14 @@ const Tooltip = ds
 
 ```css
 @layer anm-global {
-  @position-try --animus-pt-7p6dba {
+  @position-try --animus-pt-… {
     position-area: top;
     margin-bottom: 0.5rem;
   }
 }
 .animus-Tooltip-… {
   position-anchor: --trigger;
-  position-try-fallbacks: --animus-pt-7p6dba, flip-block;
+  position-try-fallbacks: --animus-pt-…, flip-block;
 }
 ```
 
@@ -299,6 +299,54 @@ accepts is admitted: inset, margin, sizing and self-alignment properties,
 `positionAnchor` and `positionArea`; anything else is a type error, and
 throws. Write a list of fallbacks as a template literal, since an array is
 a responsive value. Every registered position emits, used or not.
+
+### View transitions
+
+`createViewTransitions`, on the built bundle, names view-transition
+classes. Each transition's `group`, `imagePair`, `old` and `new` slots style
+its pseudo-elements, and take keyframe references, tokens and conditions as
+a global style block does. Register the collection under its export name:
+
+```tsx
+export const { createKeyframes, createViewTransitions } = bundle;
+export const motion = createKeyframes({
+  slideIn: { from: { translate: '100% 0' } },
+  slideOut: { to: { translate: '-100% 0' } },
+});
+export const transitions = createViewTransitions({
+  slide: {
+    group: { animationDuration: '250ms', _motionReduce: { animation: 'none' } },
+    old: { animationName: motion.slideOut },
+    new: { animationName: motion.slideIn },
+  },
+});
+export const ds = bundle
+  .registerKeyframes({ motion })
+  .registerViewTransitions({ transitions })
+  .seal();
+
+const Card = ds
+  .styles({
+    viewTransitionName: 'match-element',
+    viewTransitionClass: transitions.slide,
+  })
+  .asElement('article');
+```
+
+```css
+@layer anm-global {
+  ::view-transition-group(*.animus-vt-…) { animation-duration: 250ms; }
+  @media (prefers-reduced-motion: reduce) {
+    ::view-transition-group(*.animus-vt-…) { animation: none; }
+  }
+  ::view-transition-old(*.animus-vt-…) { animation-name: animus-kf-…; }
+  ::view-transition-new(*.animus-vt-…) { animation-name: animus-kf-…; }
+}
+```
+
+A ref prints as its class, so `String(transitions.slide)` also names it
+where a framework takes a class, such as React's `<ViewTransition>`. Every
+registered transition emits, used or not.
 
 ## Color Modes
 

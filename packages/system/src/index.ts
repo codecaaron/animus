@@ -10,6 +10,12 @@ export type {
   PositionTryDescriptors,
   PositionTryRef,
 } from './positionTry';
+export type {
+  ViewTransitionRef,
+  ViewTransitions,
+  ViewTransitionSlot,
+  ViewTransitionSlots,
+} from './viewTransition';
 export { asset, ASSET_PLACEHOLDER_PREFIX, type AssetRef } from './asset.js';
 export { firstThatWorks } from './firstThatWorks';
 export { createComponent, renderAsChild } from './runtime';
@@ -23,6 +29,7 @@ export { createComposedFamily } from './runtime/createComposedFamily';
 export type {
   CreateKeyframesFactory,
   CreatePositionTryFactory,
+  CreateViewTransitionsFactory,
   FontFace,
   FontFaceLocalSrc,
   FontFaceSrc,
@@ -37,6 +44,7 @@ export type {
   RegisterableGlobalStyles,
   RegisterableKeyframes,
   RegisterablePositionTries,
+  RegisterableViewTransitions,
   RegistrySnapshot,
   SealedSystemInstance,
   SerializedConfig,
@@ -51,6 +59,8 @@ export type {
   VocabularyOf,
   VocabularyPositionTryEntry,
   VocabularyRecord,
+  VocabularyViewTransitionEntry,
+  ViewTransitionData,
 } from './SystemBuilder';
 export { createSystem, SystemBuilder } from './SystemBuilder';
 export {

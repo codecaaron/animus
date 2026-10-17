@@ -65,6 +65,9 @@ pub struct SystemConfig {
     /// Position-try collections from the sealed registration record, shaped
     /// `{ exportName: { keyName: { name, descriptors } } }`.
     pub position_try_blocks: Option<String>,
+    /// View-transition collections from the sealed registration record,
+    /// shaped `{ exportName: { keyName: { name, slots } } }`.
+    pub view_transition_blocks: Option<String>,
     /// Coded witness entries from the sealed registration record, as one JSON
     /// array — the host shims console away, so this is the only channel.
     pub vocabulary_witnesses: Option<String>,
@@ -1399,8 +1402,13 @@ fn extract_system_config<'js>(
                 .to_string(),
         );
     }
-    let VocabularyWires { keyframes_blocks, position_try_blocks, global_style_blocks, vocabulary_witnesses } =
-        extract_vocabulary_record(ctx, &system_obj)?;
+    let VocabularyWires {
+        keyframes_blocks,
+        position_try_blocks,
+        view_transition_blocks,
+        global_style_blocks,
+        vocabulary_witnesses,
+    } = extract_vocabulary_record(ctx, &system_obj)?;
 
     Ok(SystemConfig {
         prop_config,
@@ -1419,6 +1427,7 @@ fn extract_system_config<'js>(
         global_style_blocks,
         keyframes_blocks,
         position_try_blocks,
+        view_transition_blocks,
         vocabulary_witnesses,
         // Populated by load_system_module from the resolved module graph;
         // execute_bundle only sees the assembled bundle text.
@@ -1694,6 +1703,7 @@ fn find_exports_with_method<'js>(
 struct VocabularyWires {
     keyframes_blocks: Option<String>,
     position_try_blocks: Option<String>,
+    view_transition_blocks: Option<String>,
     global_style_blocks: Option<String>,
     vocabulary_witnesses: Option<String>,
 }
@@ -1714,6 +1724,7 @@ fn extract_vocabulary_record<'js>(
   }
   const keyframes = Array.isArray(record.keyframes) ? record.keyframes : [];
   const positionTries = Array.isArray(record.positionTries) ? record.positionTries : [];
+  const viewTransitions = Array.isArray(record.viewTransitions) ? record.viewTransitions : [];
   const globalStyles = Array.isArray(record.globalStyles) ? record.globalStyles : [];
   const collisions = Array.isArray(record.collisions) ? record.collisions : [];
   const legacyVerbs = Array.isArray(record.legacyVerbs) ? record.legacyVerbs : [];
@@ -1763,6 +1774,8 @@ fn extract_vocabulary_record<'js>(
     keyframes: Object.fromEntries(keyframes.map((entry) => [entry.name, entry.frames])),
     positionTryCount: positionTries.length,
     positionTries: Object.fromEntries(positionTries.map((entry) => [entry.name, entry.tries])),
+    viewTransitionCount: viewTransitions.length,
+    viewTransitions: Object.fromEntries(viewTransitions.map((entry) => [entry.name, entry.transitions])),
     globalStyleCount: globalStyles.length,
     globalStyles: Object.fromEntries(globalStyles.map((entry) => [entry.name, blockOf(entry)])),
     witnesses: collisions.concat(legacyVerbs),
@@ -1817,13 +1830,17 @@ fn extract_vocabulary_record<'js>(
         }
         _ => None,
     };
-    let position_try_count = parsed.get("positionTryCount").and_then(|v| v.as_u64()).unwrap_or(0);
-    let position_try_blocks = if position_try_count == 0 {
-        None
-    } else {
-        parsed.get("positionTries").map(|v| serde_json::to_string(v).unwrap_or_default())
+    let collection = |count: &str, key: &str| {
+        let count = parsed.get(count).and_then(|v| v.as_u64()).unwrap_or(0);
+        (count > 0).then(|| parsed.get(key).map(|v| serde_json::to_string(v).unwrap_or_default())).flatten()
     };
-    Ok(VocabularyWires { keyframes_blocks, position_try_blocks, global_style_blocks, vocabulary_witnesses })
+    Ok(VocabularyWires {
+        keyframes_blocks,
+        position_try_blocks: collection("positionTryCount", "positionTries"),
+        view_transition_blocks: collection("viewTransitionCount", "viewTransitions"),
+        global_style_blocks,
+        vocabulary_witnesses,
+    })
 }
 
 fn list_export_keys(namespace: &Object<'_>) -> Vec<String> {

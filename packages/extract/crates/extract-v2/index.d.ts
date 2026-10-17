@@ -74,6 +74,11 @@ export interface EngineOptions {
    * } }`; absent means none.
    */
   positionTryJson?: string
+  /**
+   * View-transition collections, `{ exportName: { key: { name, slots } }
+   * }`; absent means none.
+   */
+  viewTransitionsJson?: string
   packageResolutionJson?: string
   pathAliasesJson?: string
   staticCssJson?: string
@@ -238,6 +243,12 @@ export interface NapiSystemConfig {
    * registered.
    */
   positionTryBlocks?: string
+  /**
+   * View-transition collections (`{ exportName: { key: { name, slots } }
+   * }` JSON); pass it as `viewTransitionsJson`. Absent when none are
+   * registered.
+   */
+  viewTransitionBlocks?: string
   /**
    * Vocabulary witnesses as a JSON array of coded entries; hosts surface
    * each as a diagnostic keyed by its `code`. Absent when there are none.

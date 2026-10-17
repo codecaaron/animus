@@ -204,6 +204,9 @@ export function buildAnalysisInputs(
   if (opts.system.positionTryJson) {
     inputs.positionTryJson = opts.system.positionTryJson;
   }
+  if (opts.system.viewTransitionsJson) {
+    inputs.viewTransitionsJson = opts.system.viewTransitionsJson;
+  }
   const context = analysisContextJson(opts.analysisContext);
   if (context !== undefined) inputs.analysisContextJson = context;
   return inputs;

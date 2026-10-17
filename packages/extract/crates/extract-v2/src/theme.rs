@@ -3574,6 +3574,39 @@ pub fn resolve_all_position_try_blocks(
     resolve_registered_blocks(blocks, ctx, resolve_position_try_block, after_block)
 }
 
+/// The pseudo-element each view-transition slot styles.
+const VIEW_TRANSITION_SLOTS: [(&str, &str); 4] = [
+    ("group", "view-transition-group"),
+    ("imagePair", "view-transition-image-pair"),
+    ("old", "view-transition-old"),
+    ("new", "view-transition-new"),
+];
+
+/// A registered view transition's rules: each slot's styles on its
+/// pseudo-element, scoped to the transition's class, resolved as a global
+/// block's selectors are, conditions included.
+pub fn resolve_view_transition_block(block: &Value, ctx: &ResolveContext) -> String {
+    let (Some(name), Some(slots)) =
+        (block.get("name").and_then(Value::as_str), block.get("slots").and_then(Value::as_object))
+    else {
+        return String::new();
+    };
+    let selectors: Map<String, Value> = VIEW_TRANSITION_SLOTS
+        .iter()
+        .filter_map(|(slot, pseudo)| Some((format!("::{pseudo}(*.{name})"), slots.get(*slot)?.clone())))
+        .collect();
+    resolve_global_block(&Value::Object(selectors), ctx)
+}
+
+/// Resolves every registered view transition, as keyframes blocks resolve.
+pub fn resolve_all_view_transition_blocks(
+    blocks: &Value,
+    ctx: &ResolveContext,
+    after_block: &mut dyn FnMut(&str),
+) -> String {
+    resolve_registered_blocks(blocks, ctx, resolve_view_transition_block, after_block)
+}
+
 /// Each block of each registered collection (`{ export: { key: block } }`),
 /// resolved by `resolve`, with `after_block` called by the block's name.
 fn resolve_registered_blocks(

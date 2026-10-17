@@ -89,6 +89,9 @@ pub struct EngineOptions {
     /// Position-try collections, `{ exportName: { key: { name, descriptors }
     /// } }`; absent means none.
     pub position_try_json: Option<String>,
+    /// View-transition collections, `{ exportName: { key: { name, slots } }
+    /// }`; absent means none.
+    pub view_transitions_json: Option<String>,
     pub package_resolution_json: Option<String>,
     pub path_aliases_json: Option<String>,
     pub static_css_json: Option<String>,
@@ -1008,6 +1011,9 @@ impl ExtractEngine {
             .set_position_tries(o.position_try_json.as_deref())
             .map_err(napi::Error::from_reason)?;
         css_inputs
+            .set_view_transitions(o.view_transitions_json.as_deref())
+            .map_err(napi::Error::from_reason)?;
+        css_inputs
             .set_short_class_prefix(o.short_class_prefix.as_deref())
             .map_err(napi::Error::from_reason)?;
         Ok(ExtractEngine {
@@ -1319,11 +1325,12 @@ impl ExtractEngine {
             }
         }
 
-        // Every registered collection, keyframes or position tries, by export
-        // name: each key's generated name. The kinds share one name-space.
+        // Every registered collection, keyframes, position tries or view
+        // transitions, by export name: each key's generated name. The kinds
+        // share one name-space.
         let inputs = &self.opts.css_inputs;
         let keyframes_registry: rustc_hash::FxHashMap<String, crate::static_value::StaticValue> =
-            [&inputs.keyframes_blocks, &inputs.position_try_blocks]
+            [&inputs.keyframes_blocks, &inputs.position_try_blocks, &inputs.view_transition_blocks]
                 .into_iter()
                 .flat_map(|blocks| blocks.as_ref().and_then(|v| v.as_object()).into_iter().flatten())
                 .filter_map(|(export_name, collection)| {
@@ -3878,6 +3885,45 @@ export const App = () => <Box tone="red" />;
         assert_eq!(global.matches("@position-try --animus-pt-abc123 {").count(), 1, "{global}");
         assert!(global.starts_with("@layer anm-global {"), "{global}");
         assert!(global.contains("  position-area: top;\n  width: 200px;"), "{global}");
+    }
+
+    /// Contract: a registered view transition resolves by its collection's
+    /// export name to its class, and each slot's rule emits once, in
+    /// `anm-global`, on its pseudo-element scoped to that class.
+    #[test]
+    fn a_registered_view_transition_resolves_by_export_name_and_emits_once_in_the_global_layer() {
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            view_transitions_json: Some(
+                r#"{"transitions":{"slide":{"name":"animus-vt-abc123","slots":{"group":{"animationDuration":"250ms"},"old":{"opacity":0}}}}}"#
+                    .to_string(),
+            ),
+            ..Default::default()
+        }))
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "system.ts", "source": "export const transitions = createViewTransitions({ slide: { group: { animationDuration: '250ms' }, old: { opacity: 0 } } });\n" },
+                        { "path": "a.tsx", "source": "import { transitions } from './system';\nexport const Card = ds.styles({ viewTransitionClass: transitions.slide }).asElement('article');\nexport const App = () => <Card />;\n" }
+                    ])
+                    .to_string(),
+                    None,
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        let css = manifest["css"].as_str().unwrap_or("");
+        assert!(css.contains("view-transition-class: animus-vt-abc123;"), "{css}");
+        let global = manifest["sheets"]["global"].as_str().unwrap_or("");
+        assert!(global.starts_with("@layer anm-global {"), "{global}");
+        for rule in [
+            "::view-transition-group(*.animus-vt-abc123) {\n  animation-duration: 250ms;\n}",
+            "::view-transition-old(*.animus-vt-abc123) {\n  opacity: 0;\n}",
+        ] {
+            assert_eq!(global.matches(rule).count(), 1, "{global}");
+        }
     }
 
     #[test]

@@ -5,11 +5,14 @@
 
 export type KeyframeFrameMap = Record<string, Record<string, unknown>>;
 
+/** Prints, and serializes, as the generated name: a registered block the
+ *  loader reads holds the name a style references. */
 export interface KeyframeRef<Name extends string> {
   readonly __brand: 'KeyframeRef';
   readonly __name: Name;
   toString(): string;
   valueOf(): string;
+  toJSON(): string;
 }
 
 export type Keyframes<Map extends Record<string, KeyframeFrameMap>> = {
@@ -68,6 +71,9 @@ const createRef = <Name extends string>(
     return resolvedName;
   },
   valueOf() {
+    return resolvedName;
+  },
+  toJSON() {
     return resolvedName;
   },
 });

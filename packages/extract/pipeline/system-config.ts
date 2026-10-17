@@ -48,6 +48,8 @@ export interface SystemConfig {
   keyframesJson: string | null;
   /** Registered position-try collections; absent when none are. */
   positionTryJson?: string;
+  /** Registered view-transition collections; absent when none are. */
+  viewTransitionsJson?: string;
   /** Coded witness entries from the sealed system's registration record —
    *  the witness channel, since the evaluation host's console is a no-op. */
   vocabularyWitnessesJson?: string | null;
@@ -278,6 +280,9 @@ export function loadSystemConfig(
   }
   if (config.positionTryBlocks) {
     system.positionTryJson = config.positionTryBlocks;
+  }
+  if (config.viewTransitionBlocks) {
+    system.viewTransitionsJson = config.viewTransitionBlocks;
   }
   if (registrations.invalid.length > 0) {
     system.invalidPropertyRegistrations = registrations.invalid;

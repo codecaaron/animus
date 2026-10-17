@@ -6,8 +6,21 @@ const FALLBACKS_KEY = '$animus.firstThatWorks';
 /** Set on the global object by the extraction host (the system loader). */
 const READS_FALLBACKS = '__ANIMUS_READS_FALLBACKS__';
 
-interface Fallbacks {
+/**
+ * A call's members under extraction. They serialize for the loader as the
+ * one key extraction reads, and the value prints as the preferred member,
+ * so a name hashed from styles is the same with and without extraction.
+ */
+export class Fallbacks {
   readonly [FALLBACKS_KEY]: readonly FallbackMember[];
+
+  constructor(members: readonly [FallbackMember, ...FallbackMember[]]) {
+    this[FALLBACKS_KEY] = members;
+  }
+
+  toString(): string {
+    return String(this[FALLBACKS_KEY][0]);
+  }
 }
 
 /**
@@ -37,10 +50,5 @@ export function firstThatWorks(
   ) {
     return values[0];
   }
-  // Under extraction the members serialize for the loader, and the value
-  // prints as the preferred member, so a name hashed from styles (a
-  // keyframes collection's) is the same with and without extraction.
-  return Object.defineProperty({ [FALLBACKS_KEY]: values }, 'toString', {
-    value: () => String(values[0]),
-  });
+  return new Fallbacks(values);
 }

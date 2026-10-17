@@ -115,6 +115,9 @@ pub struct CssInputs {
     /// Registered position-try collections, keyed and named as keyframes
     /// collections are: `{ exportName: { key: { name, descriptors } } }`.
     pub position_try_blocks: Option<Value>,
+    /// Registered view-transition collections, keyed and named as
+    /// keyframes collections are: `{ exportName: { key: { name, slots } } }`.
+    pub view_transition_blocks: Option<Value>,
     pub package_map: FxHashMap<String, String>,
     pub path_aliases: Vec<AliasEntry>,
     pub static_css: Option<crate::forced_usage::StaticCssConfig>,
@@ -415,6 +418,7 @@ impl CssInputs {
             )?,
             keyframes_blocks,
             position_try_blocks: None,
+            view_transition_blocks: None,
             package_map: parse("packageResolutionJson", package_resolution_json)?,
             path_aliases,
             static_css,
@@ -501,6 +505,15 @@ impl CssInputs {
     pub fn set_position_tries(&mut self, json: Option<&str>) -> Result<(), String> {
         self.position_try_blocks = parse_opt_value("positionTryJson", json)?;
         self.system_hash = crate::ids::fnv1a_json(self.system_hash, &keyframe_names(self.position_try_blocks.as_ref()));
+        Ok(())
+    }
+
+    /// The registered view transitions; their names take part in the system
+    /// hash, as keyframe names do.
+    pub fn set_view_transitions(&mut self, json: Option<&str>) -> Result<(), String> {
+        self.view_transition_blocks = parse_opt_value("viewTransitionsJson", json)?;
+        self.system_hash =
+            crate::ids::fnv1a_json(self.system_hash, &keyframe_names(self.view_transition_blocks.as_ref()));
         Ok(())
     }
 
@@ -10444,8 +10457,19 @@ fn run_with_system_floor(
     } else {
         String::new()
     };
+    let view_transition_css_raw = if let Some(blocks) = &inputs.view_transition_blocks {
+        let css = crate::theme::resolve_all_view_transition_blocks(blocks, &resolve_ctx, &mut |name| {
+            let component = format!("view transition '{name}'");
+            drain_dropped_style_keys(&dropped_keys, "system", &component, &[], &mut Vec::new(), &mut diagnostics);
+        });
+        drain_transform_failures(&transform_failures, "", None, None, &mut diagnostics, &mut deferred_errors);
+        drain_strict_token_misses(&token_misses, "system", "system", &mut diagnostics);
+        css
+    } else {
+        String::new()
+    };
     let mut combined_global = String::new();
-    for part in [&global_css_raw, &keyframes_css_raw, &position_try_css_raw] {
+    for part in [&global_css_raw, &keyframes_css_raw, &position_try_css_raw, &view_transition_css_raw] {
         if part.is_empty() {
             continue;
         }
