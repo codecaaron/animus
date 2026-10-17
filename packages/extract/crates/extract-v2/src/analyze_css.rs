@@ -12449,24 +12449,17 @@ mod tests {
     }
 
     #[test]
+    /// Contract: a host tag, which JSX compiles to a string (a lowercase
+    /// name, or one with a `-` whatever its first character), leaves usage
+    /// identity certain.
     fn lowercase_intrinsic_does_not_widen_floor_or_retain_components() {
-        let out = analyze_uncertain_identity("export const App = () => <div />;");
-        assert!(
-            out.dynamic_props.is_empty(),
-            "{:?}",
-            out.dynamic_props.keys()
-        );
-        assert!(
-            !out.sheets.base.contains("display: flex"),
-            "{}",
-            out.sheets.base
-        );
-        assert!(
-            !out.sheets.base.contains("display: grid"),
-            "{}",
-            out.sheets.base
-        );
-        assert_eq!(out.reconciliation["components_eliminated"], 2);
+        for tag in ["<div />", "<_x-widget />", "<é-widget />", "<Foo-Bar />"] {
+            let out = analyze_uncertain_identity(&format!("export const App = () => {tag};"));
+            assert!(out.dynamic_props.is_empty(), "{tag}: {:?}", out.dynamic_props.keys());
+            assert!(!out.sheets.base.contains("display: flex"), "{tag}: {}", out.sheets.base);
+            assert!(!out.sheets.base.contains("display: grid"), "{tag}: {}", out.sheets.base);
+            assert_eq!(out.reconciliation["components_eliminated"], 2, "{tag}");
+        }
     }
 
     #[test]

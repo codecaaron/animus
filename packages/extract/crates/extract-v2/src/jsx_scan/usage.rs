@@ -92,9 +92,12 @@ pub struct WrittenProp {
 }
 
 /// A tag name JSX reads as a component, as `<_As>`, `<$As>` and `<Box>`
-/// are: any but a lowercase one, which names a host element.
+/// are: an identifier that does not start with a lowercase letter. A
+/// lowercase name, or one with a `-` (`<my-widget>`, `<_x-widget>`,
+/// `<Foo-Bar>`), which no identifier spells, names a host element, as JSX
+/// compiles each to a string.
 pub(crate) fn is_component_like_identifier(name: &str) -> bool {
-    !name.is_empty() && !name.starts_with(|c: char| c.is_ascii_lowercase())
+    !name.is_empty() && !name.contains('-') && !name.starts_with(|c: char| c.is_ascii_lowercase())
 }
 
 /// Whether `property` sets the object's prototype (`{ __proto__: base }`,
