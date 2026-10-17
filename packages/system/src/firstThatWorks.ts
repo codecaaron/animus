@@ -11,7 +11,7 @@ const READS_FALLBACKS = '__ANIMUS_READS_FALLBACKS__';
  * one key extraction reads, and the value prints as the preferred member,
  * so a name hashed from styles is the same with and without extraction.
  */
-export class Fallbacks {
+class Fallbacks {
   readonly [FALLBACKS_KEY]: readonly FallbackMember[];
 
   constructor(members: readonly [FallbackMember, ...FallbackMember[]]) {

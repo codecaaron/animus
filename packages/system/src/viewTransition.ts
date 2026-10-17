@@ -3,7 +3,7 @@ import { fnv1a, type NamedRef, namedEntries, serializeBlock } from './named';
 import type { AbstractProps } from './types/props';
 
 /** The view-transition pseudo-elements a transition styles, by slot. */
-export const VIEW_TRANSITION_SLOTS = {
+const VIEW_TRANSITION_SLOTS = {
   group: 'view-transition-group',
   imagePair: 'view-transition-image-pair',
   old: 'view-transition-old',

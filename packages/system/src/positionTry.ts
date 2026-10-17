@@ -6,7 +6,7 @@ import type { PropertyTypes } from './types/properties';
  * The properties an `@position-try` rule accepts: inset, margin, sizing and
  * self-alignment properties, `position-anchor` and `position-area`.
  */
-export const POSITION_TRY_DESCRIPTORS = [
+const POSITION_TRY_DESCRIPTORS = [
   'positionAnchor',
   'positionArea',
   'top',
