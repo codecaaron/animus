@@ -902,8 +902,8 @@ pub(crate) struct EnrichedUsage {
     pub opaque_tags: Vec<OpaqueTag>,
     /// See `FileFacts::builder_import_references`.
     pub builder_import_references: Vec<BuilderImportReferences>,
-    /// See `FileFacts::first_that_works_calls`.
-    pub first_that_works_calls: BTreeSet<(u32, u32)>,
+    /// See `FileFacts::first_that_works_uses`.
+    pub first_that_works_uses: BTreeSet<(u32, u32)>,
 }
 
 /// A component element that hands its children and props to its receiver,
@@ -1117,8 +1117,8 @@ pub(crate) fn collect_enriched_usage(
         origins.map(|scoping| prop_tags_and_uses(program, scoping, &react)).unwrap_or_default();
     let builder_import_references =
         origins.map(|scoping| builder_import_references(program, module, scoping)).unwrap_or_default();
-    let first_that_works_calls =
-        origins.map(|scoping| first_that_works_calls(program, module, scoping)).unwrap_or_default();
+    let first_that_works_uses =
+        origins.map(|scoping| first_that_works_uses(program, module, scoping)).unwrap_or_default();
     EnrichedUsage {
         usage,
         confined,
@@ -1133,42 +1133,85 @@ pub(crate) fn collect_enriched_usage(
         element_consts,
         opaque_tags,
         builder_import_references,
-        first_that_works_calls,
+        first_that_works_uses,
     }
 }
 
-/// The span of each call to a local imported as `firstThatWorks` from
-/// `@animus-ui/system`, resolved through the file's scopes.
-fn first_that_works_calls(program: &Program<'_>, module: &ModuleRecord<'_>, scoping: &Scoping) -> BTreeSet<(u32, u32)> {
-    struct Scan<'s> {
+/// The span of each use of `@animus-ui/system`'s `firstThatWorks` whose
+/// value a call site may write: each call to it, through a named or a
+/// namespace import, and each read of a `const` such a call initializes.
+/// Resolved through the file's scopes, so a shadowing local is no use.
+fn first_that_works_uses(program: &Program<'_>, module: &ModuleRecord<'_>, scoping: &Scoping) -> BTreeSet<(u32, u32)> {
+    struct Uses<'s> {
         scoping: &'s Scoping,
-        imports: FxHashSet<SymbolId>,
+        functions: FxHashSet<SymbolId>,
+        namespaces: FxHashSet<SymbolId>,
+        consts: FxHashSet<SymbolId>,
         found: BTreeSet<(u32, u32)>,
     }
-    impl<'a> Visit<'a> for Scan<'_> {
-        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-            if let Expression::Identifier(callee) = &call.callee {
-                let symbol = callee
-                    .reference_id
-                    .get()
-                    .and_then(|id| self.scoping.get_reference(id).symbol_id());
-                if symbol.is_some_and(|symbol| self.imports.contains(&symbol)) {
-                    self.found.insert((call.span.start, call.span.end));
+    impl Uses<'_> {
+        fn bound(&self, ident: &IdentifierReference<'_>, symbols: &FxHashSet<SymbolId>) -> bool {
+            let symbol = ident.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+            symbol.is_some_and(|symbol| symbols.contains(&symbol))
+        }
+        fn calls_helper(&self, call: &CallExpression<'_>) -> bool {
+            match &call.callee {
+                Expression::Identifier(callee) => self.bound(callee, &self.functions),
+                Expression::StaticMemberExpression(member) => {
+                    member.property.name == "firstThatWorks"
+                        && matches!(&member.object, Expression::Identifier(object) if self.bound(object, &self.namespaces))
                 }
+                _ => false,
+            }
+        }
+    }
+    impl<'a> Visit<'a> for Uses<'_> {
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            if self.calls_helper(call) {
+                self.found.insert((call.span.start, call.span.end));
             }
             oxc::ast_visit::walk::walk_call_expression(self, call);
         }
+        fn visit_variable_declaration(&mut self, declaration: &oxc::ast::ast::VariableDeclaration<'a>) {
+            if declaration.kind == oxc::ast::ast::VariableDeclarationKind::Const {
+                for declarator in &declaration.declarations {
+                    let oxc::ast::ast::BindingPattern::BindingIdentifier(binding) = &declarator.id else { continue };
+                    let Some(init) = &declarator.init else { continue };
+                    if let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(init) {
+                        if self.calls_helper(call) {
+                            self.consts.extend(binding.symbol_id.get());
+                        }
+                    }
+                }
+            }
+            oxc::ast_visit::walk::walk_variable_declaration(self, declaration);
+        }
+        fn visit_identifier_reference(&mut self, ident: &IdentifierReference<'a>) {
+            if self.bound(ident, &self.consts) {
+                self.found.insert((ident.span.start, ident.span.end));
+            }
+        }
     }
-    let imports = module.import_entries.iter().filter(|entry| {
-        matches!(&entry.import_name, ImportImportName::Name(name) if name.name == "firstThatWorks")
-            && is_animus_system_specifier(&entry.module_request.name)
-    });
-    let imports = imports.filter_map(|entry| scoping.get_root_binding(entry.local_name.name.as_str().into())).collect();
-    let mut scan = Scan { scoping, imports, found: BTreeSet::new() };
-    if !scan.imports.is_empty() {
-        scan.visit_program(program);
+    let animus = module.import_entries.iter().filter(|entry| is_animus_system_specifier(&entry.module_request.name));
+    let symbol = |entry: &ImportEntry<'_>| scoping.get_root_binding(entry.local_name.name.as_str().into());
+    let functions = animus
+        .clone()
+        .filter(|entry| matches!(&entry.import_name, ImportImportName::Name(name) if name.name == "firstThatWorks"))
+        .filter_map(symbol)
+        .collect();
+    let namespaces =
+        animus.filter(|entry| matches!(entry.import_name, ImportImportName::NamespaceObject)).filter_map(symbol).collect();
+    let mut uses = Uses { scoping, functions, namespaces, consts: FxHashSet::default(), found: BTreeSet::new() };
+    if uses.functions.is_empty() && uses.namespaces.is_empty() {
+        return uses.found;
     }
-    scan.found
+    // A `const` may be read before its declaration in source order (from a
+    // function body), so its reads are collected on a second walk.
+    uses.visit_program(program);
+    if !uses.consts.is_empty() {
+        uses.visit_program(program);
+    }
+    uses.found
 }
 
 /// One builder import's value references, by imported name and source.

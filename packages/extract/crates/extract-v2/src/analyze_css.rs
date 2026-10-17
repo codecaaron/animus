@@ -8727,7 +8727,9 @@ fn run_with_system_floor(
         identity_policy.attribute_result(&mut usage_result, &lookup.attribution);
 
         for site in &usage_result.residue_sites {
-            if ff.first_that_works_calls.contains(&(site.span.start, site.span.end)) {
+            let (start, end) = (site.span.start, site.span.end);
+            let uses = ff.first_that_works_uses.range((start, start)..=(end, end));
+            if uses.into_iter().any(|&(_, use_end)| use_end <= end) {
                 diagnostics.push(diagnostic(
                     path,
                     binding_of(&site.binding),

@@ -443,11 +443,12 @@ pub struct FileFacts {
     /// any reference lies outside the spans it replaces.
     #[serde(skip)]
     pub builder_import_references: Vec<crate::usage_facts::BuilderImportReferences>,
-    /// The span of each call to `@animus-ui/system`'s `firstThatWorks`: one
-    /// written as a JSX value is read only by the runtime, which applies
-    /// the preferred member alone.
+    /// The span of each use of `@animus-ui/system`'s `firstThatWorks` whose
+    /// value a call site may write (`first_that_works_uses`): one inside a
+    /// JSX value is read only by the runtime, which applies the preferred
+    /// member alone.
     #[serde(skip)]
-    pub first_that_works_calls: BTreeSet<(u32, u32)>,
+    pub first_that_works_uses: BTreeSet<(u32, u32)>,
     /// Top-level `const X = Y;` bare-identifier aliases, assertion-peeled
     /// and `const` only.
     #[serde(skip)]
@@ -1268,7 +1269,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         namespace_exports: crate::usage_facts::collect_namespace_exports(ast.module_record()),
         default_export_binding,
         builder_import_references: Vec::new(),
-        first_that_works_calls: BTreeSet::new(),
+        first_that_works_uses: BTreeSet::new(),
         aliases: const_initializers.aliases,
         assigned_aliases: const_initializers.assigned,
         assigned_alias_offsets: const_initializers.assigned_at,
@@ -1958,7 +1959,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         element_consts,
         opaque_tags,
         builder_import_references,
-        first_that_works_calls,
+        first_that_works_uses,
     } = crate::usage_facts::collect_enriched_usage(
         scoping,
         program,
@@ -1987,7 +1988,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage,
         usage_enriched: Some(usage_enriched),
         builder_import_references,
-        first_that_works_calls,
+        first_that_works_uses,
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,
         default_export_chain: walked
