@@ -5546,12 +5546,13 @@ fn first_site_of(ff: &FileFacts, name: &str) -> Option<(bool, Option<TagOrigin>,
 const REACT_PASS_THROUGH: [&str; 5] = ["Activity", "Fragment", "Profiler", "StrictMode", "Suspense"];
 
 /// Whether `tag` names one of React's pass-through components, proven by
-/// its import from `react` or `react/jsx-runtime`, as a named import or a
+/// its import from `react`, `react/jsx-runtime` or `react/jsx-dev-runtime`,
+/// as a named import or a
 /// member of the default or namespace import. Unlike `ReactNames`, which an
 /// unbound `React` satisfies so that more escapes are seen, this widens a
 /// proof, so only an import counts.
 fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>) -> bool {
-    let from_react = |source: &str| source == "react" || source == "react/jsx-runtime";
+    let from_react = |source: &str| matches!(source, "react" | "react/jsx-runtime" | "react/jsx-dev-runtime");
     if origin != Some(TagOrigin::Import) {
         return false;
     }
@@ -15764,9 +15765,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     /// `createElement` is React's through an import of it from a runtime,
-    /// under any name, and as the unbound global. A function of the file's
-    /// own by that name is an ordinary call, so a component passed to it
-    /// keeps every option.
+    /// under any name, and as the unbound global; the automatic runtime's
+    /// `jsx`, `jsxs` and `jsxDEV` only through an import of the runtime that
+    /// exports them, called directly, as a namespace member or as `(0, f)`.
+    /// A function of the file's own by such a name, or one from elsewhere,
+    /// is an ordinary call, so a component passed to it keeps every option.
     #[test]
     fn create_element_is_react_only_through_a_runtime_import_or_the_global() {
         let kept = |setup: &str| {
@@ -15785,6 +15788,17 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                const createElement = (C, p) => <C {...p} size=\"lg\" />;\n\
                return createElement(R, {});\n\
              }",
+            // The automatic runtime's functions only through its import, as
+            // the runtime that exports them names them.
+            "export const Big = () => jsx(R, {});",
+            "import { jsx } from 'other-runtime';\nexport const Big = () => jsx(R, {});",
+            "import { jsxDEV as jsx } from 'react/jsx-runtime';\nexport const Big = () => jsx(R, {});",
+            "import React from 'react';\nexport const Big = () => React.jsx(R, {});",
+            "import { jsx } from 'react/jsx-runtime';\n\
+             export function Big() {\n\
+               const jsx = (C, p) => <C {...p} size=\"lg\" />;\n\
+               return jsx(R, {});\n\
+             }",
         ] {
             assert_eq!(kept(setup), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{setup}");
         }
@@ -15794,6 +15808,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "import { createElement as h } from 'preact';\nexport const Big = () => h(R, { size: 'lg' });",
             "export const Big = () => React.createElement(R, { size: 'lg' });",
             "export const Big = () => createElement(R, { size: 'lg' });",
+            "import { jsx as _jsx } from 'react/jsx-runtime';\nexport const Big = () => _jsx(R, { size: 'lg' });",
+            "import * as runtime from 'react/jsx-runtime';\nexport const Big = () => (0, runtime.jsxs)(R, { size: 'lg', children: [] });",
+            "import { jsxDEV } from 'react/jsx-dev-runtime';\nexport function Big() { return jsxDEV(R, { size: 'lg' }, void 0, false, {}, this); }",
         ] {
             assert_eq!(kept(setup), (vec!["sm", "lg"], vec!["active"]), "{setup}");
         }
@@ -19461,6 +19478,110 @@ export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} 
             assert_eq!(declined.len(), 1, "{:?}", out.diagnostics);
             assert_eq!(declined[0].severity.as_deref(), Some("error"));
             assert!(out.css.contains("column-gap: 5;"), "{}", out.css);
+        }
+    }
+
+
+    /// `source` compiled as a JSX build compiles it for React's automatic
+    /// runtime, in production or development (`jsxDEV`).
+    fn compile_jsx(source: &str, development: bool) -> String {
+        use oxc::transformer::{JsxOptions, JsxRuntime, TransformOptions, Transformer};
+        let allocator = oxc::allocator::Allocator::default();
+        let parsed = oxc::parser::Parser::new(&allocator, source, oxc::span::SourceType::jsx()).parse();
+        let mut program = parsed.program;
+        let scoping = oxc::semantic::SemanticBuilder::new().build(&program).semantic.into_scoping();
+        let options = TransformOptions {
+            jsx: JsxOptions { runtime: JsxRuntime::Automatic, development, ..JsxOptions::default() },
+            ..TransformOptions::default()
+        };
+        let compiled = Transformer::new(&allocator, std::path::Path::new("kit.jsx"), &options)
+            .build_with_scoping(scoping, &mut program);
+        assert!(compiled.diagnostics.is_empty(), "{:?}", compiled.diagnostics);
+        oxc::codegen::Codegen::new().build(&program).code
+    }
+
+    /// What analysis reads from a module's renders and makes of them, with
+    /// no byte offset, which compiling moves.
+    #[derive(Debug, PartialEq)]
+    struct Renders {
+        usage: Vec<String>,
+        css: String,
+        system_props: String,
+        reconciliation: String,
+        dynamic_props: String,
+        diagnostics: Vec<String>,
+    }
+
+    fn read_renders(source: &str) -> Renders {
+        let counter = ParseCounter::new(0);
+        let ast = OwnedAst::parse("kit.tsx".to_string(), source.to_string(), &counter);
+        let facts = extract_file_facts_with_prefix(&ast, "animus");
+        let mut usage: Vec<String> = facts
+            .usage_for_analysis()
+            .iter()
+            .map(|fact| match fact {
+                UsageFact::Element { tag, attrs, spread, element_child, .. } => {
+                    // Compiled JSX passes the key apart from the props, so
+                    // it lands after them; no spread can override a key.
+                    let (keys, props): (Vec<_>, Vec<_>) = attrs.iter().partition(|attr| attr.name == "key");
+                    format!(
+                        "{tag:?} {:?} spread={} child={}",
+                        props.iter().chain(&keys).map(|attr| (&attr.name, &attr.static_value, attr.dynamic)).collect::<Vec<_>>(),
+                        spread.is_some(),
+                        element_child.is_some(),
+                    )
+                }
+                other => format!("{other:?}"),
+            })
+            .collect();
+        usage.sort();
+        let mut inputs = test_inputs();
+        inputs.theme.insert("space.8".into(), "0.5rem".into());
+        let out = analyze(&[("kit.tsx", source)], &inputs);
+        let mut diagnostics: Vec<String> = out.diagnostics.iter().map(|d| format!("{:?} {}", d.code, d.kind)).collect();
+        diagnostics.sort();
+        Renders {
+            usage,
+            css: out.css,
+            system_props: format!("{:?}", out.system_prop_map),
+            reconciliation: out.reconciliation.to_string(),
+            dynamic_props: format!("{:?}", out.dynamic_props.keys().collect::<Vec<_>>()),
+            diagnostics,
+        }
+    }
+
+    const KIT_DEFINITIONS: &str = "import { ds } from './ds';\n\
+        const Box = ds.system({ space: true }).styles({ display: 'flex' }).asElement('div');\n\
+        const Btn = ds.styles({ display: 'flex' }).variant({ prop: 'size', variants: { sm: { display: 'grid' }, lg: { display: 'block' }, xl: { display: 'table' } } }).states({ loading: { display: 'none' }, active: { display: 'inline' } }).asElement('button');\n\
+        const Tag = ds.styles({ display: 'inline-flex' }).variant({ prop: 'tone', variants: { a: { color: 'red' }, b: { color: 'blue' } } }).asElement('span');\n";
+
+    /// Contract: a module compiled for React's automatic JSX runtime, in
+    /// production or development, reads as the JSX it was compiled from:
+    /// the same renders, with their props, spreads in order, children, keys
+    /// and `asChild` elements, and so the same CSS, pruning, system props
+    /// and diagnostics. A kit shipped as built JavaScript keeps the styles
+    /// its source keeps, such as a priority value only a literal extracts.
+    #[test]
+    fn compiled_jsx_reads_as_the_jsx_it_was_compiled_from() {
+        let closed = "export function Priority() { return <Box p=\"8!\" style={{ padding: '3px' }} data-probe=\"priority\">Priority</Box>; }\n\
+            export function List({ items, on }) { return <ul>{items.map((i) => <Btn key={i} size=\"sm\">{i}</Btn>)}<li>one</li>{on && <Btn size=\"sm\" loading />}<></></ul>; }\n\
+            export function AsChild() { return <Box asChild p=\"8\"><Btn size=\"sm\" /></Box>; }\n\
+            export function Attr() { return <Box p=\"8\" title={<Btn size=\"sm\" />} />; }\n";
+        let open = "export function Spreads(props) { return <><Btn size=\"sm\" {...props} /><Btn {...props} size=\"lg\" loading /><Tag tone=\"a\" key=\"k\" /></>; }\n\
+            export function Poly({ as: As = Btn, ...rest }) { return <As size=\"sm\" {...rest} />; }\n\
+            export function Override(p) { return <Box {...p}>text</Box>; }\n\
+            export function Escape() { return <Box title={Tag} />; }\n";
+        for (usage, closed) in [(closed, true), (open, false)] {
+            let source = format!("{KIT_DEFINITIONS}{usage}");
+            let written = read_renders(&source);
+            if closed {
+                assert!(written.system_props.contains("\"8!\""), "{}", written.system_props);
+                assert!(written.reconciliation.contains("\"variants_eliminated\":2"), "pruning is compared: {}", written.reconciliation);
+            }
+            for development in [false, true] {
+                let compiled = compile_jsx(&source, development);
+                assert_eq!(read_renders(&compiled), written, "development: {development}\n{compiled}");
+            }
         }
     }
 }

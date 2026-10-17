@@ -5571,7 +5571,7 @@ fn escape_path(
                 if call.arguments.first().map(GetSpan::span) == Some(current) =>
             {
                 // Followed only where usage records the render.
-                if react.calls(&call.callee, "createElement") {
+                if react.element_call(&call.callee).is_some() {
                     return None;
                 }
                 // So is the target of an `Object.assign` call the facts read as
@@ -6523,7 +6523,9 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
                 self.writing = outer;
             }
         }
-        if self.react.calls(&call.callee, "createElement") {
+        // A call lowering left as written: its props are the second argument
+        // for either runtime.
+        if self.react.element_call(&call.callee).is_some() {
             if let Some(first_arg) = call.arguments.first() {
                 let (ident, member, identity_uncertain) = match first_arg {
                     Argument::Identifier(id) => (Some(id.name.to_string()), None, false),
@@ -6969,7 +6971,7 @@ fn prop_tags_and_uses(
             self.ancestors.pop();
         }
         fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-            if self.react.calls(&call.callee, "createElement") {
+            if self.react.element_call(&call.callee).is_some() {
                 let target = call.arguments.first().and_then(Argument::as_expression);
                 let chosen = target.and_then(|target| match crate::chain_walk::unwrap_type_assertions(target) {
                     Expression::LogicalExpression(logical)
@@ -7237,55 +7239,78 @@ fn ordinary_components(program: &Program<'_>, scoping: &Scoping) -> BTreeSet<Str
 /// through an import from a recognised runtime, or as the unbound globals
 /// `createElement`, `cloneElement` and `React`. Any other binding of such a
 /// name is the file's own function, an ordinary call, so the escape scan
-/// sees a component passed to it as a value.
+/// sees a component passed to it as a value. The automatic runtime's
+/// element functions (`jsx`, `jsxs`, `jsxDEV`) and its `Fragment`, which
+/// compiled JSX names, count only through an import of the runtime that
+/// exports them.
 #[derive(Clone)]
 pub(crate) struct ReactNames {
-    /// Local name → the runtime function it binds.
+    /// Local name → the runtime export it binds.
     functions: FxHashMap<String, &'static str>,
-    /// Default and namespace imports of a runtime, and an unbound `React`.
-    namespaces: FxHashSet<String>,
+    /// Default and namespace imports of a runtime, and an unbound `React`,
+    /// → the exports read through them.
+    namespaces: FxHashMap<String, &'static [&'static str]>,
 }
 
 const REACT_RUNTIMES: [&str; 3] = ["react", "preact", "preact/compat"];
 const ELEMENT_FUNCTIONS: [&str; 2] = ["createElement", "cloneElement"];
+/// Each automatic runtime and the exports compiled JSX names.
+pub(crate) const AUTOMATIC_RUNTIMES: [(&str, &[&str]); 2] = [
+    ("react/jsx-runtime", &["jsx", "jsxs", "Fragment"]),
+    ("react/jsx-dev-runtime", &["jsxDEV", "Fragment"]),
+];
+
+/// Which React element function a call makes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ElementCall {
+    /// `createElement(type, props, ...children)`.
+    Classic,
+    /// The automatic runtime's `jsx(type, props, key)`, whose children are
+    /// `props.children`; `jsxs` passes them as an array, one per entry; and
+    /// `jsxDEV` adds metadata after the key.
+    Jsx,
+    Jsxs,
+    JsxDev,
+}
 
 impl ReactNames {
     /// By spelling alone, for facts read without bindings.
     fn by_name() -> Self {
         Self {
             functions: ELEMENT_FUNCTIONS.iter().map(|name| (name.to_string(), *name)).collect(),
-            namespaces: std::iter::once("React".to_string()).collect(),
+            namespaces: std::iter::once(("React".to_string(), &ELEMENT_FUNCTIONS[..])).collect(),
         }
     }
 
     pub(crate) fn from_imports(program: &Program<'_>, scoping: &Scoping) -> Self {
-        let mut names = Self {
-            functions: FxHashMap::default(),
-            namespaces: FxHashSet::default(),
-        };
+        let mut names = Self { functions: FxHashMap::default(), namespaces: FxHashMap::default() };
         for stmt in &program.body {
             let Statement::ImportDeclaration(import) = stmt else {
                 continue;
             };
-            if !REACT_RUNTIMES.contains(&import.source.value.as_str()) {
-                continue;
-            }
+            let source = import.source.value.as_str();
+            let automatic = AUTOMATIC_RUNTIMES.iter().find(|(runtime, _)| *runtime == source).map(|(_, f)| *f);
+            let exported: &'static [&'static str] = match automatic {
+                Some(exports) => exports,
+                None if REACT_RUNTIMES.contains(&source) => &ELEMENT_FUNCTIONS,
+                None => continue,
+            };
             for specifier in import.specifiers.iter().flatten() {
                 match specifier {
                     ImportDeclarationSpecifier::ImportSpecifier(named) => {
                         let imported = named.imported.name();
-                        let function = ELEMENT_FUNCTIONS
-                            .iter()
-                            .find(|function| **function == imported.as_str());
-                        if let Some(function) = function {
-                            names.functions.insert(named.local.name.to_string(), function);
+                        if let Some(export) = exported.iter().find(|export| **export == imported.as_str()) {
+                            names.functions.insert(named.local.name.to_string(), export);
                         }
                     }
+                    // The automatic runtimes export no default.
                     ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
-                        names.namespaces.insert(default.local.name.to_string());
+                        if automatic.is_none() {
+                            names.namespaces.insert(default.local.name.to_string(), exported);
+                        }
                     }
                     ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
-                        names.namespaces.insert(namespace.local.name.to_string());
+                        names.namespaces.insert(namespace.local.name.to_string(), exported);
                     }
                 }
             }
@@ -7296,29 +7321,59 @@ impl ReactNames {
             *bound.entry(name).or_default() += 1;
         }
         names.functions.retain(|local, _| bound.get(local.as_str()) == Some(&1));
-        names.namespaces.retain(|local| bound.get(local.as_str()) == Some(&1));
+        names.namespaces.retain(|local, _| bound.get(local.as_str()) == Some(&1));
         for function in ELEMENT_FUNCTIONS {
             if !bound.contains_key(function) {
                 names.functions.insert(function.to_string(), function);
             }
         }
         if !bound.contains_key("React") {
-            names.namespaces.insert("React".to_string());
+            names.namespaces.insert("React".to_string(), &ELEMENT_FUNCTIONS);
         }
         names
     }
 
+    /// The runtime export `value` names, looking through the `(0, f)` a
+    /// compiler writes to call `f` without a receiver.
+    fn export(&self, value: &Expression<'_>) -> Option<&'static str> {
+        let value = match value.get_inner_expression() {
+            Expression::SequenceExpression(sequence) => match sequence.expressions.split_last() {
+                Some((last, leading)) if leading.iter().all(Expression::is_literal) => last.get_inner_expression(),
+                _ => return None,
+            },
+            value => value,
+        };
+        match value {
+            Expression::Identifier(id) => self.functions.get(id.name.as_str()).copied(),
+            Expression::StaticMemberExpression(member) => {
+                let Expression::Identifier(object) = &member.object else { return None };
+                let exported = self.namespaces.get(object.name.as_str())?;
+                exported.iter().find(|export| **export == member.property.name.as_str()).copied()
+            }
+            _ => None,
+        }
+    }
+
     /// Whether `callee` calls the runtime's `function`.
     pub(crate) fn calls(&self, callee: &Expression<'_>, function: &str) -> bool {
-        match callee {
-            Expression::Identifier(id) => self.functions.get(id.name.as_str()) == Some(&function),
-            Expression::StaticMemberExpression(member) => {
-                member.property.name == function
-                    && matches!(&member.object, Expression::Identifier(object)
-                        if self.namespaces.contains(object.name.as_str()))
-            }
-            _ => false,
+        self.export(callee) == Some(function)
+    }
+
+    /// The element `callee` creates, if it calls a runtime's element function.
+    pub(crate) fn element_call(&self, callee: &Expression<'_>) -> Option<ElementCall> {
+        match self.export(callee)? {
+            "createElement" => Some(ElementCall::Classic),
+            "jsx" => Some(ElementCall::Jsx),
+            "jsxs" => Some(ElementCall::Jsxs),
+            "jsxDEV" => Some(ElementCall::JsxDev),
+            _ => None,
         }
+    }
+
+    /// Whether `component` is an automatic runtime's `Fragment`, which `<>`
+    /// compiles to.
+    pub(crate) fn is_compiled_fragment(&self, component: &Argument<'_>) -> bool {
+        component.as_expression().is_some_and(|component| self.export(component) == Some("Fragment"))
     }
 }
 

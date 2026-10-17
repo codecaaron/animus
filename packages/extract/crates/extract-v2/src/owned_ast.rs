@@ -80,7 +80,7 @@ impl OwnedAst {
                 }
                 panicked = ret.fatal_error;
                 let mut program = ret.program;
-                crate::lower_create_element::lower_create_element(&owner.allocator, &mut program);
+                crate::lower_create_element::lower_create_element(&owner.allocator, &mut program, &ret.module_record);
                 DependentProgram {
                     program,
                     module_record: ret.module_record,
@@ -96,8 +96,8 @@ impl OwnedAst {
         }
     }
 
-    /// The parsed program, with each React `createElement` call over a
-    /// component read as the JSX element it creates
+    /// The parsed program, with each React element call over a component,
+    /// `createElement` or compiled JSX's, read as the JSX element it creates
     /// (`lower_create_element`); source text and spans are as written.
     pub fn program(&self) -> &Program<'_> {
         &self.cell.borrow_dependent().program
