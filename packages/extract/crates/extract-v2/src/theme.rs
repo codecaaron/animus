@@ -1226,7 +1226,12 @@ fn resolve_entry(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDecla
     let failures = || ctx.transform_failures.map_or(0, |sink| sink.borrow().len());
     let failures_before = failures();
     let declarations = resolve_prop(key, value, ctx);
-    if declarations.is_empty() && value.is_object() && failures() == failures_before && ctx.dropped_keys.is_some() {
+    if declarations.is_empty()
+        && value.is_object()
+        && first_that_works_members(value).is_none()
+        && failures() == failures_before
+        && ctx.dropped_keys.is_some()
+    {
         if let Some((at_rule, block)) = value.as_object().into_iter().flatten().find(|(entry, _)| only_wraps_rules(entry, ctx)) {
             let within = format!("the value of '{key}'");
             let lost = format!("'{key}'");
@@ -1529,6 +1534,9 @@ fn without_priority(value: &Value, custom_only: bool) -> Cow<'_, Value> {
 
 /// A prop's declarations under `ctx`; it reports only through `ctx`'s sinks.
 pub(crate) fn resolve_prop(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDeclaration> {
+    if let Some(members) = first_that_works_members(value) {
+        return resolve_first_that_works(key, members, ctx);
+    }
     let mut declarations = resolve_single_prop(
         key,
         value,
@@ -1541,6 +1549,72 @@ pub(crate) fn resolve_prop(key: &str, value: &Value, ctx: &ResolveContext) -> Ve
     );
     take_px(value, &mut declarations, ctx);
     declarations
+}
+
+/// The members of a `firstThatWorks(…)` value, preferred first.
+pub(crate) fn first_that_works_members(value: &Value) -> Option<&Vec<Value>> {
+    let entries = value.as_object().filter(|entries| entries.len() == 1)?;
+    entries.get(crate::eval::FIRST_THAT_WORKS)?.as_array()
+}
+
+/// Each member resolves as the prop's value would, a strict token miss
+/// omitted and reported; each property then declares its values in reverse,
+/// so the last one a browser supports, the most preferred, wins.
+fn resolve_first_that_works(key: &str, members: &[Value], ctx: &ResolveContext) -> Vec<CssDeclaration> {
+    let mut by_property: Vec<(String, Vec<String>)> = Vec::new();
+    for member in members {
+        if omit_strict_token_miss(key, member, ctx) {
+            continue;
+        }
+        for declaration in resolve_prop(key, member, ctx) {
+            match by_property.iter_mut().find(|(property, _)| *property == declaration.property) {
+                Some((_, values)) => values.push(declaration.value),
+                None => by_property.push((declaration.property, vec![declaration.value])),
+            }
+        }
+    }
+    by_property
+        .into_iter()
+        .flat_map(|(property, values)| {
+            fold_variable_fallbacks(values)
+                .into_iter()
+                .rev()
+                .map(move |value| CssDeclaration { property: property.clone(), value })
+        })
+        .collect()
+}
+
+/// Values preferred first, with the first run of bare `var(--…)` values
+/// folded into one, falling back through the run to the value after it:
+/// `var(--a)`, `var(--b)`, `red` is `var(--a, var(--b, red))`. A variable
+/// that is not set makes its declaration invalid at computed-value time, not
+/// an earlier one apply, so the run cannot be separate declarations. Values
+/// after the folded one never apply and are dropped.
+fn fold_variable_fallbacks(values: Vec<String>) -> Vec<String> {
+    let Some(start) = values.iter().position(|value| bare_variable(value).is_some()) else {
+        return values;
+    };
+    let end = values[start..]
+        .iter()
+        .position(|value| bare_variable(value).is_none())
+        .map_or(values.len(), |at| start + at + 1);
+    let folded = values[start..end].iter().rev().fold(None, |fallback: Option<String>, value| {
+        Some(match (bare_variable(value), fallback) {
+            (Some(name), Some(fallback)) => format!("var({name}, {fallback})"),
+            _ => value.clone(),
+        })
+    });
+    let mut kept = values[..start].to_vec();
+    kept.extend(folded);
+    kept
+}
+
+/// The custom property a value names when it is exactly `var(--name)`.
+fn bare_variable(value: &str) -> Option<&str> {
+    let name = value.strip_prefix("var(")?.strip_suffix(')')?.trim();
+    let rest = name.strip_prefix("--")?;
+    (!rest.is_empty() && !rest.contains(|ch: char| ch.is_whitespace() || matches!(ch, ',' | '(' | ')' | '!')))
+        .then_some(name)
 }
 
 /// A bare number `authored` resolved to unchanged takes `px` where `ctx`
@@ -5124,6 +5198,28 @@ mod tests {
         let group = &resolved.conditioned[0];
         assert_eq!(group.conditions, [Condition::Container("@container style(--acme-tone: dark)".into())]);
         assert_eq!(group.declarations[0].property, "--acme-gap");
+    }
+
+    /// Contract: a `firstThatWorks` value declares its preferred member
+    /// last, so it wins where supported, and folds its first run of bare
+    /// `var()` members into one nested fallback, dropping what follows it.
+    #[test]
+    fn first_that_works_declares_the_preferred_member_last_and_folds_a_variable_run() {
+        let owner = TestCtxOwner::new();
+        let styles = json!({
+            "position": { "$animus.firstThatWorks": ["sticky", "-webkit-sticky", "fixed"] },
+            "outlineColor": { "$animus.firstThatWorks": ["color-mix(in srgb, red 20%, blue)", "var(--a)", "var(--b)", "red", "green"] },
+        });
+        assert_eq!(
+            declarations_of(&resolve_styles(&styles, &owner.ctx(), false)),
+            [
+                "position: fixed",
+                "position: -webkit-sticky",
+                "position: sticky",
+                "outline-color: var(--a, var(--b, red))",
+                "outline-color: color-mix(in srgb, red 20%, blue)",
+            ]
+        );
     }
 
     #[test]

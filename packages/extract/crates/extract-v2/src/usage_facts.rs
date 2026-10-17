@@ -902,6 +902,8 @@ pub(crate) struct EnrichedUsage {
     pub opaque_tags: Vec<OpaqueTag>,
     /// See `FileFacts::builder_import_references`.
     pub builder_import_references: Vec<BuilderImportReferences>,
+    /// See `FileFacts::first_that_works_calls`.
+    pub first_that_works_calls: BTreeSet<(u32, u32)>,
 }
 
 /// A component element that hands its children and props to its receiver,
@@ -1115,6 +1117,8 @@ pub(crate) fn collect_enriched_usage(
         origins.map(|scoping| prop_tags_and_uses(program, scoping, &react)).unwrap_or_default();
     let builder_import_references =
         origins.map(|scoping| builder_import_references(program, module, scoping)).unwrap_or_default();
+    let first_that_works_calls =
+        origins.map(|scoping| first_that_works_calls(program, module, scoping)).unwrap_or_default();
     EnrichedUsage {
         usage,
         confined,
@@ -1129,7 +1133,44 @@ pub(crate) fn collect_enriched_usage(
         element_consts,
         opaque_tags,
         builder_import_references,
+        first_that_works_calls,
     }
+}
+
+/// The span of each call to a local imported as `firstThatWorks` from
+/// `@animus-ui/system`, resolved through the file's scopes.
+fn first_that_works_calls(program: &Program<'_>, module: &ModuleRecord<'_>, scoping: &Scoping) -> BTreeSet<(u32, u32)> {
+    struct Scan<'s> {
+        scoping: &'s Scoping,
+        imports: FxHashSet<SymbolId>,
+        found: BTreeSet<(u32, u32)>,
+    }
+    impl<'a> Visit<'a> for Scan<'_> {
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            if let Expression::Identifier(callee) = &call.callee {
+                let symbol = callee
+                    .reference_id
+                    .get()
+                    .and_then(|id| self.scoping.get_reference(id).symbol_id());
+                if symbol.is_some_and(|symbol| self.imports.contains(&symbol)) {
+                    self.found.insert((call.span.start, call.span.end));
+                }
+            }
+            oxc::ast_visit::walk::walk_call_expression(self, call);
+        }
+    }
+    let mut scan = Scan { scoping, imports: FxHashSet::default(), found: BTreeSet::new() };
+    for import in collect_import_facts(module) {
+        if import.imported == "firstThatWorks" && is_animus_system_specifier(&import.source) {
+            if let Some(symbol) = scoping.get_root_binding(import.local.as_str().into()) {
+                scan.imports.insert(symbol);
+            }
+        }
+    }
+    if !scan.imports.is_empty() {
+        scan.visit_program(program);
+    }
+    scan.found
 }
 
 /// One builder import's value references, by imported name and source.

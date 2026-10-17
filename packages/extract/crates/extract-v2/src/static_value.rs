@@ -83,6 +83,9 @@ pub enum StaticValue {
     /// specifier may evaluate: in a package file it would resolve from the
     /// wrong origin.
     AssetFunction { in_project: bool },
+    /// A local bound to `@animus-ui/system`'s `firstThatWorks`: evaluation
+    /// calls it, and no read takes it as a value.
+    FirstThatWorksFunction,
     Unevaluated(Unevaluated),
 }
 

@@ -1523,7 +1523,10 @@ fn non_sealing_method(name: &str) -> bool {
 
 /// A function `@animus-ui/system` exports that never returns a system.
 fn non_sealing_function(name: &str) -> bool {
-    matches!(name, "createTheme" | "createSystem" | "createTransform" | "createGlobalStyles" | "createKeyframes" | "compose")
+    matches!(
+        name,
+        "createTheme" | "createSystem" | "createTransform" | "createGlobalStyles" | "createKeyframes" | "compose" | "firstThatWorks"
+    )
 }
 
 /// How a module declares a binding, as root inference reads it.

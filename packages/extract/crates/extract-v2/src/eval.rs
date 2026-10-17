@@ -262,7 +262,8 @@ fn computed_key(
 
 /// The static value an identifier, or a member path from one, names:
 /// `preset`, `presets.pixel`, `presets['pixel']`. `None` for anything else,
-/// for an unsettled binding or the `asset` function, and for a member an
+/// for an unsettled binding or a system function (`asset`,
+/// `firstThatWorks`), and for a member an
 /// unevaluated node stands for.
 pub(crate) fn static_path_value<'v>(expr: &Expression<'_>, static_values: Statics<'v>) -> Option<&'v StaticValue> {
     let member_of = |parent: &'v StaticValue, key: &str| {
@@ -270,7 +271,7 @@ pub(crate) fn static_path_value<'v>(expr: &Expression<'_>, static_values: Static
     };
     match crate::chain_walk::unwrap_type_assertions(expr) {
         Expression::Identifier(ident) => match static_value(static_values, ident.name.as_str(), &[])? {
-            Known::Exact(StaticValue::AssetFunction { .. }) => None,
+            Known::Exact(StaticValue::AssetFunction { .. } | StaticValue::FirstThatWorksFunction) => None,
             Known::Exact(value) => Some(value),
             Known::Finite(_) | Known::Uncertain(_) => None,
         },
@@ -418,13 +419,14 @@ fn eval_expression_scoped(
                             format!("variable reference (non-static) — {clause}"),
                         ));
                     }
-                    Some(Known::Exact(StaticValue::AssetFunction { .. })) | None => {}
+                    Some(Known::Exact(StaticValue::AssetFunction { .. } | StaticValue::FirstThatWorksFunction)) | None => {}
                     Some(Known::Exact(value)) => return Ok(value.clone()),
                 }
             }
             Err(BailError::new(UnevaluatedKind::Reference, "variable reference (non-static)"))
         }
         Expression::CallExpression(call) => eval_asset_call(call, static_values)
+            .or_else(|| eval_first_that_works_call(call, skips, static_values, keyframes_eligible))
             .unwrap_or_else(|| Err(BailError::new(UnevaluatedKind::Call, "function call (non-static)"))),
         Expression::ArrowFunctionExpression(_) => {
             Err(BailError::new(UnevaluatedKind::Function, "arrow function (non-static)"))
@@ -1049,8 +1051,17 @@ pub(crate) fn plain(value: &StaticValue) -> Value {
         StaticValue::AssetFunction { in_project } => {
             serde_json::json!({ ASSET_FUNCTION: if *in_project { ASSET_IN_PROJECT } else { ASSET_IN_PACKAGE } })
         }
+        StaticValue::FirstThatWorksFunction => serde_json::json!({ FIRST_THAT_WORKS_FUNCTION: true }),
     }
 }
+
+/// How JSON spells the `firstThatWorks` function, a local bound to
+/// `@animus-ui/system`'s `firstThatWorks`.
+const FIRST_THAT_WORKS_FUNCTION: &str = "$animus.firstThatWorksFunction";
+
+/// How a style value spells a `firstThatWorks(…)` call: the one key of an
+/// object holding its members, preferred first. No style key starts with `$`.
+pub(crate) const FIRST_THAT_WORKS: &str = "$animus.firstThatWorks";
 
 /// How JSON spells the `asset` function, a local bound to
 /// `@animus-ui/system`'s `asset`, by its scope: in a project file the host
@@ -1091,6 +1102,39 @@ fn eval_asset_call(
         )));
     }
     Some(Ok(StaticValue::String(format!("{ASSET_PLACEHOLDER_PREFIX}{}", specifier.value))))
+}
+
+/// `firstThatWorks(…)` through a local bound to the `firstThatWorks`
+/// function, as the members it falls back through; `None` for any other
+/// call. Each member is a static string or number, and there are two or more.
+fn eval_first_that_works_call(
+    call: &oxc::ast::ast::CallExpression<'_>,
+    skips: &mut Vec<SkippedProperty>,
+    static_values: Option<Statics<'_>>,
+    keyframes_eligible: bool,
+) -> Option<Result<StaticValue, BailError>> {
+    let Expression::Identifier(callee) = &call.callee else {
+        return None;
+    };
+    let Known::Exact(StaticValue::FirstThatWorksFunction) = static_value(static_values?, callee.name.as_str(), &[])? else {
+        return None;
+    };
+    let bail = |reason: &str| Some(Err(BailError::new(UnevaluatedKind::Call, format!("firstThatWorks() {reason} (non-static)"))));
+    if call.arguments.len() < 2 {
+        return bail("of fewer than two members");
+    }
+    let mut members = Vec::with_capacity(call.arguments.len());
+    for argument in &call.arguments {
+        let Some(expression) = argument.as_expression() else {
+            return bail("of a spread member");
+        };
+        match eval_expression_scoped(expression, skips, static_values, keyframes_eligible) {
+            Ok(member @ (StaticValue::String(_) | StaticValue::Number(_))) => members.push(member),
+            Ok(_) => return bail("of a member that is no string or number"),
+            Err(err) => return Some(Err(BailError::new(err.kind, format!("firstThatWorks() member — {}", err.reason)))),
+        }
+    }
+    Some(Ok(StaticValue::Object(vec![(FIRST_THAT_WORKS.to_string(), StaticValue::Array(members))])))
 }
 
 /// A template with no expression, or whose every expression is a static
@@ -1151,8 +1195,9 @@ pub(crate) fn carries_relative_asset(value: &StaticValue) -> bool {
     }
 }
 
-/// The module's locals imported as `asset` from `@animus-ui/system`, bound to
-/// the `asset` function for a project or a package file.
+/// The module's locals imported as `asset` or `firstThatWorks` from
+/// `@animus-ui/system`, bound to those functions; `asset` for a project or a
+/// package file.
 fn asset_bindings(program: &Program<'_>, in_package: bool) -> FxHashMap<String, StaticValue> {
     let mut bindings = FxHashMap::default();
     for stmt in &program.body {
@@ -1164,12 +1209,12 @@ fn asset_bindings(program: &Program<'_>, in_package: bool) -> FxHashMap<String, 
         }
         for specifier in import.specifiers.iter().flatten() {
             if let oxc::ast::ast::ImportDeclarationSpecifier::ImportSpecifier(named) = specifier {
-                if named.imported.name() == "asset" {
-                    bindings.insert(
-                        named.local.name.to_string(),
-                        StaticValue::AssetFunction { in_project: !in_package },
-                    );
-                }
+                let function = match named.imported.name().as_str() {
+                    "asset" => StaticValue::AssetFunction { in_project: !in_package },
+                    "firstThatWorks" => StaticValue::FirstThatWorksFunction,
+                    _ => continue,
+                };
+                bindings.insert(named.local.name.to_string(), function);
             }
         }
     }

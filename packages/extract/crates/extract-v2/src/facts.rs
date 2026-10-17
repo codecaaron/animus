@@ -443,6 +443,11 @@ pub struct FileFacts {
     /// any reference lies outside the spans it replaces.
     #[serde(skip)]
     pub builder_import_references: Vec<crate::usage_facts::BuilderImportReferences>,
+    /// The span of each call to `@animus-ui/system`'s `firstThatWorks`: one
+    /// written as a JSX value is read only by the runtime, which applies
+    /// the preferred member alone.
+    #[serde(skip)]
+    pub first_that_works_calls: BTreeSet<(u32, u32)>,
     /// Top-level `const X = Y;` bare-identifier aliases, assertion-peeled
     /// and `const` only.
     #[serde(skip)]
@@ -969,7 +974,9 @@ fn serialize_statics<S: serde::Serializer>(
 /// function or an unevaluated node, which no JSON value stands for.
 fn serialized(value: &StaticValue) -> Option<Value> {
     Some(match value {
-        StaticValue::AssetFunction { .. } | StaticValue::Unevaluated(_) => return None,
+        StaticValue::AssetFunction { .. } | StaticValue::FirstThatWorksFunction | StaticValue::Unevaluated(_) => {
+            return None
+        }
         StaticValue::Array(items) => Value::Array(items.iter().filter_map(serialized).collect()),
         StaticValue::Object(entries) => Value::Object(
             entries.iter().filter_map(|(key, value)| Some((key.clone(), serialized(value)?))).collect(),
@@ -1263,6 +1270,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         namespace_exports: crate::usage_facts::collect_namespace_exports(ast.module_record()),
         default_export_binding,
         builder_import_references: Vec::new(),
+        first_that_works_calls: BTreeSet::new(),
         aliases: const_initializers.aliases,
         assigned_aliases: const_initializers.assigned,
         assigned_alias_offsets: const_initializers.assigned_at,
@@ -1952,6 +1960,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         element_consts,
         opaque_tags,
         builder_import_references,
+        first_that_works_calls,
     } = crate::usage_facts::collect_enriched_usage(
         scoping,
         program,
@@ -1980,6 +1989,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage,
         usage_enriched: Some(usage_enriched),
         builder_import_references,
+        first_that_works_calls,
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,
         default_export_chain: walked

@@ -222,6 +222,43 @@ module runs, just as the authored `Card.extend()` does. Two consequences:
   (`'use client'`) cannot be extended from a server module; declare the
   extension in a client module.
 
+### Fallback values
+
+`firstThatWorks()` lists values for one property, the preferred one first.
+Extraction declares them in reverse, so the last one a browser supports
+wins, and folds a run of bare `var()` values into one nested fallback:
+
+```tsx
+import { firstThatWorks } from '@animus-ui/system';
+
+const Header = ds
+  .styles({
+    position: firstThatWorks('sticky', '-webkit-sticky', 'fixed'),
+    scrollMarginTop: firstThatWorks(
+      'var(--header-height)',
+      'var(--bar-height)',
+      '4rem'
+    ),
+  })
+  .asElement('header');
+```
+
+```css
+.animus-Header-… {
+  position: fixed;
+  position: -webkit-sticky;
+  position: sticky;
+  scroll-margin-top: var(--header-height, var(--bar-height, 4rem));
+}
+```
+
+Each member types against the property and resolves through its scale. It
+works in component styles, global styles and keyframes. Written as a
+call-site prop it is only read at runtime, which applies the preferred value
+alone and warns (`animus.first-that-works.unextracted`). A minifier lowering
+for browser targets, such as Lightning CSS in Vite or Animus's own
+`targets`, drops a fallback every target already supports.
+
 ## Color Modes
 
 `addColorModes(initialMode, modeConfig)` emits a `[data-color-mode="…"]` block

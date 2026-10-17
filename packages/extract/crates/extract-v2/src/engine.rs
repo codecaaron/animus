@@ -510,7 +510,11 @@ fn object_like(value: &crate::static_value::StaticValue) -> bool {
     use crate::static_value::StaticValue;
     matches!(
         value,
-        StaticValue::Object(_) | StaticValue::Array(_) | StaticValue::AssetFunction { .. } | StaticValue::Unevaluated(_)
+        StaticValue::Object(_)
+            | StaticValue::Array(_)
+            | StaticValue::AssetFunction { .. }
+            | StaticValue::FirstThatWorksFunction
+            | StaticValue::Unevaluated(_)
     )
 }
 

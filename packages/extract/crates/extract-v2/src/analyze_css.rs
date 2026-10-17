@@ -734,6 +734,9 @@ const STYLING_NAME_COLLISION: &str = "animus.chain.styling-name-collision";
 /// Warnings for losses the engine reported without a code before.
 const UNEXTRACTABLE_CHAIN: &str = "animus.chain.unextractable";
 const SKIPPED_VALUE: &str = "animus.chain.skipped-value";
+/// A `firstThatWorks(…)` written as a JSX value: the runtime applies its
+/// preferred member alone, since an inline style holds no fallbacks.
+const FIRST_THAT_WORKS_UNEXTRACTED: &str = "animus.first-that-works.unextracted";
 const UNRESOLVED_PARENT: &str = "animus.extension.unresolved-parent";
 const UNBOUND_TRANSFORM_NAME: &str = "animus.props.unbound-transform-name";
 const UNRESOLVED_TOKEN_ALIAS: &str = "animus.style.unresolved-token-alias";
@@ -801,6 +804,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (IDENTITY_UNCERTAIN_TAG, "info"),
     (UNEXTRACTABLE_CHAIN, "warn"),
     (SKIPPED_VALUE, "warn"),
+    (FIRST_THAT_WORKS_UNEXTRACTED, "warn"),
     (UNRESOLVED_PARENT, "warn"),
     (UNBOUND_TRANSFORM_NAME, "warn"),
     (UNRESOLVED_TOKEN_ALIAS, "warn"),
@@ -8690,6 +8694,21 @@ fn run_with_system_floor(
             .collect();
         identity_policy.attribute_result(&mut usage_result, &lookup.attribution);
 
+        for site in &usage_result.residue_sites {
+            if ff.first_that_works_calls.contains(&(site.span.start, site.span.end)) {
+                diagnostics.push(diagnostic(
+                    path,
+                    binding_of(&site.binding),
+                    "warn",
+                    format!(
+                        "'{}' is written firstThatWorks(…) at a call site, which only the runtime reads: it applies \
+                         the preferred member alone, with no fallback — write the fallbacks in the component's styles",
+                        site.prop_name
+                    ),
+                    Some(FIRST_THAT_WORKS_UNEXTRACTED),
+                ));
+            }
+        }
         usage_residue.extend(
             usage_result
                 .residue_sites

@@ -1,7 +1,13 @@
 import type { ComponentPropsWithRef, RefObject } from 'react';
 import { Component, forwardRef, useRef } from 'react';
 
-import { compose, createSystem, createTheme, createTransform } from '../src';
+import {
+  compose,
+  createSystem,
+  createTheme,
+  createTransform,
+  firstThatWorks,
+} from '../src';
 import { composeWithContext } from '../src/composeWithContext';
 import { createGlobalStyles, createKeyframes, ds, tokens } from './test-system';
 import sharedQuarter, {
@@ -39,6 +45,15 @@ ds.styles({ inlineSize: 50 });
 ds.styles({ cornerShape: 'squircle' });
 // A style value takes `!important`, and a trailing `!` means the same.
 ds.styles({ visibility: 'hidden!', boxSizing: 'border-box !important' });
+
+// Contract: each `firstThatWorks` member types against the receiving
+// property, and a list holds two or more.
+ds.styles({ position: firstThatWorks('sticky', '-webkit-sticky', 'fixed') });
+ds.styles({ position: { _: 'static', sm: firstThatWorks('sticky', 'fixed') } });
+// @ts-expect-error — 'stickyy' is no `position` value
+ds.styles({ position: firstThatWorks('sticky', 'stickyy') });
+// @ts-expect-error — one member is no fallback list
+firstThatWorks('sticky');
 
 const DivBox = ds.styles({ display: 'flex' }).asElement('div');
 const BtnBox = ds.styles({ display: 'flex' }).asElement('button');
