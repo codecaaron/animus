@@ -17,7 +17,7 @@ import sharedQuarter, {
   sharedNamed,
 } from './transform-callbacks';
 
-import type { LibraryBundle, VocabularyOf } from '../src';
+import type { KeyframeRef, LibraryBundle, VocabularyOf } from '../src';
 import type {
   AnyBrandedComponent,
   SharedConfig,
@@ -54,6 +54,16 @@ ds.styles({ position: { _: 'static', sm: firstThatWorks('sticky', 'fixed') } });
 ds.styles({ position: firstThatWorks('sticky', 'stickyy') });
 // @ts-expect-error — one member is no fallback list
 firstThatWorks('sticky');
+
+// Contract: a hand-written ref of the public shape, with no `toJSON`,
+// stays a valid keyframes reference.
+const handWritten: KeyframeRef<'pulse'> = {
+  __brand: 'KeyframeRef',
+  __name: 'pulse',
+  toString: () => 'pulse',
+  valueOf: () => 'pulse',
+};
+ds.styles({ animationName: handWritten });
 
 const DivBox = ds.styles({ display: 'flex' }).asElement('div');
 const BtnBox = ds.styles({ display: 'flex' }).asElement('button');

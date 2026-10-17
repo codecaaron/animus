@@ -46,14 +46,17 @@ export const serializeBlock = (block: AbstractProps): string =>
     })
     .join(';');
 
-/** A registered artifact's ref: prints, and serializes, as its name, so a
- *  registered block the loader reads holds the name a style references. */
+/**
+ * A registered artifact's ref: prints as its name. A factory's ref also
+ * serializes as its name, so a registered block the loader reads holds the
+ * name a style references; a hand-written ref need not.
+ */
 export interface NamedRef<Brand extends string, Name extends string> {
   readonly __brand: Brand;
   readonly __name: Name;
   toString(): string;
   valueOf(): string;
-  toJSON(): string;
+  toJSON?(): string;
 }
 
 /** A class, not a plain object, so `serializeBlock` prints it as its name. */
