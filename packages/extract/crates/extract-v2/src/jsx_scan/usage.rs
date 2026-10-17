@@ -8,7 +8,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use oxc::ast::ast::{
     Argument, CallExpression, Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
     JSXElementName, JSXExpression, JSXMemberExpression, JSXMemberExpressionObject,
-    JSXOpeningElement, ObjectPropertyKind, Program,
+    JSXOpeningElement, ObjectProperty, ObjectPropertyKind, Program, PropertyKind,
 };
 use oxc::ast_visit::Visit;
 
@@ -93,6 +93,17 @@ pub struct WrittenProp {
 
 pub(crate) fn is_component_like_identifier(name: &str) -> bool {
     name.chars().next().is_some_and(char::is_uppercase)
+}
+
+/// Whether `property` sets the object's prototype (`{ __proto__: base }`,
+/// `{ '__proto__': base }`), whose entries the props then inherit, rather
+/// than writing a prop: a computed or shorthand `__proto__` is an own one.
+pub(crate) fn is_prototype_setter(property: &ObjectProperty<'_>) -> bool {
+    property.kind == PropertyKind::Init
+        && !property.computed
+        && !property.shorthand
+        && !property.method
+        && property.key.static_name().is_some_and(|name| name == "__proto__")
 }
 
 /// Scan JSX for system prop values and variant/state/component usage.
@@ -432,6 +443,10 @@ pub(crate) fn create_element_props(argument: Option<&Argument<'_>>) -> Option<Ve
                 let ObjectPropertyKind::ObjectProperty(p) = property else {
                     return None;
                 };
+                // Inherited props are unknown.
+                if is_prototype_setter(p) {
+                    return None;
+                }
                 let key = p.key.static_name().filter(|_| !p.computed)?;
                 let class = match &p.value {
                     Expression::StringLiteral(lit) => lit.value.to_string(),
@@ -487,6 +502,9 @@ pub(crate) fn create_element_literals(
         .iter()
         .filter_map(|property| {
             let ObjectPropertyKind::ObjectProperty(p) = property else { return None };
+            if is_prototype_setter(p) {
+                return None;
+            }
             let key = p.key.static_name()?.to_string();
             let mut value = evaluate(&p.value)?;
             if let serde_json::Value::Object(entries) = &mut value {

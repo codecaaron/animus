@@ -8,22 +8,26 @@
 
 use oxc::allocator::{Allocator, TakeIn};
 use oxc::ast::ast::{
-    Argument, ArrayExpressionElement, Expression, JSXAttributeItem, JSXAttributeName,
+    Argument, ArrayExpressionElement, BindingPattern, Expression, JSXAttributeItem, JSXAttributeName,
     JSXAttributeValue, JSXChild, JSXClosingFragment, JSXElementName, JSXExpression, JSXIdentifier,
     JSXMemberExpression, JSXMemberExpressionObject, JSXOpeningElement, JSXOpeningFragment, ObjectExpression,
-    ObjectProperty, ObjectPropertyKind, Program, PropertyKey, PropertyKind, StaticMemberExpression,
+    ObjectProperty, ObjectPropertyKind, Program, PropertyKey, PropertyKind, Statement, StaticMemberExpression,
 };
 use oxc::ast::builder::AstBuilder;
 use oxc::ast_visit::VisitMut;
 use oxc::span::{GetSpan, Span};
 use oxc::syntax::module_record::ModuleRecord;
+use crate::jsx_scan::is_prototype_setter;
 use crate::usage_facts::{is_absent, static_member_root, ElementCall, ReactNames, AUTOMATIC_RUNTIMES};
+use oxc::semantic::SymbolId;
+use rustc_hash::FxHashSet;
 
 /// Lowers every call of a runtime's element function (as usage analysis
 /// recognizes it) whose component is a capitalized name or a member path,
-/// or, for the automatic runtime, any name JSX reads as a component or a
-/// host element's tag. A lowercase name stays a `createElement` call: JSX
-/// would read it as a host element.
+/// or, for the automatic runtime, a host element's tag or its own
+/// `Fragment`, where the JSX reads as the call does. A lowercase name stays
+/// a call: JSX would read it as a host element. So does any call the JSX
+/// cannot write exactly, which usage reads as the call it is.
 pub(crate) fn lower_create_element<'a>(allocator: &'a Allocator, program: &mut Program<'a>, module: &ModuleRecord<'_>) {
     // The automatic runtime's functions count only through its import.
     let automatic = module.requested_modules.keys().any(|source| {
@@ -36,8 +40,27 @@ pub(crate) fn lower_create_element<'a>(allocator: &'a Allocator, program: &mut P
     // its scopes, before the parse is final.
     let scoping = oxc::semantic::SemanticBuilder::new().build(program).semantic.into_scoping();
     let names = ReactNames::from_imports(program, &scoping);
-    let mut lowering = Lowering { builder: AstBuilder::new(allocator), names, scoping: &scoping };
+    // Only the automatic runtime's ignored arguments read them.
+    let literal_consts = if automatic { literal_consts(program, &scoping) } else { FxHashSet::default() };
+    let mut lowering = Lowering { builder: AstBuilder::new(allocator), names, scoping: &scoping, literal_consts };
     lowering.visit_program(program);
+}
+
+/// The module's top-level bindings of a literal that nothing writes again,
+/// such as the `var _jsxFileName` a development build passes `jsxDEV`.
+fn literal_consts(program: &Program<'_>, scoping: &oxc::semantic::Scoping) -> FxHashSet<SymbolId> {
+    let mut consts = FxHashSet::default();
+    for statement in &program.body {
+        let Statement::VariableDeclaration(declaration) = statement else { continue };
+        for declarator in &declaration.declarations {
+            if let (BindingPattern::BindingIdentifier(id), Some(init)) = (&declarator.id, &declarator.init) {
+                if init.get_inner_expression().is_literal() {
+                    consts.extend(id.symbol_id.get().filter(|symbol| !scoping.symbol_is_mutated(*symbol)));
+                }
+            }
+        }
+    }
+    consts
 }
 
 /// Whether the element at `start` is written as a call the parse lowered,
@@ -50,6 +73,7 @@ struct Lowering<'a, 's> {
     builder: AstBuilder<'a>,
     names: ReactNames,
     scoping: &'s oxc::semantic::Scoping,
+    literal_consts: FxHashSet<SymbolId>,
 }
 
 impl<'a> VisitMut<'a> for Lowering<'a, '_> {
@@ -72,29 +96,56 @@ impl<'a> VisitMut<'a> for Lowering<'a, '_> {
 }
 
 impl<'a> Lowering<'a, '_> {
-    /// A call JSX can write: a runtime's element function over a component
-    /// or, for the automatic runtime, a host tag, with no spread among the
-    /// arguments that are no children.
+    /// A call JSX can write exactly: a runtime's element function over a
+    /// capitalized name or a member path, or, for the automatic runtime, a
+    /// host tag or its own `Fragment` (the `_Fragment` compiled JSX
+    /// imports); with no spread among the arguments that are no children,
+    /// and no props that set their prototype. The automatic runtime's
+    /// arguments after the key, which it ignores, must be metadata whose
+    /// evaluation hands nothing on.
     fn lowerable(&self, call: &oxc::ast::ast::CallExpression<'a>) -> Option<ElementCall> {
         if call.optional {
             return None;
         }
         let kind = self.names.element_call(&call.callee)?;
         let classic = kind == ElementCall::Classic;
-        let component = match call.arguments.first() {
-            // Compiled JSX names a component as JSX does, by any name but a
-            // lowercase one, such as the `_Fragment` it imports.
-            Some(Argument::Identifier(id)) if classic => id.name.chars().next().is_some_and(char::is_uppercase),
-            Some(Argument::Identifier(id)) => !id.name.starts_with(|c: char| c.is_ascii_lowercase()),
-            Some(Argument::StaticMemberExpression(member)) => static_member_root(member).is_some(),
-            Some(Argument::StringLiteral(tag)) => !classic && host_tag(&tag.value),
+        let first = call.arguments.first()?;
+        let component = match first {
+            Argument::Identifier(id) => {
+                id.name.chars().next().is_some_and(char::is_uppercase)
+                    || (!classic && self.names.is_compiled_fragment(first))
+            }
+            Argument::StaticMemberExpression(member) => static_member_root(member).is_some(),
+            Argument::StringLiteral(tag) => !classic && host_tag(&tag.value),
             _ => false,
         };
-        // The automatic runtime's arguments are the props and the key; any
-        // after them are metadata.
+        // A spread among the ignored arguments is no metadata.
         let written = if classic { 2 } else { 3 };
         let spread = call.arguments.iter().take(written).any(|argument| matches!(argument, Argument::SpreadElement(_)));
-        (component && !spread).then_some(kind)
+        let metadata = classic
+            || call.arguments.iter().skip(3).all(|argument| argument.as_expression().is_some_and(|value| self.inert(value, true)));
+        (component && !spread && metadata && !sets_prototype(call.arguments.get(1))).then_some(kind)
+    }
+
+    /// Whether evaluating `value` hands nothing on: a literal, an absent
+    /// value, `this`, a top-level binding of a literal nothing writes again,
+    /// or, `nested`, an object of those under plain keys.
+    fn inert(&self, value: &Expression<'a>, nested: bool) -> bool {
+        let value = value.get_inner_expression();
+        match value {
+            Expression::ThisExpression(_) => true,
+            value if value.is_literal() || is_absent(value, Some(self.scoping)) => true,
+            Expression::Identifier(id) => id
+                .reference_id
+                .get()
+                .and_then(|reference| self.scoping.get_reference(reference).symbol_id())
+                .is_some_and(|symbol| self.literal_consts.contains(&symbol)),
+            Expression::ObjectExpression(object) if nested => object.properties.iter().all(|property| {
+                matches!(property, ObjectPropertyKind::ObjectProperty(property)
+                    if plain_name(property).is_some() && self.inert(&property.value, false))
+            }),
+            _ => false,
+        }
     }
 
     fn element(&self, call: oxc::ast::ast::CallExpression<'a>) -> Expression<'a> {
@@ -284,6 +335,16 @@ fn unwrapped(expression: Expression<'_>) -> Expression<'_> {
         Expression::TSTypeAssertion(inner) => unwrapped(inner.unbox().expression),
         expression => expression,
     }
+}
+
+/// Whether `props` is an object that sets its prototype, so the element
+/// inherits props no attribute writes.
+fn sets_prototype(props: Option<&Argument<'_>>) -> bool {
+    let Some(Expression::ObjectExpression(object)) = props.and_then(Argument::as_expression).map(Expression::get_inner_expression)
+    else {
+        return false;
+    };
+    object.properties.iter().any(|property| matches!(property, ObjectPropertyKind::ObjectProperty(property) if is_prototype_setter(property)))
 }
 
 /// The attribute name a props entry writes: a plain value under a key JSX

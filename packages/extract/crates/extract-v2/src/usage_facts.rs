@@ -7260,6 +7260,70 @@ pub(crate) const AUTOMATIC_RUNTIMES: [(&str, &[&str]); 2] = [
     ("react/jsx-dev-runtime", &["jsxDEV", "Fragment"]),
 ];
 
+/// The namespaces among `namespaces` the module may rewrite, so that a
+/// member no longer holds React's function: any whose name is used other
+/// than to read a member (`React.createElement = …`, `delete React.x`,
+/// `Object.assign(React, …)`, `const R = React`). A type names no value.
+/// Each name binds once, or not at all, so the name tells its uses.
+fn rewritable_namespaces(
+    program: &Program<'_>,
+    namespaces: &FxHashMap<String, &'static [&'static str]>,
+) -> FxHashSet<String> {
+    struct Uses<'n> {
+        names: FxHashSet<&'n str>,
+        rewritable: FxHashSet<String>,
+    }
+    impl Uses<'_> {
+        fn tracked(&self, expression: &Expression<'_>) -> bool {
+            matches!(expression, Expression::Identifier(id) if self.names.contains(id.name.as_str()))
+        }
+    }
+    impl<'a> Visit<'a> for Uses<'_> {
+        fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
+            if self.names.contains(id.name.as_str()) {
+                self.rewritable.insert(id.name.to_string());
+            }
+        }
+        // A member read leaves its object out of the uses.
+        fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
+            if !self.tracked(&member.object) {
+                oxc::ast_visit::walk::walk_static_member_expression(self, member);
+            }
+        }
+        fn visit_jsx_member_expression(&mut self, member: &oxc::ast::ast::JSXMemberExpression<'a>) {
+            if !matches!(&member.object, oxc::ast::ast::JSXMemberExpressionObject::IdentifierReference(id)
+                if self.names.contains(id.name.as_str()))
+            {
+                oxc::ast_visit::walk::walk_jsx_member_expression(self, member);
+            }
+        }
+        fn visit_simple_assignment_target(&mut self, target: &oxc::ast::ast::SimpleAssignmentTarget<'a>) {
+            if let Some(Expression::Identifier(id)) = target.as_member_expression().map(|member| member.object()) {
+                self.visit_identifier_reference(id);
+            }
+            oxc::ast_visit::walk::walk_simple_assignment_target(self, target);
+        }
+        fn visit_unary_expression(&mut self, unary: &oxc::ast::ast::UnaryExpression<'a>) {
+            if unary.operator == oxc::syntax::operator::UnaryOperator::Delete {
+                if let Some(Expression::Identifier(id)) = unary.argument.as_member_expression().map(|member| member.object()) {
+                    self.visit_identifier_reference(id);
+                }
+            }
+            oxc::ast_visit::walk::walk_unary_expression(self, unary);
+        }
+        fn visit_ts_type(&mut self, _type: &oxc::ast::ast::TSType<'a>) {}
+    }
+    // A name the source never spells has no use to read.
+    let names: FxHashSet<&str> =
+        namespaces.keys().map(String::as_str).filter(|name| program.source_text.contains(name)).collect();
+    if names.is_empty() {
+        return FxHashSet::default();
+    }
+    let mut uses = Uses { names, rewritable: FxHashSet::default() };
+    uses.visit_program(program);
+    uses.rewritable
+}
+
 /// Which React element function a call makes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ElementCall {
@@ -7330,6 +7394,8 @@ impl ReactNames {
         if !bound.contains_key("React") {
             names.namespaces.insert("React".to_string(), &ELEMENT_FUNCTIONS);
         }
+        let untrusted = rewritable_namespaces(program, &names.namespaces);
+        names.namespaces.retain(|local, _| !untrusted.contains(local));
         names
     }
 

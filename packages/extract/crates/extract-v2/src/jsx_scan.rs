@@ -16,6 +16,7 @@ pub use usage::{
 
 pub(crate) use usage::{
     classify_jsx_attribute_as_variant_value, create_element_literals, create_element_props, is_component_like_identifier,
+    is_prototype_setter,
     jsx_member_path,
 };
 pub(crate) use value_eval::{eval_jsx_attribute_value, eval_property_key, eval_static_expression, make_json_number};

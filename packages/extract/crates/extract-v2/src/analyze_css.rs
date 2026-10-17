@@ -12428,6 +12428,19 @@ mod tests {
         assert_uncertain_identity_widens_and_retains(&out);
     }
 
+    /// Contract: a compiled automatic-runtime call over a component named
+    /// as no capitalized JSX tag is (`_As`, `$As`) renders something unseen
+    /// where it resolves to nothing.
+    #[test]
+    fn unresolved_compiled_component_of_any_spelling_widens_floor_and_retains_evaluated_components() {
+        for render in [
+            "import { jsx } from 'react/jsx-runtime';\nexport const App = ({ _As }) => jsx(_As, {});",
+            "import { jsx } from 'react/jsx-runtime';\nexport const App = ({ $As }) => jsx($As, {});",
+        ] {
+            assert_uncertain_identity_widens_and_retains(&analyze_uncertain_identity(render));
+        }
+    }
+
     #[test]
     fn lowercase_intrinsic_does_not_widen_floor_or_retain_components() {
         let out = analyze_uncertain_identity("export const App = () => <div />;");
@@ -15768,8 +15781,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     /// under any name, and as the unbound global; the automatic runtime's
     /// `jsx`, `jsxs` and `jsxDEV` only through an import of the runtime that
     /// exports them, called directly, as a namespace member or as `(0, f)`.
-    /// A function of the file's own by such a name, or one from elsewhere,
-    /// is an ordinary call, so a component passed to it keeps every option.
+    /// A function of the file's own by such a name, one from elsewhere, or
+    /// one read from a React object the module may rewrite, is an ordinary
+    /// call, so a component passed to it keeps every option. So does a call
+    /// whose ignored arguments hand a component on, or whose props inherit
+    /// what they set.
     #[test]
     fn create_element_is_react_only_through_a_runtime_import_or_the_global() {
         let kept = |setup: &str| {
@@ -15799,6 +15815,15 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                const jsx = (C, p) => <C {...p} size=\"lg\" />;\n\
                return jsx(R, {});\n\
              }",
+            // A component handed on in the arguments the runtime ignores.
+            "import { jsxDEV } from 'react/jsx-dev-runtime';\nimport { leak } from './registry';\n\
+             export const Big = () => jsxDEV('div', {}, undefined, false, leak(R), this);",
+            // A React object the module rewrites holds another function.
+            "import React from 'react';\nconst real = React.createElement;\n\
+             React.createElement = (T, p) => real(T, { ...p, size: 'lg' });\n\
+             export const Big = () => (0, React.createElement)(R, { size: 'sm' });",
+            // Props that inherit what they set.
+            "import { jsx } from 'react/jsx-runtime';\nexport const Big = () => jsx(R, { __proto__: { size: 'lg' } });",
         ] {
             assert_eq!(kept(setup), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{setup}");
         }
@@ -19552,8 +19577,8 @@ export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} 
 
     const KIT_DEFINITIONS: &str = "import { ds } from './ds';\n\
         const Box = ds.system({ space: true }).styles({ display: 'flex' }).asElement('div');\n\
-        const Btn = ds.styles({ display: 'flex' }).variant({ prop: 'size', variants: { sm: { display: 'grid' }, lg: { display: 'block' }, xl: { display: 'table' } } }).states({ loading: { display: 'none' }, active: { display: 'inline' } }).asElement('button');\n\
-        const Tag = ds.styles({ display: 'inline-flex' }).variant({ prop: 'tone', variants: { a: { color: 'red' }, b: { color: 'blue' } } }).asElement('span');\n";
+        const Btn = ds.styles({ display: 'flex' }).variant({ prop: 'size', defaultVariant: 'lg', variants: { sm: { display: 'grid' }, lg: { display: 'block' }, xl: { display: 'table' } } }).states({ loading: { display: 'none' }, active: { display: 'inline' } }).asElement('button');\n\
+        const Tag = ds.styles({ display: 'inline-flex' }).variant({ prop: 'tone', defaultVariant: 'a', variants: { a: { color: 'red' }, b: { color: 'blue' } } }).asElement('span');\n";
 
     /// Contract: a module compiled for React's automatic JSX runtime, in
     /// production or development, reads as the JSX it was compiled from:
@@ -19565,18 +19590,20 @@ export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} 
     fn compiled_jsx_reads_as_the_jsx_it_was_compiled_from() {
         let closed = "export function Priority() { return <Box p=\"8!\" style={{ padding: '3px' }} data-probe=\"priority\">Priority</Box>; }\n\
             export function List({ items, on }) { return <ul>{items.map((i) => <Btn key={i} size=\"sm\">{i}</Btn>)}<li>one</li>{on && <Btn size=\"sm\" loading />}<></></ul>; }\n\
-            export function AsChild() { return <Box asChild p=\"8\"><Btn size=\"sm\" /></Box>; }\n\
             export function Attr() { return <Box p=\"8\" title={<Btn size=\"sm\" />} />; }\n";
         let open = "export function Spreads(props) { return <><Btn size=\"sm\" {...props} /><Btn {...props} size=\"lg\" loading /><Tag tone=\"a\" key=\"k\" /></>; }\n\
             export function Poly({ as: As = Btn, ...rest }) { return <As size=\"sm\" {...rest} />; }\n\
             export function Override(p) { return <Box {...p}>text</Box>; }\n\
-            export function Escape() { return <Box title={Tag} />; }\n";
+            export function Escape() { return <Box title={Tag} />; }\n\
+            export function AsChild() { return <Box asChild p=\"8\"><Btn size=\"sm\" /></Box>; }\n";
         for (usage, closed) in [(closed, true), (open, false)] {
             let source = format!("{KIT_DEFINITIONS}{usage}");
             let written = read_renders(&source);
             if closed {
                 assert!(written.system_props.contains("\"8!\""), "{}", written.system_props);
-                assert!(written.reconciliation.contains("\"variants_eliminated\":2"), "pruning is compared: {}", written.reconciliation);
+                // A rendered component keeps the option it renders alone.
+                assert!(written.css.contains("--size-sm {"), "{}", written.css);
+                assert!(!written.css.contains("--size-lg") && !written.css.contains("--size-xl"), "pruning is compared: {}", written.css);
             }
             for development in [false, true] {
                 let compiled = compile_jsx(&source, development);
