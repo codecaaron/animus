@@ -36,7 +36,13 @@ export function isEngineTransformExtension(path: string): boolean {
 
 /** An MDX file as usage analysis reads it, or why MDX would reject it. */
 export type MdxUsageSourceResult =
-  | { kind: 'ok'; source: string }
+  | {
+      kind: 'ok';
+      source: string;
+      /** The components the usage source writes that the document does
+       *  not declare: each wrapper its content renders in. */
+      synthesizedComponents: string[];
+    }
   | { kind: 'error'; error: string };
 
 /** The list items and block quotes a line's content can sit in. */
@@ -312,14 +318,14 @@ export function mdxUsageSource(
   filename: string
 ): MdxUsageSourceResult {
   try {
-    return { kind: 'ok', source: mdxToTsx(source, filename) };
+    return { kind: 'ok', ...mdxToTsx(source, filename) };
   } catch (err) {
     if (!(err instanceof MdxSyntaxError)) throw err;
     return { kind: 'error', error: err.message };
   }
 }
 
-function mdxToTsx(source: string, filename: string): string {
+function mdxToTsx(source: string, filename: string) {
   const lines = source.split('\n');
   const esm = lines.map(() => false);
   const inline = lines.map(() => false);
@@ -445,5 +451,8 @@ function mdxToTsx(source: string, filename: string): string {
     layout !== -1
       ? `return ${wrapped};`
       : `const { wrapper: MDXLayout } = props.components || {}; return MDXLayout ? ${wrapped} : <>${content}</>;`;
-  return `${out.join('\n')}\nexport default function MDXContent(props = {}) { ${render} }\n/* @mdx-source: ${filename} */\n`;
+  return {
+    source: `${out.join('\n')}\nexport default function MDXContent(props = {}) { ${render} }\n/* @mdx-source: ${filename} */\n`,
+    synthesizedComponents: contents,
+  };
 }

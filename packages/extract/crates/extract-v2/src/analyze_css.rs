@@ -8819,10 +8819,15 @@ fn run_with_system_floor(
         }
 
         // A tag proven foreign renders no Animus component, so it leaves usage
-        // identity certain.
+        // identity certain, as does a component the host's adapter wrote and
+        // declared in the file, which renders what the file shows.
         uncertain_identities.extend(
             std::mem::take(&mut usage_result.uncertain_tags)
                 .into_iter()
+                .filter(|site| {
+                    !(site.origin == Some(TagOrigin::TopLevel)
+                        && site.tag.as_ref().is_some_and(|tag| ff.synthesized_components.contains(tag)))
+                })
                 .filter_map(|site| match foreign_site(ff, &site, &written_packages, inputs) {
                     Foreign::Proven => None,
                     Foreign::Uncertain(cause) => Some(UncertainIdentity::Tag(site, Some(cause))),

@@ -449,6 +449,12 @@ pub struct FileFacts {
     /// member alone.
     #[serde(skip)]
     pub first_that_works_uses: BTreeSet<(u32, u32)>,
+    /// The components the host's adapter writes into this file that its
+    /// original never declares, by name: MDX's usage source renders the
+    /// document's content in such a wrapper. They render only what the file
+    /// shows, so their tags leave usage identity as it is.
+    #[serde(skip)]
+    pub synthesized_components: BTreeSet<String>,
     /// Top-level `const X = Y;` bare-identifier aliases, assertion-peeled
     /// and `const` only.
     #[serde(skip)]
@@ -1270,6 +1276,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         default_export_binding,
         builder_import_references: Vec::new(),
         first_that_works_uses: BTreeSet::new(),
+        synthesized_components: BTreeSet::new(),
         aliases: const_initializers.aliases,
         assigned_aliases: const_initializers.assigned,
         assigned_alias_offsets: const_initializers.assigned_at,
@@ -1989,6 +1996,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage_enriched: Some(usage_enriched),
         builder_import_references,
         first_that_works_uses,
+        synthesized_components: BTreeSet::new(),
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,
         default_export_chain: walked

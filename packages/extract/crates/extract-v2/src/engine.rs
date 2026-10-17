@@ -363,6 +363,10 @@ pub struct ExtractEngine {
 struct InputEntry {
     path: String,
     source: String,
+    /// The components the host's adapter wrote into the file
+    /// (`FileFacts::synthesized_components`).
+    #[serde(default, rename = "synthesizedComponents")]
+    synthesized_components: Vec<String>,
 }
 
 /// The files of `file_entries_json` in canonical order (by canonical
@@ -1133,6 +1137,11 @@ impl ExtractEngine {
         self.sources.clear();
         self.order.clear();
 
+        let mut synthesized: BTreeMap<String, std::collections::BTreeSet<String>> = entries
+            .iter()
+            .filter(|entry| !entry.synthesized_components.is_empty())
+            .map(|entry| (entry.path.clone(), entry.synthesized_components.iter().cloned().collect()))
+            .collect();
         let prepared = self.prepared.take().filter(|(kept, _)| {
             kept.len() == entries.len()
                 && kept.iter().zip(&entries).all(|((path, source), e)| *path == e.path && *source == e.source)
@@ -1476,6 +1485,7 @@ impl ExtractEngine {
             if let Some(names) = global_declarations.get(ast.path.as_str()) {
                 file_facts.global_keys = facts::declaration_keys(ast.program(), ast.source(), names);
             }
+            file_facts.synthesized_components = synthesized.remove(&ast.path).unwrap_or_default();
             self.facts.insert(ast.path.clone(), file_facts);
             self.sources
                 .insert(ast.path.clone(), ast.source().to_string());

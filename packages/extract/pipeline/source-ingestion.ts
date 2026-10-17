@@ -79,6 +79,9 @@ export interface AnalysisSourceEntry {
   path: string;
   source: string;
   hash: string;
+  /** The components an adapter writes into the file that its original does
+   *  not declare, which the engine reads as rendering what the file shows. */
+  synthesizedComponents?: readonly string[];
 }
 
 export interface SourceEntryOwnership {
@@ -585,16 +588,29 @@ export async function ingestSourceEntries(
     originalPath: string,
     path: string,
     source: string,
-    hash?: string
+    hash?: string,
+    synthesizedComponents?: readonly string[]
   ): void => {
-    analysisEntries.push({ path, source, hash: hash ?? contentHash(source) });
+    const entry: AnalysisSourceEntry = {
+      path,
+      source,
+      hash: hash ?? contentHash(source),
+    };
+    if (synthesizedComponents?.length) {
+      entry.synthesizedComponents = synthesizedComponents;
+    }
+    analysisEntries.push(entry);
     ownership[originalPath].analysisPaths.push(path);
     analysisOwner.set(path, originalPath);
   };
 
   const addAdaptedEntries = (
     originalPath: string,
-    entries: ReadonlyArray<{ path: string; source: string }>
+    entries: ReadonlyArray<{
+      path: string;
+      source: string;
+      synthesizedComponents?: readonly string[];
+    }>
   ): void => {
     const pendingPaths = new Set<string>();
     for (const entry of entries) {
@@ -616,7 +632,13 @@ export async function ingestSourceEntries(
     }
 
     for (const entry of entries) {
-      addAnalysisEntry(originalPath, entry.path, entry.source);
+      addAnalysisEntry(
+        originalPath,
+        entry.path,
+        entry.source,
+        undefined,
+        entry.synthesizedComponents
+      );
     }
   };
 
@@ -656,7 +678,11 @@ export async function ingestSourceEntries(
       continue;
     }
     addAdaptedEntries(original.path, [
-      { path: `${original.path}.tsx`, source: result.source },
+      {
+        path: `${original.path}.tsx`,
+        source: result.source,
+        synthesizedComponents: result.synthesizedComponents,
+      },
     ]);
   }
 

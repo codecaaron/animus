@@ -48,7 +48,11 @@ function tsxFiles(dir: string): string[] {
 async function loadEntry(
   dir: string,
   file: string
-): Promise<{ path: string; source: string }> {
+): Promise<{
+  path: string;
+  source: string;
+  synthesizedComponents?: string[];
+}> {
   const raw = readFileSync(join(dir, file), 'utf-8');
   if (file.endsWith('.mdx')) {
     const { mdxUsageSource } = await import('@animus-ui/extract/pipeline');
@@ -58,7 +62,11 @@ async function loadEntry(
         `mdxUsageSource failed for ${file}: ${JSON.stringify(result)}`
       );
     }
-    return { path: file.replace(/\.mdx$/, '.mdx.tsx'), source: result.source };
+    return {
+      path: file.replace(/\.mdx$/, '.mdx.tsx'),
+      source: result.source,
+      synthesizedComponents: result.synthesizedComponents,
+    };
   }
   return { path: file, source: raw };
 }
