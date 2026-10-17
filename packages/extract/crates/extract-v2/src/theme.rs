@@ -1610,12 +1610,24 @@ fn fold_variable_fallbacks(values: Vec<String>) -> Vec<String> {
     kept
 }
 
-/// The custom property a value names when it is exactly `var(--name)`.
+/// The custom property a value names, as written, when it is exactly one
+/// `var()` of it with no fallback: the function name in any case, as CSS
+/// reads it, and whitespace and comments around the name ignored.
 fn bare_variable(value: &str) -> Option<&str> {
-    let name = value.strip_prefix("var(")?.strip_suffix(')')?.trim();
-    let rest = name.strip_prefix("--")?;
-    (!rest.is_empty() && !rest.contains(|ch: char| ch.is_whitespace() || matches!(ch, ',' | '(' | ')' | '!')))
-        .then_some(name)
+    use crate::css_tokens::{tokenize, Kind};
+    let tokens = tokenize(value);
+    let mut significant = tokens.iter().filter(|token| token.kind != Kind::Whitespace);
+    let (Some(function), Some(name), Some(close), None) =
+        (significant.next(), significant.next(), significant.next(), significant.next())
+    else {
+        return None;
+    };
+    (function.kind == Kind::Function
+        && function.value.eq_ignore_ascii_case("var")
+        && name.kind == Kind::Ident
+        && name.value.starts_with("--")
+        && close.kind == Kind::Delim(b')'))
+        .then(|| &value[name.start..name.end])
 }
 
 /// A bare number `authored` resolved to unchanged takes `px` where `ctx`
@@ -5249,10 +5261,13 @@ mod tests {
         let styles = json!({
             "position": { "$animus.firstThatWorks": ["sticky", "-webkit-sticky", "fixed"] },
             "outlineColor": { "$animus.firstThatWorks": ["color-mix(in srgb, red 20%, blue)", "var(--a)", "var(--b)", "red", "green"] },
+            // CSS reads a function name in any case.
+            "color": { "$animus.firstThatWorks": ["VAR(--missing)", "red"] },
         });
         assert_eq!(
             declarations_of(&resolve_styles(&styles, &owner.ctx(), false)),
             [
+                "color: var(--missing, red)",
                 "position: fixed",
                 "position: -webkit-sticky",
                 "position: sticky",
