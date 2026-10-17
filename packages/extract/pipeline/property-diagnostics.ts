@@ -1,6 +1,7 @@
 import {
   componentValues,
   isSpace,
+  segmentEnd,
   someValue,
   tokenize,
   variableReads,
@@ -225,38 +226,26 @@ const isNameCode = (c: number) =>
 
 /**
  * Whether a custom-property declaration has `var(` of its own whole name in
- * its value, bounded as the declaration scanner bounds one: by a `;`, `{` or
- * `}` outside parentheses, brackets and quoted text. `var` matches in any
- * case, so this errs toward parsing.
+ * its value, bounded as `componentValues` bounds one (`segmentEnd`): a
+ * quoted string or an unquoted `url()` is one token, so a `;` or a bracket
+ * inside it ends nothing. The search inside the value matches `var` in any
+ * case and reads strings too, so this errs toward parsing.
  */
 function readsOwnName(css: string): boolean {
   for (const match of css.matchAll(CUSTOM_PROPERTY_KEY)) {
     const name = match[1];
-    let depth = 0;
-    let quote = -1;
-    for (let i = match.index + match[0].length; i < css.length; i += 1) {
+    const end = segmentEnd(css, match.index + match[0].length);
+    for (let i = match.index + match[0].length; i < end; i += 1) {
       const c = css.charCodeAt(i);
-      if (quote !== -1) {
-        // A newline ends a quoted string, as it does for the tokenizer.
-        if (c === quote || c === 0x0a || c === 0x0d || c === 0x0c) quote = -1;
-      } else if (c === 0x22 || c === 0x27) {
-        quote = c;
-      } else if (c === 0x28 || c === 0x5b) {
-        depth += 1;
-      } else if (c === 0x29 || c === 0x5d) {
-        depth = Math.max(0, depth - 1);
-      } else if (depth === 0 && (c === 0x3b || c === 0x7b || c === 0x7d)) {
-        break;
-      } else if (c === 0x76 || c === 0x56) {
-        VAR_OPEN.lastIndex = i;
-        const at = VAR_OPEN.test(css) ? VAR_OPEN.lastIndex : -1;
-        if (
-          at !== -1 &&
-          css.startsWith(name, at) &&
-          !isNameCode(css.charCodeAt(at + name.length))
-        ) {
-          return true;
-        }
+      if (c !== 0x76 && c !== 0x56) continue;
+      VAR_OPEN.lastIndex = i;
+      const at = VAR_OPEN.test(css) ? VAR_OPEN.lastIndex : -1;
+      if (
+        at !== -1 &&
+        css.startsWith(name, at) &&
+        !isNameCode(css.charCodeAt(at + name.length))
+      ) {
+        return true;
       }
     }
   }

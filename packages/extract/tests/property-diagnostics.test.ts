@@ -391,6 +391,30 @@ describe('checks on emitted CSS alone', () => {
     );
   });
 
+  // Contract: the self-reference search bounds a declaration's value by
+  // tokens, so a `;` or a bracket inside an unquoted url() or a quoted
+  // string ends nothing, and a sheet with no comment or escape, which the
+  // checker otherwise reads only on a textual hint, still reports it.
+  it('finds a self-reference past a url() or string that holds a ; or a bracket', () => {
+    // One sheet each: the checker decides per sheet whether to read it.
+    const found = (componentCss: string) =>
+      checkCustomProperties({
+        system: unregistered,
+        manifest: { components: {} },
+        componentCss,
+        globalCss: '',
+      }).map((d) => [d.code, d.component]);
+    expect(found('.url{--a:url(icon];v=1),var(--a)}')).toEqual([
+      [PROPERTY_SELF_REFERENCE, '.url'],
+    ]);
+    expect(found('.fallback{--a:url(icon];v=1),var(--b,var(--a))}')).toEqual([
+      [PROPERTY_FALLBACK_SELF_REFERENCE, '.fallback'],
+    ]);
+    expect(found('.string{--a:"];{",var(--a)}')).toEqual([
+      [PROPERTY_SELF_REFERENCE, '.string'],
+    ]);
+  });
+
   it('reads a manifest without components', () => {
     const manifest: Parameters<typeof checkCustomProperties>[0]['manifest'] =
       JSON.parse('{}');

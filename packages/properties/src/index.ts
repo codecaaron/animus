@@ -11,6 +11,7 @@ export {
   identifierAt,
   importantPriority,
   isSpace,
+  segmentEnd,
   someValue,
   tokenize,
   variableReads,

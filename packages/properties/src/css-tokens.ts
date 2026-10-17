@@ -219,77 +219,160 @@ const SINGLE = new Map<string, CssTokenType>(
   (['(', ')', '[', ']', '{', '}', ',', ':', ';'] as const).map((c) => [c, c])
 );
 
+// The token `nextToken` read last, `undefined` for a comment, which makes
+// no token. Module slots rather than a returned object, so reading a token
+// allocates nothing beyond the token itself.
+let tokenType: CssTokenType | undefined;
+let tokenValue = '';
+let tokenNumber = 0;
+
+/** Reads the token at `index`, a token boundary, into `tokenType`,
+ *  `tokenValue` and `tokenNumber`, and returns the index after it. */
+function nextToken(css: string, index: number): number {
+  const c = css.charCodeAt(index);
+  if (c === 0x2f && at(css, index + 1) === 0x2a) {
+    const close = css.indexOf('*/', index + 2);
+    tokenType = undefined;
+    return close === -1 ? css.length : close + 2;
+  }
+  tokenValue = '';
+  tokenNumber = 0;
+  if (isWhitespace(c)) {
+    let end = index + 1;
+    while (isWhitespace(at(css, end))) end += 1;
+    tokenType = 'whitespace';
+    return end;
+  }
+  if (c === 0x22 || c === 0x27) {
+    const [type, end] = readString(css, index);
+    tokenType = type;
+    return end;
+  }
+  if (startsNumber(css, index)) {
+    const end = numberEnd(css, index);
+    tokenNumber = Number(css.slice(index, end));
+    if (startsIdentifier(css, end)) {
+      const [unit, unitEnd] = readName(css, end);
+      tokenType = 'dimension';
+      tokenValue = unit;
+      return unitEnd;
+    }
+    if (at(css, end) === 0x25) {
+      tokenType = 'percentage';
+      return end + 1;
+    }
+    tokenType = 'number';
+    return end;
+  }
+  if (c === 0x2d && css.startsWith('->', index + 1)) {
+    tokenType = 'CDC';
+    return index + 3;
+  }
+  if (startsIdentifier(css, index)) {
+    const [name, end] = readName(css, index);
+    if (at(css, end) !== 0x28) {
+      tokenType = 'ident';
+      tokenValue = name;
+      return end;
+    }
+    if (!/^url$/i.test(name)) {
+      tokenType = 'function';
+      tokenValue = name;
+      return end + 1;
+    }
+    let body = end + 1;
+    while (isWhitespace(at(css, body)) && isWhitespace(at(css, body + 1))) {
+      body += 1;
+    }
+    const first = at(css, body);
+    const quote = isWhitespace(first) ? at(css, body + 1) : first;
+    if (quote === 0x22 || quote === 0x27) {
+      tokenType = 'function';
+      tokenValue = name;
+      return body;
+    }
+    const [type, urlEnd] = readUrl(css, end + 1);
+    tokenType = type;
+    return urlEnd;
+  }
+  if (
+    c === 0x23 &&
+    (isIdentChar(at(css, index + 1)) || isEscape(css, index + 1))
+  ) {
+    const [name, end] = readName(css, index + 1);
+    tokenType = 'hash';
+    tokenValue = name;
+    return end;
+  }
+  if (c === 0x40 && startsIdentifier(css, index + 1)) {
+    const [name, end] = readName(css, index + 1);
+    tokenType = 'at-keyword';
+    tokenValue = name;
+    return end;
+  }
+  if (c === 0x3c && css.startsWith('!--', index + 1)) {
+    tokenType = 'CDO';
+    return index + 4;
+  }
+  const single = SINGLE.get(css[index]);
+  if (single === undefined) {
+    tokenType = 'delim';
+    tokenValue = css[index];
+  } else {
+    tokenType = single;
+  }
+  return index + 1;
+}
+
 /** Every token of `css`, in order. */
 export function tokenize(css: string): CssToken[] {
   const tokens: CssToken[] = [];
   let index = 0;
-  const push = (type: CssTokenType, end: number, value = '', number = 0) => {
-    tokens.push({ type, start: index, end, value, number });
-    index = end;
-  };
   while (index < css.length) {
-    const c = css.charCodeAt(index);
-    if (c === 0x2f && at(css, index + 1) === 0x2a) {
-      const close = css.indexOf('*/', index + 2);
-      index = close === -1 ? css.length : close + 2;
-    } else if (isWhitespace(c)) {
-      let end = index + 1;
-      while (isWhitespace(at(css, end))) end += 1;
-      push('whitespace', end);
-    } else if (c === 0x22 || c === 0x27) {
-      const [type, end] = readString(css, index);
-      push(type, end);
-    } else if (startsNumber(css, index)) {
-      const end = numberEnd(css, index);
-      const number = Number(css.slice(index, end));
-      if (startsIdentifier(css, end)) {
-        const [unit, unitEnd] = readName(css, end);
-        push('dimension', unitEnd, unit, number);
-      } else if (at(css, end) === 0x25) {
-        push('percentage', end + 1, '', number);
-      } else {
-        push('number', end, '', number);
-      }
-    } else if (c === 0x2d && css.startsWith('->', index + 1)) {
-      push('CDC', index + 3);
-    } else if (startsIdentifier(css, index)) {
-      const [name, end] = readName(css, index);
-      if (at(css, end) !== 0x28) {
-        push('ident', end, name);
-      } else if (!/^url$/i.test(name)) {
-        push('function', end + 1, name);
-      } else {
-        let body = end + 1;
-        while (isWhitespace(at(css, body)) && isWhitespace(at(css, body + 1))) {
-          body += 1;
-        }
-        const first = at(css, body);
-        const quote = isWhitespace(first) ? at(css, body + 1) : first;
-        if (quote === 0x22 || quote === 0x27) {
-          push('function', body, name);
-        } else {
-          const [type, urlEnd] = readUrl(css, end + 1);
-          push(type, urlEnd);
-        }
-      }
-    } else if (
-      c === 0x23 &&
-      (isIdentChar(at(css, index + 1)) || isEscape(css, index + 1))
-    ) {
-      const [name, end] = readName(css, index + 1);
-      push('hash', end, name);
-    } else if (c === 0x40 && startsIdentifier(css, index + 1)) {
-      const [name, end] = readName(css, index + 1);
-      push('at-keyword', end, name);
-    } else if (c === 0x3c && css.startsWith('!--', index + 1)) {
-      push('CDO', index + 4);
-    } else {
-      const single = SINGLE.get(css[index]);
-      if (single === undefined) push('delim', index + 1, css[index]);
-      else push(single, index + 1);
+    const end = nextToken(css, index);
+    if (tokenType !== undefined) {
+      tokens.push({
+        type: tokenType,
+        start: index,
+        end,
+        value: tokenValue,
+        number: tokenNumber,
+      });
     }
+    index = end;
   }
   return tokens;
+}
+
+/**
+ * Where the segment of component values starting at `from`, a token
+ * boundary, ends: the offset of the first `;`, `{` or `}` token outside the
+ * blocks the segment opens, or the text's end. A declaration starting at
+ * `from` ends there, as `componentValues` reads it: a quoted string or an
+ * unquoted `url()` is one token, so nothing inside it ends the segment.
+ */
+export function segmentEnd(css: string, from: number): number {
+  const closers: CssTokenType[] = [];
+  let index = from;
+  while (index < css.length) {
+    const end = nextToken(css, index);
+    const type = tokenType;
+    if (type !== undefined) {
+      if (closers.length > 0 && type === closers[closers.length - 1]) {
+        closers.pop();
+      } else if (
+        closers.length === 0 &&
+        (type === ';' || type === '{' || type === '}')
+      ) {
+        return index;
+      } else {
+        const closer = CLOSERS.get(type);
+        if (closer !== undefined) closers.push(closer);
+      }
+    }
+    index = end;
+  }
+  return css.length;
 }
 
 /** A component value: a function, or a `()`, `[]` or `{}` block, with its
