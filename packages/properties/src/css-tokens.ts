@@ -345,6 +345,43 @@ export function tokenize(css: string): CssToken[] {
 }
 
 /**
+ * Where the component values from `from` end, with the blocks they open
+ * closed as `componentValues` closes them: after the block `from` opens,
+ * or, for a segment, at its first `;`, `{` or `}` outside those blocks. An
+ * unclosed block ends after its last token, as `componentValues` ends it,
+ * so a trailing comment is not part of it; a segment ends at the text's end.
+ */
+function nestEnd(css: string, from: number, block: boolean): number {
+  const closers: CssTokenType[] = [];
+  let index = from;
+  let lastEnd = from;
+  while (index < css.length) {
+    const end = nextToken(css, index);
+    const type = tokenType;
+    if (type === undefined) {
+      index = end;
+      continue;
+    }
+    if (closers.length > 0 && type === closers[closers.length - 1]) {
+      closers.pop();
+      if (block && closers.length === 0) return end;
+    } else if (
+      !block &&
+      closers.length === 0 &&
+      (type === ';' || type === '{' || type === '}')
+    ) {
+      return index;
+    } else {
+      const closer = CLOSERS.get(type);
+      if (closer !== undefined) closers.push(closer);
+    }
+    lastEnd = end;
+    index = end;
+  }
+  return block ? lastEnd : css.length;
+}
+
+/**
  * Where the segment of component values starting at `from`, a token
  * boundary, ends: the offset of the first `;`, `{` or `}` token outside the
  * blocks the segment opens, or the text's end. A declaration starting at
@@ -352,27 +389,17 @@ export function tokenize(css: string): CssToken[] {
  * unquoted `url()` is one token, so nothing inside it ends the segment.
  */
 export function segmentEnd(css: string, from: number): number {
-  const closers: CssTokenType[] = [];
-  let index = from;
-  while (index < css.length) {
-    const end = nextToken(css, index);
-    const type = tokenType;
-    if (type !== undefined) {
-      if (closers.length > 0 && type === closers[closers.length - 1]) {
-        closers.pop();
-      } else if (
-        closers.length === 0 &&
-        (type === ';' || type === '{' || type === '}')
-      ) {
-        return index;
-      } else {
-        const closer = CLOSERS.get(type);
-        if (closer !== undefined) closers.push(closer);
-      }
-    }
-    index = end;
-  }
-  return css.length;
+  return nestEnd(css, from, false);
+}
+
+/**
+ * The offset after the block the token at `open` opens (a function, or a
+ * `(`, `[` or `{`), closed as `componentValues` closes it. Unclosed, the
+ * block ends after its last token, a trailing comment excluded, which is
+ * its `ComponentValue.end`.
+ */
+export function blockEnd(css: string, open: number): number {
+  return nestEnd(css, open, true);
 }
 
 /** A component value: a function, or a `()`, `[]` or `{}` block, with its

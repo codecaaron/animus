@@ -6,6 +6,7 @@ export {
   type ZeroLengthProperty,
 } from './zero-lengths';
 export {
+  blockEnd,
   componentValues,
   decodedIdentifier,
   identifierAt,

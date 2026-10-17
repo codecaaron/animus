@@ -1,4 +1,5 @@
 import {
+  blockEnd,
   componentValues,
   isSpace,
   segmentEnd,
@@ -177,11 +178,11 @@ export function checkCustomProperties(
 /**
  * Whether a sheet can hold a finding, shown by its text before anything is
  * parsed: a custom property reading its own name, a `var(` with a fallback
- * of a registration that has an initial value, a transition or keyframes
- * and a declared contextual variable's name, or a `var(` of a currentVar name
- * when two or more props write one. An escape or a comment can hide
- * a name or a function from the text, so a sheet with either is always
- * parsed.
+ * of a registration that has an initial value, a declared contextual
+ * variable's name in a transition's value or a keyframes block, or a `var(`
+ * of a currentVar name when two or more props write one. An escape or a
+ * comment can hide a name or a function from the text, so a sheet with
+ * either is always parsed.
  */
 function mayHoldFinding(
   css: string,
@@ -196,14 +197,43 @@ function mayHoldFinding(
     withInitialValue.some((name) =>
       new RegExp(String.raw`var\(\s*${escapeRegExp(name)}\s*,`, 'i').test(css)
     ) ||
-    (declared.some((name) => css.includes(name)) &&
-      /transition|@keyframes/i.test(css)) ||
+    animatesDeclared(css, declared) ||
     // A cycle needs two currentVar writes, one read through `var()`.
     (currentVars.size > 1 &&
       [...currentVars].some((name) =>
         new RegExp(String.raw`var\(\s*${escapeRegExp(name)}`, 'i').test(css)
       ))
   );
+}
+
+/** Text that may begin a `transition` or `transition-property` declaration,
+ *  through its colon; it also matches elsewhere, so a match is only a
+ *  candidate. */
+const TRANSITION_KEY = /transition(?:-property)?[\t\n\f\r ]*:/gi;
+
+/**
+ * Whether a declared contextual variable's name stands in a transition's
+ * value or a keyframes block: the only places the animation check reads.
+ * The names alone are common, since a prop with currentVar writes one in
+ * every rule it styles, so each transition value and keyframes block is
+ * bounded as `componentValues` reads it. A match that is not a real
+ * declaration or at-rule only adds text to look at, so none is missed.
+ */
+function animatesDeclared(css: string, declared: readonly string[]): boolean {
+  if (!declared.some((name) => css.includes(name))) return false;
+  const holdsName = (start: number, end: number) => {
+    const text = css.slice(start, end);
+    return declared.some((name) => text.includes(name));
+  };
+  for (const match of css.matchAll(TRANSITION_KEY)) {
+    const from = match.index + match[0].length;
+    if (holdsName(from, segmentEnd(css, from))) return true;
+  }
+  for (const match of css.matchAll(/@keyframes/gi)) {
+    const open = segmentEnd(css, match.index);
+    if (css[open] === '{' && holdsName(open, blockEnd(css, open))) return true;
+  }
+  return false;
 }
 
 const escapeRegExp = (text: string) =>
