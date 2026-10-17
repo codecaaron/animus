@@ -335,12 +335,20 @@ const Card = ds
 
 ```css
 @layer anm-global {
-  ::view-transition-group(*.animus-vt-…) { animation-duration: 250ms; }
-  @media (prefers-reduced-motion: reduce) {
-    ::view-transition-group(*.animus-vt-…) { animation: none; }
+  ::view-transition-group(*.animus-vt-…) {
+    animation-duration: 250ms;
   }
-  ::view-transition-old(*.animus-vt-…) { animation-name: animus-kf-…; }
-  ::view-transition-new(*.animus-vt-…) { animation-name: animus-kf-…; }
+  @media (prefers-reduced-motion: reduce) {
+    ::view-transition-group(*.animus-vt-…) {
+      animation: none;
+    }
+  }
+  ::view-transition-old(*.animus-vt-…) {
+    animation-name: animus-kf-…;
+  }
+  ::view-transition-new(*.animus-vt-…) {
+    animation-name: animus-kf-…;
+  }
 }
 ```
 

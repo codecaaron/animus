@@ -8,8 +8,8 @@ import {
 } from '../conditions';
 import { KeyframeRef } from '../keyframes';
 import { PositionTryRef } from '../positionTry';
-import { ViewTransitionRef } from '../viewTransition';
 import { type Selectors } from '../selectors';
+import { ViewTransitionRef } from '../viewTransition';
 import { PropertyTypes } from './properties';
 import {
   AbstractProps,

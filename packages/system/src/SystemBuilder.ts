@@ -23,12 +23,6 @@ import {
   positionTries as positionTriesImpl,
 } from './positionTry';
 import {
-  type ViewTransitions,
-  type ViewTransitionSlot,
-  type ViewTransitionSlots,
-  viewTransitions as viewTransitionsImpl,
-} from './viewTransition';
-import {
   BUILT_IN_SELECTORS,
   mergeSelectors,
   type SelectorAliasMap,
@@ -48,6 +42,12 @@ import {
   ThemedCSSInputProps,
 } from './types/config';
 import { AbstractProps } from './types/props';
+import {
+  type ViewTransitions,
+  type ViewTransitionSlot,
+  type ViewTransitionSlots,
+  viewTransitions as viewTransitionsImpl,
+} from './viewTransition';
 
 type SerializedPropEntry =
   | SerializedValuePropEntry
@@ -1662,8 +1662,8 @@ export class SystemBuilder<
             !collection ||
             (collection as { __brand?: unknown }).__brand !==
               'ViewTransitions' ||
-            typeof (collection as { __transitions?: unknown })
-              .__transitions !== 'object'
+            typeof (collection as { __transitions?: unknown }).__transitions !==
+              'object'
           ) {
             throw new TypeError(
               `registerViewTransitions: "${name}" is not a ` +
@@ -1768,7 +1768,9 @@ export class SystemBuilder<
         }
         const positionTries = entries
           .filter((entry) => entry.kind === 'positionTry')
-          .map((entry) => Object.freeze({ name: entry.name, tries: entry.tries }));
+          .map((entry) =>
+            Object.freeze({ name: entry.name, tries: entry.tries })
+          );
         const viewTransitions = entries
           .filter((entry) => entry.kind === 'viewTransitions')
           .map((entry) =>

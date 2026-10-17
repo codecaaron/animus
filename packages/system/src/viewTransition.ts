@@ -27,9 +27,7 @@ export interface ViewTransitionRef<Name extends string> {
   toJSON(): string;
 }
 
-export type ViewTransitions<
-  Map extends Record<string, ViewTransitionSlots>,
-> = {
+export type ViewTransitions<Map extends Record<string, ViewTransitionSlots>> = {
   readonly __brand: 'ViewTransitions';
   readonly __transitions: {
     readonly [K in keyof Map & string]: {
