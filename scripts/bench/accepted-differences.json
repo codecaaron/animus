@@ -68,5 +68,26 @@
     "baseline": "a8a1ca0432e44e05f7625623cbcdede1773ec0340b0f5a06a3f33daff178dbd4",
     "candidate": "7ca9d9bb0e9939bae3779861a3bfb00933b17a60038ad6358a1b53a4aaf0fd39",
     "reason": "The loader records the system module's dependency files and their content digest. The derived-names release changes @animus-ui/system's runtime (configs derive slot and compound names, and shared system data is read from the system-props module), so the recorded system package files differ. The loader's evaluated system value is unchanged."
+  },
+  {
+    "row": "loader:large-closure",
+    "fixture": "large-closure",
+    "baseline": "fa3786901cc6ff699c0c967721ce5b144b726c64afbcdb2075443c4598dd8615",
+    "candidate": "bc98ee630f44943d3ac62c031478a6bae7524fb32c141f324e783ab9f58dae06",
+    "reason": "Only the dependency digest differs: the runtime resolver now imports firstThatWorks's member reader, so packages/system/dist's chunks, which both sides read from this checkout, take new hashed names; the path count (14 paths become 15) and the config (configDigest unchanged) are as in the earlier accepted entry for this row."
+  },
+  {
+    "row": "loader:showcase",
+    "fixture": "showcase",
+    "baseline": "b59f18967f27d7c87d26af624291987e86008373ada55f4a1aee54d63e42cd65",
+    "candidate": "38d5b85d2623362654e9c4684e8e126e55703e482e424e913e8849c374e8b199",
+    "reason": "Only the dependency digest differs: the runtime resolver now imports firstThatWorks's member reader, so packages/system/dist's chunks, which both sides read from this checkout, take new hashed names; the path count (20 paths become 21) and the config (configDigest unchanged) are as in the earlier accepted entry for this row."
+  },
+  {
+    "row": "build:vite-app",
+    "fixture": "vite-app",
+    "baseline": "d03eaa3296e0d23e68d0388403ab97408dd8782cfb08f553e0de46033fa05ee1",
+    "candidate": "94ab681882caba9a91aac9f143e081db45994b8955d371a67ad3f677962113c5",
+    "reason": "As the earlier accepted vite-app entry, plus 235 bytes: the runtime resolver reads a call site's firstThatWorks value as its preferred member (firstThatWorks always returns its members, so artifact names and the vocabulary record see every one). The CSS is identical (cssDigest unchanged); the one identity-uncertain-tag line fewer is the earlier entry's."
   }
 ]
