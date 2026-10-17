@@ -12,11 +12,13 @@ import {
   serializeConditionMap,
 } from './conditions';
 import { isDeclarationProp, validateDeclarationProp } from './declarations';
+import { fallbackMembersOf } from './firstThatWorks';
 import {
   type KeyframeFrameMap,
   type Keyframes,
   keyframes as keyframesImpl,
 } from './keyframes';
+import { serializeBlock } from './named';
 import {
   type PositionTries,
   type PositionTryDescriptors,
@@ -323,9 +325,10 @@ export interface VocabularyLegacyVerbEntry {
 /**
  * The registration record a sealed system carries, in declaration order.
  * The loader reads registered collections exclusively from here. Version 2
- * marks a record holding a kind version 1 lacks (position tries or view
- * transitions), so a
- * loader that reads only version 1 fails loud instead of dropping it; any
+ * marks a record that a loader reading only version 1 would misread: one
+ * holding a kind version 1 lacks (position tries or view transitions), or a
+ * `firstThatWorks` value in a keyframes collection or a global-style block.
+ * That loader then fails loud instead of dropping what it cannot read; any
  * other record stays version 1.
  */
 export interface VocabularyRecord {
@@ -446,6 +449,56 @@ function registeredPayloads<Payload>(
     // SAFETY: the brand names the factory, whose `field` is this payload.
     return [name, branded[field] as Payload];
   });
+}
+
+/**
+ * Whether a value holds a `firstThatWorks` value at any depth, which a
+ * version 1 record cannot carry: a loader reading only version 1 would
+ * keep its preferred member alone.
+ */
+function holdsFallbacks(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  return (
+    fallbackMembersOf(Object(value)) !== undefined ||
+    Object.values(value).some(holdsFallbacks)
+  );
+}
+
+/**
+ * Throws where two different registered bodies take one generated name:
+ * both would emit a rule under it, and the later would apply to both.
+ * Identical bodies share their name, wherever they are registered.
+ */
+function assertOneBodyPerName(entries: readonly VocabularyEntryState[]): void {
+  const bodies = new Map<string, { identity: string; at: string }>();
+  const claim = (name: string, body: AbstractProps, at: string) => {
+    const identity = serializeBlock(body);
+    const held = bodies.get(name);
+    if (!held) {
+      bodies.set(name, { identity, at });
+    } else if (held.identity !== identity) {
+      throw new Error(
+        `seal: ${held.at} and ${at} are different bodies under one ` +
+          `generated name "${name}" — the rule emitted later would apply ` +
+          'to both; change one of them.'
+      );
+    }
+  };
+  for (const entry of entries) {
+    if (entry.kind === 'keyframes') {
+      for (const [key, { name, frames }] of Object.entries(entry.frames)) {
+        claim(name, frames, `keyframes ${entry.name}.${key}`);
+      }
+    } else if (entry.kind === 'positionTry') {
+      for (const [key, { name, descriptors }] of Object.entries(entry.tries)) {
+        claim(name, descriptors, `position try ${entry.name}.${key}`);
+      }
+    } else if (entry.kind === 'viewTransitions') {
+      for (const [key, { name, slots }] of Object.entries(entry.transitions)) {
+        claim(name, slots, `view transition ${entry.name}.${key}`);
+      }
+    }
+  }
 }
 
 /**
@@ -1733,6 +1786,7 @@ export class SystemBuilder<
               '— registration is linear; seal the final bundle.'
           );
         }
+        assertOneBodyPerName(entries);
         const positionTries = entries
           .filter((entry) => entry.kind === 'positionTry')
           .map((entry) =>
@@ -1743,9 +1797,18 @@ export class SystemBuilder<
           .map((entry) =>
             Object.freeze({ name: entry.name, transitions: entry.transitions })
           );
+        // Version 2 for any record a version 1 reader would misread: a kind
+        // it lacks, or a fallback value it would cut to the preferred member.
+        const needsVersion2 =
+          positionTries.length > 0 ||
+          viewTransitions.length > 0 ||
+          entries.some(
+            (entry) =>
+              (entry.kind === 'keyframes' && holdsFallbacks(entry.frames)) ||
+              (entry.kind === 'globalStyles' && holdsFallbacks(entry.styles))
+          );
         const record: VocabularyRecord = Object.freeze({
-          version:
-            positionTries.length > 0 || viewTransitions.length > 0 ? 2 : 1,
+          version: needsVersion2 ? 2 : 1,
           ...(positionTries.length > 0
             ? { positionTries: Object.freeze(positionTries) }
             : {}),

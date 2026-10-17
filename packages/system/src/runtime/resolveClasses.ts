@@ -110,6 +110,7 @@ import {
   isZeroLengthProperty,
 } from '@animus-ui/properties';
 
+import { fallbackMembersOf } from '../firstThatWorks';
 import { IS_DEV } from './is-dev';
 import { readsVariable, trailingPriority } from './value-scan';
 
@@ -825,18 +826,40 @@ function entryClasses(
   return found;
 }
 
+/** A call site's `firstThatWorks` value applies its preferred member: an
+ *  inline style holds no fallback. Any other value is itself. */
+function appliedMember(value: unknown): unknown {
+  return typeof value === 'object' && value !== null
+    ? (fallbackMembersOf(Object(value))?.[0] ?? value)
+    : value;
+}
+
 /**
- * A responsive value without its nullish breakpoints, so it keys the same
- * static class as the value written without them; `undefined` when none
- * remain, as if the prop were omitted.
+ * A prop value as it applies: a `firstThatWorks` value, at a breakpoint
+ * too, as its preferred member, and a responsive value without its nullish
+ * breakpoints, so it keys the same static class as the value written
+ * without them; `undefined` when none remain, as if the prop were omitted.
  */
 function withoutAbsentBreakpoints(value: unknown): unknown {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return value;
+  const applied = appliedMember(value);
+  if (
+    typeof applied !== 'object' ||
+    applied === null ||
+    Array.isArray(applied)
+  ) {
+    return applied;
   }
-  const entries = Object.entries(value);
-  if (entries.every(([, entry]) => entry != null)) return value;
-  const present = entries.filter(([, entry]) => entry != null);
+  const entries = Object.entries(applied);
+  const present = entries
+    .map(([breakpoint, entry]): [string, unknown] => [
+      breakpoint,
+      appliedMember(entry),
+    ])
+    .filter(([, entry]) => entry != null);
+  const unchanged =
+    present.length === entries.length &&
+    present.every(([, entry], at) => entry === entries[at][1]);
+  if (unchanged) return applied;
   return present.length > 0 ? Object.fromEntries(present) : undefined;
 }
 

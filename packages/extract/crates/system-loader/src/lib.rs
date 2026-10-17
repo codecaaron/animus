@@ -779,11 +779,6 @@ dir: noop, group: noop, groupEnd: noop, table: noop, assert: noop, count: noop, 
 time: noop, timeEnd: noop, timeLog: noop };\n\
 })();\n";
 
-/// Tells `@animus-ui/system`'s `firstThatWorks` it runs under extraction:
-/// it returns its members, so a registered global block or keyframes
-/// collection keeps every fallback, rather than the preferred one alone.
-const FALLBACKS_FLAG: &str = "globalThis.__ANIMUS_READS_FALLBACKS__ = true;\n";
-
 /// The bundle evaluates as one script, so a QuickJS backtrace names only a
 /// bundle line; these fields map it back to a module and the stubs in force.
 #[derive(Default)]
@@ -870,7 +865,6 @@ fn build_bundle(selection: &bounded::Selection<'_>) -> Result<(String, BundleLay
     let mut marker_offsets: Vec<(usize, String)> = Vec::new();
 
     bundle.push_str(CONSOLE_SHIM);
-    bundle.push_str(FALLBACKS_FLAG);
     bundle.push_str("const __modules = {};\n");
     bundle.push_str(linked::PRELUDE);
     bundle.push('\n');

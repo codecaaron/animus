@@ -1,15 +1,15 @@
+import type { AbstractProps } from './types/props';
+
 type FallbackMember = string | number;
 
-/** How extraction spells a call: the one key of an object of its members. */
+/** How a call's value spells its members: the one key of an object of
+ *  them, which the system loader serializes and extraction reads. */
 const FALLBACKS_KEY = '$animus.firstThatWorks';
 
-/** Set on the global object by the extraction host (the system loader). */
-const READS_FALLBACKS = '__ANIMUS_READS_FALLBACKS__';
-
 /**
- * A call's members under extraction. They serialize for the loader as the
- * one key extraction reads, and the value prints as the preferred member,
- * so a name hashed from styles is the same with and without extraction.
+ * A call's value. It carries every member, so a name hashed from styles
+ * tells two lists apart and a sealed record knows it holds one; it prints
+ * as the preferred member, which is what a runtime prop applies.
  */
 class Fallbacks {
   readonly [FALLBACKS_KEY]: readonly FallbackMember[];
@@ -20,6 +20,10 @@ class Fallbacks {
 
   toString(): string {
     return String(this[FALLBACKS_KEY][0]);
+  }
+
+  valueOf(): FallbackMember {
+    return this[FALLBACKS_KEY][0];
   }
 }
 
@@ -32,8 +36,9 @@ class Fallbacks {
  * fallback every target already supports.
  *
  * Read statically in component styles, and through the system's
- * evaluation in registered global styles and keyframes. Anywhere else, a
- * call-site prop included, it returns the preferred value alone.
+ * evaluation in registered global styles and keyframes. Written as a
+ * call-site prop, the runtime applies the preferred value alone. It is a
+ * style value: a theme scale takes no fallback list.
  */
 export function firstThatWorks<
   const Values extends readonly [
@@ -44,11 +49,18 @@ export function firstThatWorks<
 >(...values: Values): Values[number];
 export function firstThatWorks(
   ...values: [FallbackMember, ...FallbackMember[]]
-): FallbackMember | Fallbacks {
-  if (
-    Object.getOwnPropertyDescriptor(globalThis, READS_FALLBACKS)?.value !== true
-  ) {
-    return values[0];
-  }
+): Fallbacks {
   return new Fallbacks(values);
+}
+
+/**
+ * The members of a `firstThatWorks` value found where a style value sits,
+ * preferred first, read by its key so a value another copy of this package
+ * made is one too; `undefined` for any other value.
+ */
+export function fallbackMembersOf(
+  value: AbstractProps
+): readonly FallbackMember[] | undefined {
+  const members = Object.getOwnPropertyDescriptor(value, FALLBACKS_KEY)?.value;
+  return Array.isArray(members) ? members : undefined;
 }

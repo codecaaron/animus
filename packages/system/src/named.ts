@@ -3,6 +3,8 @@
  * share: a name hashed from content, and a ref that stands for that name.
  */
 
+import { fallbackMembersOf } from './firstThatWorks';
+
 import type { AbstractProps } from './types/props';
 
 /** The 32-bit FNV-1a hash of `input`, in base 36. */
@@ -23,21 +25,20 @@ export const fnv1a = (input: string): string => {
 };
 
 /**
- * A block of styles as a stable string, by key. A nested block prints as
- * `key{…}`; any other value prints as `String()` writes it, so a ref prints
- * as its name and a `firstThatWorks` value as its preferred member, with
- * extraction or without.
+ * A block of styles as a stable string, by key: what an artifact's name is
+ * hashed from, the same with the system loader and without. A nested block
+ * prints as `key{…}`, a `firstThatWorks` value as every member in order,
+ * and any other value as `String()` writes it, so a ref prints as its name.
  */
 export const serializeBlock = (block: AbstractProps): string =>
   Object.keys(block)
     .sort()
     .map((key) => {
       const value = block[key];
-      if (
-        value === null ||
-        value === undefined ||
-        Object.getPrototypeOf(value) !== Object.prototype
-      ) {
+      if (value === null || value === undefined) return `${key}:${value}`;
+      const members = fallbackMembersOf(Object(value));
+      if (members) return `${key}:firstThatWorks(${JSON.stringify(members)})`;
+      if (Object.getPrototypeOf(value) !== Object.prototype) {
         return `${key}:${String(value)}`;
       }
       // SAFETY: a plain object in a block of styles is a nested block.
