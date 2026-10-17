@@ -389,10 +389,10 @@ function declaresEncoding(css: string): boolean {
     if (end < 0) return true;
     if (end !== i) {
       i = end;
-      continue;
+    } else if (css[i] === '@') {
+      CHARSET.lastIndex = i;
+      if (CHARSET.test(css)) return true;
     }
-    CHARSET.lastIndex = i;
-    if (CHARSET.test(css)) return true;
   }
   return false;
 }
