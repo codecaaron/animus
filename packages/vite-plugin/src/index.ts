@@ -347,7 +347,8 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
   // Every environment a build of the whole app builds beside the client,
   // whose output may render what the client's does not.
   let otherEnvironments: string[] = [];
-  // The manifests this build writes, where removal relinks a replaced slice.
+  // The manifests this build writes, where a replaced slice or an emptied
+  // carrier is relinked.
   let manifests = new Set<string>();
 
   // A split client build's slices, cut once in `buildStart`, and the ids of
@@ -550,6 +551,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
             ctx,
             bundle,
             linkedSlices,
+            manifests,
             emitAsset,
             removal ? (file) => removal.replace(file) : undefined
           );

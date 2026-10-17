@@ -8,7 +8,7 @@ import {
 } from '@animus-ui/extract/pipeline';
 import { posix } from 'node:path';
 
-import { sliceIdOf } from './index-html';
+import { replaceInOrder, sliceIdOf } from './index-html';
 
 import type { PluginContext } from './context';
 import type { KeptRuleReason, RuleRemoval } from '@animus-ui/extract/pipeline';
@@ -146,8 +146,8 @@ export function bundleRemoval(
     finish() {
       for (const file of Object.values(bundle)) {
         const imported = file.viteMetadata?.importedCss;
-        for (const [before, after] of renamed) {
-          if (imported?.delete(before)) imported.add(after);
+        if (imported && renamed.size > 0) {
+          replaceInOrder(imported, (css) => [renamed.get(css) ?? css]);
         }
         if (file.type !== 'asset' || !context.manifests.has(file.fileName)) {
           continue;

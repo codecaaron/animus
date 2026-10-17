@@ -1,3 +1,4 @@
+import { outputEvidence } from '@animus-ui/extract/pipeline';
 import { posix } from 'path';
 
 import { BRIDGE_SCRIPT_SRC, SPLIT_STYLESHEET_MARKER_RE } from './constants';
@@ -284,19 +285,34 @@ export function sliceIdOf(
 }
 
 /**
+ * Replaces each of a chunk's CSS files with `replacement`'s, in place: a
+ * later file's rules win over an earlier one's.
+ */
+export function replaceInOrder(
+  imported: Set<string>,
+  replacement: (css: string) => readonly string[]
+): void {
+  const sequence = [...imported].flatMap(replacement);
+  imported.clear();
+  for (const css of sequence) imported.add(css);
+}
+
+/**
  * Puts a split build's slices where the single stylesheet would have been.
  * The stylesheet module held only a marker rule, so it kept its place in
  * Vite's CSS: the file holding the marker is cut there, and each page's
  * link to it becomes the file's CSS before the marker, the slices in
  * order, then its CSS after the marker, in a file of its own when CSS
- * precedes the marker too. A carrier left empty is kept, unlinked, for a
- * lazy chunk that names it. The build fails when no page links the
- * carrier: its stylesheet loads with a lazy chunk, or no page is built.
+ * precedes the marker too. A carrier left empty goes where no script can
+ * preload it (`dropEmptyCarrier`). The build fails when no page links
+ * the carrier: its stylesheet loads with a lazy chunk, or no page is built.
  */
 export function placeStylesheetSlices(
   ctx: PluginContext,
   bundle: Rolldown.OutputBundle,
   sliceIds: readonly string[],
+  /** Vite's manifests, which may list the carrier among a chunk's CSS. */
+  manifests: ReadonlySet<string>,
   emitAsset: (name: string, source: string) => string,
   /** The file emitted in a slice's place, or `null` to ship Vite's own. */
   replace?: (file: Rolldown.OutputAsset) => string | null
@@ -391,4 +407,139 @@ export function placeStylesheetSlices(
       `[animus-extract] stylesheets: 'split' links the stylesheet's files where a page links ${carrier.fileName}, which holds Animus's stylesheet, and no page links it: it loads with a lazy chunk, or the build has no HTML page. Import Animus's components from the page's entry, or leave \`stylesheets\` unset for one sheet.`
     );
   }
+  if (!precedes && !follows) {
+    dropEmptyCarrier(bundle, carrier.fileName, slices, manifests);
+  }
+}
+
+/**
+ * Removes `carrier`, which the marker alone filled, from `bundle`, unless a
+ * script may preload it or another output names it, such as a preload link
+ * a page holds: then it stays, empty, so a request for it finds it. Chunk
+ * metadata and manifests' CSS lists name the slices in its place, and a
+ * manifest's record of the carrier itself goes. A manifest that names it
+ * anywhere else keeps it too.
+ */
+function dropEmptyCarrier(
+  bundle: Rolldown.OutputBundle,
+  carrier: string,
+  slices: readonly string[],
+  manifests: ReadonlySet<string>
+): void {
+  const owners = new Map<string, Set<string>>();
+  for (const file of Object.values(bundle)) {
+    if (file.type === 'chunk' && file.viteMetadata?.importedCss.has(carrier)) {
+      owners.set(file.fileName, file.viteMetadata.importedCss);
+    }
+  }
+  if (mayPreload(bundle, owners) || namedOutside(bundle, carrier, manifests)) {
+    return;
+  }
+  const relinked = new Map<Rolldown.OutputAsset, string>();
+  for (const fileName of manifests) {
+    const file = bundle[fileName];
+    if (file?.type !== 'asset') continue;
+    const source = relinkManifest(
+      Buffer.from(file.source).toString('utf8'),
+      carrier,
+      slices
+    );
+    if (source === null) return;
+    relinked.set(file, source);
+  }
+  for (const [file, source] of relinked) file.source = source;
+  for (const imported of owners.values()) {
+    replaceInOrder(imported, (css) => (css === carrier ? slices : [css]));
+  }
+  delete bundle[carrier];
+}
+
+/**
+ * Whether a script may name a CSS file of `owners`. Vite names a chunk's
+ * CSS in a script only in the preload list of a dynamic import, as a
+ * dependency of its target or a chunk the target imports, through static
+ * imports, short of the importing chunk itself. A name the bundle does not
+ * hold may be such a chunk.
+ */
+function mayPreload(
+  bundle: Rolldown.OutputBundle,
+  owners: ReadonlyMap<string, unknown>
+): boolean {
+  for (const importer of Object.values(bundle)) {
+    if (importer.type !== 'chunk') continue;
+    const seen = new Set([importer.fileName]);
+    const pending = [...importer.dynamicImports];
+    for (let name = pending.pop(); name !== undefined; name = pending.pop()) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const chunk = bundle[name];
+      if (chunk?.type !== 'chunk' || owners.has(name)) return true;
+      pending.push(...chunk.imports);
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether an output that is no script and no manifest names `carrier`, as
+ * written or URL-encoded, or holds text the scan cannot read.
+ */
+function namedOutside(
+  bundle: Rolldown.OutputBundle,
+  carrier: string,
+  manifests: ReadonlySet<string>
+): boolean {
+  const names = [posix.basename(carrier), encodeURI(posix.basename(carrier))];
+  const { texts, unreadable } = outputEvidence(
+    Object.values(bundle).flatMap((file) =>
+      file.type === 'asset' && !manifests.has(file.fileName)
+        ? [{ fileName: file.fileName, bytes: Buffer.from(file.source) }]
+        : []
+    ),
+    new Set([carrier])
+  );
+  return (
+    unreadable !== null ||
+    texts.some(({ text }) => names.some((name) => text.includes(name)))
+  );
+}
+
+/** A manifest Vite writes: the build manifest's records, each with its
+ *  file and CSS list, or the SSR manifest's URLs by module. */
+type ViteManifest = Record<string, string[] | { file: string; css?: string[] }>;
+
+/**
+ * `source`, a Vite manifest, with each CSS list entry naming `carrier`, as
+ * its file name or a URL ending in it, listing the slices in its place the
+ * same way, and without the carrier's own record, as Vite writes it; `null`
+ * where something else still names the carrier.
+ */
+function relinkManifest(
+  source: string,
+  carrier: string,
+  slices: readonly string[]
+): string | null {
+  const relinkList = (urls: string[]) =>
+    urls.flatMap((url) => {
+      if (!url.endsWith(carrier)) return [url];
+      const base = url.slice(0, -carrier.length);
+      return base === '' || base.endsWith('/')
+        ? slices.map((slice) => base + slice)
+        : [url];
+    });
+  const manifest: ViteManifest = JSON.parse(source);
+  for (const [key, entry] of Object.entries(manifest)) {
+    if (Array.isArray(entry)) {
+      manifest[key] = relinkList(entry);
+    } else if (entry.file === carrier) {
+      // The slices have records of their own.
+      delete manifest[key];
+    } else if (entry.css) {
+      entry.css = relinkList(entry.css);
+    }
+  }
+  const relinked = JSON.stringify(manifest, null, 2);
+  return relinked.includes(`${JSON.stringify(carrier).slice(1, -1)}"`)
+    ? null
+    : relinked;
 }
