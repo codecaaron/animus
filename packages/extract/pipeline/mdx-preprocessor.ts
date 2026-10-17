@@ -390,10 +390,21 @@ function mdxToTsx(source: string, filename: string) {
     tags[tagRow]!.push(name);
   }
 
-  // Each run of non-ESM lines renders in a component of its own.
+  // Each run of non-ESM lines renders in a component of its own, named by
+  // no name the document spells, so none of its own declarations, imports
+  // or tags is taken for one.
   const declared = declaredNames(
     lines.filter((_, index) => esm[index]).join('\n')
   );
+  const spelled = new Set(
+    source.match(/[\p{ID_Start}$_][\p{ID_Continue}$\u200c\u200d]*/gu)
+  );
+  let next = 0;
+  const wrapperName = () => {
+    let name = `_MDXContent${next++}`;
+    while (spelled.has(name)) name = `_MDXContent${next++}`;
+    return name;
+  };
   const contents: string[] = [];
   for (const [start, end] of runs(lines.length, (row) => !esm[row])) {
     // Compiled MDX takes a tag the file does not declare from the provider:
@@ -421,7 +432,7 @@ function mdxToTsx(source: string, filename: string) {
     ) {
       continue;
     }
-    const name = `_MDXContent${contents.length}`;
+    const name = wrapperName();
     contents.push(name);
     const defaults = elements
       .map((element) => `${element}: "${element}", `)

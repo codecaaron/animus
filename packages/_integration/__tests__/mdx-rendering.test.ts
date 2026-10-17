@@ -43,4 +43,48 @@ describe('MDX-only-rendered component extraction', () => {
     const { manifest } = runPipeline([componentEntry]);
     expect(manifest.report.components_eliminated).toBeGreaterThanOrEqual(1);
   });
+
+  // Contract: a component an MDX document declares itself keeps its
+  // identity uncertain even where it is spelled as the adapter's wrapper
+  // would be, so a component it may hold keeps its CSS: the adapter names
+  // its wrappers by names the document never spells, and only those are
+  // quiet.
+  test("a document's own component spelled as a wrapper stays uncertain", () => {
+    const definitions = {
+      path: 'components/mdx-rendering/collision.tsx',
+      source:
+        "import { ds } from '../../setup';\n" +
+        "export const Box = ds.system({ space: true }).styles({ display: 'flex' }).asElement('div');\n" +
+        "export const Layout = ds.styles({ display: 'block' }).asElement('div');\n" +
+        "export const Ghost = ds.styles({ display: 'grid' }).asElement('div');\n",
+    };
+    const document =
+      "import {Box, Layout} from './collision';\n" +
+      "import {pickComponent} from 'unanalysed-factory';\n" +
+      'export const _MDXContent0 = pickComponent();\n' +
+      'export default Layout;\n\n' +
+      '<_MDXContent0 />\n' +
+      '<Box p="8" />\n';
+    const result = mdxUsageSource(document, 'collision.mdx');
+    if (result.kind !== 'ok') throw new Error(result.error);
+    expect(result.synthesizedComponents).toEqual(['_MDXContent1']);
+    const entry = {
+      path: 'components/mdx-rendering/collision.mdx.tsx',
+      source: result.source,
+      synthesizedComponents: result.synthesizedComponents,
+    };
+    const { manifest, css } = runPipeline([definitions, entry]);
+    const uncertain = manifest.diagnostics
+      .filter(
+        (diagnostic: { code?: string }) =>
+          diagnostic.code === 'animus.usage.identity-uncertain-tag'
+      )
+      .map(
+        (diagnostic: { message: string }) => diagnostic.message.split(' ')[0]
+      );
+    expect(uncertain).toContain('<_MDXContent0>');
+    expect(uncertain).not.toContain('<_MDXContent1>');
+    expect(css).toMatch(/display:\s*grid/);
+    assertNoUnresolvedTokens(css);
+  });
 });
