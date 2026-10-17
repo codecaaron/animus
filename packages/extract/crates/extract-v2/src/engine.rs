@@ -86,6 +86,9 @@ pub struct EngineOptions {
     pub condition_aliases_json: Option<String>,
     pub global_style_blocks_json: Option<String>,
     pub keyframes_json: Option<String>,
+    /// Position-try collections, `{ exportName: { key: { name, descriptors }
+    /// } }`; absent means none.
+    pub position_try_json: Option<String>,
     pub package_resolution_json: Option<String>,
     pub path_aliases_json: Option<String>,
     pub static_css_json: Option<String>,
@@ -1002,6 +1005,9 @@ impl ExtractEngine {
             .set_property_records(o.property_records_json.as_deref())
             .map_err(napi::Error::from_reason)?;
         css_inputs
+            .set_position_tries(o.position_try_json.as_deref())
+            .map_err(napi::Error::from_reason)?;
+        css_inputs
             .set_short_class_prefix(o.short_class_prefix.as_deref())
             .map_err(napi::Error::from_reason)?;
         Ok(ExtractEngine {
@@ -1313,27 +1319,24 @@ impl ExtractEngine {
             }
         }
 
-        let keyframes_registry: rustc_hash::FxHashMap<String, crate::static_value::StaticValue> = self
-            .opts
-            .css_inputs
-            .keyframes_blocks
-            .as_ref()
-            .and_then(|v| v.as_object())
-            .map(|obj| {
-                obj.iter()
-                    .filter_map(|(export_name, collection)| {
-                        let coll_obj = collection.as_object()?;
-                        let mut map = crate::static_value::StaticValue::Object(Vec::new());
-                        for (key_name, block) in coll_obj {
-                            if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
-                                map.insert(key_name, crate::static_value::StaticValue::String(name.to_string()));
-                            }
+        // Every registered collection, keyframes or position tries, by export
+        // name: each key's generated name. The kinds share one name-space.
+        let inputs = &self.opts.css_inputs;
+        let keyframes_registry: rustc_hash::FxHashMap<String, crate::static_value::StaticValue> =
+            [&inputs.keyframes_blocks, &inputs.position_try_blocks]
+                .into_iter()
+                .flat_map(|blocks| blocks.as_ref().and_then(|v| v.as_object()).into_iter().flatten())
+                .filter_map(|(export_name, collection)| {
+                    let coll_obj = collection.as_object()?;
+                    let mut map = crate::static_value::StaticValue::Object(Vec::new());
+                    for (key_name, block) in coll_obj {
+                        if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
+                            map.insert(key_name, crate::static_value::StaticValue::String(name.to_string()));
                         }
-                        Some((export_name.clone(), map))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+                    }
+                    Some((export_name.clone(), map))
+                })
+                .collect();
 
         let mut enriched_by_file: std::collections::BTreeMap<
             String,
@@ -3840,6 +3843,41 @@ export const App = () => <Box tone="red" />;
             unregistered_keyframe_diagnostics(&manifest).is_empty(),
             "{manifest}"
         );
+    }
+
+    /// Contract: a registered position try resolves by its collection's
+    /// export name, in a template too, and its rule emits once, in
+    /// `anm-global`.
+    #[test]
+    fn a_registered_position_try_resolves_by_export_name_and_emits_once_in_the_global_layer() {
+        let mut engine = ExtractEngine::new(Some(EngineOptions {
+            position_try_json: Some(
+                r#"{"placements":{"above":{"name":"--animus-pt-abc123","descriptors":{"positionArea":"top","width":200}}}}"#
+                    .to_string(),
+            ),
+            ..Default::default()
+        }))
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze(
+                    serde_json::json!([
+                        { "path": "system.ts", "source": "export const placements = createPositionTry({ above: { positionArea: 'top', width: 200 } });\n" },
+                        { "path": "a.tsx", "source": "import { placements } from './system';\nexport const Tip = ds.styles({ positionTryFallbacks: `${placements.above}, flip-block` }).asElement('div');\nexport const App = () => <Tip />;\n" }
+                    ])
+                    .to_string(),
+                    None,
+                )
+                .unwrap(),
+        )
+        .unwrap();
+
+        let css = manifest["css"].as_str().unwrap_or("");
+        assert!(css.contains("position-try-fallbacks: --animus-pt-abc123, flip-block;"), "{css}");
+        let global = manifest["sheets"]["global"].as_str().unwrap_or("");
+        assert_eq!(global.matches("@position-try --animus-pt-abc123 {").count(), 1, "{global}");
+        assert!(global.starts_with("@layer anm-global {"), "{global}");
+        assert!(global.contains("  position-area: top;\n  width: 200px;"), "{global}");
     }
 
     #[test]

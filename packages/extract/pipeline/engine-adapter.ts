@@ -118,6 +118,7 @@ export interface EngineApi {
     analysisContextJson?: string,
     generatedNamesJson?: string,
     propertyRecordsJson?: string,
+    positionTryJson?: string,
     /** Given, the session's evidence for the bases and computed loads the
      *  engine's `prepare` names, carrying its input identity (spec §2.2
      *  A2, A8, §6.3), as JSON. */
@@ -175,6 +176,7 @@ interface V2ExtractEngineConfig {
   analysisContextJson?: string;
   generatedNamesJson?: string;
   propertyRecordsJson?: string;
+  positionTryJson?: string;
   shortClassPrefix?: string;
   devMode: boolean;
 }
@@ -303,6 +305,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         analysisContextJson,
         generatedNamesJson,
         propertyRecordsJson,
+        positionTryJson,
         probeEvidence
       ) => {
         const filesJson = deps.rehydrateFilesJson
@@ -355,6 +358,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           analysisContextJson,
           generatedNamesJson,
           propertyRecordsJson,
+          positionTryJson,
           shortClassPrefix: emitterConfig.short_class_prefix,
           devMode,
         };

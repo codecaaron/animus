@@ -201,6 +201,9 @@ export function buildAnalysisInputs(
   if (opts.system.propertyRecordsJson) {
     inputs.propertyRecordsJson = opts.system.propertyRecordsJson;
   }
+  if (opts.system.positionTryJson) {
+    inputs.positionTryJson = opts.system.positionTryJson;
+  }
   const context = analysisContextJson(opts.analysisContext);
   if (context !== undefined) inputs.analysisContextJson = context;
   return inputs;

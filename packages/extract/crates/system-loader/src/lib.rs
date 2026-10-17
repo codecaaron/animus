@@ -62,6 +62,9 @@ pub struct SystemConfig {
     /// Keyframe collections from the sealed registration record, shaped
     /// `{ exportName: { keyName: { name, frames } } }`; nothing is scanned.
     pub keyframes_blocks: Option<String>,
+    /// Position-try collections from the sealed registration record, shaped
+    /// `{ exportName: { keyName: { name, descriptors } } }`.
+    pub position_try_blocks: Option<String>,
     /// Coded witness entries from the sealed registration record, as one JSON
     /// array — the host shims console away, so this is the only channel.
     pub vocabulary_witnesses: Option<String>,
@@ -1396,7 +1399,7 @@ fn extract_system_config<'js>(
                 .to_string(),
         );
     }
-    let (keyframes_blocks, global_style_blocks, vocabulary_witnesses) =
+    let VocabularyWires { keyframes_blocks, position_try_blocks, global_style_blocks, vocabulary_witnesses } =
         extract_vocabulary_record(ctx, &system_obj)?;
 
     Ok(SystemConfig {
@@ -1415,6 +1418,7 @@ fn extract_system_config<'js>(
         transform_provenance,
         global_style_blocks,
         keyframes_blocks,
+        position_try_blocks,
         vocabulary_witnesses,
         // Populated by load_system_module from the resolved module graph;
         // execute_bundle only sees the assembled bundle text.
@@ -1685,9 +1689,14 @@ fn find_exports_with_method<'js>(
     found
 }
 
-/// Keyframes blocks, global-style blocks, and the coded witness array, in
-/// that order; each `None` when empty.
-type VocabularyWires = (Option<String>, Option<String>, Option<String>);
+/// The record's collections, as JSON, and its coded witness array; each
+/// `None` when empty.
+struct VocabularyWires {
+    keyframes_blocks: Option<String>,
+    position_try_blocks: Option<String>,
+    global_style_blocks: Option<String>,
+    vocabulary_witnesses: Option<String>,
+}
 
 /// Insertion order is preserved end to end: `Object.fromEntries` plus
 /// `JSON.stringify` in the context, `preserve_order` on the Rust side.
@@ -1700,10 +1709,11 @@ fn extract_vocabulary_record<'js>(
   if (!record || typeof record !== 'object') {
     return JSON.stringify({ invalid: 'getVocabularyRecord() did not return an object' });
   }
-  if (record.version !== 1) {
+  if (record.version !== 1 && record.version !== 2) {
     return JSON.stringify({ skew: String(record.version) });
   }
   const keyframes = Array.isArray(record.keyframes) ? record.keyframes : [];
+  const positionTries = Array.isArray(record.positionTries) ? record.positionTries : [];
   const globalStyles = Array.isArray(record.globalStyles) ? record.globalStyles : [];
   const collisions = Array.isArray(record.collisions) ? record.collisions : [];
   const legacyVerbs = Array.isArray(record.legacyVerbs) ? record.legacyVerbs : [];
@@ -1751,6 +1761,8 @@ fn extract_vocabulary_record<'js>(
   return JSON.stringify({
     keyframeCount: keyframes.length,
     keyframes: Object.fromEntries(keyframes.map((entry) => [entry.name, entry.frames])),
+    positionTryCount: positionTries.length,
+    positionTries: Object.fromEntries(positionTries.map((entry) => [entry.name, entry.tries])),
     globalStyleCount: globalStyles.length,
     globalStyles: Object.fromEntries(globalStyles.map((entry) => [entry.name, blockOf(entry)])),
     witnesses: collisions.concat(legacyVerbs),
@@ -1767,7 +1779,7 @@ fn extract_vocabulary_record<'js>(
     if let Some(skew) = parsed.get("skew").and_then(|v| v.as_str()) {
         return Err(format!(
             "system vocabulary record version {} is not supported by this loader \
-             (expected 1) — the system was built by a mismatched @animus-ui/system; \
+             (expected 1 or 2) — the system was built by a mismatched @animus-ui/system; \
              rebuild against a matching version instead of loading with empty \
              collections",
             skew
@@ -1805,7 +1817,13 @@ fn extract_vocabulary_record<'js>(
         }
         _ => None,
     };
-    Ok((keyframes_blocks, global_style_blocks, vocabulary_witnesses))
+    let position_try_count = parsed.get("positionTryCount").and_then(|v| v.as_u64()).unwrap_or(0);
+    let position_try_blocks = if position_try_count == 0 {
+        None
+    } else {
+        parsed.get("positionTries").map(|v| serde_json::to_string(v).unwrap_or_default())
+    };
+    Ok(VocabularyWires { keyframes_blocks, position_try_blocks, global_style_blocks, vocabulary_witnesses })
 }
 
 fn list_export_keys(namespace: &Object<'_>) -> Vec<String> {

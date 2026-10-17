@@ -69,6 +69,11 @@ export interface EngineOptions {
   conditionAliasesJson?: string
   globalStyleBlocksJson?: string
   keyframesJson?: string
+  /**
+   * Position-try collections, `{ exportName: { key: { name, descriptors }
+   * } }`; absent means none.
+   */
+  positionTryJson?: string
   packageResolutionJson?: string
   pathAliasesJson?: string
   staticCssJson?: string
@@ -227,6 +232,12 @@ export interface NapiSystemConfig {
   transformProvenance?: string
   globalStyleBlocks?: string
   keyframesBlocks?: string
+  /**
+   * Position-try collections (`{ exportName: { key: { name, descriptors }
+   * } }` JSON); pass it as `positionTryJson`. Absent when none are
+   * registered.
+   */
+  positionTryBlocks?: string
   /**
    * Vocabulary witnesses as a JSON array of coded entries; hosts surface
    * each as a diagnostic keyed by its `code`. Absent when there are none.

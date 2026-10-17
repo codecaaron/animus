@@ -259,6 +259,47 @@ alone and warns (`animus.first-that-works.unextracted`). A minifier lowering
 for browser targets, such as Lightning CSS in Vite or Animus's own
 `targets`, drops a fallback every target already supports.
 
+### Anchor-position fallbacks
+
+`createPositionTry`, on the built bundle, names fallback positions for
+anchor positioning. Register the collection under its export name, as for
+keyframes, and reference its keys in `positionTryFallbacks`:
+
+```tsx
+export const { createPositionTry } = bundle;
+export const placements = createPositionTry({
+  above: { positionArea: 'top', marginBottom: '{space.8}' },
+  flipStart: { top: 'anchor(bottom)', insetInlineStart: 'anchor(start)' },
+});
+export const ds = bundle.registerPositionTry({ placements }).seal();
+
+const Tooltip = ds
+  .styles({
+    positionAnchor: '--trigger',
+    positionTryFallbacks: `${placements.above}, flip-block`,
+  })
+  .asElement('div');
+```
+
+```css
+@layer anm-global {
+  @position-try --animus-pt-7p6dba {
+    position-area: top;
+    margin-bottom: 0.5rem;
+  }
+}
+.animus-Tooltip-… {
+  position-anchor: --trigger;
+  position-try-fallbacks: --animus-pt-7p6dba, flip-block;
+}
+```
+
+Each position is named from its descriptors. Only what `@position-try`
+accepts is admitted: inset, margin, sizing and self-alignment properties,
+`positionAnchor` and `positionArea`; anything else is a type error, and
+throws. Write a list of fallbacks as a template literal, since an array is
+a responsive value. Every registered position emits, used or not.
+
 ## Color Modes
 
 `addColorModes(initialMode, modeConfig)` emits a `[data-color-mode="…"]` block

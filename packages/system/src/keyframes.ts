@@ -24,7 +24,8 @@ export type Keyframes<Map extends Record<string, KeyframeFrameMap>> = {
   readonly [K in keyof Map & string]: KeyframeRef<K>;
 };
 
-const fnv1a = (input: string): string => {
+/** The 32-bit FNV-1a hash of `input`, in base 36. */
+export const fnv1a = (input: string): string => {
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
     hash ^= input.charCodeAt(i);
@@ -40,14 +41,17 @@ const fnv1a = (input: string): string => {
   return hash.toString(36);
 };
 
+/** One block's declarations, by property name, as a stable string. */
+export const serializeBlock = (block: Record<string, unknown>): string =>
+  Object.keys(block)
+    .sort()
+    .map((p) => `${p}:${String(block[p])}`)
+    .join(';');
+
 const serializeFrames = (frames: KeyframeFrameMap): string => {
   const stops = Object.keys(frames).sort();
   return stops
-    .map((stop) => {
-      const frame = frames[stop] ?? {};
-      const props = Object.keys(frame).sort();
-      return `${stop}{${props.map((p) => `${p}:${String(frame[p])}`).join(';')}}`;
-    })
+    .map((stop) => `${stop}{${serializeBlock(frames[stop] ?? {})}}`)
     .join('|');
 };
 

@@ -18,6 +18,11 @@ import {
   keyframes as keyframesImpl,
 } from './keyframes';
 import {
+  type PositionTries,
+  type PositionTryDescriptors,
+  positionTries as positionTriesImpl,
+} from './positionTry';
+import {
   BUILT_IN_SELECTORS,
   mergeSelectors,
   type SelectorAliasMap,
@@ -176,6 +181,14 @@ export type CreateKeyframesFactory<
   readonly [N in keyof Frames]: KeyframeFrameMap;
 }>;
 
+/** Fallback positions for anchor positioning, each an `@position-try` rule
+ *  named from its descriptors. */
+export type CreatePositionTryFactory = <
+  Map extends Record<string, PositionTryDescriptors>,
+>(
+  tries: Map
+) => PositionTries<Map>;
+
 type IncludableSystem = {
   toConfig(): SerializedConfig;
   /**
@@ -205,6 +218,12 @@ export interface RegisterableKeyframes {
   readonly __frames: object;
 }
 
+/** The shape `registerPositionTry` accepts; the brand is structural. */
+export interface RegisterablePositionTries {
+  readonly __brand: 'PositionTries';
+  readonly __tries: object;
+}
+
 export interface RegisterableGlobalStyles {
   readonly __brand: 'GlobalStyleBlock';
   readonly styles: object;
@@ -218,6 +237,16 @@ export type KeyframesFrameData = Record<
 export interface VocabularyKeyframesEntry {
   readonly name: string;
   readonly frames: KeyframesFrameData;
+}
+
+export type PositionTryData = Record<
+  string,
+  { readonly name: string; readonly descriptors: PositionTryDescriptors }
+>;
+
+export interface VocabularyPositionTryEntry {
+  readonly name: string;
+  readonly tries: PositionTryData;
 }
 
 export interface VocabularyGlobalStyleEntry {
@@ -251,23 +280,34 @@ export interface VocabularyLegacyVerbEntry {
 
 /**
  * The registration record a sealed system carries, in declaration order.
- * The loader reads registered collections exclusively from here.
+ * The loader reads registered collections exclusively from here. Version 2
+ * marks a record holding a kind version 1 lacks (position tries), so a
+ * loader that reads only version 1 fails loud instead of dropping it; any
+ * other record stays version 1.
  */
 export interface VocabularyRecord {
-  readonly version: 1;
+  readonly version: 1 | 2;
   readonly keyframes: readonly VocabularyKeyframesEntry[];
+  /** Absent from a version 1 record. */
+  readonly positionTries?: readonly VocabularyPositionTryEntry[];
   readonly globalStyles: readonly VocabularyGlobalStyleEntry[];
   readonly collisions: readonly VocabularyCollisionEntry[];
   readonly legacyVerbs: readonly VocabularyLegacyVerbEntry[];
 }
 
-/** ONE name-space across both kinds: a global-style block and a keyframes
- *  collection cannot share a registered name. */
+/** ONE name-space across every kind: a global-style block, a keyframes
+ *  collection and a position-try collection cannot share a registered name. */
 type VocabularyEntryState =
   | {
       kind: 'keyframes';
       name: string;
       frames: KeyframesFrameData;
+      origin: string;
+    }
+  | {
+      kind: 'positionTry';
+      name: string;
+      tries: PositionTryData;
       origin: string;
     }
   | {
@@ -281,6 +321,7 @@ type VocabularyEntryState =
 
 type VocabularyEntryInput =
   | { kind: 'keyframes'; name: string; frames: KeyframesFrameData }
+  | { kind: 'positionTry'; name: string; tries: PositionTryData }
   | {
       kind: 'globalStyles';
       name: string;
@@ -304,6 +345,7 @@ function legacyVerbWitness(
   if (!record) return null;
   const names = [
     ...record.keyframes.map((entry) => entry.name),
+    ...(record.positionTries ?? []).map((entry) => entry.name),
     ...record.globalStyles.map((entry) => entry.name),
   ];
   if (names.length === 0) return null;
@@ -437,11 +479,22 @@ export interface SystemBundle<
   system: SystemInstance<PropReg, GroupReg, Conds, Sels, never>;
   createGlobalStyles: GlobalStylesFactory<PropReg>;
   createKeyframes: CreateKeyframesFactory<PropReg>;
+  createPositionTry: CreatePositionTryFactory;
   /**
    * The registration key must equal the collection's module-scope export
    * name — references resolve by export name. Registration is linear.
    */
   registerKeyframes<M extends Record<string, RegisterableKeyframes>>(
+    map: M &
+      LiteralKeyMap<M> & {
+        [K in Extract<keyof M, Vocab>]: VocabularyNameCollision<K & string>;
+      }
+  ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab | (keyof M & string)>;
+  /**
+   * Keys equal the collection's module-scope export name, as for
+   * keyframes; each fallback position emits one `@position-try` rule.
+   */
+  registerPositionTry<M extends Record<string, RegisterablePositionTries>>(
     map: M &
       LiteralKeyMap<M> & {
         [K in Extract<keyof M, Vocab>]: VocabularyNameCollision<K & string>;
@@ -1066,6 +1119,11 @@ export class SystemBuilder<
         name: entry.name,
         frames: entry.frames,
       })),
+      ...(sourceRecord.positionTries ?? []).map((entry) => ({
+        kind: 'positionTry' as const,
+        name: entry.name,
+        tries: entry.tries,
+      })),
       ...sourceRecord.globalStyles.map((entry) => ({
         kind: 'globalStyles' as const,
         name: entry.name,
@@ -1412,6 +1470,7 @@ export class SystemBuilder<
 
     const createKeyframes = ((frames: Record<string, KeyframeFrameMap>) =>
       keyframesImpl(frames)) as CreateKeyframesFactory<PropReg>;
+    const createPositionTry: CreatePositionTryFactory = positionTriesImpl;
 
     const makeBundle = (
       entries: readonly VocabularyEntryState[],
@@ -1475,6 +1534,41 @@ export class SystemBuilder<
           });
         }
         return registerEntries('registerKeyframes', incoming);
+      };
+
+      const registerPositionTry = (
+        map: Record<string, RegisterablePositionTries>
+      ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
+        const incoming: VocabularyEntryInput[] = [];
+        for (const [name, collection] of Object.entries(map)) {
+          if (
+            !collection ||
+            (collection as { __brand?: unknown }).__brand !== 'PositionTries' ||
+            typeof (collection as { __tries?: unknown }).__tries !== 'object'
+          ) {
+            throw new TypeError(
+              `registerPositionTry: "${name}" is not a createPositionTry ` +
+                'collection — register the factory return value itself.'
+            );
+          }
+          const tries = (collection as { __tries: PositionTryData }).__tries;
+          incoming.push({
+            kind: 'positionTry',
+            name,
+            tries: Object.freeze(
+              Object.fromEntries(
+                Object.entries(tries).map(([key, entry]) => [
+                  key,
+                  Object.freeze({
+                    name: entry.name,
+                    descriptors: Object.freeze({ ...entry.descriptors }),
+                  }),
+                ])
+              )
+            ),
+          });
+        }
+        return registerEntries('registerPositionTry', incoming);
       };
 
       const registerGlobalStyles = (
@@ -1541,8 +1635,14 @@ export class SystemBuilder<
               '— registration is linear; seal the final bundle.'
           );
         }
+        const positionTries = entries
+          .filter((entry) => entry.kind === 'positionTry')
+          .map((entry) => Object.freeze({ name: entry.name, tries: entry.tries }));
         const record: VocabularyRecord = Object.freeze({
-          version: 1 as const,
+          version: positionTries.length > 0 ? 2 : 1,
+          ...(positionTries.length > 0
+            ? { positionTries: Object.freeze(positionTries) }
+            : {}),
           keyframes: Object.freeze(
             entries
               .filter((entry) => entry.kind === 'keyframes')
@@ -1602,7 +1702,11 @@ export class SystemBuilder<
         });
         // Runtime-only stub, absent from the sealed TYPE: registering on a
         // sealed instance names the sealed state, not "not a function".
-        for (const member of ['registerKeyframes', 'registerGlobalStyles']) {
+        for (const member of [
+          'registerKeyframes',
+          'registerPositionTry',
+          'registerGlobalStyles',
+        ]) {
           Object.defineProperty(sealed, member, {
             value: (): never => {
               throw new Error(
@@ -1621,7 +1725,9 @@ export class SystemBuilder<
         system,
         createGlobalStyles,
         createKeyframes,
+        createPositionTry,
         registerKeyframes,
+        registerPositionTry,
         registerGlobalStyles,
         seal,
       } as SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab>;

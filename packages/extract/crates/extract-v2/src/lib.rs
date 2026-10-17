@@ -105,6 +105,10 @@ pub struct NapiSystemConfig {
     pub transform_provenance: Option<String>,
     pub global_style_blocks: Option<String>,
     pub keyframes_blocks: Option<String>,
+    /// Position-try collections (`{ exportName: { key: { name, descriptors }
+    /// } }` JSON); pass it as `positionTryJson`. Absent when none are
+    /// registered.
+    pub position_try_blocks: Option<String>,
     /// Vocabulary witnesses as a JSON array of coded entries; hosts surface
     /// each as a diagnostic keyed by its `code`. Absent when there are none.
     pub vocabulary_witnesses: Option<String>,
@@ -169,6 +173,7 @@ pub fn load_system_module(
         transform_provenance: config.transform_provenance,
         global_style_blocks: config.global_style_blocks,
         keyframes_blocks: config.keyframes_blocks,
+        position_try_blocks: config.position_try_blocks,
         vocabulary_witnesses: config.vocabulary_witnesses,
         dependencies: config.dependencies,
         missing: Some(config.missing),

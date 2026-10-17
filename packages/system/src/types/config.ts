@@ -7,6 +7,7 @@ import {
   type UnknownConditionAlias,
 } from '../conditions';
 import { KeyframeRef } from '../keyframes';
+import { PositionTryRef } from '../positionTry';
 import { type Selectors } from '../selectors';
 import { PropertyTypes } from './properties';
 import {
@@ -350,7 +351,9 @@ type Important<Value> = Value extends string
 // component's whole props to an annotation or a spread.
 type PassThroughProp<K extends keyof PropertyTypes> = K extends 'animationName'
   ? ResponsiveProp<KeyframeRef<string> | PropertyTypes[K]>
-  : ResponsiveProp<PropertyTypes[K] | Important<PropertyTypes<never>[K]>>;
+  : K extends 'positionTryFallbacks'
+    ? ResponsiveProp<PositionTryRef<string> | PropertyTypes[K]>
+    : ResponsiveProp<PropertyTypes[K] | Important<PropertyTypes<never>[K]>>;
 
 type UnderscoreBlockMembers<Config extends Record<string, SystemProp>> = {
   [K in KnownUnderscoreKey]?: ThemedBlockBody<Config>;

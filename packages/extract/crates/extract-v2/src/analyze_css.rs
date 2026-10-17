@@ -112,6 +112,9 @@ pub struct CssInputs {
     pub condition_aliases: ConditionAliasesMap,
     pub global_style_blocks: Option<Value>,
     pub keyframes_blocks: Option<Value>,
+    /// Registered position-try collections, keyed and named as keyframes
+    /// collections are: `{ exportName: { key: { name, descriptors } } }`.
+    pub position_try_blocks: Option<Value>,
     pub package_map: FxHashMap<String, String>,
     pub path_aliases: Vec<AliasEntry>,
     pub static_css: Option<crate::forced_usage::StaticCssConfig>,
@@ -162,6 +165,15 @@ pub struct CssInputs {
     /// registrations, which change only warnings and the slot's
     /// `declaredNumeric`, take none.
     pub system_hash: u64,
+}
+
+/// An optional engine option's JSON; empty or `null` is none.
+fn parse_opt_value(name: &str, json: Option<&str>) -> Result<Option<Value>, String> {
+    match json {
+        None => Ok(None),
+        Some(s) if s.trim().is_empty() || s.trim() == "null" => Ok(None),
+        Some(s) => serde_json::from_str(s).map(Some).map_err(|e| format!("EngineOptions.{name}: invalid JSON — {e}")),
+    }
 }
 
 /// `hash` continued with `json` in canonical form, then a separator; JSON
@@ -354,15 +366,6 @@ impl CssInputs {
                     .map_err(|e| format!("EngineOptions.{name}: invalid JSON — {e}")),
             }
         }
-        fn parse_opt_value(name: &str, json: Option<&str>) -> Result<Option<Value>, String> {
-            match json {
-                None => Ok(None),
-                Some(s) if s.trim().is_empty() || s.trim() == "null" => Ok(None),
-                Some(s) => serde_json::from_str(s)
-                    .map(Some)
-                    .map_err(|e| format!("EngineOptions.{name}: invalid JSON — {e}")),
-            }
-        }
         let path_aliases = parse_path_aliases(path_aliases_json)?;
         let static_css = match static_css_json {
             None => None,
@@ -411,6 +414,7 @@ impl CssInputs {
                 global_style_blocks_json,
             )?,
             keyframes_blocks,
+            position_try_blocks: None,
             package_map: parse("packageResolutionJson", package_resolution_json)?,
             path_aliases,
             static_css,
@@ -492,6 +496,14 @@ impl CssInputs {
     }
 
     /// Merges the prefix's generated names into the authored-name map.
+    /// The registered position tries; their names take part in the system
+    /// hash, as keyframe names do.
+    pub fn set_position_tries(&mut self, json: Option<&str>) -> Result<(), String> {
+        self.position_try_blocks = parse_opt_value("positionTryJson", json)?;
+        self.system_hash = crate::ids::fnv1a_json(self.system_hash, &keyframe_names(self.position_try_blocks.as_ref()));
+        Ok(())
+    }
+
     pub fn set_generated_names(&mut self, json: Option<&str>) -> Result<(), String> {
         let Some(json) = json.map(str::trim).filter(|s| !s.is_empty() && *s != "null") else {
             return Ok(());
@@ -10421,15 +10433,26 @@ fn run_with_system_floor(
     } else {
         String::new()
     };
+    let position_try_css_raw = if let Some(blocks) = &inputs.position_try_blocks {
+        let css = crate::theme::resolve_all_position_try_blocks(blocks, &resolve_ctx, &mut |name| {
+            let component = format!("position try '{name}'");
+            drain_dropped_style_keys(&dropped_keys, "system", &component, &[], &mut Vec::new(), &mut diagnostics);
+        });
+        drain_transform_failures(&transform_failures, "", None, None, &mut diagnostics, &mut deferred_errors);
+        drain_strict_token_misses(&token_misses, "system", "system", &mut diagnostics);
+        css
+    } else {
+        String::new()
+    };
     let mut combined_global = String::new();
-    if !global_css_raw.is_empty() {
-        combined_global.push_str(&global_css_raw);
-    }
-    if !keyframes_css_raw.is_empty() {
+    for part in [&global_css_raw, &keyframes_css_raw, &position_try_css_raw] {
+        if part.is_empty() {
+            continue;
+        }
         if !combined_global.is_empty() {
             combined_global.push('\n');
         }
-        combined_global.push_str(&keyframes_css_raw);
+        combined_global.push_str(part);
     }
     let runtime_asset_rule = runtime_assets.root_rule();
     if !runtime_asset_rule.is_empty() {

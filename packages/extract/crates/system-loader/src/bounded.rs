@@ -1140,7 +1140,7 @@ impl<'c> Loader<'c> {
     /// traced (a third-party value's included), or the method is read where
     /// the audit cannot follow it to a call (bound, passed or stored).
     fn audit_source(&mut self, path: &str, source: &str, root: &str) {
-        const REGISTRATIONS: [&str; 2] = ["registerGlobalStyles", "registerKeyframes"];
+        const REGISTRATIONS: [&str; 3] = ["registerGlobalStyles", "registerKeyframes", "registerPositionTry"];
         // A module that never names a registration method, even through an
         // escape in an identifier, makes none.
         if !REGISTRATIONS.iter().any(|method| source.contains(method)) && !source.contains("\\u") {

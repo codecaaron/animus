@@ -25,6 +25,7 @@ export type AnalyzeProjectArgs = [
   analysisContextJson?: string,
   generatedNamesJson?: string,
   propertyRecordsJson?: string,
+  positionTryJson?: string,
   probeEvidence?: ProbeEvidenceGatherer,
 ];
 
@@ -61,6 +62,8 @@ export interface AnalyzeProjectInputs {
   /** Present only for a theme with declared properties: a prop writing only
    *  ones registered with a numeric syntax takes a number without a unit. */
   propertyRecordsJson?: string;
+  /** Present only for a system that registers position tries. */
+  positionTryJson?: string;
 }
 
 /** @internal */
@@ -98,6 +101,7 @@ export function buildAnalyzeProjectArgs(
     inputs.analysisContextJson,
     inputs.generatedNamesJson,
     inputs.propertyRecordsJson,
+    inputs.positionTryJson,
   ];
   const last =
     probeEvidence === undefined

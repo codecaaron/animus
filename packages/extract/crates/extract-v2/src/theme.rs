@@ -3545,28 +3545,54 @@ pub fn resolve_all_keyframes_blocks(
     ctx: &ResolveContext,
     after_block: &mut dyn FnMut(&str),
 ) -> String {
-    let block_map = match blocks.as_object() {
-        Some(o) => o,
-        None => return String::new(),
-    };
+    resolve_registered_blocks(blocks, ctx, resolve_keyframes_block, after_block)
+}
 
+/// A registered position try's rule: its descriptors under its generated
+/// name, a bare number taking `px` as in keyframes.
+pub fn resolve_position_try_block(block: &Value, ctx: &ResolveContext) -> String {
+    let ctx = &ResolveContext { numbers_take_px: true, ..*ctx };
+    let (Some(name), Some(descriptors)) =
+        (block.get("name").and_then(Value::as_str), block.get("descriptors").and_then(Value::as_object))
+    else {
+        return String::new();
+    };
+    let selector = format!("@position-try {name}");
+    let declarations = resolve_flat_styles(descriptors, ctx, Some(std::slice::from_ref(&selector)));
+    if declarations.is_empty() {
+        return String::new();
+    }
+    global_rule(&selector, &declarations, 0)
+}
+
+/// Resolves every registered position try, as keyframes blocks resolve.
+pub fn resolve_all_position_try_blocks(
+    blocks: &Value,
+    ctx: &ResolveContext,
+    after_block: &mut dyn FnMut(&str),
+) -> String {
+    resolve_registered_blocks(blocks, ctx, resolve_position_try_block, after_block)
+}
+
+/// Each block of each registered collection (`{ export: { key: block } }`),
+/// resolved by `resolve`, with `after_block` called by the block's name.
+fn resolve_registered_blocks(
+    blocks: &Value,
+    ctx: &ResolveContext,
+    resolve: fn(&Value, &ResolveContext) -> String,
+    after_block: &mut dyn FnMut(&str),
+) -> String {
+    let collections = blocks.as_object().into_iter().flat_map(|collections| collections.values());
     let mut parts: Vec<String> = Vec::new();
-    for (_export_name, collection) in block_map {
-        let coll_obj = match collection.as_object() {
-            Some(o) => o,
-            None => continue,
-        };
-        for (_key_name, block) in coll_obj {
-            let css = resolve_keyframes_block(block, ctx);
-            if !css.is_empty() {
-                parts.push(css);
-            }
-            if let Some(name) = block.get("name").and_then(Value::as_str) {
-                after_block(name);
-            }
+    for block in collections.filter_map(Value::as_object).flat_map(|collection| collection.values()) {
+        let css = resolve(block, ctx);
+        if !css.is_empty() {
+            parts.push(css);
+        }
+        if let Some(name) = block.get("name").and_then(Value::as_str) {
+            after_block(name);
         }
     }
-
     parts.join("\n\n")
 }
 

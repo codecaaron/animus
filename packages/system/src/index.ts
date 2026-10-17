@@ -4,6 +4,12 @@ export { AnimusExtended, AnimusExtendedWithAll } from './AnimusExtended';
 // from '@animus-ui/system/compose-with-context'.
 export { compose } from './compose';
 export type { KeyframeFrameMap, KeyframeRef, Keyframes } from './keyframes';
+export type {
+  PositionTries,
+  PositionTryDescriptor,
+  PositionTryDescriptors,
+  PositionTryRef,
+} from './positionTry';
 export { asset, ASSET_PLACEHOLDER_PREFIX, type AssetRef } from './asset.js';
 export { firstThatWorks } from './firstThatWorks';
 export { createComponent, renderAsChild } from './runtime';
@@ -16,6 +22,7 @@ export {
 export { createComposedFamily } from './runtime/createComposedFamily';
 export type {
   CreateKeyframesFactory,
+  CreatePositionTryFactory,
   FontFace,
   FontFaceLocalSrc,
   FontFaceSrc,
@@ -25,9 +32,11 @@ export type {
   GlobalStylesFactory,
   KeyframesFrameData,
   LibraryBundle,
+  PositionTryData,
   PropGroup,
   RegisterableGlobalStyles,
   RegisterableKeyframes,
+  RegisterablePositionTries,
   RegistrySnapshot,
   SealedSystemInstance,
   SerializedConfig,
@@ -40,6 +49,7 @@ export type {
   VocabularyLegacyVerbEntry,
   VocabularyNameCollision,
   VocabularyOf,
+  VocabularyPositionTryEntry,
   VocabularyRecord,
 } from './SystemBuilder';
 export { createSystem, SystemBuilder } from './SystemBuilder';

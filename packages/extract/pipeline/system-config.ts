@@ -46,6 +46,8 @@ export interface SystemConfig {
   transformProvenanceJson?: string | null;
   globalStyleBlocksJson: string | null;
   keyframesJson: string | null;
+  /** Registered position-try collections; absent when none are. */
+  positionTryJson?: string;
   /** Coded witness entries from the sealed system's registration record —
    *  the witness channel, since the evaluation host's console is a no-op. */
   vocabularyWitnessesJson?: string | null;
@@ -273,6 +275,9 @@ export function loadSystemConfig(
     system.declarationScalesJson = declarationScalesJson;
   if (config.propertyRecordsJson) {
     system.propertyRecordsJson = config.propertyRecordsJson;
+  }
+  if (config.positionTryBlocks) {
+    system.positionTryJson = config.positionTryBlocks;
   }
   if (registrations.invalid.length > 0) {
     system.invalidPropertyRegistrations = registrations.invalid;
