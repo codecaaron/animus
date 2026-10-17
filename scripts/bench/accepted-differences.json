@@ -21,13 +21,6 @@
     "reason": "Only the manifest's fileFacts differ: a valueless JSX attribute on a variant prop is now recorded as the variant key \"true\" and a boolean literal as its string, so boolean variant keys are usage-tracked. CSS, components and transforms are identical."
   },
   {
-    "row": "build:vite-app",
-    "fixture": "vite-app",
-    "baseline": "d03eaa3296e0d23e68d0388403ab97408dd8782cfb08f553e0de46033fa05ee1",
-    "candidate": "924550f924601e4d0a13b53fac2741971bc869164baf815edacf32843e83f9e4",
-    "reason": "The JS differs in size because runtime compound-variant matching compares the prop value as a string, an asComponent() target receives the variants and states its terminal forwards, configs derive slot and compound names at runtime, and scale and keyword tables, system prop name lists, supersededBy and transform bindings ship once in the system-props module. One identity-uncertain-tag info line fewer: a tag of a package with no dependency path to Animus is counted in the identity-uncertain warning, not listed. Both sides build with the checkout toolchain, whose rolldown 1.2.14 (vite-plus 1.3.0) adds a third argument, t.exports, to its CommonJS-interop helper: 10 bytes on each side. The CSS is identical (cssDigest unchanged)."
-  },
-  {
     "row": "analysis:showcase",
     "fixture": "showcase-analysis",
     "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
