@@ -974,9 +974,7 @@ fn serialize_statics<S: serde::Serializer>(
 /// function or an unevaluated node, which no JSON value stands for.
 fn serialized(value: &StaticValue) -> Option<Value> {
     Some(match value {
-        StaticValue::AssetFunction { .. } | StaticValue::FirstThatWorksFunction | StaticValue::Unevaluated(_) => {
-            return None
-        }
+        StaticValue::SystemFunction(_) | StaticValue::Unevaluated(_) => return None,
         StaticValue::Array(items) => Value::Array(items.iter().filter_map(serialized).collect()),
         StaticValue::Object(entries) => Value::Object(
             entries.iter().filter_map(|(key, value)| Some((key.clone(), serialized(value)?))).collect(),

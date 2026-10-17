@@ -1226,12 +1226,7 @@ fn resolve_entry(key: &str, value: &Value, ctx: &ResolveContext) -> Vec<CssDecla
     let failures = || ctx.transform_failures.map_or(0, |sink| sink.borrow().len());
     let failures_before = failures();
     let declarations = resolve_prop(key, value, ctx);
-    if declarations.is_empty()
-        && value.is_object()
-        && first_that_works_members(value).is_none()
-        && failures() == failures_before
-        && ctx.dropped_keys.is_some()
-    {
+    if declarations.is_empty() && is_style_block(value) && failures() == failures_before && ctx.dropped_keys.is_some() {
         if let Some((at_rule, block)) = value.as_object().into_iter().flatten().find(|(entry, _)| only_wraps_rules(entry, ctx)) {
             let within = format!("the value of '{key}'");
             let lost = format!("'{key}'");
@@ -1419,7 +1414,7 @@ fn resolve_flat_styles(obj: &Map<String, Value>, ctx: &ResolveContext, nesting_u
 /// `path`, that emitted nothing, and failed no transform (which reports
 /// itself).
 fn record_nesting(ctx: &ResolveContext, path: &[String], key: &str, value: &Value, emitted_nothing: bool) {
-    if emitted_nothing && value.is_object() && only_wraps_rules(key, ctx) {
+    if emitted_nothing && is_style_block(value) && only_wraps_rules(key, ctx) {
         if let [selector, frame] = path {
             if selector.starts_with("@keyframes") {
                 let within = format!("the keyframe frame '{frame}' of '{selector}'");
@@ -1429,7 +1424,7 @@ fn record_nesting(ctx: &ResolveContext, path: &[String], key: &str, value: &Valu
             }
         }
     }
-    if emitted_nothing && value.is_object() {
+    if emitted_nothing && is_style_block(value) {
         let selector = path.first().cloned().unwrap_or_default();
         record_dropped_key_at(
             ctx,
@@ -1549,6 +1544,12 @@ pub(crate) fn resolve_prop(key: &str, value: &Value, ctx: &ResolveContext) -> Ve
     );
     take_px(value, &mut declarations, ctx);
     declarations
+}
+
+/// Whether a value is an object of styles: a `firstThatWorks(…)` value is
+/// an object that holds a single value's members instead.
+fn is_style_block(value: &Value) -> bool {
+    value.is_object() && first_that_works_members(value).is_none()
 }
 
 /// The members of a `firstThatWorks(…)` value, preferred first.
@@ -2006,6 +2007,11 @@ fn strict_token_misses(
     value: &Value,
     ctx: &ResolveContext,
 ) -> Vec<(Option<String>, Value)> {
+    // A `firstThatWorks(…)` value's members are judged one by one where it
+    // resolves; a missed member drops alone.
+    if first_that_works_members(value).is_some() {
+        return vec![];
+    }
     // A declaration prop is strict by nature: only its scale's keys apply.
     if let Some(binding) = config.declaration_binding() {
         return match value.as_object() {
@@ -3537,17 +3543,6 @@ pub fn resolve_keyframes_block(block: &Value, ctx: &ResolveContext) -> String {
     format!("@keyframes {} {{\n{}\n}}", name, rendered_frames.join("\n"))
 }
 
-/// Resolves every registered keyframes block, calling `after_block` with
-/// each block's name once it has resolved, so what its resolution reported
-/// can be attributed to it.
-pub fn resolve_all_keyframes_blocks(
-    blocks: &Value,
-    ctx: &ResolveContext,
-    after_block: &mut dyn FnMut(&str),
-) -> String {
-    resolve_registered_blocks(blocks, ctx, resolve_keyframes_block, after_block)
-}
-
 /// A registered position try's rule: its descriptors under its generated
 /// name, a bare number taking `px` as in keyframes.
 pub fn resolve_position_try_block(block: &Value, ctx: &ResolveContext) -> String {
@@ -3563,15 +3558,6 @@ pub fn resolve_position_try_block(block: &Value, ctx: &ResolveContext) -> String
         return String::new();
     }
     global_rule(&selector, &declarations, 0)
-}
-
-/// Resolves every registered position try, as keyframes blocks resolve.
-pub fn resolve_all_position_try_blocks(
-    blocks: &Value,
-    ctx: &ResolveContext,
-    after_block: &mut dyn FnMut(&str),
-) -> String {
-    resolve_registered_blocks(blocks, ctx, resolve_position_try_block, after_block)
 }
 
 /// The pseudo-element each view-transition slot styles.
@@ -3598,21 +3584,16 @@ pub fn resolve_view_transition_block(block: &Value, ctx: &ResolveContext) -> Str
     resolve_global_block(&Value::Object(selectors), ctx)
 }
 
-/// Resolves every registered view transition, as keyframes blocks resolve.
-pub fn resolve_all_view_transition_blocks(
-    blocks: &Value,
-    ctx: &ResolveContext,
-    after_block: &mut dyn FnMut(&str),
-) -> String {
-    resolve_registered_blocks(blocks, ctx, resolve_view_transition_block, after_block)
-}
+/// How one registered block, of any kind, resolves to its CSS.
+pub type BlockResolver = fn(&Value, &ResolveContext) -> String;
 
 /// Each block of each registered collection (`{ export: { key: block } }`),
-/// resolved by `resolve`, with `after_block` called by the block's name.
-fn resolve_registered_blocks(
+/// resolved by `resolve`, with `after_block` called by the block's name once
+/// it has resolved, so what its resolution reported can be attributed to it.
+pub fn resolve_registered_blocks(
     blocks: &Value,
     ctx: &ResolveContext,
-    resolve: fn(&Value, &ResolveContext) -> String,
+    resolve: BlockResolver,
     after_block: &mut dyn FnMut(&str),
 ) -> String {
     let collections = blocks.as_object().into_iter().flat_map(|collections| collections.values());

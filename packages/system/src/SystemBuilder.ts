@@ -342,34 +342,6 @@ export interface VocabularyRecord {
 
 /** ONE name-space across every kind: no two registered collections or
  *  global-style blocks share a name, whatever their kinds. */
-type VocabularyEntryState =
-  | {
-      kind: 'keyframes';
-      name: string;
-      frames: KeyframesFrameData;
-      origin: string;
-    }
-  | {
-      kind: 'positionTry';
-      name: string;
-      tries: PositionTryData;
-      origin: string;
-    }
-  | {
-      kind: 'viewTransitions';
-      name: string;
-      transitions: ViewTransitionData;
-      origin: string;
-    }
-  | {
-      kind: 'globalStyles';
-      name: string;
-      styles: GlobalStyleMap;
-      fontFaces?: readonly FontFace[];
-      unlayered?: true;
-      origin: string;
-    };
-
 type VocabularyEntryInput =
   | { kind: 'keyframes'; name: string; frames: KeyframesFrameData }
   | { kind: 'positionTry'; name: string; tries: PositionTryData }
@@ -385,6 +357,9 @@ type VocabularyEntryInput =
       fontFaces?: readonly FontFace[];
       unlayered?: true;
     };
+
+/** An entry as the registry holds it, with where it was declared. */
+type VocabularyEntryState = VocabularyEntryInput & { origin: string };
 
 /**
  * No console output: a warn here would ship in production consumer bundles,
@@ -414,23 +389,63 @@ function legacyVerbWitness(
   };
 }
 
+/** `blocks`, and each block, frozen; deeper values alias. */
+const freezeBlocks = <Block extends object>(
+  blocks: Readonly<Record<string, Block>>
+): Readonly<Record<string, Block>> =>
+  Object.freeze(
+    Object.fromEntries(
+      Object.entries(blocks).map(([key, block]) => [
+        key,
+        Object.freeze({ ...block }),
+      ])
+    )
+  );
+
 /**
- * Frozen two levels deep (frame entries + stop bodies) so later mutation of
- * the caller's collection cannot reach a sealed record; deeper values alias.
+ * A registered collection's entries copied by `copy` and frozen, so later
+ * mutation of the caller's collection cannot reach a sealed record.
  */
-function snapshotFrameData(frames: KeyframesFrameData): KeyframesFrameData {
-  const copy: Record<string, { name: string; frames: KeyframeFrameMap }> = {};
-  for (const [key, entry] of Object.entries(frames)) {
-    const stops: KeyframeFrameMap = {};
-    for (const [stop, body] of Object.entries(entry.frames ?? {})) {
-      stops[stop] = Object.freeze({ ...body }) as KeyframeFrameMap[string];
+const snapshotEntries = <Entry extends { readonly name: string }>(
+  entries: Readonly<Record<string, Entry>>,
+  copy: (entry: Entry) => Entry
+): Readonly<Record<string, Entry>> =>
+  Object.freeze(
+    Object.fromEntries(
+      Object.entries(entries).map(([key, entry]) => [
+        key,
+        Object.freeze(copy(entry)),
+      ])
+    )
+  );
+
+/**
+ * Each registered value's `field`, once the value is checked to be what
+ * `factory` returns: an object branded `brand` that holds `field`. The brand
+ * is structural; provenance is not checked.
+ */
+function registeredPayloads<Payload>(
+  method: string,
+  factory: string,
+  brand: string,
+  field: string,
+  map: Readonly<Record<string, unknown>>
+): [string, Payload][] {
+  return Object.entries(map).map(([name, value]) => {
+    const branded = value as Record<string, unknown> | null | undefined;
+    if (
+      !branded ||
+      branded.__brand !== brand ||
+      typeof branded[field] !== 'object'
+    ) {
+      throw new TypeError(
+        `${method}: "${name}" is not a ${factory} collection — register ` +
+          'the factory return value itself.'
+      );
     }
-    copy[key] = Object.freeze({
-      name: entry.name,
-      frames: Object.freeze(stops) as KeyframeFrameMap,
-    });
-  }
-  return Object.freeze(copy) as KeyframesFrameData;
+    // SAFETY: the brand names the factory, whose `field` is this payload.
+    return [name, branded[field] as Payload];
+  });
 }
 
 /**
@@ -1595,110 +1610,62 @@ export class SystemBuilder<
       const registerKeyframes = (
         map: Record<string, RegisterableKeyframes>
       ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
-        const incoming: VocabularyEntryInput[] = [];
-        for (const [name, collection] of Object.entries(map)) {
-          if (
-            !collection ||
-            (collection as { __brand?: unknown }).__brand !== 'Keyframes' ||
-            typeof (collection as { __frames?: unknown }).__frames !== 'object'
-          ) {
-            throw new TypeError(
-              `registerKeyframes: "${name}" is not a createKeyframes ` +
-                'collection — register the factory return value itself.'
-            );
-          }
-          incoming.push({
-            kind: 'keyframes',
-            name,
-            frames: snapshotFrameData(
-              (collection as { __frames: KeyframesFrameData }).__frames
-            ),
-          });
-        }
+        const incoming = registeredPayloads<KeyframesFrameData>(
+          'registerKeyframes',
+          'createKeyframes',
+          'Keyframes',
+          '__frames',
+          map
+        ).map(([name, frames]): VocabularyEntryInput => ({
+          kind: 'keyframes',
+          name,
+          frames: snapshotEntries(frames, (entry) => ({
+            name: entry.name,
+            frames: freezeBlocks(entry.frames ?? {}),
+          })),
+        }));
         return registerEntries('registerKeyframes', incoming);
       };
 
       const registerPositionTry = (
         map: Record<string, RegisterablePositionTries>
       ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
-        const incoming: VocabularyEntryInput[] = [];
-        for (const [name, collection] of Object.entries(map)) {
-          if (
-            !collection ||
-            (collection as { __brand?: unknown }).__brand !== 'PositionTries' ||
-            typeof (collection as { __tries?: unknown }).__tries !== 'object'
-          ) {
-            throw new TypeError(
-              `registerPositionTry: "${name}" is not a createPositionTry ` +
-                'collection — register the factory return value itself.'
-            );
-          }
-          const tries = (collection as { __tries: PositionTryData }).__tries;
-          incoming.push({
-            kind: 'positionTry',
-            name,
-            tries: Object.freeze(
-              Object.fromEntries(
-                Object.entries(tries).map(([key, entry]) => [
-                  key,
-                  Object.freeze({
-                    name: entry.name,
-                    descriptors: Object.freeze({ ...entry.descriptors }),
-                  }),
-                ])
-              )
-            ),
-          });
-        }
+        const incoming = registeredPayloads<PositionTryData>(
+          'registerPositionTry',
+          'createPositionTry',
+          'PositionTries',
+          '__tries',
+          map
+        ).map(([name, tries]): VocabularyEntryInput => ({
+          kind: 'positionTry',
+          name,
+          tries: snapshotEntries(tries, (entry) => ({
+            name: entry.name,
+            descriptors: Object.freeze({ ...entry.descriptors }),
+          })),
+        }));
         return registerEntries('registerPositionTry', incoming);
       };
 
       const registerViewTransitions = (
         map: Record<string, RegisterableViewTransitions>
       ): SystemBundle<PropReg, GroupReg, Conds, Sels, Vocab> => {
-        const incoming: VocabularyEntryInput[] = [];
-        for (const [name, collection] of Object.entries(map)) {
-          if (
-            !collection ||
-            (collection as { __brand?: unknown }).__brand !==
-              'ViewTransitions' ||
-            typeof (collection as { __transitions?: unknown }).__transitions !==
-              'object'
-          ) {
-            throw new TypeError(
-              `registerViewTransitions: "${name}" is not a ` +
-                'createViewTransitions collection — register the factory ' +
-                'return value itself.'
-            );
-          }
-          const transitions = (
-            collection as { __transitions: ViewTransitionData }
-          ).__transitions;
-          // Frozen two levels deep (each slot's block); deeper blocks stay
-          // aliased, as a global-style block's do.
-          incoming.push({
-            kind: 'viewTransitions',
-            name,
-            transitions: Object.freeze(
-              Object.fromEntries(
-                Object.entries(transitions).map(([key, entry]) => [
-                  key,
-                  Object.freeze({
-                    name: entry.name,
-                    slots: Object.freeze(
-                      Object.fromEntries(
-                        Object.entries(entry.slots).map(([slot, block]) => [
-                          slot,
-                          Object.freeze({ ...block }),
-                        ])
-                      )
-                    ),
-                  }),
-                ])
-              )
-            ),
-          });
-        }
+        // Each slot's block is frozen; deeper blocks alias, as a
+        // global-style block's do.
+        const incoming = registeredPayloads<ViewTransitionData>(
+          'registerViewTransitions',
+          'createViewTransitions',
+          'ViewTransitions',
+          '__transitions',
+          map
+        ).map(([name, transitions]): VocabularyEntryInput => ({
+          kind: 'viewTransitions',
+          name,
+          transitions: snapshotEntries(transitions, (entry) => ({
+            name: entry.name,
+            slots: freezeBlocks(entry.slots),
+          })),
+        }));
         return registerEntries('registerViewTransitions', incoming);
       };
 

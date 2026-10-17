@@ -1,4 +1,4 @@
-import { fnv1a, serializeBlock } from './keyframes';
+import { fnv1a, type NamedRef, namedEntries, serializeBlock } from './named';
 
 import type { PropertyTypes } from './types/properties';
 
@@ -55,14 +55,10 @@ export type PositionTryDescriptors = {
   readonly [K in PositionTryDescriptor]?: PropertyTypes[K];
 };
 
-/** Prints, and serializes, as the generated name. */
-export interface PositionTryRef<Name extends string> {
-  readonly __brand: 'PositionTryRef';
-  readonly __name: Name;
-  toString(): string;
-  valueOf(): string;
-  toJSON(): string;
-}
+export type PositionTryRef<Name extends string> = NamedRef<
+  'PositionTryRef',
+  Name
+>;
 
 export type PositionTries<Map extends Record<string, PositionTryDescriptors>> =
   {
@@ -87,37 +83,31 @@ const ACCEPTED: ReadonlySet<string> = new Set(POSITION_TRY_DESCRIPTORS);
 export function positionTries<
   Map extends Record<string, PositionTryDescriptors>,
 >(map: Map): PositionTries<Map> {
-  const tries: Record<
-    string,
-    { name: string; descriptors: PositionTryDescriptors }
-  > = {};
-  const refs: Record<string, PositionTryRef<string>> = {};
-  for (const [key, descriptors] of Object.entries(map)) {
-    const rejected = Object.keys(descriptors).filter(
-      (property) => !ACCEPTED.has(property)
-    );
-    if (rejected.length > 0) {
-      throw new TypeError(
-        `createPositionTry: "${key}" sets ${rejected.join(', ')}, which ` +
-          '@position-try does not accept — only inset, margin, sizing and ' +
-          'self-alignment properties, positionAnchor and positionArea.'
+  const { entries, refs } = namedEntries(
+    map,
+    'PositionTryRef',
+    (key, descriptors: PositionTryDescriptors) => {
+      const rejected = Object.keys(descriptors).filter(
+        (property) => !ACCEPTED.has(property)
       );
+      if (rejected.length > 0) {
+        throw new TypeError(
+          `createPositionTry: "${key}" sets ${rejected.join(', ')}, which ` +
+            '@position-try does not accept — only inset, margin, sizing and ' +
+            'self-alignment properties, positionAnchor and positionArea.'
+        );
+      }
+      return {
+        name: `--animus-pt-${fnv1a(serializeBlock(descriptors))}`,
+        descriptors,
+      };
     }
-    const name = `--animus-pt-${fnv1a(serializeBlock(descriptors))}`;
-    tries[key] = { name, descriptors };
-    refs[key] = {
-      __brand: 'PositionTryRef',
-      __name: key,
-      toString: () => name,
-      valueOf: () => name,
-      toJSON: () => name,
-    };
-  }
-  // SAFETY: `tries` and `refs` hold exactly the keys of `map`, each entry
-  // built from that key's descriptors.
+  );
+  // SAFETY: `entries` and `refs` hold exactly the keys of `map`, each built
+  // from that key's descriptors.
   return {
     __brand: 'PositionTries' as const,
-    __tries: tries,
+    __tries: entries,
     ...refs,
   } as PositionTries<Map>;
 }

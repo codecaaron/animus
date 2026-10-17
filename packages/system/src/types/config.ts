@@ -350,13 +350,21 @@ type Important<Value> = Value extends string
 // A style value may carry `!important`. A registered prop's value does not:
 // widening every prop's union overflows (TS2590) where a consumer relates a
 // component's whole props to an annotation or a spread.
-type PassThroughProp<K extends keyof PropertyTypes> = K extends 'animationName'
-  ? ResponsiveProp<KeyframeRef<string> | PropertyTypes[K]>
-  : K extends 'positionTryFallbacks'
-    ? ResponsiveProp<PositionTryRef<string> | PropertyTypes[K]>
-    : K extends 'viewTransitionClass'
-      ? ResponsiveProp<ViewTransitionRef<string> | PropertyTypes[K]>
-      : ResponsiveProp<PropertyTypes[K] | Important<PropertyTypes<never>[K]>>;
+/** The properties a registered artifact's ref is a value of. */
+interface ArtifactRefProps {
+  animationName: KeyframeRef<string>;
+  positionTryFallbacks: PositionTryRef<string>;
+  viewTransitionClass: ViewTransitionRef<string>;
+}
+
+type PassThroughProp<K extends keyof PropertyTypes> =
+  K extends keyof ArtifactRefProps
+    ? ResponsiveProp<
+        | ArtifactRefProps[K]
+        | PropertyTypes[K]
+        | Important<PropertyTypes<never>[K]>
+      >
+    : ResponsiveProp<PropertyTypes[K] | Important<PropertyTypes<never>[K]>>;
 
 type UnderscoreBlockMembers<Config extends Record<string, SystemProp>> = {
   [K in KnownUnderscoreKey]?: ThemedBlockBody<Config>;

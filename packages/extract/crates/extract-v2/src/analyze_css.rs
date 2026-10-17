@@ -190,8 +190,9 @@ fn fold_system_input(hash: u64, json: Option<&str>) -> u64 {
     crate::ids::fnv1a(hash, "\u{0}")
 }
 
-/// Each keyframes collection's export and key, and the name its CSS takes.
-pub(crate) fn keyframe_names(blocks: Option<&Value>) -> Vec<(&str, &str, Option<&str>)> {
+/// Each registered collection's export and key, and the name its CSS takes:
+/// keyframes, position tries and view transitions are shaped alike.
+pub(crate) fn registered_names(blocks: Option<&Value>) -> Vec<(&str, &str, Option<&str>)> {
     let collections = blocks.and_then(Value::as_object).into_iter().flatten();
     collections
         .flat_map(|(export, collection)| {
@@ -395,7 +396,7 @@ impl CssInputs {
         ]
         .into_iter()
         .fold(crate::ids::FNV_OFFSET, fold_system_input);
-        let system_hash = crate::ids::fnv1a_json(system_hash, &keyframe_names(keyframes_blocks.as_ref()));
+        let system_hash = crate::ids::fnv1a_json(system_hash, &registered_names(keyframes_blocks.as_ref()));
         let mut config = parse("configJson", config_json)?;
         crate::theme::key_unidentified_transforms(&mut config);
         let prop_order = parse::<serde_json::Map<String, Value>>("configJson", config_json)?
@@ -499,24 +500,27 @@ impl CssInputs {
         crate::ids::fingerprint(crate::ids::fnv1a(self.system_hash, class_prefix))
     }
 
+    /// The registered position tries and view transitions, from their
+    /// engine options; their names take part in the system hash, as keyframe
+    /// names do.
+    pub fn set_registered_collections(
+        &mut self,
+        position_tries: Option<&str>,
+        view_transitions: Option<&str>,
+    ) -> Result<(), String> {
+        self.position_try_blocks = self.registered_collection("positionTryJson", position_tries)?;
+        self.view_transition_blocks = self.registered_collection("viewTransitionsJson", view_transitions)?;
+        Ok(())
+    }
+
+    /// One registered collection's option, its names folded into the hash.
+    fn registered_collection(&mut self, option: &str, json: Option<&str>) -> Result<Option<Value>, String> {
+        let blocks = parse_opt_value(option, json)?;
+        self.system_hash = crate::ids::fnv1a_json(self.system_hash, &registered_names(blocks.as_ref()));
+        Ok(blocks)
+    }
+
     /// Merges the prefix's generated names into the authored-name map.
-    /// The registered position tries; their names take part in the system
-    /// hash, as keyframe names do.
-    pub fn set_position_tries(&mut self, json: Option<&str>) -> Result<(), String> {
-        self.position_try_blocks = parse_opt_value("positionTryJson", json)?;
-        self.system_hash = crate::ids::fnv1a_json(self.system_hash, &keyframe_names(self.position_try_blocks.as_ref()));
-        Ok(())
-    }
-
-    /// The registered view transitions; their names take part in the system
-    /// hash, as keyframe names do.
-    pub fn set_view_transitions(&mut self, json: Option<&str>) -> Result<(), String> {
-        self.view_transition_blocks = parse_opt_value("viewTransitionsJson", json)?;
-        self.system_hash =
-            crate::ids::fnv1a_json(self.system_hash, &keyframe_names(self.view_transition_blocks.as_ref()));
-        Ok(())
-    }
-
     pub fn set_generated_names(&mut self, json: Option<&str>) -> Result<(), String> {
         let Some(json) = json.map(str::trim).filter(|s| !s.is_empty() && *s != "null") else {
             return Ok(());
@@ -10428,55 +10432,29 @@ fn run_with_system_floor(
             ),
         });
     }
-    let keyframes_css_raw = if let Some(blocks) = &inputs.keyframes_blocks {
-        let css = crate::theme::resolve_all_keyframes_blocks(blocks, &resolve_ctx, &mut |name| {
-            let component = format!("keyframes '{name}'");
-            drain_dropped_style_keys(&dropped_keys, "system", &component, &[], &mut Vec::new(), &mut diagnostics);
-        });
-        drain_transform_failures(
-            &transform_failures,
-            "",
-            None,
-            None,
-            &mut diagnostics,
-            &mut deferred_errors,
-        );
-        drain_strict_token_misses(&token_misses, "system", "system", &mut diagnostics);
-        css
-    } else {
-        String::new()
-    };
-    let position_try_css_raw = if let Some(blocks) = &inputs.position_try_blocks {
-        let css = crate::theme::resolve_all_position_try_blocks(blocks, &resolve_ctx, &mut |name| {
-            let component = format!("position try '{name}'");
+    // Each registered collection's rules, after the global blocks; what one
+    // block's resolution reports is attributed to it by name.
+    let mut combined_global = global_css_raw;
+    let registered: [(&Option<Value>, crate::theme::BlockResolver, &str); 3] = [
+        (&inputs.keyframes_blocks, crate::theme::resolve_keyframes_block, "keyframes"),
+        (&inputs.position_try_blocks, crate::theme::resolve_position_try_block, "position try"),
+        (&inputs.view_transition_blocks, crate::theme::resolve_view_transition_block, "view transition"),
+    ];
+    for (blocks, resolve, kind) in registered {
+        let Some(blocks) = blocks else { continue };
+        let css = crate::theme::resolve_registered_blocks(blocks, &resolve_ctx, resolve, &mut |name| {
+            let component = format!("{kind} '{name}'");
             drain_dropped_style_keys(&dropped_keys, "system", &component, &[], &mut Vec::new(), &mut diagnostics);
         });
         drain_transform_failures(&transform_failures, "", None, None, &mut diagnostics, &mut deferred_errors);
         drain_strict_token_misses(&token_misses, "system", "system", &mut diagnostics);
-        css
-    } else {
-        String::new()
-    };
-    let view_transition_css_raw = if let Some(blocks) = &inputs.view_transition_blocks {
-        let css = crate::theme::resolve_all_view_transition_blocks(blocks, &resolve_ctx, &mut |name| {
-            let component = format!("view transition '{name}'");
-            drain_dropped_style_keys(&dropped_keys, "system", &component, &[], &mut Vec::new(), &mut diagnostics);
-        });
-        drain_transform_failures(&transform_failures, "", None, None, &mut diagnostics, &mut deferred_errors);
-        drain_strict_token_misses(&token_misses, "system", "system", &mut diagnostics);
-        css
-    } else {
-        String::new()
-    };
-    let mut combined_global = String::new();
-    for part in [&global_css_raw, &keyframes_css_raw, &position_try_css_raw, &view_transition_css_raw] {
-        if part.is_empty() {
+        if css.is_empty() {
             continue;
         }
         if !combined_global.is_empty() {
             combined_global.push('\n');
         }
-        combined_global.push_str(part);
+        combined_global.push_str(&css);
     }
     let runtime_asset_rule = runtime_assets.root_rule();
     if !runtime_asset_rule.is_empty() {

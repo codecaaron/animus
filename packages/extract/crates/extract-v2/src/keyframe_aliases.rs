@@ -30,7 +30,7 @@ pub struct RawAlias {
 impl KeyframeKeys {
     pub fn from_blocks(blocks: Option<&Value>) -> Self {
         let mut keys: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
-        for (collection, key, name) in crate::analyze_css::keyframe_names(blocks) {
+        for (collection, key, name) in crate::analyze_css::registered_names(blocks) {
             if let Some(name) = name {
                 keys.entry(key.to_string()).or_default().push((format!("{collection}.{key}"), name.to_string()));
             }

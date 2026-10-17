@@ -1159,14 +1159,12 @@ fn first_that_works_calls(program: &Program<'_>, module: &ModuleRecord<'_>, scop
             oxc::ast_visit::walk::walk_call_expression(self, call);
         }
     }
-    let mut scan = Scan { scoping, imports: FxHashSet::default(), found: BTreeSet::new() };
-    for import in collect_import_facts(module) {
-        if import.imported == "firstThatWorks" && is_animus_system_specifier(&import.source) {
-            if let Some(symbol) = scoping.get_root_binding(import.local.as_str().into()) {
-                scan.imports.insert(symbol);
-            }
-        }
-    }
+    let imports = module.import_entries.iter().filter(|entry| {
+        matches!(&entry.import_name, ImportImportName::Name(name) if name.name == "firstThatWorks")
+            && is_animus_system_specifier(&entry.module_request.name)
+    });
+    let imports = imports.filter_map(|entry| scoping.get_root_binding(entry.local_name.name.as_str().into())).collect();
+    let mut scan = Scan { scoping, imports, found: BTreeSet::new() };
     if !scan.imports.is_empty() {
         scan.visit_program(program);
     }

@@ -1770,13 +1770,9 @@ fn extract_vocabulary_record<'js>(
     return block;
   };
   return JSON.stringify({
-    keyframeCount: keyframes.length,
     keyframes: Object.fromEntries(keyframes.map((entry) => [entry.name, entry.frames])),
-    positionTryCount: positionTries.length,
     positionTries: Object.fromEntries(positionTries.map((entry) => [entry.name, entry.tries])),
-    viewTransitionCount: viewTransitions.length,
     viewTransitions: Object.fromEntries(viewTransitions.map((entry) => [entry.name, entry.transitions])),
-    globalStyleCount: globalStyles.length,
     globalStyles: Object.fromEntries(globalStyles.map((entry) => [entry.name, blockOf(entry)])),
     witnesses: collisions.concat(legacyVerbs),
   });
@@ -1802,43 +1798,22 @@ fn extract_vocabulary_record<'js>(
         return Err(format!("system vocabulary record invalid: {}", invalid));
     }
 
-    let count = parsed
-        .get("keyframeCount")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let keyframes_blocks = if count == 0 {
-        None
-    } else {
-        parsed
-            .get("keyframes")
-            .map(|v| serde_json::to_string(v).unwrap_or_default())
-    };
-    let global_style_count = parsed
-        .get("globalStyleCount")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let global_style_blocks = if global_style_count == 0 {
-        None
-    } else {
-        parsed
-            .get("globalStyles")
-            .map(|v| serde_json::to_string(v).unwrap_or_default())
-    };
     let vocabulary_witnesses = match parsed.get("witnesses").and_then(|v| v.as_array()) {
         Some(list) if !list.is_empty() => {
             Some(serde_json::to_string(list).unwrap_or_default())
         }
         _ => None,
     };
-    let collection = |count: &str, key: &str| {
-        let count = parsed.get(count).and_then(|v| v.as_u64()).unwrap_or(0);
-        (count > 0).then(|| parsed.get(key).map(|v| serde_json::to_string(v).unwrap_or_default())).flatten()
+    // A collection the record holds none of is absent.
+    let collection = |key: &str| {
+        let held = parsed.get(key).filter(|v| v.as_object().is_some_and(|entries| !entries.is_empty()))?;
+        Some(serde_json::to_string(held).unwrap_or_default())
     };
     Ok(VocabularyWires {
-        keyframes_blocks,
-        position_try_blocks: collection("positionTryCount", "positionTries"),
-        view_transition_blocks: collection("viewTransitionCount", "viewTransitions"),
-        global_style_blocks,
+        keyframes_blocks: collection("keyframes"),
+        position_try_blocks: collection("positionTries"),
+        view_transition_blocks: collection("viewTransitions"),
+        global_style_blocks: collection("globalStyles"),
         vocabulary_witnesses,
     })
 }

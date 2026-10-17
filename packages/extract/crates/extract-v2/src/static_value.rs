@@ -78,15 +78,20 @@ pub enum StaticValue {
     String(String),
     Array(Vec<StaticValue>),
     Object(Vec<(String, StaticValue)>),
-    /// A local bound to `@animus-ui/system`'s `asset`: evaluation calls it,
-    /// and no read takes it as a value. `in_project` says whether a relative
-    /// specifier may evaluate: in a package file it would resolve from the
-    /// wrong origin.
-    AssetFunction { in_project: bool },
-    /// A local bound to `@animus-ui/system`'s `firstThatWorks`: evaluation
-    /// calls it, and no read takes it as a value.
-    FirstThatWorksFunction,
+    /// A local bound to a function `@animus-ui/system` exports that
+    /// evaluation calls; no read takes it as a value.
+    SystemFunction(SystemFunction),
     Unevaluated(Unevaluated),
+}
+
+/// The `@animus-ui/system` functions evaluation calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SystemFunction {
+    /// `asset`. `in_project` says whether a relative specifier may
+    /// evaluate: in a package file it would resolve from the wrong origin.
+    Asset { in_project: bool },
+    /// `firstThatWorks`.
+    FirstThatWorks,
 }
 
 impl StaticValue {

@@ -518,8 +518,7 @@ fn object_like(value: &crate::static_value::StaticValue) -> bool {
         value,
         StaticValue::Object(_)
             | StaticValue::Array(_)
-            | StaticValue::AssetFunction { .. }
-            | StaticValue::FirstThatWorksFunction
+            | StaticValue::SystemFunction(_)
             | StaticValue::Unevaluated(_)
     )
 }
@@ -1008,10 +1007,7 @@ impl ExtractEngine {
             .set_property_records(o.property_records_json.as_deref())
             .map_err(napi::Error::from_reason)?;
         css_inputs
-            .set_position_tries(o.position_try_json.as_deref())
-            .map_err(napi::Error::from_reason)?;
-        css_inputs
-            .set_view_transitions(o.view_transitions_json.as_deref())
+            .set_registered_collections(o.position_try_json.as_deref(), o.view_transitions_json.as_deref())
             .map_err(napi::Error::from_reason)?;
         css_inputs
             .set_short_class_prefix(o.short_class_prefix.as_deref())
@@ -1329,7 +1325,7 @@ impl ExtractEngine {
         // transitions, by export name: each key's generated name. The kinds
         // share one name-space.
         let inputs = &self.opts.css_inputs;
-        let keyframes_registry: rustc_hash::FxHashMap<String, crate::static_value::StaticValue> =
+        let registered_collections: rustc_hash::FxHashMap<String, crate::static_value::StaticValue> =
             [&inputs.keyframes_blocks, &inputs.position_try_blocks, &inputs.view_transition_blocks]
                 .into_iter()
                 .flat_map(|blocks| blocks.as_ref().and_then(|v| v.as_object()).into_iter().flatten())
@@ -1402,7 +1398,7 @@ impl ExtractEngine {
                 // A registered collection, by the name the import's route
                 // reaches it by; routes naming different registrations name
                 // none.
-                let mut registered = spelled.iter().filter_map(|(_, name)| keyframes_registry.get(name));
+                let mut registered = spelled.iter().filter_map(|(_, name)| registered_collections.get(name));
                 let first = registered.next();
                 if let Some(kf) = first.filter(|kf| registered.all(|other| other == *kf)) {
                     extra.insert(imp.local.clone(), kf.clone());
@@ -1417,7 +1413,7 @@ impl ExtractEngine {
             }
             for exp in exports {
                 if let Some(local) = &exp.local {
-                    if let Some(kf) = keyframes_registry.get(&exp.exported) {
+                    if let Some(kf) = registered_collections.get(&exp.exported) {
                         extra.insert(local.clone(), kf.clone());
                         unsettled_extra.remove(local);
                         usage_extra.insert(local.clone(), kf.clone());

@@ -1,5 +1,4 @@
-import { Fallbacks } from './firstThatWorks';
-import { fnv1a } from './keyframes';
+import { fnv1a, type NamedRef, namedEntries, serializeBlock } from './named';
 
 import type { AbstractProps } from './types/props';
 
@@ -18,14 +17,10 @@ export type ViewTransitionSlots = {
   readonly [S in ViewTransitionSlot]?: AbstractProps;
 };
 
-/** Prints, and serializes, as the generated name. */
-export interface ViewTransitionRef<Name extends string> {
-  readonly __brand: 'ViewTransitionRef';
-  readonly __name: Name;
-  toString(): string;
-  valueOf(): string;
-  toJSON(): string;
-}
+export type ViewTransitionRef<Name extends string> = NamedRef<
+  'ViewTransitionRef',
+  Name
+>;
 
 export type ViewTransitions<Map extends Record<string, ViewTransitionSlots>> = {
   readonly __brand: 'ViewTransitions';
@@ -39,13 +34,6 @@ export type ViewTransitions<Map extends Record<string, ViewTransitionSlots>> = {
   readonly [K in keyof Map & string]: ViewTransitionRef<K>;
 };
 
-/** Slots as a string, nested blocks included; fallbacks print as their
- *  preferred member, as they apply without extraction. */
-const serializeSlots = (slots: ViewTransitionSlots): string =>
-  JSON.stringify(slots, (_key, value) =>
-    value instanceof Fallbacks ? String(value) : value
-  );
-
 /**
  * Each transition, a class named `animus-vt-{hash}` from its slots, with a
  * ref that prints as that class. A slot other than `group`, `imagePair`,
@@ -54,36 +42,27 @@ const serializeSlots = (slots: ViewTransitionSlots): string =>
 export function viewTransitions<
   Map extends Record<string, ViewTransitionSlots>,
 >(map: Map): ViewTransitions<Map> {
-  const transitions: Record<
-    string,
-    { name: string; slots: ViewTransitionSlots }
-  > = {};
-  const refs: Record<string, ViewTransitionRef<string>> = {};
-  for (const [key, slots] of Object.entries(map)) {
-    const rejected = Object.keys(slots).filter(
-      (slot) => !Object.hasOwn(VIEW_TRANSITION_SLOTS, slot)
-    );
-    if (rejected.length > 0) {
-      throw new TypeError(
-        `createViewTransitions: "${key}" sets ${rejected.join(', ')} — a ` +
-          'transition styles only its group, imagePair, old and new slots.'
+  const { entries, refs } = namedEntries(
+    map,
+    'ViewTransitionRef',
+    (key, slots: ViewTransitionSlots) => {
+      const rejected = Object.keys(slots).filter(
+        (slot) => !Object.hasOwn(VIEW_TRANSITION_SLOTS, slot)
       );
+      if (rejected.length > 0) {
+        throw new TypeError(
+          `createViewTransitions: "${key}" sets ${rejected.join(', ')} — a ` +
+            'transition styles only its group, imagePair, old and new slots.'
+        );
+      }
+      return { name: `animus-vt-${fnv1a(serializeBlock(slots))}`, slots };
     }
-    const name = `animus-vt-${fnv1a(serializeSlots(slots))}`;
-    transitions[key] = { name, slots };
-    refs[key] = {
-      __brand: 'ViewTransitionRef',
-      __name: key,
-      toString: () => name,
-      valueOf: () => name,
-      toJSON: () => name,
-    };
-  }
-  // SAFETY: `transitions` and `refs` hold exactly the keys of `map`, each
-  // entry built from that key's slots.
+  );
+  // SAFETY: `entries` and `refs` hold exactly the keys of `map`, each built
+  // from that key's slots.
   return {
     __brand: 'ViewTransitions' as const,
-    __transitions: transitions,
+    __transitions: entries,
     ...refs,
   } as ViewTransitions<Map>;
 }
