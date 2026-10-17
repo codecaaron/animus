@@ -356,6 +356,42 @@ A ref prints as its class, so `String(transitions.slide)` also names it
 where a framework takes a class, such as React's `<ViewTransition>`. Every
 registered transition emits, used or not.
 
+### Relative-state selectors
+
+`marker(name)` names a class to put on an element whose state styles
+another: an ancestor, a descendant or a sibling. Register its relations as
+selector aliases:
+
+```tsx
+import { createSystem, marker } from '@animus-ui/system';
+
+export const row = marker('row'); // row.className === 'animus-marker-row'
+
+const bundle = createSystem()
+  .addSelectors({
+    _rowHover: row.ancestor(':hover'),
+    _rowHasFocus: row.descendant(':focus-visible'),
+  })
+  .build();
+
+<tr className={row.className}>
+  <Cell _rowHover={{ opacity: 1 }} />
+</tr>;
+```
+
+| Relation               | Selector                                  |
+| ---------------------- | ----------------------------------------- |
+| `ancestor(':hover')`   | `&:where(.m:hover *)`                     |
+| `descendant(':hover')` | `&:where(:has(.m:hover))`                 |
+| `siblingBefore(...)`   | `&:where(.m:hover ~ *)`                   |
+| `siblingAfter(...)`    | `&:where(:has(~ .m:hover))`               |
+| `anySibling(...)`      | `&:where(.m:hover ~ *, :has(~ .m:hover))` |
+
+A state is a pseudo-class or an attribute selector (`[data-open]`). The
+marker sits inside `:where()`, so a relation adds no specificity beyond the
+component's class, and a state of the element itself, such as `_hover`,
+wins over a relative one. No `_group*` or `_peer*` aliases are built in.
+
 ## Color Modes
 
 `addColorModes(initialMode, modeConfig)` emits a `[data-color-mode="…"]` block

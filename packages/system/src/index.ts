@@ -18,6 +18,7 @@ export type {
 } from './viewTransition';
 export { asset, ASSET_PLACEHOLDER_PREFIX, type AssetRef } from './asset.js';
 export { firstThatWorks } from './firstThatWorks';
+export { marker, type Marker } from './marker';
 export { createComponent, renderAsChild } from './runtime';
 export {
   type ClassResolver,

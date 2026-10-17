@@ -1527,6 +1527,7 @@ fn non_sealing_function(name: &str) -> bool {
     matches!(
         name,
         "createTheme" | "createSystem" | "createTransform" | "createGlobalStyles" | "createKeyframes" | "compose" | "firstThatWorks"
+            | "marker"
     )
 }
 
