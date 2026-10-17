@@ -91,8 +91,10 @@ pub struct WrittenProp {
     pub at: u32,
 }
 
+/// A tag name JSX reads as a component, as `<_As>`, `<$As>` and `<Box>`
+/// are: any but a lowercase one, which names a host element.
 pub(crate) fn is_component_like_identifier(name: &str) -> bool {
-    name.chars().next().is_some_and(char::is_uppercase)
+    !name.is_empty() && !name.starts_with(|c: char| c.is_ascii_lowercase())
 }
 
 /// Whether `property` sets the object's prototype (`{ __proto__: base }`,

@@ -12428,12 +12428,14 @@ mod tests {
         assert_uncertain_identity_widens_and_retains(&out);
     }
 
-    /// Contract: a compiled automatic-runtime call over a component named
-    /// as no capitalized JSX tag is (`_As`, `$As`) renders something unseen
-    /// where it resolves to nothing.
+    /// Contract: a tag JSX reads as a component, whatever its spelling
+    /// (`<_As>`, `<$As>`), renders something unseen where it resolves to
+    /// nothing, written or compiled for the automatic runtime.
     #[test]
-    fn unresolved_compiled_component_of_any_spelling_widens_floor_and_retains_evaluated_components() {
+    fn unresolved_component_of_any_spelling_widens_floor_and_retains_evaluated_components() {
         for render in [
+            "export const App = ({ _As }) => <_As />;",
+            "export const App = ({ $As }) => <$As />;",
             "import { jsx } from 'react/jsx-runtime';\nexport const App = ({ _As }) => jsx(_As, {});",
             "import { jsx } from 'react/jsx-runtime';\nexport const App = ({ $As }) => jsx($As, {});",
         ] {
