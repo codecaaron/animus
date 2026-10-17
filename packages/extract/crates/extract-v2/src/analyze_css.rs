@@ -513,10 +513,13 @@ impl CssInputs {
         Ok(())
     }
 
-    /// One registered collection's option, its names folded into the hash.
+    /// One registered collection's option, its names folded into the hash
+    /// when it holds any: a system without one keeps its fingerprint.
     fn registered_collection(&mut self, option: &str, json: Option<&str>) -> Result<Option<Value>, String> {
         let blocks = parse_opt_value(option, json)?;
-        self.system_hash = crate::ids::fnv1a_json(self.system_hash, &registered_names(blocks.as_ref()));
+        if blocks.is_some() {
+            self.system_hash = crate::ids::fnv1a_json(self.system_hash, &registered_names(blocks.as_ref()));
+        }
         Ok(blocks)
     }
 
