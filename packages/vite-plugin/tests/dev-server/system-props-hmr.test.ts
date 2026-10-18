@@ -89,10 +89,11 @@ const suite = prerequisites.ok ? describe : describe.skip;
 // that only adds entries hot-updates without a reload, through a
 // non-accepting importer chain, and the map object components already hold
 // gains the entries. A generation that removes an entry, or any generation
-// of a project with a class resolver, is invalidated and reaches its
-// importers as it does without the boundary: a mounted component may hold
-// the removed entry's class, and an updated module may have called a
-// resolver before the map gained what it reads.
+// of a project with a class resolver that has system props, is invalidated
+// and reaches its importers as it does without the boundary: a mounted
+// component may hold the removed entry's class, and an updated module may
+// have called a resolver before the map gained what it reads. A resolver
+// with no system props is created without the map, so it changes nothing.
 suite('the system prop map in the browser dev server', () => {
   let fixture: DevFixture;
   let adapter: DevServerAdapter;
@@ -182,6 +183,41 @@ suite('the system prop map in the browser dev server', () => {
     expect(next.systemPropMap).toBe(held);
     expect(held.p).toHaveProperty(`${NEW_USAGE_STEP}`);
     expect(held.p).toHaveProperty(`${INITIAL_USAGE_STEP}`);
+  });
+
+  // geist's docs: their class resolvers style nothing through system props.
+  it('a class resolver with no system props leaves an added value in place', async () => {
+    fixture.write(
+      'src/Card.ts',
+      "import { ds } from './ds';\n\nexport const card = ds.styles({ display: 'block' }).asClass();\n"
+    );
+    await until(
+      async () =>
+        (await adapter.requestSource('src/Card.ts')).includes(
+          'createClassResolver'
+        ),
+      {
+        what: 'the class resolver analyzed',
+        describe: async () => renderTrace(adapter),
+      }
+    );
+    const data: HotData = {};
+    const first = hotStub(data);
+    const held = (
+      await evaluate(
+        await serve([INITIAL_USAGE_STEP, NEW_USAGE_STEP], NEW_USAGE_STEP),
+        first
+      )
+    ).systemPropMap;
+
+    const added = await evaluate(
+      await serve([INITIAL_USAGE_STEP, NEW_USAGE_STEP, 8], 8),
+      hotStub(data)
+    );
+    first.callbacks.forEach((callback) => callback(added));
+    expect(first.invalidated).toEqual([]);
+    expect(added.systemPropMap).toBe(held);
+    expect(held.p).toHaveProperty('8');
   });
 
   it('a removed utility value, or a class resolver, invalidates the update', async () => {

@@ -217,9 +217,9 @@ if (import.meta.hot) {
  * - one that removes or changes an entry, since a mounted component may
  *   hold that entry's class while nothing renders it again;
  * - one that changes anything but the map (a config, an export);
- * - any generation of a project with a class resolver (`asClass`), which an
- *   updated module may call as it evaluates, before this module adds the
- *   entries it reads.
+ * - any generation of a project with a class resolver (`asClass`) that has
+ *   system props, which an updated module may call as it evaluates, before
+ *   this module adds the entries it reads.
  * Server environments and builds are served the Session's module.
  */
 function hotSystemPropsSource(source: string, adoptable: boolean): string {
@@ -266,11 +266,15 @@ if (import.meta.hot) {
 `;
 }
 
-/** Whether a project resolves classes outside a render: a class resolver
- *  (`asClass`) can be called as its module evaluates. */
+/** Whether a project may resolve system props outside a render: a class
+ *  resolver (`asClass`) can be called as its module evaluates. One with no
+ *  system props is created without the map (the engine passes it only
+ *  where the component's system prop names are not empty), so it reads none
+ *  of it. */
 function resolvesOutsideRender(ctx: PluginContext): boolean {
   return Object.values(ctx.storedManifest?.components ?? {}).some(
-    (component) => component.terminal === 'asClass'
+    (component) =>
+      component.terminal === 'asClass' && component.system_prop_names.length > 0
   );
 }
 
