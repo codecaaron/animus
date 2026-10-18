@@ -435,6 +435,193 @@ function eachRule(css: string, visit: (rule: Rule) => [] | void): void {
   });
 }
 
+/** The pseudo-classes and pseudo-elements every browser that reads
+ *  `@layer`, and so any Animus sheet, supports unprefixed. */
+const BASELINE_PSEUDO_CLASSES = new Set([
+  'hover',
+  'active',
+  'focus',
+  'focus-visible',
+  'focus-within',
+  'visited',
+  'link',
+  'any-link',
+  'target',
+  'checked',
+  'indeterminate',
+  'default',
+  'disabled',
+  'enabled',
+  'required',
+  'optional',
+  'valid',
+  'invalid',
+  'in-range',
+  'out-of-range',
+  'read-only',
+  'read-write',
+  'placeholder-shown',
+  'defined',
+  'lang',
+  'root',
+  'empty',
+  'first-child',
+  'last-child',
+  'only-child',
+  'first-of-type',
+  'last-of-type',
+  'only-of-type',
+  'nth-child',
+  'nth-last-child',
+  'nth-of-type',
+  'nth-last-of-type',
+  'not',
+  'is',
+  'where',
+]);
+const BASELINE_PSEUDO_ELEMENTS = new Set([
+  'before',
+  'after',
+  'first-line',
+  'first-letter',
+  'placeholder',
+  'selection',
+  'marker',
+  'backdrop',
+  'file-selector-button',
+]);
+const BASELINE_COMBINATORS = new Set([
+  'child',
+  'descendant',
+  'next-sibling',
+  'later-sibling',
+]);
+
+/**
+ * Whether every browser that reads the sheet reads `selector`: a style
+ * rule's list is dropped whole where one of its selectors is unknown, so
+ * cutting an unknown selector out would apply the rest where it applied
+ * nowhere. Its parts are classes, ids, types, attributes, the universal
+ * selector, the four plain combinators, and the pseudo-classes and
+ * pseudo-elements above, unprefixed, with an `nth-…` taking no `of`.
+ */
+function baselineSelector(selector: Selector): boolean {
+  return selector.every((part) => {
+    switch (part.type) {
+      case 'class':
+      case 'id':
+      case 'type':
+      case 'attribute':
+      case 'universal':
+        return true;
+      case 'namespace':
+        return part.kind !== 'named';
+      case 'combinator':
+        return BASELINE_COMBINATORS.has(part.value);
+      case 'pseudo-class': {
+        const prefixed =
+          'vendorPrefix' in part &&
+          Array.isArray(part.vendorPrefix) &&
+          part.vendorPrefix.length > 0;
+        if (prefixed || !BASELINE_PSEUDO_CLASSES.has(part.kind)) return false;
+        if ('of' in part && part.of) return false;
+        return part.kind === 'not' ||
+          part.kind === 'is' ||
+          part.kind === 'where'
+          ? part.selectors.every((inner) => baselineSelector(inner))
+          : true;
+      }
+      case 'pseudo-element': {
+        const prefixed =
+          'vendorPrefix' in part &&
+          Array.isArray(part.vendorPrefix) &&
+          part.vendorPrefix.length > 0;
+        return !prefixed && BASELINE_PSEUDO_ELEMENTS.has(part.kind);
+      }
+      default:
+        return false;
+    }
+  });
+}
+
+/**
+ * Where each selector of the list of the style rule at `start` sits in
+ * `css`: from after the comma before it (or the rule's start) to the comma
+ * after it (or the `{` that opens the block), a comma counting only
+ * outside brackets, parentheses and literals. `null` where no block opens.
+ */
+function selectorSpans(
+  css: string,
+  start: number
+): Array<[number, number]> | null {
+  const spans: Array<[number, number]> = [];
+  let from = start;
+  let depth = 0;
+  for (let i = start; i < css.length; i++) {
+    const end = literalEnd(css, i);
+    if (end < 0) return null;
+    if (end !== i) {
+      i = end;
+      continue;
+    }
+    const c = css[i];
+    if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') depth--;
+    else if (depth === 0 && c === ',') {
+      spans.push([from, i]);
+      from = i + 1;
+    } else if (depth === 0 && c === '{') {
+      spans.push([from, i]);
+      return spans;
+    }
+  }
+  return null;
+}
+
+/**
+ * The dead selectors of a style rule some of whose selectors need no
+ * removed class: each that needs one (`needs`), is read by every browser
+ * that reads the sheet, and holds no `&`. Returns the text to cut, each
+ * run of dead selectors with the comma that joins it to the list, the
+ * selectors left, and the removed classes the cut ones need. `null` where
+ * none goes, or the list does not read as one span per selector.
+ */
+function deadBranches(
+  css: string,
+  start: number,
+  selectors: Selector[],
+  needs: string[][]
+): { cuts: Array<[number, number]>; live: Selector[]; gone: string[] } | null {
+  const dead = selectors.map(
+    (selector, index) =>
+      needs[index]!.length > 0 &&
+      baselineSelector(selector) &&
+      !selector.some((part) => part.type === 'nesting')
+  );
+  if (!dead.includes(true) || dead.every(Boolean)) return null;
+  const spans = selectorSpans(css, start);
+  if (spans === null || spans.length !== selectors.length) return null;
+  const cuts: Array<[number, number]> = [];
+  for (let a = 0; a < dead.length; a++) {
+    if (!dead[a]) continue;
+    let b = a;
+    while (b + 1 < dead.length && dead[b + 1]) b++;
+    // A run before a live selector goes with the comma after it; a run
+    // ending the list, with the comma before it.
+    cuts.push(
+      b + 1 < spans.length
+        ? [spans[a]![0], spans[b + 1]![0]]
+        : [spans[a - 1]![1], spans[b]![1]]
+    );
+    a = b;
+  }
+  return {
+    cuts,
+    live: selectors.filter((_, index) => !dead[index]),
+    gone: needs.filter((_, index) => dead[index]).flat(),
+  };
+}
+
 /**
  * `css` without each rule all of whose selectors need an element carrying
  * one of `classes` (or a class derived from one, `{class}--…`), and without
@@ -521,25 +708,55 @@ export function removeComponentRules(
         return null;
     }
   };
+  const offsetOf = ({ line, column }: { line: number; column: number }) =>
+    (starts[line] ?? Number.NaN) + column - 1;
   const cutStarts: number[] = [];
+  // The text cut out of a kept rule's selector list: its dead selectors.
+  const branchCuts: Array<[number, number]> = [];
+  // Style rules nested in a style rule, whose lists removal leaves whole.
+  const nestedStyles = new Set<number>();
   const keys: string[] = [];
   eachRule(css, (rule) => {
     const dropped = drops(rule);
     if (dropped !== null) {
-      const { line, column } = dropped.loc;
-      cutStarts.push((starts[line] ?? Number.NaN) + column - 1);
+      cutStarts.push(offsetOf(dropped.loc));
       for (const name of dropped.gone) went.add(name);
       return [];
     }
     const children = childRules(rule).filter((child) => drops(child) === null);
-    keys.push(ruleKey(rule, children.length));
-    if (rule.type !== 'style') return;
-    const needs = needsOf(rule.value.selectors);
+    if (rule.type !== 'style') {
+      keys.push(ruleKey(rule, children.length));
+      return;
+    }
+    for (const child of rule.value.rules ?? []) {
+      if (child.type === 'style') nestedStyles.add(offsetOf(child.value.loc));
+    }
+    const start = offsetOf(rule.value.loc);
+    const branches =
+      (rule.value.rules ?? []).length === 0 && !nestedStyles.has(start)
+        ? deadBranches(
+            css,
+            start,
+            rule.value.selectors,
+            needsOf(rule.value.selectors)
+          )
+        : null;
+    let selectors = rule.value.selectors;
+    if (branches !== null) {
+      branchCuts.push(...branches.cuts);
+      for (const name of branches.gone) went.add(name);
+      selectors = branches.live;
+    }
+    // A cut list must read back as exactly its live selectors.
+    keys.push(
+      ruleKey({ ...rule, value: { ...rule.value, selectors } }, children.length)
+    );
+    const needs = needsOf(selectors);
     const needed = new Set(needs.flat());
     // Every selector needing a removed class, the rule stayed for a rule
     // nested in it.
     const nested = everyNeeds(needs);
-    for (const selector of rule.value.selectors) {
+    for (const selector of selectors) {
       eachClass(selector, (name) => {
         const stem = classStem(name);
         if (!classes.has(stem)) return;
@@ -551,7 +768,9 @@ export function removeComponentRules(
       });
     }
   });
-  if (cutStarts.length === 0) return { css: null, went, kept, refused: null };
+  if (cutStarts.length === 0 && branchCuts.length === 0) {
+    return { css: null, went, kept, refused: null };
+  }
   // Nothing goes from a sheet that stays whole.
   const refuse = (why: string): RuleRemoval => ({
     css: null,
@@ -564,18 +783,25 @@ export function removeComponentRules(
       'it declares its encoding (a byte-order mark or @charset), which cutting rules could change'
     );
   }
-  let trimmed = '';
-  let from = 0;
-  for (const start of cutStarts.sort((a, b) => a - b)) {
+  const cuts: Array<[number, number]> = [...branchCuts];
+  for (const start of cutStarts) {
     const end = ruleEnd(css, start);
     if (end < 0) return refuse('a removed rule does not end where it should');
+    cuts.push([start, end]);
+  }
+  cuts.sort((a, b) => a[0] - b[0]);
+  let trimmed = '';
+  let from = 0;
+  for (const [start, end] of cuts) {
+    if (start < from) return refuse('two of its cuts overlap');
     trimmed += css.slice(from, start);
     from = end;
   }
   trimmed += css.slice(from);
   // The trimmed sheet must read as the same rules, each holding the same
-  // number, in the same order, less those cut: a cut that ended anywhere
-  // else changed a rule kept.
+  // number, in the same order, less those cut, and each cut list as its
+  // live selectors alone: a cut that ended anywhere else changed a rule
+  // kept.
   const after: string[] = [];
   try {
     eachRule(trimmed, (rule) => {

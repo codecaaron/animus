@@ -27,9 +27,10 @@ describe('removeComponentRules', () => {
   // carrying a removed component's class, or a class derived from it, outside
   // a pseudo-class's argument or in an `:is()` or `:where()` every
   // alternative of which requires one; a class inside `:not()` or `:has()`
-  // requires nothing, and every other rule, keyframes included, stays whole.
-  // A class counts as gone only where one of its rules went, and a kept rule
-  // naming it says why it stayed, in a pseudo's argument (`:host()`) too.
+  // requires nothing, and every other rule, keyframes included, stays. A
+  // list keeps its other selectors. A class counts as gone only where one of
+  // its rules or selectors went, and a kept rule naming it says why it
+  // stayed, in a pseudo's argument (`:host()`) too.
   test('removes only the rules every selector of which needs a removed class', () => {
     const css = [
       '@layer anm-base{.dead{color:red}.live{color:blue}:where(.dead){margin:0}}',
@@ -51,7 +52,7 @@ describe('removeComponentRules', () => {
     for (const stays of [
       '.live{color:blue}',
       '.live--size-sm{padding:2px}',
-      '.dead,.live{order:1}',
+      '.live{order:1}',
       '.live:not(.dead){gap:1px}',
       ':is(.dead,.live) span{gap:2px}',
       '.live:has(.dead){gap:4px}',
@@ -64,11 +65,57 @@ describe('removeComponentRules', () => {
     }
     expect([...went]).toEqual(['dead']);
     expect(Object.fromEntries(kept)).toEqual({
-      dead: 'shared-list',
+      dead: 'conditional',
       cond: 'conditional',
       hosted: 'conditional',
     });
     expect(removeComponentRules(css, new Set(['other'])).css).toBeNull();
+  });
+
+  // Contract: a kept selector in a mixed list survives removal byte for
+  // byte. Each selector that needs a removed class goes from its list with
+  // the comma that joins it; the selectors left, their order, spacing and
+  // the declarations stay exactly as written, at the start, middle and end
+  // of a list, past a comma in a string, an attribute or an `:is()`. A
+  // selector some browser may not read stays, since a list is dropped whole
+  // where one selector is unknown and cutting it would apply the rest; so
+  // does every selector of a rule holding nested rules, and one with `&`.
+  test('a kept selector in a mixed list survives removal byte for byte', () => {
+    const dead = new Set(['dead', 'gone']);
+    const cut = (css: string) => removeComponentRules(css, dead).css;
+    expect(cut('.dead,.live{a:1}')).toBe('.live{a:1}');
+    expect(cut('.live,.dead{a:1}')).toBe('.live{a:1}');
+    expect(cut('.a,.dead,.gone:hover,.b{a:1}')).toBe('.a,.b{a:1}');
+    expect(cut('.dead , .live > p , .gone::after {a:1}')).toBe(
+      ' .live > p {a:1}'
+    );
+    expect(cut('[data-x="a,b"].live,.dead{a:1}')).toBe(
+      '[data-x="a,b"].live{a:1}'
+    );
+    expect(cut(':is(.x,.y) .live,.dead .z{a:1}')).toBe(':is(.x,.y) .live{a:1}');
+    expect(
+      cut(
+        '@layer l{@media (min-width:1px){.live:focus-visible,.dead:focus-visible{a:1}}}'
+      )
+    ).toBe('@layer l{@media (min-width:1px){.live:focus-visible{a:1}}}');
+    // Selectors some browser may not read, and lists removal leaves whole.
+    for (const whole of [
+      '.live,.dead:has(.x){a:1}',
+      '.live,.dead::-webkit-scrollbar{a:1}',
+      '.live,.dead:-moz-focusring{a:1}',
+      '.live,.dead:user-invalid{a:1}',
+      '.live,.dead:nth-child(2 of .x){a:1}',
+      '.live,.dead{a:1;&:hover{b:2}}',
+      '.p{.live,.dead{a:1}}',
+    ]) {
+      expect(cut(whole), whole).toBeNull();
+    }
+    const { went, kept } = removeComponentRules(
+      '.dead,.live{a:1}.gone:has(.x),.live{b:2}',
+      dead
+    );
+    expect([...went]).toEqual(['dead']);
+    expect(Object.fromEntries(kept)).toEqual({ gone: 'shared-list' });
   });
 
   // Contract: a `@media`, `@supports` or `@container` rule removal empties
