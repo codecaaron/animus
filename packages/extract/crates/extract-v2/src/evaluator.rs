@@ -3,9 +3,10 @@
 
 use std::cell::RefCell;
 use std::fmt;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use animus_system_loader::executor::Realm;
-use rquickjs::Function;
+use rquickjs::{qjs, Ctx, FromJs, Function};
 use rustc_hash::FxHashMap;
 use serde_json::Value;
 
@@ -147,8 +148,9 @@ pub struct Scalar {
 /// realm before the callable compiles, so it closes over pristine
 /// intrinsics. A finite number comes back wrapped as `['' + r]`, so its type
 /// survives.
-fn harness_source() -> String {
-    format!(
+fn harness_source() -> &'static str {
+    static SOURCE: OnceLock<String> = OnceLock::new();
+    SOURCE.get_or_init(|| format!(
         "(() => {{\n\
            const isArray = Array.isArray;\n\
            return (fn, value) => {{\n\
@@ -166,7 +168,7 @@ fn harness_source() -> String {
              throw '{INVALID_RESULT_PREFIX}' + d;\n\
            }};\n\
          }})()"
-    )
+    ))
 }
 
 impl TransformEvaluator {
@@ -245,9 +247,9 @@ fn evaluate_in_fresh_realm(source: &str, name: &str, js_arg: &str) -> Result<Sca
     let mut touched_host = false;
     let outcome = realm.with(|ctx| {
         let fail = |e: rquickjs::Error| classify_eval_error(&ctx, name, &e);
-        let harness: Function = ctx.eval(harness_source().as_bytes()).map_err(fail)?;
-        let touched: Function = ctx.eval(HOST_GUARD.as_bytes()).map_err(fail)?;
-        let callable: Function = ctx.eval(isolated_script(source).as_bytes()).map_err(fail)?;
+        let harness: Function = eval_compiled(&ctx, harness_source()).map_err(fail)?;
+        let touched: Function = eval_compiled(&ctx, HOST_GUARD).map_err(fail)?;
+        let callable: Function = eval_compiled(&ctx, &isolated_script(source)).map_err(fail)?;
         let argument: rquickjs::Value = ctx.eval(format!("({js_arg})").as_bytes()).map_err(fail)?;
         let result = harness.call::<_, rquickjs::Value>((callable, argument)).map_err(fail);
         // Read after the callback's own exception is taken.
@@ -264,6 +266,84 @@ fn evaluate_in_fresh_realm(source: &str, name: &str, js_arg: &str) -> Result<Sca
         Err(_) if realm.exhausted() => Err(EvalError::Unevaluable),
         outcome => outcome,
     }
+}
+
+/// Each script an evaluation runs, compiled once to QuickJS bytecode: every
+/// fresh realm reads the bytecode instead of parsing the text again. A script
+/// that does not compile keeps no bytecode, so its realm evaluates the text
+/// and fails as it always did.
+fn compiled(script: &str) -> Option<Arc<[u8]>> {
+    type Compiled = FxHashMap<String, Option<Arc<[u8]>>>;
+    static COMPILED: OnceLock<Mutex<Compiled>> = OnceLock::new();
+    let cache = COMPILED.get_or_init(Default::default);
+    if let Some(bytecode) = cache.lock().expect("bytecode cache lock").get(script) {
+        return bytecode.clone();
+    }
+    let bytecode = compile(script);
+    cache.lock().expect("bytecode cache lock").insert(script.to_string(), bytecode.clone());
+    bytecode
+}
+
+/// The flags and file name `Ctx::eval` compiles a script with: global code,
+/// strict.
+const EVAL_FLAGS: u32 = qjs::JS_EVAL_TYPE_GLOBAL | qjs::JS_EVAL_FLAG_STRICT;
+const EVAL_FILE: &std::ffi::CStr = c"eval_script";
+
+fn compile(script: &str) -> Option<Arc<[u8]>> {
+    let source = std::ffi::CString::new(script).ok()?;
+    let realm = Realm::fresh(None).ok()?;
+    realm.with(|ctx| {
+        let raw = ctx.as_raw().as_ptr();
+        // SAFETY: `raw` is this realm's live context, `source` a
+        // NUL-terminated buffer of `script.len()` bytes, as `Ctx::eval` hands
+        // QuickJS; every value made here is freed before the realm drops.
+        unsafe {
+            let function = qjs::JS_Eval(
+                raw,
+                source.as_ptr(),
+                script.len() as _,
+                EVAL_FILE.as_ptr(),
+                (EVAL_FLAGS | qjs::JS_EVAL_FLAG_COMPILE_ONLY) as i32,
+            );
+            if qjs::JS_IsException(function) {
+                let _ = ctx.catch();
+                return None;
+            }
+            let mut length = 0;
+            let buffer = qjs::JS_WriteObject(raw, &mut length, function, qjs::JS_WRITE_OBJ_BYTECODE as i32);
+            qjs::JS_FreeValue(raw, function);
+            if buffer.is_null() {
+                let _ = ctx.catch();
+                return None;
+            }
+            let bytecode: Arc<[u8]> = std::slice::from_raw_parts(buffer, length as usize).into();
+            qjs::js_free(raw, buffer.cast());
+            Some(bytecode)
+        }
+    })
+}
+
+/// `ctx.eval(script)`, from the script's bytecode where it compiled.
+fn eval_compiled<'js, V: FromJs<'js>>(ctx: &Ctx<'js>, script: &str) -> rquickjs::Result<V> {
+    let Some(bytecode) = compiled(script) else {
+        return ctx.eval(script.as_bytes());
+    };
+    let raw = ctx.as_raw().as_ptr();
+    // SAFETY: the bytecode is QuickJS's own serialization of `script`,
+    // written by this build's QuickJS; JS_ReadObject copies it, and
+    // JS_EvalFunction takes ownership of the function it reads.
+    let value = unsafe {
+        let function = qjs::JS_ReadObject(raw, bytecode.as_ptr(), bytecode.len() as _, qjs::JS_READ_OBJ_BYTECODE as i32);
+        if qjs::JS_IsException(function) {
+            return Err(rquickjs::Error::Exception);
+        }
+        let value = qjs::JS_EvalFunction(raw, function);
+        if qjs::JS_IsException(value) {
+            return Err(rquickjs::Error::Exception);
+        }
+        rquickjs::Value::from_raw(ctx.clone(), value)
+    };
+    V::from_js(ctx, value)
 }
 
 /// Run in an isolated realm before the callback compiles: every way to the
