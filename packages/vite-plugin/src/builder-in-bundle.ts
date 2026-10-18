@@ -59,11 +59,18 @@ export function reportShippedBuilder(
     const ownedBySystem = (id: string) => owners.of(id) === SYSTEM_PACKAGE;
     diagnostics = Object.values(bundle).flatMap((file) => {
       if (file.type !== 'chunk') return [];
-      const builder = Object.entries(file.modules).find(
-        ([id, rendered]) =>
-          rendered.renderedExports.some((name) => BUILDER_EXPORTS.has(name)) &&
-          ownedBySystem(id)
-      )?.[0];
+      // The builder exports the chunk renders, from every module of the
+      // system package that renders one, and the first such module.
+      const rendered = new Set<string>();
+      let builder: string | undefined;
+      for (const [id, module] of Object.entries(file.modules)) {
+        const names = module.renderedExports.filter((name) =>
+          BUILDER_EXPORTS.has(name)
+        );
+        if (names.length === 0 || !ownedBySystem(id)) continue;
+        builder ??= id;
+        for (const name of names) rendered.add(name);
+      }
       if (builder === undefined) return [];
       const chain = importChain(builder, moduleInfo).filter(
         (id) => !ownedBySystem(id)
@@ -71,7 +78,12 @@ export function reportShippedBuilder(
       return [
         systemBuilderShippedDiagnostic(
           file.fileName,
-          chain.map((id) => relative(ctx.rootDir, id))
+          chain.map((id) => relative(ctx.rootDir, id)),
+          {
+            system:
+              rendered.has('createSystem') || rendered.has('SystemBuilder'),
+            theme: rendered.has('createTheme') || rendered.has('ThemeBuilder'),
+          }
         ),
       ];
     });

@@ -388,20 +388,38 @@ export function unreadableDiscoveryPathDiagnostic<Thrown>(
   };
 }
 
-/** `chunk` ships the system builder; `importers` is the shortest import
- *  chain from an entry to `@animus-ui/system`, its first module the one
- *  that reads the system at runtime. Informational: an app that reads its
- *  system at runtime ships the builder by design. */
+/** Which of `@animus-ui/system`'s builders a chunk renders. */
+export interface ShippedBuilders {
+  /** `createSystem`, the system builder. */
+  readonly system: boolean;
+  /** `createTheme`, the theme builder. */
+  readonly theme: boolean;
+}
+
+/** `chunk` ships `builders`; `importers` is the shortest import chain from
+ *  an entry to the module that holds them, which shows how the bundle
+ *  reaches it, not which read keeps it. Informational: an app that reads
+ *  its system or theme at runtime ships its builder by design. */
 export function systemBuilderShippedDiagnostic(
   chunk: string,
-  importers: readonly string[]
+  importers: readonly string[],
+  builders: ShippedBuilders = { system: true, theme: true }
 ): ManifestDiagnostic {
-  const via = importers.length > 0 ? ` through ${importers.join(' → ')}` : '';
+  const what =
+    builders.system && builders.theme
+      ? "the system and theme builders (@animus-ui/system's createSystem and createTheme)"
+      : builders.system
+        ? "the system builder (@animus-ui/system's createSystem)"
+        : "the theme builder (@animus-ui/system's createTheme)";
+  const via =
+    importers.length > 0
+      ? ` It is reached through ${importers.join(' → ')}: one import path to it, not necessarily the read that keeps it.`
+      : '';
   return {
     file: chunk,
     component: 'bundle',
     kind: 'info',
-    message: `ships the system builder (@animus-ui/system's createSystem and createTheme)${via}. A client build drops it only where no runtime code imports a module that builds the system, and that module's package declares "sideEffects" truthfully (false, or a list of the files that have side effects); to keep it out, import what runtime code reads from a module that does not build the system`,
+    message: `ships ${what}.${via} A client build drops a builder only where no runtime code reads a value it builds, and the module that builds that value declares "sideEffects" truthfully (false, or a list of the files that have side effects); to keep it out, import what runtime code reads from a module that does not build it`,
     code: SYSTEM_BUILDER_SHIPPED,
     severity: severityFor(SYSTEM_BUILDER_SHIPPED),
   };

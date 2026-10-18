@@ -129,7 +129,7 @@ suite('a production client build and the system builder', () => {
 
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(
-      /ℹ \S+\.js: bundle: ships the system builder .* through src\/main\.ts → src\/ds\.ts\./
+      /ℹ \S+\.js: bundle: ships the system builder \(@animus-ui\/system's createSystem\)\. It is reached through src\/main\.ts → src\/ds\.ts: /
     );
   });
 
@@ -164,7 +164,9 @@ suite('a production client build and the system builder', () => {
     });
 
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/through src\/main\.ts → src\/kit\/index\.ts\./);
+    expect(lines[0]).toMatch(
+      /ships the theme builder .* reached through src\/main\.ts → src\/kit\/index\.ts: /
+    );
   });
 
   it('reports the builder of a system package resolved to its source', async () => {
@@ -179,6 +181,29 @@ suite('a production client build and the system builder', () => {
     });
 
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/through src\/main\.ts → src\/ds\.ts\./);
+    expect(lines[0]).toMatch(
+      /ships the system builder .* reached through src\/main\.ts → src\/ds\.ts: /
+    );
+  });
+
+  // Contract: the record names the builders the chunk renders: the system
+  // builder, the theme builder, or both.
+  it('names the theme builder alone where only a theme is read', async () => {
+    const themeOnly = await buildLog({
+      runtimeRead:
+        "import { tokens } from './theme';\n\nObject.assign(globalThis, { tokens });",
+    });
+    expect(themeOnly).toHaveLength(1);
+    expect(themeOnly[0]).toMatch(
+      /ships the theme builder \(@animus-ui\/system's createTheme\)\. It is reached through src\/main\.ts → src\/theme\.ts: /
+    );
+
+    const both = await buildLog({
+      runtimeRead: `${READS_SYSTEM}\nimport { tokens } from './theme';\n\nObject.assign(globalThis, { tokens });`,
+    });
+    expect(both).toHaveLength(1);
+    expect(both[0]).toMatch(
+      /ships the system and theme builders \(@animus-ui\/system's createSystem and createTheme\)\./
+    );
   });
 });
