@@ -67,15 +67,11 @@ type Registry = {
   transforms: Record<string, (value: number) => string>;
 };
 
-/** Vite's hot-context prelude, which imports the browser's Vite client. */
-const HOT_CONTEXT_PRELUDE =
-  /^import \{ createHotContext as __vite__createHotContext \} from "\/@vite\/client";import\.meta\.hot = __vite__createHotContext\([^)]*\);/;
-
-/** The served registry module, evaluated as the browser would, less the
- *  hot context only a browser's Vite client supplies. */
+/** The served registry module, evaluated as the browser would. */
 async function registryOf(served: DevArtifacts): Promise<Registry> {
-  const source = served.systemProps.replace(HOT_CONTEXT_PRELUDE, '');
-  return import(`data:text/javascript,${encodeURIComponent(source)}`);
+  return import(
+    `data:text/javascript,${encodeURIComponent(served.systemProps)}`
+  );
 }
 
 /** The runtime result of the binding `prop` resolves through. */

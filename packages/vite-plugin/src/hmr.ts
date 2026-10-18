@@ -12,7 +12,6 @@ import { invalidateFileModules } from './module-invalidation';
 import { reconcileSourceCorpus } from './rediscovery';
 import { applyPublished, changesOf, mergePublished } from './session-outcomes';
 import { applyDevBridgeImport, extendingFiles } from './transform';
-import { systemPropsAdoptable, systemPropsDelivery } from './virtual-modules';
 
 import type { ObservedOutcome, PluginContext } from './context';
 import type { HotUpdateResult } from './hot-update-events';
@@ -359,14 +358,6 @@ function invalidateStaleModules(
     const mod = graph.getModuleById(moduleId);
     if (mod) {
       graph.invalidateModule(mod);
-      // A map generation that may not be taken in place reaches its
-      // importers now. Vite reads the boundary from the generation served
-      // before, so one that had it would take a hot step first, and its
-      // callback's invalidate would then be ignored, since the generation
-      // now served accepts nothing.
-      if (moduleId === RESOLVED_SYSTEM_PROPS_ID && !systemPropsAdoptable(ctx)) {
-        mod.isSelfAccepting = false;
-      }
       modulesToUpdate.push(mod);
     }
   }
@@ -404,15 +395,11 @@ function invalidateStaleModules(
 
   const added = modulesToUpdate.slice(modules.length);
   if (added.length > 0) {
-    // As the plugin's isClient: a host without environments builds only the
-    // browser's.
-    const client = (environment.config?.consumer ?? 'client') === 'client';
     const named = added.map((mod) => {
       if (mod.id === RESOLVED_COMPONENTS_ID) return 'components.js';
+      // The map module accepts nothing: its update reaches its importers.
       if (mod.id === RESOLVED_SYSTEM_PROPS_ID) {
-        return client
-          ? `system-props ${systemPropsDelivery(ctx)}`
-          : 'system-props';
+        return 'system-props to its importers';
       }
       return `${relative(ctx.rootDir, mod.file ?? mod.id ?? '')} (re-delivered)`;
     });

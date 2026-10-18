@@ -18,59 +18,6 @@ const NEW_USAGE_STEP = 16;
 
 const SYSTEM_PROPS_URL = 'virtual:animus/system-props';
 
-/** Vite's hot-context prelude, which imports the browser's Vite client. */
-const HOT_CONTEXT_PRELUDE =
-  /^import \{ createHotContext as __vite__createHotContext \} from "\/@vite\/client";import\.meta\.hot = __vite__createHotContext\([^)]*\);/;
-
-type SystemPropMap = Record<string, Record<string, string>>;
-
-/** What the tests read of an evaluated generation. */
-interface Generation {
-  systemPropMap: SystemPropMap;
-}
-
-/** What the served module keeps across its generations. */
-interface HotData {
-  animusSystemProps?: { signature: string; map: SystemPropMap };
-}
-
-/** A generation's hot context, as Vite's client gives each one: its own
- *  callbacks, and the data every generation of the module shares. */
-interface HotStub {
-  data: HotData;
-  callbacks: Array<(next: Generation) => void>;
-  invalidated: string[];
-  accept(callback: (next: Generation) => void): void;
-  invalidate(message: string): void;
-}
-
-function hotStub(data: HotData): HotStub {
-  const stub: HotStub = {
-    data,
-    callbacks: [],
-    invalidated: [],
-    accept: (callback) => stub.callbacks.push(callback),
-    invalidate: (message) => stub.invalidated.push(message),
-  };
-  return stub;
-}
-
-declare global {
-  /** Each evaluated generation's hot context, by its evaluation index. */
-  var __animusTestHot: HotStub[] | undefined;
-}
-
-/** Evaluates a served generation with `hot` as its `import.meta.hot`. */
-async function evaluate(served: string, hot: HotStub): Promise<Generation> {
-  globalThis.__animusTestHot ??= [];
-  const index = globalThis.__animusTestHot.push(hot) - 1;
-  const source = served.replace(
-    HOT_CONTEXT_PRELUDE,
-    `import.meta.hot = globalThis.__animusTestHot[${index}];`
-  );
-  return import(`data:text/javascript,${encodeURIComponent(source)}`);
-}
-
 const usage = (steps: number[]) =>
   `import { Box } from './Box';\n\nexport const App = () => <>${steps
     .map((step) => `<Box p={${step}} />`)
@@ -85,47 +32,18 @@ it('system-props HMR prerequisites are materialized', (context) => {
 
 const suite = prerequisites.ok ? describe : describe.skip;
 
-// Contract: in the browser dev server, a generation of the system prop map
-// that only adds entries hot-updates without a reload, through a
-// non-accepting importer chain, and the map object components already hold
-// gains the entries. A generation that removes an entry is invalidated and
-// reaches its importers as it does without the boundary: a mounted
-// component may hold the removed entry's class. A project with a class
-// resolver that has system props is served without the boundary, so its
-// updates reach importers at once, with no hot step first: an updated module
-// may have called a resolver before the map gained what it reads. A resolver
-// with no system props is created without the map, so it changes nothing.
+// Contract: in the browser dev server the system prop map module accepts no
+// update of its own: a new utility value reaches the client as an update of
+// the map's importers, here a reload, since the map's importer reaches the
+// entry through a router object that accepts nothing. Taking the map in
+// place re-stamped its stateful importers, so an edited module re-imported a
+// provider under consumers that kept the old one.
 suite('the system prop map in the browser dev server', () => {
   let fixture: DevFixture;
   let adapter: DevServerAdapter;
 
   const updatesSince = (mark: number): string[] =>
     adapter.hotUpdatePaths!().slice(mark);
-
-  /** Writes the usage site and waits for the map it mints. */
-  async function serve(steps: number[], present: number, absent?: number) {
-    const write = () => fixture.write('src/Usage.tsx', usage(steps));
-    write();
-    return until(
-      async () => {
-        const served = (await adapter.read()).systemProps;
-        const map = /export const systemPropMap = .*$/m.exec(served)?.[0] ?? '';
-        return map.includes(`"${present}"`) &&
-          (absent === undefined || !map.includes(`"${absent}"`))
-          ? served
-          : false;
-      },
-      {
-        what: `the map serving p=${present}${absent === undefined ? '' : ` and not p=${absent}`}`,
-        // Each scenario writes this file right after the last one's event,
-        // inside chokidar's 50ms per-path change throttle, which drops the
-        // write outright where the watcher reports each one (Linux inotify).
-        reassert: write,
-        describe: async () =>
-          `${(await adapter.read()).systemProps}${renderTrace(adapter)}`,
-      }
-    );
-  }
 
   beforeAll(async () => {
     fixture = createDevFixture();
@@ -154,120 +72,32 @@ suite('the system prop map in the browser dev server', () => {
     fixture?.dispose();
   });
 
-  it('an added utility value updates the held map without a reload', async () => {
-    const data: HotData = {};
-    const first = hotStub(data);
-    const held = (await evaluate((await adapter.read()).systemProps, first))
-      .systemPropMap;
-    expect(held.p).toHaveProperty(`${INITIAL_USAGE_STEP}`);
+  it("a new utility value reaches the map's importers, not the map alone", async () => {
+    const before = await adapter.read();
+    expect(before.systemProps).toContain(`"${INITIAL_USAGE_STEP}"`);
+    expect(before.systemProps).not.toContain('import.meta.hot');
     const mark = adapter.hotUpdatePaths!().length;
 
     // The first step stays used, so the map only gains the new one.
-    const served = await serve(
-      [INITIAL_USAGE_STEP, NEW_USAGE_STEP],
-      NEW_USAGE_STEP
-    );
+    const write = () =>
+      fixture.write(
+        'src/Usage.tsx',
+        usage([INITIAL_USAGE_STEP, NEW_USAGE_STEP])
+      );
+    write();
     await until(
       async () =>
-        updatesSince(mark).some((path) => path.includes(SYSTEM_PROPS_URL)),
+        (await adapter.read()).systemProps.includes(`"${NEW_USAGE_STEP}"`) &&
+        updatesSince(mark).includes('full-reload'),
       {
-        what: 'the map delivered as an update',
+        what: `the map's p=${NEW_USAGE_STEP} utility, delivered by a reload`,
+        // A write right after the last event lands inside chokidar's 50ms
+        // per-path change throttle, which drops it on Linux.
+        reassert: write,
         describe: async () =>
           `payloads since mark: ${JSON.stringify(updatesSince(mark))}${renderTrace(adapter)}`,
       }
     );
-    expect(updatesSince(mark)).not.toContain('full-reload');
-
-    const next = await evaluate(served, hotStub(data));
-    first.callbacks.forEach((callback) => callback(next));
-    expect(first.invalidated).toEqual([]);
-    expect(next.systemPropMap).toBe(held);
-    expect(held.p).toHaveProperty(`${NEW_USAGE_STEP}`);
-    expect(held.p).toHaveProperty(`${INITIAL_USAGE_STEP}`);
-  });
-
-  // geist's docs: their class resolvers style nothing through system props.
-  it('a class resolver with no system props leaves an added value in place', async () => {
-    fixture.write(
-      'src/Card.ts',
-      "import { ds } from './ds';\n\nexport const card = ds.styles({ display: 'block' }).asClass();\n"
-    );
-    await until(
-      async () =>
-        (await adapter.requestSource('src/Card.ts')).includes(
-          'createClassResolver'
-        ),
-      {
-        what: 'the class resolver analyzed',
-        describe: async () => renderTrace(adapter),
-      }
-    );
-    const data: HotData = {};
-    const first = hotStub(data);
-    const held = (
-      await evaluate(
-        await serve([INITIAL_USAGE_STEP, NEW_USAGE_STEP], NEW_USAGE_STEP),
-        first
-      )
-    ).systemPropMap;
-
-    const added = await evaluate(
-      await serve([INITIAL_USAGE_STEP, NEW_USAGE_STEP, 8], 8),
-      hotStub(data)
-    );
-    first.callbacks.forEach((callback) => callback(added));
-    expect(first.invalidated).toEqual([]);
-    expect(added.systemPropMap).toBe(held);
-    expect(held.p).toHaveProperty('8');
-  });
-
-  it('a removed utility value invalidates; a class resolver reloads at once', async () => {
-    const data: HotData = {};
-    const first = hotStub(data);
-    const held = (
-      await evaluate(
-        await serve([INITIAL_USAGE_STEP, NEW_USAGE_STEP], NEW_USAGE_STEP),
-        first
-      )
-    ).systemPropMap;
-    const before = JSON.stringify(held);
-
-    const removed = await evaluate(
-      await serve([NEW_USAGE_STEP], NEW_USAGE_STEP, INITIAL_USAGE_STEP),
-      hotStub(data)
-    );
-    first.callbacks.forEach((callback) => callback(removed));
-    expect(first.invalidated).toHaveLength(1);
-    expect(removed.systemPropMap).not.toBe(held);
-    expect(JSON.stringify(held)).toBe(before);
-
-    // With a class resolver that has system props, no generation is taken
-    // in place: it is served without the boundary, and an added value
-    // reaches its importers at once, with no hot step first.
-    fixture.write(
-      'src/Resolver.ts',
-      "import { ds } from './ds';\n\nexport const box = ds.styles({}).system({ space: true }).asClass();\n"
-    );
-    await until(
-      async () =>
-        (await adapter.requestSource('src/Resolver.ts')).includes(
-          'createClassResolver'
-        ),
-      {
-        what: 'the class resolver analyzed',
-        describe: async () => renderTrace(adapter),
-      }
-    );
-    const plain = await serve([NEW_USAGE_STEP, 4], NEW_USAGE_STEP);
-    const mark = adapter.hotUpdatePaths!().length;
-    const added = await serve([NEW_USAGE_STEP, 4, 8], 8);
-    expect(plain).not.toContain('import.meta.hot.accept(');
-    expect(added).not.toContain('import.meta.hot.accept(');
-    await until(async () => updatesSince(mark).includes('full-reload'), {
-      what: 'the added value reloading at once',
-      describe: async () =>
-        `payloads since mark: ${JSON.stringify(updatesSince(mark))}${renderTrace(adapter)}`,
-    });
     expect(
       updatesSince(mark).filter((path) => path.includes(SYSTEM_PROPS_URL))
     ).toEqual([]);

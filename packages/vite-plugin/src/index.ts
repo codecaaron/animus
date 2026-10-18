@@ -516,12 +516,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
       if (loaded) return loaded;
       const slice = RESOLVED_SLICE_IDS.get(id);
       if (slice !== undefined) return slices.get(slice) ?? '';
-      const own = loadVirtualModule(
-        ctx,
-        id,
-        this.environment?.name,
-        !ctx.isProd && isClient(this)
-      );
+      const own = loadVirtualModule(ctx, id, this.environment?.name);
       // A split build's foundation slice carries the vendor sheets.
       if (id === RESOLVED_CSS_ID && own !== null && !ctx.splitsStylesheet) {
         return withVendorHead(this, own);
