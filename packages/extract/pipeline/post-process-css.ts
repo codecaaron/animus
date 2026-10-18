@@ -39,9 +39,23 @@ type TransformOptions = {
 const kept: { options: string; css: string; code: string }[] = [];
 const TRANSFORMS_KEPT = 2;
 
+/** Every enumerable browser the targets name, inherited ones included, as
+ *  Lightning CSS reads them: the key and the transform see the same map. */
+function enumerableTargets(targets: LightningTargets): LightningTargets {
+  const own: LightningTargets = {};
+  for (const browser in targets) {
+    // SAFETY: for-in yields the targets' own and inherited enumerable keys,
+    // each a browser name Lightning CSS reads.
+    const name = browser as keyof LightningTargets;
+    own[name] = targets[name];
+  }
+  return own;
+}
+
 function transformOnce(css: string, opts: TransformOptions): string {
   const keepDirSelector = opts.keepDirSelector ?? false;
-  const options = JSON.stringify([opts.minify, keepDirSelector, opts.targets]);
+  const targets = enumerableTargets(opts.targets);
+  const options = JSON.stringify([opts.minify, keepDirSelector, targets]);
   const hit = kept.find(
     (entry) => entry.options === options && entry.css === css
   );
@@ -50,7 +64,7 @@ function transformOnce(css: string, opts: TransformOptions): string {
     filename: 'animus-extracted.css',
     code: Buffer.from(css),
     minify: opts.minify,
-    targets: opts.targets,
+    targets,
     ...(keepDirSelector && keptDirFeatures()),
   }).code.toString();
   kept.unshift({ options, css, code });

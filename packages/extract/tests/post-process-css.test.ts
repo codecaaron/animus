@@ -146,6 +146,26 @@ describe('postProcessCss', () => {
     expect(options.map((opts) => postProcessCss(css, opts))).toEqual(first);
   });
 
+  test('targets a prototype names are part of the input', () => {
+    const css = '.inherited:dir(rtl) { backdrop-filter: blur(2px); }';
+    const inherited: typeof SAFARI15 = Object.create(SAFARI15);
+    const lowered = postProcessCss(css, { minify: true, targets: inherited });
+    expect(lowered).toBe(
+      postProcessCss(css, { minify: true, targets: SAFARI15 })
+    );
+    let reported = false;
+    const untargeted = postProcessCss(css, {
+      minify: true,
+      targets: {},
+      onLoweredDir: () => {
+        reported = true;
+      },
+    });
+    expect(untargeted).not.toBe(lowered);
+    expect(untargeted).toContain(':dir(rtl)');
+    expect(reported).toBe(false);
+  });
+
   test('empty input passes through untouched', () => {
     expect(postProcessCss('', { minify: true, targets: CHROME120 })).toBe('');
   });
