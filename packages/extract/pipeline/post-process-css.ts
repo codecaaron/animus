@@ -62,6 +62,20 @@ export function lightningTargetsFor(
   };
 }
 
+/** Each browser's minimum version in `targets`, as `chrome 111, safari
+ *  16.4`: Lightning CSS packs a version as major << 16 | minor << 8 | patch,
+ *  and a zero minor or patch is left out. */
+export function describeLightningTargets(targets: LightningTargets): string {
+  return Object.entries(targets)
+    .flatMap(([browser, packed]) => {
+      if (packed === undefined) return [];
+      const parts = [packed >> 16, (packed >> 8) & 0xff, packed & 0xff];
+      while (parts.length > 1 && parts.at(-1) === 0) parts.pop();
+      return [`${browser} ${parts.join('.')}`];
+    })
+    .join(', ');
+}
+
 type TransformOptions = {
   minify: boolean;
   targets: LightningTargets;

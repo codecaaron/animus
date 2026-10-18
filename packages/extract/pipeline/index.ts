@@ -209,6 +209,7 @@ export type {
   LightningTargets,
 } from './post-process-css';
 export {
+  describeLightningTargets,
   keptDirFeatures,
   lightningTargetsFor,
   loweredDirDiagnostic,

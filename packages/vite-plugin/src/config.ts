@@ -1,5 +1,6 @@
 import {
   buildPathAliasesJson,
+  describeLightningTargets,
   outputExclusions,
   resolveMode,
   viteAssetClassification,
@@ -101,7 +102,7 @@ export function applyResolvedConfig(
   );
   ctx.lightning = { targets, features: config.css.lightningcss ?? {} };
   ctx.log(
-    `Lightning CSS targets resolved from ${source} (${Object.keys(targets).length} browsers)`
+    `Lightning CSS targets resolved from ${source} (${Object.keys(targets).length} browsers): ${describeLightningTargets(targets)}`
   );
 
   const pairs: Parameters<typeof buildPathAliasesJson>[0] = [];
