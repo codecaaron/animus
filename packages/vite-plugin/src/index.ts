@@ -542,7 +542,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     // a preload another plugin adds after Animus's is in the HTML it reads.
     generateBundle: {
       order: 'post',
-      async handler(_output, bundle) {
+      handler(_output, bundle) {
         const emitAsset = (name: string, source: string) =>
           this.getFileName(this.emitFile({ type: 'asset', name, source }));
         if (linkedSlices.length > 0 && isClient(this)) {
@@ -596,15 +596,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
           }
         }
         if (ctx.isProd && isClient(this)) {
-          const system = await this.resolve(
-            '@animus-ui/system',
-            resolve(ctx.rootDir, ctx.options.system)
-          );
-          if (system) {
-            reportShippedBuilder(ctx, bundle, system.id, (id) =>
-              this.getModuleInfo(id)
-            );
-          }
+          reportShippedBuilder(ctx, bundle, (id) => this.getModuleInfo(id));
         }
         if (!ctx.served?.fontPreloads.length) return;
         for (const file of Object.values(bundle)) {

@@ -278,6 +278,7 @@ export {
   AUDIT_INCOMPLETE,
   loadFindingDiagnostics,
   surfaceManifestDiagnostics,
+  effectiveLevel,
   isDeletedSource,
   noKitFilesDiagnostics,
   unreadableDiscoveryPathDiagnostic,

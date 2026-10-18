@@ -1,18 +1,24 @@
 import {
+  effectiveLevel,
   surfaceManifestDiagnostics,
   systemBuilderShippedDiagnostic,
 } from '@animus-ui/extract/pipeline';
-import { relative } from 'path';
+import { readFileSync } from 'fs';
+import { dirname, isAbsolute, join, relative } from 'path';
 
 import type { PluginContext } from './context';
 import type { Rolldown } from 'vite';
 
-/** Exports of `@animus-ui/system`'s root module that a chunk renders only
- *  where it keeps the builder. */
+/** The package whose builder the record reports. */
+const SYSTEM_PACKAGE = '@animus-ui/system';
+
+/** Exports a module of the system package renders only where it keeps the
+ *  builder: its dist entry, or the source modules that implement it. */
 const BUILDER_EXPORTS: ReadonlySet<string> = new Set([
   'createSystem',
   'createTheme',
   'SystemBuilder',
+  'ThemeBuilder',
 ]);
 
 /** What the chain reads of a module: Rollup and Rolldown's module info. */
@@ -24,36 +30,92 @@ interface ModuleLinks {
 
 /**
  * Reports, at info, each chunk of a production client build that renders
- * the builder of `systemModule` (`@animus-ui/system`'s root module, as the
- * system file resolves it), with the import chain that keeps it. A build
- * drops the builder where no runtime code reads a module that builds the
- * system, so this is the one place that loss shows: the CSS is the same.
+ * the system builder from any installed copy of `@animus-ui/system`, dist
+ * or source, with the import chain that keeps it. A build drops the builder
+ * where no runtime code reads a module that builds the system, so this is
+ * the one place that loss shows: the CSS is the same.
+ *
+ * Nothing runs where the record would not print: off, or info without
+ * verbose. It resolves nothing, so it adds no import the build's own graph
+ * lacks. A failure to read the bundle's modules skips the record and leaves
+ * the build as it was; an escalated record still fails it.
  */
 export function reportShippedBuilder(
   ctx: PluginContext,
   bundle: Rolldown.OutputBundle,
-  systemModule: string,
   moduleInfo: (id: string) => ModuleLinks | null
 ): void {
-  const diagnostics = Object.values(bundle).flatMap((file) => {
-    if (file.type !== 'chunk') return [];
-    const rendered = file.modules[systemModule]?.renderedExports ?? [];
-    if (!rendered.some((name) => BUILDER_EXPORTS.has(name))) return [];
-    const chain = importChain(systemModule, moduleInfo);
-    return [
-      systemBuilderShippedDiagnostic(
-        file.fileName,
-        chain.map((id) => relative(ctx.rootDir, id))
-      ),
-    ];
-  });
-  if (diagnostics.length === 0) return;
-  surfaceManifestDiagnostics({ diagnostics }, (message) => ctx.warn(message), {
+  const policy = {
     levels: ctx.options.diagnostics,
     strict: ctx.options.strict,
-    info: (line) => ctx.log(line),
+    info: (line: string) => ctx.log(line),
     reportErrors: ctx.reportErrors(),
-  });
+  };
+  const level = effectiveLevel(systemBuilderShippedDiagnostic('', []), policy);
+  if (level === 'off' || (level === 'info' && !ctx.verbose)) return;
+  let diagnostics;
+  try {
+    const owners = new PackageOwners();
+    const ownedBySystem = (id: string) => owners.of(id) === SYSTEM_PACKAGE;
+    diagnostics = Object.values(bundle).flatMap((file) => {
+      if (file.type !== 'chunk') return [];
+      const builder = Object.entries(file.modules).find(
+        ([id, rendered]) =>
+          rendered.renderedExports.some((name) => BUILDER_EXPORTS.has(name)) &&
+          ownedBySystem(id)
+      )?.[0];
+      if (builder === undefined) return [];
+      const chain = importChain(builder, moduleInfo).filter(
+        (id) => !ownedBySystem(id)
+      );
+      return [
+        systemBuilderShippedDiagnostic(
+          file.fileName,
+          chain.map((id) => relative(ctx.rootDir, id))
+        ),
+      ];
+    });
+  } catch (err) {
+    ctx.log(`system builder check skipped: ${String(err)}`);
+    return;
+  }
+  if (diagnostics.length === 0) return;
+  surfaceManifestDiagnostics(
+    { diagnostics },
+    (message) => ctx.warn(message),
+    policy
+  );
+}
+
+/** The name of the package each module id lies in (its nearest
+ *  `package.json`), read once per directory. */
+class PackageOwners {
+  private readonly byDir = new Map<string, string | null>();
+
+  of(id: string): string | null {
+    // A virtual or query-suffixed id names no file.
+    if (!isAbsolute(id) || id.includes('?')) return null;
+    return this.inDir(dirname(id));
+  }
+
+  private inDir(dir: string): string | null {
+    const known = this.byDir.get(dir);
+    if (known !== undefined) return known;
+    let name: string | null;
+    try {
+      // SAFETY: npm requires a manifest's `name` to be a string; one that is
+      // not compares unequal to the system package's, as an absent one does.
+      const manifest = JSON.parse(
+        readFileSync(join(dir, 'package.json'), 'utf8')
+      ) as { name?: string };
+      name = manifest.name ?? null;
+    } catch {
+      const parent = dirname(dir);
+      name = parent === dir ? null : this.inDir(parent);
+    }
+    this.byDir.set(dir, name);
+    return name;
+  }
 }
 
 /** The shortest import chain from an entry down to `target`, `target` left
