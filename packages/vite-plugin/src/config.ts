@@ -17,6 +17,23 @@ import { viteCssTargets } from './css-targets';
 import type { PluginContext } from './context';
 import type { ResolvedConfig } from 'vite';
 
+/** The targets Vite's own first Lightning CSS stage compiles for: its
+ *  Lightning CSS transformer's, which the dev component sheet, a string in
+ *  a JS module, never passes through; otherwise its minification's. */
+function viteLightningTargets(config: ResolvedConfig) {
+  const transformer = config.css.lightningcss?.targets;
+  if (config.css.transformer === 'lightningcss' && transformer) {
+    return { targets: transformer, source: "Vite's css.lightningcss.targets" };
+  }
+  const minification = viteCssTargets(config.build.cssTarget);
+  return (
+    minification && {
+      targets: minification,
+      source: "Vite's build.cssTarget",
+    }
+  );
+}
+
 export function applyResolvedConfig(
   ctx: PluginContext,
   config: ResolvedConfig
@@ -77,11 +94,10 @@ export function applyResolvedConfig(
   ctx.serverOrigin = config.server.origin ?? '';
   ctx.publicDir = config.publicDir;
 
-  const cssTargets = viteCssTargets(config.build.cssTarget);
   const { targets, source } = lightningTargetsFor(
     ctx.options.targets,
     ctx.rootDir,
-    cssTargets && { targets: cssTargets, source: "Vite's build.cssTarget" }
+    viteLightningTargets(config)
   );
   ctx.lightning = { targets, features: config.css.lightningcss ?? {} };
   ctx.log(

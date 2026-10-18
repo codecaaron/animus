@@ -176,10 +176,25 @@ describe('postProcessCss', () => {
   // Contract: the keep merge over a config it already merged is equal, as
   // Vite's css.lightningcss carries Animus's merge into Animus's own pass.
   test('keptDirFeatures over its own result merges equal', () => {
-    for (const own of [{}, { exclude: Features.Nesting }, { include: 1 }]) {
+    for (const own of [
+      {},
+      { exclude: Features.Nesting },
+      { include: Features.Nesting },
+      { include: Features.Selectors },
+      { include: Features.Selectors, exclude: Features.IsSelector },
+    ]) {
       const merged = keptDirFeatures(own);
       expect(keptDirFeatures(merged)).toEqual(merged);
+      // An included DirSelector would compile what the keep excludes.
+      expect(merged.include & Features.DirSelector).toBe(0);
     }
+    const kept = postProcessCss('.a:dir(rtl) { color: red; }', {
+      minify: true,
+      targets: SAFARI15,
+      keepDirSelector: true,
+      features: { include: Features.Selectors },
+    });
+    expect(kept).toBe('.a:dir(rtl){color:red}');
   });
 
   test('empty input passes through untouched', () => {

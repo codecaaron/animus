@@ -152,15 +152,16 @@ export function postProcessCss(
  *  `css.lightningcss`). */
 export function keptDirFeatures(own: LightningFeatures = {}) {
   const exclude = (own.exclude ?? 0) | Features.DirSelector;
+  // An included feature compiles whatever the exclusions say, so a config's
+  // include (`Features.Selectors`, say) keeps every bit but DirSelector.
+  const include = (own.include ?? 0) & ~Features.DirSelector;
   // Any excluded selector feature turns off all selector compilation unless
   // one is included (should_compile_selectors, targets.rs, lightningcss
   // v1.33.0). IsSelector compiles nothing the targets do not need; a config
   // that already excludes a selector feature has turned it off itself, and
   // one merged here already includes IsSelector, so a second merge is equal.
-  if ((own.exclude ?? 0) & Features.Selectors) {
-    return { include: own.include ?? 0, exclude };
-  }
-  return { include: (own.include ?? 0) | Features.IsSelector, exclude };
+  if ((own.exclude ?? 0) & Features.Selectors) return { include, exclude };
+  return { include: include | Features.IsSelector, exclude };
 }
 
 /** A `:dir()` that `by` lowered for the targets `option` names differs from

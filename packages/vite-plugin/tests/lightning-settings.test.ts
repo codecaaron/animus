@@ -20,7 +20,8 @@ afterEach(() => {
 
 async function resolvedContext(
   config: InlineConfig,
-  options: { targets?: string; browserslist?: string } = {}
+  options: { targets?: string; browserslist?: string } = {},
+  command: 'build' | 'serve' = 'build'
 ) {
   const root = mkdtempSync(join(tmpdir(), 'animus-lightning-'));
   roots.push(root);
@@ -35,7 +36,7 @@ async function resolvedContext(
     ctx,
     await resolveConfig(
       { configFile: false, root, logLevel: 'silent', ...config },
-      'build'
+      command
     )
   );
   return ctx;
@@ -76,6 +77,24 @@ describe("Animus's Lightning CSS pass follows Vite's CSS settings", () => {
     });
     expect(fromOption.lightning?.targets).toEqual({ edge: version(120) });
     expect(lowersNothing.lightning?.targets).toEqual({});
+    // Vite's Lightning CSS transformer compiles CSS for its own targets,
+    // served or built; the dev component sheet never passes through it.
+    for (const command of ['serve', 'build'] as const) {
+      const fromTransformer = await resolvedContext(
+        {
+          build,
+          css: {
+            transformer: 'lightningcss',
+            lightningcss: { targets: { safari: version(15) } },
+          },
+        },
+        {},
+        command
+      );
+      expect(fromTransformer.lightning?.targets).toEqual({
+        safari: version(15),
+      });
+    }
     // The Session's own pass, and its lowered :dir() report, follow the same.
     expect(fromVite.session?.hostLightning).toBe(fromVite.lightning);
   });
