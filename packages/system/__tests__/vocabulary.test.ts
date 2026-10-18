@@ -299,28 +299,68 @@ describe('vocabulary registration — two-phase terminal (runtime)', () => {
   });
 
   it('partial delivery narrows the witness to the genuinely refused names', () => {
-    const kitABundle = createSystem().build();
-    const kitMotion = kitABundle.createKeyframes({ pulse: FRAMES_A });
-    const kitFade = kitABundle.createKeyframes({ fade: FRAMES_B });
-    const kitA = kitABundle
-      .registerKeyframes({ kitMotion })
-      .registerKeyframes({ kitFade })
-      .seal();
-    const kitBBundle = createSystem().build();
-    const kitB = kitBBundle
+    // kitA carries kitM's own kitMotion through `.extend()` and registers
+    // kitFade; extending kitM delivers that same kitMotion, not kitFade.
+    const kitMBundle = createSystem().build();
+    const kitM = kitMBundle
       .registerKeyframes({
-        kitMotion: kitBBundle.createKeyframes({ pulse: FRAMES_A }),
+        kitMotion: kitMBundle.createKeyframes({ pulse: FRAMES_A }),
+      })
+      .seal();
+    const kitABundle = createSystem().extend(kitM).build();
+    const kitA = kitABundle
+      .registerKeyframes({
+        kitFade: kitABundle.createKeyframes({ fade: FRAMES_B }),
       })
       .seal();
 
     const sealed = createSystem({ includes: [kitA] })
-      .extend(kitB)
+      .extend(kitM)
       .build()
       .seal();
     const record = recordOf(sealed);
 
     expect(record.legacyVerbs).toHaveLength(1);
     expect(record.legacyVerbs[0]?.names).toEqual(['kitFade']);
+  });
+
+  // Contract: a witnessed name counts as delivered only where the kept entry
+  // of that name is the source's own definition. One that only shares the
+  // name, the system's own registration or another kit's, delivers nothing.
+  it('a kept entry that only shares a witnessed name does not hide the witness', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const kitWith = (frames: typeof FRAMES_A) => {
+      const bundle = createSystem().build();
+      return bundle
+        .registerKeyframes({
+          kitMotion: bundle.createKeyframes({ pulse: frames }),
+        })
+        .seal();
+    };
+    const kit = kitWith(FRAMES_A);
+
+    const own = createSystem({ includes: [kit] }).build();
+    const ownSealed = own
+      .registerKeyframes({
+        kitMotion: own.createKeyframes({ mine: FRAMES_B }),
+      })
+      .seal();
+    const fromOwn = createSystem().from(kit).build();
+    const fromSealed = fromOwn
+      .registerKeyframes({
+        kitMotion: fromOwn.createKeyframes({ mine: FRAMES_B }),
+      })
+      .seal();
+    const otherKit = createSystem({ includes: [kit] })
+      .extend(kitWith(FRAMES_A))
+      .build()
+      .seal();
+
+    for (const sealed of [ownSealed, fromSealed, otherKit]) {
+      expect(recordOf(sealed).legacyVerbs.map((entry) => entry.names)).toEqual([
+        ['kitMotion'],
+      ]);
+    }
   });
 
   it('.extend() of the same sealed kit produces no legacy-verb witness — it carries', () => {

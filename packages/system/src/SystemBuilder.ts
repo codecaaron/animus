@@ -373,6 +373,30 @@ type VocabularyEntryInput =
 /** An entry as the registry holds it, with where it was declared. */
 type VocabularyEntryState = VocabularyEntryInput & { origin: string };
 
+/** The definition each witnessed name stood for in its source's record (its
+ *  frames, tries, transitions or styles): a name counts as delivered only
+ *  where the kept entry of that name is that same definition, arrived through
+ *  `.extend()`, not another one that merely shares its name. */
+const witnessedDefinitions = new WeakMap<
+  VocabularyLegacyVerbEntry,
+  ReadonlyMap<string, object>
+>();
+
+/** The definition a registry entry holds, the object `.extend()` carries
+ *  over from a sealed source's record as it is. */
+function definitionOf(entry: VocabularyEntryInput): object {
+  switch (entry.kind) {
+    case 'keyframes':
+      return entry.frames;
+    case 'positionTry':
+      return entry.tries;
+    case 'viewTransitions':
+      return entry.transitions;
+    case 'globalStyles':
+      return entry.styles;
+  }
+}
+
 /**
  * No console output: a warn here would ship in production consumer bundles,
  * and the extraction host shims `console`. The record is the witness.
@@ -386,19 +410,25 @@ function legacyVerbWitness(
     source as { getVocabularyRecord?(): VocabularyRecord }
   ).getVocabularyRecord?.();
   if (!record) return null;
-  const names = [
-    ...record.keyframes.map((entry) => entry.name),
-    ...(record.positionTries ?? []).map((entry) => entry.name),
-    ...(record.viewTransitions ?? []).map((entry) => entry.name),
-    ...record.globalStyles.map((entry) => entry.name),
-  ];
-  if (names.length === 0) return null;
-  return {
+  const definitions = new Map<string, object>([
+    ...record.keyframes.map((entry) => [entry.name, entry.frames] as const),
+    ...(record.positionTries ?? []).map(
+      (entry) => [entry.name, entry.tries] as const
+    ),
+    ...(record.viewTransitions ?? []).map(
+      (entry) => [entry.name, entry.transitions] as const
+    ),
+    ...record.globalStyles.map((entry) => [entry.name, entry.styles] as const),
+  ]);
+  if (definitions.size === 0) return null;
+  const witness: VocabularyLegacyVerbEntry = {
     code: 'animus.vocabulary.legacy-verb',
     verb,
     source: `${verb} source #${sourceIndex}`,
-    names,
+    names: [...definitions.keys()],
   };
+  witnessedDefinitions.set(witness, definitions);
+  return witness;
 }
 
 /** `blocks`, and each block, frozen; deeper values alias. */
@@ -1850,12 +1880,20 @@ export class SystemBuilder<
           ),
           legacyVerbs: Object.freeze(
             legacyVerbWitnessRecord
-              // A name that DID arrive through a separate `.extend()` must
-              // not be claimed undelivered — keep only refused names.
+              // A name whose definition DID arrive through a separate
+              // `.extend()` must not be claimed undelivered — keep only
+              // refused names. A kept entry that only shares the name (the
+              // system's own, or another source's) delivers nothing.
               .map((entry) => ({
                 ...entry,
                 names: entry.names.filter(
-                  (name) => !entries.some((kept) => kept.name === name)
+                  (name) =>
+                    !entries.some(
+                      (kept) =>
+                        kept.name === name &&
+                        definitionOf(kept) ===
+                          witnessedDefinitions.get(entry)?.get(name)
+                    )
                 ),
               }))
               .filter((entry) => entry.names.length > 0)
