@@ -11,7 +11,8 @@ import type { ManifestMissingInput, ProjectManifest } from './manifest-schema';
 export interface ServedFiles {
   listed: ReadonlySet<string>;
   dropped: ReadonlyMap<string, ManifestMissingInput>;
-  builders: ReadonlySet<string>;
+  /** Absent reads as empty: an adapter written before it may omit it. */
+  builders?: ReadonlySet<string>;
 }
 
 export function servedFiles(

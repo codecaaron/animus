@@ -922,8 +922,8 @@ pub(crate) struct EnrichedUsage {
     pub builder_import_references: Vec<BuilderImportReferences>,
     /// See `FileFacts::first_that_works_uses`.
     pub first_that_works_uses: BTreeSet<(u32, u32)>,
-    /// See `FileFacts::pure_builder_edits`.
-    pub pure_builder_edits: Vec<(u32, u32, String)>,
+    /// See `FileFacts::builder_proof`.
+    pub builder_proof: Option<crate::pure_builders::BuilderProof>,
 }
 
 /// A component element that hands its children and props to its receiver,
@@ -1139,9 +1139,7 @@ pub(crate) fn collect_enriched_usage(
         origins.map(|scoping| builder_import_references(program, module, scoping)).unwrap_or_default();
     let first_that_works_uses =
         origins.map(|scoping| first_that_works_uses(program, module, scoping)).unwrap_or_default();
-    let pure_builder_edits = origins
-        .map(|scoping| crate::pure_builders::pure_builder_edits(program, module, scoping))
-        .unwrap_or_default();
+    let builder_proof = origins.and_then(|scoping| crate::pure_builders::prove(program, module, scoping));
     EnrichedUsage {
         usage,
         confined,
@@ -1157,7 +1155,7 @@ pub(crate) fn collect_enriched_usage(
         opaque_tags,
         builder_import_references,
         first_that_works_uses,
-        pure_builder_edits,
+        builder_proof,
     }
 }
 

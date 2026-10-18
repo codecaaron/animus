@@ -172,7 +172,7 @@ export async function transformSource(
   const drop = served.dropped.get(relativePath);
   if (drop !== undefined) throw new Error(droppedExtensionMessage(drop));
   const listed = served.listed.has(relativePath);
-  if (!listed && !served.builders.has(relativePath)) return null;
+  if (!listed && !served.builders?.has(relativePath)) return null;
 
   try {
     const { transformFile } = ctx.engineApi();

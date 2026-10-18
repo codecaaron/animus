@@ -176,7 +176,7 @@ export function createHostState(): HostState {
     mode: null,
     cssText: '',
     fontPreloads: [],
-    served: { listed: new Set(), dropped: new Map(), builders: new Set() },
+    served: { listed: new Set(), dropped: new Map() },
     analyzedFiles: [],
     systemPropsJs: '',
     kitRedirects: new Map(),
@@ -284,9 +284,7 @@ export function transformWithEngine(
 
 /** What a manifest's transform serves, parsed once per run. */
 function manifestServedFiles(manifestJson: string | null): ServedFiles {
-  if (manifestJson === null) {
-    return { listed: new Set(), dropped: new Map(), builders: new Set() };
-  }
+  if (manifestJson === null) return { listed: new Set(), dropped: new Map() };
   // SAFETY: the session's own published manifest.
   return servedFiles(JSON.parse(manifestJson) as ProjectManifest);
 }

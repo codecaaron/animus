@@ -1498,6 +1498,7 @@ impl ExtractEngine {
 
         // Facts own every resolved reference; release the modules' scopings.
         drop(references);
+        crate::pure_builders::resolve(&mut self.facts, &links, &self.opts.css_inputs);
         let mut css = analyze_css::run(
             &self.facts,
             &self.order,
@@ -4728,66 +4729,139 @@ export const App = () => <Box tone="red" />;
         }
     }
 
-    /// Contract: an unread system drops its builder. Each top-level chain
-    /// the module's own bindings prove is an Animus builder's takes a
-    /// `/* @__PURE__ */` annotation, and a destructured factory becomes one
-    /// annotated read per name on the same lines; the manifest names such a file in
-    /// `builderFiles` so a host transforms it though it defines no
-    /// component. An aliased, reassigned, namespaced or passed-through
-    /// builder, a chain inside a function, and a chain with an argument that
-    /// may have an effect stay as written.
+    /// The `builderFiles` an analysis of `files` lists, and each file's
+    /// transformed code.
+    fn builder_marks(files: &[(&str, &str)]) -> (serde_json::Value, BTreeMap<String, String>) {
+        let entries: Vec<serde_json::Value> =
+            files.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect();
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&engine.analyze(serde_json::Value::Array(entries).to_string(), None).unwrap()).unwrap();
+        let code = files
+            .iter()
+            .map(|(path, _)| {
+                let result: serde_json::Value =
+                    serde_json::from_str(&engine.transform_file(path.to_string()).unwrap()).unwrap();
+                (path.to_string(), result["code"].as_str().unwrap().to_string())
+            })
+            .collect();
+        (manifest["builderFiles"].clone(), code)
+    }
+
+    /// Contract: an unread system drops its builder, and a mark never drops
+    /// an effect. A top-level chain is marked `/* @__PURE__ */` where every
+    /// step is a listed builder method on a proven receiver and every
+    /// argument is passive data or a proven value, an import counting only
+    /// where its own module proves it; a destructured factory becomes one
+    /// annotated read per name, on the same lines, of the initializer as
+    /// written; the manifest names each marked file in `builderFiles`.
+    /// Each shape the cold review of 4eb5ff8d ran, and the earlier
+    /// unmarked shapes, stays exactly as written.
     #[test]
     fn proven_builder_chains_are_annotated_pure() {
-        let files = serde_json::json!([
-            {
-                "path": "kit.ts",
-                "source": "import { createSystem, createTheme, firstThatWorks } from '@animus-ui/system';\n\
-                    export const kitTheme = createTheme().addScale({ name: 'space', values: { 1: '4px' } }).build();\n\
-                    const bundle = createSystem().build();\n\
-                    export const {\n  createKeyframes,\n} = bundle;\n\
-                    export const motion = createKeyframes({ fade: { from: { opacity: 0 } } });\n\
-                    export const system = bundle.registerKeyframes({ motion, w: firstThatWorks('1px', '2px') }).seal();\n\
-                    createSystem().build();\n",
-            },
-            {
-                "path": "negative.ts",
-                "source": "import { createSystem as cs } from '@animus-ui/system';\n\
-                    import * as s from '@animus-ui/system';\n\
-                    import { make } from './maker';\n\
-                    const alias = cs;\n\
-                    export const a = alias().build();\n\
-                    let reassigned = cs().build();\n\
-                    export const b = s.createSystem().build();\n\
-                    export const c = make(cs()).build();\n\
-                    export const d = cs().addProps({ x: { property: track() } }).build();\n\
-                    export const e = cs().addProps(window.config).build();\n\
-                    export const f = cs().extend(new Kit()).build();\n\
-                    function inner() { return cs().build(); }\n",
-            },
-        ])
-        .to_string();
-        let mut engine = ExtractEngine::new(None).unwrap();
-        let manifest: serde_json::Value = serde_json::from_str(&engine.analyze(files, None).unwrap()).unwrap();
-        assert_eq!(manifest["builderFiles"], serde_json::json!(["kit.ts"]));
-
-        let kit: serde_json::Value = serde_json::from_str(&engine.transform_file("kit.ts".into()).unwrap()).unwrap();
-        assert_eq!(kit["annotated"], true);
+        use oxc::ast::ast::{Expression, Statement};
+        let kit = "import { createSystem, createTheme, firstThatWorks } from '@animus-ui/system';\n\
+            export const kitTheme = createTheme().addScale({ name: 'space', values: { 1: '4px' } }).build();\n\
+            const bundle = createSystem().build();\n\
+            export const {\n  createKeyframes,\n} = bundle;\n\
+            export const motion = createKeyframes({ fade: { from: { opacity: 0 } } });\n\
+            const faces = [{ family: 'Kit', src: [{ url: 'kit.woff2', format: 'woff2' }] }];\n\
+            export const system = bundle.registerKeyframes({ motion, faces, w: firstThatWorks('1px', '2px') }).seal();\n\
+            createSystem().build();\n";
+        let app = "import { createSystem, createTheme } from '@animus-ui/system';\n\
+            import { system, kitTheme } from './kit';\n\
+            export const theme = createTheme().extend(kitTheme).build();\n\
+            const asserted = createSystem().extend(system).build();\n\
+            export const { createGlobalStyles } = asserted as typeof asserted;\n\
+            export const ds = asserted.registerGlobalStyles({ reboot: createGlobalStyles({ body: { margin: 0 } }) }).seal();\n";
+        let (builder_files, code) = builder_marks(&[("kit.ts", kit), ("app.ts", app)]);
+        assert_eq!(builder_files, serde_json::json!(["app.ts", "kit.ts"]));
         assert_eq!(
-            kit["code"].as_str().unwrap(),
+            code["kit.ts"],
             "import { createSystem, createTheme, firstThatWorks } from '@animus-ui/system';\n\
             export const kitTheme = /* @__PURE__ */ createTheme().addScale({ name: 'space', values: { 1: '4px' } }).build();\n\
             const bundle = /* @__PURE__ */ createSystem().build();\n\
-            export const createKeyframes = /* @__PURE__ */ (() => bundle.createKeyframes)()\n\n;\n\
+            export const createKeyframes = /* @__PURE__ */ (() => (bundle).createKeyframes)()\n\n;\n\
             export const motion = /* @__PURE__ */ createKeyframes({ fade: { from: { opacity: 0 } } });\n\
-            export const system = /* @__PURE__ */ bundle.registerKeyframes({ motion, w: firstThatWorks('1px', '2px') }).seal();\n\
+            const faces = [{ family: 'Kit', src: [{ url: 'kit.woff2', format: 'woff2' }] }];\n\
+            export const system = /* @__PURE__ */ bundle.registerKeyframes({ motion, faces, w: firstThatWorks('1px', '2px') }).seal();\n\
             /* @__PURE__ */ createSystem().build();\n"
         );
+        assert_eq!(
+            code["app.ts"],
+            "import { createSystem, createTheme } from '@animus-ui/system';\n\
+            import { system, kitTheme } from './kit';\n\
+            export const theme = /* @__PURE__ */ createTheme().extend(kitTheme).build();\n\
+            const asserted = /* @__PURE__ */ createSystem().extend(system).build();\n\
+            export const createGlobalStyles = /* @__PURE__ */ (() => (asserted as typeof asserted).createGlobalStyles)();\n\
+            export const ds = /* @__PURE__ */ asserted.registerGlobalStyles({ reboot: createGlobalStyles({ body: { margin: 0 } }) }).seal();\n"
+        );
+        // Once types are erased the read is still of the factory: the IIFE
+        // returns `(asserted as …).createGlobalStyles`.
+        let allocator = oxc::allocator::Allocator::default();
+        let parsed = oxc::parser::Parser::new(&allocator, &code["app.ts"], oxc::span::SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let read = parsed.program.body.iter().find_map(|statement| {
+            let Statement::ExportDeclaration(export) = statement else { return None };
+            let oxc::ast::ast::Declaration::VariableDeclaration(declaration) = &export.declaration else { return None };
+            let declarator = &declaration.declarations[0];
+            (declarator.id.get_identifier_name()? == "createGlobalStyles").then_some(declarator.init.as_ref()?)
+        });
+        let Some(Expression::CallExpression(call)) = read.map(Expression::get_inner_expression) else {
+            panic!("no IIFE read in {}", code["app.ts"])
+        };
+        let Expression::ArrowFunctionExpression(arrow) = call.callee.get_inner_expression() else { panic!("no arrow") };
+        let Some(Expression::StaticMemberExpression(member)) = arrow.body.as_expression() else {
+            panic!("not a member read")
+        };
+        assert_eq!(member.property.name, "createGlobalStyles");
+        assert!(matches!(member.object.get_inner_expression(), Expression::Identifier(object) if object.name == "asserted"));
 
-        let negative: serde_json::Value =
-            serde_json::from_str(&engine.transform_file("negative.ts".into()).unwrap()).unwrap();
-        assert!(negative.get("annotated").is_none(), "{negative}");
-        assert!(!negative["code"].as_str().unwrap().contains("__PURE__"), "{negative}");
+        let i = "import { createSystem as cs, createTheme } from '@animus-ui/system';\n";
+        let negatives: Vec<(&str, String)> = vec![
+            // The cold review's shapes.
+            ("callback.ts", format!("{i}createTheme().addScale({{ name: 'space', values: {{ sm: '4px' }} }}).extendScale('space', (t) => {{ globalThis.events.push(1); return t; }}).build();\n")),
+            ("bare-seal.ts", format!("{i}const bundle = cs().build();\nbundle.seal();\nglobalThis.r = (() => {{ try {{ bundle.seal(); return 1; }} catch {{ return 2; }} }})();\n")),
+            ("replaced.ts", format!("{i}const builder = cs();\nbuilder.addSelectors = function () {{ return this; }};\nbuilder.addSelectors({{ _hover: '&:hover' }}).build();\n")),
+            ("getter.ts", format!("{i}const config = {{ get _hover() {{ globalThis.events.push(1); return '&:hover'; }} }};\ncs().addSelectors(config).build();\n")),
+            ("member.ts", format!("{i}const holder = {{ config: {{ _hover: '&:hover' }} }};\ncs().addSelectors(holder.config).build();\n")),
+            ("spread.ts", format!("{i}const config = {{ get _hover() {{ globalThis.events.push(1); return '&:hover'; }} }};\ncs().addSelectors({{ ...config }}).build();\n")),
+            ("coerce.ts", format!("{i}const key = {{ [Symbol.toPrimitive]() {{ return '&:hover'; }} }};\ncs().addSelectors({{ _hover: `${{key}}` }}).build();\n")),
+            ("computed.ts", format!("{i}const key = '_hover';\ncs().addSelectors({{ [key]: '&:hover' }}).build();\n")),
+            ("iterator.ts", format!("{i}const steps = ['4px'];\ncreateTheme().addScale({{ name: 'space', values: [...steps] }}).build();\n")),
+            ("tdz.ts", format!("{i}cs().addSelectors(config).build();\nconst config = {{ _hover: '&:hover' }};\n")),
+            ("written.ts", format!("{i}const config = {{ _hover: '&:hover' }};\nObject.defineProperty(config, '_focus', {{ get() {{ return '&:focus'; }} }});\ncs().addSelectors(config).build();\n")),
+            ("proto.ts", format!("{i}cs().addSelectors({{ __proto__: null, _hover: '&:hover' }}).build();\n")),
+            ("twice.ts", format!("{i}const bundle = cs().build();\nexport const a = bundle.seal();\nexport const b = bundle.seal();\n")),
+            ("escaped.ts", format!("{i}export const bundle = cs().build();\nexport const a = bundle.seal();\n")),
+            // Earlier unmarked shapes: aliased, reassigned, namespaced,
+            // passed through, an effectful or unbound argument, a chain in a
+            // function.
+            ("earlier.ts", format!("{i}import * as s from '@animus-ui/system';\nimport {{ make }} from './maker';\nconst alias = cs;\nexport const a = alias().build();\nlet reassigned = cs().build();\nexport const b = s.createSystem().build();\nexport const c = make(cs()).build();\nexport const d = cs().addProps({{ x: {{ property: track() }} }}).build();\nexport const e = cs().addProps(window.config).build();\nexport const f = cs().extend(new Kit()).build();\nfunction inner() {{ return cs().build(); }}\n")),
+        ];
+        for (path, source) in &negatives {
+            let (builder_files, code) = builder_marks(&[(path, source.as_str())]);
+            assert!(builder_files.is_null(), "{path} listed: {builder_files}");
+            assert_eq!(&code[*path], source, "{path} changed");
+        }
+
+        // An import counts only where its module proves it, no importer can
+        // change it, and no cycle can read it early.
+        let plain = ("plain.ts", "export const notChain = { system: 1 };\n");
+        let reads_plain = ("reads-plain.ts", "import { createSystem } from '@animus-ui/system';\nimport { notChain } from './plain';\nexport const ds = createSystem().extend(notChain).build().seal();\n");
+        let changes = ("changes.ts", "import { system } from './kit';\nsystem.extra = 1;\n");
+        let cycle = ("cycle.ts", "import { createSystem } from '@animus-ui/system';\nimport { back } from './cycle-back';\nexport const sealed = createSystem().build().seal();\nexport const ds = createSystem().extend(back).build().seal();\n");
+        let back = ("cycle-back.ts", "import { createSystem } from '@animus-ui/system';\nimport { sealed } from './cycle';\nexport const back = createSystem().extend(sealed).build().seal();\n");
+        let extends_marked = "/* @__PURE__ */ createSystem().extend(";
+        let (_, code) = builder_marks(&[plain, reads_plain]);
+        assert_eq!(code["reads-plain.ts"], reads_plain.1);
+        let (_, code) = builder_marks(&[("kit.ts", kit), ("app.ts", app), changes]);
+        assert!(!code["app.ts"].contains(extends_marked), "{}", code["app.ts"]);
+        let (_, code) = builder_marks(&[cycle, back]);
+        assert!(!code["cycle.ts"].contains(extends_marked), "{}", code["cycle.ts"]);
+        assert!(!code["cycle-back.ts"].contains(extends_marked), "{}", code["cycle-back.ts"]);
     }
+
 }
 
 

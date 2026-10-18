@@ -132,11 +132,7 @@ describe('a transform failure never serves builder source', () => {
         rootDir: '/app',
         manifestJson: '{}',
         transformFile: (source) => ({ code: source, hasComponents: false }),
-        served: {
-          listed: new Set(['src/Button.tsx']),
-          dropped: new Map(),
-          builders: new Set(),
-        },
+        served: { listed: new Set(['src/Button.tsx']), dropped: new Map() },
       })
     ).toThrow(/src\/Button\.tsx/);
   });
@@ -171,7 +167,6 @@ describe('a dropped extension is never served raw', () => {
           served: {
             listed: new Set(mixed ? [DROP.file] : []),
             dropped: new Map([[DROP.file, DROP]]),
-            builders: new Set(),
           },
         })
       ).toThrow(DROPPED_MESSAGE);

@@ -13,11 +13,7 @@ import type {
   ServedFiles,
 } from '@animus-ui/extract/pipeline';
 
-const NO_SERVED: ServedFiles = {
-  listed: new Set(),
-  dropped: new Map(),
-  builders: new Set(),
-};
+const NO_SERVED: ServedFiles = { listed: new Set(), dropped: new Map() };
 
 // Per-manifest memo: the membership checks run once per served file.
 const servedByManifest = new WeakMap<ProjectManifest, ServedFiles>();

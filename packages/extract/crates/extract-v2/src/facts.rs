@@ -455,9 +455,14 @@ pub struct FileFacts {
     /// shows, so their tags leave usage identity as it is.
     #[serde(skip)]
     pub synthesized_components: BTreeSet<String>,
-    /// The edits that mark each top-level Animus builder chain
-    /// `/* @__PURE__ */` (`pure_builders`), so a bundler drops a system no
-    /// runtime code reads.
+    /// The module's builder proof before its imports are resolved
+    /// (`pure_builders::prove`); the analysis settles it into
+    /// `pure_builder_edits`.
+    #[serde(skip)]
+    pub(crate) builder_proof: Option<crate::pure_builders::BuilderProof>,
+    /// The edits that mark each proven Animus builder chain
+    /// `/* @__PURE__ */` (`pure_builders::resolve`), so a bundler drops a
+    /// system no runtime code reads.
     #[serde(skip)]
     pub pure_builder_edits: Vec<(u32, u32, String)>,
     /// Top-level `const X = Y;` bare-identifier aliases, assertion-peeled
@@ -1282,6 +1287,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         builder_import_references: Vec::new(),
         first_that_works_uses: BTreeSet::new(),
         synthesized_components: BTreeSet::new(),
+        builder_proof: None,
         pure_builder_edits: Vec::new(),
         aliases: const_initializers.aliases,
         assigned_aliases: const_initializers.assigned,
@@ -1973,7 +1979,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         opaque_tags,
         builder_import_references,
         first_that_works_uses,
-        pure_builder_edits,
+        builder_proof,
     } = crate::usage_facts::collect_enriched_usage(
         scoping,
         program,
@@ -2004,7 +2010,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         builder_import_references,
         first_that_works_uses,
         synthesized_components: BTreeSet::new(),
-        pure_builder_edits,
+        builder_proof,
+        pure_builder_edits: Vec::new(),
         member_parent_extensions,
         member_rooted_chains: walked.member_rooted,
         default_export_chain: walked
