@@ -84,9 +84,10 @@ export interface ManifestCrossFileFacts {
 
 export interface ManifestEliminatedDetail {
   component: string;
-  /** `"component"` | `"variant"` | `"state"`. */
+  /** `"component"` | `"variant"` | `"state"` | `"compound"`. */
   kind: string;
-  /** Variant option or state name; `null` for a whole component. */
+  /** Variant option or state name, or a compound's index; `null` for a
+   *  whole component. */
   name: string | null;
   reason: string;
 }

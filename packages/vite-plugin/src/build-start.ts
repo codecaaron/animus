@@ -151,6 +151,8 @@ export async function runBuildStart(
         ctx.trace(`${d.component} variant '${d.name}' pruned: ${d.reason}`);
       } else if (d.kind === 'state') {
         ctx.trace(`${d.component} state '${d.name}' pruned: ${d.reason}`);
+      } else if (d.kind === 'compound') {
+        ctx.trace(`${d.component} compound ${d.name} pruned: ${d.reason}`);
       }
     }
 

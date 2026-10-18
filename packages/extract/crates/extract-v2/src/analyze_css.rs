@@ -10208,9 +10208,12 @@ fn run_with_system_floor(
     .flatten()
     .collect::<Vec<_>>()
     .join(", and ");
+    // Each component's compound conditions, in compound order.
+    let compound_conditions: FxHashMap<&str, &[crate::css::CompoundConfig]> =
+        evaluated.iter().map(|(id, (.., configs))| (id.as_str(), configs.as_slice())).collect();
     let pruned_components = (!inputs.dev_mode && !unseen.is_empty()).then(|| {
         let mut pruned = reconciled_components.clone();
-        reconcile(&mut pruned, &usage_ledger, &parent_ids);
+        reconcile(&mut pruned, &usage_ledger, &parent_ids, &compound_conditions);
         pruned
     });
     let reconciliation = if inputs.dev_mode || pruned_components.is_some() {
@@ -10227,7 +10230,7 @@ fn run_with_system_floor(
         }
         serde_json::to_value(&report).unwrap_or(serde_json::json!({}))
     } else {
-        let mut report = reconcile(&mut reconciled_components, &usage_ledger, &parent_ids);
+        let mut report = reconcile(&mut reconciled_components, &usage_ledger, &parent_ids, &compound_conditions);
         if let Some(forced) = &forced_report {
             crate::forced_usage::merge_into_report(&mut report, forced);
         }

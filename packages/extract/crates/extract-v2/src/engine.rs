@@ -4862,6 +4862,62 @@ export const App = () => <Box tone="red" />;
         assert!(!code["cycle-back.ts"].contains(extends_marked), "{}", code["cycle-back.ts"]);
     }
 
+    /// Contract: a compound needing a pruned option is dropped. A compound one
+    /// of whose conditions names only variant options usage pruned can never
+    /// match, so its rule goes; every other compound keeps its index, class
+    /// and bytes, an axis usage cannot close (one with no default) prunes
+    /// nothing, and neither does a state.
+    #[test]
+    fn a_compound_needing_a_pruned_option_is_dropped() {
+        let source = |extra: &str| {
+            format!(
+                "export const Tag = ds.styles({{ padding: 1 }})\n\
+                   .variant({{ prop: 'size', defaultVariant: 'sm', variants: {{ sm: {{ margin: 1 }}, md: {{ margin: 2 }}, lg: {{ margin: 3 }} }} }})\n\
+                   .variant({{ prop: 'tone', variants: {{ calm: {{ color: 'blue' }}, loud: {{ color: 'red' }} }} }})\n\
+                   .states({{ busy: {{ opacity: 0.5 }}, quiet: {{ opacity: 0.9 }} }})\n\
+                   .compound({{ size: 'lg' }}, {{ order: 1 }})\n\
+                   .compound({{ size: 'sm' }}, {{ order: 2 }})\n\
+                   .compound({{ busy: true }}, {{ order: 3 }})\n\
+                   .compound({{ size: ['md', 'lg'] }}, {{ order: 4 }})\n\
+                   .compound({{ tone: 'loud' }}, {{ order: 5 }})\n\
+                   .compound({{ size: ['sm', 'lg'] }}, {{ order: 6 }})\n\
+                   .asElement('span');\n\
+                 export const App = () => <><Tag size='sm' tone='calm' quiet />{extra}</>;\n"
+            )
+        };
+        let css = |source: String| {
+            let mut engine =
+                ExtractEngine::new(Some(EngineOptions { dev_mode: Some(false), ..Default::default() })).unwrap();
+            let manifest: serde_json::Value = serde_json::from_str(
+                &engine.analyze(serde_json::json!([{ "path": "tag.tsx", "source": source }]).to_string(), None).unwrap(),
+            )
+            .unwrap();
+            manifest["css"].as_str().unwrap().to_string()
+        };
+        let pruned = css(source(""));
+        let rule = |css: &str, index: usize| {
+            let at = css.find(&format!("--compound-{index}"))?;
+            let end = css[at..].find('}')? + at + 1;
+            Some(css[at..end].to_string())
+        };
+        // lg and md are pruned.
+        for gone in [0, 3] {
+            assert_eq!(rule(&pruned, gone), None, "compound {gone} kept:\n{pruned}");
+        }
+        // sm stays, so does a state's (busy is pruned, but no compound
+        // condition records a state), tone has no default and stays whole, and
+        // [sm, lg] needs sm.
+        let all = css(source("<Tag size='lg' busy /><Tag size='md' tone='loud' />"));
+        for kept in [1, 2, 4, 5] {
+            let kept_rule = rule(&pruned, kept);
+            assert!(kept_rule.is_some(), "compound {kept} dropped:\n{pruned}");
+            assert_eq!(kept_rule, rule(&all, kept), "compound {kept} changed");
+        }
+        // With every option used, nothing goes.
+        for index in 0..6 {
+            assert!(rule(&all, index).is_some(), "compound {index} dropped with every option used:\n{all}");
+        }
+    }
 }
 
 

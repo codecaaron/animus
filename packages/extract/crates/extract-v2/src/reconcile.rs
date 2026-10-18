@@ -161,10 +161,39 @@ pub struct EliminatedDetail {
     pub reason: String,
 }
 
+/// Prunes what usage proves never renders: components, then variant options
+/// and states, then each compound one of whose conditions needs only options
+/// pruned here (`compound_conditions`, by component id, in compound order). A pruned compound keeps its place, emptied, so every
+/// other compound keeps its index and class.
+/// The condition of a compound no render can meet, as the runtime matches
+/// it (`String(props[prop] ?? default)` against each expected value): a
+/// variant whose every expected option is pruned. The conditions hold a
+/// compound's string and list values only, so a state's never prunes one.
+fn impossible_condition(
+    conditions: &crate::css::CompoundConditions,
+    eliminated_options: &FxHashMap<String, FxHashSet<String>>,
+) -> Option<String> {
+    let spelled = |value: &serde_json::Value| match value {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    };
+    conditions.iter().find_map(|(prop, expected)| {
+        let alternatives: Option<Vec<String>> = match expected {
+            serde_json::Value::Array(items) => items.iter().map(spelled).collect(),
+            value => spelled(value).map(|value| vec![value]),
+        };
+        let alternatives = alternatives.filter(|alternatives| !alternatives.is_empty())?;
+        let pruned = eliminated_options.get(prop)?;
+        alternatives.iter().all(|value| pruned.contains(value)).then(|| format!("{prop} {}", alternatives.join(" or ")))
+    })
+}
+
 pub fn reconcile(
     components: &mut Vec<(String, ComponentCss)>,
     ledger: &UsageLedger,
     parent_components: &FxHashSet<String>,
+    compound_conditions: &FxHashMap<&str, &[crate::css::CompoundConfig]>,
 ) -> ReconciliationReport {
     let mut report = ReconciliationReport {
         components_total: components.len(),
@@ -207,6 +236,8 @@ pub fn reconcile(
 
     for (component_id, css) in components.iter_mut() {
         let binding = extract_binding(component_id).to_string();
+        // The options pruned here, which no render can carry.
+        let mut eliminated_options: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
 
         for variant in css.variants.iter_mut() {
             let used_options = ledger
@@ -230,6 +261,7 @@ pub fn reconcile(
                     let eliminated_count = before_count - after_count;
                     report.variants_eliminated += eliminated_count;
 
+                    eliminated_options.entry(variant.prop.clone()).or_default().extend(eliminated_here.iter().cloned());
                     for eliminated_option in eliminated_here {
                         report.eliminated_details.push(EliminatedDetail {
                             component: binding.clone(),
@@ -274,6 +306,24 @@ pub fn reconcile(
                     });
                 }
             }
+        }
+
+        let Some(configs) = compound_conditions.get(component_id.as_str()) else { continue };
+        for (index, (conditions, _)) in configs.iter().enumerate() {
+            let Some(styles) = css.compounds.get_mut(index) else { continue };
+            if styles.all_declarations().next().is_none() {
+                continue;
+            }
+            let Some(why) = impossible_condition(conditions, &eliminated_options) else {
+                continue;
+            };
+            *styles = crate::theme::ResolvedStyles::default();
+            report.eliminated_details.push(EliminatedDetail {
+                component: binding.clone(),
+                kind: "compound".to_string(),
+                name: Some(index.to_string()),
+                reason: format!("compound {index} needs {why}, which no render carries"),
+            });
         }
     }
 
@@ -382,7 +432,7 @@ mod tests {
         let ledger = make_ledger_with_variants("src/Button.tsx::Button", "variant", &["stroke"]);
         let parents: FxHashSet<String> = FxHashSet::default();
 
-        let report = reconcile(&mut components, &ledger, &parents);
+        let report = reconcile(&mut components, &ledger, &parents, &FxHashMap::default());
 
         let remaining_options: Vec<&str> = components[0].1.variants[0]
             .options
@@ -411,7 +461,7 @@ mod tests {
             make_ledger_with_variants("src/Button.tsx::Button", "variant", &["fill", "stroke"]);
         let parents: FxHashSet<String> = FxHashSet::default();
 
-        let report = reconcile(&mut components, &ledger, &parents);
+        let report = reconcile(&mut components, &ledger, &parents, &FxHashMap::default());
 
         assert_eq!(components[0].1.variants[0].options.len(), 2);
         assert_eq!(report.variants_eliminated, 0);
@@ -427,7 +477,7 @@ mod tests {
         let ledger = make_ledger_with_states("src/Layout.tsx::Layout", &["sidebar"]);
         let parents: FxHashSet<String> = FxHashSet::default();
 
-        let report = reconcile(&mut components, &ledger, &parents);
+        let report = reconcile(&mut components, &ledger, &parents, &FxHashMap::default());
 
         let remaining_states: Vec<&str> = components[0]
             .1
@@ -456,7 +506,7 @@ mod tests {
         let ledger = UsageLedger::default();
         let parents: FxHashSet<String> = FxHashSet::default();
 
-        let report = reconcile(&mut components, &ledger, &parents);
+        let report = reconcile(&mut components, &ledger, &parents, &FxHashMap::default());
 
         assert!(components.is_empty(), "Ghost should be eliminated entirely");
         assert_eq!(report.components_eliminated, 1);
@@ -473,7 +523,7 @@ mod tests {
         let mut parents: FxHashSet<String> = FxHashSet::default();
         parents.insert("src/Base.tsx::Base".to_string());
 
-        reconcile(&mut components, &ledger, &parents);
+        reconcile(&mut components, &ledger, &parents, &FxHashMap::default());
 
         assert_eq!(
             components.len(),
@@ -525,7 +575,7 @@ mod tests {
             make_component("animus-Button-abc", "variant", &["fill", "stroke"], &[]),
         )];
         let parents: FxHashSet<String> = FxHashSet::default();
-        reconcile(&mut components, &ledger, &parents);
+        reconcile(&mut components, &ledger, &parents, &FxHashMap::default());
 
         let remaining: Vec<&str> = components[0].1.variants[0]
             .options
@@ -576,7 +626,7 @@ mod tests {
             make_component("animus-Button-abc", "variant", &["fill", "stroke"], &[]),
         )];
         let parents: FxHashSet<String> = FxHashSet::default();
-        let report = reconcile(&mut components, &ledger, &parents);
+        let report = reconcile(&mut components, &ledger, &parents, &FxHashMap::default());
 
         assert_eq!(components[0].1.variants[0].options.len(), 2);
         assert_eq!(report.variants_eliminated, 0);
@@ -616,7 +666,7 @@ mod tests {
             .insert("src/Layout.tsx::Layout".to_string(), layout_used);
 
         let parents: FxHashSet<String> = FxHashSet::default();
-        let report = reconcile(&mut components, &ledger, &parents);
+        let report = reconcile(&mut components, &ledger, &parents, &FxHashMap::default());
 
         assert_eq!(report.components_total, 2);
         assert_eq!(report.components_extracted, 2);
@@ -646,7 +696,7 @@ mod tests {
             .insert("src/Button.tsx::Button".to_string());
 
         let parents: FxHashSet<String> = FxHashSet::default();
-        let report = reconcile(&mut components, &ledger, &parents);
+        let report = reconcile(&mut components, &ledger, &parents, &FxHashMap::default());
 
         assert_eq!(
             components[0].1.variants[0].options.len(),
@@ -741,7 +791,7 @@ mod tests {
             identify_prospective_eliminations(&components_a, &ledger, &parents);
 
         let mut components_b = components_a.clone();
-        let actual_report = reconcile(&mut components_b, &ledger, &parents);
+        let actual_report = reconcile(&mut components_b, &ledger, &parents, &FxHashMap::default());
 
         assert_eq!(prospective_details.len(), 1);
         assert_eq!(actual_report.eliminated_details.len(), 1);
