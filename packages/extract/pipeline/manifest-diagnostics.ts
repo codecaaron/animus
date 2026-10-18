@@ -261,6 +261,9 @@ export function collectSelectorAliasDiagnostics(
 
 export const UNREADABLE_SOURCE_FILE = 'animus.ingestion.unreadable-source-file';
 
+/** A directory discovery could not list, or an entry it could not stat. */
+export const UNREADABLE_DISCOVERY_PATH = 'animus.discovery.unreadable-path';
+
 /** A kit the system extends resolved, yet discovery found none of its files. */
 export const NO_KIT_FILES = 'animus.discovery.no-kit-files';
 
@@ -361,6 +364,23 @@ export function unreadableSourceDiagnostic<Thrown>(
     message: `configured source file ${relPath} could not be read: ${String(error)} (${SKIPPED_SOURCE_COST})`,
     code: UNREADABLE_SOURCE_FILE,
     severity: severityFor(UNREADABLE_SOURCE_FILE),
+  };
+}
+
+/** A path discovery could not read: no file under it is analyzed. A warning,
+ *  not a lost input, because the file set is what discovery finds; it holds
+ *  no pruning off. */
+export function unreadableDiscoveryPathDiagnostic<Thrown>(
+  relPath: string,
+  error: Thrown
+): ManifestDiagnostic {
+  return {
+    file: relPath,
+    component: 'discovery',
+    kind: 'warn',
+    message: `could not be read, so discovery skipped it and no file under it is analyzed: ${String(error)} — fix its permissions, or exclude it if it holds no source`,
+    code: UNREADABLE_DISCOVERY_PATH,
+    severity: severityFor(UNREADABLE_DISCOVERY_PATH),
   };
 }
 
@@ -470,6 +490,7 @@ type DiagnosticSeverity = 'error' | 'warn' | 'info';
 const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [SELECTOR_UNSUPPORTED_SUBJECT, 'error'],
   [UNREADABLE_SOURCE_FILE, 'error'],
+  [UNREADABLE_DISCOVERY_PATH, 'warn'],
   [NO_KIT_FILES, 'warn'],
   [KIT_WITHOUT_SOURCE_CONDITION, 'warn'],
   [KIT_WITHOUT_SIDE_EFFECTS, 'warn'],

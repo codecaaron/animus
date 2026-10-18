@@ -98,6 +98,7 @@ import {
   toWatchKeys,
   tsconfigChainPaths,
   isDeletedSource,
+  unreadableDiscoveryPathDiagnostic,
   unreadableSourceDiagnostic,
   unmatchedExcludeLines,
   unresolvableIncludesMessage,
@@ -179,6 +180,7 @@ import {
 import { logBuildTimings } from './timing';
 
 import type { PackageReadRecord } from '../pipeline/alias-agreement';
+import type { OnUndiscoverable } from '../pipeline/discover-files';
 import type { DiscoveryResolver } from '../pipeline/host-package-resolver';
 import type {
   AnimusCoreOptions,
@@ -867,6 +869,25 @@ export class ExtractionSession {
     ).mode;
   }
 
+  /** Warns of each path a discovery walk could not read, named from
+   *  `rootDir`: no file under it is analyzed. */
+  private reportUndiscoverable(rootDir: string): OnUndiscoverable {
+    return (path, err) =>
+      surfaceManifestDiagnostics(
+        {
+          diagnostics: [
+            unreadableDiscoveryPathDiagnostic(relative(rootDir, path), err),
+          ],
+        },
+        (message) => this.warn(message),
+        {
+          levels: this.options.diagnostics,
+          strict: this.options.strict,
+          reportErrors: this.reportErrors(),
+        }
+      );
+  }
+
   /** Forgets that `relPath` could not be read once an incremental pass reads
    *  or deletes it, so its cost stops holding pruning off. Whether one was
    *  recorded. */
@@ -1377,7 +1398,8 @@ export class ExtractionSession {
         rootDir,
         rootDir,
         excludeMatcher,
-        extensionsSet
+        extensionsSet,
+        this.reportUndiscoverable(rootDir)
       ).map((abs) => ({ abs, key: relative(rootDir, abs), owningRoot: null }));
     }
 
@@ -1913,7 +1935,8 @@ export class ExtractionSession {
       rootDir,
       rootDir,
       excludeMatcher,
-      extensionsSet
+      extensionsSet,
+      this.reportUndiscoverable(rootDir)
     );
     // The system load's own modules outside the root (a system file in the
     // app root's parent, and the files of its package it reads) are analysed
@@ -2664,7 +2687,8 @@ export class ExtractionSession {
       // extension set; the project default sees nothing under a dist root.
       const walked = walkPackageSources(
         root,
-        this.externalRootExtensions.get(root) ?? extensionsSet
+        this.externalRootExtensions.get(root) ?? extensionsSet,
+        this.reportUndiscoverable(this.rootDir!)
       );
       if (walked.length === 0 && previous.size > 0) {
         // A vacuous rewalk of a populated root is how policy drift presents
@@ -3556,7 +3580,10 @@ export class ExtractionSession {
       // `{ schema: 1, sessionId, epoch }`; both fields are re-decided below.
       const parsed = JSON.parse(
         readFileSync(replacementEpochPath(this.sessionDir), 'utf-8')
-      ) as { schema?: number; epoch?: string };
+      ) as {
+        schema?: number;
+        epoch?: string;
+      };
       return parsed.schema === 1 && isDiskString(parsed.epoch)
         ? parsed.epoch
         : null;

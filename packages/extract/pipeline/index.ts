@@ -276,6 +276,7 @@ export {
   surfaceManifestDiagnostics,
   isDeletedSource,
   noKitFilesDiagnostics,
+  unreadableDiscoveryPathDiagnostic,
   unreadableSourceDiagnostic,
   VOCABULARY_COLLISION,
   VOCABULARY_LEGACY_VERB,

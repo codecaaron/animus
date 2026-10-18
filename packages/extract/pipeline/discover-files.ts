@@ -1,7 +1,14 @@
 import { readdirSync, statSync } from 'fs';
 import { extname, join, relative } from 'path';
 
+import { isDeletedSource } from './manifest-diagnostics';
+
 import type { ExcludeMatcher } from './core-options';
+
+/** Called with a directory discovery could not list, or an entry it could
+ *  not stat, and the error: whatever is under it is not discovered. An entry
+ *  deleted during the walk is not reported. */
+export type OnUndiscoverable = <Thrown>(path: string, error: Thrown) => void;
 
 function pathCharRank(code: number): number {
   return code === 0x2f || code === 0x5c ? -1 : code;
@@ -21,9 +28,10 @@ export function discoverFiles(
   dir: string,
   rootDir: string,
   exclude: ExcludeMatcher | undefined,
-  extensionsSet: ReadonlySet<string>
+  extensionsSet: ReadonlySet<string>,
+  onUndiscoverable?: OnUndiscoverable
 ): string[] {
-  return walkFiles(dir, rootDir, exclude, extensionsSet).sort(
+  return walkFiles(dir, rootDir, exclude, extensionsSet, onUndiscoverable).sort(
     compareDiscoveryOrder
   );
 }
@@ -32,14 +40,16 @@ function walkFiles(
   dir: string,
   rootDir: string,
   exclude: ExcludeMatcher | undefined,
-  extensionsSet: ReadonlySet<string>
+  extensionsSet: ReadonlySet<string>,
+  onUndiscoverable: OnUndiscoverable | undefined
 ): string[] {
   const results: string[] = [];
 
   let entries: string[];
   try {
     entries = readdirSync(dir, { encoding: 'utf8' });
-  } catch {
+  } catch (err) {
+    if (!isDeletedSource(err)) onUndiscoverable?.(dir, err);
     return results;
   }
 
@@ -56,12 +66,21 @@ function walkFiles(
     let stat: ReturnType<typeof statSync>;
     try {
       stat = statSync(fullPath);
-    } catch {
+    } catch (err) {
+      if (!isDeletedSource(err)) onUndiscoverable?.(fullPath, err);
       continue;
     }
 
     if (stat.isDirectory()) {
-      results.push(...walkFiles(fullPath, rootDir, exclude, extensionsSet));
+      results.push(
+        ...walkFiles(
+          fullPath,
+          rootDir,
+          exclude,
+          extensionsSet,
+          onUndiscoverable
+        )
+      );
     } else if (extensionsSet.has(extname(entry))) {
       results.push(fullPath);
     }

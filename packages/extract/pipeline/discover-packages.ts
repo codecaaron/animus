@@ -26,6 +26,7 @@ import {
   UNIMPORTED_CREATE_SYSTEM,
   UNFOLLOWED_SYSTEM_BUILDER,
   UNPROVEN_ROOT_BINDING,
+  unreadableDiscoveryPathDiagnostic,
 } from './manifest-diagnostics';
 import { isEngineTransformExtension } from './mdx-preprocessor';
 import {
@@ -39,6 +40,7 @@ import { moduleFactsCall, relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 import { declaredWorkspacePackages } from './workspace-packages';
 
+import type { OnUndiscoverable } from './discover-files';
 import type { EngineApi } from './engine-adapter';
 import type { KitDescriptorRecord } from './kit-descriptor';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
@@ -76,9 +78,16 @@ export function isExcludedPackageRelativePath(rel: string): boolean {
 
 export function walkPackageSources(
   packageDir: string,
-  extensionsSet: ReadonlySet<string>
+  extensionsSet: ReadonlySet<string>,
+  onUndiscoverable?: OnUndiscoverable
 ): string[] {
-  return discoverFiles(packageDir, packageDir, undefined, extensionsSet).filter(
+  return discoverFiles(
+    packageDir,
+    packageDir,
+    undefined,
+    extensionsSet,
+    onUndiscoverable
+  ).filter(
     (absPath) => !isExcludedPackageRelativePath(relative(packageDir, absPath))
   );
 }
@@ -750,6 +759,12 @@ export async function collectExternalPackageSources(opts: {
     reported.add(key);
     diagnostics.push(finding);
   };
+  // A kit path its walk could not read, once whichever walk reaches it.
+  const undiscoverable: OnUndiscoverable = (path, error) =>
+    reportFinding(
+      path,
+      unreadableDiscoveryPathDiagnostic(relative(rootDir, path), error)
+    );
   const report = (
     packageName: string,
     pkgRoot: string,
@@ -945,7 +960,8 @@ export async function collectExternalPackageSources(opts: {
         outputDir,
         outputDir,
         undefined,
-        outputExtensions
+        outputExtensions,
+        undiscoverable
       ).filter((file) => {
         const relToOutput = relative(outputDir, file);
         return !PACKAGE_OUTPUT_EXCLUDES.some((pattern) =>
@@ -978,7 +994,11 @@ export async function collectExternalPackageSources(opts: {
         claimDir(condition.root, specifier);
         dirExtensions[condition.root] = [...extensionsSet];
         onPackageResolved?.(specifier, condition.root);
-        for (const file of walkPackageSources(condition.root, extensionsSet)) {
+        for (const file of walkPackageSources(
+          condition.root,
+          extensionsSet,
+          undiscoverable
+        )) {
           if (ingest(file, specifier)) fileCount++;
         }
       }
@@ -1028,7 +1048,11 @@ export async function collectExternalPackageSources(opts: {
         }
       }
 
-      const pkgFiles = walkPackageSources(srcDir, extensionsSet);
+      const pkgFiles = walkPackageSources(
+        srcDir,
+        extensionsSet,
+        undiscoverable
+      );
 
       staleDist = linked && distEntryIsStale(absEntry, srcDir, pkgFiles);
 

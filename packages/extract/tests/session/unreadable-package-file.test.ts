@@ -1,4 +1,11 @@
-import { chmodSync, readFileSync, rmSync } from 'fs';
+import {
+  chmodSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -18,7 +25,10 @@ setEngineApiOverride(() => ({
   clearAnalysisCache: mocks.clearAnalysisCache,
 }));
 
-import { UNREADABLE_SOURCE_FILE } from '../../pipeline/manifest-diagnostics';
+import {
+  UNREADABLE_DISCOVERY_PATH,
+  UNREADABLE_SOURCE_FILE,
+} from '../../pipeline/manifest-diagnostics';
 import { getSharedCss } from '../../session/singleton';
 import {
   buildManifest,
@@ -51,6 +61,7 @@ let restoreGlobals: () => void;
 let warned: string[];
 let reported: string[];
 const lockedFiles: string[] = [];
+const lockedDirs: string[] = [];
 
 function createWorkspace() {
   const { app, kit } = createKitWorkspace();
@@ -84,6 +95,7 @@ afterEach(() => {
   restoreGlobals();
   vi.restoreAllMocks();
   for (const file of lockedFiles.splice(0)) chmodSync(file, 0o644);
+  for (const dir of lockedDirs.splice(0)) chmodSync(dir, 0o755);
   disposeTempRoots();
 });
 
@@ -171,6 +183,41 @@ describe('a project file that cannot be read', () => {
     expect(line).toContain('its renders are not seen, so nothing is pruned');
     expect(mocks.analyzeProject.mock.calls[0][DEV_MODE_SLOT]).toBe(false);
     expect(skippedSources()).toEqual(['src/App.tsx']);
+    session.close();
+  });
+});
+
+// Contract: a directory discovery cannot list is reported with its path and
+// cause, not silently dropped. Nothing under it can be read, so it is a
+// warning: it fails no strict build and holds no pruning off.
+describe('a directory discovery cannot read', () => {
+  function lockDir(dir: string) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'Hidden.tsx'), 'export const Hidden = 1;\n');
+    chmodSync(dir, 0o000);
+    lockedDirs.push(dir);
+    expect(() => readdirSync(dir)).toThrow();
+  }
+
+  test('is reported, in the project and in a kit, and fails nothing', async () => {
+    const { app, kit } = createKitWorkspace();
+    lockDir(join(app, 'src', 'locked'));
+    lockDir(join(kit, 'src', 'locked'));
+    const session = makeSession(app, { mode: 'production', strict: true });
+
+    await session.runFullPipeline();
+
+    const lines = warned.filter((line) =>
+      line.includes(UNREADABLE_DISCOVERY_PATH)
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines).toContainEqual(
+      expect.stringMatching(/(^|\s)src\/locked\b.*EACCES/)
+    );
+    expect(lines).toContainEqual(
+      expect.stringMatching(/\.\.\/kits\/ui\/src\/locked\b.*EACCES/)
+    );
+    expect(skippedSources()).toEqual([]);
     session.close();
   });
 });
