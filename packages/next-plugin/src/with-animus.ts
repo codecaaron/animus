@@ -773,14 +773,30 @@ async function analyzeForTurbopack(
   );
   // Each full pass re-reads the tsconfig aliases.
   session.aliasesFromTsconfig = true;
-  await runSessionPipeline(session);
-
-  // A load that started while this one analyzed has replaced its session.
-  if (development && owner.session === session) {
-    const outcome = startTurbopackWatcher(session, rootDir);
+  // Under next dev the watcher starts before the first pass and holds what
+  // it sees until that pass publishes, so an edit made while it runs is
+  // analyzed after it rather than lost.
+  if (development) {
+    const outcome = startTurbopackWatcher(session, rootDir, {
+      holdEvents: true,
+    });
     bindTurbopackWatchDeathReport(outcome, rootDir);
     if (outcome.kind === 'started') owner.watcher = outcome.handle;
   }
+  const watcher = owner.watcher;
+  try {
+    await runSessionPipeline(session);
+  } catch (err) {
+    if (owner.watcher === watcher) {
+      watcher?.close();
+      owner.watcher = null;
+    }
+    throw err;
+  }
+
+  // A load that started while this one analyzed has replaced its session,
+  // and closed this watcher.
+  if (owner.session === session) void watcher?.deliverHeldEvents();
 
   for (const line of turbopackSideEffectsLimits(
     rootDir,

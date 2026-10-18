@@ -1,3 +1,5 @@
+import { appendFileSync } from 'fs';
+import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -260,5 +262,28 @@ describe('the Turbopack first full pass', () => {
       dev.status === 'fulfilled' && rootWatched(loadBuild(dev.value));
     if (watched) await config('phase-production-server');
     expect(watched).toBe(false);
+  });
+
+  // Contract: a source edit made while the first dev analysis runs is
+  // analyzed once that analysis publishes, not lost to a watcher that
+  // started after it.
+  test('an edit during the first dev analysis is analyzed after it', async () => {
+    const config = turbopackConfigInNewProject();
+    const button = join(process.cwd(), 'src', 'Button.tsx');
+    mocks.analyzeProject.mockImplementationOnce(() => {
+      // A real first analysis runs for seconds; the pause lets a watcher
+      // registered before it start reporting, as fs.watch does not at once.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+      appendFileSync(button, '// edited during the first analysis\n');
+      return buildManifest({});
+    });
+
+    const dev = await config('phase-development-server');
+    await vi.waitFor(
+      () => expect(mocks.analyzeProject).toHaveBeenCalledTimes(2),
+      { timeout: 2000 }
+    );
+    expect(rootWatched(loadBuild(dev))).toBe(true);
+    await config('phase-production-build');
   });
 });
