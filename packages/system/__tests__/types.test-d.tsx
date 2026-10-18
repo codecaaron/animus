@@ -191,6 +191,31 @@ function TypeTests() {
   <DivBox className="x">click</DivBox>;
   <StatefulBox>content</StatefulBox>;
 
+  // Children take any React node, on the default element and through `as`,
+  // and refuse anything else.
+  <DivBox>
+    <span />
+  </DivBox>;
+  <DivBox>
+    text {42} <span />
+    {['a', 'b'].map((item) => (
+      <span key={item}>{item}</span>
+    ))}
+    {[[<span key="nested" />], null, undefined, false]}
+    <>
+      <span />
+      fragment
+    </>
+  </DivBox>;
+  <DivBox as="a" href="/">
+    <span />
+    {[<span key="one" />, 'two']}
+  </DivBox>;
+  // @ts-expect-error — an object is not a React node
+  <DivBox>{{ label: 'x' }}</DivBox>;
+  // @ts-expect-error — an object is not a React node, through `as` too
+  <DivBox as="a">{{ label: 'x' }}</DivBox>;
+
   type TestProps = { display: string; '&:hover': { color: string } };
   type TestConfig = Record<string, Prop>;
   type ResolvedNested = ThemedCSSProps<TestProps, TestConfig>;

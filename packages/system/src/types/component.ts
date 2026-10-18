@@ -152,7 +152,11 @@ type AnimusOwnProps<
   SelectorAliasProps<ResolvedGroupProps<PR, GR, AG>> & {
     asChild?: boolean | undefined;
     className?: string | undefined;
-    children?: ReactNode;
+    // `JSX.Element` is assignable to `ReactNode` but no subtype of it, so a
+    // two-signature component fails the subtype pass of overload resolution
+    // on every element child and checks the call twice more. Listing it makes
+    // that pass succeed; the accepted children are the same.
+    children?: ReactNode | JSX.Element | Iterable<ReactNode | JSX.Element>;
   };
 
 /** A string terminal rendered as `E`: E's native props and ref, then Animus's. */
