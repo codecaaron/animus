@@ -12,6 +12,7 @@ import { invalidateFileModules } from './module-invalidation';
 import { reconcileSourceCorpus } from './rediscovery';
 import { applyPublished, changesOf, mergePublished } from './session-outcomes';
 import { applyDevBridgeImport, extendingFiles } from './transform';
+import { systemPropsAdoptable } from './virtual-modules';
 
 import type { ObservedOutcome, PluginContext } from './context';
 import type { HotUpdateResult } from './hot-update-events';
@@ -358,6 +359,14 @@ function invalidateStaleModules(
     const mod = graph.getModuleById(moduleId);
     if (mod) {
       graph.invalidateModule(mod);
+      // A map generation that may not be taken in place reaches its
+      // importers now. Vite reads the boundary from the generation served
+      // before, so one that had it would take a hot step first, and its
+      // callback's invalidate would then be ignored, since the generation
+      // now served accepts nothing.
+      if (moduleId === RESOLVED_SYSTEM_PROPS_ID && !systemPropsAdoptable(ctx)) {
+        mod.isSelfAccepting = false;
+      }
       modulesToUpdate.push(mod);
     }
   }

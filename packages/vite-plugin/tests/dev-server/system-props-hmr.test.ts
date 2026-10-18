@@ -88,11 +88,12 @@ const suite = prerequisites.ok ? describe : describe.skip;
 // Contract: in the browser dev server, a generation of the system prop map
 // that only adds entries hot-updates without a reload, through a
 // non-accepting importer chain, and the map object components already hold
-// gains the entries. A generation that removes an entry, or any generation
-// of a project with a class resolver that has system props, is invalidated
-// and reaches its importers as it does without the boundary: a mounted
-// component may hold the removed entry's class, and an updated module may
-// have called a resolver before the map gained what it reads. A resolver
+// gains the entries. A generation that removes an entry is invalidated and
+// reaches its importers as it does without the boundary: a mounted
+// component may hold the removed entry's class. A project with a class
+// resolver that has system props is served without the boundary, so its
+// updates reach importers at once, with no hot step first: an updated module
+// may have called a resolver before the map gained what it reads. A resolver
 // with no system props is created without the map, so it changes nothing.
 suite('the system prop map in the browser dev server', () => {
   let fixture: DevFixture;
@@ -220,7 +221,7 @@ suite('the system prop map in the browser dev server', () => {
     expect(held.p).toHaveProperty('8');
   });
 
-  it('a removed utility value, or a class resolver, invalidates the update', async () => {
+  it('a removed utility value invalidates; a class resolver reloads at once', async () => {
     const data: HotData = {};
     const first = hotStub(data);
     const held = (
@@ -240,32 +241,35 @@ suite('the system prop map in the browser dev server', () => {
     expect(removed.systemPropMap).not.toBe(held);
     expect(JSON.stringify(held)).toBe(before);
 
-    // With a class resolver in the project, even an added value invalidates.
+    // With a class resolver that has system props, no generation is taken
+    // in place: it is served without the boundary, and an added value
+    // reaches its importers at once, with no hot step first.
     fixture.write(
       'src/Resolver.ts',
       "import { ds } from './ds';\n\nexport const box = ds.styles({}).system({ space: true }).asClass();\n"
     );
-    const resolverData: HotData = {};
-    const resolverFirst = hotStub(resolverData);
     await until(
-      async () => {
-        await adapter.read();
-        return adapter.trace!().some((line) => line.includes('Resolver.ts'));
-      },
+      async () =>
+        (await adapter.requestSource('src/Resolver.ts')).includes(
+          'createClassResolver'
+        ),
       {
         what: 'the class resolver analyzed',
         describe: async () => renderTrace(adapter),
       }
     );
-    await evaluate(
-      await serve([NEW_USAGE_STEP, 4], NEW_USAGE_STEP),
-      resolverFirst
-    );
-    const added = await evaluate(
-      await serve([NEW_USAGE_STEP, 4, 8], 8),
-      hotStub(resolverData)
-    );
-    resolverFirst.callbacks.forEach((callback) => callback(added));
-    expect(resolverFirst.invalidated).toHaveLength(1);
+    const plain = await serve([NEW_USAGE_STEP, 4], NEW_USAGE_STEP);
+    const mark = adapter.hotUpdatePaths!().length;
+    const added = await serve([NEW_USAGE_STEP, 4, 8], 8);
+    expect(plain).not.toContain('import.meta.hot.accept(');
+    expect(added).not.toContain('import.meta.hot.accept(');
+    await until(async () => updatesSince(mark).includes('full-reload'), {
+      what: 'the added value reloading at once',
+      describe: async () =>
+        `payloads since mark: ${JSON.stringify(updatesSince(mark))}${renderTrace(adapter)}`,
+    });
+    expect(
+      updatesSince(mark).filter((path) => path.includes(SYSTEM_PROPS_URL))
+    ).toEqual([]);
   });
 });

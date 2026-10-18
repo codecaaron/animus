@@ -192,7 +192,7 @@ if (import.meta.hot) {
     // The Session's module, built where every host's are: the HMR change
     // decision compares its exact bytes, which decide what is served here.
     return hotClient
-      ? hotSystemPropsSource(ctx.systemPropsModule, !resolvesOutsideRender(ctx))
+      ? hotSystemPropsSource(ctx.systemPropsModule, systemPropsAdoptable(ctx))
       : ctx.systemPropsModule;
   }
 
@@ -200,6 +200,17 @@ if (import.meta.hot) {
 
   return null;
 }
+
+/** The boundary a generation that may be taken in place carries: the old
+ *  generation's callback invalidates a new one that exports its own map. */
+const HOT_ACCEPT = `if (import.meta.hot) {
+  import.meta.hot.accept((next) => {
+    if (next?.systemPropMap !== systemPropMap) {
+      import.meta.hot.invalidate('animus: the system props module changed more than adding prop map entries');
+    }
+  });
+}
+`;
 
 /**
  * The browser dev server's system-props module: the Session's, accepting a
@@ -216,10 +227,15 @@ if (import.meta.hot) {
  * its importers as it does without the boundary:
  * - one that removes or changes an entry, since a mounted component may
  *   hold that entry's class while nothing renders it again;
- * - one that changes anything but the map (a config, an export);
- * - any generation of a project with a class resolver (`asClass`) that has
- *   system props, which an updated module may call as it evaluates, before
- *   this module adds the entries it reads.
+ * - one that changes anything but the map (a config, an export).
+ * A generation of a project with a class resolver (`asClass`) that has
+ * system props is never taken in place, since an updated module may call it
+ * as it evaluates, before this module adds the entries it reads. It is
+ * served without the boundary, and the hot update marks the module as
+ * accepting nothing, so the update reaches its importers at once: a hot
+ * step first would re-run updated modules against an outgoing page (a
+ * provider re-imported under a consumer that was not). It still records its
+ * map, which a later generation that may be taken in place compares with.
  * Server environments and builds are served the Session's module.
  */
 function hotSystemPropsSource(source: string, adoptable: boolean): string {
@@ -256,14 +272,14 @@ function __animusAdopt(incoming) {
   return map;
 }
 ${source.slice(0, start)}__animusAdopt(${source.slice(start, end)})${source.slice(end)}
-if (import.meta.hot) {
-  import.meta.hot.accept((next) => {
-    if (next?.systemPropMap !== systemPropMap) {
-      import.meta.hot.invalidate('animus: the system props module changed more than adding prop map entries');
-    }
-  });
+${adoptable ? HOT_ACCEPT : ''}`;
 }
-`;
+
+/** Whether the generation served now may be taken in place: where it may
+ *  not, it is served without the boundary, and the update reaches its
+ *  importers as it does without one, never through a hot step first. */
+export function systemPropsAdoptable(ctx: PluginContext): boolean {
+  return !resolvesOutsideRender(ctx);
 }
 
 /** Whether a project may resolve system props outside a render: a class
