@@ -1,4 +1,4 @@
-import { appendFileSync } from 'fs';
+import { appendFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -28,6 +28,7 @@ import {
   buildManifest,
   createProject,
   disposeTempRoots,
+  makeTempRoot,
   resetAnimusGlobals,
   SYSTEM_CONFIG,
 } from '../../extract/tests/session/session-fixtures';
@@ -281,6 +282,32 @@ describe('the Turbopack first full pass', () => {
     const dev = await config('phase-development-server');
     await vi.waitFor(
       () => expect(mocks.analyzeProject).toHaveBeenCalledTimes(2),
+      { timeout: 2000 }
+    );
+    expect(rootWatched(loadBuild(dev))).toBe(true);
+    await config('phase-production-build');
+  });
+
+  // Contract: a system dependency outside the watched tree that changes
+  // while the first dev pass runs is reloaded once that pass publishes. The
+  // watcher learns of it only from the load, after the edit, so the edit
+  // reaches it as the bytes that load read, not as an event.
+  test('an outside-root system dependency edited during the first dev pass reloads after it', async () => {
+    const config = turbopackConfigInNewProject();
+    const tokens = join(makeTempRoot('animus-outside-tokens-'), 'tokens.ts');
+    writeFileSync(tokens, "export const brand = 'red';\n");
+    mocks.loadSystemModule.mockImplementation(() => ({
+      ...SYSTEM_CONFIG,
+      dependencies: [tokens],
+    }));
+    mocks.analyzeProject.mockImplementationOnce(() => {
+      appendFileSync(tokens, "export const accent = 'blue';\n");
+      return buildManifest({});
+    });
+
+    const dev = await config('phase-development-server');
+    await vi.waitFor(
+      () => expect(mocks.loadSystemModule).toHaveBeenCalledTimes(2),
       { timeout: 2000 }
     );
     expect(rootWatched(loadBuild(dev))).toBe(true);

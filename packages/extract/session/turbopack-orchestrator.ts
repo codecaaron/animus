@@ -500,8 +500,18 @@ export function startTurbopackWatcher(
     deliverHeldEvents: () => {
       holdingEvents = false;
       // A watcher started before discovery learns the dependencies only
-      // now, whether or not anything is pending.
+      // now, whether or not anything is pending, and sees no edit made
+      // between the first load's read and this registration: one is queued
+      // as an event, so it reloads the system after the first pass.
       syncDependencyWatchers();
+      try {
+        const changed = session.changedSystemDependency();
+        if (changed !== undefined) enqueuePath(changed);
+      } catch (err) {
+        console.warn(
+          `[animus-extract] Turbopack startup dependency check failed: ${String(err)}`
+        );
+      }
       // Startup bypasses the window.
       if (pendingPaths.size > 0) coalescing.flush();
       return updateChain;

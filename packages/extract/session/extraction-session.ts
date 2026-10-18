@@ -764,6 +764,14 @@ export class ExtractionSession {
     };
   }
 
+  /** A file of the system's evaluated module set whose bytes differ from
+   *  those recorded at its last load; `undefined` where none does. A watcher
+   *  that learns of a dependency only from that load reconciles with it
+   *  the edits it could not see. */
+  changedSystemDependency(): string | undefined {
+    return firstChangedFile(this.systemDependencyHashes);
+  }
+
   /** Whether `path` is the system module, one of its dependencies, or a
    *  path its load found absent: a change to it reloads the system. */
   isSystemDependency(path: string): boolean {
