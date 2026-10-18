@@ -17952,7 +17952,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         };
         let bare = extract("Link");
         let replacement = &bare.components["anchor.ts::Anchor"].replacement;
-        assert!(replacement.starts_with("createComponent(Link,"), "{replacement}");
+        assert!(replacement.starts_with("/* @__PURE__ */ createComponent(Link,"), "{replacement}");
         for wrapped in typescript_wrappers("Link") {
             let out = extract(&wrapped);
             assert_eq!(

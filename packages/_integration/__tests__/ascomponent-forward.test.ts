@@ -44,13 +44,13 @@ describe('asComponent forward extraction', () => {
 
   test('writes a listed or `true` forward into the config, and none without one', () => {
     expect(code).toMatch(
-      /Listed = createComponent\(Target, '[^']+', \{.*"forward":\["size","error"\]\}\);/
+      /Listed = \/\* @__PURE__ \*\/ createComponent\(Target, '[^']+', \{.*"forward":\["size","error"\]\}\);/
     );
     expect(code).toMatch(
-      /All = createComponent\(Target, '[^']+', \{.*"forward":true\}\);/
+      /All = \/\* @__PURE__ \*\/ createComponent\(Target, '[^']+', \{.*"forward":true\}\);/
     );
     expect(code).toMatch(
-      /Plain = createComponent\(Target, '[^']+', \{(?!.*"forward").*\}\);/
+      /Plain = \/\* @__PURE__ \*\/ createComponent\(Target, '[^']+', \{(?!.*"forward").*\}\);/
     );
   });
 

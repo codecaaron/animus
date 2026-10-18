@@ -247,6 +247,10 @@ pub struct ConfigInputs<'a> {
 }
 
 /// Build the replacement call text for one chain.
+/// The annotation that lets a bundler drop an emitted factory call whose
+/// value is unused.
+pub const PURE_ANNOTATION: &str = "/* @__PURE__ */ ";
+
 pub fn generate_replacement(
     filename: &str,
     chain: &ChainFacts,
@@ -266,15 +270,24 @@ pub fn generate_replacement(
         (false, _) => String::new(),
     };
 
+    // The runtime factories are pure at construction: they allocate the
+    // component and its closures, read their arguments and register nothing,
+    // so a bundler may drop a call whose value is unused. Every argument is
+    // Animus's: literals, generated names, a captured callback (a function or
+    // arrow expression, or an identifier), a parent's delivered callbacks.
+    // The one user expression is an asComponent target; a member path
+    // (`motion.div`) can run a getter, so only an identifier target is marked.
+    let pure = d.terminal != TerminalKind::AsComponent || !d.tag.contains('.');
+    let mark = if pure { PURE_ANNOTATION } else { "" };
     Ok(if d.terminal == TerminalKind::AsClass {
-        format!("{}('{}', {}{})", names.create_class_resolver, class_name, config, maps)
+        format!("{mark}{}('{}', {}{})", names.create_class_resolver, class_name, config, maps)
     } else {
         let tag = if d.terminal == TerminalKind::AsComponent {
             d.tag.clone()
         } else {
             format!("'{}'", d.tag)
         };
-        format!("{}({}, '{}', {}{})", names.create_component, tag, class_name, config, maps)
+        format!("{mark}{}({}, '{}', {}{})", names.create_component, tag, class_name, config, maps)
     })
 }
 
@@ -343,7 +356,7 @@ mod tests {
         );
         let text = generate_replacement("a.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false }, &GeneratedNames::exports()).unwrap();
         let class = class_name_for("a.tsx", "Box", "animus");
-        assert_eq!(text, format!("createComponent('div', '{class}', {{}})"));
+        assert_eq!(text, format!("/* @__PURE__ */ createComponent('div', '{class}', {{}})"));
     }
 
     #[test]
@@ -387,6 +400,32 @@ mod tests {
     fn class_resolver_shape() {
         let facts = facts_for("d.tsx", "export const card = ds.styles({ p: 8 }).asClass();");
         let text = generate_replacement("d.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false }, &GeneratedNames::exports()).unwrap();
-        assert!(text.starts_with("createClassResolver('animus-card-"), "got {text}");
+        assert!(text.starts_with("/* @__PURE__ */ createClassResolver('animus-card-"), "got {text}");
+    }
+
+    /// Contract: an emitted component factory call carries a pure
+    /// annotation, and a user expression is never covered by one. The
+    /// factories are pure at construction; the arguments Animus emits are
+    /// literals, generated names and captured callbacks (a function or arrow
+    /// expression, or an identifier). An asComponent target read through a
+    /// member path can run a getter, so that call stays unmarked.
+    #[test]
+    fn emitted_factory_calls_are_pure_and_never_cover_a_user_expression() {
+        let replacement = |file: &str, source: &str| {
+            let facts = facts_for(file, source);
+            generate_replacement(file, &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false }, &GeneratedNames::exports()).unwrap()
+        };
+        for (file, source) in [
+            ("a.tsx", "export const Box = ds.styles({ p: 4 }).asElement('div');"),
+            ("b.tsx", "import { Link } from 'router';\nexport const Anchor = ds.styles({ p: 4 }).asComponent(Link);"),
+            ("c.tsx", "export const card = ds.styles({ p: 8 }).asClass();"),
+        ] {
+            let text = replacement(file, source);
+            assert!(text.starts_with(PURE_ANNOTATION), "unmarked: {text}");
+            assert_eq!(text.matches("@__PURE__").count(), 1, "{text}");
+        }
+        let member = replacement("d.tsx", "import { motion } from 'motion';\nexport const Fade = ds.styles({ p: 4 }).asComponent(motion.div);");
+        assert!(!member.contains("@__PURE__"), "a member target is marked: {member}");
+        assert!(member.starts_with("createComponent(motion.div,"), "{member}");
     }
 }

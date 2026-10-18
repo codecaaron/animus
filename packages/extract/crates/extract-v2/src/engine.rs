@@ -1669,8 +1669,11 @@ impl ExtractEngine {
                     .iter()
                     .map(|k| format!("\"{}\"", k))
                     .collect();
+                // Pure as a component factory is: every argument is a slot
+                // binding or a literal.
                 format!(
-                    "{}({}, {{ name: \"{}\", sharedKeys: [{}] }})",
+                    "{}{}({}, {{ name: \"{}\", sharedKeys: [{}] }})",
+                    assemble::PURE_ANNOTATION,
                     names.create_composed_family_with_context,
                     slots_obj,
                     family.name,
@@ -1678,8 +1681,11 @@ impl ExtractEngine {
                 )
             } else {
                 format!(
-                    "{}({}, {{ name: \"{}\" }})",
-                    names.create_composed_family, slots_obj, family.name
+                    "{}{}({}, {{ name: \"{}\" }})",
+                    assemble::PURE_ANNOTATION,
+                    names.create_composed_family,
+                    slots_obj,
+                    family.name
                 )
             };
             replacements.push((family.span.0, family.span.1, text));
@@ -2343,13 +2349,27 @@ mod tests {
         );
     }
 
+    /// Contract (with assemble's): an emitted composed-family call carries
+    /// a pure annotation; its arguments are slot bindings and literals.
+    #[test]
+    fn emitted_composed_family_calls_are_pure() {
+        let code = transform_source(
+            "import { compose } from '@animus-ui/system/compose';\nconst Root = ds.styles({ display: 'flex' }).asElement('div');\nconst Body = ds.styles({ display: 'grid' }).asElement('div');\nexport const Card = compose({ Root, Body }, { name: 'Card' });\nexport const App = () => <Card.Root><Card.Body /></Card.Root>;\n",
+        );
+        assert!(
+            code.contains("export const Card = /* @__PURE__ */ createComposedFamily({ Root: Root, Body: Body }, { name: \"Card\" });"),
+            "got {code}"
+        );
+        assert_eq!(code.matches("@__PURE__").count(), 3, "got {code}");
+    }
+
     #[test]
     fn directive_fact_clears_when_strip_removes_comment_close_and_directive() {
         let source = "/*\nimport { animus } from '@animus-ui/system'; */ 'use client';\nexport const Box = animus.styles({ display: 'flex' }).asElement('div');\nexport const App = () => <Box />;\n";
         let code = transform_source(source);
         assert!(
             code.starts_with(
-                "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n/*\nexport const Box = createComponent"
+                "import { createComponent } from '@animus-ui/system';\nimport 'virtual:animus/styles.css';\n/*\nexport const Box = /* @__PURE__ */ createComponent"
             ),
             "got {code}"
         );

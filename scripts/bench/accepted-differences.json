@@ -45,8 +45,8 @@
     "row": "analysis:showcase",
     "fixture": "showcase-analysis",
     "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
-    "candidate": "eab5058b1cffcbf7318725c6bb27bed856e70beeba82cbb7fccd27e1780d676d",
-    "reason": "Beside the differences above, emitted configs carry one [prefix, scope] pair instead of slot variable and class names the runtime can derive, compound class names the runtime derives are omitted, each systemPropNames list ships once as a named export of the system-props module, supersededBy references one system table, and transforms are bound per entry instead of by a per-module loop. Class names and CSS are unchanged. The manifest also gains builderFiles, the three system and theme modules whose builder chains the transform marks /* @__PURE__ */ (../test-ds/src/system.ts, ../test-ds/src/theme.ts, src/ds.ts); without it the manifest is byte-identical to the one this entry's previous candidate described."
+    "candidate": "c5cbf42bc5b4cd60223b1a72cca724552803e4a54cf9bdb1c313fd8c60f939a6",
+    "reason": "Beside the differences above, emitted configs carry one [prefix, scope] pair instead of slot variable and class names the runtime can derive, compound class names the runtime derives are omitted, each systemPropNames list ships once as a named export of the system-props module, supersededBy references one system table, and transforms are bound per entry instead of by a per-module loop. Class names and CSS are unchanged. The manifest also gains builderFiles, the three system and theme modules whose builder chains the transform marks /* @__PURE__ */ (../test-ds/src/system.ts, ../test-ds/src/theme.ts, src/ds.ts); without it the manifest is byte-identical to the one this entry's previous candidate described. Beside those, each emitted component, class-resolver and composed-family factory call in the replacements begins with /* @__PURE__ */, except an asComponent call whose target is a member path. CSS and diagnostics are identical."
   },
   {
     "row": "loader:large-closure",
