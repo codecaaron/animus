@@ -870,7 +870,7 @@ export class ExtractionSession {
   }
 
   /** Warns of each path a discovery walk could not read, named from
-   *  `rootDir`: no file under it is analyzed. */
+   *  `rootDir`: files under it may be missing from the analysis. */
   private reportUndiscoverable(rootDir: string): OnUndiscoverable {
     return (path, err) =>
       surfaceManifestDiagnostics(
@@ -883,6 +883,7 @@ export class ExtractionSession {
         {
           levels: this.options.diagnostics,
           strict: this.options.strict,
+          info: (line) => this.log(line),
           reportErrors: this.reportErrors(),
         }
       );
@@ -2117,6 +2118,7 @@ export class ExtractionSession {
       {
         levels: this.options.diagnostics,
         strict: this.options.strict,
+        info: (line) => this.log(line),
         reportErrors: this.reportErrors(),
       }
     );

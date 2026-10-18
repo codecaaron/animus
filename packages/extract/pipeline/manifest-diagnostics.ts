@@ -367,7 +367,8 @@ export function unreadableSourceDiagnostic<Thrown>(
   };
 }
 
-/** A path discovery could not read: no file under it is analyzed. A warning,
+/** A path discovery could not list or stat: files under it may be missing
+ *  from the analysis (a kit's known entry is still read by name). A warning,
  *  not a lost input, because the file set is what discovery finds; it holds
  *  no pruning off. */
 export function unreadableDiscoveryPathDiagnostic<Thrown>(
@@ -378,7 +379,7 @@ export function unreadableDiscoveryPathDiagnostic<Thrown>(
     file: relPath,
     component: 'discovery',
     kind: 'warn',
-    message: `could not be read, so discovery skipped it and no file under it is analyzed: ${String(error)} — fix its permissions, or exclude it if it holds no source`,
+    message: `could not be listed or examined, so files under it may be missing from the analysis: ${String(error)} — fix its permissions, or exclude it if it holds no source`,
     code: UNREADABLE_DISCOVERY_PATH,
     severity: severityFor(UNREADABLE_DISCOVERY_PATH),
   };

@@ -188,8 +188,9 @@ describe('a project file that cannot be read', () => {
 });
 
 // Contract: a directory discovery cannot list is reported with its path and
-// cause, not silently dropped. Nothing under it can be read, so it is a
-// warning: it fails no strict build and holds no pruning off.
+// cause, not silently dropped, and one inside a path the walk excludes (a
+// kit's node_modules) is not reported at all. It is a warning: it fails no
+// strict build and holds no pruning off.
 describe('a directory discovery cannot read', () => {
   function lockDir(dir: string) {
     mkdirSync(dir, { recursive: true });
@@ -203,6 +204,7 @@ describe('a directory discovery cannot read', () => {
     const { app, kit } = createKitWorkspace();
     lockDir(join(app, 'src', 'locked'));
     lockDir(join(kit, 'src', 'locked'));
+    lockDir(join(kit, 'src', 'node_modules', 'private'));
     const session = makeSession(app, { mode: 'production', strict: true });
 
     await session.runFullPipeline();

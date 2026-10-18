@@ -81,15 +81,20 @@ export function walkPackageSources(
   extensionsSet: ReadonlySet<string>,
   onUndiscoverable?: OnUndiscoverable
 ): string[] {
+  // A path the walk could not read is reported where its files would be
+  // kept: under an excluded path, none would.
+  const excluded = (path: string) =>
+    isExcludedPackageRelativePath(relative(packageDir, path));
   return discoverFiles(
     packageDir,
     packageDir,
     undefined,
     extensionsSet,
-    onUndiscoverable
-  ).filter(
-    (absPath) => !isExcludedPackageRelativePath(relative(packageDir, absPath))
-  );
+    onUndiscoverable &&
+      ((path, error) => {
+        if (!excluded(path)) onUndiscoverable(path, error);
+      })
+  ).filter((absPath) => !excluded(absPath));
 }
 
 const PACKAGE_OUTPUT_EXCLUDES = [
@@ -956,18 +961,21 @@ export async function collectExternalPackageSources(opts: {
       const outputExtensions = new Set(extensionsSet);
       outputExtensions.add(extname(entryFile));
       dirExtensions[outputDir] = [...outputExtensions];
+      const excluded = (path: string) => {
+        const relToOutput = relative(outputDir, path);
+        return PACKAGE_OUTPUT_EXCLUDES.some((pattern) =>
+          relToOutput.includes(pattern)
+        );
+      };
       const outputFiles = discoverFiles(
         outputDir,
         outputDir,
         undefined,
         outputExtensions,
-        undiscoverable
-      ).filter((file) => {
-        const relToOutput = relative(outputDir, file);
-        return !PACKAGE_OUTPUT_EXCLUDES.some((pattern) =>
-          relToOutput.includes(pattern)
-        );
-      });
+        (path, error) => {
+          if (!excluded(path)) undiscoverable(path, error);
+        }
+      ).filter((file) => !excluded(file));
       if (!outputFiles.includes(entryFile)) outputFiles.unshift(entryFile);
       for (const outputFile of outputFiles) {
         if (ingest(outputFile, specifier)) fileCount++;
