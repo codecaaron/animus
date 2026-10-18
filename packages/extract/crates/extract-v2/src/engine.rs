@@ -120,6 +120,11 @@ pub struct EngineOptions {
     pub short_class_prefix: Option<String>,
 }
 
+/// The runtimes Animus ships. Each reads a compiled variant's prop and
+/// default only, never its options.
+const OFFICIAL_RUNTIMES: [&str; 3] =
+    ["@animus-ui/system", "@animus-ui/system/runtime", "@animus-ui/system/class-resolver"];
+
 struct ResolvedOptions {
     runtime_import: String,
     css_module_id: String,
@@ -1021,11 +1026,11 @@ impl ExtractEngine {
         css_inputs
             .set_short_class_prefix(o.short_class_prefix.as_deref())
             .map_err(napi::Error::from_reason)?;
+        let runtime_import = o.runtime_import.unwrap_or_else(|| "@animus-ui/system".to_string());
+        css_inputs.variant_options = !OFFICIAL_RUNTIMES.contains(&runtime_import.as_str());
         Ok(ExtractEngine {
             opts: ResolvedOptions {
-                runtime_import: o
-                    .runtime_import
-                    .unwrap_or_else(|| "@animus-ui/system".to_string()),
+                runtime_import,
                 css_module_id: o
                     .css_module_id
                     .unwrap_or_else(|| "virtual:animus/styles.css".to_string()),
@@ -1627,7 +1632,10 @@ impl ExtractEngine {
             file_facts,
             crate::ids::CLASS_PREFIX,
             Some(&file_payloads),
-            &self.opts.css_inputs.group_registry,
+            assemble::ConfigInputs {
+                group_registry: &self.opts.css_inputs.group_registry,
+                variant_options: self.opts.css_inputs.variant_options,
+            },
             &names,
         )
         .map_err(|e| match e {
@@ -3518,6 +3526,39 @@ export const App = () => <Box tone="red" />;
             }
         }
         assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    #[test]
+    fn only_a_custom_runtime_import_keeps_variant_options() {
+        // Contract: the code transformed for an official runtime carries no
+        // variant options list; a custom `runtimeImport`'s does, and the
+        // manifest's descriptor always keeps it for the tooling that reads it.
+        let files = serde_json::json!([
+            { "path": "a.tsx", "source": "export const C = ds.styles({ display: 'flex' }).variant({ prop: 'size', variants: { sm: {}, md: {} } }).asClass();\n" }
+        ]);
+        let run = |runtime_import: Option<&str>| -> (String, String) {
+            let mut engine = ExtractEngine::new(Some(EngineOptions {
+                runtime_import: runtime_import.map(str::to_string),
+                ..Default::default()
+            }))
+            .unwrap();
+            let manifest: serde_json::Value =
+                serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+            let transformed: serde_json::Value =
+                serde_json::from_str(&engine.transform_file("a.tsx".to_string()).unwrap()).unwrap();
+            (
+                transformed["code"].as_str().unwrap().to_string(),
+                manifest["components"]["a.tsx::C"]["replacement"].as_str().unwrap().to_string(),
+            )
+        };
+        let listed = r#""variants":{"size":{"options":["sm","md"]}}"#;
+        for official in [None, Some("@animus-ui/system"), Some("@animus-ui/system/runtime"), Some("@animus-ui/system/class-resolver")] {
+            let (code, descriptor) = run(official);
+            assert!(code.contains(r#""variants":{"size":{}}"#), "{official:?}: {code}");
+            assert!(descriptor.contains(listed), "{official:?}: {descriptor}");
+        }
+        let (code, _) = run(Some("./my-runtime"));
+        assert!(code.contains(listed), "{code}");
     }
 
     #[test]

@@ -177,8 +177,9 @@ describe.skipIf(!prereq.ok)(
       expect(fancyAfterEdit.length).toBeGreaterThanOrEqual(1);
       const merged = fancyAfterEdit[fancyAfterEdit.length - 1];
       expect(merged.code).toContain('createComponent');
-      expect(merged.code).toContain('tone');
-      expect(merged.code).toContain('loud');
+      // The inherited axis, which has no default, as the official runtime
+      // receives it.
+      expect(merged.code).toMatch(/"variants":\s*\{\s*"tone":\s*\{\s*\}/);
 
       const buttonEditTurns = state.modifiedByTurn.size
         ? [...state.modifiedByTurn.entries()]

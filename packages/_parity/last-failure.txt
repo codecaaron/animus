@@ -1,56 +1,119 @@
 parity baseline — engines: baseline:v2 vs v2 — devMode: false
 
-Units passed: 65/66 (98.48%)
-Divergences: 5 (5 unregistered)
+Units passed: 46/66 (69.70%)
+Divergences: 30 (30 unregistered)
 
 Failing units (sorted):
-  parity/multibyte.tsx · code (UNREGISTERED) [021a727531196fe5e15b7de3a3a49693f27197a693993280d13e481a10fa9bd0 -> b4f16fc247205a6554c4c29c6a0eadf5419bcaeb0881d43e8e70e89fe4edb006] — multibyte.tsx: transformed code not AST-equivalent
-  parity/multibyte.tsx · css [selector] (UNREGISTERED) [48d0a1f1e7a15096b01e16ac4e0d9071c43e0121e83fa0401b08b2c66aea5b32 -> fa92151ed4a78b22cc00b07de7c9ccc4eb4e492862dfafad31666b56a0953357] — CSS bytes differ (318 vs 340)
-  parity/multibyte.tsx · diagnostics (UNREGISTERED) [20c6f674b21c8583951430b31ca4ee810715a2ca3dbb0a6ee9739f3c9a848a80 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  parity/multibyte.tsx · observables (UNREGISTERED) [a3f820c0a497432c61ec728d6c1492a29095f883fdba828fdc582f93f87c7684 -> 945e66ee43ef5ff609ea200f4d71bb6a2f9739345d203f45ee443d5d6b60c23f] — componentFragmentsJson differs
-  parity/multibyte.tsx · observables (UNREGISTERED) [a3f820c0a497432c61ec728d6c1492a29095f883fdba828fdc582f93f87c7684 -> 945e66ee43ef5ff609ea200f4d71bb6a2f9739345d203f45ee443d5d6b60c23f] — sheetsJson differs
+  extract-all · code (UNREGISTERED) [18bc5f62ea47670c12a4dc0c5760369dc88584971d0aebed90a783b3fa7d4e4a -> e4d1fd481a22e102c10003fc33a683aa004c69d360e92f44afd0e963b513c192] — as-class.tsx: transformed code not AST-equivalent
+  extract-all · code (UNREGISTERED) [18bc5f62ea47670c12a4dc0c5760369dc88584971d0aebed90a783b3fa7d4e4a -> e4d1fd481a22e102c10003fc33a683aa004c69d360e92f44afd0e963b513c192] — button.tsx: transformed code not AST-equivalent
+  extract-all · code (UNREGISTERED) [18bc5f62ea47670c12a4dc0c5760369dc88584971d0aebed90a783b3fa7d4e4a -> e4d1fd481a22e102c10003fc33a683aa004c69d360e92f44afd0e963b513c192] — compound-variants.tsx: transformed code not AST-equivalent
+  extract-all · code (UNREGISTERED) [18bc5f62ea47670c12a4dc0c5760369dc88584971d0aebed90a783b3fa7d4e4a -> e4d1fd481a22e102c10003fc33a683aa004c69d360e92f44afd0e963b513c192] — extension-child.tsx: transformed code not AST-equivalent
+  extract-all · code (UNREGISTERED) [18bc5f62ea47670c12a4dc0c5760369dc88584971d0aebed90a783b3fa7d4e4a -> e4d1fd481a22e102c10003fc33a683aa004c69d360e92f44afd0e963b513c192] — extension-parent.tsx: transformed code not AST-equivalent
+  extract-all · code (UNREGISTERED) [18bc5f62ea47670c12a4dc0c5760369dc88584971d0aebed90a783b3fa7d4e4a -> e4d1fd481a22e102c10003fc33a683aa004c69d360e92f44afd0e963b513c192] — reconciliation.tsx: transformed code not AST-equivalent
+  extract-all · code (UNREGISTERED) [18bc5f62ea47670c12a4dc0c5760369dc88584971d0aebed90a783b3fa7d4e4a -> e4d1fd481a22e102c10003fc33a683aa004c69d360e92f44afd0e963b513c192] — variant-groups.tsx: transformed code not AST-equivalent
+  extract/as-class.tsx · code (UNREGISTERED) [461934a3dd05e9ab0e6c5a868a652bc12db17121432ca17591f0b89f67820a07 -> 9f5aa97e6dd7d9a77ac09d4815281852467a7db0d2a07f1206c84950e1800fdd] — as-class.tsx: transformed code not AST-equivalent
+  extract/button.tsx · code (UNREGISTERED) [d7460ffb566cc4619d5bef1a43b3b459c737851a3f777841cd51204421809b61 -> 4b1b6735992479bd4d430d6c7fa149ec467d55bc6c8cf44dd5f3a2768df8cec8] — button.tsx: transformed code not AST-equivalent
+  extract/compound-variants.tsx · code (UNREGISTERED) [882435efec662e02bb715feff4a250d9489da0ccedc863d2f3b26ac1a1342ae0 -> 7361c9829d7f169555ed4ffc195e3f691f17d821124ea1082cca68baa00da35f] — compound-variants.tsx: transformed code not AST-equivalent
+  extract/extension-parent.tsx · code (UNREGISTERED) [d881ac524b2a20a37b2e965275c2e835e0cfa6ccb97a8996ea2587f46d6037af -> f3d1340ebe0c8f6ab788ab29934a1f9e857174d1e1b9ba5af115ad6feb6e85cd] — extension-parent.tsx: transformed code not AST-equivalent
+  extract/reconciliation.tsx · code (UNREGISTERED) [04b58af63d487091c8afeba3bf263d485194455e89c1df161d148874487c8e56 -> 0809e29e83c0efb5b671a8811ab29ef244ae444db81727b626d1d9b4f3acf181] — reconciliation.tsx: transformed code not AST-equivalent
+  extract/variant-groups.tsx · code (UNREGISTERED) [f8157cd40334a0ddc045e0750a80bd7aaffd8dc7bc1775aea8de394b8c823a7e -> 2e73b88830fb2db0b733ef4bc2cbb3ead87d463c9d466b5946cff492d6989956] — variant-groups.tsx: transformed code not AST-equivalent
+  integration/button.tsx · code (UNREGISTERED) [7297e4a5fd33610681870ff3ffc94822442f775ff0caf6ca68c29c7596162145 -> 4d58767c3f2c4a4d55fd77f144b87c5f04c637602d22e15e12e40cc0b5da1a40] — button.tsx: transformed code not AST-equivalent
+  integration/composition.tsx · code (UNREGISTERED) [6ea815a91652fe8f9caa3e210f155323e40cefd3aba29f4722afe746c31f3c89 -> 50983329a30578d50bcf59be67341efc91c3ce1fd9a75a97275b5c602bd04a89] — composition.tsx: transformed code not AST-equivalent
+  integration/compounds.tsx · code (UNREGISTERED) [ed52d03566e9ed68eac81e22c5bb38a601bba9b511c83761842f417001cbe221 -> cfcaf665709c8cffecc6a9daa7bf8a5c596e71eb634d3fefe412298939af4762] — compounds.tsx: transformed code not AST-equivalent
+  integration/selector-rules · code (UNREGISTERED) [ca86d3afee7bd7604d31de58438c4a2e6fb19862cc7eebbf6018606e4afd7eb2 -> 309e4f7be995894b607ff99e2085e86a454e3b690fb09b974f33d564af2bf424] — selector-rules-full-chain.tsx: transformed code not AST-equivalent
+  integration/svelte-usage · code (UNREGISTERED) [0f477712bad0f3b57443364edf8ef925f831b8910ec3fbf858c34832e866b4cb -> e00e7bf0a37bae3018edc8c50196664df5020fef79cb4577aaa68021f17778a4] — definition.ts: transformed code not AST-equivalent
+  parity/aliased-import · code (UNREGISTERED) [f9d09b8c61b1d017ef5bc69395b504910119280f23b754573ac7df211d6d4b83 -> 91389b68a79fb5e37789ce698ed9c2b3177816cda6bb7d82618d56d1586da457] — button.tsx: transformed code not AST-equivalent
+  parity/compose-default.tsx · code (UNREGISTERED) [67fb329cc4a70a4a8411ff633f794b7fcd557041eb9ef8ea54e3d3bda19b8962 -> 30ef020759d5289c6e4374695669d3366cd5706c9dc0c5912025bf8be80ecbd5] — compose-default.tsx: transformed code not AST-equivalent
+  parity/compose-slot-bail · code (UNREGISTERED) [ef51e499baa264be171e8efb33470fbafb823c3d508391aa74ee7047b4b3f799 -> 06438dcca01f3ddab5f28783e5555ddf230e9945add2fbbe68e2d784c315d405] — defs.tsx: transformed code not AST-equivalent
+  parity/compose-slot-bail · code (UNREGISTERED) [ef51e499baa264be171e8efb33470fbafb823c3d508391aa74ee7047b4b3f799 -> 06438dcca01f3ddab5f28783e5555ddf230e9945add2fbbe68e2d784c315d405] — other.tsx: transformed code not AST-equivalent
+  parity/duplicate-compose-modules · code (UNREGISTERED) [ce13645e27493aaf70a43e320052c5c3447746b6a490ecfdcccd6aa019f364e4 -> b4329af3baaa6771abf2aab8c77ae4b5230276459591e62277a06865c7dc518d] — one.tsx: transformed code not AST-equivalent
+  parity/duplicate-compose-modules · code (UNREGISTERED) [ce13645e27493aaf70a43e320052c5c3447746b6a490ecfdcccd6aa019f364e4 -> b4329af3baaa6771abf2aab8c77ae4b5230276459591e62277a06865c7dc518d] — two.tsx: transformed code not AST-equivalent
+  parity/extension-compounds · code (UNREGISTERED) [23430ee7449e73a0d8b194ce65ad536bd5526f022555151193011f9dc145bb55 -> ac4917a27bef5c795fd4ff0a228ca00e1cc86604a45705271f7e9ffc4e8e8825] — child.tsx: transformed code not AST-equivalent
+  parity/extension-compounds · code (UNREGISTERED) [23430ee7449e73a0d8b194ce65ad536bd5526f022555151193011f9dc145bb55 -> ac4917a27bef5c795fd4ff0a228ca00e1cc86604a45705271f7e9ffc4e8e8825] — parent.tsx: transformed code not AST-equivalent
+  parity/one-arg-compound.tsx · code (UNREGISTERED) [ca4eb8701919b889b97b6a32961ff2a6d7bf7dc3000589f03bf3e61623332427 -> d4c50357e2544e7d3d1b6e14e982fd1cc2e735923306b77d9e38a02f53ad0e5d] — one-arg-compound.tsx: transformed code not AST-equivalent
+  parity/reexport-parent · code (UNREGISTERED) [21b8397fadc80ae7ec13419a1da659db263cd0920d52eb140d871d6c913e6223 -> 2ec2c06f5acf9d00965f7307a5b76ef4530b615cda8865e7ceab98e7933b2a15] — button.tsx: transformed code not AST-equivalent
+  parity/reexport-parent · code (UNREGISTERED) [21b8397fadc80ae7ec13419a1da659db263cd0920d52eb140d871d6c913e6223 -> 2ec2c06f5acf9d00965f7307a5b76ef4530b615cda8865e7ceab98e7933b2a15] — child.tsx: transformed code not AST-equivalent
+  parity/string-transforms-literal.tsx · code (UNREGISTERED) [638fdee3dd26c8eb9996e0996591c097848a6bb5093095dbdd04ed02b405898a -> d23082d1cadf65ba54f1103850c35b1ced220f6bec6e08cab5ad9a3e2e5588ff] — string-transforms-literal.tsx: transformed code not AST-equivalent
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
-  ok aliased-import — expected identical, observed identical
+  VIOLATED aliased-import — expected identical, observed divergence
   ok duplicate-binding — expected identical, observed identical
   ok bare-create-element — expected identical, observed identical
   ok compose-reassignment — expected identical, observed identical
   ok shadowed-local — expected identical, observed identical
   ok multiline-import — expected identical, observed identical
   ok use-client-comment — expected identical, observed identical
-  ok string-transforms-literal — expected identical, observed identical
+  VIOLATED string-transforms-literal — expected identical, observed divergence
   ok cyclic-extension — expected identical, observed identical
-  ok duplicate-compose-modules — expected identical, observed identical
-  ok extension-compounds — expected identical, observed identical
-  ok compose-default — expected identical, observed identical
-  ok compose-slot-bail — expected identical, observed identical
+  VIOLATED duplicate-compose-modules — expected identical, observed divergence
+  VIOLATED extension-compounds — expected identical, observed divergence
+  VIOLATED compose-default — expected identical, observed divergence
+  VIOLATED compose-slot-bail — expected identical, observed divergence
+  VIOLATED family aliased-import: expected identical, saw 1 divergence(s)
+  VIOLATED family string-transforms-literal: expected identical, saw 1 divergence(s)
+  VIOLATED family duplicate-compose-modules: expected identical, saw 2 divergence(s)
+  VIOLATED family extension-compounds: expected identical, saw 2 divergence(s)
+  VIOLATED family compose-default: expected identical, saw 1 divergence(s)
+  VIOLATED family compose-slot-bail: expected identical, saw 2 divergence(s)
 
 ---
 
 parity baseline — engines: baseline:v2 vs v2 — devMode: true
 
-Units passed: 65/66 (98.48%)
-Divergences: 4 (4 unregistered)
+Units passed: 46/66 (69.70%)
+Divergences: 30 (30 unregistered)
 
 Failing units (sorted):
-  parity/multibyte.tsx · css [value] (UNREGISTERED) [0c3f99dc191e89417aaa33b08715778aaab13c377503693c4b5a1d7f22f73a24 -> ac53af0c6075b90ea321c6998a23b1a8a48989457e682218be7e6ff8ca1a093b] — CSS bytes differ (318 vs 340)
-  parity/multibyte.tsx · diagnostics (UNREGISTERED) [20c6f674b21c8583951430b31ca4ee810715a2ca3dbb0a6ee9739f3c9a848a80 -> 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945] — diagnostics multiset differs (1 vs 0)
-  parity/multibyte.tsx · observables (UNREGISTERED) [7540be4dccf7cc949efa20d01f445810b5bb8ef693f93c96a92ec9c606d5469a -> 5178e17bc2dd1e4db3c6eb8a2dcbba6a67c6e8861e852cdbef9118f3f8c0c3ef] — componentFragmentsJson differs
-  parity/multibyte.tsx · observables (UNREGISTERED) [7540be4dccf7cc949efa20d01f445810b5bb8ef693f93c96a92ec9c606d5469a -> 5178e17bc2dd1e4db3c6eb8a2dcbba6a67c6e8861e852cdbef9118f3f8c0c3ef] — sheetsJson differs
+  extract-all · code (UNREGISTERED) [c6e1ca05ff23583c34e39df5418538535f6b7ad61812366f23fc17c033835a86 -> 649040f91c6b37b8e88068e4a62501d105a942d14e472bac1ac92fd44ccb69e4] — as-class.tsx: transformed code not AST-equivalent
+  extract-all · code (UNREGISTERED) [c6e1ca05ff23583c34e39df5418538535f6b7ad61812366f23fc17c033835a86 -> 649040f91c6b37b8e88068e4a62501d105a942d14e472bac1ac92fd44ccb69e4] — button.tsx: transformed code not AST-equivalent
+  extract-all · code (UNREGISTERED) [c6e1ca05ff23583c34e39df5418538535f6b7ad61812366f23fc17c033835a86 -> 649040f91c6b37b8e88068e4a62501d105a942d14e472bac1ac92fd44ccb69e4] — compound-variants.tsx: transformed code not AST-equivalent
+  extract-all · code (UNREGISTERED) [c6e1ca05ff23583c34e39df5418538535f6b7ad61812366f23fc17c033835a86 -> 649040f91c6b37b8e88068e4a62501d105a942d14e472bac1ac92fd44ccb69e4] — extension-child.tsx: transformed code not AST-equivalent
+  extract-all · code (UNREGISTERED) [c6e1ca05ff23583c34e39df5418538535f6b7ad61812366f23fc17c033835a86 -> 649040f91c6b37b8e88068e4a62501d105a942d14e472bac1ac92fd44ccb69e4] — extension-parent.tsx: transformed code not AST-equivalent
+  extract-all · code (UNREGISTERED) [c6e1ca05ff23583c34e39df5418538535f6b7ad61812366f23fc17c033835a86 -> 649040f91c6b37b8e88068e4a62501d105a942d14e472bac1ac92fd44ccb69e4] — reconciliation.tsx: transformed code not AST-equivalent
+  extract-all · code (UNREGISTERED) [c6e1ca05ff23583c34e39df5418538535f6b7ad61812366f23fc17c033835a86 -> 649040f91c6b37b8e88068e4a62501d105a942d14e472bac1ac92fd44ccb69e4] — variant-groups.tsx: transformed code not AST-equivalent
+  extract/as-class.tsx · code (UNREGISTERED) [609fe39a59264db4209fcdd78a92550311ae7939c8b470e1c1dbe493cee9592b -> 11c969c68c8ef8ea747afe01b889e4823eddb1305eb6b9c85a6a2c74caf4140e] — as-class.tsx: transformed code not AST-equivalent
+  extract/button.tsx · code (UNREGISTERED) [d2ff5b50db198509867e23ee00643b0965a86605b150b46d874c7c9d6629503b -> 9770815b7c68ae0a6fb88e24977c12accc66dc7197da5a319e97ff5ae4d25d35] — button.tsx: transformed code not AST-equivalent
+  extract/compound-variants.tsx · code (UNREGISTERED) [59ce7f524b10e6043f96d80eb569f1c0294fb179587430dddb4c9fa81c4db1ee -> a4673aa7a25a0b6dcf8a2963d71ef14f72d3e0a693b6d6ffedfa1e106c6c66e5] — compound-variants.tsx: transformed code not AST-equivalent
+  extract/extension-parent.tsx · code (UNREGISTERED) [24f587204c18acb4bde9b75847d6f932d93276c65bb110cbda04a69e1b8c0dc0 -> 59f423710f9d948097e1e68ff90431b2b66c709e602cee0a344a6d02b49c6356] — extension-parent.tsx: transformed code not AST-equivalent
+  extract/reconciliation.tsx · code (UNREGISTERED) [678079e5614702beed6f6b4a602aaf339d73af67b1fee538ac08be30b7829eca -> fb304c065693446636b4eca1a6dbf18ec0b377567e8103c020991be1508e7be6] — reconciliation.tsx: transformed code not AST-equivalent
+  extract/variant-groups.tsx · code (UNREGISTERED) [3d0a6960c3a0317ef7827c4d0bdb85330bd4aa41659506fbfe4b8636e057a365 -> 82cc416aa5c4e037068db1e8dd0c746dfc667c8e294df5e0dbb32cb703136963] — variant-groups.tsx: transformed code not AST-equivalent
+  integration/button.tsx · code (UNREGISTERED) [003c20fe6579dbe42e7a9e6ad15849b2bca85f682b0d006f9a25028b75a56e83 -> 88adcd96204447f9b300513648155243bb1edc16e8b5473c72c0ff40bb67ff73] — button.tsx: transformed code not AST-equivalent
+  integration/composition.tsx · code (UNREGISTERED) [bddbaae8f467fa9eae2daad150e7a0a08f224ae8732fac1cd093fed813a7d6c1 -> deb6f9db4b137cd7568ebd5f23562747750c8526583264ddf043e7f369d6b934] — composition.tsx: transformed code not AST-equivalent
+  integration/compounds.tsx · code (UNREGISTERED) [0bcbe8373dc24d6bb76aa88a45ff72bbc73e4ef959c89a8212e03e3fdbe96780 -> 5e6a3bf980afdba27de155b89d2ed4f69d05ebc16c2461bda3fb7b3d7f0cc49d] — compounds.tsx: transformed code not AST-equivalent
+  integration/selector-rules · code (UNREGISTERED) [f906f984d792e7f65707ebbc79900b26556e7b9ac2435f9a536a2b0756f52f27 -> e31b44086729e71789620fc8d246adbba1ac1767b92c68faa4868d4c740146f3] — selector-rules-full-chain.tsx: transformed code not AST-equivalent
+  integration/svelte-usage · code (UNREGISTERED) [32ed797a1654cc3808605e88d52eed38ea6e2577c200ca20a8c1e57534eb9ee7 -> 3d7c7b7c9cdd2760530fee2bdfb32414124e49b4334eaf23fb48f043248e72a2] — definition.ts: transformed code not AST-equivalent
+  parity/aliased-import · code (UNREGISTERED) [982479da02cbad55428ef414033b3027054741236f7e225a37640a38c8f100f3 -> 3e671ad7253a17d69fdc4683d239ee3f37fa84fac51064df383d80d74fe0036a] — button.tsx: transformed code not AST-equivalent
+  parity/compose-default.tsx · code (UNREGISTERED) [b8a4bef3bfd2b657374fd4d7504a187e9be3c6a36413fc88b5c77728a1cb1694 -> e9bbfe1464d0eb5018ed0e5f16d1e9cef887e51fec7a3152108a1c6870a1720f] — compose-default.tsx: transformed code not AST-equivalent
+  parity/compose-slot-bail · code (UNREGISTERED) [89b6515f9094a4d4b71b61fcf7a747d8df9ba11c4a8c86735e36b627d4aad756 -> 1dcce53cda2e077c8a2d273ce251819f2c43587d7f81aa3efd2bfec555022de4] — defs.tsx: transformed code not AST-equivalent
+  parity/compose-slot-bail · code (UNREGISTERED) [89b6515f9094a4d4b71b61fcf7a747d8df9ba11c4a8c86735e36b627d4aad756 -> 1dcce53cda2e077c8a2d273ce251819f2c43587d7f81aa3efd2bfec555022de4] — other.tsx: transformed code not AST-equivalent
+  parity/duplicate-compose-modules · code (UNREGISTERED) [7f98dd3a63a31f8cb3483f73bbf2eee7db29083b9f468abc4934c0b9420191b5 -> cd4588babe404f04fc48458a61e03e2dbab5120f260384a8be4161896a8372b6] — one.tsx: transformed code not AST-equivalent
+  parity/duplicate-compose-modules · code (UNREGISTERED) [7f98dd3a63a31f8cb3483f73bbf2eee7db29083b9f468abc4934c0b9420191b5 -> cd4588babe404f04fc48458a61e03e2dbab5120f260384a8be4161896a8372b6] — two.tsx: transformed code not AST-equivalent
+  parity/extension-compounds · code (UNREGISTERED) [9df6524d4fa8321a710995ea53d0005a4b044919e516b2d92d16923ae77108c9 -> a6b17d29f3e4ac9f191179e2b8ef4803d3d724093d6ef6e49d7863e2eabd9873] — child.tsx: transformed code not AST-equivalent
+  parity/extension-compounds · code (UNREGISTERED) [9df6524d4fa8321a710995ea53d0005a4b044919e516b2d92d16923ae77108c9 -> a6b17d29f3e4ac9f191179e2b8ef4803d3d724093d6ef6e49d7863e2eabd9873] — parent.tsx: transformed code not AST-equivalent
+  parity/one-arg-compound.tsx · code (UNREGISTERED) [d2499b8dc5314f5d40b0f2c02cb33c6d98edd44dee60108bf1da2e1c9a6a5336 -> 670ff91bdb76d7e6f31efabc8d412aeb2323668d8588bede5202e031484d86d0] — one-arg-compound.tsx: transformed code not AST-equivalent
+  parity/reexport-parent · code (UNREGISTERED) [437559825fbb730fcdf70baf6dbcc486b02efe93da65c706d06bf333db3bc1dd -> d250a26885ddcc96c54a6eac9812ca491c1ba6d203383fab631f9368807fa216] — button.tsx: transformed code not AST-equivalent
+  parity/reexport-parent · code (UNREGISTERED) [437559825fbb730fcdf70baf6dbcc486b02efe93da65c706d06bf333db3bc1dd -> d250a26885ddcc96c54a6eac9812ca491c1ba6d203383fab631f9368807fa216] — child.tsx: transformed code not AST-equivalent
+  parity/string-transforms-literal.tsx · code (UNREGISTERED) [2161b1aca763b7110ec45e049590515b4f5579b45bf5e48665b0cdb5348f9857 -> 039270de8c785e385315198f24ae1dce75cb49811eb171a64e54ca967a5f2afb] — string-transforms-literal.tsx: transformed code not AST-equivalent
 
 Usage-case families:
   ok mdx-provider-scope — expected identical, observed identical
-  ok aliased-import — expected identical, observed identical
+  VIOLATED aliased-import — expected identical, observed divergence
   ok duplicate-binding — expected identical, observed identical
   ok bare-create-element — expected identical, observed identical
   ok compose-reassignment — expected identical, observed identical
   ok shadowed-local — expected identical, observed identical
   ok multiline-import — expected identical, observed identical
   ok use-client-comment — expected identical, observed identical
-  ok string-transforms-literal — expected identical, observed identical
+  VIOLATED string-transforms-literal — expected identical, observed divergence
   ok cyclic-extension — expected identical, observed identical
-  ok duplicate-compose-modules — expected identical, observed identical
-  ok extension-compounds — expected identical, observed identical
-  ok compose-default — expected identical, observed identical
-  ok compose-slot-bail — expected identical, observed identical
+  VIOLATED duplicate-compose-modules — expected identical, observed divergence
+  VIOLATED extension-compounds — expected identical, observed divergence
+  VIOLATED compose-default — expected identical, observed divergence
+  VIOLATED compose-slot-bail — expected identical, observed divergence
+  VIOLATED family aliased-import: expected identical, saw 1 divergence(s)
+  VIOLATED family string-transforms-literal: expected identical, saw 1 divergence(s)
+  VIOLATED family duplicate-compose-modules: expected identical, saw 2 divergence(s)
+  VIOLATED family extension-compounds: expected identical, saw 2 divergence(s)
+  VIOLATED family compose-default: expected identical, saw 1 divergence(s)
+  VIOLATED family compose-slot-bail: expected identical, saw 2 divergence(s)

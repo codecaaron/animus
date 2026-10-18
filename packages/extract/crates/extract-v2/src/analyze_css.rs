@@ -157,6 +157,10 @@ pub struct CssInputs {
     /// `{prefix}_{id}` (`ids::short_class_names`) under this prefix, which
     /// keeps two builds on one page apart; `None` keeps the readable names.
     pub short_class_prefix: Option<String>,
+    /// Whether the transformed code's variant configs list their options.
+    /// The official runtimes read only a variant's prop and default; a
+    /// custom `runtimeImport` may read the list.
+    pub variant_options: bool,
     /// The custom properties the theme registers with a numeric syntax,
     /// `<integer>` or `<number>`, with `--`: a number written to one needs
     /// no unit.
@@ -436,6 +440,7 @@ impl CssInputs {
             package_openings: Default::default(),
             dev_mode,
             short_class_prefix: None,
+            variant_options: false,
             numeric_properties: FxHashSet::default(),
             system_hash,
         })
@@ -10565,7 +10570,8 @@ fn run_with_system_floor(
             chain,
             class_prefix,
             payload,
-            &inputs.group_registry,
+            // The descriptor tooling reads keeps the complete config.
+            crate::assemble::ConfigInputs { group_registry: &inputs.group_registry, variant_options: true },
             &crate::assemble::GeneratedNames::exports(),
         )
         .unwrap_or_default();

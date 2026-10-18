@@ -1,5 +1,8 @@
 interface VariantConfig {
-  options: string[];
+  /** Written for a custom `runtimeImport`, which may read it, and by a
+   *  builder terminal that ran without Animus compiling it. The runtime
+   *  reads no option list: it builds a variant's class from the value. */
+  options?: string[];
   default?: string;
 }
 
@@ -9,6 +12,8 @@ interface CompoundConfig {
   className?: string;
 }
 
+/** The config compiled terminals pass the runtime: Animus's internal wire
+ *  format, which the compiler and this runtime change together. */
 export interface ClassResolverConfig {
   variants?: Record<string, VariantConfig>;
   compounds?: CompoundConfig[];

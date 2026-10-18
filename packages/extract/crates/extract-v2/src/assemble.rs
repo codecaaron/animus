@@ -235,18 +235,29 @@ fn spells_identifier(source: &str, name: &str) -> bool {
     })
 }
 
+/// What a compiled config reads beyond its chain: the system's prop groups,
+/// and whether each variant lists its options.
+#[derive(Clone, Copy)]
+pub struct ConfigInputs<'a> {
+    pub group_registry: &'a FxHashMap<String, Vec<String>>,
+    /// The official runtimes read a variant's prop and default only; a
+    /// custom `runtimeImport`, and the manifest's descriptor that tooling
+    /// reads, keep the list.
+    pub variant_options: bool,
+}
+
 /// Build the replacement call text for one chain.
 pub fn generate_replacement(
     filename: &str,
     chain: &ChainFacts,
     prefix: &str,
     payload: Option<&ReplacementPayload>,
-    group_registry: &FxHashMap<String, Vec<String>>,
+    inputs: ConfigInputs<'_>,
     names: &GeneratedNames,
 ) -> Result<String, AssembleError> {
     let d = &chain.descriptor;
     let class_name = component_class_name(filename, &d.binding, prefix, payload);
-    let config = build_config(filename, &d.binding, chain, prefix, payload, group_registry, names)?;
+    let config = build_config(filename, &d.binding, chain, prefix, payload, inputs, names)?;
     let has_system_props = payload.is_some_and(|p| !p.system_prop_names.is_empty());
     let has_dynamic_props = payload.is_some_and(|p| p.has_dynamic_props);
     let maps = match (has_system_props, has_dynamic_props) {
@@ -274,7 +285,7 @@ pub fn assemble_replacements(
     facts: &FileFacts,
     prefix: &str,
     payloads: Option<&HashMap<String, ReplacementPayload>>,
-    group_registry: &FxHashMap<String, Vec<String>>,
+    inputs: ConfigInputs<'_>,
     names: &GeneratedNames,
 ) -> Result<Vec<(u32, u32, String)>, AssembleError> {
     let mut out = Vec::new();
@@ -291,7 +302,7 @@ pub fn assemble_replacements(
             },
             None => None,
         };
-        let text = generate_replacement(filename, chain, prefix, payload, group_registry, names)?;
+        let text = generate_replacement(filename, chain, prefix, payload, inputs, names)?;
         out.push((chain.descriptor.span.0, chain.descriptor.span.1, text));
     }
     Ok(out)
@@ -330,7 +341,7 @@ mod tests {
             "a.tsx",
             "export const Box = ds.styles({ p: 4 }).asElement('div');",
         );
-        let text = generate_replacement("a.tsx", &facts.chains[0], "animus", None, &FxHashMap::default(), &GeneratedNames::exports()).unwrap();
+        let text = generate_replacement("a.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false }, &GeneratedNames::exports()).unwrap();
         let class = class_name_for("a.tsx", "Box", "animus");
         assert_eq!(text, format!("createComponent('div', '{class}', {{}})"));
     }
@@ -345,11 +356,16 @@ mod tests {
                 .states({ loading: {} })
                 .asElement('button');"#,
         );
-        let text = generate_replacement("b.tsx", &facts.chains[0], "animus", None, &FxHashMap::default(), &GeneratedNames::exports()).unwrap();
+        let text = generate_replacement("b.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false }, &GeneratedNames::exports()).unwrap();
         // Compound conditions are sorted (size before variant) for
         // determinism.
         assert!(text.contains(r#""conditions":{"size":"sm","variant":"ghost"}"#), "got {text}");
-        assert!(text.contains(r#""variants":{"size":{"options":["sm","lg"],"default":"sm"}}"#) || text.contains(r#""variants":{"size":{"default":"sm","options":["sm","lg"]}}"#), "got {text}");
+        // Contract: an emitted variant config carries no options list for
+        // the official runtime, which reads only the prop and its default;
+        // a custom runtime's carries the list.
+        assert!(text.contains(r#""variants":{"size":{"default":"sm"}}"#), "got {text}");
+        let custom = generate_replacement("b.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: true }, &GeneratedNames::exports()).unwrap();
+        assert!(custom.contains(r#""variants":{"size":{"options":["sm","lg"],"default":"sm"}}"#), "got {custom}");
         assert!(text.contains(r#""states":["loading"]"#));
         // A positional compound name is the runtime's to derive.
         assert!(!text.contains("--compound-0"), "got {text}");
@@ -361,7 +377,7 @@ mod tests {
             "c.tsx",
             "export const Box = ds.system({ space: true }).asElement('div');",
         );
-        let err = generate_replacement("c.tsx", &facts.chains[0], "animus", None, &FxHashMap::default(), &GeneratedNames::exports()).unwrap_err();
+        let err = generate_replacement("c.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false }, &GeneratedNames::exports()).unwrap_err();
         match err {
             AssembleError::NeedsConfig(msg) => assert!(msg.contains("row 07")),
         }
@@ -370,7 +386,7 @@ mod tests {
     #[test]
     fn class_resolver_shape() {
         let facts = facts_for("d.tsx", "export const card = ds.styles({ p: 8 }).asClass();");
-        let text = generate_replacement("d.tsx", &facts.chains[0], "animus", None, &FxHashMap::default(), &GeneratedNames::exports()).unwrap();
+        let text = generate_replacement("d.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false }, &GeneratedNames::exports()).unwrap();
         assert!(text.starts_with("createClassResolver('animus-card-"), "got {text}");
     }
 }

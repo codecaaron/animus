@@ -80,7 +80,7 @@
     "row": "build:vite-app",
     "fixture": "vite-app",
     "baseline": "d03eaa3296e0d23e68d0388403ab97408dd8782cfb08f553e0de46033fa05ee1",
-    "candidate": "94ab681882caba9a91aac9f143e081db45994b8955d371a67ad3f677962113c5",
-    "reason": "As the earlier accepted vite-app entry, plus 235 bytes: the runtime resolver reads a call site's firstThatWorks value as its preferred member (firstThatWorks always returns its members, so artifact names and the vocabulary record see every one). The CSS is identical (cssDigest unchanged); the one identity-uncertain-tag line fewer is the earlier entry's."
+    "candidate": "2179f40e66626c2fa02c5cd8f77143b421a1b689ce7bc5a78c52fba4d0febf61",
+    "reason": "As the earlier accepted vite-app entry, plus 235 bytes: the runtime resolver reads a call site's firstThatWorks value as its preferred member (firstThatWorks always returns its members, so artifact names and the vocabulary record see every one). Then less 295 bytes: code compiled for the official runtime no longer lists each variant's options, which no runtime path reads (251,740 against 252,035 jsBytes). The CSS is identical (cssDigest unchanged); the one identity-uncertain-tag line fewer is the earlier entry's."
   }
 ]

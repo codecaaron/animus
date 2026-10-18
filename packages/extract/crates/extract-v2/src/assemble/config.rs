@@ -167,9 +167,10 @@ pub(super) fn build_config(
     chain: &ChainFacts,
     prefix: &str,
     payload: Option<&ReplacementPayload>,
-    group_registry: &FxHashMap<String, Vec<String>>,
+    inputs: super::ConfigInputs<'_>,
     names: &super::GeneratedNames,
 ) -> Result<String, AssembleError> {
+    let super::ConfigInputs { group_registry, variant_options } = inputs;
     let mut config = ObjectLiteral::default();
 
     let mut variants = Map::new();
@@ -190,11 +191,13 @@ pub(super) fn build_config(
                 if let Some(v) = &stage.value {
                     let prop = v["prop"].as_str().unwrap_or("variant").to_string();
                     let mut entry = Map::new();
-                    let options: Vec<String> = v["variants"]
-                        .as_object()
-                        .map(|m| m.keys().cloned().collect())
-                        .unwrap_or_default();
-                    entry.insert("options".into(), json!(options));
+                    if variant_options {
+                        let options: Vec<String> = v["variants"]
+                            .as_object()
+                            .map(|m| m.keys().cloned().collect())
+                            .unwrap_or_default();
+                        entry.insert("options".into(), json!(options));
+                    }
                     if let Some(d) = v["defaultVariant"].as_str() {
                         entry.insert("default".into(), json!(d));
                     }
@@ -245,7 +248,9 @@ pub(super) fn build_config(
     if let Some(merged) = use_merged {
         for (prop, options, default) in &merged.variant_config {
             let mut entry = Map::new();
-            entry.insert("options".into(), json!(options));
+            if variant_options {
+                entry.insert("options".into(), json!(options));
+            }
             if let Some(d) = default {
                 entry.insert("default".into(), json!(d));
             }
@@ -528,7 +533,15 @@ mod tests {
         let facts = facts_for("box.tsx", source);
         let registry: FxHashMap<String, Vec<String>> =
             [("space".to_string(), vec!["p".to_string(), "m".to_string()])].into_iter().collect();
-        build_config("box.tsx", "Box", &facts.chains[0], "animus", Some(payload), &registry, &super::super::GeneratedNames::exports())
+        build_config(
+            "box.tsx",
+            "Box",
+            &facts.chains[0],
+            "animus",
+            Some(payload),
+            super::super::ConfigInputs { group_registry: &registry, variant_options: false },
+            &super::super::GeneratedNames::exports(),
+        )
             .unwrap()
     }
 
@@ -581,7 +594,7 @@ mod tests {
         assert_eq!(
             config,
             concat!(
-                r#"{"variants":{"size":{"options":["sm"]}},"states":["busy"],"#,
+                r#"{"variants":{"size":{}},"states":["busy"],"#,
                 r#""systemPropNames":[].concat(systemPropGroups.space,["bg","lift","sized","tone"]),"#,
                 r#""customPropMap":{"sized":{"sm":"animus-uc-1"}},"#,
                 r#""typedCustomProps":["sized"],"#,
