@@ -245,21 +245,62 @@ impl TransformEvaluator {
 /// host guarded, so the name, source and argument decide it. Bounded, as a
 /// dev server's edits keep adding arguments.
 fn evaluated(source: &str, name: &str, js_arg: &str) -> Result<Scalar, EvalError> {
-    type Results = FxHashMap<(String, String, String), Result<Scalar, EvalError>>;
-    static RESULTS: OnceLock<Mutex<Results>> = OnceLock::new();
-    const RESULTS_KEPT: usize = 65_536;
-    let cache = RESULTS.get_or_init(Default::default);
-    let key = (name.to_string(), source.to_string(), js_arg.to_string());
-    if let Some(result) = cache.lock().expect("transform results lock").get(&key) {
-        return result.clone();
+    type ByCall = FxHashMap<(String, String), Result<Scalar, EvalError>>;
+    static RESULTS: OnceLock<Mutex<Budgeted<ByCall>>> = OnceLock::new();
+    let cache = RESULTS.get_or_init(|| Mutex::new(Budgeted::new(RESULTS_BUDGET)));
+    let call = (name.to_string(), js_arg.to_string());
+    let kept = cache.lock().expect("transform results lock").entries.get(source).and_then(|calls| calls.get(&call).cloned());
+    if let Some(result) = kept {
+        return result;
     }
     let result = evaluate_in_fresh_realm(source, name, js_arg);
-    let mut kept = cache.lock().expect("transform results lock");
-    if kept.len() >= RESULTS_KEPT {
-        kept.clear();
-    }
-    kept.insert(key, result.clone());
+    let value = match &result {
+        Ok(scalar) => scalar.css.len(),
+        Err(error) => format!("{error:?}").len(),
+    };
+    let bytes = ENTRY_OVERHEAD + name.len() + js_arg.len() + value;
+    cache.lock().expect("transform results lock").keep(source, bytes, |calls| {
+        calls.insert(call, result.clone());
+    });
     result
+}
+
+/// Results the process keeps, at most this many bytes of keys, sources and
+/// values; the definitions' bytecode, at most `COMPILED_BUDGET`.
+const RESULTS_BUDGET: usize = 16 << 20;
+const COMPILED_BUDGET: usize = 8 << 20;
+/// What one kept entry costs besides its strings.
+const ENTRY_OVERHEAD: usize = 64;
+
+/// A process-wide cache by source, held to `budget` bytes: an entry larger
+/// than a quarter of it is not kept, and one that would pass it clears the
+/// rest first. Each source is stored once, however many entries share it.
+struct Budgeted<V> {
+    budget: usize,
+    bytes: usize,
+    entries: FxHashMap<String, V>,
+}
+
+impl<V: Default> Budgeted<V> {
+    fn new(budget: usize) -> Self {
+        Self { budget, bytes: 0, entries: FxHashMap::default() }
+    }
+
+    /// Keeps what `write` adds to `source`'s entry, which costs `bytes`
+    /// besides the source itself.
+    fn keep(&mut self, source: &str, bytes: usize, write: impl FnOnce(&mut V)) {
+        let cost = bytes + if self.entries.contains_key(source) { 0 } else { ENTRY_OVERHEAD + source.len() };
+        if cost > self.budget / 4 {
+            return;
+        }
+        if self.bytes + cost > self.budget {
+            self.entries.clear();
+            self.bytes = 0;
+            return self.keep(source, bytes, write);
+        }
+        self.bytes += cost;
+        write(self.entries.entry(source.to_string()).or_default());
+    }
 }
 
 /// Evaluate `source` for `js_arg` in a realm of its own.
@@ -269,9 +310,13 @@ fn evaluate_in_fresh_realm(source: &str, name: &str, js_arg: &str) -> Result<Sca
     let mut touched_host = false;
     let outcome = realm.with(|ctx| {
         let fail = |e: rquickjs::Error| classify_eval_error(&ctx, name, &e);
-        let harness: Function = eval_compiled(&ctx, harness_source()).map_err(fail)?;
-        let touched: Function = eval_compiled(&ctx, HOST_GUARD).map_err(fail)?;
-        let callable: Function = eval_compiled(&ctx, &isolated_script(source)).map_err(fail)?;
+        static HARNESS: OnceLock<Bytecode> = OnceLock::new();
+        static GUARD: OnceLock<Bytecode> = OnceLock::new();
+        let harness: Function =
+            eval_compiled(&ctx, harness_source(), pinned(&HARNESS, harness_source())).map_err(fail)?;
+        let touched: Function = eval_compiled(&ctx, HOST_GUARD, pinned(&GUARD, HOST_GUARD)).map_err(fail)?;
+        let script = isolated_script(source);
+        let callable: Function = eval_compiled(&ctx, &script, compiled(&script)).map_err(fail)?;
         let argument: rquickjs::Value = ctx.eval(format!("({js_arg})").as_bytes()).map_err(fail)?;
         let result = harness.call::<_, rquickjs::Value>((callable, argument)).map_err(fail);
         // Read after the callback's own exception is taken.
@@ -290,20 +335,29 @@ fn evaluate_in_fresh_realm(source: &str, name: &str, js_arg: &str) -> Result<Sca
     }
 }
 
+/// A script's QuickJS bytecode; none where the script does not compile.
+type Bytecode = Option<Arc<[u8]>>;
+
 /// Each script an evaluation runs, compiled once to QuickJS bytecode: every
 /// fresh realm reads the bytecode instead of parsing the text again. A script
 /// that does not compile keeps no bytecode, so its realm evaluates the text
 /// and fails as it always did.
-fn compiled(script: &str) -> Option<Arc<[u8]>> {
-    type Compiled = FxHashMap<String, Option<Arc<[u8]>>>;
-    static COMPILED: OnceLock<Mutex<Compiled>> = OnceLock::new();
-    let cache = COMPILED.get_or_init(Default::default);
-    if let Some(bytecode) = cache.lock().expect("bytecode cache lock").get(script) {
+fn compiled(script: &str) -> Bytecode {
+    static COMPILED: OnceLock<Mutex<Budgeted<Bytecode>>> = OnceLock::new();
+    let cache = COMPILED.get_or_init(|| Mutex::new(Budgeted::new(COMPILED_BUDGET)));
+    if let Some(bytecode) = cache.lock().expect("bytecode cache lock").entries.get(script) {
         return bytecode.clone();
     }
     let bytecode = compile(script);
-    cache.lock().expect("bytecode cache lock").insert(script.to_string(), bytecode.clone());
+    let bytes = bytecode.as_ref().map_or(0, |bytecode| bytecode.len());
+    cache.lock().expect("bytecode cache lock").keep(script, bytes, |kept| *kept = bytecode.clone());
     bytecode
+}
+
+/// The harness and the host guard, which every evaluation runs, compiled
+/// once and kept for the process.
+fn pinned(slot: &'static OnceLock<Bytecode>, script: &str) -> Bytecode {
+    slot.get_or_init(|| compile(script)).clone()
 }
 
 /// The flags and file name `Ctx::eval` compiles a script with: global code,
@@ -345,9 +399,13 @@ fn compile(script: &str) -> Option<Arc<[u8]>> {
     })
 }
 
-/// `ctx.eval(script)`, from the script's bytecode where it compiled.
-fn eval_compiled<'js, V: FromJs<'js>>(ctx: &Ctx<'js>, script: &str) -> rquickjs::Result<V> {
-    let Some(bytecode) = compiled(script) else {
+/// `ctx.eval(script)`, from `bytecode`, the script's own, where it compiled.
+fn eval_compiled<'js, V: FromJs<'js>>(
+    ctx: &Ctx<'js>,
+    script: &str,
+    bytecode: Bytecode,
+) -> rquickjs::Result<V> {
+    let Some(bytecode) = bytecode else {
         return ctx.eval(script.as_bytes());
     };
     let raw = ctx.as_raw().as_ptr();
@@ -727,6 +785,26 @@ mod tests {
         let second = message("b", "second");
         assert!(second.starts_with("transform 'second' eval failed"), "{second}");
         assert_eq!(message("c", "first"), first);
+    }
+
+    #[test]
+    fn a_process_cache_holds_to_its_byte_budget() {
+        // Contract: a process-wide transform cache never holds more than its
+        // byte budget, keeps no entry larger than a quarter of it, and
+        // stores each source once however many entries share it.
+        let mut cache: super::Budgeted<Vec<u32>> = super::Budgeted::new(4096);
+        for edit in 0..64u32 {
+            let source = format!("{edit:0>500}");
+            cache.keep(&source, 100, |entries| entries.push(edit));
+            assert!(cache.bytes <= cache.budget, "{} > {}", cache.bytes, cache.budget);
+        }
+        assert!(cache.entries.len() < 64);
+        cache.keep("oversized", 1025, |entries| entries.push(0));
+        assert!(!cache.entries.contains_key("oversized"));
+        let before = cache.bytes;
+        let source = cache.entries.keys().next().unwrap().clone();
+        cache.keep(&source, 10, |entries| entries.push(1));
+        assert_eq!(cache.bytes, before + 10);
     }
 
     #[test]
