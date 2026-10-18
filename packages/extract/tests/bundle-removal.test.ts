@@ -78,8 +78,10 @@ describe('removeComponentRules', () => {
   // the declarations stay exactly as written, at the start, middle and end
   // of a list, past a comma in a string, an attribute or an `:is()`. A
   // selector some browser may not read stays, since a list is dropped whole
-  // where one selector is unknown and cutting it would apply the rest; so
-  // does every selector of a rule holding nested rules, and one with `&`.
+  // where one selector is unknown and cutting it would apply the rest: an
+  // attribute's `s` flag and a `:lang()` of two ranges among them, which
+  // Lightning CSS reads and Chromium 149 and 156 do not. So does every
+  // selector of a rule holding nested rules, and one with `&`.
   test('a kept selector in a mixed list survives removal byte for byte', () => {
     const dead = new Set(['dead', 'gone']);
     const cut = (css: string) => removeComponentRules(css, dead).css;
@@ -98,6 +100,9 @@ describe('removeComponentRules', () => {
         '@layer l{@media (min-width:1px){.live:focus-visible,.dead:focus-visible{a:1}}}'
       )
     ).toBe('@layer l{@media (min-width:1px){.live:focus-visible{a:1}}}');
+    expect(cut('.dead[data-x=x i],.dead:lang(en),.live{a:1}')).toBe(
+      '.live{a:1}'
+    );
     // Selectors some browser may not read, and lists removal leaves whole.
     for (const whole of [
       '.live,.dead:has(.x){a:1}',
@@ -105,6 +110,8 @@ describe('removeComponentRules', () => {
       '.live,.dead:-moz-focusring{a:1}',
       '.live,.dead:user-invalid{a:1}',
       '.live,.dead:nth-child(2 of .x){a:1}',
+      '@layer test{.dead[data-x=x s],.live{color:red}}',
+      '@layer test{.dead:lang(en,fr),.live{color:red}}',
       '.live,.dead{a:1;&:hover{b:2}}',
       '.p{.live,.dead{a:1}}',
     ]) {
@@ -146,7 +153,9 @@ describe('removeComponentRules keeps kept rules', () => {
   // `-webkit-` prefixes beside their standard properties. A sheet that
   // declares its encoding stays whole, since a cut could change how it is
   // decoded: a misplaced `@charset` a cut would bring to the start, or a
-  // byte-order mark the first rule's range would take.
+  // byte-order mark the first rule's range would take. So does a sheet that
+  // reads back as other rules once cut: a nested rule's cut that would join
+  // the declarations after it to the block before it.
   test('removal changes no kept rule', () => {
     const live =
       '.live{-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}.link:hover{-webkit-text-decoration-color:red;text-decoration-color:red}';
@@ -173,6 +182,12 @@ describe('removeComponentRules keeps kept rules', () => {
         new Set(['dead'])
       ).css
     ).toBe('.live:after{content:"@charset"}');
+    const joined = removeComponentRules(
+      '.live{a:1;.dead{b:2}c:3}',
+      new Set(['dead'])
+    );
+    expect(joined.css).toBeNull();
+    expect(joined.refused).toMatch(/would change a rule it keeps/);
   });
 });
 

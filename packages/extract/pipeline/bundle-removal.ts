@@ -490,6 +490,8 @@ const BASELINE_PSEUDO_ELEMENTS = new Set([
   'backdrop',
   'file-selector-button',
 ]);
+/** A language tag with no wildcard: `en`, `zh-Hant-TW`. */
+const PLAIN_LANGUAGE_RANGE = /^[a-z]{1,8}(?:-[a-z0-9]{1,8})*$/i;
 const BASELINE_COMBINATORS = new Set([
   'child',
   'descendant',
@@ -503,7 +505,10 @@ const BASELINE_COMBINATORS = new Set([
  * cutting an unknown selector out would apply the rest where it applied
  * nowhere. Its parts are classes, ids, types, attributes, the universal
  * selector, the four plain combinators, and the pseudo-classes and
- * pseudo-elements above, unprefixed, with an `nth-…` taking no `of`.
+ * pseudo-elements above, unprefixed, with an `nth-…` taking no `of`. An
+ * attribute takes no named namespace and no `s` flag, and a `:lang()` one
+ * plain language range: Chromium 149 and 156 reject `[x=y s]` and
+ * `:lang(en,fr)`, though Lightning CSS reads both.
  */
 function baselineSelector(selector: Selector): boolean {
   return selector.every((part) => {
@@ -511,9 +516,13 @@ function baselineSelector(selector: Selector): boolean {
       case 'class':
       case 'id':
       case 'type':
-      case 'attribute':
       case 'universal':
         return true;
+      case 'attribute':
+        return (
+          part.namespace?.type !== 'specific' &&
+          part.operation?.caseSensitivity !== 'explicit-case-sensitive'
+        );
       case 'namespace':
         return part.kind !== 'named';
       case 'combinator':
@@ -525,6 +534,12 @@ function baselineSelector(selector: Selector): boolean {
           part.vendorPrefix.length > 0;
         if (prefixed || !BASELINE_PSEUDO_CLASSES.has(part.kind)) return false;
         if ('of' in part && part.of) return false;
+        if (part.kind === 'lang') {
+          return (
+            part.languages.length === 1 &&
+            PLAIN_LANGUAGE_RANGE.test(part.languages[0])
+          );
+        }
         return part.kind === 'not' ||
           part.kind === 'is' ||
           part.kind === 'where'
