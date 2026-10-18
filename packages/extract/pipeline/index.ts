@@ -243,7 +243,10 @@ export type { WorkspacePackages } from './workspace-packages';
 export { declaredWorkspacePackages } from './workspace-packages';
 export type { StructuralCheckInput } from './structural-self-check';
 export { runStructuralSelfCheck } from './structural-self-check';
-export { buildSystemPropsModule } from './system-props-module';
+export {
+  buildSystemPropsModule,
+  systemPropMapSpan,
+} from './system-props-module';
 export { readTsconfigAliasPairs, tsconfigChainPaths } from './tsconfig-paths';
 export type {
   DynamicPropConfigEntry,

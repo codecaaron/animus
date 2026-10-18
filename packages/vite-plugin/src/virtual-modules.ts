@@ -1,6 +1,8 @@
 import {
   assembleStylesheet,
+  contentHash,
   reportSurvivingAssetPlaceholders,
+  systemPropMapSpan,
   stableStringify,
   stripLeadingLayerDeclaration,
 } from '@animus-ui/extract/pipeline';
@@ -111,7 +113,8 @@ export function stylesheetSource(ctx: PluginContext): string {
 export function loadVirtualModule(
   ctx: PluginContext,
   id: string,
-  environmentName?: string
+  environmentName?: string,
+  hotClient = false
 ): string | null {
   // A split build's pages link the slices where this module's CSS lands.
   if (id === RESOLVED_CSS_ID) {
@@ -186,14 +189,75 @@ if (import.meta.hot) {
   }
 
   if (id === RESOLVED_SYSTEM_PROPS_ID) {
-    // The Session's module: the HMR change decision compares the exact bytes
-    // this hook serves, built where every host's are.
-    return ctx.systemPropsModule;
+    // The Session's module, built where every host's are: the HMR change
+    // decision compares its exact bytes, which decide what is served here.
+    return hotClient
+      ? hotSystemPropsSource(ctx.systemPropsModule)
+      : ctx.systemPropsModule;
   }
 
   if (id === RESOLVED_FONT_PRELOADS_ID) return fontPreloadsSource(ctx);
 
   return null;
+}
+
+/**
+ * The browser dev server's system-props module: the Session's, accepting a
+ * generation that changes only `systemPropMap`, as a new utility value does.
+ * Without a boundary, an importer path that reaches the entry through no
+ * accepting module (a router exporting an object) reloads the page.
+ *
+ * A generation whose module differs only in the map exports the map object
+ * of the one before it, whose callback then replaces its entries in place,
+ * the per-prop objects too: the component constructors and class resolvers
+ * already running hold that object. A generation that changes anything else
+ * (a config, an export) has another signature, exports its own map, and is
+ * invalidated before any shared object changes, so it reaches its importers
+ * as it does without the boundary. Server environments and builds are
+ * served the Session's module.
+ */
+function hotSystemPropsSource(source: string): string {
+  const span = systemPropMapSpan(source);
+  if (span === null) return source;
+  const [start, end] = span;
+  const signature = contentHash(source.slice(0, start) + source.slice(end));
+  return `const __animusSignature = ${JSON.stringify(signature)};
+/** The map this generation exports: the one before it where only the map
+ *  changed, so its callback can replace the entries in place. */
+function __animusAdopt(incoming) {
+  const hot = import.meta.hot;
+  if (!hot) return incoming;
+  const prior = hot.data.animusSystemProps;
+  const map = prior?.signature === __animusSignature ? prior.map : incoming;
+  hot.data.animusSystemProps = { signature: __animusSignature, map, incoming };
+  return map;
+}
+${source.slice(0, start)}__animusAdopt(${source.slice(start, end)})${source.slice(end)}
+if (import.meta.hot) {
+  import.meta.hot.accept(() => {
+    const next = import.meta.hot.data.animusSystemProps;
+    if (next.signature !== __animusSignature) {
+      import.meta.hot.invalidate('animus: the system props module changed more than its prop map');
+      return;
+    }
+    const own = Object.hasOwn;
+    for (const prop of Object.keys(systemPropMap)) {
+      if (!own(next.incoming, prop)) delete systemPropMap[prop];
+    }
+    for (const [prop, values] of Object.entries(next.incoming)) {
+      const held = systemPropMap[prop];
+      if (held === undefined) {
+        systemPropMap[prop] = values;
+        continue;
+      }
+      for (const key of Object.keys(held)) {
+        if (!own(values, key)) delete held[key];
+      }
+      Object.assign(held, values);
+    }
+  });
+}
+`;
 }
 
 /**

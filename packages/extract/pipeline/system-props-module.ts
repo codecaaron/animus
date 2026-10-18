@@ -77,6 +77,22 @@ function propNameListsSource(
     .join('');
 }
 
+/** The `systemPropMap` export, and what ends it: the generator writes the
+ *  groups export next, and the map's JSON holds no `;` outside a string and
+ *  no raw newline inside one. */
+const SYSTEM_PROP_MAP_EXPORT = 'export const systemPropMap = ';
+const SYSTEM_PROP_MAP_END = ';\nexport const systemPropGroups = ';
+
+/** Where the `systemPropMap` export's JSON lies in a module
+ *  `buildSystemPropsModule` wrote, as `[start, end)`; `null` for a module it
+ *  did not write. */
+export function systemPropMapSpan(source: string): [number, number] | null {
+  // Where a line opens with the export: the source's first line counts.
+  const line = `\n${source}`.indexOf(`\n${SYSTEM_PROP_MAP_EXPORT}`);
+  const end = line < 0 ? -1 : source.indexOf(SYSTEM_PROP_MAP_END, line);
+  return end < 0 ? null : [line + SYSTEM_PROP_MAP_EXPORT.length, end];
+}
+
 export function buildSystemPropsModule(opts: {
   systemPropMapJson: string;
   groupRegistryJson: string;
@@ -93,8 +109,8 @@ export function buildSystemPropsModule(opts: {
     (opts.runtimeTables
       ? `export const animusTables = ${JSON.stringify(opts.runtimeTables)};\n`
       : '') +
-    `export const systemPropMap = ${opts.systemPropMapJson};\n` +
-    `export const systemPropGroups = ${opts.groupRegistryJson};\n` +
+    `${SYSTEM_PROP_MAP_EXPORT}${opts.systemPropMapJson}` +
+    `${SYSTEM_PROP_MAP_END}${opts.groupRegistryJson};\n` +
     propNameListsSource(opts.propNameLists) +
     // A config narrows the system's one table to its own props.
     (opts.supersededBy
