@@ -281,6 +281,7 @@ export {
   isDeletedSource,
   noKitFilesDiagnostics,
   unreadableDiscoveryPathDiagnostic,
+  systemBuilderShippedDiagnostic,
   unreadableSourceDiagnostic,
   VOCABULARY_COLLISION,
   VOCABULARY_LEGACY_VERB,

@@ -16,6 +16,7 @@ import { resolve } from 'path';
 import { mergeConfig } from 'vite';
 
 import { runBuildStart } from './build-start';
+import { reportShippedBuilder } from './builder-in-bundle';
 import { bundleRemoval } from './bundle-removal';
 import { applyResolvedConfig } from './config';
 import {
@@ -541,7 +542,7 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
     // a preload another plugin adds after Animus's is in the HTML it reads.
     generateBundle: {
       order: 'post',
-      handler(_output, bundle) {
+      async handler(_output, bundle) {
         const emitAsset = (name: string, source: string) =>
           this.getFileName(this.emitFile({ type: 'asset', name, source }));
         if (linkedSlices.length > 0 && isClient(this)) {
@@ -591,6 +592,17 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
                 strict: ctx.options.strict,
                 reportErrors: ctx.reportErrors(),
               }
+            );
+          }
+        }
+        if (ctx.isProd && isClient(this)) {
+          const system = await this.resolve(
+            '@animus-ui/system',
+            resolve(ctx.rootDir, ctx.options.system)
+          );
+          if (system) {
+            reportShippedBuilder(ctx, bundle, system.id, (id) =>
+              this.getModuleInfo(id)
             );
           }
         }

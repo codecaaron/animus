@@ -264,6 +264,9 @@ export const UNREADABLE_SOURCE_FILE = 'animus.ingestion.unreadable-source-file';
 /** A directory discovery could not list, or an entry it could not stat. */
 export const UNREADABLE_DISCOVERY_PATH = 'animus.discovery.unreadable-path';
 
+/** A production client chunk ships `@animus-ui/system`'s builder. */
+export const SYSTEM_BUILDER_SHIPPED = 'animus.bundle.system-builder-shipped';
+
 /** A kit the system extends resolved, yet discovery found none of its files. */
 export const NO_KIT_FILES = 'animus.discovery.no-kit-files';
 
@@ -385,6 +388,25 @@ export function unreadableDiscoveryPathDiagnostic<Thrown>(
   };
 }
 
+/** `chunk` ships the system builder; `importers` is the shortest import
+ *  chain from an entry to `@animus-ui/system`, its first module the one
+ *  that reads the system at runtime. Informational: an app that reads its
+ *  system at runtime ships the builder by design. */
+export function systemBuilderShippedDiagnostic(
+  chunk: string,
+  importers: readonly string[]
+): ManifestDiagnostic {
+  const via = importers.length > 0 ? ` through ${importers.join(' → ')}` : '';
+  return {
+    file: chunk,
+    component: 'bundle',
+    kind: 'info',
+    message: `ships the system builder (@animus-ui/system's createSystem and createTheme)${via}. A client build drops it only where no runtime code imports a module that builds the system, and that module's package declares "sideEffects" truthfully (false, or a list of the files that have side effects); to keep it out, import what runtime code reads from a module that does not build the system`,
+    code: SYSTEM_BUILDER_SHIPPED,
+    severity: severityFor(SYSTEM_BUILDER_SHIPPED),
+  };
+}
+
 /** One warning per kit the system extends that resolved, yet yielded no
  *  files: none of its components are extracted. */
 export function noKitFilesDiagnostics(
@@ -491,6 +513,7 @@ type DiagnosticSeverity = 'error' | 'warn' | 'info';
 const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [SELECTOR_UNSUPPORTED_SUBJECT, 'error'],
   [UNREADABLE_SOURCE_FILE, 'error'],
+  [SYSTEM_BUILDER_SHIPPED, 'info'],
   [UNREADABLE_DISCOVERY_PATH, 'warn'],
   [NO_KIT_FILES, 'warn'],
   [KIT_WITHOUT_SOURCE_CONDITION, 'warn'],
