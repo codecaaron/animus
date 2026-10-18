@@ -109,7 +109,8 @@ export function stylesheetSource(ctx: PluginContext): string {
 
 export function loadVirtualModule(
   ctx: PluginContext,
-  id: string
+  id: string,
+  environmentName?: string
 ): string | null {
   // A split build's pages link the slices where this module's CSS lands.
   if (id === RESOLVED_CSS_ID) {
@@ -119,9 +120,11 @@ export function loadVirtualModule(
   }
 
   if (id === RESOLVED_COMPONENTS_ID) {
-    const strippedCss = stripLeadingLayerDeclaration(
-      ctx.resolvedComponentCss || ''
-    );
+    const componentCss = ctx.resolvedComponentCss;
+    if (environmentName !== undefined) {
+      ctx.servedComponentCss.set(environmentName, componentCss);
+    }
+    const strippedCss = stripLeadingLayerDeclaration(componentCss);
     const css = checked(
       ctx,
       postProcessCss(strippedCss, {

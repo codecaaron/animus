@@ -39,6 +39,7 @@ import {
 import { PluginContext } from '../src/context';
 import { flushSystemReload, handleHotUpdate } from '../src/hmr';
 import { HotUpdateEvents } from '../src/hot-update-events';
+import { loadVirtualModule } from '../src/virtual-modules';
 import { makeContextProbe, makeEnvGraph, published } from './context-probe';
 import { makeComponent, makeManifest } from './manifest-fixture';
 
@@ -799,12 +800,12 @@ function observedContext(root: string) {
   ctx.excludeMatcher = createExcludeMatcher(undefined);
   const session = ctx.createSession();
   const system: SystemConfig = { ...ctx.system };
-  const publish = (manifest: ProjectManifest) => {
+  const publish = (manifest: ProjectManifest, componentCss = '') => {
     const publication: SessionPublication = {
       manifest,
       manifestJson: JSON.stringify(manifest),
       analysisGlobalCss: '',
-      analysisComponentCss: '',
+      analysisComponentCss: componentCss,
       styles: '',
       fontPreloads: [],
       // Built from the same inputs as the Session builds it.
@@ -836,13 +837,13 @@ function observedContext(root: string) {
       redeliver: [],
     });
   };
-  let next = makeManifest();
-  session.handleWatchUpdate = async () => publish(next);
+  let next: Parameters<typeof publish> = [makeManifest()];
+  session.handleWatchUpdate = async () => publish(...next);
   return {
     ctx,
     publish,
-    publishNext(manifest: ProjectManifest) {
-      next = manifest;
+    publishNext(...args: Parameters<typeof publish>) {
+      next = args;
     },
   };
 }
@@ -937,6 +938,29 @@ describe('hotUpdate gates system-props invalidation on a changed map', () => {
     expect(ctx.systemPropsModule).toContain('export const systemPropMap = {};');
     expect(client.invalidated).toEqual(VIRTUAL_IDS);
     expect(modules?.map((m) => m.id)).toEqual(VIRTUAL_IDS);
+  });
+
+  it('re-delivers the components module only once the CSS it was served moves', async () => {
+    const { ctx, publish, publishNext } = observedContext(root);
+    publish(makeManifest(), '.a { color: red; }');
+    loadVirtualModule(ctx, RESOLVED_COMPONENTS_ID, 'client');
+    publishNext(makeManifest(), '.a { color: red; }');
+    const client = makeEnvironment('client', VIRTUAL_IDS);
+    const ssr = makeEnvironment('ssr', VIRTUAL_IDS);
+
+    await dispatch(ctx, client.environment, 90);
+    await dispatch(ctx, ssr.environment, 90);
+
+    expect(client.invalidated).toEqual([]);
+    // Never served there, so nothing shows what it holds.
+    expect(ssr.invalidated).toEqual([RESOLVED_COMPONENTS_ID]);
+
+    publishNext(makeManifest(), '.a { color: blue; }');
+    const edited = makeEnvironment('client', VIRTUAL_IDS);
+    const modules = await dispatch(ctx, edited.environment, 91);
+
+    expect(edited.invalidated).toEqual([RESOLVED_COMPONENTS_ID]);
+    expect(modules?.map((m) => m.id)).toEqual([RESOLVED_COMPONENTS_ID]);
   });
 });
 

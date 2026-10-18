@@ -9,6 +9,7 @@ import {
   resolveAssetFile,
   resolveVerbosity,
   runStructuralSelfCheck,
+  substituteAssetPlaceholders,
   substituteFontPreloads,
   substituteSheetAssets,
   writeAssetCopy,
@@ -204,11 +205,17 @@ export class PluginContext {
    *  substitute the current asset URLs, so an edited asset changes its URL
    *  without re-analysis. */
   get globalCss(): string {
-    return this.substitutedSheets().globalCss;
+    return substituteAssetPlaceholders(
+      this.analysisSheets().globalCss,
+      this.assetUrlBySpecifier
+    );
   }
 
   get resolvedComponentCss(): string {
-    return this.substitutedSheets().componentCss;
+    return substituteAssetPlaceholders(
+      this.analysisSheets().componentCss,
+      this.assetUrlBySpecifier
+    );
   }
 
   /** The published font preloads, each by the URL the stylesheet's own
@@ -233,16 +240,14 @@ export class PluginContext {
     };
   }
 
-  private substitutedSheets(): ReturnType<typeof substituteSheetAssets> {
-    return substituteSheetAssets(
-      this.analysisSheets(),
-      this.assetUrlBySpecifier
-    );
-  }
-
   layerDeclaration = '';
 
   transformOutputHashes = new Map<string, string>();
+
+  /** Environment name → the component CSS its components module was last
+   *  built from, so an analysis that leaves it as it was invalidates
+   *  nothing. */
+  servedComponentCss = new Map<string, string>();
 
   recordTransformOutput(relativePath: string, code: string): void {
     this.transformOutputHashes.set(relativePath, contentHash(code));

@@ -340,7 +340,13 @@ function invalidateStaleModules(
   const graph = environment.moduleGraph;
   const modulesToUpdate = analyzed.presentationOnly ? [] : [...modules];
 
-  const moduleIds = [RESOLVED_COMPONENTS_ID];
+  // The components module this environment holds is current while the CSS
+  // it was built from is; nothing it was built from changes in between.
+  const moduleIds: string[] = [];
+  const served = ctx.servedComponentCss.get(environment.name);
+  if (served === undefined || served !== ctx.resolvedComponentCss) {
+    moduleIds.push(RESOLVED_COMPONENTS_ID);
+  }
   if (analyzed.systemPropsChanged) moduleIds.push(RESOLVED_SYSTEM_PROPS_ID);
   for (const moduleId of moduleIds) {
     const mod = graph.getModuleById(moduleId);

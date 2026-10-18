@@ -235,6 +235,7 @@ export function makeContextProbe<Overrides extends ContextProbeOverrides>(
       session,
       abortedParseHashes: new Map<string, string>(),
       transformOutputHashes: new Map<string, string>(),
+      servedComponentCss: new Map<string, string>(),
       recordTransformOutput(
         this: PluginContext,
         relativePath: string,
