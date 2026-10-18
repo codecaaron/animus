@@ -369,8 +369,13 @@ function invalidateStaleModules(
   }
 
   if (analyzed.presentationOnly) {
+    const delivered = modulesToUpdate.some(
+      (mod) => mod.id === RESOLVED_COMPONENTS_ID
+    )
+      ? 'CSS delivered'
+      : 'CSS unchanged';
     ctx.log(
-      `HMR (${environment.name}): presentation-only — ${modules.length} module update(s) suppressed, CSS delivered`
+      `HMR (${environment.name}): presentation-only — ${modules.length} module update(s) suppressed, ${delivered}`
     );
     for (const mod of modules) {
       // A server closing mid-warm must not surface as an unhandled rejection.
