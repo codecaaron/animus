@@ -57,6 +57,16 @@ export function reportShippedBuilder(
   try {
     const owners = new PackageOwners();
     const ownedBySystem = (id: string) => owners.of(id) === SYSTEM_PACKAGE;
+    // Every module some chunk renders code for.
+    const renderedModules = new Set(
+      Object.values(bundle).flatMap((file) =>
+        file.type === 'chunk'
+          ? Object.entries(file.modules)
+              .filter(([, module]) => module.renderedLength > 0)
+              .map(([id]) => id)
+          : []
+      )
+    );
     diagnostics = Object.values(bundle).flatMap((file) => {
       if (file.type !== 'chunk') return [];
       // The builder exports the chunk renders, from every module of the
@@ -72,7 +82,7 @@ export function reportShippedBuilder(
         for (const name of names) rendered.add(name);
       }
       if (builder === undefined) return [];
-      const chain = importChain(builder, moduleInfo).filter(
+      const chain = importChain(builder, moduleInfo, renderedModules).filter(
         (id) => !ownedBySystem(id)
       );
       return [
@@ -130,33 +140,43 @@ class PackageOwners {
   }
 }
 
-/** The shortest import chain from an entry down to `target`, `target` left
- *  out, through the module graph: a module that only re-exports is part of
- *  it though no chunk renders it. Empty where no entry reaches it. */
+/** An import chain from an entry down to `target`, `target` left out,
+ *  through the fewest modules no chunk renders: a module the bundle
+ *  tree-shook explains nothing, but one that only re-exports renders
+ *  nothing and may still be the way in, so it is crossed where no rendered
+ *  path exists. Empty where no entry reaches `target`. */
 function importChain(
   target: string,
-  moduleInfo: (id: string) => ModuleLinks | null
+  moduleInfo: (id: string) => ModuleLinks | null,
+  rendered: ReadonlySet<string>
 ): string[] {
+  // A 0-1 search: crossing a module no chunk renders costs one.
+  const cost = new Map<string, number>([[target, 0]]);
   // Each module reached, and the module it imports on the way to `target`.
-  const toward = new Map<string, string>([[target, target]]);
-  let frontier = [target];
-  while (frontier.length > 0) {
-    const next: string[] = [];
-    for (const id of frontier) {
-      const info = moduleInfo(id);
-      if (info === null) continue;
-      if (info.isEntry && id !== target) {
-        const chain: string[] = [];
-        for (let at = id; at !== target; at = toward.get(at)!) chain.push(at);
-        return chain;
-      }
-      for (const importer of [...info.importers, ...info.dynamicImporters]) {
-        if (toward.has(importer)) continue;
-        toward.set(importer, id);
-        next.push(importer);
-      }
+  const toward = new Map<string, string>();
+  const queue: string[] = [target];
+  const done = new Set<string>();
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (done.has(id)) continue;
+    done.add(id);
+    const info = moduleInfo(id);
+    if (info === null) continue;
+    if (info.isEntry && id !== target) {
+      const chain: string[] = [];
+      for (let at = id; at !== target; at = toward.get(at)!) chain.push(at);
+      return chain;
     }
-    frontier = next;
+    for (const importer of [...info.importers, ...info.dynamicImporters]) {
+      if (done.has(importer)) continue;
+      const step = rendered.has(importer) ? 0 : 1;
+      const reached = cost.get(id)! + step;
+      if (reached >= (cost.get(importer) ?? Infinity)) continue;
+      cost.set(importer, reached);
+      toward.set(importer, id);
+      if (step === 0) queue.unshift(importer);
+      else queue.push(importer);
+    }
   }
   return [];
 }

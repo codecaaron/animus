@@ -186,6 +186,36 @@ suite('a production client build and the system builder', () => {
     );
   });
 
+  // Contract: the chain passes through modules the chunk renders where such
+  // a path exists, not through an importer the bundle tree-shook.
+  it('a chain skips an importer the bundle tree-shook', async () => {
+    const lines = await buildLog({
+      runtimeRead:
+        // `dead` keeps the import past the TypeScript transform; an app
+        // build drops an entry's exports, so the bundle shakes `shaken.ts`.
+        "import { unused } from './shaken';\nimport { read } from './reader';\n\nexport const dead = () => unused;\nObject.assign(globalThis, { read });",
+      setup: (fixture) => {
+        fixture.write(
+          'src/shaken.ts',
+          "import { ds } from './ds';\n\nexport const unused = ds;\n"
+        );
+        fixture.write(
+          'src/holder.ts',
+          "import { ds } from './ds';\n\nexport const held = ds;\n"
+        );
+        fixture.write(
+          'src/reader.ts',
+          "import { held } from './holder';\n\nexport const read = () => held;\n"
+        );
+      },
+    });
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(
+      /reached through src\/main\.ts → src\/reader\.ts → src\/holder\.ts → src\/ds\.ts: /
+    );
+  });
+
   // Contract: the record names the builders the chunk renders: the system
   // builder, the theme builder, or both.
   it('names the theme builder alone where only a theme is read', async () => {
