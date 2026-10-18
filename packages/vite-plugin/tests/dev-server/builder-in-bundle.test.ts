@@ -112,6 +112,21 @@ async function buildLog(build: BuildCase = {}): Promise<string[]> {
   }
 }
 
+/** A kit under src/kit with its own installed copy of the system package,
+ *  building a theme from that copy. */
+function withKitCopy(fixture: DevFixture): void {
+  const copy = join(fixture.root, 'src/kit/node_modules/@animus-ui/system');
+  const system = join(REPO_ROOT, 'packages/system');
+  mkdirSync(copy, { recursive: true });
+  cpSync(join(system, 'dist'), join(copy, 'dist'), { recursive: true });
+  cpSync(join(system, 'package.json'), join(copy, 'package.json'));
+  symlinkSync(join(system, 'node_modules'), join(copy, 'node_modules'));
+  fixture.write(
+    'src/kit/index.ts',
+    "import { createTheme } from '@animus-ui/system';\n\nexport const kitTheme = createTheme().addColors({ foreign: 'purple' }).build();\n"
+  );
+}
+
 const READS_SYSTEM =
   "import { ds } from './ds';\n\nObject.assign(globalThis, { system: ds });";
 
@@ -146,21 +161,7 @@ suite('a production client build and the system builder', () => {
     const lines = await buildLog({
       runtimeRead:
         "import { kitTheme } from './kit/index';\n\nObject.assign(globalThis, { kitTheme });",
-      setup: (fixture) => {
-        const copy = join(
-          fixture.root,
-          'src/kit/node_modules/@animus-ui/system'
-        );
-        const system = join(REPO_ROOT, 'packages/system');
-        mkdirSync(copy, { recursive: true });
-        cpSync(join(system, 'dist'), join(copy, 'dist'), { recursive: true });
-        cpSync(join(system, 'package.json'), join(copy, 'package.json'));
-        symlinkSync(join(system, 'node_modules'), join(copy, 'node_modules'));
-        fixture.write(
-          'src/kit/index.ts',
-          "import { createTheme } from '@animus-ui/system';\n\nexport const kitTheme = createTheme().addColors({ foreign: 'purple' }).build();\n"
-        );
-      },
+      setup: withKitCopy,
     });
 
     expect(lines).toHaveLength(1);
@@ -254,6 +255,73 @@ suite('a production client build and the system builder', () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(
       /The system builder is reached through src\/main\.ts → src\/reader\.ts → src\/ds\.ts; the theme builder is reached through src\/main\.ts → src\/theme\.ts: one import path to each/
+    );
+  });
+
+  // Contract: a chain ends at a holder only where the bundle renders it and
+  // its runtime import reaches the package instance rendering the builder
+  // in that chunk; else it ends at that instance's own module.
+  it("keeps each chunk's chain with its own package copy", async () => {
+    const lines = await buildLog({
+      runtimeRead:
+        "import { tokens } from './theme';\n\nObject.assign(globalThis, { tokens });\nvoid import('./kit/index').then((kit) => Object.assign(globalThis, { kitTheme: kit.kitTheme }));",
+      setup: withKitCopy,
+    });
+
+    expect(lines).toHaveLength(2);
+    expect(lines).toContainEqual(
+      expect.stringMatching(/reached through src\/main\.ts → src\/theme\.ts: /)
+    );
+    expect(lines).toContainEqual(
+      expect.stringMatching(
+        /reached through src\/main\.ts → src\/kit\/index\.ts: /
+      )
+    );
+  });
+
+  it('a holder the bundle tree-shook explains nothing', async () => {
+    const lines = await buildLog({
+      runtimeRead:
+        "import { unusedTheme } from './shaken-builder';\nimport { kitTheme } from './kit/index';\n\nexport const dead = () => unusedTheme;\nObject.assign(globalThis, { kitTheme });",
+      setup: (fixture) => {
+        withKitCopy(fixture);
+        // Through a namespace, so the kit holds no named import of its own.
+        fixture.write(
+          'src/kit/index.ts',
+          "import * as animus from '@animus-ui/system';\n\nexport const kitTheme = animus.createTheme().addColors({ foreign: 'purple' }).build();\n"
+        );
+        fixture.write(
+          'src/shaken-builder.ts',
+          "import { createTheme } from '@animus-ui/system';\n\nexport const unusedTheme = () => createTheme().build();\n"
+        );
+      },
+    });
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(
+      /reached through src\/main\.ts → src\/kit\/index\.ts: /
+    );
+  });
+
+  it('a type-only import of a builder holds nothing', async () => {
+    const lines = await buildLog({
+      runtimeRead:
+        "import { read } from './reader';\nimport { marker } from './z-decoy';\n\nObject.assign(globalThis, { read, marker });",
+      setup: (fixture) => {
+        fixture.write(
+          'src/reader.ts',
+          "import { ds } from './ds';\n\nexport const read = () => ds;\n"
+        );
+        fixture.write(
+          'src/z-decoy.ts',
+          "import type { createSystem } from '@animus-ui/system';\n\nexport type Unused = ReturnType<typeof createSystem>;\nexport const marker = Object.assign(globalThis, { decoy: true });\n"
+        );
+      },
+    });
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(
+      /reached through src\/main\.ts → src\/reader\.ts → src\/ds\.ts: /
     );
   });
 });

@@ -29,6 +29,7 @@ interface ModuleLinks {
   readonly isEntry: boolean;
   readonly importers: readonly string[];
   readonly dynamicImporters: readonly string[];
+  readonly importedIds: readonly string[];
 }
 
 /**
@@ -99,8 +100,21 @@ export function reportShippedBuilder(
       // (a compiled kit), at the system package's module that renders it.
       const chainTo = (kind: 'system' | 'theme') => {
         if (rendering[kind].length === 0) return undefined;
-        const targets =
-          holders![kind].length > 0 ? holders![kind] : rendering[kind];
+        // A holder explains this chunk's builder only where the bundle
+        // renders it and its runtime imports reach the very package
+        // instance rendering the builder here: a type-only import is
+        // erased, and another installed copy is another instance.
+        const instances = new Set(
+          rendering[kind].map((id) => owners.systemInstanceOf(id))
+        );
+        const admitted = holders![kind].filter(
+          (id) =>
+            renderedModules.has(id) &&
+            (moduleInfo(id)?.importedIds ?? []).some((dep) =>
+              instances.has(owners.systemInstanceOf(dep))
+            )
+        );
+        const targets = admitted.length > 0 ? admitted : rendering[kind];
         return importChain(targets, moduleInfo, renderedModules)
           .filter((id) => !ownedBySystem(id))
           .map((id) => relative(ctx.rootDir, id));
@@ -127,32 +141,49 @@ export function reportShippedBuilder(
 /** The name of the package each module id lies in (its nearest
  *  `package.json`), read once per directory. */
 class PackageOwners {
-  private readonly byDir = new Map<string, string | null>();
+  private readonly byDir = new Map<string, OwningPackage | null>();
 
   of(id: string): string | null {
+    return this.packageOf(id)?.name ?? null;
+  }
+
+  /** The directory of the system package instance `id` lies in; `null`
+   *  outside one. Two installed copies are two instances. */
+  systemInstanceOf(id: string): string | null {
+    const owning = this.packageOf(id);
+    return owning?.name === SYSTEM_PACKAGE ? owning.dir : null;
+  }
+
+  private packageOf(id: string): OwningPackage | null {
     // A virtual or query-suffixed id names no file.
     if (!isAbsolute(id) || id.includes('?')) return null;
     return this.inDir(dirname(id));
   }
 
-  private inDir(dir: string): string | null {
+  private inDir(dir: string): OwningPackage | null {
     const known = this.byDir.get(dir);
     if (known !== undefined) return known;
-    let name: string | null;
+    let owning: OwningPackage | null;
     try {
       // SAFETY: npm requires a manifest's `name` to be a string; one that is
       // not compares unequal to the system package's, as an absent one does.
       const manifest = JSON.parse(
         readFileSync(join(dir, 'package.json'), 'utf8')
       ) as { name?: string };
-      name = manifest.name ?? null;
+      owning = { name: manifest.name ?? null, dir };
     } catch {
       const parent = dirname(dir);
-      name = parent === dir ? null : this.inDir(parent);
+      owning = parent === dir ? null : this.inDir(parent);
     }
-    this.byDir.set(dir, name);
-    return name;
+    this.byDir.set(dir, owning);
+    return owning;
   }
+}
+
+/** The package a module lies in: its nearest `package.json`. */
+interface OwningPackage {
+  readonly name: string | null;
+  readonly dir: string;
 }
 
 /** Per builder, module ids. */
@@ -162,8 +193,12 @@ interface BuilderModules {
 }
 
 /** The project's modules, by id, that import each builder from the system
- *  package (`createSystem`, `createTheme`) and are in the build's module
- *  graph: from the facts the Session already parsed, through its cache. */
+ *  package by name (`createSystem`, `createTheme`) and are in the build's
+ *  module graph: from the facts the Session already parsed, through its
+ *  cache. Candidates only: a chunk admits one where the bundle renders it
+ *  and its runtime imports reach the instance rendering the builder there.
+ *  A namespace member or a re-exported factory is not followed; its chain
+ *  ends at the package module. */
 interface BuilderHolders {
   readonly system: readonly string[];
   readonly theme: readonly string[];
