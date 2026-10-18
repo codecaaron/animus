@@ -45,6 +45,11 @@ struct AnalyzeResult<'a> {
     reverse_provenance: &'a std::collections::BTreeMap<String, Vec<String>>,
     components: &'a std::collections::BTreeMap<String, analyze_css::ComponentDescriptor>,
     files: &'a std::collections::BTreeMap<String, Vec<String>>,
+    /// Files whose transform marks a builder chain `/* @__PURE__ */`: a host
+    /// transforms them although they hold no component. Present only where
+    /// one does.
+    #[serde(rename = "builderFiles", skip_serializing_if = "<[_]>::is_empty")]
+    builder_files: &'a [&'a str],
     /// Present only where an extension was dropped over its parent.
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     missing_inputs: &'a [analyze_css::MissingInput],
@@ -1509,6 +1514,12 @@ impl ExtractEngine {
         }
         analyze_css::report_package_openings(&mut css.diagnostics, &self.opts.css_inputs);
         let cross = cross_file::resolve_cross_file(&self.facts, css.member_bindings.clone());
+        let builder_files: Vec<&str> = self
+            .facts
+            .iter()
+            .filter(|(_, facts)| !facts.pure_builder_edits.is_empty())
+            .map(|(path, _)| path.as_str())
+            .collect();
         let out = serde_json::to_string(&AnalyzeResult {
             cross_file: cross.clone(),
             file_facts: &self.facts,
@@ -1527,6 +1538,7 @@ impl ExtractEngine {
             reverse_provenance: &css.reverse_provenance,
             components: &css.components,
             files: &css.files_map,
+            builder_files: &builder_files,
             missing_inputs: &css.missing_inputs,
             font_preloads: &css.font_preloads,
             runtime_tables: &css.runtime_tables,
@@ -1588,8 +1600,21 @@ impl ExtractEngine {
             })
             .unwrap_or_default();
 
+        // A file with no component: the source, with its builder chains'
+        // pure marks if it has any.
+        let no_components = || -> napi::Result<String> {
+            if file_facts.pure_builder_edits.is_empty() {
+                return Ok(serde_json::json!({ "code": source, "hasComponents": false }).to_string());
+            }
+            let annotated = emit::apply_plan(
+                source,
+                &emit::EmissionPlan { replacements: file_facts.pure_builder_edits.clone(), ..Default::default() },
+            )
+            .map_err(napi::Error::from_reason)?;
+            Ok(serde_json::json!({ "code": annotated.code, "hasComponents": false, "annotated": true }).to_string())
+        };
         if file_payloads.is_empty() {
-            return Ok(serde_json::json!({ "code": source, "hasComponents": false }).to_string());
+            return no_components();
         }
 
         let names = assemble::GeneratedNames::free_in(
@@ -1652,8 +1677,16 @@ impl ExtractEngine {
         }
 
         if replacements.is_empty() {
-            return Ok(serde_json::json!({ "code": source, "hasComponents": false }).to_string());
+            return no_components();
         }
+        // A builder chain's pure mark, where no component replacement covers it.
+        let annotations: Vec<_> = file_facts
+            .pure_builder_edits
+            .iter()
+            .filter(|&&(start, end, _)| !replacements.iter().any(|&(from, to, _)| start < to && from < end))
+            .cloned()
+            .collect();
+        replacements.extend(annotations);
 
         let needed = |imports: &[(bool, &assemble::GeneratedName)]| -> Vec<String> {
             imports.iter().filter(|(needed, _)| *needed).map(|(_, name)| name.specifier()).collect()
@@ -4693,6 +4726,67 @@ export const App = () => <Box tone="red" />;
         for order in [[4, 3, 2, 1, 0], [2, 4, 0, 3, 1]] {
             assert_eq!(run(order), given, "files in the order {order:?}");
         }
+    }
+
+    /// Contract: an unread system drops its builder. Each top-level chain
+    /// the module's own bindings prove is an Animus builder's takes a
+    /// `/* @__PURE__ */` annotation, and a destructured factory becomes one
+    /// annotated read per name on the same lines; the manifest names such a file in
+    /// `builderFiles` so a host transforms it though it defines no
+    /// component. An aliased, reassigned, namespaced or passed-through
+    /// builder, a chain inside a function, and a chain with an argument that
+    /// may have an effect stay as written.
+    #[test]
+    fn proven_builder_chains_are_annotated_pure() {
+        let files = serde_json::json!([
+            {
+                "path": "kit.ts",
+                "source": "import { createSystem, createTheme, firstThatWorks } from '@animus-ui/system';\n\
+                    export const kitTheme = createTheme().addScale({ name: 'space', values: { 1: '4px' } }).build();\n\
+                    const bundle = createSystem().build();\n\
+                    export const {\n  createKeyframes,\n} = bundle;\n\
+                    export const motion = createKeyframes({ fade: { from: { opacity: 0 } } });\n\
+                    export const system = bundle.registerKeyframes({ motion, w: firstThatWorks('1px', '2px') }).seal();\n\
+                    createSystem().build();\n",
+            },
+            {
+                "path": "negative.ts",
+                "source": "import { createSystem as cs } from '@animus-ui/system';\n\
+                    import * as s from '@animus-ui/system';\n\
+                    import { make } from './maker';\n\
+                    const alias = cs;\n\
+                    export const a = alias().build();\n\
+                    let reassigned = cs().build();\n\
+                    export const b = s.createSystem().build();\n\
+                    export const c = make(cs()).build();\n\
+                    export const d = cs().addProps({ x: { property: track() } }).build();\n\
+                    export const e = cs().addProps(window.config).build();\n\
+                    export const f = cs().extend(new Kit()).build();\n\
+                    function inner() { return cs().build(); }\n",
+            },
+        ])
+        .to_string();
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&engine.analyze(files, None).unwrap()).unwrap();
+        assert_eq!(manifest["builderFiles"], serde_json::json!(["kit.ts"]));
+
+        let kit: serde_json::Value = serde_json::from_str(&engine.transform_file("kit.ts".into()).unwrap()).unwrap();
+        assert_eq!(kit["annotated"], true);
+        assert_eq!(
+            kit["code"].as_str().unwrap(),
+            "import { createSystem, createTheme, firstThatWorks } from '@animus-ui/system';\n\
+            export const kitTheme = /* @__PURE__ */ createTheme().addScale({ name: 'space', values: { 1: '4px' } }).build();\n\
+            const bundle = /* @__PURE__ */ createSystem().build();\n\
+            export const createKeyframes = /* @__PURE__ */ (() => bundle.createKeyframes)()\n\n;\n\
+            export const motion = /* @__PURE__ */ createKeyframes({ fade: { from: { opacity: 0 } } });\n\
+            export const system = /* @__PURE__ */ bundle.registerKeyframes({ motion, w: firstThatWorks('1px', '2px') }).seal();\n\
+            /* @__PURE__ */ createSystem().build();\n"
+        );
+
+        let negative: serde_json::Value =
+            serde_json::from_str(&engine.transform_file("negative.ts".into()).unwrap()).unwrap();
+        assert!(negative.get("annotated").is_none(), "{negative}");
+        assert!(!negative["code"].as_str().unwrap().contains("__PURE__"), "{negative}");
     }
 }
 

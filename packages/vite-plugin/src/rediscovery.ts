@@ -10,29 +10,36 @@ import type { ObservedOutcome, PluginContext } from './context';
 import type {
   ManifestMissingInput,
   ProjectManifest,
+  ServedFiles,
 } from '@animus-ui/extract/pipeline';
 
-const NO_DROPS: ReadonlyMap<string, ManifestMissingInput> = new Map();
+const NO_SERVED: ServedFiles = {
+  listed: new Set(),
+  dropped: new Map(),
+  builders: new Set(),
+};
 
-// Per-manifest memo: the membership check below runs once per served file.
-const dropsByManifest = new WeakMap<
-  ProjectManifest,
-  ReadonlyMap<string, ManifestMissingInput>
->();
+// Per-manifest memo: the membership checks run once per served file.
+const servedByManifest = new WeakMap<ProjectManifest, ServedFiles>();
+
+/** What the current manifest says the transform serves. */
+export function manifestServedFiles(ctx: PluginContext): ServedFiles {
+  const manifest = ctx.storedManifest;
+  if (!manifest) return NO_SERVED;
+  let served = servedByManifest.get(manifest);
+  if (!served) {
+    served = servedFiles(manifest);
+    servedByManifest.set(manifest, served);
+  }
+  return served;
+}
 
 /** The current manifest's extensions dropped over their parent, by file:
  *  the engine's typed missing-input evidence (spec §12.2 row 11). */
 export function droppedExtensions(
   ctx: PluginContext
 ): ReadonlyMap<string, ManifestMissingInput> {
-  const manifest = ctx.storedManifest;
-  if (!manifest) return NO_DROPS;
-  let drops = dropsByManifest.get(manifest);
-  if (!drops) {
-    drops = servedFiles(manifest).dropped;
-    dropsByManifest.set(manifest, drops);
-  }
-  return drops;
+  return manifestServedFiles(ctx).dropped;
 }
 
 /** Per-context (file, parent, condition) verdicts already warned — each

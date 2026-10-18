@@ -241,6 +241,24 @@ pub(crate) fn is_animus_system_specifier(spec: &str) -> bool {
     spec == "@animus-ui/system" || spec.starts_with("@animus-ui/system/")
 }
 
+/// The locals a module binds to `names`, each imported by name from
+/// `@animus-ui/system`.
+pub(crate) fn animus_named_imports(module: &ModuleRecord<'_>, scoping: &Scoping, names: &[&str]) -> FxHashSet<SymbolId> {
+    module
+        .import_entries
+        .iter()
+        .filter(|entry| is_animus_system_specifier(&entry.module_request.name))
+        .filter(|entry| matches!(&entry.import_name, ImportImportName::Name(name) if names.contains(&name.name.as_str())))
+        .filter_map(|entry| scoping.get_root_binding(entry.local_name.name.as_str().into()))
+        .collect()
+}
+
+/// Whether `ident` reads one of `symbols`.
+pub(crate) fn reads_symbol(scoping: &Scoping, ident: &IdentifierReference<'_>, symbols: &FxHashSet<SymbolId>) -> bool {
+    let symbol = ident.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
+    symbol.is_some_and(|symbol| symbols.contains(&symbol))
+}
+
 /// Namespace imports (`import * as ns from 'x'`): local name → specifier.
 /// Kept apart from `ImportFact`, whose consumers resolve `local` as a named
 /// binding.
@@ -904,6 +922,8 @@ pub(crate) struct EnrichedUsage {
     pub builder_import_references: Vec<BuilderImportReferences>,
     /// See `FileFacts::first_that_works_uses`.
     pub first_that_works_uses: BTreeSet<(u32, u32)>,
+    /// See `FileFacts::pure_builder_edits`.
+    pub pure_builder_edits: Vec<(u32, u32, String)>,
 }
 
 /// A component element that hands its children and props to its receiver,
@@ -1119,6 +1139,9 @@ pub(crate) fn collect_enriched_usage(
         origins.map(|scoping| builder_import_references(program, module, scoping)).unwrap_or_default();
     let first_that_works_uses =
         origins.map(|scoping| first_that_works_uses(program, module, scoping)).unwrap_or_default();
+    let pure_builder_edits = origins
+        .map(|scoping| crate::pure_builders::pure_builder_edits(program, module, scoping))
+        .unwrap_or_default();
     EnrichedUsage {
         usage,
         confined,
@@ -1134,6 +1157,7 @@ pub(crate) fn collect_enriched_usage(
         opaque_tags,
         builder_import_references,
         first_that_works_uses,
+        pure_builder_edits,
     }
 }
 
@@ -1151,8 +1175,7 @@ fn first_that_works_uses(program: &Program<'_>, module: &ModuleRecord<'_>, scopi
     }
     impl Uses<'_> {
         fn bound(&self, ident: &IdentifierReference<'_>, symbols: &FxHashSet<SymbolId>) -> bool {
-            let symbol = ident.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
-            symbol.is_some_and(|symbol| symbols.contains(&symbol))
+            reads_symbol(self.scoping, ident, symbols)
         }
         fn calls_helper(&self, call: &CallExpression<'_>) -> bool {
             match &call.callee {
@@ -1192,15 +1215,14 @@ fn first_that_works_uses(program: &Program<'_>, module: &ModuleRecord<'_>, scopi
             }
         }
     }
-    let animus = module.import_entries.iter().filter(|entry| is_animus_system_specifier(&entry.module_request.name));
-    let symbol = |entry: &ImportEntry<'_>| scoping.get_root_binding(entry.local_name.name.as_str().into());
-    let functions = animus
-        .clone()
-        .filter(|entry| matches!(&entry.import_name, ImportImportName::Name(name) if name.name == "firstThatWorks"))
-        .filter_map(symbol)
+    let functions = animus_named_imports(module, scoping, &["firstThatWorks"]);
+    let namespaces = module
+        .import_entries
+        .iter()
+        .filter(|entry| is_animus_system_specifier(&entry.module_request.name))
+        .filter(|entry| matches!(entry.import_name, ImportImportName::NamespaceObject))
+        .filter_map(|entry| scoping.get_root_binding(entry.local_name.name.as_str().into()))
         .collect();
-    let namespaces =
-        animus.filter(|entry| matches!(entry.import_name, ImportImportName::NamespaceObject)).filter_map(symbol).collect();
     let mut uses = Uses { scoping, functions, namespaces, consts: FxHashSet::default(), found: BTreeSet::new() };
     if uses.functions.is_empty() && uses.namespaces.is_empty() {
         return uses.found;

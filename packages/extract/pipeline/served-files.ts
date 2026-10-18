@@ -1,8 +1,9 @@
 /**
  * What a host's transform reads from a published manifest (SA1): the files
- * it lists components for, which must transform, and the extensions it
+ * it lists components for, which must transform, the extensions it
  * dropped over a parent the analysis could not resolve, which must not be
- * served untransformed (spec §12.2 row 11).
+ * served untransformed (spec §12.2 row 11), and the files whose builder
+ * chains the transform marks pure, which may.
  */
 
 import type { ManifestMissingInput, ProjectManifest } from './manifest-schema';
@@ -10,10 +11,11 @@ import type { ManifestMissingInput, ProjectManifest } from './manifest-schema';
 export interface ServedFiles {
   listed: ReadonlySet<string>;
   dropped: ReadonlyMap<string, ManifestMissingInput>;
+  builders: ReadonlySet<string>;
 }
 
 export function servedFiles(
-  manifest: Pick<ProjectManifest, 'files' | 'missing_inputs'>
+  manifest: Pick<ProjectManifest, 'files' | 'missing_inputs' | 'builderFiles'>
 ): ServedFiles {
   const dropped = new Map<string, ManifestMissingInput>();
   for (const input of manifest.missing_inputs ?? []) {
@@ -31,6 +33,7 @@ export function servedFiles(
         .map(([file]) => file)
     ),
     dropped,
+    builders: new Set(manifest.builderFiles ?? []),
   };
 }
 

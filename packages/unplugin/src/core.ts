@@ -65,6 +65,7 @@ import type {
   OutputTargets,
   ProjectManifest,
   ServedFiles,
+  TransformFileResult,
 } from '@animus-ui/extract/pipeline';
 import type {
   BuildingEnvironment,
@@ -156,7 +157,7 @@ export interface HostState {
         source: string,
         path: string,
         manifestJson: string
-      ) => { code: string; hasComponents: boolean })
+      ) => TransformFileResult)
     | null;
   sessionDir: string | null;
   /** The build of the root this plugin instance analyses, once a pipeline
@@ -175,7 +176,7 @@ export function createHostState(): HostState {
     mode: null,
     cssText: '',
     fontPreloads: [],
-    served: { listed: new Set(), dropped: new Map() },
+    served: { listed: new Set(), dropped: new Map(), builders: new Set() },
     analyzedFiles: [],
     systemPropsJs: '',
     kitRedirects: new Map(),
@@ -258,7 +259,7 @@ export function transformWithEngine(
       source: string,
       path: string,
       manifestJson: string
-    ) => { code: string; hasComponents: boolean };
+    ) => TransformFileResult;
     /** The root-relative files the analysis extracted components from,
      *  which must transform, and those it dropped over their parent. */
     served?: ServedFiles;
@@ -270,7 +271,7 @@ export function transformWithEngine(
   const drop = ctx.served?.dropped.get(filename);
   if (drop !== undefined) throw new Error(droppedExtensionMessage(drop));
   const result = ctx.transformFile(code, filename, ctx.manifestJson);
-  if (result.hasComponents) return result.code;
+  if (result.hasComponents || result.annotated) return result.code;
   // Serving it raw would ship builder code (SA1).
   if (ctx.served?.listed.has(filename)) {
     throw new Error(
@@ -283,7 +284,9 @@ export function transformWithEngine(
 
 /** What a manifest's transform serves, parsed once per run. */
 function manifestServedFiles(manifestJson: string | null): ServedFiles {
-  if (manifestJson === null) return { listed: new Set(), dropped: new Map() };
+  if (manifestJson === null) {
+    return { listed: new Set(), dropped: new Map(), builders: new Set() };
+  }
   // SAFETY: the session's own published manifest.
   return servedFiles(JSON.parse(manifestJson) as ProjectManifest);
 }

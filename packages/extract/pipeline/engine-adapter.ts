@@ -24,6 +24,9 @@ export interface V2ExtractEngine {
 export interface TransformFileResult {
   code: string;
   hasComponents: boolean;
+  /** Present on a file with no component whose builder chains the transform
+   *  marked `/* @__PURE__ *\/`: `code` is the source with those marks. */
+  annotated?: true;
 }
 
 /**
@@ -412,8 +415,17 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           );
         }
         // SAFETY: serde output of the engine's own call on this line —
-        // `transformFile` serializes `{code, hasComponents}`. Bad bytes throw.
-        return JSON.parse(engine.transformFile(path)) as TransformFileResult;
+        // `transformFile` serializes `{code, hasComponents, annotated?}`. Bad
+        // bytes throw.
+        const result = JSON.parse(
+          engine.transformFile(path)
+        ) as TransformFileResult;
+        // Pure marks are only a size gain: a drifted system module is served
+        // as the host has it, never reverted to analyze-time bytes.
+        if (result.annotated && sent !== undefined && sent !== source) {
+          return { code: source, hasComponents: false };
+        }
+        return result;
       },
       clearAnalysisCache: () => {
         const engine = store.getEngine();

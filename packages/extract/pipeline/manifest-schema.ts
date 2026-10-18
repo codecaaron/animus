@@ -160,6 +160,10 @@ export interface ProjectManifest {
   components: Record<string, ManifestComponentDescriptor>;
   /** file path → component ids declared in it. */
   files: Record<string, string[]>;
+  /** Files whose transform marks a builder chain `/* @__PURE__ *\/`, so a
+   *  bundler drops a system no runtime code reads: a host transforms them
+   *  even where they define no component. Absent where there are none. */
+  builderFiles?: string[];
   /** Each extension dropped over a parent that is no analysed chain, with
    *  why (spec §12.2 row 11); absent where none was. */
   missing_inputs?: ManifestMissingInput[];

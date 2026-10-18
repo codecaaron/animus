@@ -163,7 +163,7 @@ export function transformWithManifest(args: {
       );
     }
 
-    let code = result.hasComponents ? result.code : source;
+    let code = result.hasComponents || result.annotated ? result.code : source;
 
     code = code.replace(CSS_IMPORT_RE, '');
 

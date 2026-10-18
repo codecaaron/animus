@@ -61,6 +61,7 @@ pub mod dynamic_meta;
 pub mod forced_usage;
 pub mod owned_ast;
 pub mod pipeline;
+pub(crate) mod pure_builders;
 pub mod property_names;
 pub mod reconcile;
 pub mod runtime_assets;

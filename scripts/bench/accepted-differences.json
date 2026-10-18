@@ -45,8 +45,8 @@
     "row": "analysis:showcase",
     "fixture": "showcase-analysis",
     "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
-    "candidate": "46132b02615a0dec8ec0187dc60f26bc2b1c7cc42ae064e3c44abb2e2a9b870b",
-    "reason": "Beside the differences above, emitted configs carry one [prefix, scope] pair instead of slot variable and class names the runtime can derive, compound class names the runtime derives are omitted, each systemPropNames list ships once as a named export of the system-props module, supersededBy references one system table, and transforms are bound per entry instead of by a per-module loop. Class names and CSS are unchanged."
+    "candidate": "eab5058b1cffcbf7318725c6bb27bed856e70beeba82cbb7fccd27e1780d676d",
+    "reason": "Beside the differences above, emitted configs carry one [prefix, scope] pair instead of slot variable and class names the runtime can derive, compound class names the runtime derives are omitted, each systemPropNames list ships once as a named export of the system-props module, supersededBy references one system table, and transforms are bound per entry instead of by a per-module loop. Class names and CSS are unchanged. The manifest also gains builderFiles, the three system and theme modules whose builder chains the transform marks /* @__PURE__ */ (../test-ds/src/system.ts, ../test-ds/src/theme.ts, src/ds.ts); without it the manifest is byte-identical to the one this entry's previous candidate described."
   },
   {
     "row": "loader:large-closure",

@@ -8,7 +8,7 @@ import { extname, relative } from 'path';
 
 import { VIRTUAL_BRIDGE_ID, VIRTUAL_PREFIX } from './constants';
 import { invalidateFileModules } from './module-invalidation';
-import { droppedExtensions, reconcileSourceCorpus } from './rediscovery';
+import { manifestServedFiles, reconcileSourceCorpus } from './rediscovery';
 import { applyPublished, changesOf, mergePublished } from './session-outcomes';
 
 import type { ObservedOutcome, PluginContext } from './context';
@@ -168,14 +168,20 @@ export async function transformSource(
   // An extension dropped over a parent the analysis could not resolve is
   // never served untransformed, in any mode, even beside components that
   // did extract: its builder code would render with empty classes (SA1).
-  const drop = droppedExtensions(ctx).get(relativePath);
+  const served = manifestServedFiles(ctx);
+  const drop = served.dropped.get(relativePath);
   if (drop !== undefined) throw new Error(droppedExtensionMessage(drop));
-  if (!ctx.storedManifest.files[relativePath]?.length) return null;
+  const listed = served.listed.has(relativePath);
+  if (!listed && !served.builders.has(relativePath)) return null;
 
   try {
     const { transformFile } = ctx.engineApi();
     const result = transformFile(code, relativePath, ctx.storedManifestJson);
 
+    // A system module: only its builder chains' pure marks change.
+    if (!listed) {
+      return result.annotated ? { code: result.code, map: null } : null;
+    }
     if (!result.hasComponents) {
       // The manifest lists components and the engine found none: serving
       // the raw source would ship builder code (SA1).
