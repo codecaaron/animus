@@ -236,4 +236,24 @@ suite('a production client build and the system builder', () => {
       /ships the system and theme builders \(@animus-ui\/system's createSystem and createTheme\)\./
     );
   });
+
+  // Contract: where both builders ship, each gets its own chain, to a module
+  // that holds that builder: the system builder to the module calling
+  // createSystem, the theme builder to the one calling createTheme.
+  it('gives each shipped builder its own chain', async () => {
+    const lines = await buildLog({
+      runtimeRead:
+        "import { read } from './reader';\nimport { tokens } from './theme';\n\nObject.assign(globalThis, { read, tokens });",
+      setup: (fixture) =>
+        fixture.write(
+          'src/reader.ts',
+          "import { ds } from './ds';\n\nexport const read = () => ds;\n"
+        ),
+    });
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(
+      /The system builder is reached through src\/main\.ts → src\/reader\.ts → src\/ds\.ts; the theme builder is reached through src\/main\.ts → src\/theme\.ts: one import path to each/
+    );
+  });
 });

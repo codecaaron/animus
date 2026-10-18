@@ -388,33 +388,48 @@ export function unreadableDiscoveryPathDiagnostic<Thrown>(
   };
 }
 
-/** Which of `@animus-ui/system`'s builders a chunk renders. */
+/** The builders of `@animus-ui/system` a chunk renders, each with an import
+ *  chain from an entry to a module that holds it (empty where none is
+ *  known). */
 export interface ShippedBuilders {
   /** `createSystem`, the system builder. */
-  readonly system: boolean;
+  readonly system?: readonly string[];
   /** `createTheme`, the theme builder. */
-  readonly theme: boolean;
+  readonly theme?: readonly string[];
 }
 
-/** `chunk` ships `builders`; `importers` is the shortest import chain from
- *  an entry to the module that holds them, which shows how the bundle
- *  reaches it, not which read keeps it. Informational: an app that reads
- *  its system or theme at runtime ships its builder by design. */
+/** `chunk` ships `builders`. Each chain shows how the bundle reaches a
+ *  module holding its builder, not which read keeps it. Informational: an
+ *  app that reads its system or theme at runtime ships its builder by
+ *  design. */
 export function systemBuilderShippedDiagnostic(
   chunk: string,
-  importers: readonly string[],
-  builders: ShippedBuilders = { system: true, theme: true }
+  builders: ShippedBuilders
 ): ManifestDiagnostic {
+  const { system, theme } = builders;
   const what =
-    builders.system && builders.theme
+    system && theme
       ? "the system and theme builders (@animus-ui/system's createSystem and createTheme)"
-      : builders.system
+      : system
         ? "the system builder (@animus-ui/system's createSystem)"
         : "the theme builder (@animus-ui/system's createTheme)";
+  // One clause per builder named that has a chain.
+  const clauses = (
+    [
+      ['system', system],
+      ['theme', theme],
+    ] as const
+  ).flatMap(([name, chain]) =>
+    chain !== undefined && chain.length > 0
+      ? [`the ${name} builder is reached through ${chain.join(' → ')}`]
+      : []
+  );
   const via =
-    importers.length > 0
-      ? ` It is reached through ${importers.join(' → ')}: one import path to it, not necessarily the read that keeps it.`
-      : '';
+    clauses.length === 0
+      ? ''
+      : system && theme
+        ? ` ${clauses.join('; ').replace(/^t/, 'T')}: one import path to ${clauses.length > 1 ? 'each' : 'it'}, not necessarily the read that keeps it.`
+        : ` It is reached through ${(system ?? theme)!.join(' → ')}: one import path to it, not necessarily the read that keeps it.`;
   return {
     file: chunk,
     component: 'bundle',
