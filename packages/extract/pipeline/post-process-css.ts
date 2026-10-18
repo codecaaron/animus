@@ -69,7 +69,7 @@ export function describeLightningTargets(targets: LightningTargets): string {
   return Object.entries(targets)
     .flatMap(([browser, packed]) => {
       if (packed === undefined) return [];
-      const parts = [packed >> 16, (packed >> 8) & 0xff, packed & 0xff];
+      const parts = [packed >>> 16, (packed >> 8) & 0xff, packed & 0xff];
       while (parts.length > 1 && parts.at(-1) === 0) parts.pop();
       return [`${browser} ${parts.join('.')}`];
     })
