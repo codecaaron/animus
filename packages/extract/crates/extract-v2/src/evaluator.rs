@@ -234,10 +234,32 @@ impl TransformEvaluator {
         if let Some(result) = results.borrow().get(&js_arg) {
             return result.clone();
         }
-        let result = evaluate_in_fresh_realm(source, name, &js_arg);
+        let result = evaluated(source, name, &js_arg);
         results.borrow_mut().insert(js_arg, result.clone());
         result
     }
+}
+
+/// A definition's result for an argument, kept across analyses: each
+/// evaluation runs in a fresh realm under one budget, with every way to its
+/// host guarded, so the name, source and argument decide it. Bounded, as a
+/// dev server's edits keep adding arguments.
+fn evaluated(source: &str, name: &str, js_arg: &str) -> Result<Scalar, EvalError> {
+    type Results = FxHashMap<(String, String, String), Result<Scalar, EvalError>>;
+    static RESULTS: OnceLock<Mutex<Results>> = OnceLock::new();
+    const RESULTS_KEPT: usize = 65_536;
+    let cache = RESULTS.get_or_init(Default::default);
+    let key = (name.to_string(), source.to_string(), js_arg.to_string());
+    if let Some(result) = cache.lock().expect("transform results lock").get(&key) {
+        return result.clone();
+    }
+    let result = evaluate_in_fresh_realm(source, name, js_arg);
+    let mut kept = cache.lock().expect("transform results lock");
+    if kept.len() >= RESULTS_KEPT {
+        kept.clear();
+    }
+    kept.insert(key, result.clone());
+    result
 }
 
 /// Evaluate `source` for `js_arg` in a realm of its own.
@@ -684,6 +706,27 @@ mod tests {
         let value = Value::Number(3.into());
         assert_eq!(eval.evaluate("unit@system.inset", "unit", &value).unwrap(), "3px");
         assert_eq!(eval.evaluate("unit@system.lift", "unit", &value).unwrap(), "3rem");
+    }
+
+    #[test]
+    fn a_result_kept_across_analyses_names_its_own_transform() {
+        // Contract: a result kept from an earlier analysis is the one a fresh
+        // evaluation gives, so its error still names the transform it reports.
+        let source = "(v) => { throw new Error('kept-across-analyses') }";
+        let value = Value::Number(7.into());
+        let message = |key: &str, name: &str| {
+            let eval = TransformEvaluator::new();
+            eval.register(key, source).unwrap();
+            match eval.evaluate(key, name, &value) {
+                Err(EvalError::Throw { message }) => message,
+                other => panic!("expected Throw, got {:?}", other),
+            }
+        };
+        let first = message("a", "first");
+        assert!(first.starts_with("transform 'first' eval failed"), "{first}");
+        let second = message("b", "second");
+        assert!(second.starts_with("transform 'second' eval failed"), "{second}");
+        assert_eq!(message("c", "first"), first);
     }
 
     #[test]
