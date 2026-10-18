@@ -167,6 +167,12 @@ async function reloadSystem(
   }
   const merged = mergePublished(outcomes);
   applyPublished(ctx, merged);
+  // The reload goes out as Animus's own payload, which Vite does not log as
+  // it logs the page reloads it decides.
+  if (merged.full && ctx.devServer) {
+    const changed = events.map(([path]) => relative(ctx.rootDir, path));
+    ctx.info(`page reload ${changed.join(', ')} (system reload)`);
+  }
   // A held reload re-serves the published system's unchanged bytes.
   if (!merged.published) ctx.invalidateSystemReloadModules(false);
   else {
