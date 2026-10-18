@@ -112,6 +112,40 @@ describe('postProcessCss', () => {
     }
   });
 
+  // Contract: a transform the cache answers still reports its diagnostics.
+  test('a repeated transform reports a lowered :dir() and a failure each time', () => {
+    const onLoweredDir = vi.fn();
+    const warnFn = vi.fn();
+    const broken = '.a { color: ; @}} nonsense';
+    for (let pass = 0; pass < 2; pass++) {
+      const lowered = postProcessCss('.r:dir(rtl) { margin-left: 2px; }', {
+        minify: true,
+        targets: SAFARI15,
+        onLoweredDir,
+      });
+      expect(lowered).not.toContain(':dir(');
+      expect(
+        postProcessCss(broken, { minify: true, targets: CHROME120, warnFn })
+      ).toBe(broken);
+    }
+    expect(onLoweredDir).toHaveBeenCalledTimes(2);
+    expect(warnFn).toHaveBeenCalledTimes(2);
+  });
+
+  // Contract: the cache answers only the input and options it transformed.
+  test('one input under each other option transforms again', () => {
+    const css = '.a:dir(rtl) { backdrop-filter: blur(2px); }';
+    const options = [
+      { minify: true, targets: SAFARI15 },
+      { minify: false, targets: SAFARI15 },
+      { minify: true, targets: CHROME120 },
+      { minify: true, targets: SAFARI15, keepDirSelector: true },
+    ];
+    const first = options.map((opts) => postProcessCss(css, opts));
+    expect(new Set(first).size).toBe(options.length);
+    expect(options.map((opts) => postProcessCss(css, opts))).toEqual(first);
+  });
+
   test('empty input passes through untouched', () => {
     expect(postProcessCss('', { minify: true, targets: CHROME120 })).toBe('');
   });

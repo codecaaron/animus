@@ -26,13 +26,41 @@ export function resolveLightningTargets(
   );
 }
 
+type TransformOptions = {
+  minify: boolean;
+  targets: LightningTargets;
+  /** Keeps `:dir()` as written where the targets would lower it. */
+  keepDirSelector?: boolean;
+};
+
+/** The latest transforms, newest first. A build post-processes one sheet
+ *  for the session and again where the host serves it, and an edit that
+ *  leaves the CSS as it was repeats the session's. */
+const kept: { options: string; css: string; code: string }[] = [];
+const TRANSFORMS_KEPT = 2;
+
+function transformOnce(css: string, opts: TransformOptions): string {
+  const keepDirSelector = opts.keepDirSelector ?? false;
+  const options = JSON.stringify([opts.minify, keepDirSelector, opts.targets]);
+  const hit = kept.find(
+    (entry) => entry.options === options && entry.css === css
+  );
+  if (hit) return hit.code;
+  const code = lcssTransform({
+    filename: 'animus-extracted.css',
+    code: Buffer.from(css),
+    minify: opts.minify,
+    targets: opts.targets,
+    ...(keepDirSelector && keptDirFeatures()),
+  }).code.toString();
+  kept.unshift({ options, css, code });
+  kept.length = Math.min(kept.length, TRANSFORMS_KEPT);
+  return code;
+}
+
 export function postProcessCss(
   css: string,
-  opts: {
-    minify: boolean;
-    targets: LightningTargets;
-    /** Keeps `:dir()` as written where the targets would lower it. */
-    keepDirSelector?: boolean;
+  opts: TransformOptions & {
     warnFn?: (msg: string) => void;
     /** Called when the targets lowered an authored `:dir()`. */
     onLoweredDir?: () => void;
@@ -41,13 +69,7 @@ export function postProcessCss(
   if (!css) return css;
   let code: string;
   try {
-    code = lcssTransform({
-      filename: 'animus-extracted.css',
-      code: Buffer.from(css),
-      minify: opts.minify,
-      targets: opts.targets,
-      ...(opts.keepDirSelector && keptDirFeatures()),
-    }).code.toString();
+    code = transformOnce(css, opts);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     // eslint-disable-next-line no-console
