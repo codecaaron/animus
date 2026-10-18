@@ -14,8 +14,8 @@ const component = (
   className: string,
   extendsFrom: string | null = null
 ) =>
-  // SAFETY: the functions under test read only `binding`, `class_name` and
-  // `extends_from` of a descriptor.
+  // SAFETY: the functions under test read only `binding` and `class_name` of
+  // a descriptor; `extends_from` is set to show removal ignores it.
   ({
     binding,
     class_name: className,
@@ -227,20 +227,16 @@ describe('removeComponentRules over nested rules', () => {
 
 describe('unbundledComponents', () => {
   // Contract: a component is removed only when no output file names its
-  // class, or a class derived from it; `staticCss` keeps one by binding,
-  // and a kept extension keeps every parent.
-  test('keeps what the output names, staticCss declares, or a kept extension extends', () => {
+  // class, or a class derived from it; `staticCss` keeps one by binding.
+  test('keeps what the output names or staticCss declares', () => {
     const components = {
       'a::Shipped': component('Shipped', 'c-shipped'),
       'a::Derived': component('Derived', 'c-derived'),
       'a::Forced': component('Forced', 'c-forced'),
-      'a::Root': component('Root', 'c-root'),
-      'a::Parent': component('Parent', 'c-parent', 'a::Root'),
-      'a::Child': component('Child', 'c-child', 'a::Parent'),
       'a::Gone': component('Gone', 'c-gone'),
     };
     const shipped = shippedClasses(
-      ['z(Tag,"c-shipped",{}); x=`${"c-derived--size-sm"}`; y("c-child")'],
+      ['z(Tag,"c-shipped",{}); x=`${"c-derived--size-sm"}`'],
       Object.values(components).map((c) => c.class_name)
     );
     const removed = unbundledComponents(
@@ -250,6 +246,40 @@ describe('unbundledComponents', () => {
     );
     expect([...removed.keys()]).toEqual(['a::Gone']);
   });
+
+  // Contract: removal drops the CSS of a base used only through .extend()
+  // when no output carries its class, and keeps it when one does.
+  test('drops a base used only through .extend() unless the output carries its class', () => {
+    const components = {
+      'a::Base': component('Base', 'c-base'),
+      'a::Leaf': component('Leaf', 'c-leaf', 'a::Base'),
+      'a::Deeper': component('Deeper', 'c-deeper', 'a::Leaf'),
+    };
+    const css =
+      '@layer anm-base{.c-base{color:red}.c-leaf{color:red;padding:1px}.c-deeper{color:red;padding:1px;margin:2px}}' +
+      '@layer anm-variants{.c-base--tone-b{color:blue}.c-leaf--tone-b{color:blue}.c-deeper--tone-b{color:blue}}';
+    const classes = Object.values(components).map((c) => c.class_name);
+    const removal = (output: string) => {
+      const removed = unbundledComponents(
+        components,
+        shippedClasses([output], classes),
+        new Set()
+      );
+      return {
+        removed: [...removed.keys()],
+        css: removeComponentRules(css, new Set(removed.values())).css,
+      };
+    };
+    expect(removal('z("span","c-deeper",{})')).toEqual({
+      removed: ['a::Base', 'a::Leaf'],
+      css: '@layer anm-base{.c-deeper{color:red;padding:1px;margin:2px}}@layer anm-variants{.c-deeper--tone-b{color:blue}}',
+    });
+    // `asComponent(Base)`: Deeper renders Base, whose definition then ships.
+    expect(removal('z("div","c-base",{}); z(Base,"c-deeper",{})')).toEqual({
+      removed: ['a::Leaf'],
+      css: '@layer anm-base{.c-base{color:red}.c-deeper{color:red;padding:1px;margin:2px}}@layer anm-variants{.c-base--tone-b{color:blue}.c-deeper--tone-b{color:blue}}',
+    });
+  });
 });
 
 describe('unbundledComponents by class', () => {
@@ -258,15 +288,15 @@ describe('unbundledComponents by class', () => {
   // their class, and with it their CSS.
   test('a class any kept component owns is never removed', () => {
     const components = {
-      'one::Parent': component('Parent', 'c-parent'),
-      'two::Parent': component('Parent', 'c-parent'),
-      'a::Child': component('Child', 'c-child', 'one::Parent'),
+      'one::Forced': component('Forced', 'c-shared'),
+      'two::Copy': component('Copy', 'c-shared'),
       'a::Gone': component('Gone', 'c-gone'),
     };
+    // `staticCss` keeps one id by binding; the other carries its class.
     const removed = unbundledComponents(
       components,
-      new Set(['c-child']),
-      new Set()
+      new Set(),
+      new Set(['Forced'])
     );
     expect([...removed.keys()]).toEqual(['a::Gone']);
   });

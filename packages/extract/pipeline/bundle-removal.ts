@@ -156,8 +156,11 @@ export function shippedClasses(
  * render: a component's transformed definition names its class as a string
  * literal, so a build that drops the definition drops every use of the
  * class. Kept are a component the output names (`shipped`), one
- * `staticCss` declares, every parent of a kept extension, and every
- * component sharing a kept one's class. Returns each removed component's id
+ * `staticCss` declares, and every component sharing a kept one's class.
+ * A kept extension keeps no parent: its CSS is a full copy of what it
+ * inherits under its own class, and it renders that class alone, so a
+ * parent's rules serve only where the output names the parent's class too
+ * (`asComponent(Parent)`, for one). Returns each removed component's id
  * and class.
  */
 export function unbundledComponents(
@@ -165,23 +168,16 @@ export function unbundledComponents(
   shipped: ReadonlySet<string>,
   staticCssBindings: ReadonlySet<string>
 ): Map<string, string> {
-  const kept = new Set<string>();
-  for (const [id, component] of Object.entries(components)) {
-    if (
-      !shipped.has(component.class_name) &&
-      !staticCssBindings.has(component.binding)
-    ) {
-      continue;
-    }
-    for (let at: string | null = id; at !== null && !kept.has(at);) {
-      kept.add(at);
-      at = components[at]?.extends_from ?? null;
-    }
-  }
   // CSS belongs to a class, which copies of one definition share: a class
   // any kept component carries stays, whatever other id carries it too.
   const keptClasses = new Set(
-    [...kept].map((id) => components[id]!.class_name)
+    Object.values(components)
+      .filter(
+        (component) =>
+          shipped.has(component.class_name) ||
+          staticCssBindings.has(component.binding)
+      )
+      .map((component) => component.class_name)
   );
   const removed = new Map<string, string>();
   for (const [id, component] of Object.entries(components)) {
