@@ -11,19 +11,55 @@ import type { ManifestDiagnostic } from './manifest-diagnostics';
 
 export type LightningTargets = ReturnType<typeof browserslistToTargets>;
 
+/** The features a host's own Lightning CSS pass includes and excludes
+ *  (Vite's `css.lightningcss`), which Animus's pass follows. */
+export type LightningFeatures = { include?: number; exclude?: number };
+
+/** The targets and features a host's own Lightning CSS pass uses, which
+ *  Animus's pass follows. */
+export type HostLightning = {
+  targets: LightningTargets;
+  features: LightningFeatures;
+};
+
+/** Targets with what named them, for the host's log. */
+type SourcedLightningTargets = {
+  targets: LightningTargets;
+  source: string;
+};
+
 export function resolveLightningTargets(
   explicitTargets: string | string[] | undefined,
   rootDir: string
 ): LightningTargets {
+  return lightningTargetsFor(explicitTargets, rootDir).targets;
+}
+
+/** The targets and what named them: the `targets` option, then the root's
+ *  browserslist config, then the host's own CSS targets where it has them,
+ *  then browserslist `defaults`. */
+export function lightningTargetsFor(
+  explicitTargets: string | string[] | undefined,
+  rootDir: string,
+  host?: SourcedLightningTargets
+): SourcedLightningTargets {
   // Explicit targets always resolve: a one-word query such as 'defaults' is
   // no browser id, and a resolved id ('chrome 120') resolves to itself.
   if (explicitTargets) {
-    return browserslistToTargets(browserslist(explicitTargets));
+    return {
+      targets: browserslistToTargets(browserslist(explicitTargets)),
+      source: 'the targets option',
+    };
   }
+  const configured = browserslist.loadConfig({ path: rootDir }) !== undefined;
+  if (host && !configured) return host;
   const detected = browserslist(undefined, { path: rootDir });
-  return browserslistToTargets(
-    detected.length > 0 ? detected : browserslist('defaults')
-  );
+  return {
+    targets: browserslistToTargets(
+      detected.length > 0 ? detected : browserslist('defaults')
+    ),
+    source: configured ? 'the browserslist config' : 'browserslist defaults',
+  };
 }
 
 type TransformOptions = {
@@ -31,6 +67,7 @@ type TransformOptions = {
   targets: LightningTargets;
   /** Keeps `:dir()` as written where the targets would lower it. */
   keepDirSelector?: boolean;
+  features?: LightningFeatures;
 };
 
 /** The latest transforms, newest first. A build post-processes one sheet
@@ -55,7 +92,13 @@ function enumerableTargets(targets: LightningTargets): LightningTargets {
 function transformOnce(css: string, opts: TransformOptions): string {
   const keepDirSelector = opts.keepDirSelector ?? false;
   const targets = enumerableTargets(opts.targets);
-  const options = JSON.stringify([opts.minify, keepDirSelector, targets]);
+  const features = keepDirSelector
+    ? keptDirFeatures(opts.features)
+    : {
+        include: opts.features?.include ?? 0,
+        exclude: opts.features?.exclude ?? 0,
+      };
+  const options = JSON.stringify([opts.minify, targets, features]);
   const hit = kept.find(
     (entry) => entry.options === options && entry.css === css
   );
@@ -65,7 +108,7 @@ function transformOnce(css: string, opts: TransformOptions): string {
     code: Buffer.from(css),
     minify: opts.minify,
     targets,
-    ...(keepDirSelector && keptDirFeatures()),
+    ...features,
   }).code.toString();
   kept.unshift({ options, css, code });
   kept.length = Math.min(kept.length, TRANSFORMS_KEPT);
@@ -107,15 +150,16 @@ export function postProcessCss(
 /** The Lightning CSS features that keep `:dir()` as written and every other
  *  selector as the targets compile it, over a config's own (Vite's
  *  `css.lightningcss`). */
-export function keptDirFeatures(
-  own: { include?: number; exclude?: number } = {}
-) {
+export function keptDirFeatures(own: LightningFeatures = {}) {
   const exclude = (own.exclude ?? 0) | Features.DirSelector;
   // Any excluded selector feature turns off all selector compilation unless
   // one is included (should_compile_selectors, targets.rs, lightningcss
   // v1.33.0). IsSelector compiles nothing the targets do not need; a config
-  // that already excludes a selector feature has turned it off itself.
-  if ((own.exclude ?? 0) & Features.Selectors) return { exclude };
+  // that already excludes a selector feature has turned it off itself, and
+  // one merged here already includes IsSelector, so a second merge is equal.
+  if ((own.exclude ?? 0) & Features.Selectors) {
+    return { include: own.include ?? 0, exclude };
+  }
   return { include: (own.include ?? 0) | Features.IsSelector, exclude };
 }
 

@@ -1,5 +1,8 @@
-export type { LightningTargets } from '@animus-ui/extract/pipeline';
+export type {
+  HostLightning,
+  LightningTargets,
+} from '@animus-ui/extract/pipeline';
 export {
+  lightningTargetsFor,
   postProcessCss,
-  resolveLightningTargets,
 } from '@animus-ui/extract/pipeline';

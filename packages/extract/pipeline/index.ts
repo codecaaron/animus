@@ -203,9 +203,14 @@ export type { StylesheetDelivery, StylesheetSlice } from './split-stylesheet';
 export { resolveAssetFile, resolveThroughPathAliases } from './resolve-asset';
 export { enforceExternalTokenContracts } from './correlate-external-tokens';
 export { buildPathAliasesJson } from './path-aliases';
-export type { LightningTargets } from './post-process-css';
+export type {
+  HostLightning,
+  LightningFeatures,
+  LightningTargets,
+} from './post-process-css';
 export {
   keptDirFeatures,
+  lightningTargetsFor,
   loweredDirDiagnostic,
   postProcessCss,
   resolveLightningTargets,

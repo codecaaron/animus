@@ -11,7 +11,8 @@ import { isAbsolute, join, resolve } from 'path';
 import { isFileLoadingAllowed } from 'vite';
 
 import { processCopyDir } from './asset-copy-dirs';
-import { resolveLightningTargets } from './css';
+import { lightningTargetsFor } from './css';
+import { viteCssTargets } from './css-targets';
 
 import type { PluginContext } from './context';
 import type { ResolvedConfig } from 'vite';
@@ -76,9 +77,15 @@ export function applyResolvedConfig(
   ctx.serverOrigin = config.server.origin ?? '';
   ctx.publicDir = config.publicDir;
 
-  ctx.lcssTargets = resolveLightningTargets(ctx.options.targets, ctx.rootDir);
+  const cssTargets = viteCssTargets(config.build.cssTarget);
+  const { targets, source } = lightningTargetsFor(
+    ctx.options.targets,
+    ctx.rootDir,
+    cssTargets && { targets: cssTargets, source: "Vite's build.cssTarget" }
+  );
+  ctx.lightning = { targets, features: config.css.lightningcss ?? {} };
   ctx.log(
-    `Lightning CSS targets resolved (${Object.keys(ctx.lcssTargets).length} browsers)`
+    `Lightning CSS targets resolved from ${source} (${Object.keys(targets).length} browsers)`
   );
 
   const pairs: Parameters<typeof buildPathAliasesJson>[0] = [];

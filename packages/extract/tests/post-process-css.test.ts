@@ -1,6 +1,8 @@
+import { Features } from 'lightningcss';
 import { describe, expect, test, vi } from 'vitest';
 
 import {
+  keptDirFeatures,
   postProcessCss,
   resolveLightningTargets,
 } from '../pipeline/post-process-css';
@@ -137,6 +139,11 @@ describe('postProcessCss', () => {
     const css = '.a:dir(rtl) { backdrop-filter: blur(2px); }';
     const options = [
       { minify: true, targets: SAFARI15 },
+      {
+        minify: true,
+        targets: SAFARI15,
+        features: { exclude: Features.VendorPrefixes },
+      },
       { minify: false, targets: SAFARI15 },
       { minify: true, targets: CHROME120 },
       { minify: true, targets: SAFARI15, keepDirSelector: true },
@@ -164,6 +171,15 @@ describe('postProcessCss', () => {
     expect(untargeted).not.toBe(lowered);
     expect(untargeted).toContain(':dir(rtl)');
     expect(reported).toBe(false);
+  });
+
+  // Contract: the keep merge over a config it already merged is equal, as
+  // Vite's css.lightningcss carries Animus's merge into Animus's own pass.
+  test('keptDirFeatures over its own result merges equal', () => {
+    for (const own of [{}, { exclude: Features.Nesting }, { include: 1 }]) {
+      const merged = keptDirFeatures(own);
+      expect(keptDirFeatures(merged)).toEqual(merged);
+    }
   });
 
   test('empty input passes through untouched', () => {

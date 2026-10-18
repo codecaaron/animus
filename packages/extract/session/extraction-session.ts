@@ -266,7 +266,7 @@ import type {
   EngineApi,
   FontPreload,
   IngestionOpening,
-  LightningTargets,
+  HostLightning,
   ManifestDiagnostic,
   ManifestFontPreload,
   ProjectManifest,
@@ -594,6 +594,11 @@ export class ExtractionSession {
    *  emitFile markers): the published sheets keep their placeholders, and
    *  the session makes no copy and tracks no asset file. */
   hostSubstitutesAssets = false;
+  /** The targets and features the host's own Lightning CSS pass uses (Vite:
+   *  its resolved `build.cssTarget` and `css.lightningcss`), which this
+   *  session's pass follows; unset, the `targets` option or the root's
+   *  browserslist config decides. */
+  hostLightning: HostLightning | null = null;
   /** Whether the session writes the font-preloads module beside its
    *  stylesheet, for a host that aliases it (Next). */
   writesFontPreloadsModule = false;
@@ -838,9 +843,9 @@ export class ExtractionSession {
   /** Debounce-window observations pending analysis (sourceKey → hash). */
   private debouncePending = new Map<string, string>();
   private sessionStartHygieneDone = false;
-  // Lightning CSS targets — resolved lazily once per session (browserslist
+  // Lightning CSS settings — resolved lazily once per session (browserslist
   // config I/O).
-  private lcssTargets: LightningTargets | null = null;
+  private lightning: HostLightning | null = null;
 
   constructor(
     options: SessionOptions,
@@ -2973,15 +2978,13 @@ export class ExtractionSession {
 
     // Post-process the BODY only — the @layer declaration and variable CSS
     // pass through untouched.
-    if (this.lcssTargets === null) {
-      this.lcssTargets = resolveLightningTargets(
-        this.options.targets,
-        this.rootDir!
-      );
-    }
+    this.lightning ??= this.hostLightning ?? {
+      targets: resolveLightningTargets(this.options.targets, this.rootDir!),
+      features: {},
+    };
     const processedBody = postProcessCss(body, {
       minify: this.options.minify ?? this.startupMode === 'production',
-      targets: this.lcssTargets,
+      ...this.lightning,
       keepDirSelector: this.options.keepDirSelector,
       warnFn: (msg) => this.warn(msg),
       onLoweredDir: () => {

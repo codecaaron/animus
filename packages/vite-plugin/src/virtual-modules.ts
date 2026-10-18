@@ -67,7 +67,8 @@ export function resolveVirtualId(
 function lightningOptions(ctx: PluginContext) {
   return {
     minify: ctx.options.minify ?? ctx.emissionProd,
-    targets: ctx.lcssTargets,
+    targets: ctx.lightning?.targets ?? {},
+    features: ctx.lightning?.features,
     keepDirSelector: ctx.options.keepDirSelector,
     warnFn: (msg: string) => ctx.warn(msg),
   };

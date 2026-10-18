@@ -38,7 +38,7 @@ import {
 } from './constants';
 import { HotUpdateEvents } from './hot-update-events';
 
-import type { LightningTargets } from './css';
+import type { HostLightning } from './css';
 import type { AnimusExtractOptions } from './index';
 import type {
   AssetSheets,
@@ -117,7 +117,9 @@ export class PluginContext {
   rootDir = '';
   logger: Logger | null = null;
 
-  lcssTargets: LightningTargets = {};
+  /** The targets and features Animus's Lightning CSS pass follows, from
+   *  Vite's resolved config. */
+  lightning: HostLightning | null = null;
   /** Whether the stylesheet this client build served kept an authored
    *  `:dir()`, which Vite's own CSS minification may still lower. */
   servedDirSelector = false;
@@ -420,6 +422,7 @@ export class PluginContext {
     session.persistArtifacts = false;
     // Vite resolves asset() specifiers through its own asset pipeline.
     session.hostSubstitutesAssets = true;
+    session.hostLightning = this.lightning;
     session.driverLabel = 'animus-extract';
     session.onOutcome = (outcome) => this.observeOutcome(session, outcome);
     session.development = this.development;
