@@ -163,6 +163,9 @@ export class PluginContext {
    *  Session commits it; null until one commits, and a failed analysis
    *  leaves the previous one served. Every view below reads it. */
   served: SessionPublication | null = null;
+  /** The system-props module published before the last one that changed
+   *  it, which the verbose HMR line compares the new one with. */
+  priorSystemPropsModule: string | null = null;
   /** What a context serves before a first publication. */
   private readonly unpublishedSystem = emptySystemConfig();
 
@@ -460,6 +463,7 @@ export class PluginContext {
       const before = this.systemPropsModule;
       this.adoptPublication(session);
       systemPropsChanged = this.systemPropsModule !== before;
+      if (systemPropsChanged) this.priorSystemPropsModule = before;
     }
     for (const collected of this.outcomeCollectors) {
       collected.push({ outcome, systemPropsChanged });

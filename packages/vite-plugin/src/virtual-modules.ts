@@ -275,6 +275,49 @@ ${source.slice(0, start)}__animusAdopt(${source.slice(start, end)})${source.slic
 ${adoptable ? HOT_ACCEPT : ''}`;
 }
 
+/** How the system-props generation published last reaches the browser, as
+ *  the verbose HMR line names it: in place (it only adds map entries), to
+ *  its importers at once (it is served without the boundary), or
+ *  invalidated by the client (it removes or changes an entry, or changes
+ *  more than the map). */
+export function systemPropsDelivery(
+  ctx: PluginContext
+): 'in place' | 'to its importers' | 'invalidated by the client' {
+  if (!systemPropsAdoptable(ctx)) return 'to its importers';
+  const prior = ctx.priorSystemPropsModule;
+  return prior !== null && mapOnlyGains(prior, ctx.systemPropsModule)
+    ? 'in place'
+    : 'invalidated by the client';
+}
+
+/** Whether `next` differs from `prior` only in map entries it adds: what the
+ *  served boundary's adoption checks in the browser. */
+function mapOnlyGains(prior: string, next: string): boolean {
+  const was = systemPropMapSpan(prior);
+  const now = systemPropMapSpan(next);
+  if (was === null || now === null) return false;
+  const rest = (source: string, [start, end]: [number, number]) =>
+    source.slice(0, start) + source.slice(end);
+  if (rest(prior, was) !== rest(next, now)) return false;
+  // SAFETY: the span is the generator's systemPropMap JSON, prop → value key
+  // → class.
+  const map = (source: string, [start, end]: [number, number]) =>
+    JSON.parse(source.slice(start, end)) as Record<
+      string,
+      Record<string, string>
+    >;
+  const before = map(prior, was);
+  const after = map(next, now);
+  return Object.entries(before).every(
+    ([prop, values]) =>
+      Object.hasOwn(after, prop) &&
+      Object.entries(values).every(
+        ([key, cls]) =>
+          Object.hasOwn(after[prop], key) && after[prop][key] === cls
+      )
+  );
+}
+
 /** Whether the generation served now may be taken in place: where it may
  *  not, it is served without the boundary, and the update reaches its
  *  importers as it does without one, never through a hot step first. */

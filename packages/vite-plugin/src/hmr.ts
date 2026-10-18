@@ -12,7 +12,7 @@ import { invalidateFileModules } from './module-invalidation';
 import { reconcileSourceCorpus } from './rediscovery';
 import { applyPublished, changesOf, mergePublished } from './session-outcomes';
 import { applyDevBridgeImport, extendingFiles } from './transform';
-import { systemPropsAdoptable } from './virtual-modules';
+import { systemPropsAdoptable, systemPropsDelivery } from './virtual-modules';
 
 import type { ObservedOutcome, PluginContext } from './context';
 import type { HotUpdateResult } from './hot-update-events';
@@ -402,9 +402,23 @@ function invalidateStaleModules(
     return modulesToUpdate;
   }
 
-  const invalidated = modulesToUpdate.length - modules.length;
-  if (invalidated > 0) {
-    ctx.log(`HMR (${environment.name}): ${invalidated} modules invalidated`);
+  const added = modulesToUpdate.slice(modules.length);
+  if (added.length > 0) {
+    // As the plugin's isClient: a host without environments builds only the
+    // browser's.
+    const client = (environment.config?.consumer ?? 'client') === 'client';
+    const named = added.map((mod) => {
+      if (mod.id === RESOLVED_COMPONENTS_ID) return 'components.js';
+      if (mod.id === RESOLVED_SYSTEM_PROPS_ID) {
+        return client
+          ? `system-props ${systemPropsDelivery(ctx)}`
+          : 'system-props';
+      }
+      return `${relative(ctx.rootDir, mod.file ?? mod.id ?? '')} (re-delivered)`;
+    });
+    ctx.log(
+      `HMR (${environment.name}): ${added.length} module${added.length === 1 ? '' : 's'} updated — ${named.join(', ')}`
+    );
     return modulesToUpdate;
   }
 }
