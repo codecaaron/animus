@@ -170,7 +170,7 @@ pub(super) fn build_config(
     inputs: super::ConfigInputs<'_>,
     names: &super::GeneratedNames,
 ) -> Result<String, AssembleError> {
-    let super::ConfigInputs { group_registry, variant_options } = inputs;
+    let super::ConfigInputs { group_registry, variant_options, .. } = inputs;
     let mut config = ObjectLiteral::default();
 
     let mut variants = Map::new();
@@ -539,7 +539,7 @@ mod tests {
             &facts.chains[0],
             "animus",
             Some(payload),
-            super::super::ConfigInputs { group_registry: &registry, variant_options: false },
+            super::super::ConfigInputs { group_registry: &registry, variant_options: false, trusted_factories: true },
             &super::super::GeneratedNames::exports(),
         )
             .unwrap()

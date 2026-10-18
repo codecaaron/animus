@@ -1635,6 +1635,7 @@ impl ExtractEngine {
             assemble::ConfigInputs {
                 group_registry: &self.opts.css_inputs.group_registry,
                 variant_options: self.opts.css_inputs.variant_options,
+                trusted_factories: !self.opts.css_inputs.variant_options,
             },
             &names,
         )
@@ -1669,20 +1670,23 @@ impl ExtractEngine {
                     .iter()
                     .map(|k| format!("\"{}\"", k))
                     .collect();
-                // Pure as a component factory is: every argument is a slot
-                // binding or a literal.
+                // Never marked: the factory reads Root's variantDefaults, and
+                // a user's Root (a Proxy, a getter) can make that read run code.
                 format!(
-                    "{}{}({}, {{ name: \"{}\", sharedKeys: [{}] }})",
-                    assemble::PURE_ANNOTATION,
+                    "{}({}, {{ name: \"{}\", sharedKeys: [{}] }})",
                     names.create_composed_family_with_context,
                     slots_obj,
                     family.name,
                     shared_keys_str.join(", ")
                 )
             } else {
+                // Pure as a component factory is, under an official runtime:
+                // it reads nothing of its slots, and every argument is a slot
+                // binding or a literal.
+                let mark = if self.opts.css_inputs.variant_options { "" } else { assemble::PURE_ANNOTATION };
                 format!(
                     "{}{}({}, {{ name: \"{}\" }})",
-                    assemble::PURE_ANNOTATION,
+                    mark,
                     names.create_composed_family,
                     slots_obj,
                     family.name
@@ -2350,7 +2354,8 @@ mod tests {
     }
 
     /// Contract (with assemble's): an emitted composed-family call carries
-    /// a pure annotation; its arguments are slot bindings and literals.
+    /// a pure annotation; its arguments are slot bindings and literals. A
+    /// context family's call never does.
     #[test]
     fn emitted_composed_family_calls_are_pure() {
         let code = transform_source(
@@ -2361,6 +2366,13 @@ mod tests {
             "got {code}"
         );
         assert_eq!(code.matches("@__PURE__").count(), 3, "got {code}");
+        // A context family's factory reads Root's variantDefaults, which a
+        // user's Root (a Proxy, a getter) can turn into code: never marked.
+        let context = transform_source(
+            "import { composeWithContext } from '@animus-ui/system/compose-with-context';\nconst Root = ds.styles({ display: 'flex' }).asElement('div');\nconst Body = ds.styles({ display: 'grid' }).asElement('div');\nexport const Card = composeWithContext({ Root, Body }, { name: 'Card', shared: {} });\nexport const App = () => <Card.Root><Card.Body /></Card.Root>;\n",
+        );
+        assert!(context.contains("export const Card = createComposedFamilyWithContext("), "got {context}");
+        assert_eq!(context.matches("@__PURE__").count(), 2, "got {context}");
     }
 
     #[test]
@@ -3579,6 +3591,38 @@ export const App = () => <Box tone="red" />;
         }
         let (code, _) = run(Some("./my-runtime"));
         assert!(code.contains(listed), "{code}");
+    }
+
+    /// Contract (with assemble's): an emitted factory call carries a pure
+    /// annotation only into a runtime Animus ships. A custom `runtimeImport`
+    /// promises suitable exports, not effect-free ones, so neither the
+    /// transformed code nor the manifest's descriptor marks its calls.
+    #[test]
+    fn a_custom_runtime_import_gets_no_pure_annotation() {
+        let files = serde_json::json!([
+            { "path": "a.tsx", "source": "export const live = ds.styles({ display: 'block' }).asClass();\nexport const dormant = ds.styles({ display: 'grid' }).asClass();\n" }
+        ]);
+        let run = |runtime_import: Option<&str>| -> (String, String) {
+            let mut engine = ExtractEngine::new(Some(EngineOptions {
+                runtime_import: runtime_import.map(str::to_string),
+                ..Default::default()
+            }))
+            .unwrap();
+            let manifest: serde_json::Value =
+                serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+            let transformed: serde_json::Value =
+                serde_json::from_str(&engine.transform_file("a.tsx".to_string()).unwrap()).unwrap();
+            (
+                transformed["code"].as_str().unwrap().to_string(),
+                manifest["components"]["a.tsx::dormant"]["replacement"].as_str().unwrap().to_string(),
+            )
+        };
+        let (code, descriptor) = run(None);
+        assert_eq!(code.matches("@__PURE__").count(), 2, "{code}");
+        assert!(descriptor.starts_with("/* @__PURE__ */ "), "{descriptor}");
+        let (code, descriptor) = run(Some("./runtime.js"));
+        assert!(!code.contains("@__PURE__"), "{code}");
+        assert!(!descriptor.contains("@__PURE__"), "{descriptor}");
     }
 
     #[test]

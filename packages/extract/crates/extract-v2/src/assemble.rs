@@ -244,6 +244,11 @@ pub struct ConfigInputs<'a> {
     /// custom `runtimeImport`, and the manifest's descriptor that tooling
     /// reads, keep the list.
     pub variant_options: bool,
+    /// The runtime import is one Animus ships, whose factories are pure at
+    /// construction. A custom `runtimeImport` promises suitable exports, not
+    /// effect-free ones (its resolver may register the class it makes), so
+    /// its calls stay unmarked.
+    pub trusted_factories: bool,
 }
 
 /// Build the replacement call text for one chain.
@@ -277,7 +282,7 @@ pub fn generate_replacement(
     // arrow expression, or an identifier), a parent's delivered callbacks.
     // The one user expression is an asComponent target; a member path
     // (`motion.div`) can run a getter, so only an identifier target is marked.
-    let pure = d.terminal != TerminalKind::AsComponent || !d.tag.contains('.');
+    let pure = inputs.trusted_factories && (d.terminal != TerminalKind::AsComponent || !d.tag.contains('.'));
     let mark = if pure { PURE_ANNOTATION } else { "" };
     Ok(if d.terminal == TerminalKind::AsClass {
         format!("{mark}{}('{}', {}{})", names.create_class_resolver, class_name, config, maps)
@@ -354,7 +359,7 @@ mod tests {
             "a.tsx",
             "export const Box = ds.styles({ p: 4 }).asElement('div');",
         );
-        let text = generate_replacement("a.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false }, &GeneratedNames::exports()).unwrap();
+        let text = generate_replacement("a.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false, trusted_factories: true }, &GeneratedNames::exports()).unwrap();
         let class = class_name_for("a.tsx", "Box", "animus");
         assert_eq!(text, format!("/* @__PURE__ */ createComponent('div', '{class}', {{}})"));
     }
@@ -369,7 +374,7 @@ mod tests {
                 .states({ loading: {} })
                 .asElement('button');"#,
         );
-        let text = generate_replacement("b.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false }, &GeneratedNames::exports()).unwrap();
+        let text = generate_replacement("b.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false, trusted_factories: true }, &GeneratedNames::exports()).unwrap();
         // Compound conditions are sorted (size before variant) for
         // determinism.
         assert!(text.contains(r#""conditions":{"size":"sm","variant":"ghost"}"#), "got {text}");
@@ -377,7 +382,7 @@ mod tests {
         // the official runtime, which reads only the prop and its default;
         // a custom runtime's carries the list.
         assert!(text.contains(r#""variants":{"size":{"default":"sm"}}"#), "got {text}");
-        let custom = generate_replacement("b.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: true }, &GeneratedNames::exports()).unwrap();
+        let custom = generate_replacement("b.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: true, trusted_factories: true }, &GeneratedNames::exports()).unwrap();
         assert!(custom.contains(r#""variants":{"size":{"options":["sm","lg"],"default":"sm"}}"#), "got {custom}");
         assert!(text.contains(r#""states":["loading"]"#));
         // A positional compound name is the runtime's to derive.
@@ -390,7 +395,7 @@ mod tests {
             "c.tsx",
             "export const Box = ds.system({ space: true }).asElement('div');",
         );
-        let err = generate_replacement("c.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false }, &GeneratedNames::exports()).unwrap_err();
+        let err = generate_replacement("c.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false, trusted_factories: true }, &GeneratedNames::exports()).unwrap_err();
         match err {
             AssembleError::NeedsConfig(msg) => assert!(msg.contains("row 07")),
         }
@@ -399,7 +404,7 @@ mod tests {
     #[test]
     fn class_resolver_shape() {
         let facts = facts_for("d.tsx", "export const card = ds.styles({ p: 8 }).asClass();");
-        let text = generate_replacement("d.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false }, &GeneratedNames::exports()).unwrap();
+        let text = generate_replacement("d.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false, trusted_factories: true }, &GeneratedNames::exports()).unwrap();
         assert!(text.starts_with("/* @__PURE__ */ createClassResolver('animus-card-"), "got {text}");
     }
 
@@ -408,12 +413,13 @@ mod tests {
     /// factories are pure at construction; the arguments Animus emits are
     /// literals, generated names and captured callbacks (a function or arrow
     /// expression, or an identifier). An asComponent target read through a
-    /// member path can run a getter, so that call stays unmarked.
+    /// member path can run a getter, so that call stays unmarked, and so does
+    /// every call into a custom runtimeImport.
     #[test]
     fn emitted_factory_calls_are_pure_and_never_cover_a_user_expression() {
         let replacement = |file: &str, source: &str| {
             let facts = facts_for(file, source);
-            generate_replacement(file, &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false }, &GeneratedNames::exports()).unwrap()
+            generate_replacement(file, &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: false, trusted_factories: true }, &GeneratedNames::exports()).unwrap()
         };
         for (file, source) in [
             ("a.tsx", "export const Box = ds.styles({ p: 4 }).asElement('div');"),
@@ -427,5 +433,9 @@ mod tests {
         let member = replacement("d.tsx", "import { motion } from 'motion';\nexport const Fade = ds.styles({ p: 4 }).asComponent(motion.div);");
         assert!(!member.contains("@__PURE__"), "a member target is marked: {member}");
         assert!(member.starts_with("createComponent(motion.div,"), "{member}");
+        // A custom runtimeImport's factories may register what they make.
+        let facts = facts_for("e.tsx", "export const card = ds.styles({ p: 8 }).asClass();");
+        let custom = generate_replacement("e.tsx", &facts.chains[0], "animus", None, ConfigInputs { group_registry: &FxHashMap::default(), variant_options: true, trusted_factories: false }, &GeneratedNames::exports()).unwrap();
+        assert!(custom.starts_with("createClassResolver("), "a custom runtime's call is marked: {custom}");
     }
 }

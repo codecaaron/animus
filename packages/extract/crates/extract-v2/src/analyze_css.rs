@@ -10570,8 +10570,13 @@ fn run_with_system_floor(
             chain,
             class_prefix,
             payload,
-            // The descriptor tooling reads keeps the complete config.
-            crate::assemble::ConfigInputs { group_registry: &inputs.group_registry, variant_options: true },
+            // The descriptor tooling reads keeps the complete config; a call
+            // into a custom runtime is never marked pure.
+            crate::assemble::ConfigInputs {
+                group_registry: &inputs.group_registry,
+                variant_options: true,
+                trusted_factories: !inputs.variant_options,
+            },
             &crate::assemble::GeneratedNames::exports(),
         )
         .unwrap_or_default();
