@@ -102,7 +102,8 @@ suite('the system prop map in the browser dev server', () => {
 
   /** Writes the usage site and waits for the map it mints. */
   async function serve(steps: number[], present: number, absent?: number) {
-    fixture.write('src/Usage.tsx', usage(steps));
+    const write = () => fixture.write('src/Usage.tsx', usage(steps));
+    write();
     return until(
       async () => {
         const served = (await adapter.read()).systemProps;
@@ -114,6 +115,10 @@ suite('the system prop map in the browser dev server', () => {
       },
       {
         what: `the map serving p=${present}${absent === undefined ? '' : ` and not p=${absent}`}`,
+        // Each scenario writes this file right after the last one's event,
+        // inside chokidar's 50ms per-path change throttle, which drops the
+        // write outright where the watcher reports each one (Linux inotify).
+        reassert: write,
         describe: async () =>
           `${(await adapter.read()).systemProps}${renderTrace(adapter)}`,
       }
