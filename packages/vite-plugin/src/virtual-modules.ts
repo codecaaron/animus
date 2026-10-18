@@ -192,7 +192,7 @@ if (import.meta.hot) {
     // The Session's module, built where every host's are: the HMR change
     // decision compares its exact bytes, which decide what is served here.
     return hotClient
-      ? hotSystemPropsSource(ctx.systemPropsModule)
+      ? hotSystemPropsSource(ctx.systemPropsModule, !resolvesOutsideRender(ctx))
       : ctx.systemPropsModule;
   }
 
@@ -203,61 +203,75 @@ if (import.meta.hot) {
 
 /**
  * The browser dev server's system-props module: the Session's, accepting a
- * generation that changes only `systemPropMap`, as a new utility value does.
- * Without a boundary, an importer path that reaches the entry through no
- * accepting module (a router exporting an object) reloads the page.
+ * generation that only adds `systemPropMap` entries, as a new utility value
+ * does. Without a boundary, an importer path that reaches the entry through
+ * no accepting module (a router exporting an object) reloads the page.
  *
- * A generation whose module differs only in the map exports the map object
- * of the one before it, whose callback then replaces its entries in place,
- * the per-prop objects too: the component constructors and class resolvers
- * already running hold that object. A generation that changes anything else
- * (a config, an export) has another signature, exports its own map, and is
- * invalidated before any shared object changes, so it reaches its importers
- * as it does without the boundary. Server environments and builds are
- * served the Session's module.
+ * An added entry is safe to take in place: every mounted component resolves
+ * against the one map object on its next render, and one rendered before
+ * the entry existed holds a dynamic slot that still applies. So such a
+ * generation adds its entries to the map object of the one before it, as it
+ * evaluates, and exports that object. Any other generation exports a map of
+ * its own, and the old generation's callback invalidates it, so it reaches
+ * its importers as it does without the boundary:
+ * - one that removes or changes an entry, since a mounted component may
+ *   hold that entry's class while nothing renders it again;
+ * - one that changes anything but the map (a config, an export);
+ * - any generation of a project with a class resolver (`asClass`), which an
+ *   updated module may call as it evaluates, before this module adds the
+ *   entries it reads.
+ * Server environments and builds are served the Session's module.
  */
-function hotSystemPropsSource(source: string): string {
+function hotSystemPropsSource(source: string, adoptable: boolean): string {
   const span = systemPropMapSpan(source);
   if (span === null) return source;
   const [start, end] = span;
   const signature = contentHash(source.slice(0, start) + source.slice(end));
   return `const __animusSignature = ${JSON.stringify(signature)};
-/** The map this generation exports: the one before it where only the map
- *  changed, so its callback can replace the entries in place. */
+/** The map this generation exports: the one before it, with this one's
+ *  added entries, where it adds entries only; else its own. */
 function __animusAdopt(incoming) {
   const hot = import.meta.hot;
   if (!hot) return incoming;
   const prior = hot.data.animusSystemProps;
-  const map = prior?.signature === __animusSignature ? prior.map : incoming;
-  hot.data.animusSystemProps = { signature: __animusSignature, map, incoming };
+  const own = Object.hasOwn;
+  const extendsPrior =
+    ${adoptable} &&
+    prior?.signature === __animusSignature &&
+    Object.entries(prior.map).every(
+      ([prop, values]) =>
+        own(incoming, prop) &&
+        Object.entries(values).every(
+          ([key, cls]) => own(incoming[prop], key) && incoming[prop][key] === cls
+        )
+    );
+  const map = extendsPrior ? prior.map : incoming;
+  if (extendsPrior) {
+    for (const [prop, values] of Object.entries(incoming)) {
+      if (!own(map, prop)) map[prop] = {};
+      Object.assign(map[prop], values);
+    }
+  }
+  hot.data.animusSystemProps = { signature: __animusSignature, map };
   return map;
 }
 ${source.slice(0, start)}__animusAdopt(${source.slice(start, end)})${source.slice(end)}
 if (import.meta.hot) {
-  import.meta.hot.accept(() => {
-    const next = import.meta.hot.data.animusSystemProps;
-    if (next.signature !== __animusSignature) {
-      import.meta.hot.invalidate('animus: the system props module changed more than its prop map');
-      return;
-    }
-    const own = Object.hasOwn;
-    for (const prop of Object.keys(systemPropMap)) {
-      if (!own(next.incoming, prop)) delete systemPropMap[prop];
-    }
-    for (const [prop, values] of Object.entries(next.incoming)) {
-      const held = systemPropMap[prop];
-      if (held === undefined) {
-        systemPropMap[prop] = values;
-        continue;
-      }
-      for (const key of Object.keys(held)) {
-        if (!own(values, key)) delete held[key];
-      }
-      Object.assign(held, values);
+  import.meta.hot.accept((next) => {
+    if (next?.systemPropMap !== systemPropMap) {
+      import.meta.hot.invalidate('animus: the system props module changed more than adding prop map entries');
     }
   });
 }
 `;
+}
+
+/** Whether a project resolves classes outside a render: a class resolver
+ *  (`asClass`) can be called as its module evaluates. */
+function resolvesOutsideRender(ctx: PluginContext): boolean {
+  return Object.values(ctx.storedManifest?.components ?? {}).some(
+    (component) => component.terminal === 'asClass'
+  );
 }
 
 /**
