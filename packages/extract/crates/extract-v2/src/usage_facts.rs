@@ -942,21 +942,32 @@ pub(crate) struct EnrichedUsage {
 
 /// A component element that hands its children and props to its receiver,
 /// which may clone them: the tag as written, where its first name is bound,
-/// whether the element can render something other than its tag (`as`,
-/// `asChild` or a spread), and what its attributes and children carry, read
-/// as a call's arguments are.
+/// what else the element can render, and what its attributes and children
+/// carry, read as a call's arguments are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OpaqueTag {
     pub tag: String,
     /// A parameter or local never names the module's binding of that name.
     pub origin: TagOrigin,
-    pub polymorphic: bool,
+    pub polymorphic: Polymorphic,
     /// Whether the element sets a `ref`, which reads the instance of a
     /// class component, its props included.
     pub exposed: bool,
     pub tags: BTreeSet<String>,
     pub imported_args: Vec<String>,
     pub forwards_from: Vec<String>,
+}
+
+/// What an element's attributes let it render in place of its tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Polymorphic {
+    /// Only its tag: no `as`, `asChild` or spread.
+    No,
+    /// The host element an `as` of a static string names, which an Animus
+    /// element renders in place.
+    Host,
+    /// Anything: an `as` naming a value, `asChild`, or a spread.
+    Open,
 }
 
 /// A use that may hand the module's elements or a component's inputs to

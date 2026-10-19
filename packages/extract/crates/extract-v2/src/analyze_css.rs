@@ -7013,8 +7013,9 @@ fn reexported_modules(
 /// either, or a function that forwards a parameter to such code. A
 /// component element hands its children and props to its receiver, which
 /// keeps them in place only when it is an Animus component that renders an
-/// element and the element cannot render another one (`as`, `asChild` or a
-/// spread), or an ordinary component that forwards nothing outside.
+/// element and the element cannot render a component in its place (an `as`
+/// naming a value, `asChild` or a spread), or an ordinary component that
+/// forwards nothing outside and takes no `as`, `asChild` or spread.
 #[allow(clippy::too_many_arguments)]
 fn opaque_delivery(
     files: &BTreeMap<String, FileFacts>,
@@ -7094,7 +7095,7 @@ fn opaque_delivery(
         })
     };
     let tag_opaque = |file: &str, ff: &FileFacts, tag: &crate::usage_facts::OpaqueTag, forwarding: &FxHashSet<(String, String)>| {
-        use crate::usage_facts::TagOrigin;
+        use crate::usage_facts::{Polymorphic, TagOrigin};
         if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
             return true;
         }
@@ -7103,7 +7104,7 @@ fn opaque_delivery(
         }
         let ids = receiver_ids(file, ff, &tag.tag);
         if !ids.is_empty() {
-            return tag.polymorphic || !ids.iter().all(|id| renders_in_place(id));
+            return tag.polymorphic == Polymorphic::Open || !ids.iter().all(|id| renders_in_place(id));
         }
         // An ordinary component, named directly or as an object's member.
         let ordinary = declaration(file, ff, &tag.tag)
@@ -7115,7 +7116,7 @@ fn opaque_delivery(
         // A ref to a class component reads the instance, its props
         // included.
         ordinary.is_none_or(|(declaring, binding)| {
-            tag.polymorphic
+            tag.polymorphic != Polymorphic::No
                 || forwarding.contains(&(declaring.clone(), binding.clone()))
                 || (tag.exposed && files.get(&declaring).is_some_and(|declared| declared.class_components.contains(&binding)))
         })
@@ -14040,6 +14041,31 @@ mod tests {
         let one_file = format!("{}{}{}", card(own_extend), unimported(item), unimported(app));
         let out = analyze(&[("card.tsx", &one_file)], &test_inputs());
         assert!(out.dynamic_props.contains_key("p"), "{one_file}");
+    }
+
+    /// Contract: an Animus element whose `as` is a static string renders
+    /// a host element, so it hands off nothing rendered inside it, while
+    /// an `as` naming a value, `asChild` or a spread still may.
+    #[test]
+    fn a_string_as_hands_off_nothing_it_renders() {
+        let keeps_p = |attributes: &str| {
+            let source = format!(
+                "const Stack = ds.system({{ display: true }}).asElement('div');\n\
+                 const Box = ds.system({{ space: true }}).asElement('div');\n\
+                 export const App = ({{ tag, rest }}) => <Stack {attributes}><Box p={{2}} /></Stack>;\n"
+            );
+            analyze(&[("a.tsx", &source)], &test_inputs()).dynamic_props.contains_key("p")
+        };
+        for (attributes, keeps) in [
+            (r#"as="span""#, false),
+            (r#"as={"h2"}"#, false),
+            ("as={tag}", true),
+            ("asChild", true),
+            ("{...rest}", true),
+            (r#"as="span" {...rest}"#, true),
+        ] {
+            assert_eq!(keeps_p(attributes), keeps, "{attributes}");
+        }
     }
 
     #[test]

@@ -49,7 +49,7 @@ use std::rc::Rc;
 
 use super::{
     is_erased_wrapper, jsx_member_path, jsx_member_root, tag_origin, ElementConst, MemberEffect, OpaqueCall, OpaqueTag,
-    TagOrigin,
+    Polymorphic, TagOrigin,
 };
 use crate::chain_walk::{unwrap_type_assertions, ChainDescriptor};
 
@@ -497,7 +497,7 @@ struct Reached {
 struct Receiver {
     tag: String,
     origin: TagOrigin,
-    polymorphic: bool,
+    polymorphic: Polymorphic,
     exposed: bool,
     reached: Reached,
 }
@@ -2333,7 +2333,25 @@ impl<'a> Walk<'_, '_, 'a> {
                 }
             })
         };
-        let polymorphic = named_attribute(&["as", "asChild"]);
+        // An `as` of a static string renders that host element in place.
+        let polymorphic = opening
+            .attributes
+            .iter()
+            .map(|attribute| match attribute {
+                oxc::ast::ast::JSXAttributeItem::SpreadAttribute(_) => Polymorphic::Open,
+                oxc::ast::ast::JSXAttributeItem::Attribute(attribute) => match &attribute.name {
+                    oxc::ast::ast::JSXAttributeName::Identifier(name) if name.name == "as" => {
+                        match crate::jsx_scan::eval_jsx_attribute_value(&attribute.value) {
+                            crate::jsx_scan::PropValueResult::Static(serde_json::Value::String(_)) => Polymorphic::Host,
+                            _ => Polymorphic::Open,
+                        }
+                    }
+                    oxc::ast::ast::JSXAttributeName::Identifier(name) if name.name == "asChild" => Polymorphic::Open,
+                    _ => Polymorphic::No,
+                },
+            })
+            .max()
+            .unwrap_or(Polymorphic::No);
         let exposed = named_attribute(&["ref"]);
         let reached = Reached { top: self.top.to_vec(), held: value.clone() };
         self.module.receivers.insert(element.span.start, Receiver { tag, origin, polymorphic, exposed, reached });
