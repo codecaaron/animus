@@ -635,6 +635,13 @@ pub struct FileFacts {
     /// while nothing changes the wrapper.
     #[serde(skip)]
     pub(crate) ordinary_components: BTreeSet<String>,
+    /// The `ordinary_components` React's `forwardRef` or `memo` builds, each
+    /// with the name of a callback the module names: an object whose
+    /// `render` or `type` React calls, so a write through one or a hand-on
+    /// of one may change what it renders, and it renders what that callback
+    /// does.
+    #[serde(skip)]
+    pub(crate) react_wrappers: BTreeMap<String, Option<String>>,
     /// Top-level `const` bindings React's `createContext` builds: a tag
     /// naming one's `Provider` renders its children in place.
     #[serde(skip)]
@@ -1392,6 +1399,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
             .filter_map(|load| load.specifier().map(str::to_string))
             .collect(),
         ordinary_components: BTreeSet::new(),
+        react_wrappers: BTreeMap::new(),
         context_consts,
         prop_tags: Vec::new(),
         name_uses: BTreeMap::new(),
@@ -2039,6 +2047,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         escapes: value_escapes,
         spread_wrappers,
         ordinary_components,
+        react_wrappers,
         prop_tags,
         name_uses,
         namespace_member_uses,
@@ -2106,6 +2115,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         value_escapes,
         spread_wrappers,
         ordinary_components,
+        react_wrappers,
         prop_tags,
         name_uses,
         namespace_member_uses,

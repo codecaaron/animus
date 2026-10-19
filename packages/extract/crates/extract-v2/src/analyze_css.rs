@@ -7122,6 +7122,33 @@ fn opaque_delivery(
         })
     };
     let mut forwarding: FxHashSet<(String, String)> = FxHashSet::default();
+    // A React wrapper some module hands on or writes through, by any path to
+    // it (an import, a `const` alias, an object that holds it), may render
+    // anything in its callback's place: it forwards outside.
+    for (path, ff) in files {
+        for escaped in &ff.value_escapes {
+            let prefixes = escaped.match_indices('.').map(|(dot, _)| &escaped[..dot]).chain(std::iter::once(escaped.as_str()));
+            let mut pending: Vec<(String, String)> =
+                prefixes.filter_map(|prefix| declaration(path, ff, prefix)).map(|(declaring, binding, _)| (declaring, binding)).collect();
+            let mut seen: FxHashSet<(String, String)> = FxHashSet::default();
+            while let Some((declaring, binding)) = pending.pop() {
+                let Some(declared) = files.get(&declaring) else { continue };
+                if !seen.insert((declaring.clone(), binding.clone())) {
+                    continue;
+                }
+                // A hand-on of a wrapper hands on its callback too.
+                if let Some(callback) = declared.react_wrappers.get(&binding) {
+                    pending.extend(callback.iter().map(|callback| (declaring.clone(), callback.clone())));
+                    forwarding.insert((declaring, binding));
+                    continue;
+                }
+                let held = declared.aliases.get(&binding).into_iter().chain(declared.object_members.get(&binding).into_iter().flat_map(|members| members.values()));
+                pending.extend(
+                    held.filter_map(|name| declaration(&declaring, declared, name)).map(|(declaring, binding, _)| (declaring, binding)),
+                );
+            }
+        }
+    }
     loop {
         let mut grew = false;
         for (path, ff) in files {
@@ -7137,6 +7164,11 @@ fn opaque_delivery(
                         .flat_map(|tag| &tag.forwards_from),
                 )
                 .map(|name| (path.clone(), name.clone()))
+                // A React wrapper forwards what its callback does.
+                .chain(ff.react_wrappers.iter().filter_map(|(wrapper, callback)| {
+                    let callback = callback.as_ref()?;
+                    forwarding.contains(&(path.clone(), callback.clone())).then(|| (path.clone(), wrapper.clone()))
+                }))
                 .collect::<Vec<_>>();
             for key in forwards {
                 grew |= forwarding.insert(key);
@@ -14104,6 +14136,47 @@ mod tests {
         }
         // A `forwardRef` or `memo` that is not React's.
         assert!(keeps_p("import { memo, forwardRef } from 'outside';", "memo(forwardRef(Render))"));
+    }
+
+    /// Contract: a React wrapper some module hands on or writes through may
+    /// render anything in its callback's place (`render` and `type` are
+    /// what React calls), so it hands its children outside, however a
+    /// module reaches it.
+    #[test]
+    fn a_react_wrapper_handed_on_forwards_outside() {
+        let wrapper = (
+            "w.tsx",
+            "import { forwardRef, memo } from 'react';\n\
+             const Render = (props, ref) => <div ref={ref}>{props.children}</div>;\n\
+             export const Wrapped = forwardRef(Render);\n\
+             export const Outer = memo(Wrapped);\n",
+        );
+        let renders = |tag: &str, more: &str, other: &str| {
+            let app = format!(
+                "import {{ Wrapped, Outer }} from './w';\nimport {{ pad, consume }} from 'outside';\n\
+                 export const Box = ds.system({{ space: true }}).asElement('div');\n\
+                 export const App = () => <{tag}><Box p={{8}} /></{tag}>;\n{more}"
+            );
+            let other = format!("import {{ Wrapped, Outer }} from './w';\nimport * as w from './w';\nimport {{ pad, consume }} from 'outside';\n{other}");
+            analyze(&[wrapper, ("app.tsx", &app), ("other.tsx", &other)], &test_inputs()).dynamic_props.contains_key("p")
+        };
+        let keeps_p = |more: &str, other: &str| renders("Wrapped", more, other);
+        // A wrapper of a wrapper renders what the inner one does.
+        assert!(!renders("Outer", "", ""));
+        assert!(renders("Outer", "", "Wrapped.render = (props) => pad(props.children);\n"));
+        // A hand-on of the outer one hands on the inner one.
+        assert!(renders("Wrapped", "", "consume(Outer);\n"));
+        for (more, other, keeps) in [
+            ("", "", false),
+            ("Wrapped.render = (props) => pad(props.children);\n", "", true),
+            ("", "Object.assign(Wrapped, { render: (props) => pad(props.children) });\n", true),
+            ("", "consume(w.Wrapped);\n", true),
+            ("", "function patch(c) { c.render = (props) => pad(props.children); }\npatch(Wrapped);\n", true),
+            ("", "const Held = Wrapped;\nHeld.render = (props) => pad(props.children);\n", true),
+            ("", "const Kit = { Wrapped };\nconsume(Kit);\n", true),
+        ] {
+            assert_eq!(keeps_p(more, other), keeps, "{more}{other}");
+        }
     }
 
     /// Contract: a component a `const` facade holds (`Field = { Root }`) is
