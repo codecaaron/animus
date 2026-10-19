@@ -1,7 +1,9 @@
 import {
   contentHash,
+  hostFinding,
   noteKept,
   outputEvidence,
+  REMOVAL_UNREADABLE,
   removeComponentRules,
   shippedClasses,
   unbundledComponents,
@@ -115,9 +117,14 @@ export function bundleRemoval(
       try {
         removal = removeComponentRules(css, classes);
       } catch (error) {
-        ctx.warn(
-          `[animus-extract] removeUnbundledComponents kept ${file.fileName} whole: Lightning CSS could not read it (${error instanceof Error ? error.message : String(error)})`
-        );
+        ctx.surfaceDiagnostics([
+          hostFinding(
+            REMOVAL_UNREADABLE,
+            file.fileName,
+            'removeUnbundledComponents',
+            `kept it whole: Lightning CSS could not read it (${error instanceof Error ? error.message : String(error)})`
+          ),
+        ]);
         return keepFile(css);
       }
       if (removal.refused !== null) {

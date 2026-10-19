@@ -7,7 +7,11 @@
 import { relative, resolve, sep } from 'path';
 
 import { outputExclusion, REPLACEABLE_DEFAULT_EXCLUDE } from './core-options';
-import { hostFinding, OUTPUT_TREES } from './manifest-diagnostics';
+import {
+  ANALYSED_OUTPUT,
+  hostFinding,
+  OUTPUT_TREES,
+} from './manifest-diagnostics';
 import { isPathWithinRoot } from './source-identity';
 
 import type { ManifestDiagnostic } from './manifest-diagnostics';
@@ -131,7 +135,7 @@ export function analysedOutputs(
   root: string,
   targets: OutputTargets,
   analyzed: readonly string[]
-): string | null {
+): ManifestDiagnostic | null {
   const earlier = analyzed.filter((file) => targets.files.includes(file));
   const inside = targets.dirs.flatMap((dir) => {
     const exclusion = outputExclusion(root, dir);
@@ -159,7 +163,12 @@ export function analysedOutputs(
   ];
   return parts.length === 0
     ? null
-    : `[animus] this build ${parts.join('; and ')}.`;
+    : hostFinding(
+        ANALYSED_OUTPUT,
+        'output',
+        'this build',
+        parts.join('; and ')
+      );
 }
 
 /** Directory names build tools write into, which source rarely uses. */

@@ -35,7 +35,7 @@ describe('plugin self-verification', () => {
     });
 
     await expect(result).rejects.toThrow(
-      '[animus:verify] No component CSS produced'
+      'stylesheet: self-check: No component CSS produced'
     );
   });
 });

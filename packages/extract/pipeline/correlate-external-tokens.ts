@@ -2,9 +2,17 @@ import { existsSync, realpathSync } from 'fs';
 import { dirname, join } from 'path';
 
 import { parseInternalWire } from './internal-wire';
+import {
+  EXTERNAL_TOKEN_UNDEFINED,
+  hostFinding,
+  surfaceManifestDiagnostics,
+} from './manifest-diagnostics';
 import { isPathWithinRoot } from './source-identity';
 
-import type { ManifestDiagnostic } from './manifest-diagnostics';
+import type {
+  DiagnosticPolicy,
+  ManifestDiagnostic,
+} from './manifest-diagnostics';
 
 /**
  * A candidate token becomes a finding only when the SOURCE package's own
@@ -81,7 +89,7 @@ export function buildSourceTokenIndex(opts: {
 }
 
 /**
- * One message per distinct (component, token, specifier) whose source
+ * One finding per distinct (component, token, specifier) whose source
  * defines the token. Severity routing stays at the caller.
  */
 export function correlateExternalTokenDiagnostics(opts: {
@@ -90,8 +98,8 @@ export function correlateExternalTokenDiagnostics(opts: {
   fileOwners: Record<string, string>;
   /** specifier → token paths the source itself defines. */
   sourceTokens: Map<string, Set<string>>;
-}): string[] {
-  const messages: string[] = [];
+}): ManifestDiagnostic[] {
+  const findings: ManifestDiagnostic[] = [];
   const seen = new Set<string>();
 
   for (const diagnostic of opts.diagnostics ?? []) {
@@ -106,15 +114,20 @@ export function correlateExternalTokenDiagnostics(opts: {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    messages.push(
-      `${diagnostic.component} (from '${specifier}') references token ` +
-        `'${diagnostic.token}', which the consumer theme does not define — ` +
-        `inherit the source's tokens with createTheme().extend(...) using the ` +
-        `tokens (or bundle) export of '${specifier}'`
+    findings.push(
+      hostFinding(
+        EXTERNAL_TOKEN_UNDEFINED,
+        diagnostic.file,
+        diagnostic.component,
+        `(from '${specifier}') references token '${diagnostic.token}', ` +
+          `which the consumer theme does not define — inherit the source's ` +
+          `tokens with createTheme().extend(...) using the tokens (or bundle) ` +
+          `export of '${specifier}'`
+      )
     );
   }
 
-  return messages;
+  return findings;
 }
 
 // Memoized per `dirOwners` identity (hosts allocate a fresh one per
@@ -128,21 +141,20 @@ const indexCache = new WeakMap<
  * The one cross-source token-contract gate both plugins share, so the hosts
  * cannot drift on wiring or severity.
  */
-export function enforceExternalTokenContracts(opts: {
-  diagnostics: ManifestDiagnostic[] | undefined;
-  /** rootDir-relative file path → owning specifier. */
-  fileOwners: Record<string, string>;
-  /** Absolute package dir → owning specifier. */
-  dirOwners: Record<string, string>;
-  sourceThemeManifestsJson: string | null | undefined;
-  strict: boolean | undefined;
-  /** Host log prefix, e.g. `[animus-extract]`. */
-  prefix: string;
-  warn: (message: string) => void;
-  /** Development's error sink: under `strict`, the messages are reported
-   *  here instead of thrown. */
-  reportErrors?: (message: string) => void;
-}): void {
+export function enforceExternalTokenContracts(
+  opts: {
+    diagnostics: ManifestDiagnostic[] | undefined;
+    /** rootDir-relative file path → owning specifier. */
+    fileOwners: Record<string, string>;
+    /** Absolute package dir → owning specifier. */
+    dirOwners: Record<string, string>;
+    sourceThemeManifestsJson: string | null | undefined;
+  },
+  warn: (message: string) => void,
+  /** The host's diagnostics policy: an undefined token fails a strict
+   *  build, and a level can change that. */
+  policy: DiagnosticPolicy
+): void {
   const manifestsJson = opts.sourceThemeManifestsJson ?? '';
   const cached = indexCache.get(opts.dirOwners);
   let sourceTokens: Map<string, Set<string>>;
@@ -156,17 +168,10 @@ export function enforceExternalTokenContracts(opts: {
     indexCache.set(opts.dirOwners, { manifestsJson, index: sourceTokens });
   }
 
-  const messages = correlateExternalTokenDiagnostics({
+  const diagnostics = correlateExternalTokenDiagnostics({
     diagnostics: opts.diagnostics,
     fileOwners: opts.fileOwners,
     sourceTokens,
   });
-  if (messages.length === 0) return;
-  if (!opts.strict) {
-    for (const message of messages) opts.warn(message);
-    return;
-  }
-  const message = `${opts.prefix} ${messages.join('\n')}`;
-  if (!opts.reportErrors) throw new Error(message);
-  opts.reportErrors(message);
+  surfaceManifestDiagnostics({ diagnostics }, warn, policy);
 }

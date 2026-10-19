@@ -84,7 +84,7 @@ describe('external token contracts', () => {
     const { run } = await buildKitConsumer(true);
 
     await expect(run()).rejects.toThrow(
-      /KitButton \(from '[^']*kits\/ui\/src\/index\.ts'\) references token 'colors\.externalAccent'.*createTheme\(\)\.extend\(/
+      /animus\.token\.external-undefined — .*: KitButton: \(from '[^']*kits\/ui\/src\/index\.ts'\) references token 'colors\.externalAccent'.*createTheme\(\)\.extend\(/
     );
   });
 

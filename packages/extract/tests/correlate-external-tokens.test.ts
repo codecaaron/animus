@@ -47,10 +47,14 @@ describe('correlateExternalTokenDiagnostics', () => {
     });
 
     expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain('KitCard');
-    expect(messages[0]).toContain("'@acme/ui-kit'");
-    expect(messages[0]).toContain("'colors.externalAccent'");
-    expect(messages[0]).toContain('createTheme().extend(');
+    expect(messages[0]).toMatchObject({
+      component: 'KitCard',
+      code: 'animus.token.external-undefined',
+      severity: 'error',
+    });
+    expect(messages[0].message).toContain("'@acme/ui-kit'");
+    expect(messages[0].message).toContain("'colors.externalAccent'");
+    expect(messages[0].message).toContain('createTheme().extend(');
   });
 
   test('a CSS literal the source does not define stays silent (witness miss)', () => {
@@ -203,17 +207,18 @@ describe('buildSourceTokenIndex package-boundary join', () => {
     const { srcDir, distModule } = makeKit();
 
     expect(() =>
-      enforceExternalTokenContracts({
-        diagnostics: [candidate()],
-        fileOwners: FILE_OWNERS,
-        dirOwners: { [srcDir]: '@acme/ui-kit' },
-        sourceThemeManifestsJson: JSON.stringify({
-          [distModule]: { theme: ['colors.externalAccent'] },
-        }),
-        strict: true,
-        prefix: '[animus-extract]',
-        warn: () => {},
-      })
+      enforceExternalTokenContracts(
+        {
+          diagnostics: [candidate()],
+          fileOwners: FILE_OWNERS,
+          dirOwners: { [srcDir]: '@acme/ui-kit' },
+          sourceThemeManifestsJson: JSON.stringify({
+            [distModule]: { theme: ['colors.externalAccent'] },
+          }),
+        },
+        () => {},
+        { strict: true }
+      )
     ).toThrow(/KitCard.*'colors\.externalAccent'/s);
   });
 });

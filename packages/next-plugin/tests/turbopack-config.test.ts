@@ -165,15 +165,23 @@ describe('turbopackSideEffectsLimits', () => {
         ['@acme/kit/register', true],
       ]);
 
-      const lines = turbopackSideEffectsLimits(root, entries, declared);
+      const findings = turbopackSideEffectsLimits(root, entries, declared);
 
-      expect(lines).toHaveLength(2);
-      expect(lines[0]).toContain(
-        'cannot carry the "sideEffects" of @acme/kit/register to its source kit/src/register.ts'
+      expect(findings).toHaveLength(2);
+      expect(findings[0]).toMatchObject({
+        file: 'kit/src/register.ts',
+        component: '@acme/kit/register',
+        code: 'animus.next.turbopack-side-effects',
+      });
+      expect(findings[0].message).toContain(
+        'Turbopack can drop its side effects'
       );
-      expect(lines[0]).toContain('Turbopack can drop its side effects');
-      expect(lines[1]).toContain(
-        'cannot keep the source modules of kit side-effectful'
+      expect(findings[1]).toMatchObject({
+        file: 'kit',
+        component: 'sideEffects',
+      });
+      expect(findings[1].message).toContain(
+        'cannot keep its source modules side-effectful'
       );
     } finally {
       rmSync(root, { recursive: true, force: true });

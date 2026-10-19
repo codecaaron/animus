@@ -77,12 +77,11 @@ function lightningOptions(ctx: PluginContext) {
 }
 
 function checked(ctx: PluginContext, css: string): string {
-  reportSurvivingAssetPlaceholders(css, {
-    strict: ctx.options.strict,
-    warn: (message) => ctx.warn(message),
-    reportErrors: ctx.reportErrors(),
-    prefix: '[animus-extract]',
-  });
+  reportSurvivingAssetPlaceholders(
+    css,
+    (message) => ctx.warn(message),
+    ctx.diagnosticPolicy()
+  );
   return css;
 }
 

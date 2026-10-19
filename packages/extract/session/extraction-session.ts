@@ -269,6 +269,7 @@ import type {
 } from '../pipeline/index';
 import type {
   AssetSheets,
+  DiagnosticPolicy,
   EngineApi,
   FontPreload,
   IngestionOpening,
@@ -899,13 +900,19 @@ export class ExtractionSession {
     surfaceManifestDiagnostics(
       { diagnostics },
       (message) => this.warn(message),
-      {
-        levels: this.options.diagnostics,
-        strict: this.options.strict,
-        info: (line) => this.log(line),
-        reportErrors: this.reportErrors(),
-      }
+      this.hostPolicy()
     );
+  }
+
+  /** The host's `diagnostics` levels and strictness, as every finding the
+   *  session makes is reported under. */
+  private hostPolicy(): DiagnosticPolicy {
+    return {
+      levels: this.options.diagnostics,
+      strict: this.options.strict,
+      info: (line) => this.log(line),
+      reportErrors: this.reportErrors(),
+    };
   }
 
   /** Forgets that `relPath` could not be read once an incremental pass reads
@@ -2965,16 +2972,16 @@ export class ExtractionSession {
       assertRuntimeImportSuppliesTerminals(this.runtimeImport, result.manifest);
     }
 
-    enforceExternalTokenContracts({
-      diagnostics: result.manifest?.diagnostics,
-      fileOwners: this.externalFileOwners,
-      dirOwners: this.externalDirOwners,
-      sourceThemeManifestsJson: system.sourceThemeManifestsJson,
-      strict: this.options.strict,
-      prefix: `[${this.driverLabel}]`,
-      warn: (message: string) => this.warn(message),
-      reportErrors: this.reportErrors(),
-    });
+    enforceExternalTokenContracts(
+      {
+        diagnostics: result.manifest?.diagnostics,
+        fileOwners: this.externalFileOwners,
+        dirOwners: this.externalDirOwners,
+        sourceThemeManifestsJson: system.sourceThemeManifestsJson,
+      },
+      (message) => this.warn(message),
+      this.hostPolicy()
+    );
 
     bt.jsonSerialize = result.timings.serializeMs;
     bt.rustExtract = result.timings.extractMs;
@@ -3029,11 +3036,7 @@ export class ExtractionSession {
           "Animus's CSS post-processing",
           'targets'
         );
-        const policy = {
-          levels: this.options.diagnostics,
-          strict: this.options.strict,
-          reportErrors: this.reportErrors(),
-        };
+        const policy = this.hostPolicy();
         // An error fails every attempt; a warning prints once per build.
         if (
           effectiveLevel(diagnostic, policy) === 'error' ||
@@ -3054,20 +3057,18 @@ export class ExtractionSession {
     // A host that substitutes assets itself receives the placeholders on
     // purpose and reports the specifiers it cannot resolve.
     if (!this.hostSubstitutesAssets) {
-      reportSurvivingAssetPlaceholders(fullCss, {
-        strict: this.options.strict,
-        warn: (message) => this.warn(message),
-        reportErrors: this.reportErrors(),
-        prefix: `[${this.driverLabel}]`,
-      });
+      reportSurvivingAssetPlaceholders(
+        fullCss,
+        (message) => this.warn(message),
+        this.hostPolicy()
+      );
     }
-    reportSurvivingAssetPlaceholders(generatedModuleCode(manifest), {
-      strict: this.options.strict,
-      warn: (message) => this.warn(message),
-      reportErrors: this.reportErrors(),
-      prefix: `[${this.driverLabel}]`,
-      surface: 'generated runtime modules',
-    });
+    reportSurvivingAssetPlaceholders(
+      generatedModuleCode(manifest),
+      (message) => this.warn(message),
+      this.hostPolicy(),
+      'generated runtime modules'
+    );
 
     const systemPropsContent = buildSystemPropsModule({
       systemPropMapJson: JSON.stringify(manifest?.system_prop_map ?? {}),
@@ -3295,15 +3296,7 @@ export class ExtractionSession {
     const key = `${finding.file}\0${finding.component}`;
     if (record.reported.has(key)) return;
     record.reported.add(key);
-    surfaceManifestDiagnostics(
-      { diagnostics: [finding] },
-      (message) => this.warn(message),
-      {
-        levels: this.options.diagnostics,
-        strict: this.options.strict,
-        reportErrors: this.reportErrors(),
-      }
-    );
+    this.surfaceHostDiagnostics([finding]);
   }
 
   private writeAnalysisStatus(
@@ -3861,15 +3854,7 @@ export class ExtractionSession {
       return true;
     });
     if (diagnostics.length === 0) return;
-    surfaceManifestDiagnostics(
-      { diagnostics },
-      (message) => this.warn(message),
-      {
-        levels: this.options.diagnostics,
-        strict: this.options.strict,
-        reportErrors: this.reportErrors(),
-      }
-    );
+    this.surfaceHostDiagnostics(diagnostics);
   }
 
   private reportUnresolvableAsset(specifier: string): void {

@@ -105,10 +105,11 @@ When `verify: true`, the plugin runs a structural self-check at the end of `buil
 - Variable CSS contains a `:root` block
 - No `__TRANSFORM__` placeholders in any CSS output
 
-Output is prefixed with `[animus:verify]`. Behavior on failure follows the `strict` option:
+A failure is the `animus.verify.self-check-failed` diagnostic, at error severity, so it follows the `strict` and `diagnostics` options:
 
 - `strict: true` + verify failure → plugin throws, halting the build
 - `strict: false` (default) + verify failure → plugin warns via the Vite logger (or `console.warn`) and continues
+- a `diagnostics` level for the code overrides both
 
 Success is silent unless `verbose: true`, at which point a single `[animus:verify] structural self-check passed` line is emitted.
 

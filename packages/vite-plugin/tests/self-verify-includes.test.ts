@@ -57,7 +57,7 @@ describe('self-verify: external package include outcomes', () => {
     ];
 
     expect(() => ctx.runSelfVerify()).toThrow(
-      "[animus:verify] include '@x/missing' could not be resolved"
+      "animus.verify.self-check-failed — stylesheet: self-check: include '@x/missing' could not be resolved"
     );
   });
 
@@ -73,7 +73,7 @@ describe('self-verify: external package include outcomes', () => {
     ctx.runSelfVerify();
 
     expect(warnings).toEqual([
-      "[animus:verify] include '@x/missing' could not be resolved",
+      "[animus] ⚠ stylesheet: self-check: include '@x/missing' could not be resolved [animus.verify.self-check-failed]",
     ]);
   });
 });

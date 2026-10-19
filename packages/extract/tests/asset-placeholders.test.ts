@@ -7,8 +7,8 @@ import {
   generatedModuleCode,
   reportSurvivingAssetPlaceholders,
   substituteAssetPlaceholders,
-  UNSUBSTITUTED_ASSET_CODE,
 } from '../pipeline/asset-placeholders';
+import { UNSUBSTITUTED_ASSET_CODE } from '../pipeline/manifest-diagnostics';
 
 test('the scanner-side scheme matches the producer constant in @animus-ui/system', () => {
   expect(ASSET_PLACEHOLDER_PREFIX).toBe('animus-asset:');
@@ -120,24 +120,20 @@ describe('reportSurvivingAssetPlaceholders', () => {
 
   test('a placeholder in emitted CSS fails a strict build, naming it and the code', () => {
     expect(() =>
-      reportSurvivingAssetPlaceholders(leaked, {
-        strict: true,
-        warn: () => {},
-        prefix: '[animus]',
-      })
-    ).toThrow(`@acme/rock.jpg (${UNSUBSTITUTED_ASSET_CODE})`);
+      reportSurvivingAssetPlaceholders(leaked, () => {}, { strict: true })
+    ).toThrow(
+      `${UNSUBSTITUTED_ASSET_CODE} — emitted CSS: asset(): placeholders reached it unsubstituted: @acme/rock.jpg`
+    );
   });
 
   test('a non-strict build warns, and clean CSS reports nothing', () => {
     const warnings: string[] = [];
     const warn = (message: string) => warnings.push(message);
-    reportSurvivingAssetPlaceholders(leaked, { warn, prefix: '[animus]' });
+    reportSurvivingAssetPlaceholders(leaked, warn, {});
     reportSurvivingAssetPlaceholders(
       ".hero{background:url('./assets/rock.1.jpg')}",
-      {
-        warn,
-        prefix: '[animus]',
-      }
+      warn,
+      {}
     );
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(UNSUBSTITUTED_ASSET_CODE);
@@ -166,14 +162,14 @@ describe('generated runtime modules', () => {
 
   test('a placeholder in them fails a strict build, naming where it surfaced', () => {
     expect(() =>
-      reportSurvivingAssetPlaceholders(placeholder, {
-        strict: true,
-        warn: () => {},
-        prefix: '[animus]',
-        surface: 'generated runtime modules',
-      })
+      reportSurvivingAssetPlaceholders(
+        placeholder,
+        () => {},
+        { strict: true },
+        'generated runtime modules'
+      )
     ).toThrow(
-      `asset() placeholders reached generated runtime modules unsubstituted: @acme/rock.jpg (${UNSUBSTITUTED_ASSET_CODE})`
+      `${UNSUBSTITUTED_ASSET_CODE} — generated runtime modules: asset(): placeholders reached it unsubstituted: @acme/rock.jpg`
     );
   });
 });
@@ -246,19 +242,16 @@ describe('asset reference referenceForms', () => {
     ],
   ])('%s left after substitution is reported', (_form, css) => {
     expect(() =>
-      reportSurvivingAssetPlaceholders(css, {
-        strict: true,
-        warn: () => {},
-        prefix: '[animus]',
-      })
-    ).toThrow(`./gone.png (${UNSUBSTITUTED_ASSET_CODE})`);
+      reportSurvivingAssetPlaceholders(css, () => {}, { strict: true })
+    ).toThrow(`placeholders reached it unsubstituted: ./gone.png`);
   });
 
   test('a content string is not reported', () => {
     const warnings: string[] = [];
     reportSurvivingAssetPlaceholders(
       '.a::after{content:"animus-asset:./note"}',
-      { warn: (message) => warnings.push(message), prefix: '[animus]' }
+      (message) => warnings.push(message),
+      {}
     );
     expect(warnings).toEqual([]);
   });

@@ -265,6 +265,7 @@ export type {
 export type {
   DiagnosticLevel,
   DiagnosticLevels,
+  DiagnosticPolicy,
   ManifestDiagnostic,
 } from './manifest-diagnostics';
 export {
@@ -284,6 +285,16 @@ export {
   unresolvableAssetDiagnostic,
   CROSS_VOLUME_SOURCE,
   COMPONENT_ELIMINATED,
+  ARTIFACTS_NOT_IGNORED,
+  LOWERED_DIR_SELECTOR,
+  DUPLICATE_FONT_PRELOAD,
+  OPTION_DEPRECATED,
+  OPTION_UNSUPPORTED,
+  REMOVAL_UNREADABLE,
+  SELF_CHECK_FAILED,
+  STYLESHEET_UNWRITTEN,
+  TURBOPACK_CWD_ROOT,
+  TURBOPACK_SIDE_EFFECTS,
   COMPONENT_ELIMINABLE,
   unreadableDiscoveryPathDiagnostic,
   systemBuilderShippedDiagnostic,

@@ -2,6 +2,8 @@ import {
   AnimusConfigError,
   assertKnownOptionKeys,
   assertSupportedEngine,
+  DUPLICATE_FONT_PRELOAD,
+  hostFinding,
   isPathWithinRoot,
   keepsKitSourceEffects,
   keptDirFeatures,
@@ -593,9 +595,14 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
             html,
             new URL(file.fileName, servedBase(ctx.base)).href
           )) {
-            ctx.warn(
-              `[animus-extract] ${file.fileName} preloads ${href} twice: Animus's font preload and another preload tag, written in the page or added by a plugin whose index.html hook runs after Animus's, so the browser may fetch it twice. Remove the other preload; Animus's names the URL the stylesheet's url() loads.`
-            );
+            ctx.surfaceDiagnostics([
+              hostFinding(
+                DUPLICATE_FONT_PRELOAD,
+                file.fileName,
+                href,
+                "is preloaded twice: Animus's font preload and another preload tag, written in the page or added by a plugin whose index.html hook runs after Animus's, so the browser may fetch it twice. Remove the other preload; Animus's names the URL the stylesheet's url() loads."
+              ),
+            ]);
           }
         }
       },

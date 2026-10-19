@@ -2,7 +2,9 @@ import {
   ENGINE_TRANSFORM_EXTENSIONS,
   fileSideEffects,
   findPackageRoot,
+  hostFinding,
   kitSourceModuleSideEffects,
+  TURBOPACK_SIDE_EFFECTS,
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_CSS_MODULE_ID,
@@ -18,6 +20,7 @@ import { resolveLoaderPath } from './loader-path';
 
 import type { TurbopackLoaderOptions } from './turbopack-loader';
 import type { AnimusNextOptions } from './types';
+import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
 
 /** Everything emitted here must be JSON-serializable: Turbopack forwards
  *  loader options across process boundaries and rejects live values. */
@@ -133,15 +136,19 @@ export function turbopackSideEffectsLimits(
   rootDir: string,
   externalSourceEntries: ReadonlyMap<string, string>,
   externalSourceSideEffects: ReadonlyMap<string, boolean>
-): string[] {
+): ManifestDiagnostic[] {
   const kits = new Set(
     [...externalSourceEntries.values()]
       .filter((srcEntry) => kitSourceModuleSideEffects(srcEntry) === true)
       .map(findPackageRoot)
   );
-  const modules = [...kits].map(
-    (pkgRoot) =>
-      `[animus-extract] Turbopack cannot keep the source modules of ${relative(rootDir, pkgRoot).replace(/\\/g, '/')} side-effectful: the package's "sideEffects" list names shipped code, and Turbopack reads that list against each source module, so it can drop a listed effect of a module the source imports. List the source modules in "sideEffects" too, or build with webpack.`
+  const modules = [...kits].map((pkgRoot) =>
+    hostFinding(
+      TURBOPACK_SIDE_EFFECTS,
+      relative(rootDir, pkgRoot).replace(/\\/g, '/'),
+      'sideEffects',
+      `Turbopack cannot keep its source modules side-effectful: the package's "sideEffects" list names shipped code, and Turbopack reads that list against each source module, so it can drop a listed effect of a module the source imports. List the source modules in "sideEffects" too, or build with webpack.`
+    )
   );
   const entries = [...externalSourceEntries].flatMap(
     ([specifier, srcEntry]) => {
@@ -154,7 +161,12 @@ export function turbopackSideEffectsLimits(
         ? 'Turbopack can drop its side effects'
         : 'Turbopack keeps it when it is unused';
       return [
-        `[animus-extract] Turbopack cannot carry the "sideEffects" of ${specifier} to its source ${source}: the package's "sideEffects" classify the shipped entry as ${declared ? 'side-effectful' : 'free of side effects'} but the source as ${read ? 'side-effectful' : 'free of side effects'}, so ${consequence}. Make the package's "sideEffects" classify the source as it classifies the shipped entry, or build with webpack.`,
+        hostFinding(
+          TURBOPACK_SIDE_EFFECTS,
+          source,
+          specifier,
+          `Turbopack cannot carry the package's "sideEffects" to this source: they classify the shipped entry as ${declared ? 'side-effectful' : 'free of side effects'} but the source as ${read ? 'side-effectful' : 'free of side effects'}, so ${consequence}. Make the package's "sideEffects" classify the source as it classifies the shipped entry, or build with webpack.`
+        ),
       ];
     }
   );

@@ -1,16 +1,23 @@
 import {
   AnimusConfigError,
+  ARTIFACTS_NOT_IGNORED,
   assembleStylesheet,
   assertSupportedEngine,
   assertKnownOptionKeys,
   fontPreloadsModule,
+  hostFinding,
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
+  LOWERED_DIR_SELECTOR,
   nextImageAssetClassification,
+  OPTION_DEPRECATED,
+  OPTION_UNSUPPORTED,
   outputExclusion,
   resolveMode,
   sourceKitDependencies,
+  surfaceManifestDiagnostics,
+  TURBOPACK_CWD_ROOT,
   turbopackExtensionPolicy,
   withVendorLayer,
 } from '@animus-ui/extract/pipeline';
@@ -46,6 +53,7 @@ import {
 import type { TurbopackConfigFragment } from './turbopack-config';
 import type { AnimusNextOptions } from './types';
 import type { WatchOptions } from './watch-ignored';
+import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
 import type {
   TurbopackWatcherHandle,
   TurbopackWatchOutcome,
@@ -195,9 +203,14 @@ export function withAnimus(
   // Next decides its own CSS chunks and their order, so it links one
   // sheet, as Vite's dev server does: the output is the same cascade.
   if ('stylesheets' in options && options.stylesheets === 'split') {
-    console.warn(
-      "[animus-extract] `stylesheets: 'split'` is not supported by the Next plugin yet: Next decides how CSS chunks are merged and ordered, so it links one stylesheet."
-    );
+    reportFindings(options, [
+      hostFinding(
+        OPTION_UNSUPPORTED,
+        'withAnimus',
+        'stylesheets',
+        "'split' is not supported by the Next plugin yet: Next decides how CSS chunks are merged and ordered, so it links one stylesheet"
+      ),
+    ]);
   }
 
   if (
@@ -206,9 +219,14 @@ export function withAnimus(
     !warnedUnstableTurbopack
   ) {
     warnedUnstableTurbopack = true;
-    console.warn(
-      '[animus-extract] `unstable_turbopack` is deprecated — rename it to `turbopack` (same shape)'
-    );
+    reportFindings(options, [
+      hostFinding(
+        OPTION_DEPRECATED,
+        'withAnimus',
+        'unstable_turbopack',
+        'is deprecated — rename it to `turbopack` (same shape)'
+      ),
+    ]);
   }
 
   // One build per config load: every compiler, the loaders and the
@@ -228,7 +246,7 @@ export function withAnimus(
     const turbopack = resolveTurbopackMode(options);
     const nextConfig = withKeptDirSelector(
       withTranspiled(authoredConfig, transpiledPackages(appRoot)),
-      options.keepDirSelector === true,
+      options,
       turbopack || 'TURBOPACK' in process.env,
       appRoot
     );
@@ -312,9 +330,14 @@ export function withAnimus(
             if (existsSync(gitignorePath)) {
               const content = readFileSync(gitignorePath, 'utf-8');
               if (!content.includes('.animus')) {
-                console.warn(
-                  '[animus-extract] Add `.animus/` to your .gitignore — it contains generated build artifacts.'
-                );
+                reportFindings(options, [
+                  hostFinding(
+                    ARTIFACTS_NOT_IGNORED,
+                    '.gitignore',
+                    '.animus/',
+                    'is not ignored, and it holds generated build artifacts — add `.animus/` to .gitignore'
+                  ),
+                ]);
               }
             }
           } catch {}
@@ -520,6 +543,18 @@ const NEXT_PLUGIN_PACKAGE = '@animus-ui/next-plugin';
 
 let warnedTurbopackCwd = false;
 
+/** Reports the plugin's own findings under the `diagnostics` levels. */
+function reportFindings(
+  options: AnimusNextOptions,
+  diagnostics: ManifestDiagnostic[]
+): void {
+  surfaceManifestDiagnostics(
+    { diagnostics },
+    (line) => console.warn(`[animus-extract] ${line}`),
+    { levels: options.diagnostics, strict: options.strict }
+  );
+}
+
 /** Turbopack's loaders get no app dir either, so a cwd that is not the app
  *  cannot be detected later: warn at startup when the cwd holds no Next
  *  config and no `root` names the app. */
@@ -533,12 +568,16 @@ function warnTurbopackCwdRoot(
   );
   if (hasNextConfig) return;
   warnedTurbopackCwd = true;
-  console.warn(
-    `[animus-extract] the current directory (${appRoot}) holds no ` +
-      `next.config: under Turbopack, Animus reads the app from the current ` +
-      `directory. Run next from the app directory, or pass ` +
-      `withAnimus({ root }) naming it.`
-  );
+  reportFindings(options, [
+    hostFinding(
+      TURBOPACK_CWD_ROOT,
+      appRoot,
+      'turbopack',
+      'the current directory holds no next.config: under Turbopack, Animus ' +
+        'reads the app from the current directory. Run next from the app ' +
+        'directory, or pass withAnimus({ root }) naming it.'
+    ),
+  ]);
 }
 
 /** The config with `packages` added to `transpilePackages`. Next's server
@@ -564,18 +603,23 @@ function withTranspiled<Config extends NextOwnedConfig>(
  */
 function withKeptDirSelector<Config extends NextOwnedConfig>(
   nextConfig: NextConfigInput<Config>,
-  keep: boolean,
+  options: AnimusNextOptions,
   turbopack: boolean,
   appRoot: string
 ): NextConfigInput<Config> {
-  if (!keep) return nextConfig;
+  if (options.keepDirSelector !== true) return nextConfig;
   const experimental = nextConfig.experimental ?? {};
   if (!nextNamesLightningCssFeature(appRoot, DIR_SELECTOR)) {
     if ((turbopack || experimental.useLightningcss) && !warnedLoweredDir) {
       warnedLoweredDir = true;
-      console.warn(
-        "[animus-extract] keepDirSelector keeps :dir() in Animus's stylesheet, but this Next has no experimental.lightningCssFeatures to keep it in its own Lightning CSS pass, which lowers it to :lang() for the app's browserslist: an element that sets only dir does not match. Upgrade Next, or raise the browserslist to browsers that support :dir() (Chrome 120, Firefox 49, Safari 16.4)."
-      );
+      reportFindings(options, [
+        hostFinding(
+          LOWERED_DIR_SELECTOR,
+          'next.config',
+          'keepDirSelector',
+          "keeps :dir() in Animus's stylesheet, but this Next has no experimental.lightningCssFeatures to keep it in its own Lightning CSS pass, which lowers it to :lang() for the app's browserslist: an element that sets only dir does not match. Upgrade Next, or raise the browserslist to browsers that support :dir() (Chrome 120, Firefox 49, Safari 16.4)."
+        ),
+      ]);
     }
     return nextConfig;
   }
@@ -798,13 +842,14 @@ async function analyzeForTurbopack(
   // and closed this watcher.
   if (owner.session === session) void watcher?.deliverHeldEvents();
 
-  for (const line of turbopackSideEffectsLimits(
-    rootDir,
-    session.externalSourceEntries,
-    session.externalSourceSideEffects
-  )) {
-    console.warn(line);
-  }
+  reportFindings(
+    options,
+    turbopackSideEffectsLimits(
+      rootDir,
+      session.externalSourceEntries,
+      session.externalSourceSideEffects
+    )
+  );
 
   return buildTurbopackConfig({
     rootDir,

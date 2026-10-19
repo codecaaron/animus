@@ -48,12 +48,7 @@ export function reportShippedBuilder(
   bundle: Rolldown.OutputBundle,
   moduleInfo: (id: string) => ModuleLinks | null
 ): void {
-  const policy = {
-    levels: ctx.options.diagnostics,
-    strict: ctx.options.strict,
-    info: (line: string) => ctx.log(line),
-    reportErrors: ctx.reportErrors(),
-  };
+  const policy = ctx.diagnosticPolicy();
   const level = effectiveLevel(
     systemBuilderShippedDiagnostic('', { system: [] }),
     policy

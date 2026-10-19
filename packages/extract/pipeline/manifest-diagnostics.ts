@@ -1,4 +1,3 @@
-import { UNSUBSTITUTED_ASSET_CODE } from './asset-placeholders';
 import { parseInternalWire } from './internal-wire';
 
 import type { ExternalPackageOutcome } from './discover-packages';
@@ -173,11 +172,7 @@ export function knownDiagnosticCodes(
         )
       )
     : [];
-  return new Set([
-    ...engineCodes,
-    ...DIAGNOSTIC_SEVERITY.keys(),
-    UNSUBSTITUTED_ASSET_CODE,
-  ]);
+  return new Set([...engineCodes, ...DIAGNOSTIC_SEVERITY.keys()]);
 }
 
 /** The keys of `levels` that name no known code, exactly or as a prefix. */
@@ -296,6 +291,50 @@ export const COMPONENT_ELIMINATED = 'animus.reconcile.component-eliminated';
 
 /** A component a development build keeps that production would leave out. */
 export const COMPONENT_ELIMINABLE = 'animus.reconcile.component-eliminable';
+
+/** An `asset()` placeholder reached emitted output unsubstituted: a broken
+ *  URL in the browser. */
+export const UNSUBSTITUTED_ASSET_CODE =
+  'animus.asset.unsubstituted-placeholder';
+
+/** A component of an included package references a token the consumer
+ *  theme does not define, though the package's own theme does. */
+export const EXTERNAL_TOKEN_UNDEFINED = 'animus.token.external-undefined';
+
+/** A host option asks for something this host does not do. */
+export const OPTION_UNSUPPORTED = 'animus.options.unsupported';
+
+/** A host option spelled the deprecated way. */
+export const OPTION_DEPRECATED = 'animus.options.deprecated';
+
+/** The project's `.gitignore` does not ignore Animus's generated
+ *  artifacts. */
+export const ARTIFACTS_NOT_IGNORED = 'animus.next.artifacts-not-ignored';
+
+/** Under Turbopack, the current directory holds no Next config: Animus
+ *  reads the app from it. */
+export const TURBOPACK_CWD_ROOT = 'animus.next.turbopack-cwd-root';
+
+/** Turbopack cannot carry a package's `sideEffects` to the source Animus
+ *  redirects it to. */
+export const TURBOPACK_SIDE_EFFECTS = 'animus.next.turbopack-side-effects';
+
+/** A bundler build that writes nothing: the extracted stylesheet is not
+ *  produced. */
+export const STYLESHEET_UNWRITTEN = 'animus.bundle.stylesheet-unwritten';
+
+/** The analysis read a file the build itself writes. */
+export const ANALYSED_OUTPUT = 'animus.discovery.analysed-output';
+
+/** A page preloads a font URL Animus also preloads. */
+export const DUPLICATE_FONT_PRELOAD = 'animus.font.duplicate-preload';
+
+/** The `verify` option's structural self-check failed. */
+export const SELF_CHECK_FAILED = 'animus.verify.self-check-failed';
+
+/** `removeUnbundledComponents` could not read a stylesheet, so it kept it
+ *  whole. */
+export const REMOVAL_UNREADABLE = 'animus.bundle.removal-unreadable';
 
 /** A production client chunk ships `@animus-ui/system`'s builder. */
 export const SYSTEM_BUILDER_SHIPPED = 'animus.bundle.system-builder-shipped';
@@ -638,6 +677,18 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [POST_PROCESSING_FAILED, 'warn'],
   [COMPONENT_ELIMINATED, 'warn'],
   [COMPONENT_ELIMINABLE, 'warn'],
+  [UNSUBSTITUTED_ASSET_CODE, 'error'],
+  [EXTERNAL_TOKEN_UNDEFINED, 'error'],
+  [OPTION_UNSUPPORTED, 'warn'],
+  [OPTION_DEPRECATED, 'warn'],
+  [ARTIFACTS_NOT_IGNORED, 'warn'],
+  [TURBOPACK_CWD_ROOT, 'warn'],
+  [TURBOPACK_SIDE_EFFECTS, 'warn'],
+  [STYLESHEET_UNWRITTEN, 'warn'],
+  [ANALYSED_OUTPUT, 'error'],
+  [DUPLICATE_FONT_PRELOAD, 'warn'],
+  [REMOVAL_UNREADABLE, 'warn'],
+  [SELF_CHECK_FAILED, 'error'],
   [NO_KIT_FILES, 'warn'],
   [KIT_WITHOUT_SOURCE_CONDITION, 'warn'],
   [KIT_WITHOUT_SIDE_EFFECTS, 'warn'],

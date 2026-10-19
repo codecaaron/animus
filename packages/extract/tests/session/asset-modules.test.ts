@@ -109,7 +109,7 @@ test('a placeholder left in a runtime config is reported', async () => {
 
   expect(warn).toHaveBeenCalledWith(
     expect.stringContaining(
-      'asset() placeholders reached generated runtime modules unsubstituted'
+      'generated runtime modules: asset(): placeholders reached it unsubstituted'
     )
   );
 });

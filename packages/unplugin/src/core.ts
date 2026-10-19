@@ -7,6 +7,7 @@ import {
   esbuildAssetClassification,
   esbuildExtensionPolicy,
   esbuildOutputTargets,
+  hostFinding,
   isEngineTransformExtension,
   isPathWithinRoot,
   keepsKitSourceEffects,
@@ -17,7 +18,9 @@ import {
   rollupOutputTargets,
   servedFiles,
   STYLESHEET_SLICES,
+  STYLESHEET_UNWRITTEN,
   stylesheetSliceFiles,
+  surfaceManifestDiagnostics,
   viteAssetClassification,
   viteExtensionPolicy,
   viteHostExpander,
@@ -56,10 +59,12 @@ import { resolveHostMode, resolveHostOptions } from './options';
 import type { AnimusUnpluginOptions } from './options';
 import type {
   AnimusMode,
+  DiagnosticPolicy,
   FontPreload,
   HostAssetClassification,
   HostExtensionPolicy,
   HostLoadExpander,
+  ManifestDiagnostic,
   WebpackRuleEntry,
   HostResolve,
   OutputTargets,
@@ -810,19 +815,31 @@ export const unpluginFactory: UnpluginFactory<
       const outDir =
         esbuildOptions?.outdir ??
         (esbuildOptions?.outfile ? dirname(esbuildOptions.outfile) : null);
+      const unwritten = (message: string) =>
+        reportFindings(
+          [
+            hostFinding(
+              STYLESHEET_UNWRITTEN,
+              CSS_ASSET_NAME,
+              'esbuild',
+              message
+            ),
+          ],
+          // eslint-disable-next-line no-console
+          (line) => console.warn(line)
+        );
       if (outDir === null) {
-        console.warn(
-          `[animus] esbuild build has no outdir/outfile — the extracted ` +
-            `stylesheet (${CSS_ASSET_NAME}) was not written`
+        unwritten(
+          'the build has no outdir/outfile, so the extracted stylesheet was not written'
         );
         return;
       }
       if (esbuildOptions?.write === false) {
-        console.warn(
-          `[animus] esbuild \`write: false\` build — the extracted ` +
-            `stylesheet (${CSS_ASSET_NAME}) and its asset files were NOT ` +
-            `produced (no in-memory output seam); use \`write: true\` or ` +
-            `the standalone \`animus build\` CLI for in-memory pipelines`
+        unwritten(
+          'a `write: false` build: the extracted stylesheet and its asset ' +
+            'files were NOT produced (no in-memory output seam); use ' +
+            '`write: true` or the standalone `animus build` CLI for in-memory ' +
+            'pipelines'
         );
         return;
       }
@@ -881,6 +898,24 @@ export const unpluginFactory: UnpluginFactory<
     }
   }
 
+  /** Reports the plugin's own findings, prefixed, under the `diagnostics`
+   *  levels and strictness, which `policy` may narrow. */
+  function reportFindings(
+    diagnostics: ManifestDiagnostic[],
+    warn: (line: string) => void,
+    policy: Pick<DiagnosticPolicy, 'strict' | 'reportErrors'> = {}
+  ): void {
+    surfaceManifestDiagnostics(
+      { diagnostics },
+      (line) => warn(`[animus] ${line}`),
+      {
+        levels: options.diagnostics,
+        strict: options.strict,
+        ...policy,
+      }
+    );
+  }
+
   /** Rollup and Rolldown name their output only at render, after
    *  analysis: this process's later builds exclude it, and an analysis that
    *  already read a file there is reported, failing a build under `strict`. */
@@ -890,10 +925,13 @@ export const unpluginFactory: UnpluginFactory<
   ): void {
     const targets = rollupOutputTargets(output);
     learnedOutputTargets = mergeOutputTargets([learnedOutputTargets, targets]);
-    const message = analysedOutputs(root, targets, state.analyzedFiles);
-    if (message === null) return;
-    if (options.strict && !watching()) context.error(message);
-    context.warn(message);
+    const finding = analysedOutputs(root, targets, state.analyzedFiles);
+    if (finding === null) return;
+    // Strict fails a build, never a watch.
+    reportFindings([finding], (line) => context.warn(line), {
+      strict: options.strict && !watching(),
+      reportErrors: (message) => context.error(message),
+    });
   }
 
   /** Analysis is a filesystem walk, so watch mode misses edits to

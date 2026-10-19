@@ -5,10 +5,12 @@ import {
   contentHash,
   DEFAULT_EXTENSIONS,
   findSheetAssetSpecifiers,
+  hostFinding,
   parseFilesJson,
   resolveAssetFile,
   resolveVerbosity,
   runStructuralSelfCheck,
+  SELF_CHECK_FAILED,
   substituteAssetPlaceholders,
   substituteFontPreloads,
   substituteSheetAssets,
@@ -50,6 +52,7 @@ import type {
   HostAssetClassification,
   HostExtensionPolicy,
   HostLoadExpander,
+  DiagnosticPolicy,
   ManifestDiagnostic,
   ProjectManifest,
   SystemConfig,
@@ -720,13 +723,19 @@ export class PluginContext {
     surfaceManifestDiagnostics(
       { diagnostics },
       (message) => this.warn(message),
-      {
-        levels: this.options.diagnostics,
-        strict: this.options.strict,
-        info: (line) => this.log(line),
-        reportErrors: this.reportErrors(),
-      }
+      this.diagnosticPolicy()
     );
+  }
+
+  /** The `diagnostics` levels and strictness every finding the plugin
+   *  makes is reported under. */
+  diagnosticPolicy(): DiagnosticPolicy {
+    return {
+      levels: this.options.diagnostics,
+      strict: this.options.strict,
+      info: (line) => this.log(line),
+      reportErrors: this.reportErrors(),
+    };
   }
 
   /** Every asset() specifier in the sheets the plugin emits. */
@@ -856,18 +865,11 @@ export class PluginContext {
       variableMapJson: this.system.variableMapJson,
     });
 
-    for (const message of failures) {
-      const line = `[animus:verify] ${message}`;
-      if (this.options.strict) {
-        this.strictFailure(line);
-        continue;
-      }
-      if (this.logger) {
-        this.logger.warn(line, { timestamp: true });
-      } else {
-        console.warn(line);
-      }
-    }
+    this.surfaceDiagnostics(
+      failures.map((message) =>
+        hostFinding(SELF_CHECK_FAILED, 'stylesheet', 'self-check', message)
+      )
+    );
 
     if (failures.length === 0) {
       this.log('[animus:verify] structural self-check passed');

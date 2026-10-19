@@ -243,7 +243,7 @@ describe('output targets', () => {
       '/app',
       rollupOutputTargets({ file: '/app/src/bundle.js' }),
       analysed
-    );
+    )?.message;
     expect(file).toContain('its own earlier output: src/bundle.js');
     expect(file).not.toContain('helper');
     expect(
@@ -257,7 +257,7 @@ describe('output targets', () => {
       '/app',
       rollupOutputTargets({ dir: '/app/src' }),
       ['/app/src/helper.ts']
-    );
+    )?.message;
     expect(dir).toContain("inside its output directory 'src': src/helper.ts");
     expect(dir).toContain('write the output outside the source tree');
   });
