@@ -7890,7 +7890,7 @@ pub(crate) fn passed_values(
 /// Custom-prop scan over collected facts.
 pub fn filter_custom_prop_scan(
     facts: &[UsageFact],
-    component_props: &FxHashMap<String, FxHashSet<String>>,
+    component_props: &impl Keyed<FxHashSet<String>>,
     member_expr_bindings: &FxHashMap<String, String>,
     proxies: &WrapperProxies,
 ) -> CustomPropScanResult {
@@ -7961,7 +7961,7 @@ pub fn filter_custom_prop_scan(
 /// spread or a `createElement` call — as one dynamic usage per custom prop.
 pub fn uncertain_custom_renders(
     facts: &[UsageFact],
-    component_props: &FxHashMap<String, FxHashSet<String>>,
+    component_props: &impl Keyed<FxHashSet<String>>,
     member_expr_bindings: &FxHashMap<String, String>,
     proxies: &WrapperProxies,
 ) -> Vec<DynamicPropUsage> {
@@ -7970,9 +7970,7 @@ pub fn uncertain_custom_renders(
     for fact in facts {
         if let UsageFact::CloneUnknown { props: Some(props), .. } = fact {
             // Each listed override reaches every component with that prop.
-            let mut bindings: Vec<(&String, &FxHashSet<String>)> = component_props.iter().collect();
-            bindings.sort_unstable_by_key(|(binding, _)| *binding);
-            for (binding, custom) in bindings {
+            for (binding, custom) in component_props.sorted_entries() {
                 for (prop, _) in props.iter().filter(|(prop, _)| custom.contains(prop)) {
                     if seen.insert((binding.as_str(), prop)) {
                         usages.push(DynamicPropUsage {
@@ -8049,12 +8047,34 @@ fn record_unwritten_options(
     }
 }
 
+/// A map read by key: a plain map, or a file's view of the project's usage
+/// lookup with the file's own entries over it (`Layered`, analyze_css).
+pub trait Keyed<V> {
+    fn get(&self, key: &str) -> Option<&V>;
+    fn contains_key(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+    /// Every entry, sorted by key.
+    fn sorted_entries(&self) -> Vec<(&String, &V)>;
+}
+
+impl<V> Keyed<V> for FxHashMap<String, V> {
+    fn get(&self, key: &str) -> Option<&V> {
+        FxHashMap::get(self, key)
+    }
+    fn sorted_entries(&self) -> Vec<(&String, &V)> {
+        let mut entries: Vec<(&String, &V)> = self.iter().collect();
+        entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        entries
+    }
+}
+
 /// Variant/state/system-prop usage scan over collected facts.
 pub fn filter_usage_scan(
     facts: &[UsageFact],
-    component_props: &FxHashMap<String, FxHashSet<String>>,
-    custom_props: &FxHashMap<String, FxHashSet<String>>,
-    component_configs: &FxHashMap<String, ComponentUsageConfig>,
+    component_props: &impl Keyed<FxHashSet<String>>,
+    custom_props: &impl Keyed<FxHashSet<String>>,
+    component_configs: &impl Keyed<ComponentUsageConfig>,
     member_expr_bindings: &FxHashMap<String, String>,
     proxies: &WrapperProxies,
 ) -> UsageScanResult {
@@ -8410,10 +8430,7 @@ pub fn filter_usage_scan(
             // them; the warning covers the ones it cannot.
             UsageFact::CloneUnknown { props: Some(props), .. } => {
                 result.cloned_props.extend(props.iter().map(|(key, _)| key.clone()));
-                let mut bindings: Vec<&String> = component_configs.keys().collect();
-                bindings.sort_unstable();
-                for binding in bindings {
-                    let config = &component_configs[binding];
+                for (binding, config) in component_configs.sorted_entries() {
                     for (key, class) in props {
                         if config.variants.contains_key(key) {
                             result.variant_usages.push(VariantUsage {

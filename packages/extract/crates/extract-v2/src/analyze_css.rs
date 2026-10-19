@@ -40,7 +40,7 @@ use crate::theme::{
     unresolved_alias, unresolved_alias_spans, writes_token_reference, UnresolvedAlias,
 };
 
-use crate::usage_facts::{is_animus_system_specifier, ObjectUse, TagFact, TagOrigin, UsageFact, UsageResidueRecord};
+use crate::usage_facts::{is_animus_system_specifier, Keyed, ObjectUse, TagFact, TagOrigin, UsageFact, UsageResidueRecord};
 
 type ComponentPropSetMap = FxHashMap<String, FxHashSet<String>>;
 
@@ -6402,8 +6402,9 @@ impl<'f> LostThrough<'f> {
 }
 
 /// The maps the per-file JSX filter consults. All four share one lookup-key
-/// space: component ids plus bare bindings.
-#[derive(Default, Clone)]
+/// space: component ids plus bare bindings. A file reads them through its
+/// own [`FileLookup`].
+#[derive(Default)]
 struct UsageLookupMaps {
     props: ComponentPropSetMap,
     configs: FxHashMap<String, ComponentUsageConfig>,
@@ -6427,22 +6428,64 @@ impl UsageLookupMaps {
             || self.attribution.contains_key(key)
     }
 
-    /// Drops `key`, so its tag renders no component the maps know.
-    fn forget(&mut self, key: &str) {
-        self.props.remove(key);
-        self.configs.remove(key);
-        self.custom_props.remove(key);
-        self.attribution.remove(key);
+    /// Publishes what `ids` render under `key` ([`UsageEntry`]).
+    fn publish(&mut self, key: &str, ids: &[String], source: &UsageSourceMaps) {
+        UsageEntry::publish(key, ids, source, &mut self.attribution, &mut self.props, &mut self.custom_props, &mut self.configs);
+    }
+}
+
+/// A map a usage entry is published into: a project map, or a file's layer
+/// over one.
+trait Put<V> {
+    fn put(&mut self, key: String, value: V);
+}
+
+impl<V> Put<V> for FxHashMap<String, V> {
+    fn put(&mut self, key: String, value: V) {
+        self.insert(key, value);
+    }
+}
+
+/// What a key that renders `ids` reads from each map: the union over the
+/// candidates, which the filter reads only as key sets, so it is sound for an
+/// ambiguous name and exact for a single component. An empty set is `None`:
+/// an empty set and a missing key behave the same downstream, but the
+/// emptiness gates observe the missing key.
+struct UsageEntry {
+    props: Option<FxHashSet<String>>,
+    custom_props: Option<FxHashSet<String>>,
+    config: Option<ComponentUsageConfig>,
+}
+
+impl UsageEntry {
+    /// Publishes what `ids` render under `key` into a lookup's four maps.
+    fn publish(
+        key: &str,
+        ids: &[String],
+        source: &UsageSourceMaps,
+        attribution: &mut impl Put<Vec<String>>,
+        props: &mut impl Put<FxHashSet<String>>,
+        custom_props: &mut impl Put<FxHashSet<String>>,
+        configs: &mut impl Put<ComponentUsageConfig>,
+    ) {
+        let Some(entry) = UsageEntry::of(ids, source) else { return };
+        attribution.put(key.to_string(), ids.to_vec());
+        if let Some(set) = entry.props {
+            props.put(key.to_string(), set);
+        }
+        if let Some(set) = entry.custom_props {
+            custom_props.put(key.to_string(), set);
+        }
+        if let Some(config) = entry.config {
+            configs.put(key.to_string(), config);
+        }
     }
 
-    /// Values union over the candidates: the filter reads only key sets, so a
-    /// union is sound for an ambiguous name and exact for a single component.
-    fn publish(&mut self, key: &str, ids: &[String], source: &UsageSourceMaps) {
+    /// `None` where `ids` is empty: nothing is published.
+    fn of(ids: &[String], source: &UsageSourceMaps) -> Option<Self> {
         if ids.is_empty() {
-            return;
+            return None;
         }
-        self.attribution.insert(key.to_string(), ids.to_vec());
-
         let mut props: FxHashSet<String> = FxHashSet::default();
         let mut custom: FxHashSet<String> = FxHashSet::default();
         let mut config = ComponentUsageConfig::default();
@@ -6467,17 +6510,90 @@ impl UsageLookupMaps {
                 config.states.extend(c.states.iter().cloned());
             }
         }
-        // An empty set and a missing key behave the same downstream, but the
-        // emptiness gates observe the missing key.
-        if !props.is_empty() {
-            self.props.insert(key.to_string(), props);
+        Some(UsageEntry {
+            props: (!props.is_empty()).then_some(props),
+            custom_props: (!custom.is_empty()).then_some(custom),
+            config: ids.iter().any(|id| source.configs.contains_key(id)).then_some(config),
+        })
+    }
+}
+
+/// One map of a file's usage lookup: the project's, with the file's own
+/// entries over it and the keys it drops, so a file that deviates copies
+/// nothing.
+struct Layered<'g, V> {
+    global: &'g FxHashMap<String, V>,
+    local: FxHashMap<String, V>,
+    removed: FxHashSet<String>,
+}
+
+impl<'g, V> Layered<'g, V> {
+    fn over(global: &'g FxHashMap<String, V>) -> Self {
+        Layered { global, local: FxHashMap::default(), removed: FxHashSet::default() }
+    }
+
+    fn remove(&mut self, key: &str) {
+        self.local.remove(key);
+        if self.global.contains_key(key) {
+            self.removed.insert(key.to_string());
         }
-        if !custom.is_empty() {
-            self.custom_props.insert(key.to_string(), custom);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.local.is_empty() && self.global.keys().all(|key| self.removed.contains(key))
+    }
+}
+
+impl<V> Put<V> for Layered<'_, V> {
+    fn put(&mut self, key: String, value: V) {
+        self.removed.remove(&key);
+        self.local.insert(key, value);
+    }
+}
+
+impl<V> Keyed<V> for Layered<'_, V> {
+    fn get(&self, key: &str) -> Option<&V> {
+        self.local.get(key).or_else(|| if self.removed.contains(key) { None } else { self.global.get(key) })
+    }
+
+    fn sorted_entries(&self) -> Vec<(&String, &V)> {
+        let shown = self.global.iter().filter(|(key, _)| !self.removed.contains(*key) && !self.local.contains_key(*key));
+        let mut entries: Vec<(&String, &V)> = self.local.iter().chain(shown).collect();
+        entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        entries
+    }
+}
+
+/// A file's view of the usage lookup: the project's maps, with the file's
+/// deviations over them.
+struct FileLookup<'g> {
+    props: Layered<'g, FxHashSet<String>>,
+    configs: Layered<'g, ComponentUsageConfig>,
+    custom_props: Layered<'g, FxHashSet<String>>,
+    attribution: Layered<'g, Vec<String>>,
+}
+
+impl<'g> FileLookup<'g> {
+    fn over(global: &'g UsageLookupMaps) -> Self {
+        FileLookup {
+            props: Layered::over(&global.props),
+            configs: Layered::over(&global.configs),
+            custom_props: Layered::over(&global.custom_props),
+            attribution: Layered::over(&global.attribution),
         }
-        if ids.iter().any(|id| source.configs.contains_key(id)) {
-            self.configs.insert(key.to_string(), config);
-        }
+    }
+
+    /// Drops `key`, so its tag renders no component the maps know.
+    fn forget(&mut self, key: &str) {
+        self.props.remove(key);
+        self.configs.remove(key);
+        self.custom_props.remove(key);
+        self.attribution.remove(key);
+    }
+
+    /// Publishes what `ids` render under `key` ([`UsageEntry`]).
+    fn publish(&mut self, key: &str, ids: &[String], source: &UsageSourceMaps) {
+        UsageEntry::publish(key, ids, source, &mut self.attribution, &mut self.props, &mut self.custom_props, &mut self.configs);
     }
 }
 
@@ -6902,7 +7018,7 @@ struct UsageIdentityPolicy {
 impl UsageIdentityPolicy {
     /// An unresolved key is a site of identity uncertainty and comes back
     /// as-is; dropping the record would delete the utility CSS it feeds.
-    fn resolve_all(&mut self, key: &str, attribution: &IdsByBinding) -> Vec<String> {
+    fn resolve_all(&mut self, key: &str, attribution: &impl Keyed<Vec<String>>) -> Vec<String> {
         match attribution.get(key) {
             Some(ids) => ids.clone(),
             None => {
@@ -6913,7 +7029,7 @@ impl UsageIdentityPolicy {
     }
 
     /// One representative id, for records whose binding is unread downstream.
-    fn resolve_one(&mut self, key: &str, attribution: &IdsByBinding) -> Option<String> {
+    fn resolve_one(&mut self, key: &str, attribution: &impl Keyed<Vec<String>>) -> Option<String> {
         match attribution.get(key) {
             Some(ids) => ids.first().cloned(),
             None => {
@@ -6926,7 +7042,7 @@ impl UsageIdentityPolicy {
     fn attribute_system_usages(
         &mut self,
         usages: &mut [SystemPropUsage],
-        attribution: &IdsByBinding,
+        attribution: &impl Keyed<Vec<String>>,
     ) {
         for usage in usages {
             if let Some(id) = self.resolve_one(&usage.binding, attribution) {
@@ -6945,7 +7061,7 @@ impl UsageIdentityPolicy {
     fn attribute_dynamic_usages(
         &mut self,
         usages: &mut Vec<DynamicPropUsage>,
-        attribution: &IdsByBinding,
+        attribution: &impl Keyed<Vec<String>>,
     ) {
         let taken = std::mem::take(usages);
         for usage in taken {
@@ -6958,7 +7074,7 @@ impl UsageIdentityPolicy {
         }
     }
 
-    fn attribute_result(&mut self, result: &mut UsageScanResult, attribution: &IdsByBinding) {
+    fn attribute_result(&mut self, result: &mut UsageScanResult, attribution: &impl Keyed<Vec<String>>) {
         self.attribute_system_usages(&mut result.system_prop_usages, attribution);
         self.attribute_dynamic_usages(&mut result.dynamic_prop_usages, attribution);
 
@@ -8681,7 +8797,7 @@ fn run_with_system_floor(
         let Some(ff) = files.get(path) else { continue };
         let member_expr_bindings = member_bindings.get(path).unwrap_or(&no_members);
 
-        let mut file_lookup: Option<UsageLookupMaps> = None;
+        let mut file_lookup = FileLookup::over(&global_lookup);
         // The tags this file reads by their spelling alone, and those a proof
         // below settles.
         let mut by_name: FxHashSet<&str> = FxHashSet::default();
@@ -8705,7 +8821,7 @@ fn run_with_system_floor(
                 // unknown, as one no Animus component is named like does.
                 Fallback::Foreign => {
                     if global_lookup.knows(name) {
-                        file_lookup.get_or_insert_with(|| global_lookup.clone()).forget(name);
+                        file_lookup.forget(name);
                     }
                     continue;
                 }
@@ -8726,7 +8842,6 @@ fn run_with_system_floor(
                 // as a component while nothing may be attributed to it.
                 if from_import && global_lookup.attribution.contains_key(name) {
                     file_lookup
-                        .get_or_insert_with(|| global_lookup.clone())
                         .attribution
                         .remove(name);
                 }
@@ -8735,9 +8850,7 @@ fn run_with_system_floor(
             if global_lookup.attribution.get(name) == Some(&ids) {
                 continue;
             }
-            file_lookup
-                .get_or_insert_with(|| global_lookup.clone())
-                .publish(name, &ids, &usage_sources);
+            file_lookup.publish(name, &ids, &usage_sources);
         }
         // `const B = R`, or `Object.assign(R, …)`, which returns `R` itself:
         // `<B>` renders as `R` when this file's own declarations and imports
@@ -8751,9 +8864,7 @@ fn run_with_system_floor(
             if global_lookup.attribution.get(alias.as_str()) == Some(&ids) {
                 continue;
             }
-            file_lookup
-                .get_or_insert_with(|| global_lookup.clone())
-                .publish(alias, &ids, &usage_sources);
+            file_lookup.publish(alias, &ids, &usage_sources);
         }
         // A facade built with `Object.assign(T, …)` is `T`, so `<X>` renders
         // as `T` does while nothing can have changed it since.
@@ -8772,7 +8883,7 @@ fn run_with_system_floor(
                 if global_lookup.attribution.get(tag) == Some(&ids) {
                     continue;
                 }
-                file_lookup.get_or_insert_with(|| global_lookup.clone()).publish(tag, &ids, &usage_sources);
+                file_lookup.publish(tag, &ids, &usage_sources);
             }
         }
         // A spread wrapper's renders stand in for its targets' renders.
@@ -8791,18 +8902,14 @@ fn run_with_system_floor(
             forward
         }));
         for (wrapper, ids) in &wrapper_targets {
-            file_lookup
-                .get_or_insert_with(|| global_lookup.clone())
-                .publish(wrapper, ids, &usage_sources);
+            file_lookup.publish(wrapper, ids, &usage_sources);
             proven.insert(wrapper);
         }
         // `<ui.R>` through `import * as ui` renders what the namespace's
         // module exports as `R`, followed through barrels.
         let mut members_with_namespaces: Option<FxHashMap<String, String>> = None;
         for (tag, ids) in namespace_member_ids(path, ff, files, inputs, links, &evaluated_ids) {
-            file_lookup
-                .get_or_insert_with(|| global_lookup.clone())
-                .publish(&tag, &ids, &usage_sources);
+            file_lookup.publish(&tag, &ids, &usage_sources);
             members_with_namespaces
                 .get_or_insert_with(|| member_expr_bindings.clone())
                 .insert(tag.clone(), tag);
@@ -8814,13 +8921,12 @@ fn run_with_system_floor(
             let Some(paths) = all_wrappers.get(&module).and_then(|(_, held, _)| held.paths.get(&wrapper)) else {
                 continue;
             };
-            let lookup = file_lookup.get_or_insert_with(|| global_lookup.clone());
-            lookup.publish(tag, &held_ids(&module, &wrapper), &usage_sources);
+            file_lookup.publish(tag, &held_ids(&module, &wrapper), &usage_sources);
             proven.insert(tag);
             let mut lookups = Vec::new();
             for (index, (key, dropped)) in paths.iter().enumerate() {
                 let held_key = format!("{tag}#{index}");
-                lookup.publish(&held_key, &held_ids(&module, key), &usage_sources);
+                file_lookup.publish(&held_key, &held_ids(&module, key), &usage_sources);
                 lookups.push((held_key, dropped.clone()));
             }
             proxies.paths.insert(tag.to_string(), lookups);
@@ -8842,7 +8948,7 @@ fn run_with_system_floor(
         // proof in this file settles it.
         let possible = |tag: &str| !proven.contains(tag) && (by_name.contains(tag) || by_bare_name.contains(tag));
         let attributed = |tag: &str| {
-            file_lookup.as_ref().unwrap_or(&global_lookup).attribution.contains_key(tag)
+            file_lookup.attribution.contains_key(tag)
         };
         // A literal a render routes to an extracted component through a
         // declaration usage attribution misses takes that component's static
@@ -8864,7 +8970,7 @@ fn run_with_system_floor(
             all_utility_inputs.extend(admitted_input(&inputs.config, path, component, (prop, value, &uses), &mut diagnostics));
         }
         diagnostics.extend(untracked_clone_props(path, ff));
-        let lookup = file_lookup.as_ref().unwrap_or(&global_lookup);
+        let lookup = &file_lookup;
         diagnostics.extend(unread_create_element_props(path, ff, |fact| match fact {
             UsageFact::CreateElement { ident: Some(name), .. } => lookup.props.contains_key(name.as_str()),
             UsageFact::CreateElement { member: Some(key), .. } => member_expr_bindings.contains_key(key),
