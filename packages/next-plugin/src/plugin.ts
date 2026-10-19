@@ -142,6 +142,9 @@ type Compiler = {
       >;
     };
     watchOptions?: WatchOptions;
+    /** Next resolves a production build's entries before it compiles, and
+     *  keeps a function, which adds entries on demand, in development. */
+    entry?: object;
   };
   webpack?: {
     version?: string;
@@ -168,6 +171,16 @@ const UNSUPPORTED_WEBPACK_MESSAGE =
 
 const PLUGIN_NAME = 'AnimusWebpackPlugin';
 
+/** A compiler whose resolved entries are none: it loads no module. */
+function buildsNothing(compiler: Compiler): boolean {
+  const entry = compiler.options?.entry;
+  return (
+    entry !== undefined &&
+    !(entry instanceof Function) &&
+    Object.keys(entry).length === 0
+  );
+}
+
 /** Paths the Session's watch plan registers: files (and absent paths it
  *  waits for) by exact path, directories with everything under them. */
 interface RegisteredWatch {
@@ -179,6 +192,8 @@ export class AnimusWebpackPlugin {
   private options: AnimusNextOptions;
   private session: ExtractionSession;
   private initialized = false;
+  /** A compiler took this plugin. */
+  private applied = false;
   /** Left its build: the next turn joins again and catches up, retried
    *  until it succeeds, never reusing the startup it already consumed. */
   private rejoining = false;
@@ -352,22 +367,12 @@ export class AnimusWebpackPlugin {
   }
 
   apply(compiler: Compiler): void {
+    this.applied = true;
     // The compiler's end leaves the build, which retires with its last
-    // compiler: withAnimus joins every compiler's plugin at config time. A
-    // watch started again analyzes in full: its build may have retired
-    // meanwhile.
-    const leave = () => {
-      this.session.close();
-      this.initialized = false;
-      this.rejoining = true;
-    };
-    compiler.hooks.shutdown?.tap(PLUGIN_NAME, leave);
-    compiler.hooks.watchClose?.tap(PLUGIN_NAME, leave);
+    // compiler: withAnimus joins every compiler's plugin at config time.
+    compiler.hooks.shutdown?.tap(PLUGIN_NAME, () => this.leave());
+    compiler.hooks.watchClose?.tap(PLUGIN_NAME, () => this.leave());
 
-    // The edge compiler has no CSS dependencies, but its loader transforms
-    // the middleware: it joins the build as every compiler does. `next
-    // build` runs its compilers one after another, and the server compiler
-    // leaves the build, retiring it, before the edge compiler starts.
     // Every compiler joins the build, the edge compiler too: it has no CSS
     // dependencies, but its loader transforms the middleware. In Next's
     // build worker each compiler runs in its own process, and under `next
@@ -491,6 +496,9 @@ export class AnimusWebpackPlugin {
    *  waits for the analysis another compiler started, or analyzes. */
   private joinOnRun(compiler: Compiler): void {
     compiler.hooks.run.tapPromise(PLUGIN_NAME, async (_compiler: Compiler) => {
+      // Next's edge compiler in a build without middleware or edge routes:
+      // in Next's build worker it would analyze for nothing.
+      if (buildsNothing(_compiler)) return;
       this.adoptCompilerContext(_compiler);
       this.extractAliases(_compiler);
       this.extractConditions(_compiler);
@@ -595,7 +603,24 @@ export class AnimusWebpackPlugin {
    *  starts after another left takes its analysis, never another one. Call
    *  after `setRootDir`. */
   joinBuild(): void {
-    void this.session.key;
+    this.session.joinBuild();
+  }
+
+  /** Leaves the build unless a compiler took this plugin. Next creates a
+   *  config it never runs when an earlier compiler fails (the client after a
+   *  server error), and its participant would keep that build live for the
+   *  next `next build` in the process. */
+  retireUnapplied(): void {
+    if (!this.applied) this.leave();
+  }
+
+  /** Leaves the build, which retires with its last participant. A compiler
+   *  that runs again analyzes in full: its build may have retired
+   *  meanwhile. */
+  private leave(): void {
+    this.session.close();
+    this.initialized = false;
+    this.rejoining = true;
   }
 
   /** Keeps Next's output directory out of discovery, whatever the user's

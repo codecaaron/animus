@@ -101,6 +101,8 @@ interface NextWebpackContext {
   dir?: string;
   dev?: boolean;
   isServer?: boolean;
+  /** The server compiler's runtime; absent on the client compiler. */
+  nextRuntime?: 'nodejs' | 'edge';
   webpack?: {
     DefinePlugin?: DefinePluginConstructor;
   };
@@ -234,6 +236,9 @@ export function withAnimus(
   // Turbopack workers take part in it, and another `next` process of the
   // same root is another build.
   const build = createBuildId();
+  // The plugins of the latest config round, by compiler: the next round
+  // retires those no compiler took (retireUnapplied).
+  let round = new Map<string, AnimusWebpackPlugin>();
 
   // The app's root: the one authority for its source kits and both arms'
   // sessions. Next passes no dir to a config module, so without `root` it
@@ -303,6 +308,13 @@ export function withAnimus(
         if (nextConfig.distDir) {
           plugin.excludeOutputDir(resolve(rootDir, nextConfig.distDir));
         }
+        const compilerName =
+          context.nextRuntime ?? (context.isServer ? 'server' : 'client');
+        if (round.has(compilerName)) {
+          for (const left of round.values()) left.retireUnapplied();
+          round = new Map();
+        }
+        round.set(compilerName, plugin);
         plugin.joinBuild();
         const sessionDir = plugin.sessionDir;
 

@@ -930,6 +930,12 @@ export class ExtractionSession {
    *  whose options differ from the build's fails with
    *  `SessionConfigurationConflict`. */
   get key(): SessionKey {
+    return this.joinBuild();
+  }
+
+  /** Joins this session's build, once, and names it: the build lasts while
+   *  any participant remains joined. Reading `key` joins as well. */
+  joinBuild(): SessionKey {
     if (this.joinedKey === null) {
       const key = sessionKey(this.sessionId, this.rootDir!);
       // Unique across module copies (ESM and CJS), which share the registry.

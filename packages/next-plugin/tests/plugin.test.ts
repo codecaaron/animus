@@ -30,6 +30,7 @@ import {
   SYSTEM_CONFIG,
 } from '../../extract/tests/session/session-fixtures';
 import { AnimusWebpackPlugin } from '../src/plugin';
+import { withAnimus } from '../src/with-animus';
 
 import type { AnimusNextOptions } from '../src/types';
 import type { JsonObject, JsonValue } from '@animus-ui/assertions';
@@ -783,6 +784,55 @@ describe('coordinated teardown', () => {
     for (const { side } of sides) side.shutdown();
 
     expect(findSession(keyOf(root))).toBeUndefined();
+  });
+
+  /** Contract: a Next build analyzes once, and a config round whose
+   *  compiler Next skipped leaves the next round a fresh build. Next creates
+   *  every compiler's config, runs them one after another, and skips the
+   *  client compiler after a server error; the next `next build` in the
+   *  process analyzes again, rather than awaiting the failed build's
+   *  analysis. */
+  test('a build analyzes once, and again after Next skipped a compiler', async () => {
+    const root = createProject();
+    const config = withAnimus({ ...OPTIONS, root })({});
+    if (!('webpack' in config)) throw new Error('expected the webpack arm');
+    const configRound = () =>
+      (['client', 'nodejs', 'edge'] as const).map((side) => {
+        const plugin = config
+          .webpack?.(
+            {},
+            side === 'client'
+              ? { dir: root, isServer: false }
+              : { dir: root, isServer: true, nextRuntime: side }
+          )
+          ?.plugins?.find((entry) => entry instanceof AnimusWebpackPlugin);
+        if (!(plugin instanceof AnimusWebpackPlugin)) {
+          throw new Error('expected the webpack hook to inject the plugin');
+        }
+        return plugin;
+      });
+    /** Runs a round's compilers in Next's order, each shut down before the
+     *  next starts; without the client, as after a server error. */
+    const build = async (withClient: boolean) => {
+      const [client, server, edge] = configRound();
+      const order: [string, AnimusWebpackPlugin][] = [
+        ['server', server],
+        ['edge-server', edge],
+      ];
+      if (withClient) order.push(['client', client]);
+      for (const [name, plugin] of order) {
+        const side = createCompiler(root, { name });
+        applyPlugin(plugin, side.compiler);
+        await side.runHandlers[0](side.compiler);
+        side.shutdown();
+      }
+    };
+
+    await build(false);
+    expect(mocks.analyzeProject).toHaveBeenCalledTimes(1);
+
+    await build(true);
+    expect(mocks.analyzeProject).toHaveBeenCalledTimes(2);
   });
 
   test('a watch closed and started again analyzes in full', async () => {
