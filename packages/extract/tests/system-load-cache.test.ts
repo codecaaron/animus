@@ -4,13 +4,15 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
+  unlinkSync,
   utimesSync,
   writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { dirname, join } from 'path';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { createV2EngineApi } from '../pipeline/engine-adapter';
 import { loadSystemConfig } from '../pipeline/system-config';
@@ -56,9 +58,62 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
 });
 
-/** A project whose system re-exports `./theme`, which resolves to
- *  `theme/index.ts`: `theme.ts` is a path the load finds missing. */
-function project(): string {
+const SYSTEM = `import { createSystem } from '@animus-ui/system';
+export { tokens } from './theme';
+export const ds = createSystem().build().seal();
+`;
+
+const theme = (brand: string, prelude = '') =>
+  `import { createTheme } from '@animus-ui/system';
+${prelude}
+export const tokens = createTheme().addColors({ brand: { 500: ${brand} } }).build();
+`;
+
+function write(path: string, text: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text);
+}
+
+/** Dates everything under `root` as settled, outside `node_modules`: the
+ *  cache keeps no load of a path that changed just before it. */
+function settle(root: string): void {
+  const settled = new Date(Date.now() - 2 * SYSTEM_LOAD_SETTLE_MS);
+  const visit = (path: string) => {
+    utimesSync(path, settled, settled);
+    if (!statSync(path).isDirectory()) return;
+    for (const name of readdirSync(path)) {
+      if (name !== 'node_modules') visit(join(path, name));
+    }
+  };
+  visit(root);
+}
+
+/** Waits until the system packages a project links in settle: the tiers
+ *  build them just before this runs, and the cache keeps no load of a file
+ *  that changed just before it. */
+function settleLinkedPackages(): void {
+  let newest = 0;
+  const visit = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const stats = statSync(join(dir, name));
+      if (stats.isDirectory()) visit(join(dir, name));
+      else newest = Math.max(newest, stats.mtimeMs);
+    }
+  };
+  for (const name of ['system', 'properties']) {
+    visit(join(REPO_ROOT, 'packages', name, 'dist'));
+  }
+  const wait = newest + SYSTEM_LOAD_SETTLE_MS - Date.now();
+  if (wait > 0)
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait + 50);
+}
+
+/** A project whose system re-exports `./theme`; `files` are written below
+ *  its root, and `links` link a path below it to another. */
+function project(
+  files: Record<string, string>,
+  links: Record<string, string> = {}
+): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'animus-load-cache-')));
   roots.push(root);
   mkdirSync(join(root, 'node_modules', '@animus-ui'), { recursive: true });
@@ -68,91 +123,144 @@ function project(): string {
       join(root, 'node_modules', '@animus-ui', name)
     );
   }
-  writeFileSync(join(root, 'package.json'), '{"name":"app","type":"module"}');
-  mkdirSync(join(root, 'src', 'theme'), { recursive: true });
-  writeFileSync(
-    join(root, 'src', 'ds.ts'),
-    `import { createSystem } from '@animus-ui/system';
-export { tokens } from './theme';
-export const ds = createSystem().build().seal();
-`
-  );
-  writeTheme(root, 'theme/index.ts', "'#111111'");
+  write(join(root, 'package.json'), '{"name":"app","type":"module"}');
+  write(join(root, 'src', 'ds.ts'), SYSTEM);
+  for (const [path, text] of Object.entries(files))
+    write(join(root, path), text);
+  for (const [path, target] of Object.entries(links)) {
+    symlinkSync(target, join(root, path));
+  }
+  settle(root);
   return root;
 }
 
-/** Writes a theme file, then dates the project's sources as settled: the
- *  cache keeps no load of a file written just before it. */
-function writeTheme(root: string, file: string, brand: string): void {
-  writeFileSync(
-    join(root, 'src', file),
-    `import { createTheme } from '@animus-ui/system';
-export const tokens = createTheme().addColors({ brand: { 500: ${brand} } }).build();
-`
-  );
-  const settled = new Date(Date.now() - 2 * SYSTEM_LOAD_SETTLE_MS);
-  const settle = (path: string) => {
-    utimesSync(path, settled, settled);
-    if (path.endsWith('.ts') || path.endsWith('.json')) return;
-    for (const name of readdirSync(path)) settle(join(path, name));
+interface LoadCounter {
+  loads: number;
+  buildId: string;
+  /** Runs once, after the next native load returns: what changes while a
+   *  load runs. */
+  duringLoad?: () => void;
+}
+
+/** Loads through the cache, counting the native loads. */
+function loader(root: string) {
+  const native = nativeApi();
+  const counter: LoadCounter = {
+    loads: 0,
+    buildId: native.engineBuildId?.() ?? '',
   };
-  settle(join(root, 'src'));
-  utimesSync(join(root, 'package.json'), settled, settled);
+  const engine: EngineApi = {
+    ...native,
+    engineBuildId: () => counter.buildId,
+    loadSystemModule: (...args: unknown[]) => {
+      counter.loads++;
+      const result = native.loadSystemModule(...args);
+      const during = counter.duringLoad;
+      counter.duringLoad = undefined;
+      during?.();
+      return result;
+    },
+  };
+  const load = (conditions?: string[]) =>
+    loadSystemConfig(() => engine, {
+      systemPath: join(root, 'src', 'ds.ts'),
+      rootDir: root,
+      conditions,
+    });
+  const brand = () => /#[0-9a-f]{6}/.exec(load().variableCss)?.[0];
+  /** How many native loads `run` made. */
+  const loadsOf = (run: () => void) => {
+    const before = counter.loads;
+    run();
+    return counter.loads - before;
+  };
+  return { counter, load, brand, loadsOf };
 }
 
 /**
  * Contract: a cached system load is served only while every file it read is
  * unchanged and every path it found missing is still absent, under the same
- * engine build and loader options; a load that read the clock or
- * `Math.random` is never served from the cache. A partial entry is a miss,
- * and a project keeps a bounded number of entries.
+ * engine build, loader options and time zone, and while every link its
+ * resolution passed through leads where it led. A load that read the clock
+ * or `Math.random`, or ran within the settle window of a change, is never
+ * served from the cache. A partial entry is a miss, and a project keeps a
+ * bounded number of entries.
  */
 describe('the system-load cache', () => {
+  const zone = process.env.TZ;
+  beforeAll(() => {
+    settleLinkedPackages();
+    // A known zone, which a runtime can set and set back.
+    process.env.TZ = 'UTC';
+  });
+  afterAll(() => {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  });
+
   it('serves a load only while every file it read is unchanged and every path it found missing is still absent', () => {
-    const root = project();
-    const native = nativeApi();
-    let loads = 0;
-    let buildId = native.engineBuildId?.() ?? '';
-    const engine: EngineApi = {
-      ...native,
-      engineBuildId: () => buildId,
-      loadSystemModule: (...args: unknown[]) => {
-        loads++;
-        return native.loadSystemModule(...args);
-      },
+    // A repository of its own: the load records `.git`, a directory.
+    const root = project({
+      'src/theme/index.ts': theme("'#111111'"),
+      '.git/HEAD': 'ref: refs/heads/main\n',
+    });
+    const { counter, load, brand, loadsOf } = loader(root);
+    const writeTheme = (file: string, text: string) => {
+      write(join(root, 'src', file), text);
+      settle(root);
     };
-    const load = (conditions?: string[]) =>
-      loadSystemConfig(() => engine, {
-        systemPath: join(root, 'src', 'ds.ts'),
-        rootDir: root,
-        conditions,
-      });
-    const brand = () => /#[0-9a-f]{6}/.exec(load().variableCss)?.[0];
 
     // Kept, and served as loaded.
     const loaded = load();
     expect(load()).toEqual(loaded);
-    expect(loads).toBe(1);
+    expect(counter.loads).toBe(1);
 
     // A file it read changes.
-    writeTheme(root, 'theme/index.ts', "'#222222'");
-    expect(brand()).toBe('#222222');
-    expect(brand()).toBe('#222222');
-    expect(loads).toBe(2);
+    writeTheme('theme/index.ts', theme("'#222222'"));
+    expect(loadsOf(() => expect(brand()).toBe('#222222'))).toBe(1);
+    expect(loadsOf(() => expect(brand()).toBe('#222222'))).toBe(0);
 
     // A path it found missing appears, and now wins resolution.
-    writeTheme(root, 'theme.ts', "'#333333'");
-    expect(brand()).toBe('#333333');
-    expect(brand()).toBe('#333333');
-    expect(loads).toBe(3);
+    writeTheme('theme.ts', theme("'#333333'"));
+    expect(loadsOf(() => expect(brand()).toBe('#333333'))).toBe(1);
+    expect(loadsOf(() => expect(brand()).toBe('#333333'))).toBe(0);
 
-    // Other loader options, then another engine build.
-    load(['animus-test']);
-    load(['animus-test']);
-    expect(loads).toBe(4);
-    buildId = 'another-build';
-    load();
-    expect(loads).toBe(5);
+    // Other loader options, then another time zone, then another build.
+    expect(loadsOf(() => load(['animus-test']))).toBe(1);
+    expect(loadsOf(() => load(['animus-test']))).toBe(0);
+    process.env.TZ = 'Pacific/Chatham';
+    try {
+      expect(loadsOf(() => load())).toBe(1);
+    } finally {
+      process.env.TZ = 'UTC';
+    }
+    expect(loadsOf(() => load())).toBe(0);
+    counter.buildId = 'another-build';
+    expect(loadsOf(() => load())).toBe(1);
+
+    // A change within the settle window is not kept until it settles.
+    write(join(root, 'src', 'theme.ts'), theme("'#444444'"));
+    expect(loadsOf(() => expect(brand()).toBe('#444444'))).toBe(1);
+    expect(loadsOf(() => expect(brand()).toBe('#444444'))).toBe(1);
+    settle(root);
+    expect(loadsOf(() => brand())).toBe(1);
+    expect(loadsOf(() => brand())).toBe(0);
+
+    // A directory's own time is no file's content: git touches `.git`'s on
+    // every command, and a load just after still keeps.
+    writeTheme('theme.ts', theme("'#454545'"));
+    const now = new Date();
+    utimesSync(join(root, '.git'), now, now);
+    expect(loadsOf(() => expect(brand()).toBe('#454545'))).toBe(1);
+    expect(loadsOf(() => brand())).toBe(0);
+
+    // A file appearing, its time and all, where the load found none while
+    // it ran is not kept: the load read the path missing.
+    rmSync(join(root, 'src', 'theme.ts'));
+    settle(root);
+    counter.duringLoad = () => writeTheme('theme.ts', theme("'#464646'"));
+    expect(loadsOf(() => expect(brand()).toBe('#222222'))).toBe(1);
+    expect(loadsOf(() => expect(brand()).toBe('#464646'))).toBe(1);
 
     // A partial entry is a miss.
     const kept = join(root, 'node_modules', '.cache', 'animus', 'system-load');
@@ -162,16 +270,75 @@ describe('the system-load cache', () => {
     for (const name of readdirSync(directory)) {
       writeFileSync(join(directory, name), '{"format":');
     }
-    load();
-    expect(loads).toBe(6);
+    expect(loadsOf(() => load())).toBe(1);
     expect(readdirSync(directory).length).toBeLessThanOrEqual(
       SYSTEM_LOAD_CACHE_ENTRIES
     );
 
-    // A load that reads the clock is never served again.
-    writeTheme(root, 'theme.ts', "Date.now() > 0 ? '#444444' : '#555555'");
-    expect(brand()).toBe('#444444');
-    expect(brand()).toBe('#444444');
-    expect(loads).toBe(8);
+    // A load that reads the clock or `Math.random` is never served again;
+    // one that only checks what the realm offers is.
+    for (const read of [
+      'Date.now() > 0',
+      'new Date().getTime() > 0',
+      "Date() !== ''",
+      'Math.random() >= 0',
+      'performance.now() >= 0',
+      'performance.timeOrigin > 0',
+    ]) {
+      writeTheme('theme.ts', theme(`${read} ? '#555555' : '#666666'`));
+      expect(loadsOf(() => expect(brand()).toBe('#555555'))).toBe(1);
+      expect(
+        loadsOf(() => expect(brand()).toBe('#555555')),
+        read
+      ).toBe(1);
+    }
+    writeTheme(
+      'theme.ts',
+      theme(
+        "typeof performance.now === 'function' && 'now' in performance ? '#777777' : '#888888'"
+      )
+    );
+    expect(loadsOf(() => expect(brand()).toBe('#777777'))).toBe(1);
+    expect(loadsOf(() => expect(brand()).toBe('#777777'))).toBe(0);
+  });
+
+  it('serves a load only while every link its resolution passed through leads where it led', () => {
+    // Two checkouts of one package: the same package.json, another brand.
+    const checkout = (name: string, brand: string) => ({
+      [`pkgs/${name}/package.json`]:
+        '{"name":"brand-tokens","type":"module","main":"index.js"}',
+      [`pkgs/${name}/index.js`]: `export const BRAND = '${brand}';\n`,
+    });
+    const files = {
+      'themes/a/index.ts': theme(
+        'BRAND',
+        "import { BRAND } from 'brand-tokens';"
+      ),
+      'themes/b/index.ts': theme("'#cc0000'"),
+      ...checkout('a', '#aa0000'),
+      ...checkout('b', '#bb0000'),
+    };
+    const root = project(files, {
+      'src/theme': '../themes/a',
+      'node_modules/brand-tokens': '../pkgs/a',
+    });
+    const { brand, loadsOf } = loader(root);
+    const relink = (path: string, target: string) => {
+      unlinkSync(join(root, path));
+      symlinkSync(target, join(root, path));
+    };
+
+    expect(loadsOf(() => expect(brand()).toBe('#aa0000'))).toBe(1);
+    expect(loadsOf(() => expect(brand()).toBe('#aa0000'))).toBe(0);
+
+    // A package link retargeted to a checkout with the same package.json.
+    relink('node_modules/brand-tokens', '../pkgs/b');
+    expect(loadsOf(() => expect(brand()).toBe('#bb0000'))).toBe(1);
+    expect(loadsOf(() => expect(brand()).toBe('#bb0000'))).toBe(0);
+
+    // A directory link a relative import passes through, retargeted.
+    relink('src/theme', '../themes/b');
+    expect(loadsOf(() => expect(brand()).toBe('#cc0000'))).toBe(1);
+    expect(loadsOf(() => expect(brand()).toBe('#cc0000'))).toBe(0);
   });
 });

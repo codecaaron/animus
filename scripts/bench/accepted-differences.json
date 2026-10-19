@@ -3,15 +3,15 @@
     "row": "loader:large-closure",
     "fixture": "large-closure",
     "baseline": "a31dc1ca914569cc7a4c358d200e1f143987acc389d234cb1da41666f65cecd2",
-    "candidate": "f244cedf3299699b9d7ca4f9265100a2856d745c8664a99df81198de431434c1",
-    "reason": "Both sides read this checkout's packages/system/dist, so the baseline moves with it and an earlier pair for this row cannot recur; this entry replaces them. The path count differs because the audit owns the packages of the monorepo the system's package belongs to and reads the manifest declaring the workspaces, this repository's root package.json (14 paths become 15). The dependency digest differs because those files differ: the runtime resolver now walks the system props a site sets through an index resolveConfig builds, so createClassResolver takes a new hashed name. The config is identical (configDigest unchanged)."
+    "candidate": "fb60e2fdc53f9a482348b5c57d2c33562f2c068ecc16e13629244810226088f7",
+    "reason": "Both sides read this checkout's packages/system/dist, so the baseline moves with it and an earlier pair for this row cannot recur; this entry replaces them. The path count differs because the audit owns the packages of the monorepo the system's package belongs to and reads the manifest declaring the workspaces, this repository's root package.json (14 paths become 15). The dependency digest differs because those files differ: the runtime resolver now walks the system props a site sets through an index resolveConfig builds, so createClassResolver takes a new hashed name. The config is identical (configDigest unchanged). The config digest differs too: the load reports the links its resolution passed through (each path named, by the real path reached), which the bench's linked fixture packages produce and the system-load cache checks."
   },
   {
     "row": "loader:showcase",
     "fixture": "showcase",
     "baseline": "64ab38b9c548088d20b50b896bc8b246f1d69d8becf7abc4584c9a0faffab220",
-    "candidate": "e73cc4a87632a733571ec1cf58d190094fcdd9dbaf6fc8fa9dde2350eb09a0d2",
-    "reason": "Both sides read this checkout's packages/system/dist, so the baseline moves with it and an earlier pair for this row cannot recur; this entry replaces them. The path count differs because the audit owns the packages of the monorepo the system's package belongs to and reads the manifest declaring the workspaces, this repository's root package.json (20 paths become 21). The dependency digest differs because those files differ: the runtime resolver now walks the system props a site sets through an index resolveConfig builds, so createClassResolver takes a new hashed name. The config is identical (configDigest unchanged)."
+    "candidate": "97eca2d0de07af5f1c113e09ee6deeb23679604464f0f1e60a6fbefcee5a1bca",
+    "reason": "Both sides read this checkout's packages/system/dist, so the baseline moves with it and an earlier pair for this row cannot recur; this entry replaces them. The path count differs because the audit owns the packages of the monorepo the system's package belongs to and reads the manifest declaring the workspaces, this repository's root package.json (20 paths become 21). The dependency digest differs because those files differ: the runtime resolver now walks the system props a site sets through an index resolveConfig builds, so createClassResolver takes a new hashed name. The config is identical (configDigest unchanged). The config digest differs too: the load reports the links its resolution passed through (each path named, by the real path reached), which the bench's linked fixture packages produce and the system-load cache checks."
   },
   {
     "row": "analysis:showcase",

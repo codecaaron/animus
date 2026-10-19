@@ -144,6 +144,11 @@ pub struct NapiSystemConfig {
     /// clock, `Math.random`), sorted: a host must not reuse this result.
     /// Absent when it read none.
     pub volatile: Option<Vec<String>>,
+    /// Each path a resolution named that a link led elsewhere, by the real
+    /// path it reached: retargeting the link changes what the system loads.
+    /// Absent when no resolution passed through a link.
+    /// Sorted by path, so the object's keys come in one order.
+    pub links: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// A failed load throws an `Error` carrying `dependencies` (the files it
@@ -199,6 +204,7 @@ pub fn load_system_module(
         source_theme_manifests: config.source_theme_manifests,
         load_findings_json: config.load_findings_json,
         volatile: (!config.volatile.is_empty()).then_some(config.volatile),
+        links: (!config.links.is_empty()).then_some(config.links),
     })
 }
 

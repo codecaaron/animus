@@ -517,7 +517,7 @@ impl<'c> Loader<'c> {
                 resolution.as_ref().ok().map(String::as_str),
             ));
             return match resolution {
-                Ok(resolved) => Target::Module(real_path_string(resolved.into())),
+                Ok(resolved) => Target::Module(self.through_links(resolved)),
                 Err(RelativeMiss::CaseMismatch(reason)) => Target::Failed(reason),
                 Err(RelativeMiss::Absent) => Target::Failed(format!(
                     "relative import '{spec}' in '{importer}' names no file, and the module evaluates it (it is \
@@ -537,7 +537,7 @@ impl<'c> Loader<'c> {
         }
         match resolve_bare_specifier_observed(spec, &dir.to_string_lossy(), self.context, &mut self.reads) {
             Ok((resolved, manifest)) => {
-                let canonical = real_path_string(resolved.into());
+                let canonical = self.through_links(resolved);
                 let manifest = real_path_string(manifest);
                 self.reads.read.insert(manifest);
                 if !spec.starts_with("@animus-ui/") {
@@ -551,6 +551,16 @@ impl<'c> Loader<'c> {
                  (RUNTIME_STUB_SPECIFIERS in the system loader)."
             )),
         }
+    }
+
+    /// The real path of `resolved`, recording the resolution when a link
+    /// led elsewhere.
+    fn through_links(&mut self, resolved: String) -> String {
+        let real = real_path_string(resolved.clone().into());
+        if real != resolved {
+            self.reads.links.insert(resolved, real.clone());
+        }
+        real
     }
 
     /// Reads `path` for its routes: parsed once, never run.

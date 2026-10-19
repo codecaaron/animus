@@ -309,6 +309,13 @@ export interface NapiSystemConfig {
    * Absent when it read none.
    */
   volatile?: Array<string>
+  /**
+   * Each path a resolution named that a link led elsewhere, by the real
+   * path it reached: retargeting the link changes what the system loads.
+   * Absent when no resolution passed through a link.
+   * Sorted by path, so the object's keys come in one order.
+   */
+  links?: Record<string, string>
 }
 
 /**

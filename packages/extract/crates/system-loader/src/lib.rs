@@ -91,6 +91,10 @@ pub struct SystemConfig {
     /// another load of the same files may build another system, so a host
     /// must not reuse this one. Empty when it read none.
     pub volatile: Vec<String>,
+    /// Each path a resolution named that a link led elsewhere, by the real
+    /// path it reached, the entry included: retargeting the link changes
+    /// what the system loads.
+    pub links: BTreeMap<String, String>,
 }
 
 /// A registration the load found in owned code it did not run.
@@ -734,6 +738,9 @@ pub struct LoadReads {
     pub missing: BTreeSet<String>,
     /// What the load found in owned code it did not run.
     pub findings: Vec<LoadFinding>,
+    /// Each path a resolution named that a link led elsewhere, by the real
+    /// path it reached: retargeting the link changes what the system loads.
+    pub links: BTreeMap<String, String>,
 }
 
 
@@ -1115,7 +1122,8 @@ fn execute_bundle(
         let authored_probe: Function = ctx
             .eval(AUTHORED_CALLABLE_PROBE.as_bytes())
             .map_err(|e| format!("authored-callable probe failed to compile: {}", e))?;
-        ctx.eval::<(), _>(VOLATILE_TRAP.as_bytes())
+        let volatile_reads: Function = ctx
+            .eval(VOLATILE_TRAP.as_bytes())
             .map_err(|e| format!("volatile-read trap failed to install: {e}"))?;
         ctx.eval::<(), _>(bundle_script.as_bytes())
             .map_err(|e| describe_eval_failure(&ctx, layout, &e))?;
@@ -1136,9 +1144,8 @@ fn execute_bundle(
             transform_provenance(config, &authored_probe, sources, bundle_script, layout)
         })?;
         config.source_theme_manifests = extract_source_theme_manifests(&ctx).map(|scanned| with_routed_themes(&scanned, layout));
-        config.volatile = ctx
-            .eval::<Vec<String>, _>(b"[...globalThis.__animus_volatile].sort()" as &[u8])
-            .map_err(|e| format!("volatile reads failed to read: {e}"))?;
+        config.volatile =
+            volatile_reads.call::<_, Vec<String>>(()).map_err(|e| format!("volatile reads failed to read: {e}"))?;
         Ok(config)
     })
 }
@@ -1443,25 +1450,34 @@ fn extract_system_config<'js>(
         load_findings_json: None,
         // Populated by execute_bundle once the system is read.
         volatile: Vec::new(),
+        // Populated by load_system_module from the resolved module graph.
+        links: BTreeMap::new(),
     })
 }
 
-/// Records each read whose value differs from one load to the next: the
-/// clock, through `Date.now`, `Date()`, `new Date()` with no argument and any
-/// reading of `performance`, and `Math.random`. Installed before any module
-/// runs.
-/// `Date` stays the constructor of every date: its prototype names the
-/// trapping `Date`, so `date.constructor === Date` and `instanceof` hold.
+/// Records each read whose value differs from one load to the next: a call
+/// of `Date.now`, `Date()` or `new Date()` with no argument, of any function
+/// on `performance` or of `Math.random`, and a read of a clock value on
+/// `performance` (`timeOrigin`). Installed before any module runs, and
+/// invisible to reflection: each replaced function keeps its name, length,
+/// attributes and native source text, `performance` keeps every key and
+/// descriptor, and `Date` stays the constructor of every date. Reading a
+/// clock value's descriptor records it too, as `Object.keys(performance)`
+/// does: the trap cannot tell a descriptor read for its enumerability from
+/// one for its value. Evaluates to the function that lists what was read.
 const VOLATILE_TRAP: &str = r#"(() => {
     const read = new Set();
-    Object.defineProperty(globalThis, '__animus_volatile', { value: read });
+    // A callable proxy of a native function keeps its name, length and
+    // source text, `[native code]`.
+    const recording = (native, name, self) =>
+        new Proxy(native, {
+            apply(target, thisArg, args) {
+                read.add(name);
+                return Reflect.apply(target, self === undefined ? thisArg : self, args);
+            },
+        });
     const NativeDate = Date;
-    const nativeNow = NativeDate.now;
-    Object.defineProperty(NativeDate, 'now', {
-        value: () => { read.add('Date.now'); return nativeNow.call(NativeDate); },
-        writable: true,
-        configurable: true,
-    });
+    Object.defineProperty(NativeDate, 'now', { value: recording(NativeDate.now, 'Date.now') });
     const TrappedDate = new Proxy(NativeDate, {
         apply(target, self, args) { read.add('Date()'); return Reflect.apply(target, self, args); },
         construct(target, args, newTarget) {
@@ -1469,24 +1485,37 @@ const VOLATILE_TRAP: &str = r#"(() => {
             return Reflect.construct(target, args, newTarget);
         },
     });
-    Object.defineProperty(NativeDate.prototype, 'constructor', { value: TrappedDate, writable: true, configurable: true });
-    Object.defineProperty(globalThis, 'Date', { value: TrappedDate, writable: true, configurable: true });
-    const nativeRandom = Math.random;
-    Math.random = () => { read.add('Math.random'); return nativeRandom(); };
-    // Every reading of `performance` is a clock reading, `timeOrigin` too.
-    // The realm fixes `now` on its object, so the global is replaced.
+    Object.defineProperty(NativeDate.prototype, 'constructor', { value: TrappedDate });
+    Object.defineProperty(globalThis, 'Date', { value: TrappedDate });
+    Object.defineProperty(Math, 'random', { value: recording(Math.random, 'Math.random') });
+    // The realm fixes `performance`'s properties, so the global becomes a copy
+    // with the same descriptors, each function a same-named one that records
+    // its call, behind a proxy that records a read of a clock value.
     if (typeof performance === 'object' && performance !== null) {
         const nativePerformance = performance;
-        const trappedPerformance = new Proxy({}, {
-            get(_target, key) {
-                read.add(`performance.${String(key)}`);
-                const value = Reflect.get(nativePerformance, key);
-                return typeof value === 'function' ? value.bind(nativePerformance) : value;
+        const copy = Object.create(Object.getPrototypeOf(nativePerformance));
+        for (const key of Reflect.ownKeys(nativePerformance)) {
+            const descriptor = Object.getOwnPropertyDescriptor(nativePerformance, key);
+            if (typeof descriptor.value === 'function') {
+                descriptor.value = recording(descriptor.value, `performance.${String(key)}`, nativePerformance);
+            }
+            Object.defineProperty(copy, key, descriptor);
+        }
+        const clockValue = (key) => typeof key === 'string' && typeof nativePerformance[key] === 'number';
+        const trapped = new Proxy(copy, {
+            get(target, key, receiver) {
+                if (clockValue(key)) read.add(`performance.${key}`);
+                return Reflect.get(target, key, receiver);
+            },
+            getOwnPropertyDescriptor(target, key) {
+                if (clockValue(key)) read.add(`performance.${key}`);
+                return Reflect.getOwnPropertyDescriptor(target, key);
             },
         });
-        Object.defineProperty(globalThis, 'performance', { value: trappedPerformance, writable: true, configurable: true });
+        Object.defineProperty(globalThis, 'performance', { value: trapped });
     }
-})();"#;
+    return () => [...read].sort();
+})()"#;
 
 /// Reads, for each configured transform, the authored callable an Animus
 /// forwarder links under a registry symbol: its position and text, through
@@ -1910,6 +1939,10 @@ pub fn load_system_module_reading(
     reads.read.extend(selecting.read);
     reads.missing.extend(selecting.missing);
     reads.findings.extend(selecting.findings);
+    reads.links.extend(selecting.links);
+    if Path::new(system_path).is_absolute() && entry_path != system_path {
+        reads.links.insert(system_path.to_string(), entry_path.clone());
+    }
     let selection = selected?;
 
     let (bundle, layout) = build_bundle(&selection)?;
@@ -1922,6 +1955,7 @@ pub fn load_system_module_reading(
     // the system reaches or how its routes resolve.
     config.dependencies = reads.read.iter().cloned().collect();
     config.missing = reads.missing.iter().cloned().collect();
+    config.links = reads.links.clone();
     config.load_findings_json = (!reads.findings.is_empty())
         .then(|| serde_json::to_string(&reads.findings).expect("findings serialize"));
 

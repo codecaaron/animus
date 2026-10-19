@@ -1,6 +1,7 @@
 import {
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   unlinkSync,
   utimesSync,
@@ -15,7 +16,7 @@ export const SYSTEM_LOAD_CACHE_ENTRIES = 4;
 
 /** Bumped when an entry's shape changes: it is part of every key, so an
  *  entry of another shape never matches and ages out. */
-const ENTRY_FORMAT = 2;
+const ENTRY_FORMAT = 3;
 
 /** A path written this close to a load, or during it, may have been read in
  *  another state than the one recorded after it: the margin covers file
@@ -23,16 +24,19 @@ const ENTRY_FORMAT = 2;
 export const SYSTEM_LOAD_SETTLE_MS = 2000;
 
 /** What a cached load needs from the loader's result: the files it read,
- *  the paths it found missing, and what it read that varies per load. */
+ *  the paths it found missing, each link its resolution passed through, and
+ *  what it read that varies per load. */
 interface LoaderResult {
   dependencies?: string[];
   missing?: string[];
+  links?: Record<string, string>;
   volatile?: string[];
 }
 
 interface Entry {
-  /** What each path the load read or found missing held after it:
-   *  `none`, `directory`, or `file:` and the file's content digest. */
+  /** What each path the load read or found missing held after it: `none`,
+   *  `directory`, or `file:` and the file's content digest; for each path
+   *  a resolution reached through a link, `link:` and where it led. */
   paths: Record<string, string>;
   result: LoaderResult;
 }
@@ -45,6 +49,15 @@ function observe(path: string): string {
   if (stats.isDirectory()) return 'directory';
   try {
     return `file:${contentHash(readFileSync(path))}`;
+  } catch {
+    return 'none';
+  }
+}
+
+/** Where the links on `path` lead, as the loader's real path reads it. */
+function observeLink(path: string): string {
+  try {
+    return `link:${realpathSync.native(path)}`;
   } catch {
     return 'none';
   }
@@ -103,10 +116,17 @@ function candidates(directory: string, key: string): string[] {
 /** The entry for `key` still current: every path the load read or found
  *  missing holds what it held. Each path is observed once. */
 function lookup(directory: string, key: string): LoaderResult | null {
+  // By kind and path: one path can be a link in one entry and a file in
+  // another.
   const observed = new Map<string, string>();
   const holds = ([path, recorded]: [string, string]) => {
-    let now = observed.get(path);
-    if (now === undefined) observed.set(path, (now = observe(path)));
+    const link = recorded.startsWith('link:');
+    const id = `${link ? 'link' : 'path'}:${path}`;
+    let now = observed.get(id);
+    if (now === undefined) {
+      now = link ? observeLink(path) : observe(path);
+      observed.set(id, now);
+    }
     return now === recorded;
   };
   for (const path of candidates(directory, key)) {
@@ -120,15 +140,22 @@ function lookup(directory: string, key: string): LoaderResult | null {
       continue;
     }
     if (!Object.entries(entry.paths).every(holds)) continue;
-    const now = new Date();
-    utimesSync(path, now, now);
+    try {
+      const now = new Date();
+      utimesSync(path, now, now);
+    } catch {
+      // Recency only orders eviction; a read-only cache still serves.
+    }
     return entry.result;
   }
   return null;
 }
 
-/** Keeps `result` unless it read something that varies per load, or a path
- *  it read or found missing changed shortly before or while it ran. */
+/** Keeps `result` unless it read something that varies per load, or what
+ *  it read moved while it ran: a file it read changed shortly before or
+ *  while it ran, a file appeared where it found none, or a link it passed
+ *  through now leads elsewhere. A directory's own time is no file's
+ *  content, and git touches `.git`'s on every command. */
 function store(
   directory: string,
   key: string,
@@ -137,13 +164,20 @@ function store(
 ): void {
   if (result.volatile && result.volatile.length > 0) return;
   const paths: Record<string, string> = {};
-  for (const path of [
-    ...(result.dependencies ?? []),
-    ...(result.missing ?? []),
-  ]) {
+  for (const path of result.dependencies ?? []) {
     const stats = statSync(path, { throwIfNoEntry: false });
-    if (stats && stats.mtimeMs > startedMs - SYSTEM_LOAD_SETTLE_MS) return;
+    if (stats?.isFile() && stats.mtimeMs > startedMs - SYSTEM_LOAD_SETTLE_MS) {
+      return;
+    }
     paths[path] = observe(path);
+  }
+  for (const path of result.missing ?? []) {
+    paths[path] = observe(path);
+    if (paths[path].startsWith('file:')) return;
+  }
+  for (const [path, real] of Object.entries(result.links ?? {})) {
+    paths[path] = observeLink(path);
+    if (paths[path] !== `link:${real}`) return;
   }
   const entry: Entry = { paths, result };
   const name = `${key}.${contentHash(JSON.stringify(paths))}.json`;
@@ -151,9 +185,18 @@ function store(
   evict(directory);
 }
 
-/** Keeps the most recently used entries. */
+/** Keeps the most recently used entries, and drops what a writer that
+ *  stopped between write and rename left an hour ago or more. */
 function evict(directory: string): void {
-  const entries = readdirSync(directory)
+  const names = readdirSync(directory);
+  const hourAgo = Date.now() - 60 * 60 * 1000;
+  for (const name of names) {
+    const path = join(directory, name);
+    if (name.endsWith('.tmp') && statSync(path).mtimeMs < hourAgo) {
+      unlinkSync(path);
+    }
+  }
+  const entries = names
     .filter((name) => name.endsWith('.json'))
     .map((name) => join(directory, name))
     .map((path) => ({ path, used: statSync(path).mtimeMs }))
@@ -180,16 +223,17 @@ export function cachedSystemLoad<Result extends LoaderResult>(
   args: readonly KeyPart[],
   load: () => Result
 ): Result {
-  const directory = buildId ? cacheDirectory(rootDir) : null;
-  if (!directory) return load();
+  if (!buildId) return load();
   // The host's time zone, as a local-time date reads it, in winter and in
   // summer; `Intl` would cost more than a hit.
   const zone = `${new Date(0)}|${new Date(15552000000)}`;
   const key = contentHash(
     canonicalJson([ENTRY_FORMAT, buildId, zone, ...args])
   );
+  let directory: string | null = null;
   try {
-    const kept = lookup(directory, key);
+    directory = cacheDirectory(rootDir);
+    const kept = directory && lookup(directory, key);
     if (kept) {
       // SAFETY: an entry under this key holds what `load` returned for the
       // same engine build and arguments.
@@ -200,6 +244,7 @@ export function cachedSystemLoad<Result extends LoaderResult>(
   }
   const startedMs = Date.now();
   const result = load();
+  if (!directory) return result;
   try {
     store(directory, key, result, startedMs);
   } catch {
