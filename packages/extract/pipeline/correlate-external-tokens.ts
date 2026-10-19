@@ -114,8 +114,8 @@ export function correlateExternalTokenDiagnostics(opts: {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    findings.push(
-      hostFinding(
+    findings.push({
+      ...hostFinding(
         EXTERNAL_TOKEN_UNDEFINED,
         diagnostic.file,
         diagnostic.component,
@@ -123,8 +123,11 @@ export function correlateExternalTokenDiagnostics(opts: {
           `which the consumer theme does not define — inherit the source's ` +
           `tokens with createTheme().extend(...) using the tokens (or bundle) ` +
           `export of '${specifier}'`
-      )
-    );
+      ),
+      // Where the engine located the reference.
+      line: diagnostic.line,
+      column: diagnostic.column,
+    });
   }
 
   return findings;

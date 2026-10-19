@@ -15,6 +15,7 @@ import {
   OPTION_UNSUPPORTED,
   outputExclusion,
   resolveMode,
+  resolveVerbosity,
   sourceKitDependencies,
   surfaceManifestDiagnostics,
   TURBOPACK_CWD_ROOT,
@@ -551,7 +552,19 @@ function reportFindings(
   surfaceManifestDiagnostics(
     { diagnostics },
     (line) => console.warn(`[animus-extract] ${line}`),
-    { levels: options.diagnostics, strict: options.strict }
+    {
+      levels: options.diagnostics,
+      strict: options.strict,
+      // At the verbose tier, as the session's info lines print.
+      info: (line) => {
+        if (
+          resolveVerbosity(options.verbose, process.env.ANIMUS_DEBUG) !==
+          'quiet'
+        ) {
+          console.error(`[animus-extract] ${line}`);
+        }
+      },
+    }
   );
 }
 

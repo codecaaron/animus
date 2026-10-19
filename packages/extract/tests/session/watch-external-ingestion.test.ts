@@ -490,11 +490,6 @@ describe('cross-volume external roots (design D5)', () => {
     const warned = warn.mock.calls.map((c) => String(c[0])).join('\n');
     expect(warned).toContain('[animus.discovery.cross-volume-source]');
     expect(warned).toContain(join(kit, 'src', 'index.ts'));
-    expect(
-      [...session.stickyDiagnostics.values()].some((m) =>
-        m.includes('ANIMUS_EXTERNAL_CROSS_VOLUME_UNSUPPORTED')
-      )
-    ).toBe(true);
     const calls = mocks.analyzeProject.mock.calls.length;
     writeFileSync(join(kit, 'src', 'Button.tsx'), BUTTON_STYLE_EDIT);
     await session.handleWatchUpdate({

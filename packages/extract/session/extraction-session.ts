@@ -2147,29 +2147,21 @@ export class ExtractionSession {
       for (const specifier of specifiers) rejectedSpecifiers.add(specifier);
       crossVolumeDetails.push(`${specifiers.join(', ')} → ${dir}`);
     }
-    this.stickyDiagnostics.delete('cross-volume');
     if (rejectedSpecifiers.size > 0) {
       const message =
         `external package source root(s) on a different volume than the ` +
         `project root (${rootDir}): ${crossVolumeDetails.join('; ')} — ` +
         `cross-volume workspace sources are unsupported; the package(s) are ` +
         `excluded from extraction and watching`;
-      // Reported on each full pipeline; the CLI's watch also lists it while
-      // it holds, which a strict session never reaches.
-      if (!this.options.strict) {
-        this.stickyDiagnostics.set(
-          'cross-volume',
-          `ANIMUS_EXTERNAL_CROSS_VOLUME_UNSUPPORTED: ${message}`
-        );
-      }
+      // Reported on each full pipeline while it holds.
       this.surfaceHostDiagnostics([
         hostFinding(CROSS_VOLUME_SOURCE, systemFile, 'includes', message),
       ]);
     }
-    // Every other sticky line (an external watcher that degraded) repeats
-    // on each full pipeline while it holds.
-    for (const [key, message] of this.stickyDiagnostics) {
-      if (key !== 'cross-volume') this.warn(message);
+    // A sticky line (an external watcher that degraded) repeats on each
+    // full pipeline while it holds.
+    for (const message of this.stickyDiagnostics.values()) {
+      this.warn(message);
     }
     const admitted = excludeCollectedPackages(
       collected,

@@ -15,8 +15,7 @@ import {
 import { runBuildStart } from '../src/build-start';
 import { applyResolvedConfig } from '../src/config';
 import { PluginContext } from '../src/context';
-import { serve } from './context-probe';
-import { makeComponent, makeManifest } from './manifest-fixture';
+import { makeManifest } from './manifest-fixture';
 
 import type { AnimusExtractOptions } from '../src/index';
 
@@ -24,61 +23,6 @@ afterEach(() => {
   disposeTempRoots();
 });
 
-/** The fixture satisfies every other self-verify check: discovered components
- *  require component CSS, so an empty sheet fails for the wrong reason. */
-function makeContext(strict: boolean): PluginContext {
-  const ctx = new PluginContext({ system: './src/ds.ts', strict });
-  serve(ctx, {
-    manifest: makeManifest({
-      components: { 'Button::src/Button.tsx': makeComponent('src/Button.tsx') },
-    }),
-    system: { ...ctx.system, variableCss: ':root { --color-text: #000; }' },
-    analysisComponentCss: '.animus-Button-abc { margin: 0; }',
-  });
-  return ctx;
-}
-
-describe('self-verify: external package include outcomes', () => {
-  test('an include that resolved but discovered nothing passes verification under strict', () => {
-    // An empty kit is discovery's coded warning, never a verify failure.
-    const ctx = makeContext(true);
-    ctx.externalPackageOutcomes = [
-      { specifier: '@x/ds', outcome: 'empty', fileCount: 0 },
-    ];
-
-    expect(() => ctx.runSelfVerify()).not.toThrow();
-  });
-
-  test('an unresolvable include fails verification', () => {
-    const ctx = makeContext(true);
-    ctx.externalPackageOutcomes = [
-      { specifier: '@x/missing', outcome: 'unresolvable', fileCount: 0 },
-      { specifier: '@x/ds', outcome: 'resolved', fileCount: 3 },
-    ];
-
-    expect(() => ctx.runSelfVerify()).toThrow(
-      "animus.verify.self-check-failed — stylesheet: self-check: include '@x/missing' could not be resolved"
-    );
-  });
-
-  test('non-strict mode warns instead of throwing', () => {
-    const ctx = makeContext(false);
-    const warnings: string[] = [];
-    ctx.logger = createLogger('silent');
-    ctx.logger.warn = (message) => warnings.push(message);
-    ctx.externalPackageOutcomes = [
-      { specifier: '@x/missing', outcome: 'unresolvable', fileCount: 0 },
-    ];
-
-    ctx.runSelfVerify();
-
-    expect(warnings).toEqual([
-      "[animus] ⚠ stylesheet: self-check: include '@x/missing' could not be resolved [animus.verify.self-check-failed]",
-    ]);
-  });
-});
-
-/** A Vite build whose system extends `includes`, none of which resolves. */
 async function buildIncluding(
   includes: string[],
   options: Partial<AnimusExtractOptions> = {},
@@ -166,14 +110,17 @@ describe('buildStart gate: include resolution', () => {
   });
 
   // Contract: every warning a build writes about the project carries an
-  // Animus code, so turning every code off leaves a build that writes none.
+  // Animus code and answers that code's own level: turning every code off
+  // leaves a build that writes none, a `kind:warn` key reaches only
+  // warn-severity findings, and the self-check does not report a finding
+  // again under its own code.
   test('a build with every Animus code off writes no warning', async () => {
     // An include that resolves to nothing, a pattern that matches nothing,
     // and a tree of build output that is analysed.
-    const build = (diagnostics?: AnimusExtractOptions['diagnostics']) =>
+    const build = (options: Partial<AnimusExtractOptions> = {}) =>
       buildIncluding(
         ['@x/missing'],
-        { exclude: ['dist', 'stories'], diagnostics },
+        { exclude: ['dist', 'stories'], ...options },
         { 'out/bundle.js': `export const x = '${'x'.repeat(300 * 1024)}';\n` }
       );
 
@@ -191,9 +138,28 @@ describe('buildStart gate: include resolution', () => {
       ])
     );
 
-    const silenced = await build({ 'animus.*': 'off' });
+    const silenced = await build({ diagnostics: { 'animus.*': 'off' } });
     await silenced.run();
     expect(silenced.warnings).toEqual([]);
+
+    // An error-severity finding is no `kind:warn` record.
+    const kindOff = await build({
+      strict: true,
+      diagnostics: { 'kind:warn': 'off' },
+    });
+    await expect(kindOff.run()).rejects.toThrow(
+      'animus.discovery.unresolvable-include'
+    );
+
+    // The include's own level holds: the self-check does not name it again.
+    const verified = await build({
+      verify: true,
+      diagnostics: { 'animus.discovery.unresolvable-include': 'off' },
+    });
+    await verified.run();
+    expect(
+      verified.warnings.filter((line) => line.includes('@x/missing'))
+    ).toEqual([]);
   });
 
   test('no unresolvable outcomes is a no-op in both modes', async () => {

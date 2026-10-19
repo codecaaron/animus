@@ -19,6 +19,7 @@ import {
   servedFiles,
   STYLESHEET_SLICES,
   STYLESHEET_UNWRITTEN,
+  resolveVerbosity,
   stylesheetSliceFiles,
   surfaceManifestDiagnostics,
   viteAssetClassification,
@@ -911,6 +912,16 @@ export const unpluginFactory: UnpluginFactory<
       {
         levels: options.diagnostics,
         strict: options.strict,
+        // At the verbose tier, as the session's info lines print.
+        info: (line) => {
+          if (
+            resolveVerbosity(options.verbose, process.env.ANIMUS_DEBUG) !==
+            'quiet'
+          ) {
+            // eslint-disable-next-line no-console
+            console.error(`[animus] ${line}`);
+          }
+        },
         ...policy,
       }
     );

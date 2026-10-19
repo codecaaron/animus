@@ -47,7 +47,6 @@ import type { AnimusExtractOptions } from './index';
 import type {
   AssetSheets,
   ExcludeMatcher,
-  ExternalPackageOutcome,
   FontPreload,
   HostAssetClassification,
   HostExtensionPolicy,
@@ -305,8 +304,6 @@ export class PluginContext {
 
   assetPassComplete = false;
 
-  /** The Session's last external package outcomes, for the self-verify. */
-  externalPackageOutcomes: ExternalPackageOutcome[] = [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   devServer: any;
 
@@ -511,7 +508,6 @@ export class PluginContext {
   adoptPublication(session: ExtractionSession): void {
     if (session.publication === null) return;
     this.served = session.publication;
-    this.externalPackageOutcomes = session.lastExternalOutcomes;
     this.applyAssetSubstitutions();
   }
 
@@ -564,11 +560,10 @@ export class PluginContext {
    *  the server or watch keeps running. Only a build fails on them. */
   reportErrors(): ((message: string) => void) | undefined {
     if (!this.development) return undefined;
-    // Every reported line carries `[animus]`, as the warn sink's do;
-    // `[animus:verify]` keeps its own mark.
+    // Every reported line carries `[animus]`, as the warn sink's do.
     return (message) =>
       (this.logger ?? console).error(
-        /^\[animus(?::verify)?\] /.test(message)
+        /^\[animus\] /.test(message)
           ? message
           : `[animus] ${message.replace(/^\[animus-extract\] /, '')}`
       );
@@ -861,7 +856,8 @@ export class PluginContext {
       globalCss: this.globalCss,
       componentCss: this.resolvedComponentCss,
       layers: this.options.layers,
-      externalOutcomes: this.externalPackageOutcomes,
+      // An unresolvable include is discovery's own finding, at the level
+      // the diagnostics option sets: the self-check does not report it again.
       variableMapJson: this.system.variableMapJson,
     });
 

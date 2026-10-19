@@ -460,22 +460,30 @@ export function unreadableDiscoveryPathDiagnostic<Thrown>(
   };
 }
 
+/** The kind of an error-severity host finding: an error under `strict`,
+ *  a warning otherwise. No `kind:` key selects it: `kind:error` names hard
+ *  errors, which fail any build. */
+export const STRICT_ERROR_KIND = 'strict-error';
+
 /** A host's finding about `file`, as a record the diagnostics policy
  *  reports: printed `file: component: message [code]`, at its code's
- *  severity, so an error-severity finding fails a strict build. */
+ *  severity, so an error-severity finding fails a strict build. Its kind
+ *  follows its severity, so a `kind:warn` key selects only warn-severity
+ *  findings. */
 export function hostFinding(
   code: string,
   file: string,
   component: string,
   message: string
 ): ManifestDiagnostic {
+  const severity = severityFor(code);
   return {
     file,
     component,
-    kind: 'warn',
+    kind: severity === 'error' ? STRICT_ERROR_KIND : severity,
     message,
     code,
-    severity: severityFor(code),
+    severity,
   };
 }
 
@@ -956,7 +964,8 @@ export function surfaceManifestDiagnostics(
     const located =
       diagnostic.kind === 'warn' ||
       diagnostic.kind === 'error' ||
-      diagnostic.kind === 'info';
+      diagnostic.kind === 'info' ||
+      diagnostic.kind === STRICT_ERROR_KIND;
     if (diagnostic.kind === 'bail') {
       line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component} not extracted: ${message}${codeSuffix(diagnostic)}`;
     } else if (diagnostic.kind === 'skip') {
