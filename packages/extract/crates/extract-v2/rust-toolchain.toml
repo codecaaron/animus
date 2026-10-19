@@ -1,4 +1,4 @@
-# OXC 0.153 requires Rust >= 1.97; Rust 1.98 adds the Mach-O LINKEDIT alignment
+# OXC 0.154 requires Rust >= 1.97; Rust 1.98 adds the Mach-O LINKEDIT alignment
 # fix for stripped NAPI binaries on macOS 27. Cargo selects toolchains by
 # invocation directory, so keep the shared loader's directory pin aligned.
 [toolchain]

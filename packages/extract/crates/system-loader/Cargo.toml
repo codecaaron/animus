@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.97.0"
 
 [dependencies]
-oxc = { version = "0.153", features = ["semantic", "transformer", "codegen"] }
+oxc = { version = "0.154", features = ["semantic", "transformer", "codegen"] }
 rquickjs = "0.14.0"
 rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
