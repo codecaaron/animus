@@ -303,6 +303,7 @@ export function withAnimus(
         if (nextConfig.distDir) {
           plugin.excludeOutputDir(resolve(rootDir, nextConfig.distDir));
         }
+        plugin.joinBuild();
         const sessionDir = plugin.sessionDir;
 
         if (!existsSync(sessionDir)) {

@@ -353,9 +353,9 @@ export class AnimusWebpackPlugin {
 
   apply(compiler: Compiler): void {
     // The compiler's end leaves the build, which retires with its last
-    // compiler. A watch started again analyzes in full: its build may have
-    // retired meanwhile. The edge compiler joins too, through the resolver
-    // lookups withAnimus wires, so it leaves the same way.
+    // compiler: withAnimus joins every compiler's plugin at config time. A
+    // watch started again analyzes in full: its build may have retired
+    // meanwhile.
     const leave = () => {
       this.session.close();
       this.initialized = false;
@@ -364,7 +364,16 @@ export class AnimusWebpackPlugin {
     compiler.hooks.shutdown?.tap(PLUGIN_NAME, leave);
     compiler.hooks.watchClose?.tap(PLUGIN_NAME, leave);
 
-    // Edge compiler has no CSS dependencies.
+    // The edge compiler has no CSS dependencies, but its loader transforms
+    // the middleware: it joins the build as every compiler does. `next
+    // build` runs its compilers one after another, and the server compiler
+    // leaves the build, retiring it, before the edge compiler starts.
+    // Every compiler joins the build, the edge compiler too: it has no CSS
+    // dependencies, but its loader transforms the middleware. In Next's
+    // build worker each compiler runs in its own process, and under `next
+    // dev` an edit to the middleware reaches only the edge compiler.
+    this.joinOnRun(compiler);
+    this.analyzeOnWatchRun(compiler);
     if (compiler.options?.name === 'edge-server') return;
 
     const NormalModule = compiler.webpack?.NormalModule;
@@ -457,7 +466,30 @@ export class AnimusWebpackPlugin {
         }
       });
     });
+  }
 
+  /** Each watch turn analyzes what changed, or joins the build at first. */
+  private analyzeOnWatchRun(compiler: Compiler): void {
+    compiler.hooks.watchRun.tapPromise(
+      PLUGIN_NAME,
+      async (_compiler: Compiler) => {
+        this.adoptCompilerContext(_compiler);
+        this.extractAliases(_compiler);
+        this.extractConditions(_compiler);
+        try {
+          await this.analyzeWatchTurn(_compiler);
+          this.watchFailure = null;
+        } catch (err) {
+          this.watchFailure =
+            err instanceof Error ? err : new Error(String(err));
+        }
+      }
+    );
+  }
+
+  /** A run joins the build: it catches up with a build this compiler left,
+   *  waits for the analysis another compiler started, or analyzes. */
+  private joinOnRun(compiler: Compiler): void {
     compiler.hooks.run.tapPromise(PLUGIN_NAME, async (_compiler: Compiler) => {
       this.adoptCompilerContext(_compiler);
       this.extractAliases(_compiler);
@@ -479,26 +511,8 @@ export class AnimusWebpackPlugin {
       setAnalysisStartedPromise(this.session.key, promise);
       await promise;
     });
-
-    compiler.hooks.watchRun.tapPromise(
-      PLUGIN_NAME,
-      async (_compiler: Compiler) => {
-        this.adoptCompilerContext(_compiler);
-        this.extractAliases(_compiler);
-        this.extractConditions(_compiler);
-        try {
-          await this.analyzeWatchTurn(_compiler);
-          this.watchFailure = null;
-        } catch (err) {
-          this.watchFailure =
-            err instanceof Error ? err : new Error(String(err));
-        }
-      }
-    );
   }
 
-  /** Rejects with the analysis error; the published generation stays the
-   *  last successful one. */
   /** Joins the build this compiler left and catches up with it: true when
    *  the build was live, false when it starts as at first. */
   private async rejoin(): Promise<boolean> {
@@ -509,6 +523,8 @@ export class AnimusWebpackPlugin {
     return live;
   }
 
+  /** Rejects with the analysis error; the published generation stays the
+   *  last successful one. */
   private async analyzeWatchTurn(compiler: Compiler): Promise<void> {
     if (!this.initialized && (await this.rejoin())) {
       await this.session.agreeWithSystemAuthority();
@@ -571,6 +587,15 @@ export class AnimusWebpackPlugin {
 
   setRootDir(rootDir: string): void {
     this.session.rootDir = rootDir;
+  }
+
+  /** Joins this compiler's build now, at config time. Next creates every
+   *  compiler's config before `next build` runs them one after another, so
+   *  the build then lasts until the last of them leaves: a compiler that
+   *  starts after another left takes its analysis, never another one. Call
+   *  after `setRootDir`. */
+  joinBuild(): void {
+    void this.session.key;
   }
 
   /** Keeps Next's output directory out of discovery, whatever the user's

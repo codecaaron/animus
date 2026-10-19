@@ -341,15 +341,15 @@ function readEpoch(path: string): string {
 }
 
 describe('AnimusWebpackPlugin.apply', () => {
-  test('skips the edge-server compiler entirely', () => {
+  test('the edge-server compiler only joins the build, on run and watch', () => {
     const root = createProject();
     const { compiler, runHandlers, watchRunHandlers, compilationHandlers } =
       createCompiler(root, { name: 'edge-server' });
 
     applyPlugin(new AnimusWebpackPlugin(OPTIONS, { build: BUILD }), compiler);
 
-    expect(runHandlers).toHaveLength(0);
-    expect(watchRunHandlers).toHaveLength(0);
+    expect(runHandlers).toHaveLength(1);
+    expect(watchRunHandlers).toHaveLength(1);
     expect(compilationHandlers).toHaveLength(0);
   });
 
