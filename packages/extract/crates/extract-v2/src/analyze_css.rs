@@ -97,6 +97,10 @@ pub fn expand_alias(source: &str, aliases: &[AliasEntry]) -> Option<String> {
     None
 }
 
+/// Identity resolutions by file, then local, then whether a same-name
+/// fallback applies: the components found and the fallback taken.
+type IdentityMemo = FxHashMap<String, FxHashMap<String, [Option<(Vec<String>, Fallback)>; 2]>>;
+
 /// Configuration and theme inputs, parsed once from EngineOptions JSON.
 #[derive(Default)]
 pub struct CssInputs {
@@ -142,6 +146,11 @@ pub struct CssInputs {
     /// What each analysed module imports or loads at runtime
     /// ([`runtime_imports`]), found once.
     pub runtime_imports: std::sync::OnceLock<BTreeMap<String, Vec<String>>>,
+    /// This run's identity resolutions ([`resolve_identity`]). Each run
+    /// starts empty: its files, links and evaluated components are its own.
+    identity_memo: std::sync::Mutex<IdentityMemo>,
+    /// This run's export lookups ([`import_identity`]), by module, then name.
+    import_memo: std::sync::Mutex<FxHashMap<String, FxHashMap<String, ImportIds>>>,
     /// Each opening of an unread module, by the reason the safety relations
     /// record it under, for the diagnostic that names what it cost.
     pub(crate) unread_openings: std::sync::Mutex<BTreeMap<String, crate::link::UnreadOpening>>,
@@ -444,6 +453,8 @@ impl CssInputs {
             build_chunks: Default::default(),
             config_only: Default::default(),
             runtime_imports: Default::default(),
+            identity_memo: Default::default(),
+            import_memo: Default::default(),
             unread_openings: Default::default(),
             dev_mode,
             short_class_prefix: None,
@@ -3816,6 +3827,36 @@ fn resolve_identity(
     evaluated_ids: &FxHashSet<String>,
     fallback: Option<&NameFallback>,
 ) -> Vec<String> {
+    // A fallback that already took a name is mid-resolution: its outcome is
+    // not this lookup's alone.
+    if fallback.is_some_and(|fallback| fallback.took.get() != Fallback::None) {
+        return resolve_identity_uncached(file, local, files, inputs, links, evaluated_ids, fallback);
+    }
+    let slot = usize::from(fallback.is_some());
+    let cached = inputs.identity_memo.lock().ok().and_then(|memo| memo.get(file)?.get(local)?[slot].clone());
+    if let Some((ids, took)) = cached {
+        if let Some(fallback) = fallback {
+            fallback.took.set(took);
+        }
+        return ids;
+    }
+    let ids = resolve_identity_uncached(file, local, files, inputs, links, evaluated_ids, fallback);
+    let took = fallback.map_or(Fallback::None, |fallback| fallback.took.get());
+    if let Ok(mut memo) = inputs.identity_memo.lock() {
+        memo.entry(file.to_string()).or_default().entry(local.to_string()).or_default()[slot] = Some((ids.clone(), took));
+    }
+    ids
+}
+
+fn resolve_identity_uncached(
+    file: &str,
+    local: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+    evaluated_ids: &FxHashSet<String>,
+    fallback: Option<&NameFallback>,
+) -> Vec<String> {
     // Components bound to `name`. Behind an import the analysis resolves,
     // the module it reads stands behind them; elsewhere only the spelling
     // does, which the fallback records.
@@ -3847,7 +3888,7 @@ fn resolve_identity(
         if let Some(module) =
             files.get(file).and_then(|ff| namespace_path_module(file, ff, path_head, files, inputs, links))
         {
-            return import_identity(&module, last, files, links, evaluated_ids, &in_graph);
+            return import_identity(&module, last, files, inputs, links, evaluated_ids, &in_graph);
         }
         let root = path_head.split('.').next().unwrap_or(path_head);
         // A namespace the module table rejects names no member: none is
@@ -3881,7 +3922,7 @@ fn resolve_identity(
         .and_then(|ff| ff.imports.iter().find(|i| i.local == local))
     {
         if let Some(source_file) = resolve_import_source(file, &imp.source, files, inputs) {
-            return import_identity(&source_file, &imp.imported, files, links, evaluated_ids, &in_graph);
+            return import_identity(&source_file, &imp.imported, files, inputs, links, evaluated_ids, &in_graph);
         }
         return by_name_unless_foreign(&imp.imported, &imp.source);
     }
@@ -4376,10 +4417,49 @@ fn import_identity(
     module: &str,
     name: &str,
     files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
     evaluated_ids: &FxHashSet<String>,
     by_bare_name: &dyn Fn(&str) -> Vec<String>,
 ) -> Vec<String> {
+    let cached = inputs.import_memo.lock().ok().and_then(|memo| memo.get(module)?.get(name).cloned());
+    let lookup = cached.unwrap_or_else(|| {
+        let lookup = import_lookup(module, name, files, links, evaluated_ids);
+        if let Ok(mut memo) = inputs.import_memo.lock() {
+            memo.entry(module.to_string()).or_default().insert(name.to_string(), lookup.clone());
+        }
+        lookup
+    });
+    match lookup {
+        ImportIds::Settled(ids) => ids,
+        ImportIds::Known(mut ids) => {
+            for id in by_bare_name(name) {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            ids
+        }
+    }
+}
+
+/// What `module` exports as `name`, as extracted component ids, before any
+/// same-name fallback.
+#[derive(Debug, Clone)]
+enum ImportIds {
+    /// The lookup decides alone: one component, or no such export.
+    Settled(Vec<String>),
+    /// The components the lookup knows, to which the fallback adds.
+    Known(Vec<String>),
+}
+
+fn import_lookup(
+    module: &str,
+    name: &str,
+    files: &BTreeMap<String, FileFacts>,
+    links: &crate::link::ProjectLinks,
+    evaluated_ids: &FxHashSet<String>,
+) -> ImportIds {
     let component = |terminal: &Terminal<crate::identity::LocalId>| match terminal {
         Terminal::Local { module, binding } => {
             let (path, name) = binding_name(links, files, *module, *binding);
@@ -4387,23 +4467,18 @@ fn import_identity(
         }
         Terminal::Namespace(_) | Terminal::External { .. } => None,
     };
-    let known = match links.resolve_export(module, name) {
+    match links.resolve_export(module, name) {
         Some(ExportLookup::Resolved(terminal)) => match component(&terminal) {
-            Some(id) => return vec![id],
-            None => Vec::new(),
+            Some(id) => ImportIds::Settled(vec![id]),
+            None => ImportIds::Known(Vec::new()),
         },
-        Some(ExportLookup::Ambiguous(terminals) | ExportLookup::Incomplete { known: terminals, .. }) => terminals,
-        // The module exports no such name: the import names nothing.
-        Some(ExportLookup::Absent) => return Vec::new(),
-        None => Vec::new(),
-    };
-    let mut ids: Vec<String> = known.iter().filter_map(component).collect();
-    for id in by_bare_name(name) {
-        if !ids.contains(&id) {
-            ids.push(id);
+        Some(ExportLookup::Ambiguous(terminals) | ExportLookup::Incomplete { known: terminals, .. }) => {
+            ImportIds::Known(terminals.iter().filter_map(component).collect())
         }
+        // The module exports no such name: the import names nothing.
+        Some(ExportLookup::Absent) => ImportIds::Settled(Vec::new()),
+        None => ImportIds::Known(Vec::new()),
     }
-    ids
 }
 
 /// Every member tag a file writes, as a JSX tag or a `createElement` type.
@@ -7579,6 +7654,12 @@ fn run_with_system_floor(
     class_prefix: &str,
     total_system_floor: bool,
 ) -> CssOutput {
+    if let Ok(mut memo) = inputs.identity_memo.lock() {
+        memo.clear();
+    }
+    if let Ok(mut memo) = inputs.import_memo.lock() {
+        memo.clear();
+    }
     let links = &crate::link::ProjectLinks::link(files, inputs);
     let breakpoints = extract_breakpoints(&inputs.theme);
     let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
