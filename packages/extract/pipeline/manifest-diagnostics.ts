@@ -47,7 +47,7 @@ function droppedSuffix(diagnostic: ManifestDiagnostic): string {
     : '';
 }
 
-/** The record's code, when its message does not already quote it. */
+/** The record's code, unless its message already ends with it. */
 function codeSuffix(diagnostic: ManifestDiagnostic): string {
   if (!diagnostic.code) return '';
   const suffix = ` [${diagnostic.code}]`;
@@ -246,7 +246,7 @@ export function collectSelectorAliasDiagnostics(
         file: 'system',
         component: name,
         kind: 'warn',
-        message: `selector alias '${name}' value '${value}' has no substitutable '&' subject outside quoted text (${SELECTOR_UNSUPPORTED_SUBJECT})`,
+        message: `selector alias '${name}' value '${value}' has no substitutable '&' subject outside quoted text`,
         code: SELECTOR_UNSUPPORTED_SUBJECT,
         severity: severityFor(SELECTOR_UNSUPPORTED_SUBJECT),
       });
@@ -780,7 +780,7 @@ export function vocabularyWitnessDiagnostics(
         file: 'system',
         component: entry.name ?? 'keyframes',
         kind: 'warn',
-        message: `keyframes vocabulary "${entry.name}" is registered by both ${entry.loser} and ${entry.winner} — ${entry.winner} wins; rename one collection (${entry.code})`,
+        message: `keyframes vocabulary "${entry.name}" is registered by both ${entry.loser} and ${entry.winner} — ${entry.winner} wins; rename one collection`,
         code: entry.code,
         severity: severityFor(entry.code),
       });
@@ -789,7 +789,7 @@ export function vocabularyWitnessDiagnostics(
         file: 'system',
         component: 'keyframes',
         kind: 'warn',
-        message: `a sealed system (${entry.source ?? `'${entry.verb}' source`}) with registered vocabulary [${(entry.names ?? []).join(', ')}] was consumed through the deprecated '${entry.verb}' verb, which cannot carry it — those collections do NOT reach this consumer; use createSystem().extend(source) (${entry.code})`,
+        message: `a sealed system (${entry.source ?? `'${entry.verb}' source`}) with registered vocabulary [${(entry.names ?? []).join(', ')}] was consumed through the deprecated '${entry.verb}' verb, which cannot carry it — those collections do NOT reach this consumer; use createSystem().extend(source)`,
         code: entry.code,
         severity: severityFor(entry.code),
       });
@@ -798,7 +798,7 @@ export function vocabularyWitnessDiagnostics(
         file: 'system',
         component: 'vocabulary',
         kind: 'warn',
-        message: `unrecognized vocabulary witness entry ${JSON.stringify(entry)} — a newer @animus-ui/system may have recorded a witness kind this host predates${entry.code ? ` (${entry.code})` : ''}`,
+        message: `unrecognized vocabulary witness entry ${JSON.stringify(entry)} — a newer @animus-ui/system may have recorded a witness kind this host predates`,
         code: entry.code,
         severity: severityFor(entry.code),
       });
@@ -865,7 +865,7 @@ export function systemLoadDiagnostics(
       file: 'system',
       component: name,
       kind: 'warn',
-      message: `@property ${name} was not emitted: ${reason}. Browsers ignore an invalid registration and minifying it fails; fix it where the theme declares ${name} (${INVALID_PROPERTY_REGISTRATION})`,
+      message: `@property ${name} was not emitted: ${reason}. Browsers ignore an invalid registration and minifying it fails; fix it where the theme declares ${name}`,
       code: INVALID_PROPERTY_REGISTRATION,
       severity: severityFor(INVALID_PROPERTY_REGISTRATION),
     })
@@ -879,8 +879,8 @@ export function systemLoadDiagnostics(
       kind: 'error',
       message:
         reason === 'transport'
-          ? `the prefix would emit the contextual variable ${name} as --${final}, inside the --animus- names of the runtime's transport variables, where it can collide with a prop's own variable. Use a different prefix (${PREFIX_NAME_CONFLICT})`
-          : `the theme variable --${name} is spelled like the final name of the contextual variable ${final}, so under prefixContextualVars a reference to --${name} reaches ${final} and the theme variable is unreachable. Rename one of them (${PREFIX_NAME_CONFLICT})`,
+          ? `the prefix would emit the contextual variable ${name} as --${final}, inside the --animus- names of the runtime's transport variables, where it can collide with a prop's own variable. Use a different prefix`
+          : `the theme variable --${name} is spelled like the final name of the contextual variable ${final}, so under prefixContextualVars a reference to --${name} reaches ${final} and the theme variable is unreachable. Rename one of them`,
       code: PREFIX_NAME_CONFLICT,
       severity: severityFor(PREFIX_NAME_CONFLICT),
     })

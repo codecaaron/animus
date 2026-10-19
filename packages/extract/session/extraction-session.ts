@@ -723,8 +723,9 @@ export class ExtractionSession {
 
   readonly corpus: SourceCorpus = createSourceCorpus(this.corpusHost());
 
-  /** The corpus reads the driver label when it reports, so a host that
-   *  sets `driverLabel` after construction is named in its messages. */
+  /** The corpus reads the driver label when it reports its own errors, so
+   *  a host that sets `driverLabel` after construction is named in them;
+   *  its finding lines carry `[animus]`. */
   private corpusHost(): SourceIngestorHost {
     const label = () => this.driverLabel;
     return {

@@ -308,6 +308,8 @@ describe('system load under a prefix', () => {
     expect(reported[1]).toMatch(
       /^\[animus\] ✖ system: --acme-tone: .* \[animus\.prefix\.name-conflict\]$/m
     );
+    // Its code once: in brackets, never in parentheses.
+    expect(reported[1]).not.toContain('(animus.');
   });
 
   it('reports nothing about the prefix without the option, since contextual names are kept', () => {

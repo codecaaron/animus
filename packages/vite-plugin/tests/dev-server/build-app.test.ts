@@ -118,7 +118,6 @@ describe('environments built in parallel', () => {
     const fixture = createDevFixture();
     try {
       const lines: string[] = [];
-      const record = (message: string) => lines.push(message);
       const input = join(fixture.root, 'src', 'main.ts');
       // SAFETY: vite-plus runs Vite's builder and consumes the same plugin
       // hooks; only the nominal declarations differ, and tsc overflows on them.
@@ -130,15 +129,7 @@ describe('environments built in parallel', () => {
       const builder = await startLoggedBuild({
         root: fixture.root,
         configFile: false,
-        customLogger: {
-          info: record,
-          warn: record,
-          warnOnce: record,
-          error: record,
-          clearScreen: () => {},
-          hasErrorLogged: () => false,
-          hasWarned: false,
-        },
+        customLogger: recordingLogger(lines),
         plugins: [
           slowSsr,
           animusExtract({ system: './src/ds.ts', verbose: true }),
@@ -232,6 +223,127 @@ describe('environments built in parallel', () => {
     }
   });
 });
+
+/**
+ * Contract: every finding line a real build prints ends with its own Animus
+ * code in brackets, names that code once, and writes no code in parentheses,
+ * whether the system loader, the host or the engine raised it. Source
+ * ingestion lines, which keep their legacy codes, are out of its scope.
+ */
+describe('finding lines of a real build', () => {
+  it('end with their own code, named once', async () => {
+    const fixture = createDevFixture();
+    try {
+      // A selector alias with no subject outside quotes (a host finding).
+      fixture.write(
+        'src/ds.ts',
+        `import { createSystem } from '@animus-ui/system';
+import { color, space } from '@animus-ui/system/groups';
+import './side';
+
+export { tokens } from './theme';
+
+export const ds = createSystem()
+  .addGroup('space', space)
+  .addGroup('surface', color)
+  .addSelectors({ _quoted: '[data-x="&"]' })
+  .build()
+  .seal();
+`
+      );
+      // A registration in a function the system does not reach (a loader
+      // finding).
+      fixture.write(
+        'src/side.ts',
+        `import { createSystem } from '@animus-ui/system';
+
+export function later() {
+  return createSystem().build().registerGlobalStyles({});
+}
+`
+      );
+      // Skips whose reason carries its code (engine findings), written
+      // inline and held in a const, whose reason names it after the code.
+      fixture.write(
+        'src/Probe.ts',
+        `import { ds } from './ds';
+
+const held = { '[data-y="&"]': { color: 'blue' } };
+
+export const Probe = ds
+  .styles({ '[data-x="&"]': { color: 'red' } })
+  .asElement('div');
+
+export const Held = ds.styles(held).asElement('div');
+`
+      );
+      const lines: string[] = [];
+      // SAFETY: as above.
+      const startLoggedBuild = createBuilder as (config: {
+        root: string;
+        configFile: false;
+        customLogger: Logger;
+        plugins: ReturnType<typeof animusExtract>[];
+        build: {
+          outDir: string;
+          write: false;
+          rollupOptions: { input: string };
+        };
+      }) => Promise<{ buildApp(): Promise<void> }>;
+      const builder = await startLoggedBuild({
+        root: fixture.root,
+        configFile: false,
+        customLogger: recordingLogger(lines),
+        // Verbose, so info findings print too.
+        plugins: [animusExtract({ system: './src/ds.ts', verbose: true })],
+        build: {
+          outDir: 'dist',
+          write: false,
+          rollupOptions: { input: join(fixture.root, 'src', 'main.ts') },
+        },
+      });
+      await builder.buildApp();
+
+      const findings = lines.filter((line) => /^\[animus\] [⚠ℹ✖] /.test(line));
+      const codes = findings.map(
+        (line) => / \[(animus\.[a-z.-]+)\]$/.exec(line)?.[1]
+      );
+      expect(codes).not.toContain(undefined);
+      expect(codes).toEqual(
+        expect.arrayContaining([
+          'animus.selector.unsupported-subject',
+          'animus.system.registration-unproved',
+        ])
+      );
+      // The engine's skip and the host's alias finding share a code.
+      expect(
+        findings.filter((line) => /(Probe|Held): skipped/.test(line))
+      ).toHaveLength(2);
+      for (const [index, line] of findings.entries()) {
+        expect(line.split(codes[index]!), line).toHaveLength(2);
+      }
+      expect(lines.filter((line) => line.includes('(animus.'))).toEqual([]);
+    } finally {
+      fixture.dispose();
+    }
+  });
+});
+
+/** A logger that records every line it is given. */
+function recordingLogger(lines: string[]): Logger {
+  const record = (message: string) => {
+    lines.push(message);
+  };
+  return {
+    info: record,
+    warn: record,
+    warnOnce: record,
+    error: record,
+    clearScreen: () => {},
+    hasErrorLogged: () => false,
+    hasWarned: false,
+  };
+}
 
 /** A builder whose app builds client and SSR in parallel, SSR slowly,
  *  unless `buildApp` builds otherwise. */

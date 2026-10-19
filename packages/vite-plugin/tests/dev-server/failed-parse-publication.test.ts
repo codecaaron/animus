@@ -111,8 +111,8 @@ suite.each(STRICTNESS)(
       admittedCss = (await adapter.read()).componentCss;
       expect(admittedCss).toContain('12px');
       expect(admittedCss).toContain('13px');
-      expect(warnings(adapter).join('\n')).toContain(
-        'SOURCE_NATIVE_PARSE_ERROR src/recovered.js'
+      expect(warnings(adapter).join('\n')).toMatch(
+        /src\/recovered\.js: .* \[SOURCE_NATIVE_PARSE_ERROR\]/
       );
     });
 

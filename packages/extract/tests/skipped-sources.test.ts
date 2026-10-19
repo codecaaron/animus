@@ -143,7 +143,7 @@ describe('a source ingestion skips', () => {
 
   it('keeps every option while a file it cannot see may render them', async () => {
     const { css, warned } = await build({ 'src/Doc.mdx': BROKEN_MDX });
-    expect(warned).toContain('SOURCE_MDX_PARSE_ERROR src/Doc.mdx');
+    expect(warned).toMatch(/src\/Doc\.mdx: .* \[SOURCE_MDX_PARSE_ERROR\]/);
     expect(warned).toContain('its renders are not seen, so nothing is pruned');
     expect(css).toContain('padding:1px');
     expect(css).toContain('padding:9px');

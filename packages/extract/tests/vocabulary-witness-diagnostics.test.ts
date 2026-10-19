@@ -26,7 +26,8 @@ describe('vocabularyWitnessDiagnostics — the one host mapper for the sealed re
     });
     expect(diagnostics[0]?.message).toContain('extended source #1');
     expect(diagnostics[0]?.message).toContain('local registration #1');
-    expect(diagnostics[0]?.message).toContain(VOCABULARY_COLLISION);
+    // The record carries its code; the line prints it, so the message does not.
+    expect(diagnostics[0]?.message).not.toContain(VOCABULARY_COLLISION);
   });
 
   it('maps a legacy-verb entry to a coded warning naming the verb, the source, and the refused names', () => {

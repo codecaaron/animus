@@ -23,9 +23,10 @@ describe('createSourceIngestor', () => {
     expect(ingestor.surfaceDiagnostics([fatal])).toEqual(
       new Set(['src/Usage.svelte'])
     );
+    // The warn sink writes `[animus]`; the line is the finding's own.
     expect(warnings).toEqual([
-      expect.stringContaining(
-        'SOURCE_SVELTE_DEPENDENCY_MISSING src/Usage.svelte'
+      expect.stringMatching(
+        /^⚠ src\/Usage\.svelte: .* \[SOURCE_SVELTE_DEPENDENCY_MISSING\]$/
       ),
     ]);
 
@@ -41,7 +42,7 @@ describe('createSourceIngestor', () => {
     const ingestor = createSourceIngestor(makeHost({ strict: true }));
 
     expect(() => ingestor.surfaceDiagnostics([fatal])).toThrow(
-      /SOURCE_SVELTE_DEPENDENCY_MISSING src\/Usage\.svelte/
+      /^\[animus\] ✖ src\/Usage\.svelte: .* \[SOURCE_SVELTE_DEPENDENCY_MISSING\]$/
     );
     expect(() => ingestor.surfaceDiagnostics([advisory, fatal])).toThrow(
       /SOURCE_SVELTE_DEPENDENCY_MISSING/
@@ -57,7 +58,9 @@ describe('createSourceIngestor', () => {
 
     expect(strict.surfaceDiagnostics([advisory])).toEqual(new Set());
     expect(warnings).toEqual([
-      expect.stringContaining('SOURCE_NATIVE_PARSE_ERROR src/app.js'),
+      expect.stringMatching(
+        /^⚠ src\/app\.js: .* \[SOURCE_NATIVE_PARSE_ERROR\]$/
+      ),
     ]);
 
     const lax = createSourceIngestor(makeHost({ warnings }));

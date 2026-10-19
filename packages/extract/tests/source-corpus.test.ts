@@ -158,7 +158,7 @@ describe('createSourceCorpus', () => {
     const { corpus } = makeCorpus({ ...diagnosed, strict: true });
 
     await expect(corpus.prepare([usage, ok])).rejects.toThrow(
-      /SOURCE_SVELTE_DEPENDENCY_MISSING src\/Usage\.svelte/
+      /src\/Usage\.svelte: .* \[SOURCE_SVELTE_DEPENDENCY_MISSING\]/
     );
     expect(corpus.published.analysisEntries.size).toBe(0);
   });

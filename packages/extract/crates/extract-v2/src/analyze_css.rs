@@ -681,23 +681,6 @@ impl CssDiagnostic {
     }
 }
 
-/// `message` less every `(animus.…)` it names: the form a reason carries its
-/// code in until a record is made. A record prints only its own code, in
-/// brackets after its message, so a line names one code, and once.
-fn without_codes(mut message: String) -> String {
-    let mut from = 0;
-    while let Some(at) = message[from..].find(" (animus.").map(|at| from + at) {
-        let inner = at + 2;
-        let Some(len) = message[inner..].find(')') else { break };
-        if message[inner..inner + len].chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
-            message.replace_range(at..inner + len + 1, "");
-        } else {
-            from = inner;
-        }
-    }
-    message
-}
-
 pub(crate) fn diagnostic_code_from_message(message: &str) -> Option<String> {
     let start = message.rfind("(animus.")?;
     let rest = &message[start + 1..];
@@ -706,6 +689,22 @@ pub(crate) fn diagnostic_code_from_message(message: &str) -> Option<String> {
     code.chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
         .then(|| code.to_string())
+}
+
+/// A skip's message less the code its reason named, and that code: the last
+/// `(animus.…)` it names, wherever the reason put it (a const-held skip
+/// names its const after it). The record prints its code itself, so its
+/// message drops that occurrence and keeps every other word.
+fn split_code(message: &str) -> (String, Option<String>) {
+    let Some(code) = diagnostic_code_from_message(message) else {
+        return (message.to_string(), None);
+    };
+    let named = format!(" ({code})");
+    let message = match message.rfind(&named) {
+        Some(at) => format!("{}{}", &message[..at], &message[at + named.len()..]),
+        None => message.to_string(),
+    };
+    (message, Some(code))
 }
 
 const COMPOSE_UNRESOLVABLE_SLOT: &str = "animus.compose.unresolvable-slot";
@@ -948,7 +947,7 @@ pub(crate) fn diagnostic(
         file: file.to_string(),
         component: component.to_string(),
         kind: kind.to_string(),
-        message: without_codes(message),
+        message,
         code: code.map(str::to_string),
         severity: code.map(|c| diagnostic_severity_for_code(c).to_string()),
         line: None,
@@ -8373,12 +8372,12 @@ fn run_with_system_floor(
                         continue;
                     }
                     // A skip names its own code when it has one.
-                    let code = diagnostic_code_from_message(warning);
+                    let (message, code) = split_code(warning);
                     let record = diagnostic(
                         file_path,
                         &chain.descriptor.binding,
                         "skip",
-                        warning.clone(),
+                        message,
                         Some(code.as_deref().unwrap_or(SKIPPED_VALUE)),
                     );
                     diagnostics.push(match located.iter().position(|(line, _)| line == warning) {
@@ -11182,6 +11181,25 @@ mod tests {
 
     fn diagnostics_of<'a>(out: &'a CssOutput, kind: &str) -> Vec<&'a CssDiagnostic> {
         out.diagnostics.iter().filter(|d| d.kind == kind).collect()
+    }
+
+    /// Contract: a skip's record loses only the code its reason named,
+    /// wherever the reason put it, and keeps every other word.
+    #[test]
+    fn a_skip_loses_only_its_own_code() {
+        let code = "animus.selector.unsupported-subject";
+        assert_eq!(
+            split_code(&format!("[skip] A: property 'k' — no subject ({code})")),
+            ("[skip] A: property 'k' — no subject".to_string(), Some(code.to_string()))
+        );
+        assert_eq!(
+            split_code(&format!("[skip] A: property 'k' — no subject ({code}) in const 'held'")),
+            ("[skip] A: property 'k' — no subject in const 'held'".to_string(), Some(code.to_string()))
+        );
+        assert_eq!(
+            split_code(&format!("[skip] A: property 'k' — Button (animus.tsx) (src/Card.tsx:3) ({code})")),
+            ("[skip] A: property 'k' — Button (animus.tsx) (src/Card.tsx:3)".to_string(), Some(code.to_string()))
+        );
     }
 
     fn analyze_with_total_system_floor(

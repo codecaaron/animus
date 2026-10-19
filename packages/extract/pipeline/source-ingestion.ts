@@ -899,12 +899,15 @@ export interface SourceIngestorHost {
     extractFacts?: (filesJson: string) => string;
     extractModuleFacts?: (filesJson: string) => string;
   };
-  /** Host log prefix, e.g. `[animus-extract]`. */
+  /** Host log prefix for the ingestor's own errors, e.g.
+   *  `[animus-extract]`. Finding lines carry `[animus]` instead. */
   prefix: string;
   strict(): boolean;
+  /** Writes `[animus]` before each line it is given. */
   warn(message: string): void;
   /** Development's error sink: under `strict`, a fatal diagnostic is
-   *  reported here instead of thrown, and its original is quarantined. */
+   *  reported here instead of thrown, and its original is quarantined. It
+   *  writes each line as given, `[animus]` included. */
   reportErrors?(): ((message: string) => void) | undefined;
   /** The host's extension order (spec §2.2 A2); the built-in policy
    *  without one. */
@@ -927,6 +930,16 @@ export interface SourceIngestor {
   /** Clears the warn dedupe for the result's originals so a later regression
    *  re-warns; hosts call it from their publish step. */
   markPublished(result: SourceIngestionResult): void;
+}
+
+/** A source diagnostic's finding line after its mark: `file: message
+ *  [CODE]`. A skipped file's line says what skipping it costs. */
+function sourceLine(
+  diagnostic: SourceIngestionDiagnostic,
+  advisory: boolean
+): string {
+  const cost = advisory ? '' : ` (${SKIPPED_SOURCE_COST})`;
+  return `${diagnostic.originalPath}: ${diagnostic.message}${cost} [${diagnostic.code}]`;
 }
 
 /**
@@ -974,18 +987,14 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
       );
       if (diagnostics.length === 0) return invalidOriginals;
       const reportError = host.strict() ? host.reportErrors?.() : undefined;
+      const errorLine = (diagnostic: SourceIngestionDiagnostic) =>
+        `[animus] ✖ ${sourceLine(diagnostic, false)}`;
       if (host.strict() && fatal.length > 0 && !reportError) {
-        const lines = fatal.map(
-          (diagnostic) =>
-            `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message} (${SKIPPED_SOURCE_COST})`
-        );
-        throw new Error(`${host.prefix} ${lines.join(`\n${host.prefix} `)}`);
+        throw new Error(fatal.map(errorLine).join('\n'));
       }
       for (const diagnostic of diagnostics) {
-        const skipped = isAdvisorySourceDiagnostic(diagnostic)
-          ? ''
-          : ` (${SKIPPED_SOURCE_COST})`;
-        const line = `${diagnostic.code} ${diagnostic.originalPath}: ${diagnostic.message}${skipped}`;
+        const advisory = isAdvisorySourceDiagnostic(diagnostic);
+        const line = sourceLine(diagnostic, advisory);
         let warned = warnedByOriginal.get(diagnostic.originalPath);
         if (!warned) {
           warned = new Set();
@@ -993,8 +1002,8 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
         }
         if (warned.has(line)) continue;
         warned.add(line);
-        if (reportError && skipped) reportError(`${host.prefix} ${line}`);
-        else host.warn(`${host.prefix} ${line}`);
+        if (reportError && !advisory) reportError(errorLine(diagnostic));
+        else host.warn(`⚠ ${line}`);
       }
       return invalidOriginals;
     },

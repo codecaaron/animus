@@ -513,7 +513,13 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
       engineActive: probe.isActive(),
     }).toEqual({
       clears: clearsBeforeReset + 1,
-      warnings: [expect.stringContaining(`SVELTE_PARSE_ERROR ${usagePath}`)],
+      warnings: [
+        expect.stringMatching(
+          new RegExp(
+            `^\\[animus\\] ⚠ ${usagePath}: [\\s\\S]* \\[SVELTE_PARSE_ERROR\\]$`
+          )
+        ),
+      ],
       invalidatedCount: 4,
       hotMessages: [{ type: 'full-reload' }],
       transformError: null,
@@ -542,7 +548,11 @@ describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
     await runBuildStart(ctx, async () => null);
     const badPath = relative(appRoot, badFile);
     expect(warnings).toEqual([
-      expect.stringContaining(`SVELTE_PARSE_ERROR ${badPath}`),
+      expect.stringMatching(
+        new RegExp(
+          `^\\[animus\\] ⚠ ${badPath}: [\\s\\S]* \\[SVELTE_PARSE_ERROR\\]$`
+        )
+      ),
     ]);
     expect(ownership(ctx)[badPath]).toBeUndefined();
 
