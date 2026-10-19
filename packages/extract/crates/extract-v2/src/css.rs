@@ -44,6 +44,19 @@ pub(crate) fn css_property_name(key: &str) -> String {
     if key.starts_with("--") {
         return key.to_string();
     }
+    // A key's name depends on the key and the property table alone.
+    thread_local! {
+        static NAMES: std::cell::RefCell<rustc_hash::FxHashMap<String, String>> = Default::default();
+    }
+    if let Some(name) = NAMES.with(|names| names.borrow().get(key).cloned()) {
+        return name;
+    }
+    let name = uncached_css_property_name(key);
+    NAMES.with(|names| names.borrow_mut().insert(key.to_string(), name.clone()));
+    name
+}
+
+fn uncached_css_property_name(key: &str) -> String {
     let vendor = PROPERTY_TABLE.vendor_prefixes.iter().find_map(|(vendor, prefix)| {
         let rest = key.strip_prefix(vendor.as_str())?;
         rest.starts_with(|c: char| c.is_uppercase()).then_some((prefix, rest))

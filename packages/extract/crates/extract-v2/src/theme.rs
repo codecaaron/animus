@@ -83,38 +83,39 @@ fn entry_conditions<'a>(value: &'a Value, ctx: &ResolveContext) -> FxHashSet<&'a
 /// written before the shorthand that covers it, which plain CSS would let
 /// reset it. A shorthand followed by its longhand is the override idiom:
 /// both contribute as CSS order says, and nothing is reported.
-fn record_shared_properties(obj: &Map<String, Value>, entries: &[(&String, &Value)], ctx: &ResolveContext) {
+fn record_shared_properties(obj: &Map<String, Value>, ordered: &CascadeEntries<'_>, ctx: &ResolveContext) {
     if ctx.dropped_keys.is_none() {
         return;
     }
-    let writes: Vec<_> = entries
+    let writes: Vec<_> = ordered
+        .entries
         .iter()
-        .filter_map(|(key, value)| {
-            let properties = entry_properties(key, ctx.config);
-            (!properties.is_empty()).then(|| (*key, properties, entry_conditions(value, ctx)))
+        .zip(&ordered.properties)
+        .filter(|(_, properties)| !properties.is_empty())
+        .map(|((key, value), properties)| {
+            let resets = crate::declarations::reset_set(properties.iter().map(String::as_str));
+            (*key, properties, resets, entry_conditions(value, ctx))
         })
         .collect();
     let authored = |key: &str| obj.keys().position(|k| k == key);
-    for (index, (earlier, earlier_properties, earlier_conditions)) in writes.iter().enumerate() {
-        let earlier_resets = crate::declarations::reset_set(earlier_properties.iter().map(String::as_str));
-        for (later, later_properties, later_conditions) in &writes[index + 1..] {
+    for (index, (earlier, earlier_properties, earlier_resets, earlier_conditions)) in writes.iter().enumerate() {
+        for (later, later_properties, later_resets, later_conditions) in &writes[index + 1..] {
             if earlier_conditions.is_disjoint(later_conditions) {
                 continue;
             }
-            let later_resets = crate::declarations::reset_set(later_properties.iter().map(String::as_str));
-            let shared: Vec<&str> = earlier_resets.intersection(&later_resets).copied().collect();
+            let shared: Vec<&str> = earlier_resets.intersection(later_resets).copied().collect();
             let Some(first_shared) = shared.first() else {
                 continue;
             };
             // Named by the narrower key's own property where it can be.
             let property = later_properties
                 .iter()
-                .chain(earlier_properties)
+                .chain(earlier_properties.iter())
                 .find(|property| shared.contains(&property.as_str()))
                 .map_or_else(|| first_shared.to_string(), String::clone);
             let rule = if earlier_resets == later_resets {
                 if authored(earlier) < authored(later) { CascadeRule::AuthoredOrder } else { CascadeRule::PropRank }
-            } else if earlier_resets.is_superset(&later_resets) && authored(later) < authored(earlier) {
+            } else if earlier_resets.is_superset(later_resets) && authored(later) < authored(earlier) {
                 CascadeRule::LonghandBeforeShorthand
             } else {
                 continue;
@@ -137,23 +138,34 @@ fn record_shared_properties(obj: &Map<String, Value>, entries: &[(&String, &Valu
 /// whatever their tiers, so a longhand always beats its shorthand. Entries
 /// keep their relative order otherwise; selectors and conditions never move
 /// past each other.
-fn cascade_order<'a>(obj: &'a Map<String, Value>, config: &PropConfigMap) -> Vec<(&'a String, &'a Value)> {
+fn cascade_order<'a>(obj: &'a Map<String, Value>, config: &PropConfigMap) -> CascadeEntries<'a> {
     let mut entries: Vec<(&String, &Value)> = obj.iter().collect();
-    entries.sort_by_key(|(key, _)| prop_cascade_tier(key, config));
-    let properties: Vec<Vec<String>> = entries.iter().map(|(key, _)| entry_properties(key, config)).collect();
+    entries.sort_by_cached_key(|(key, _)| prop_cascade_tier(key, config));
+    let mut properties: Vec<Vec<String>> = entries.iter().map(|(key, _)| entry_properties(key, config)).collect();
     let resets: Vec<_> =
         properties.iter().map(|set| crate::declarations::reset_set(set.iter().map(String::as_str))).collect();
     let broader = |a: usize, b: usize| {
         !resets[b].is_empty() && resets[a].len() > resets[b].len() && resets[a].is_superset(&resets[b])
     };
     let mut pending: Vec<usize> = (0..entries.len()).collect();
-    let mut ordered = Vec::with_capacity(entries.len());
+    let mut order = Vec::with_capacity(entries.len());
     while !pending.is_empty() {
         // Strict containment is acyclic, so some entry is always free.
         let free = pending.iter().position(|&entry| !pending.iter().any(|&other| broader(other, entry))).unwrap_or(0);
-        ordered.push(entries[pending.remove(free)]);
+        order.push(pending.remove(free));
     }
-    ordered
+    drop(resets);
+    CascadeEntries {
+        entries: order.iter().map(|&at| entries[at]).collect(),
+        properties: order.iter().map(|&at| std::mem::take(&mut properties[at])).collect(),
+    }
+}
+
+/// A style object's entries in cascade order ([`cascade_order`]), with the
+/// CSS properties each writes ([`entry_properties`]), computed once.
+struct CascadeEntries<'a> {
+    entries: Vec<(&'a String, &'a Value)>,
+    properties: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -929,8 +941,9 @@ pub fn resolve_styles(
         None => return result,
     };
 
-    let entries = cascade_order(obj, ctx.config);
-    record_shared_properties(obj, &entries, ctx);
+    let ordered = cascade_order(obj, ctx.config);
+    record_shared_properties(obj, &ordered, ctx);
+    let entries = ordered.entries;
     let slots = key_slots(obj);
     let slot = |key: &str| slots.get(key).copied().unwrap_or_default();
     let root = NestFrame::root(NEXT_SOURCE_BLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
@@ -1026,8 +1039,9 @@ fn resolve_block_entries(
     result: &mut ResolvedStyles,
     raw_condition_index: &mut usize,
 ) {
-    let entries = cascade_order(obj, ctx.config);
-    record_shared_properties(obj, &entries, ctx);
+    let ordered = cascade_order(obj, ctx.config);
+    record_shared_properties(obj, &ordered, ctx);
+    let entries = ordered.entries;
     let slots = key_slots(obj);
     let slot = |key: &str| slots.get(key).copied().unwrap_or_default();
 
@@ -1392,7 +1406,7 @@ fn resolve_responsive_prop(prop_name: &str, value: &Value, ctx: &ResolveContext,
 /// that selector to `obj`, and each nested block is reported, since it emits
 /// nothing.
 fn resolve_flat_styles(obj: &Map<String, Value>, ctx: &ResolveContext, nesting_under: Option<&[String]>) -> Vec<CssDeclaration> {
-    let entries = cascade_order(obj, ctx.config);
+    let entries = cascade_order(obj, ctx.config).entries;
 
     let mut declarations = Vec::new();
     for (key, value) in entries {
