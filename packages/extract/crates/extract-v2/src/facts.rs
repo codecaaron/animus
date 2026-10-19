@@ -521,12 +521,12 @@ pub struct FileFacts {
     #[serde(skip)]
     pub(crate) unsafe_object_uses: BTreeMap<String, crate::usage_facts::ObjectUse>,
     /// Module-scope bindings whose `extend` member is called as a method,
-    /// each with its first such call, kept apart from `unsafe_object_uses`:
-    /// an extension's parent writes nothing of itself in `.extend()`, so
-    /// the call changes the object only where the binding is no extracted
-    /// component (`changing_uses`).
+    /// each with every such call, kept apart from `unsafe_object_uses`: a
+    /// call that heads an extension the engine extracts is replaced with it
+    /// by the transform, so nothing of it runs (`changing_uses`). Any other
+    /// call survives and runs whatever `extend` the object holds.
     #[serde(skip)]
-    pub(crate) extend_calls: BTreeMap<String, crate::usage_facts::ObjectUse>,
+    pub(crate) extend_calls: BTreeMap<String, Vec<crate::usage_facts::ObjectUse>>,
     /// Each object binding the module passes whole to a module-scope
     /// function nothing writes, which the engine judges once every module's
     /// parameter readings are known: a hand-off to a parameter that does
@@ -900,17 +900,28 @@ impl FileFacts {
         self.usage_enriched.as_deref().unwrap_or(&self.usage)
     }
 
-    /// The module's uses that may change a module-scope object or hand it
-    /// outside the analysis: `unsafe_object_uses`, and each `.extend()` call
-    /// on a binding `component` does not resolve to an extracted component.
+    /// The uses of `path`, this module, that may change a module-scope
+    /// object or hand it outside the analysis: `unsafe_object_uses`, and
+    /// each binding's first `.extend()` call that heads no extension chain
+    /// among `evaluated`, which the transform replaces.
     pub(crate) fn changing_uses<'a>(
         &'a self,
-        component: impl Fn(&str) -> bool + 'a,
+        path: &'a str,
+        evaluated: &'a rustc_hash::FxHashSet<String>,
     ) -> impl Iterator<Item = (&'a String, &'a crate::usage_facts::ObjectUse)> + 'a {
+        // An extension chain starts at its parent's name, where the call is.
+        let replaced = move |call: &crate::usage_facts::ObjectUse| {
+            self.chains.iter().any(|chain| {
+                chain.descriptor.extends_from.is_some()
+                    && call.at == Some(chain.descriptor.span.0)
+                    && evaluated.contains(&format!("{path}::{}", chain.descriptor.binding))
+            })
+        };
         let extends = self
             .extend_calls
             .iter()
-            .filter(move |(name, _)| !self.unsafe_object_uses.contains_key(*name) && !component(name));
+            .filter(|(name, _)| !self.unsafe_object_uses.contains_key(*name))
+            .filter_map(move |(name, calls)| Some((name, calls.iter().find(|call| !replaced(call))?)));
         self.unsafe_object_uses.iter().chain(extends)
     }
 }

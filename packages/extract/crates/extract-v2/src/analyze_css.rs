@@ -9045,7 +9045,7 @@ fn run_with_system_floor(
         }
     };
     let mut object_members =
-        crate::family_members::ObjectMembers::new(files, inputs, links, &family_index, &declared_component);
+        crate::family_members::ObjectMembers::new(files, inputs, links, &family_index, &declared_component, &evaluated_ids);
     // A member tag written through a facade or alias whose member is stable
     // resolves like a family member tag.
     let member_bindings: BTreeMap<String, FxHashMap<String, String>> = order
@@ -9766,8 +9766,7 @@ fn run_with_system_floor(
     // or path a module hands on or changes, and each object along it.
     let mut changed_ids: FxHashSet<String> = FxHashSet::default();
     for (path, ff) in files {
-        let component = |name: &str| declared_component(path, name).is_some();
-        for used in ff.value_escapes.iter().chain(ff.changing_uses(component).map(|(name, _)| name)) {
+        for used in ff.value_escapes.iter().chain(ff.changing_uses(path, &evaluated_ids).map(|(name, _)| name)) {
             let prefixes = used.match_indices('.').map(|(dot, _)| &used[..dot]).chain(std::iter::once(used.as_str()));
             for prefix in prefixes {
                 changed_ids.extend(resolve_declared_identity(path, prefix, files, inputs, links, &evaluated_ids));
@@ -13995,9 +13994,10 @@ mod tests {
         analyze(&[("a.tsx", source)], inputs).slot_provenance.unwrap()
     }
 
-    /// Contract: extending a component is no hand-off of the elements
-    /// rendered inside it, while a use that really may change the
-    /// component still is, even after the extension.
+    /// Contract: an extension the engine extracts is no hand-off of the
+    /// elements rendered inside its parent, while a `.extend()` call the
+    /// transform leaves in place still is: it runs whatever `extend` the
+    /// object holds.
     #[test]
     fn extending_a_component_hands_off_nothing_it_renders() {
         let stack = ("stack.tsx", "export const Stack = ds.system({ space: true }).asElement('div');\n");
@@ -14014,9 +14014,32 @@ mod tests {
         let extended = "import { Stack } from './stack';\n\
                         export const StackItem = Stack.extend().styles({ flexShrink: 0 }).asElement('div');\n";
         assert_eq!(kept(extended), Vec::<String>::new());
-        // A method call other than `extend` may write the component.
-        let changed = format!("{extended}Stack.mutate();\n");
-        assert_eq!(kept(&changed), ["p"]);
+        // An extension the engine does not extract keeps its `.extend()`
+        // call, which runs whatever `extend` the object holds: an
+        // `Object.assign` facade's sources can supply their own.
+        let card = |sources: &str| {
+            format!(
+                "import {{ helpers, pad }} from 'outside';\n\
+                 const Root = ds.styles({{ display: 'block' }}).asElement('div');\n\
+                 export const Card = Object.assign(Root, {sources});\n"
+            )
+        };
+        let own_extend = "{ extend() { this.render = (props) => pad(props.children); return builder; } }";
+        let item = "import { Card } from './card';\n\
+                    export const Item = Card.extend().styles({ minHeight: '1px' }).asElement('div');\n";
+        let app = "import { Card } from './card';\n\
+                   export const Box = ds.system({ space: true }).asElement('div');\n\
+                   export const App = () => <Card><Box p={2} /></Card>;\n";
+        for sources in ["helpers", own_extend] {
+            let source = card(sources);
+            let out = analyze(&[("card.tsx", &source), ("item.tsx", item), ("app.tsx", app)], &test_inputs());
+            assert!(out.dynamic_props.contains_key("p"), "{sources}");
+        }
+        // The three in one module, without the imports of each other.
+        let unimported = |source: &'static str| source.split_once('\n').unwrap().1;
+        let one_file = format!("{}{}{}", card(own_extend), unimported(item), unimported(app));
+        let out = analyze(&[("card.tsx", &one_file)], &test_inputs());
+        assert!(out.dynamic_props.contains_key("p"), "{one_file}");
     }
 
     #[test]

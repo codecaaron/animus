@@ -287,6 +287,8 @@ pub(crate) struct ObjectMembers<'f> {
     families: &'f FamilyIndex,
     /// The one component a binding of a module names, if any.
     component: &'f dyn Fn(&str, &str) -> Option<String>,
+    /// The components the analysis extracts.
+    evaluated: &'f FxHashSet<String>,
     objects: FxHashMap<(String, String), Option<Object>>,
     tables: FxHashMap<Object, Rc<MemberTable>>,
     building: FxHashSet<Object>,
@@ -302,6 +304,7 @@ impl<'f> ObjectMembers<'f> {
         links: &'f crate::link::ProjectLinks,
         families: &'f FamilyIndex,
         component: &'f dyn Fn(&str, &str) -> Option<String>,
+        evaluated: &'f FxHashSet<String>,
     ) -> Self {
         Self {
             files,
@@ -309,6 +312,7 @@ impl<'f> ObjectMembers<'f> {
             links,
             families,
             component,
+            evaluated,
             objects: FxHashMap::default(),
             tables: FxHashMap::default(),
             building: FxHashSet::default(),
@@ -756,8 +760,7 @@ impl<'f> ObjectMembers<'f> {
         // A config file runs in its tool, never in the app (`config_files`).
         let config_files = crate::analyze_css::config_files(files, inputs);
         for (module, ff) in files.iter().filter(|(module, _)| !config_files.contains(*module)) {
-            let component = |name: &str| (self.component)(module, name).is_some();
-            for (name, used) in ff.changing_uses(component) {
+            for (name, used) in ff.changing_uses(module, self.evaluated) {
                 let reason = used.said(name, module);
                 let reach: Reach = match name.split_once('.') {
                     // A member of a namespace import.

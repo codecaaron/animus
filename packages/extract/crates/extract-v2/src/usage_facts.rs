@@ -1433,7 +1433,7 @@ pub(crate) struct ObjectUses {
     /// See `FileFacts::unsafe_object_uses`.
     pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::extend_calls`.
-    pub extend_calls: BTreeMap<String, ObjectUse>,
+    pub extend_calls: BTreeMap<String, Vec<ObjectUse>>,
     /// See `FileFacts::object_handoffs`.
     pub object_handoffs: Vec<Handoff>,
     /// See `FileFacts::written_namespaces`.
@@ -3379,7 +3379,7 @@ struct ObjectUseScan<'a, 's> {
     react: ReactImports,
     uses: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::extend_calls`.
-    extend_calls: BTreeMap<String, ObjectUse>,
+    extend_calls: BTreeMap<String, Vec<ObjectUse>>,
     ancestors: Vec<AstKind<'a>>,
     /// Style-value rules (see `style_object_uses`) instead of a facade's.
     style: bool,
@@ -4086,14 +4086,13 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 }
             }
             if !used {
-                // `X.extend()` calls an extension's parent, which writes
-                // nothing of it, where `X` is one: that is known once
-                // components resolve (`FileFacts::changing_uses`).
-                // Style values are no components: their uses stay whole.
-                let extends =
-                    !self.style && matches!(member, Some((_, Some("extend")))) && writes_nothing(&used_at.what);
+                // An `X.extend()` call that heads an extension the engine
+                // extracts is replaced with it, so nothing of it runs: that
+                // is known once chains evaluate (`FileFacts::changing_uses`).
+                // Style mode returned above.
+                let extends = matches!(member, Some((_, Some("extend")))) && writes_nothing(&used_at.what);
                 if extends {
-                    self.extend_calls.entry(binding.name.clone()).or_insert(used_at);
+                    self.extend_calls.entry(binding.name.clone()).or_default().push(used_at);
                 } else {
                     self.uses.insert(binding.name.clone(), used_at);
                 }
