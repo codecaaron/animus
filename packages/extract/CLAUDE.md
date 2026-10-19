@@ -45,9 +45,14 @@ wrapper or its loader-only metadata exports.
   `systemPropsModuleId`, `devMode`. NAPI `Option<String>` fields reject `null`
   (coerce with `?? undefined`). No selector-order field (retired).
 - `analyze(fileEntriesJson) → string` — parse-once fact extraction over the
-  file set; retains facts+sources on the handle. Returns the JSON manifest
-  (resolved components, merged configs, complete CSS, per-component
-  `component_fragments`, `sheets`, `system_prop_map`, `report`, provenance).
+  file set; retains facts+sources on the handle. Returns the JSON host
+  manifest (resolved components, merged configs, complete CSS, `sheets`,
+  `system_prop_map`, `report`, provenance, `chainBindings`), without the
+  sections no host reads.
+- `fullManifestJson() → string` — the last analysis's full manifest: every
+  section, `fileFacts`, `crossFile`, `usageResidue` and per-component
+  `component_fragments` included. `manifestSection(name) → string` returns
+  one of those four.
 - `transformFile(path) → string` — per-file `{ code, hasComponents }` JSON from
   retained source+facts.
 - `clearCache()` — reset retained build state. `get parseCount(): number`.

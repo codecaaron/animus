@@ -148,6 +148,10 @@ pub struct CssInputs {
     pub runtime_imports: std::sync::OnceLock<BTreeMap<String, Vec<String>>>,
     /// This run's identity resolutions ([`resolve_identity`]). Each run
     /// starts empty: its files, links and evaluated components are its own.
+    /// The key leaves those out, so every caller runs inside one
+    /// `run_with_system_floor`, after `evaluated_ids` and `ids_by_binding`
+    /// are final: a caller with a partial evaluated set would read stale
+    /// answers.
     identity_memo: std::sync::Mutex<IdentityMemo>,
     /// This run's export lookups ([`import_identity`]), by module, then name.
     import_memo: std::sync::Mutex<FxHashMap<String, FxHashMap<String, ImportIds>>>,

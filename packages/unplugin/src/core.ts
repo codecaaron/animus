@@ -63,7 +63,7 @@ import type {
   WebpackRuleEntry,
   HostResolve,
   OutputTargets,
-  ProjectManifest,
+  PublishedManifest,
   ServedFiles,
   TransformFileResult,
 } from '@animus-ui/extract/pipeline';
@@ -286,7 +286,7 @@ export function transformWithEngine(
 function manifestServedFiles(manifestJson: string | null): ServedFiles {
   if (manifestJson === null) return { listed: new Set(), dropped: new Map() };
   // SAFETY: the session's own published manifest.
-  return servedFiles(JSON.parse(manifestJson) as ProjectManifest);
+  return servedFiles(JSON.parse(manifestJson) as PublishedManifest);
 }
 
 /** Whether esbuild's `external` option names `specifier`: exactly, as the

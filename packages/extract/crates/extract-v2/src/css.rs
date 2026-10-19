@@ -52,7 +52,14 @@ pub(crate) fn css_property_name(key: &str) -> String {
         return name;
     }
     let name = uncached_css_property_name(key);
-    NAMES.with(|names| names.borrow_mut().insert(key.to_string(), name.clone()));
+    NAMES.with(|names| {
+        let mut names = names.borrow_mut();
+        // A long-lived process sees ever more keys: start over at a bound.
+        if names.len() >= 4096 {
+            names.clear();
+        }
+        names.insert(key.to_string(), name.clone());
+    });
     name
 }
 
