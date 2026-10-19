@@ -26,7 +26,7 @@ use crate::jsx_scan::{
     eval_static_expression, make_json_number,
     is_component_like_identifier, jsx_member_path, ComponentUsageConfig, ComposeFamilyInfo, CustomPropScanResult,
     DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage, record_written,
-    UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage, WrittenProp,
+    OpenSite, UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage, WrittenProp,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -7640,7 +7640,7 @@ pub fn filter_usage_scan(
                     continue;
                 };
                 let binding = resolved_binding.clone().unwrap_or_else(|| tag_name.to_string());
-                result.open_components.insert(binding.clone());
+                result.open_components.entry(binding.clone()).or_insert(OpenSite { kind: "default-props", file: None, at: *at });
                 record_unwritten_options(&mut result, &mut fully_open, &binding, config, &FxHashSet::default(), true);
             }
             UsageFact::Element { tag, attrs, spread, span, origin, written_as_call, .. } => {
@@ -7679,7 +7679,7 @@ pub fn filter_usage_scan(
                     let binding = resolved_binding.clone().unwrap_or_else(|| tag_name.to_string());
                     result.rendered_components.insert(binding.clone());
                     if spread.is_some() && !proxies.forwarding.contains(span) && !proxies.derived.contains(span) {
-                        result.open_components.insert(binding.clone());
+                        result.open_components.entry(binding.clone()).or_insert(OpenSite { kind: "spread", file: None, at: span.0 });
                     }
 
                     let active_props = component_props.get(tag_name);
@@ -7890,7 +7890,7 @@ pub fn filter_usage_scan(
                             }
                         }
                         None => {
-                            result.open_components.insert(binding.clone());
+                            result.open_components.entry(binding.clone()).or_insert(OpenSite { kind: "create-element", file: None, at: *at });
                         }
                     }
                     // Literal system props take their static classes as a

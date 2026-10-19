@@ -198,6 +198,7 @@ interface V2ExtractEngineConfig {
   positionTryJson?: string;
   viewTransitionsJson?: string;
   shortClassPrefix?: string;
+  slotProvenance?: boolean;
   devMode: boolean;
 }
 
@@ -352,6 +353,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
               css_module_id?: string;
               system_props_module_id?: string;
               short_class_prefix?: string;
+              slot_provenance?: boolean;
             })
           : {};
 
@@ -386,6 +388,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           positionTryJson,
           viewTransitionsJson,
           shortClassPrefix: emitterConfig.short_class_prefix,
+          slotProvenance: emitterConfig.slot_provenance,
           devMode,
         };
         // SAFETY: `native` is the loaded engine module, whose generated

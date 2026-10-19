@@ -35,6 +35,8 @@ export interface EmitterConfig {
   systemPropsModuleId?: string;
   /** The prefix production names classes short under (`shortClassNames`). */
   shortClassPrefix?: string;
+  /** Records what keeps each system slot open, for verbose output. */
+  slotProvenance?: boolean;
 }
 
 export interface ProjectAnalysisResult {
@@ -161,6 +163,7 @@ type EmitterConfigWire = {
   css_module_id: string;
   system_props_module_id?: string;
   short_class_prefix?: string;
+  slot_provenance?: boolean;
 };
 
 /** The named `analyzeProject` input set, and the persistence shape an
@@ -177,6 +180,9 @@ export function buildAnalysisInputs(
   }
   if (opts.emitter.shortClassPrefix) {
     emitterConfig.short_class_prefix = opts.emitter.shortClassPrefix;
+  }
+  if (opts.emitter.slotProvenance) {
+    emitterConfig.slot_provenance = true;
   }
   const inputs: AnalyzeProjectInputs = {
     filesJson: JSON.stringify(opts.fileEntries),

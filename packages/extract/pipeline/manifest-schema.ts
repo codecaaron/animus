@@ -6,6 +6,7 @@
 import type { DynamicPropMeta, RuntimeTables } from './dynamic-prop-config';
 import type { FontPreload, PreloadedFontFace } from './font-preloads';
 import type { ManifestDiagnostic } from './manifest-diagnostics';
+import type { SlotProvenance } from './slot-provenance';
 import type { ExtractFileFacts } from './source-ingestion';
 
 export interface ManifestComponentDescriptor {
@@ -153,6 +154,9 @@ export interface ProjectManifest {
    *  which runtime configs reference from the `supersededBy` export; absent
    *  where none is referenced. */
   superseded_by?: Record<string, string[]>;
+  /** What keeps each system slot open; present where verbose output asked
+   *  the engine for it. */
+  slot_provenance?: SlotProvenance;
   /** The fingerprint of the system the analysis ran with. */
   system_fingerprint: string;
   /** parent component id → child component ids. */

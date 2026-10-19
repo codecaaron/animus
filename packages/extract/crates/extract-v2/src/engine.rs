@@ -76,6 +76,9 @@ struct AnalyzeResult<'a> {
     /// Present only where a runtime config references it.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     superseded_by: &'a std::collections::BTreeMap<String, Vec<String>>,
+    /// Present only where the options ask for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slot_provenance: Option<&'a crate::slot_provenance::SlotProvenance>,
     timing: serde_json::Value,
 }
 
@@ -126,6 +129,9 @@ pub struct EngineOptions {
     /// prefix: a letter, then letters and digits. Development keeps the
     /// readable names.
     pub short_class_prefix: Option<String>,
+    /// Records what keeps each system slot open (`slot_provenance` in the
+    /// manifest), which verbose output prints.
+    pub slot_provenance: Option<bool>,
 }
 
 /// The runtimes Animus ships. Each reads a compiled variant's prop and
@@ -1059,6 +1065,7 @@ impl ExtractEngine {
         css_inputs
             .set_short_class_prefix(o.short_class_prefix.as_deref())
             .map_err(napi::Error::from_reason)?;
+        css_inputs.slot_provenance = o.slot_provenance.unwrap_or(false);
         let runtime_import = o.runtime_import.unwrap_or_else(|| "@animus-ui/system".to_string());
         css_inputs.variant_options = !OFFICIAL_RUNTIMES.contains(&runtime_import.as_str());
         Ok(ExtractEngine {
@@ -1572,6 +1579,9 @@ impl ExtractEngine {
             name_compiled_kit_fix(diagnostic, &compiled_declarations, output_dirs);
         }
         analyze_css::report_unread_openings(&mut css.diagnostics, &self.facts, &self.opts.css_inputs);
+        if let Some(provenance) = &mut css.slot_provenance {
+            provenance.locate(|file| self.sources.get(file).map(String::as_str));
+        }
         self.css = Some(css);
         clock.mark("post");
         let manifest = self.manifest_json(false);
@@ -1680,6 +1690,7 @@ impl ExtractEngine {
             tag_components: &css.tag_components,
             prop_name_lists: &css.prop_name_lists,
             superseded_by: &css.superseded_by,
+            slot_provenance: css.slot_provenance.as_ref(),
             timing: serde_json::json!({ "parseCount": self.parse_count }),
         });
         out.map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))

@@ -26,7 +26,9 @@ export type ManifestDiagnostic = {
 };
 
 /** `file`, then its line and column where the record has them. */
-function locationOf(diagnostic: ManifestDiagnostic): string {
+export function locationOf(
+  diagnostic: Pick<ManifestDiagnostic, 'file' | 'line' | 'column'>
+): string {
   if (diagnostic.line === undefined) return diagnostic.file;
   if (diagnostic.column === undefined) {
     return `${diagnostic.file}:${diagnostic.line}`;

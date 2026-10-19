@@ -135,6 +135,11 @@ export interface EngineOptions {
    * readable names.
    */
   shortClassPrefix?: string
+  /**
+   * Records what keeps each system slot open (`slot_provenance` in the
+   * manifest), which verbose output prints.
+   */
+  slotProvenance?: boolean
 }
 
 /** Probe identity: proves the binary loads and its oxc linkage parses. */

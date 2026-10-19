@@ -22,6 +22,7 @@ use crate::css::{
     resolve_custom_prop_classes, resolve_utility_classes, slot_property_registrations, wrap_layer, BreakpointMap, ComponentCss, ComposeFamilyRef, CompoundConditionMap,
     CssFragmentStore, CssSheets, UtilityInput, VariantCss,
 };
+use crate::slot_provenance::{escape, SlotKeeper, SlotOpening, SlotProvenance};
 use crate::declarations::{bind_component_declarations, check_surface_overlap, DeclarationBinding, DeclarationScales};
 use crate::dynamic_meta::{share_slots, DynamicPropMeta};
 use crate::evaluator::{Admission, EvalError, TransformAdmission, TransformEvaluator};
@@ -172,6 +173,9 @@ pub struct CssInputs {
     /// `{prefix}_{id}` (`ids::short_class_names`) under this prefix, which
     /// keeps two builds on one page apart; `None` keeps the readable names.
     pub short_class_prefix: Option<String>,
+    /// Whether the analysis records what keeps each system slot open
+    /// (`SlotProvenance`), which verbose output prints.
+    pub slot_provenance: bool,
     /// Whether the transformed code's variant configs list their options.
     /// The official runtimes read only a variant's prop and default; a
     /// custom `runtimeImport` may read the list.
@@ -462,6 +466,7 @@ impl CssInputs {
             unread_openings: Default::default(),
             dev_mode,
             short_class_prefix: None,
+            slot_provenance: false,
             variant_options: false,
             numeric_properties: FxHashSet::default(),
             system_hash,
@@ -1018,6 +1023,8 @@ pub struct CssOutput {
     /// Every system prop → the later-defined props that take effect over it
     /// (`system_superseded_props`), which a config references.
     pub superseded_by: BTreeMap<String, Vec<String>>,
+    /// What keeps each system slot open, when the inputs ask for it.
+    pub slot_provenance: Option<SlotProvenance>,
 }
 
 /// A component's props in authoring order (`ComponentDescriptor`): a name
@@ -1282,23 +1289,27 @@ pub fn resolve_import_source<T>(
     }
 }
 
-/// Whether the analysis leaves a source unseen: a skipped source, or a
-/// probe that ended Incomplete. Either may render any option, so nothing is
-/// pruned. A bindingless import binds nothing usage follows, but the host
-/// loads it for its effects, so it is probed here.
-fn analysis_incomplete(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> bool {
+/// Where the analysis leaves a source unseen: each skipped source, and each
+/// probe that ended Incomplete; empty when it sees every source. Either may
+/// render any option, so nothing is pruned. A bindingless import binds
+/// nothing usage follows, but the host loads it for its effects, so it is
+/// probed here.
+fn analysis_gaps(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> Vec<SlotOpening> {
     for (file, ff) in files {
         for spec in &ff.bindingless_imports {
             resolve_import_source(file, spec, files, inputs);
         }
     }
     let config_only = config_only(files, inputs);
-    !inputs.analysis_context.skipped_sources.is_empty()
-        || inputs
-            .incomplete_probes
-            .lock()
-            .map(|incomplete| incomplete.iter().any(|probe| !config_only.contains(&probe.importer)))
-            .unwrap_or(true)
+    let mut gaps: Vec<SlotOpening> =
+        inputs.analysis_context.skipped_sources.iter().map(|file| SlotOpening::rule("skipped-source").in_file(file)).collect();
+    match inputs.incomplete_probes.lock() {
+        Ok(probes) => gaps.extend(probes.iter().filter(|probe| !config_only.contains(&probe.importer)).map(|probe| {
+            SlotOpening::rule("incomplete-probe").in_file(&probe.importer).detail(probe.specifier.as_str())
+        })),
+        Err(_) => gaps.push(SlotOpening::rule("incomplete-probe")),
+    }
+    gaps
 }
 
 /// Tools whose `{name}.config.{ext}` in the analysis root is build or
@@ -6001,9 +6012,9 @@ fn bounded_prop_tags(
     unproven: &std::collections::BTreeSet<String>,
     forwards: &[Forward],
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
-    delivered_tags: &[(String, String)],
+    delivered_tags: &[OpaqueDelivery],
     object_members: &mut crate::family_members::ObjectMembers<'_>) -> FxHashSet<(String, u32)> {
-    let open: FxHashSet<&String> = results.iter().flat_map(|result| &result.open_components).collect();
+    let open: FxHashSet<&String> = results.iter().flat_map(|result| result.open_components.keys()).collect();
     let open_except: Vec<&(String, std::collections::BTreeSet<String>)> =
         results.iter().flat_map(|result| &result.open_except).collect();
     let rendered: FxHashSet<&String> = results.iter().flat_map(|result| &result.rendered_components).collect();
@@ -6095,7 +6106,7 @@ fn bounded_prop_tags(
                 || ordinary_members.get(&(file.to_string(), tag.to_string())) == Some(&target)
                 || namespace_declared(file, ff, tag).as_ref() == Some(&target)
         };
-        if delivered_tags.iter().any(|(file, tag)| files.contains_key(file) && names_target(file, tag)) {
+        if delivered_tags.iter().any(|delivery| files.contains_key(&delivery.file) && names_target(&delivery.file, &delivery.tag)) {
             return false;
         }
         // Each render that analysed code is seen making: an outer component's
@@ -6234,8 +6245,10 @@ fn bounded_prop_tags(
     tags
 }
 
-/// Whether every tag that leaves usage identity uncertain still lets usage
-/// prove where each extracted component renders and with what props. A tag
+/// Each uncertain identity that leaves usage unable to prove where each
+/// extracted component renders and with what props, lazily: the proof asks
+/// for the first, provenance for all. A tag repeated in a file is judged
+/// once, at its first site. A tag
 /// matters in two ways: it may be one of our components, rendered with
 /// props usage cannot see, or it may receive our elements and clone props
 /// into them. A receiver blocks nothing here, because the components whose
@@ -6253,19 +6266,44 @@ fn bounded_prop_tags(
 /// excluded file may render our components) or any other declaration may
 /// be one of our components, so it blocks every component.
 #[allow(clippy::too_many_arguments)]
-fn uncertainty_leaves_usage_proven(
-    sites: &[(&String, UncertainIdentity)],
-    files: &BTreeMap<String, FileFacts>,
-    inputs: &CssInputs,
-    links: &crate::link::ProjectLinks,
-    ordinary_members: &FxHashMap<(String, String), (String, String)>,
-    package_members: &FxHashSet<(String, String)>,
-    bounded_tags: &FxHashSet<(String, u32)>,
-    contexts: &crate::flow::ValueEffects) -> bool {
+fn unsettled_identities<'a>(
+    sites: &'a [(&'a String, UncertainIdentity)],
+    files: &'a BTreeMap<String, FileFacts>,
+    inputs: &'a CssInputs,
+    links: &'a crate::link::ProjectLinks,
+    ordinary_members: &'a FxHashMap<(String, String), (String, String)>,
+    package_members: &'a FxHashSet<(String, String)>,
+    bounded_tags: &'a FxHashSet<(String, u32)>,
+    contexts: &'a crate::flow::ValueEffects,
+) -> impl Iterator<Item = SlotOpening> + 'a {
+    let mut settled = settled_identity(files, inputs, links, ordinary_members, package_members, bounded_tags, contexts);
+    sites.iter().filter(move |(file, site)| !settled(file, site)).map(|(file, site)| match site {
+        UncertainIdentity::Tag(tag, _) => SlotOpening {
+            at: Some(tag.at),
+            detail: tag.tag.clone(),
+            ..SlotOpening::rule("uncertain-identity").in_file(file)
+        },
+        UncertainIdentity::Unattributed(name) => SlotOpening::rule("unattributed-name").in_file(file).detail(name.as_str()),
+    })
+}
+
+/// Whether an uncertain identity leaves usage proven, as
+/// `unsettled_identities` judges each site; a repeat of a tag already
+/// judged in its file counts as settled.
+#[allow(clippy::too_many_arguments)]
+fn settled_identity<'a>(
+    files: &'a BTreeMap<String, FileFacts>,
+    inputs: &'a CssInputs,
+    links: &'a crate::link::ProjectLinks,
+    ordinary_members: &'a FxHashMap<(String, String), (String, String)>,
+    package_members: &'a FxHashSet<(String, String)>,
+    bounded_tags: &'a FxHashSet<(String, u32)>,
+    contexts: &'a crate::flow::ValueEffects,
+) -> impl FnMut(&'a String, &'a UncertainIdentity) -> bool + 'a {
     // Each element of an ordinary component is a site; classify each tag once.
     let mut classified: FxHashSet<(&str, &str, Option<TagOrigin>)> = FxHashSet::default();
-    sites.iter().all(|(file, site)| {
-        let (UncertainIdentity::Tag(site, _), Some(ff)) = (site, files.get(*file)) else {
+    move |file, site| {
+        let (UncertainIdentity::Tag(site, _), Some(ff)) = (site, files.get(file)) else {
             return false;
         };
         // A tag a function's prop chooses, which every render of the
@@ -6293,7 +6331,7 @@ fn uncertainty_leaves_usage_proven(
             // The module's binding, never a parameter or local of the name.
             || (matches!(site.origin, Some(TagOrigin::Import | TagOrigin::TopLevel))
                 && ordinary_members.contains_key(&(file.to_string(), tag.to_string())))
-    })
+    }
 }
 
 /// Whether `tag` is the `Provider` of a context React's `createContext`
@@ -6803,14 +6841,25 @@ struct ConfinedUse {
     runtime: FxHashMap<String, Option<BTreeSet<String>>>,
     /// Each prop's distinct literal values.
     static_values: FxHashMap<String, Vec<Value>>,
+    /// The first site writing each prop a runtime value, where known.
+    runtime_sites: FxHashMap<String, (Option<std::sync::Arc<str>>, u32)>,
 }
 
 impl ConfinedUse {
     /// Every value `prop` can receive is a literal for which `has_class` holds.
     fn covers(&self, prop: &str, has_class: impl Fn(&Value) -> bool) -> bool {
-        !self.spread
-            && !self.runtime.contains_key(prop)
-            && self.static_values.get(prop).is_none_or(|values| values.iter().all(has_class))
+        self.uncovered(prop, has_class).is_none()
+    }
+
+    /// What `prop` can receive that no class covers, if anything.
+    fn uncovered(&self, prop: &str, has_class: impl Fn(&Value) -> bool) -> Option<Uncovered<'_>> {
+        if self.spread {
+            return Some(Uncovered::Spread);
+        }
+        if self.runtime.contains_key(prop) {
+            return Some(Uncovered::Runtime(self.runtime_sites.get(prop)));
+        }
+        self.static_values.get(prop)?.iter().find(|value| !has_class(value)).map(Uncovered::Literal)
     }
 
     /// The conditions the values of `prop` that reach its slot write: its
@@ -6853,7 +6902,34 @@ impl ConfinedUse {
     fn take(&mut self, written: &crate::jsx_scan::WrittenProp) {
         match &written.literal {
             Some(value) => self.receive(&written.prop, value),
-            None => self.write(&written.prop, written.conditions.clone()),
+            None => {
+                if !self.runtime_sites.contains_key(&written.prop) {
+                    self.runtime_sites.insert(written.prop.clone(), (written.file.clone(), written.at));
+                }
+                self.write(&written.prop, written.conditions.clone());
+            }
+        }
+    }
+}
+
+/// What a confined component's prop receives that no class covers.
+enum Uncovered<'a> {
+    Spread,
+    /// A runtime value, at its first site where known.
+    Runtime(Option<&'a (Option<std::sync::Arc<str>>, u32)>),
+    Literal(&'a Value),
+}
+
+impl Uncovered<'_> {
+    fn opening(&self) -> SlotOpening {
+        match self {
+            Uncovered::Spread => SlotOpening::rule("spread"),
+            Uncovered::Runtime(site) => SlotOpening {
+                file: site.and_then(|(file, _)| file.as_deref().map(str::to_string)),
+                at: site.map(|(_, at)| *at),
+                ..SlotOpening::rule("runtime-value")
+            },
+            Uncovered::Literal(value) => SlotOpening::rule("unclassed-literal").detail(value.to_string()),
         }
     }
 }
@@ -6940,7 +7016,7 @@ fn opaque_delivery(
     receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
     renders_in_place: impl Fn(&str) -> bool,
     contexts: &crate::flow::ValueEffects,
-) -> (std::collections::BTreeSet<String>, Vec<(String, String)>) {
+) -> (Vec<(String, usize)>, Vec<OpaqueDelivery>) {
     // The declaration `name` (`lib.enhance` for a namespace import's
     // member) names from `file`, or `None` outside the analysis.
     let declaration = |file: &str, ff: &FileFacts, name: &str| {
@@ -7060,20 +7136,25 @@ fn opaque_delivery(
     }
     // Component tags, each with the file that names it, followed through
     // imported `const`s to the modules that declare them.
-    let mut tags: Vec<(String, String)> = Vec::new();
-    let mut imports: Vec<(String, String)> = Vec::new();
+    let mut tags: Vec<OpaqueDelivery> = Vec::new();
+    let mut imports: Vec<(String, String, Receiver)> = Vec::new();
+    let mut deliver = |file: &String, tag: &String, receiver: &Receiver| {
+        tags.push(OpaqueDelivery { file: file.clone(), tag: tag.clone(), receiver: receiver.clone() });
+    };
     for (path, ff) in files {
         for call in ff.opaque_calls.iter().filter(|call| call_opaque(path, ff, call, &forwarding)) {
-            tags.extend(call.tags.iter().map(|tag| (path.clone(), tag.clone())));
-            imports.extend(call.imported_args.iter().map(|import| (path.clone(), import.clone())));
+            let receiver = Receiver::Call(call.callee.clone());
+            call.tags.iter().for_each(|tag| deliver(path, tag, &receiver));
+            imports.extend(call.imported_args.iter().map(|import| (path.clone(), import.clone(), receiver.clone())));
         }
         for tag in ff.opaque_tags.iter().filter(|tag| tag_opaque(path, ff, tag, &forwarding)) {
-            tags.extend(tag.tags.iter().map(|inner| (path.clone(), inner.clone())));
-            imports.extend(tag.imported_args.iter().map(|import| (path.clone(), import.clone())));
+            let receiver = Receiver::Tag(tag.tag.clone());
+            tag.tags.iter().for_each(|inner| deliver(path, inner, &receiver));
+            imports.extend(tag.imported_args.iter().map(|import| (path.clone(), import.clone(), receiver.clone())));
         }
     }
     let mut followed: FxHashSet<(String, String)> = FxHashSet::default();
-    while let Some((file, import)) = imports.pop() {
+    while let Some((file, import, receiver)) = imports.pop() {
         if !followed.insert((file.clone(), import.clone())) {
             continue;
         }
@@ -7093,20 +7174,49 @@ fn opaque_delivery(
                 .unwrap_or_default(),
         };
         for (declaring, held) in held {
-            tags.extend(held.tags.iter().map(|tag| (declaring.clone(), tag.clone())));
-            imports.extend(held.imports.iter().map(|import| (declaring.clone(), import.clone())));
+            held.tags.iter().for_each(|tag| deliver(&declaring, tag, &receiver));
+            imports.extend(held.imports.iter().map(|import| (declaring.clone(), import.clone(), receiver.clone())));
         }
     }
     // A private wrapper that spreads its props into components delivers them.
     let delivered = tags
         .iter()
-        .flat_map(|(file, tag)| {
-            resolve_usage_identity(file, tag, files, inputs, links, evaluated_ids, ids_by_binding).into_iter().chain(
-                wrapper_targets.get(file).and_then(|wrappers| wrappers.get(tag)).into_iter().flatten().cloned(),
-            )
+        .enumerate()
+        .flat_map(|(at, OpaqueDelivery { file, tag, .. })| {
+            resolve_usage_identity(file, tag, files, inputs, links, evaluated_ids, ids_by_binding)
+                .into_iter()
+                .chain(wrapper_targets.get(file).and_then(|wrappers| wrappers.get(tag)).into_iter().flatten().cloned())
+                .map(move |id| (id, at))
         })
         .collect();
     (delivered, tags)
+}
+
+/// A component tag an element delivers outside the analysis, in its file,
+/// and what receives it.
+struct OpaqueDelivery {
+    file: String,
+    tag: String,
+    receiver: Receiver,
+}
+
+/// What an element is handed to: a call, by its callee (`None` for a
+/// global), or a component element, by its tag.
+#[derive(Clone)]
+enum Receiver {
+    Call(Option<String>),
+    Tag(String),
+}
+
+impl OpaqueDelivery {
+    fn opening(&self) -> SlotOpening {
+        let receiver = match &self.receiver {
+            Receiver::Call(Some(callee)) => format!("{callee}()"),
+            Receiver::Call(None) => "a global call".to_string(),
+            Receiver::Tag(tag) => format!("<{tag}>"),
+        };
+        SlotOpening::rule("opaque-delivery").in_file(&self.file).detail(format!("{} to {receiver}", self.tag))
+    }
 }
 
 /// The props the runtime sets itself on an `.asComponent()` target: the
@@ -7180,27 +7290,51 @@ fn forwarded_writes<'r>(
 /// clone's overrides cannot be listed. A component an `.asComponent()`
 /// target renders also takes what the outer component's uses forward, and
 /// is unproven when they are.
+///
+/// `rejected`, where provenance asks for it, takes each other component's
+/// reasons but an escape's, which the escape records.
 fn project_confined_uses<'a>(
     results: &[UsageScanResult],
     forwards: &[Forward],
     components: impl Iterator<Item = (&'a String, bool)>,
     escaped_ids: &std::collections::BTreeSet<String>,
+    mut rejected: Option<&mut Rejections>,
 ) -> Option<FxHashMap<String, ConfinedUse>> {
     if results.iter().any(|result| result.unlisted_clone) {
         return None;
     }
+    let mut reject = |id: &str, opening: SlotOpening| {
+        if let Some(rejected) = rejected.as_deref_mut() {
+            rejected.entry(id.to_string()).or_default().push(opening);
+        }
+    };
     // A rest a `createElement` spreads may carry any prop it does not exclude.
-    let open: FxHashSet<&String> = results
+    let open: FxHashMap<&String, Option<&crate::jsx_scan::OpenSite>> = results
         .iter()
-        .flat_map(|result| result.open_components.iter().chain(result.open_except.iter().map(|(id, _)| id)))
+        .flat_map(|result| {
+            result.open_components.iter().map(|(id, site)| (id, Some(site))).chain(result.open_except.iter().map(|(id, _)| (id, None)))
+        })
         .collect();
     // A clone's override may take any shape.
     let cloned: FxHashMap<String, Option<BTreeSet<String>>> =
         results.iter().flat_map(|result| result.cloned_props.iter().map(|prop| (prop.clone(), None))).collect();
-    let mut uses: FxHashMap<String, ConfinedUse> = components
-        .filter(|(id, class_resolver)| !class_resolver && !escaped_ids.contains(*id) && !open.contains(id))
-        .map(|(id, _)| (id.clone(), ConfinedUse { runtime: cloned.clone(), ..Default::default() }))
-        .collect();
+    let mut uses: FxHashMap<String, ConfinedUse> = FxHashMap::default();
+    for (id, class_resolver) in components {
+        if class_resolver {
+            reject(id, SlotOpening::rule("class-resolver"));
+        } else if let Some(site) = open.get(id) {
+            reject(id, match site {
+                Some(site) => SlotOpening {
+                    file: site.file.as_deref().map(str::to_string),
+                    at: Some(site.at),
+                    ..SlotOpening::rule(site.kind)
+                },
+                None => SlotOpening::rule("create-element-rest"),
+            });
+        } else if !escaped_ids.contains(id) {
+            uses.insert(id.clone(), ConfinedUse { runtime: cloned.clone(), ..Default::default() });
+        }
+    }
     for result in results {
         for written in &result.written_props {
             let Some(confined) = uses.get_mut(&written.binding) else { continue };
@@ -7232,7 +7366,9 @@ fn project_confined_uses<'a>(
                     }
                 }
                 None => {
-                    uses.remove(inner);
+                    if uses.remove(inner).is_some() {
+                        reject(inner, SlotOpening::rule("forwarded-from-unproven").detail(forward.outer.as_str()));
+                    }
                 }
             }
         }
@@ -7240,11 +7376,16 @@ fn project_confined_uses<'a>(
     Some(uses)
 }
 
-/// The evaluated components whose module confines them, keyed by id.
+/// Each component a use proof rejects, with why.
+type Rejections = FxHashMap<String, Vec<SlotOpening>>;
+
+/// The evaluated components whose module confines them, keyed by id; each
+/// other one goes into `rejected` where provenance asks for it.
 fn confined_uses(
     files: &BTreeMap<String, FileFacts>,
     chain_lookup: &FxHashMap<&str, (&str, usize)>,
     evaluated_ids: &FxHashSet<String>,
+    mut rejected: Option<&mut Rejections>,
 ) -> FxHashMap<String, ConfinedUse> {
     let mut uses = FxHashMap::default();
     for component_id in evaluated_ids {
@@ -7254,6 +7395,9 @@ fn confined_uses(
         let ff = &files[*file];
         let binding = &ff.chains[*chain_idx].descriptor.binding;
         if !ff.confined_components.contains(binding) {
+            if let Some(rejected) = rejected.as_deref_mut() {
+                rejected.entry(component_id.clone()).or_default().push(SlotOpening::rule("not-module-confined"));
+            }
             continue;
         }
         let mut confined = ConfinedUse::default();
@@ -7395,8 +7539,10 @@ impl UsageIdentityPolicy {
             }
         }
         let open = std::mem::take(&mut result.open_components);
-        for key in open {
-            result.open_components.extend(self.resolve_all(&key, attribution));
+        for (key, site) in open {
+            for id in self.resolve_all(&key, attribution) {
+                result.open_components.entry(id).or_insert_with(|| site.clone());
+            }
         }
         let open_except = std::mem::take(&mut result.open_except);
         for (key, excluded) in open_except {
@@ -9401,6 +9547,9 @@ fn run_with_system_floor(
         for written in &mut usage_result.written_props {
             written.file = Some(std::sync::Arc::clone(&file));
         }
+        for site in usage_result.open_components.values_mut() {
+            site.file = Some(std::sync::Arc::clone(&file));
+        }
         all_usage_results.push(usage_result);
     }
     let identity_uncertain = !uncertain_identities.is_empty();
@@ -9412,6 +9561,7 @@ fn run_with_system_floor(
     // A component a reference hands somewhere usage tracking does not follow
     // can render there with any props, so every option it declares stays.
     let mut escaped_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut escape_reasons: Option<FxHashMap<String, SlotOpening>> = inputs.slot_provenance.then(FxHashMap::default);
     // A module loaded at runtime renders its exports where usage cannot
     // follow. One call site that opens many components is named, so the
     // user can see why pruning stopped.
@@ -9456,7 +9606,9 @@ fn run_with_system_floor(
                 };
                 diagnostics.push(diagnostic(path, call, "warn", message, Some(WIDE_MODULE_LOAD)).on_line(line));
             }
-            escaped_ids.extend(opened);
+            escape(&mut escaped_ids, escape_reasons.as_mut(), opened, || {
+                SlotOpening { line: Some(line), ..SlotOpening::rule("module-load").in_file(path).detail(call) }
+            });
         }
     }
     for (path, ff) in files {
@@ -9474,48 +9626,49 @@ fn run_with_system_floor(
             // A class resolver has no component members, so a path through
             // one (`resolver.attrs`, `resolver.attrs.call`) is the resolver
             // itself, called for attributes instead of a class name.
+            let escaping = || SlotOpening::rule("value-escape").in_file(path).detail(name.as_str());
             for (dot, _) in name.match_indices('.') {
                 let prefix = &name[..dot];
-                escaped_ids.extend(
+                escape(&mut escaped_ids, escape_reasons.as_mut(),
                     resolve_declared_identity(path, prefix, files, inputs, links, &evaluated_ids)
                         .into_iter()
                         .chain(member_path_ids(path, ff, prefix, false, files, inputs, links, &evaluated_ids))
                         .filter(|id| {
                             evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsClass)
                         }),
+                    escaping,
                 );
             }
             // A namespace object hands over everything its module exports, and
             // a member of one at any depth (`ui.sub.X`) that component.
             match namespace_path_module(path, ff, name, files, inputs, links) {
                 Some(module) => {
-                    escaped_ids.extend(exported_component_ids(&module, files, inputs, links, &evaluated_ids));
+                    let ids = exported_component_ids(&module, files, inputs, links, &evaluated_ids);
+                    escape(&mut escaped_ids, escape_reasons.as_mut(), ids, escaping);
                 }
-                None => escaped_ids.extend(member_path_ids(
-                    path,
-                    ff,
-                    name,
-                    true,
-                    files,
-                    inputs,
-                    links,
-                    &evaluated_ids,)),
+                None => {
+                    let ids = member_path_ids(path, ff, name, true, files, inputs, links, &evaluated_ids);
+                    escape(&mut escaped_ids, escape_reasons.as_mut(), ids, escaping);
+                }
             }
             // An escaping facade or alias hands over its members, and one
             // member of it that component.
-            escaped_ids.extend(object_members.escaped_components(path, name));
+            escape(&mut escaped_ids, escape_reasons.as_mut(), object_members.escaped_components(path, name), escaping);
             for (module, wrapper) in object_members.escaped_wrappers(path, name) {
-                escaped_ids.extend(held_ids(&module, &wrapper));
+                escape(&mut escaped_ids, escape_reasons.as_mut(), held_ids(&module, &wrapper), escaping);
             }
             // An escaping compose family hands over its slots.
             if let Some(members) = member_bindings.get(path) {
-                escaped_ids.extend(
+                escape(
+                    &mut escaped_ids,
+                    escape_reasons.as_mut(),
                     members
                         .iter()
                         .filter(|(tag, _)| {
                             tag.strip_prefix(name.as_str()).is_some_and(|rest| rest.starts_with('.'))
                         })
                         .map(|(_, component)| component.clone()),
+                    escaping,
                 );
             }
         }
@@ -9536,25 +9689,27 @@ fn run_with_system_floor(
                 continue;
             }
             if let Some((declaring, binding, _)) = resolve_export(path, source, original, files, inputs, links) {
-                escaped_ids.extend(resolve_declared_identity(&declaring, &binding, files, inputs, links, &evaluated_ids));
+                let ids = resolve_declared_identity(&declaring, &binding, files, inputs, links, &evaluated_ids);
+                escape(&mut escaped_ids, escape_reasons.as_mut(), ids, || {
+                    SlotOpening::rule("default-reexport").in_file(path).detail(original.as_str())
+                });
             }
         }
         // A compose family a top-level `const X = Object.assign(F, …)` takes as
         // its target hands over its slots: `X` does not copy the target's
         // members, so usage reaches no slot through it.
         for target in ff.assigned_targets.values() {
-            escaped_ids.extend(object_members.family_slots(path, target));
+            escape(&mut escaped_ids, escape_reasons.as_mut(), object_members.family_slots(path, target), || {
+                SlotOpening::rule("assigned-family").in_file(path).detail(target.as_str())
+            });
         }
         // Through the file's own declarations and imports only: an outside
         // package's `R` never opens a project component named `R`.
         for name in names {
-            escaped_ids.extend(resolve_declared_identity(
-                path,
-                name,
-                files,
-                inputs,
-                links,
-                &evaluated_ids,));
+            let ids = resolve_declared_identity(path, name, files, inputs, links, &evaluated_ids);
+            escape(&mut escaped_ids, escape_reasons.as_mut(), ids, || {
+                SlotOpening::rule("value-escape").in_file(path).detail(name)
+            });
         }
     }
     // An element handed to code outside the analysis renders with options
@@ -9662,11 +9817,15 @@ fn run_with_system_floor(
                 && evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement)
         },
         object_members.changes(),);
-    escaped_ids.extend(delivered_ids);
+    for (id, at) in delivered_ids {
+        escape(&mut escaped_ids, escape_reasons.as_mut(), [id], || delivered_tags[at].opening());
+    }
     // A held wrapper some render of which no member tag shows renders with
     // props no analysed use shows.
     for (module, wrapper) in object_members.unproven_wrappers() {
-        escaped_ids.extend(held_ids(&module, &wrapper));
+        escape(&mut escaped_ids, escape_reasons.as_mut(), held_ids(&module, &wrapper), || {
+            SlotOpening::rule("unproven-wrapper").in_file(&module).detail(wrapper.as_str())
+        });
     }
     let mut opened_usage = UsageScanResult::default();
     for component_id in &escaped_ids {
@@ -9865,39 +10024,58 @@ fn run_with_system_floor(
         }
         false => FxHashSet::default(),
     };
-    let usage_complete = !analysis_incomplete(files, inputs)
-        && !files.values().any(|ff| ff.direct_eval || ff.patches_intrinsics)
-        && (!identity_uncertain
-            || uncertainty_leaves_usage_proven(
-                &uncertain_identities,
-                files,
-                inputs,
-                links,
-                &ordinary_members,
-                &package_members,
-                &bounded_tags,
-                object_members.changes(),
-            ));
+    // Why usage is not proven project-wide: the proof needs only whether a
+    // gap exists, and provenance lists them all.
+    let mut usage_gaps = analysis_gaps(files, inputs);
+    usage_gaps.extend(files.iter().filter(|(_, ff)| ff.direct_eval).map(|(file, _)| SlotOpening::rule("direct-eval").in_file(file)));
+    usage_gaps.extend(files.iter().filter(|(_, ff)| ff.patches_intrinsics).map(|(file, _)| SlotOpening::rule("patches-intrinsics").in_file(file)));
+    {
+        let mut unsettled = unsettled_identities(
+            &uncertain_identities,
+            files,
+            inputs,
+            links,
+            &ordinary_members,
+            &package_members,
+            &bounded_tags,
+            object_members.changes(),
+        );
+        if inputs.slot_provenance {
+            usage_gaps.extend(unsettled);
+        } else if usage_gaps.is_empty() {
+            usage_gaps.extend(unsettled.next());
+        }
+    }
+    let usage_complete = usage_gaps.is_empty();
+    // What each proof rejects, where provenance asks: the project-wide proof
+    // as it would decide even where a gap leaves it unused.
+    let mut rejected: Rejections = FxHashMap::default();
+    let unproven: std::collections::BTreeSet<String> = escaped_ids.iter().chain(&forced_ids).cloned().collect();
+    let components = || evaluated.iter().map(|(id, (_, _, terminal, _, _, _, _))| (id, *terminal == TerminalKind::AsClass));
+    if inputs.slot_provenance && !usage_complete {
+        project_confined_uses(&all_usage_results, &forwards, components(), &unproven, Some(&mut rejected));
+    }
     let project_uses = usage_complete
         .then(|| {
-            let unproven: std::collections::BTreeSet<String> =
-                escaped_ids.iter().chain(&forced_ids).cloned().collect();
-            project_confined_uses(
-                &all_usage_results,
-                &forwards,
-                evaluated.iter().map(|(id, (_, _, terminal, _, _, _, _))| (id, *terminal == TerminalKind::AsClass)),
-                &unproven,
-            )
+            let rejected = inputs.slot_provenance.then_some(&mut rejected);
+            project_confined_uses(&all_usage_results, &forwards, components(), &unproven, rejected)
         })
         .flatten();
     // Development keeps every slot, and records which ones a production
     // build prunes (`production_uses`), so its runtime can warn when a value
     // reaches one: such a value arrives in a way the proof missed.
+    if inputs.slot_provenance && usage_complete && project_uses.is_none() {
+        usage_gaps.push(SlotOpening::rule("unlisted-clone"));
+    }
+    if inputs.slot_provenance && inputs.dev_mode {
+        usage_gaps.push(SlotOpening::rule("development"));
+    }
     let (project_uses, production_uses) =
         if inputs.dev_mode { (None, project_uses) } else { (project_uses, None) };
     // Only project-wide uses record the conditions runtime values write.
     let narrows_slots = project_uses.is_some();
-    let confined_uses = project_uses.unwrap_or_else(|| confined_uses(files, &chain_lookup, &evaluated_ids));
+    let confined_uses = project_uses
+        .unwrap_or_else(|| confined_uses(files, &chain_lookup, &evaluated_ids, inputs.slot_provenance.then_some(&mut rejected)));
     // An object written for a prop a component passes on, keyed by something
     // other than a breakpoint, is reported where it is written, once.
     let report_passed_on = |diagnostics: &mut Vec<CssDiagnostic>, written: &WrittenProp, value: &Value| {
@@ -9981,16 +10159,25 @@ fn run_with_system_floor(
     // A system prop keeps its slot while any component it is active on can
     // receive a value without a utility class; a same-named custom prop takes
     // that component's values instead.
-    let uncovered_by = |uses: &FxHashMap<String, ConfinedUse>| {
+    // `keepers`, where provenance asks for it, takes each owner that keeps
+    // a prop's slot, and how.
+    let uncovered_by = |uses: &FxHashMap<String, ConfinedUse>, mut keepers: Option<&mut BTreeMap<String, Vec<SlotKeeper>>>| {
         let mut uncovered: FxHashSet<&String> = FxHashSet::default();
         for (component_id, (_, _, _, active_props, _, custom_configs, _)) in &evaluated {
             let confined = uses.get(component_id);
             for prop in active_props.iter().flatten() {
-                let custom = custom_configs.as_ref().is_some_and(|configs| configs.contains_key(prop));
-                let covered = confined
-                    .is_some_and(|confined| confined.covers(prop, |value| utility_classes.has_class(prop, value)));
-                if !custom && !covered {
-                    uncovered.insert(prop);
+                if custom_configs.as_ref().is_some_and(|configs| configs.contains_key(prop)) {
+                    continue;
+                }
+                let keeping = match confined {
+                    None => Some(None),
+                    Some(confined) => confined.uncovered(prop, |value| utility_classes.has_class(prop, value)).map(Some),
+                };
+                let Some(keeping) = keeping else { continue };
+                uncovered.insert(prop);
+                if let Some(keepers) = keepers.as_deref_mut() {
+                    let opening = keeping.map_or_else(|| SlotOpening::rule("unproven-owner"), |uncovered| uncovered.opening());
+                    keepers.entry(prop.clone()).or_default().push(SlotKeeper { owner: component_id.clone(), opening });
                 }
             }
         }
@@ -10010,13 +10197,37 @@ fn run_with_system_floor(
         }
         Some(conditions)
     };
+    let mut keepers: Option<BTreeMap<String, Vec<SlotKeeper>>> =
+        (inputs.slot_provenance && total_system_floor).then(BTreeMap::new);
     let (proven_static_props, dynamic_prop_names): (FxHashSet<String>, FxHashSet<String>) =
         if total_system_floor {
-            let uncovered = uncovered_by(&confined_uses);
+            let uncovered = uncovered_by(&confined_uses, keepers.as_mut());
             active_system_prop_names.into_iter().partition(|prop| !uncovered.contains(prop))
         } else {
             (FxHashSet::default(), detected_dynamic_prop_names)
         };
+
+    // Each kept slot's keepers, and each unproven one's reasons: what the
+    // proof recorded as it decided.
+    let slot_provenance = keepers.map(|mut keepers| {
+        keepers.retain(|prop, _| dynamic_prop_names.contains(prop));
+        let mut owners: BTreeMap<String, Vec<SlotOpening>> = BTreeMap::new();
+        for keeper in keepers.values_mut().flatten().filter(|keeper| keeper.opening.rule == "unproven-owner") {
+            owners.entry(keeper.owner.clone()).or_insert_with(|| {
+                let id = keeper.owner.as_str();
+                let mut reasons: Vec<SlotOpening> = escape_reasons.as_ref().and_then(|reasons| reasons.get(id)).cloned().into_iter().collect();
+                if forced_ids.contains(id) {
+                    reasons.push(SlotOpening::rule("static-css"));
+                }
+                reasons.extend(rejected.get(id).into_iter().flatten().cloned());
+                reasons
+            });
+        }
+        for list in keepers.values_mut() {
+            list.sort_by(|a, b| a.owner.cmp(&b.owner));
+        }
+        SlotProvenance { usage: usage_gaps, owners, props: keepers }
+    });
 
     let typed_system_props = utility_classes.typed_props().clone();
     let mut dynamic_props: HashMap<String, DynamicPropMeta> = HashMap::new();
@@ -10052,7 +10263,7 @@ fn run_with_system_floor(
         Default::default()
     };
     if let (Some(production), true) = (&production_uses, total_system_floor) {
-        let uncovered = uncovered_by(production);
+        let uncovered = uncovered_by(production, None);
         let narrowed = proven_slot_conditions(&dynamic_props, |prop| system_conditions_by(production, prop));
         for (prop, meta) in dynamic_props.iter_mut() {
             let conditions = match (uncovered.contains(prop), meta.value()) {
@@ -11225,6 +11436,7 @@ fn run_with_system_floor(
         tag_components,
         prop_name_lists: prop_name_lists.into_sources(),
         superseded_by,
+        slot_provenance,
     }
 }
 
@@ -13696,6 +13908,36 @@ mod tests {
             let files = [("a.tsx", a), ("rows.tsx", "export const rows = ['a'];\n"), ("barrel.tsx", barrel), ("other.tsx", other)];
             assert_eq!(analyze(&files, &test_inputs()).dynamic_props.contains_key("p"), keeps, "{barrel} {other}");
         }
+    }
+
+    /// Contract: every system slot the floor keeps names each owner that
+    /// keeps it, and the rule or site that keeps that owner open.
+    #[test]
+    fn each_kept_slot_names_what_keeps_it_open() {
+        let source = "export const Box = ds.system({ space: true }).asElement('div');\n\
+                      const Card = ds.system({ space: true }).asElement('div');\n\
+                      export const App = ({ n, rest }) => <><Box p={n} /><Card {...rest} /></>;\n";
+        let mut inputs = test_inputs();
+        assert!(analyze(&[("a.tsx", source)], &inputs).slot_provenance.is_none());
+        inputs.slot_provenance = true;
+        let provenance = analyze(&[("a.tsx", source)], &inputs).slot_provenance.unwrap();
+        assert!(provenance.usage.is_empty(), "{:?}", provenance.usage);
+        assert_eq!(provenance.props.keys().collect::<Vec<_>>(), ["m", "p"]);
+        let keeper = |prop: &str, owner: &str| {
+            provenance.props[prop].iter().find(|keeper| keeper.owner == owner).map(|keeper| keeper.opening.rule)
+        };
+        assert_eq!(keeper("p", "a.tsx::Box"), Some("runtime-value"));
+        let site = provenance.props["p"].iter().find(|keeper| keeper.owner == "a.tsx::Box").unwrap();
+        assert_eq!((site.opening.file.as_deref(), site.opening.at.is_some()), (Some("a.tsx"), true));
+        assert_eq!(keeper("p", "a.tsx::Card"), Some("unproven-owner"));
+        assert_eq!(keeper("m", "a.tsx::Box"), None, "a value no use writes keeps no slot");
+        assert_eq!(keeper("m", "a.tsx::Card"), Some("unproven-owner"));
+        assert_eq!(provenance.owners["a.tsx::Card"][0].rule, "spread");
+        // An unseen source leaves usage unproven project-wide.
+        inputs.analysis_context.skipped_sources = vec!["unseen.tsx".into()];
+        let unproven = analyze(&[("a.tsx", source)], &inputs).slot_provenance.unwrap();
+        assert_eq!(unproven.usage, [SlotOpening::rule("skipped-source").in_file("unseen.tsx")]);
+        assert_eq!(unproven.owners["a.tsx::Box"].iter().map(|reason| reason.rule).collect::<Vec<_>>(), ["not-module-confined"]);
     }
 
     #[test]

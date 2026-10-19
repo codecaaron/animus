@@ -11,7 +11,7 @@ mod value_eval;
 pub use compose::{scan_compose_calls, ComposeFamilyInfo};
 pub use system_props::scan_jsx;
 pub use usage::{
-    scan_jsx_usage, ComponentUsageConfig, StateUsage, UsageScanResult, VariantUsage, WrittenProp,
+    scan_jsx_usage, ComponentUsageConfig, OpenSite, StateUsage, UsageScanResult, VariantUsage, WrittenProp,
 };
 
 pub(crate) use usage::{

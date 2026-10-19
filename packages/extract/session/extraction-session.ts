@@ -117,6 +117,7 @@ import {
   SYSTEM_INSTANCE_MISMATCH,
 } from '../pipeline/manifest-diagnostics';
 import { foreignPackages } from '../pipeline/registry-packages';
+import { slotProvenanceLines } from '../pipeline/slot-provenance';
 import { moduleFactsCall } from '../pipeline/source-ingestion';
 import { systemInstanceMismatches } from '../pipeline/system-instances';
 import { writeAtomically } from '../pipeline/write-atomically';
@@ -2889,6 +2890,7 @@ export class ExtractionSession {
             ? systemPropsPath(this.sessionDir)
             : this.delivery.systemPropsModuleId,
         shortClassPrefix: this.options.shortClassNames?.prefix,
+        slotProvenance: this.verbose,
       },
       pathAliasesJson: this.pathAliasesJson,
       staticCssJson: this.staticCssJson,
@@ -3180,6 +3182,15 @@ export class ExtractionSession {
       this.verbose,
       result.timings.engine
     );
+    if (manifest?.slot_provenance) {
+      const lines = slotProvenanceLines(
+        manifest.slot_provenance,
+        manifest.components
+      );
+      for (const line of lines) {
+        this.log(line);
+      }
+    }
   }
 
   /** Open a status attempt (attemptId increments once per burst — a

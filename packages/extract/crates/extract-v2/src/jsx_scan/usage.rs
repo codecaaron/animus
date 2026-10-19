@@ -57,9 +57,10 @@ pub struct UsageScanResult {
     #[serde(skip)]
     pub written_props: Vec<WrittenProp>,
     /// Bindings a use can pass any prop to: an element with a spread, or a
-    /// `createElement` or `cloneElement` render.
+    /// `createElement` or `cloneElement` render, each with the first render
+    /// that opens it.
     #[serde(skip)]
-    pub open_components: FxHashSet<String>,
+    pub open_components: FxHashMap<String, OpenSite>,
     /// Bindings a `createElement` reaches with a rest parameter spread: any
     /// prop but the listed keys may arrive through it.
     #[serde(skip)]
@@ -87,6 +88,17 @@ pub struct WrittenProp {
     pub conditions: Option<std::collections::BTreeSet<String>>,
     /// The file it is written in, once the analysis knows it, and the byte
     /// offset of its attribute or call there.
+    pub file: Option<std::sync::Arc<str>>,
+    pub at: u32,
+}
+
+/// A render that can pass its component any prop.
+#[derive(Debug, Clone)]
+pub struct OpenSite {
+    /// What opens it: a `spread`, a `createElement` call whose props usage
+    /// cannot list, or `defaultProps` written to it.
+    pub kind: &'static str,
+    /// The file, once the analysis knows it, and the render's byte offset.
     pub file: Option<std::sync::Arc<str>>,
     pub at: u32,
 }
