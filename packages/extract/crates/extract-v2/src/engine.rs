@@ -863,7 +863,7 @@ fn record_style_changes(
         for (namespace, (subject, used)) in &module.written_namespaces {
             let Some(Request::Outside(identity)) = namespace_of(file, namespace) else { continue };
             if let Some(unread) = crate::link::unread_package(&identity, files, inputs) {
-                let opening = || crate::link::PackageOpening::namespace_write(file, used.line, namespace, &identity);
+                let opening = |opened| crate::link::UnreadOpening::namespace_write(file, used.line, namespace, &identity, opened);
                 crate::link::open_unread(flow, unread, &said(file, subject, used), inputs, opening, &mut |flow, target, reason| {
                     hand_on(flow, target, reason)
                 });
@@ -1108,12 +1108,13 @@ impl ExtractEngine {
         if let Ok(mut shadowing) = self.opts.css_inputs.shadowing_probes.lock() {
             shadowing.clear();
         }
-        if let Ok(mut openings) = self.opts.css_inputs.package_openings.lock() {
+        if let Ok(mut openings) = self.opts.css_inputs.unread_openings.lock() {
             openings.clear();
         }
         // The config-only modules are this file set's own: an edit may move
         // a module into the app's reach.
         self.opts.css_inputs.config_only = Default::default();
+        self.opts.css_inputs.runtime_imports = Default::default();
         if let Ok(mut incomplete) = self.opts.css_inputs.incomplete_probes.lock() {
             incomplete.clear();
             // Ingestion's openings are this analysis's own.
@@ -1518,7 +1519,7 @@ impl ExtractEngine {
             }
             name_compiled_kit_fix(diagnostic, &compiled_declarations, output_dirs);
         }
-        analyze_css::report_package_openings(&mut css.diagnostics, &self.opts.css_inputs);
+        analyze_css::report_unread_openings(&mut css.diagnostics, &self.facts, &self.opts.css_inputs);
         let cross = cross_file::resolve_cross_file(&self.facts, css.member_bindings.clone());
         let builder_files: Vec<&str> = self
             .facts
@@ -4163,6 +4164,90 @@ export const App = () => <Box tone="red" />;
         }
     }
 
+    /// Contract: an import analysis cannot follow names its importing file
+    /// and suggests excluding it. A missing module that cost declarations
+    /// is named once, where it is imported, with them; a file the host
+    /// opens that analysis does not read says so beside its own remedy.
+    /// Each remedy builds on the host's `exclude` list and names that file
+    /// alone, and none is offered for a module another analysed module
+    /// imports.
+    #[test]
+    fn an_import_analysis_cannot_follow_names_its_importing_file_and_suggests_excluding_it() {
+        let base = [
+            ("tokens.ts", "export const pad = { padding: 4 };\n"),
+            (
+                "card.tsx",
+                "import { pad } from './tokens';\nexport const Card = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <Card />;\n",
+            ),
+        ];
+        let manifest_worker =
+            "import manifest from './asset-manifest.js';\nexport default { fetch: () => new Response(JSON.stringify(manifest)) };\n";
+        let helper_worker = "import { serve } from '../hosting/asset-worker.js';\nexport default serve();\n";
+        let run = |more: &[(&str, &str)], exclude: Option<&str>, unanalysed: Option<&str>| -> Vec<String> {
+            let mut engine = ExtractEngine::new(Some(EngineOptions {
+                analysis_context_json: exclude.map(|list| format!(r#"{{"exclude":{list}}}"#)),
+                ..Default::default()
+            }))
+            .unwrap();
+            let files = serde_json::Value::Array(
+                base.iter().chain(more).map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect(),
+            )
+            .to_string();
+            let prepared: serde_json::Value = serde_json::from_str(&engine.prepare(files.clone()).unwrap()).unwrap();
+            let evidence = unanalysed.map(|base| {
+                serde_json::json!({
+                    "generation": 1,
+                    "identity": prepared["identity"],
+                    "bases": { base: { "candidate": base, "reading": "unanalysed" } },
+                })
+                .to_string()
+            });
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files, evidence).unwrap()).unwrap();
+            out["diagnostics"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|d| d["code"] == "animus.load.missing-module-reach" || d["code"] == "animus.resolve.unanalysed-import")
+                .map(|d| format!("{} {}:{} {}", d["code"].as_str().unwrap(), d["file"].as_str().unwrap(), d["line"], d["message"].as_str().unwrap()))
+                .collect()
+        };
+        assert_eq!(run(&[], Some(r#"["dist","legacy"]"#), None), Vec::<String>::new());
+        let missing = |named: &[String], remedy: &str| {
+            let [named] = named else { panic!("{named:?}") };
+            for said in [
+                "animus.load.missing-module-reach worker.js:1 ",
+                "'./asset-manifest.js' names no file the analysis holds",
+                "worker.js imports it on line 1",
+                "1 declaration that read an exported object is not extracted, whole or in part: Card (card.tsx:2)",
+                &format!("if worker.js runs outside the app (a Worker, a script), exclude it: {remedy}"),
+            ] {
+                assert!(named.contains(said), "{said}: {named}");
+            }
+        };
+        missing(&run(&[("worker.js", manifest_worker)], Some(r#"["dist","legacy"]"#), None), "exclude: ['dist', 'legacy', 'worker.js']");
+        missing(&run(&[("worker.js", manifest_worker)], None, None), "add 'worker.js' to exclude");
+        // A pattern another analysed path holds too would exclude it as well.
+        missing(
+            &run(&[("worker.js", manifest_worker), ("service-worker.js", "export {};\n")], Some("[]"), None),
+            "exclude: ['worker*.js']",
+        );
+        // A module another analysed module imports runs with it: excluding it
+        // is no remedy.
+        let imported = run(&[("worker.js", manifest_worker), ("main.tsx", "import './worker.js';\n")], Some("[]"), None);
+        let [imported] = imported.as_slice() else { panic!("{imported:?}") };
+        assert!(imported.contains("worker.js imports it on line 1") && !imported.contains("exclude it"), "{imported}");
+        let opened = run(&[("worker.js", helper_worker)], Some(r#"["dist"]"#), Some("../hosting/asset-worker.js"));
+        let unanalysed: Vec<&String> = opened.iter().filter(|named| named.starts_with("animus.resolve.unanalysed-import")).collect();
+        let [unanalysed] = unanalysed.as_slice() else { panic!("{opened:?}") };
+        for said in [
+            "animus.resolve.unanalysed-import worker.js:",
+            "nothing is pruned",
+            "if worker.js runs outside the app (a Worker, a script), exclude it: exclude: ['dist', 'worker.js']",
+        ] {
+            assert!(unanalysed.contains(said), "{said}: {unanalysed}");
+        }
+    }
+
     /// Contract: a load of an unread package unsettles only the exported
     /// objects the host says it reaches, and a config-only module's load
     /// unsettles nothing; a load that still costs declarations is named
@@ -4231,8 +4316,8 @@ export const App = () => <Box tone="red" />;
                 "api/server.ts:1 ",
                 package,
                 "api/server.ts loads it at runtime with require() on line 1",
-                "1 declaration that read an exported object is not extracted: Box (box.tsx:3)",
-                "exclude: ['api/**', …]",
+                "1 declaration that read an exported object is not extracted, whole or in part: Box (box.tsx:3)",
+                "exclude them from the analysis: add 'api/**' to exclude",
             ] {
                 assert!(named.contains(said), "{said}: {named}");
             }

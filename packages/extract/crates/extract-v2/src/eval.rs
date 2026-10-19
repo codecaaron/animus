@@ -578,12 +578,16 @@ pub fn parse_variant_arg(
     let mut base = None;
     let mut variants = StaticValue::Object(Vec::new());
     let mut all_skips = Vec::new();
-    let skip = |key: &str, kind: UnevaluatedKind, reason: &str, span: Span| SkippedProperty {
+    // A skip says why its value names no static one where it can tell.
+    let skip = |key: &str, kind: UnevaluatedKind, reason: &str, value: &Expression<'_>| SkippedProperty {
         key: key.to_string(),
         kind,
-        reason: reason.to_string(),
+        reason: match static_values.and_then(|sv| expression_clause(value, sv)) {
+            Some(clause) => format!("{reason} — {clause}"),
+            None => reason.to_string(),
+        },
         parent: None,
-        span: span_of(span),
+        span: span_of(value.span()),
     };
 
     for prop_kind in &obj.properties {
@@ -594,7 +598,7 @@ pub fn parse_variant_arg(
                     if let Expression::StringLiteral(lit) = &p.value {
                         prop = lit.value.to_string();
                     } else {
-                        all_skips.push(skip("prop", expression_kind(&p.value), "variant prop name (non-static)", p.value.span()));
+                        all_skips.push(skip("prop", expression_kind(&p.value), "variant prop name (non-static)", &p.value));
                     }
                 }
                 "defaultVariant" => match &p.value {
@@ -605,7 +609,7 @@ pub fn parse_variant_arg(
                         "defaultVariant",
                         expression_kind(other),
                         "default variant name (non-static)",
-                        other.span(),
+                        other,
                     )),
                 },
                 "base" => {
@@ -621,7 +625,7 @@ pub fn parse_variant_arg(
                             Ok(object @ StaticValue::Object(_)) => base = Some(object),
                             evaluated => {
                                 let kind = evaluated.err().map_or(UnevaluatedKind::Unsupported, |bail| bail.kind);
-                                all_skips.push(skip("base", kind, "variant base styles (non-static)", p.value.span()));
+                                all_skips.push(skip("base", kind, "variant base styles (non-static)", &p.value));
                             }
                         }
                     }
@@ -642,12 +646,10 @@ pub fn parse_variant_arg(
                                     variants.insert(&vkey, vstyles);
                                 }
                                 ObjectPropertyKind::SpreadProperty(spread) => {
-                                    all_skips.push(skip(
-                                        "variants",
-                                        UnevaluatedKind::Spread,
-                                        "variant map spread (non-static)",
-                                        spread.span,
-                                    ));
+                                    all_skips.push(SkippedProperty {
+                                        span: span_of(spread.span),
+                                        ..skip("variants", UnevaluatedKind::Spread, "variant map spread (non-static)", &spread.argument)
+                                    });
                                 }
                             }
                         }
@@ -660,20 +662,18 @@ pub fn parse_variant_arg(
                             }
                             evaluated => {
                                 let kind = evaluated.err().map_or(UnevaluatedKind::Unsupported, |bail| bail.kind);
-                                all_skips.push(skip("variants", kind, "variant map (non-static)", p.value.span()));
+                                all_skips.push(skip("variants", kind, "variant map (non-static)", &p.value));
                             }
                         }
                     }
                 }
                 _ => {}
             }
-        } else {
-            all_skips.push(skip(
-                "variant config",
-                UnevaluatedKind::Spread,
-                "variant config spread (non-static)",
-                prop_kind.span(),
-            ));
+        } else if let ObjectPropertyKind::SpreadProperty(spread) = prop_kind {
+            all_skips.push(SkippedProperty {
+                span: span_of(spread.span),
+                ..skip("variant config", UnevaluatedKind::Spread, "variant config spread (non-static)", &spread.argument)
+            });
         }
     }
 

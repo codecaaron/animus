@@ -817,7 +817,8 @@ impl<'f> ObjectMembers<'f> {
                 };
                 let reason = used.said(subject, module);
                 if let Some(unread) = crate::link::unread_package(&identity, files, inputs) {
-                    let opening = || crate::link::PackageOpening::namespace_write(module, used.line, namespace, &identity);
+                    let opening =
+                        |opened| crate::link::UnreadOpening::namespace_write(module, used.line, namespace, &identity, opened);
                     crate::link::open_unread(&mut flow, unread, &reason, inputs, opening, &mut |flow, target, reason| {
                         self.namespace_reach(target).record(flow, self.families, Vec::new(), reason)
                     });

@@ -73,6 +73,7 @@ import {
   extensionPolicyJson,
   loadSystemConfig,
   outputSourceGuard,
+  REPLACEABLE_DEFAULT_EXCLUDE,
   outputSourceMessage,
   outputTreesMessage,
   loweredDirDiagnostic,
@@ -2903,6 +2904,8 @@ export class ExtractionSession {
         unbundledComputedImports: this.host.unbundledComputedImports,
         openings: [...this.ingestionOpenings],
         propOrder: this.options.propOrderFile === true,
+        // The list as the user wrote it, or the defaults it replaces.
+        exclude: this.options.exclude ?? REPLACEABLE_DEFAULT_EXCLUDE,
         foreignPackages: this.foreignPackages,
         packageDirs: this.externalPackageDirs.map((dir) =>
           relative(this.rootDir!, dir)

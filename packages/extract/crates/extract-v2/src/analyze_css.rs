@@ -139,10 +139,12 @@ pub struct CssInputs {
     pub build_chunks: std::sync::OnceLock<Vec<String>>,
     /// The config-only modules ([`config_only`]), found once.
     pub config_only: std::sync::OnceLock<BTreeSet<String>>,
-    /// Each opening of an unread package, by the reason the safety
-    /// relations record it under, for the diagnostic that names what it
-    /// cost.
-    pub(crate) package_openings: std::sync::Mutex<BTreeMap<String, crate::link::PackageOpening>>,
+    /// What each analysed module imports or loads at runtime
+    /// ([`runtime_imports`]), found once.
+    pub runtime_imports: std::sync::OnceLock<BTreeMap<String, Vec<String>>>,
+    /// Each opening of an unread module, by the reason the safety relations
+    /// record it under, for the diagnostic that names what it cost.
+    pub(crate) unread_openings: std::sync::Mutex<BTreeMap<String, crate::link::UnreadOpening>>,
     /// `{ definitionKey: sourceText }` for the loaded system's configured
     /// transforms, keyed as its props' `transformId` (or, for a system that
     /// predates identities, their name).
@@ -257,6 +259,10 @@ pub struct AnalysisContext {
     /// The host publishes the prop-order file (`propOrderFile`): each
     /// component's authoring order and each file's tag table are built.
     pub prop_order: bool,
+    /// The host's `exclude` list as the user wrote it, or the defaults it
+    /// replaces: a remedy that excludes a file names it in full. Diagnostics
+    /// only.
+    pub exclude: Option<Vec<String>>,
 }
 
 /// Whether the probe base or candidate `path` names one of the system's
@@ -437,7 +443,8 @@ impl CssInputs {
             shadowing_probes: Default::default(),
             build_chunks: Default::default(),
             config_only: Default::default(),
-            package_openings: Default::default(),
+            runtime_imports: Default::default(),
+            unread_openings: Default::default(),
             dev_mode,
             short_class_prefix: None,
             variant_options: false,
@@ -753,6 +760,10 @@ const LOAD_DECLARED_CLOSED_UNMATCHED: &str = "animus.load.declared-closed-unmatc
 /// read them are not extracted. It names the declarations and the exclusion
 /// that removes server or build code from the analysis.
 const UNREAD_PACKAGE_REACH: &str = "animus.load.unread-package-reach";
+/// A warning: a module the analysis cannot find, which an analysed module
+/// imports, cost declarations their values; it names the importer and how
+/// to exclude it.
+const MISSING_MODULE_REACH: &str = "animus.load.missing-module-reach";
 const WIDE_MODULE_LOAD_LIMIT: usize = 20;
 /// A warning, once per production analysis: tags usage cannot match to an
 /// Animus component stop whole-component removal, so every extracted
@@ -837,6 +848,7 @@ pub(crate) const DIAGNOSTIC_CODES: &[(&str, &str)] = &[
     (LOAD_DECLARED_CLOSED, "info"),
     (LOAD_DECLARED_CLOSED_UNMATCHED, "warn"),
     (UNREAD_PACKAGE_REACH, "warn"),
+    (MISSING_MODULE_REACH, "warn"),
     (IDENTITY_UNCERTAIN, "warn"),
     (IDENTITY_UNCERTAIN_TAG, "info"),
     (UNEXTRACTABLE_CHAIN, "warn"),
@@ -1308,25 +1320,7 @@ pub(crate) fn config_only<'i>(files: &BTreeMap<String, FileFacts>, inputs: &'i C
         if roots.is_empty() {
             return BTreeSet::new();
         }
-        let mut imports: BTreeMap<&String, Vec<String>> = BTreeMap::new();
-        for (file, ff) in files {
-            for load in &ff.runtime_imports {
-                let crate::loads::LoadTarget::Specifier(spec) = &load.target else { continue };
-                if let Some(target) = resolve_import_source(file, spec, files, inputs) {
-                    imports.entry(file).or_default().push(target);
-                }
-            }
-            // A runtime load reaches what it may load: a literal's module, a
-            // closed expansion's, however many modules it lists, or, open,
-            // every module. Only Flow needs the load-set bound.
-            for load in &ff.module_loads {
-                let reached: Vec<String> = match load_reach_within(file, load, files, inputs, usize::MAX) {
-                    LoadReach::Modules(modules) => modules.into_iter().cloned().collect(),
-                    LoadReach::Any(_) => files.keys().cloned().collect(),
-                };
-                imports.entry(file).or_default().extend(reached);
-            }
-        }
+        let imports = runtime_imports(files, inputs);
         let reach = |from: Vec<&String>| -> BTreeSet<String> {
             let mut seen: BTreeSet<String> = from.iter().map(|file| (*file).clone()).collect();
             let mut work: Vec<String> = seen.iter().cloned().collect();
@@ -1343,6 +1337,35 @@ pub(crate) fn config_only<'i>(files: &BTreeMap<String, FileFacts>, inputs: &'i C
         let app = reach(files.keys().filter(|file| !configured.contains(*file)).collect());
         configured.into_iter().filter(|file| !app.contains(file)).collect()
     })
+}
+
+/// The analysed modules each analysed module imports or loads at runtime,
+/// found once.
+fn runtime_imports<'i>(files: &BTreeMap<String, FileFacts>, inputs: &'i CssInputs) -> &'i BTreeMap<String, Vec<String>> {
+    inputs.runtime_imports.get_or_init(|| runtime_imports_of(files, inputs))
+}
+
+fn runtime_imports_of(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> BTreeMap<String, Vec<String>> {
+    let mut imports: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (file, ff) in files {
+        for load in &ff.runtime_imports {
+            let crate::loads::LoadTarget::Specifier(spec) = &load.target else { continue };
+            if let Some(target) = resolve_import_source(file, spec, files, inputs) {
+                imports.entry(file.clone()).or_default().push(target);
+            }
+        }
+        // A runtime load reaches what it may load: a literal's module, a
+        // closed expansion's, however many modules it lists, or, open,
+        // every module. Only Flow needs the load-set bound.
+        for load in &ff.module_loads {
+            let reached: Vec<String> = match load_reach_within(file, load, files, inputs, usize::MAX) {
+                LoadReach::Modules(modules) => modules.into_iter().cloned().collect(),
+                LoadReach::Any(_) => files.keys().cloned().collect(),
+            };
+            imports.entry(file.clone()).or_default().extend(reached);
+        }
+    }
+    imports
 }
 
 #[cfg(test)]
@@ -3323,19 +3346,27 @@ fn emit_eval_drop_bail(
     diagnostics.push(diagnostic(file, binding, "bail", message, code));
 }
 
-/// The declarations a package opening cost that a warning names in full.
-const PACKAGE_REACH_NAMED: usize = 5;
+/// The declarations an unread module's opening cost that a warning names
+/// in full.
+const OPENING_COST_NAMED: usize = 5;
 
-/// One warning for each opening of an unread package that cost
-/// declarations: where a module reaches the package and how, how the host
-/// located it, the declarations it left unextracted, located, and what to
-/// do when the module is server or build code.
-pub(crate) fn report_package_openings(diagnostics: &mut Vec<CssDiagnostic>, inputs: &CssInputs) {
-    let openings = inputs.package_openings.lock().map(|mut openings| std::mem::take(&mut *openings)).unwrap_or_default();
-    let bails: Vec<&CssDiagnostic> = diagnostics.iter().filter(|d| d.kind == "bail").collect();
+/// One warning for each opening of an unread module that cost
+/// declarations: where a module reaches it and how, what it is, the
+/// declarations it cost, located, and what to do about it.
+pub(crate) fn report_unread_openings(
+    diagnostics: &mut Vec<CssDiagnostic>,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+) {
+    use crate::link::{Opened, UnreadOpening};
+    let openings = inputs.unread_openings.lock().map(|mut openings| std::mem::take(&mut *openings)).unwrap_or_default();
+    // An opening costs a declaration a value it reads: a whole stage, or a
+    // property.
+    let lost: Vec<&CssDiagnostic> =
+        diagnostics.iter().filter(|d| d.kind == "bail" || d.code.as_deref() == Some(SKIPPED_VALUE)).collect();
     let mut found = Vec::new();
     for (reason, opening) in &openings {
-        let mut cost: Vec<String> = bails
+        let mut cost: Vec<String> = lost
             .iter()
             .filter(|d| d.message.contains(reason.as_str()))
             .map(|d| match d.line {
@@ -3348,44 +3379,134 @@ pub(crate) fn report_package_openings(diagnostics: &mut Vec<CssDiagnostic>, inpu
         if cost.is_empty() {
             continue;
         }
-        let crate::link::PackageOpening { module, line, how, specifier, local } = opening;
-        let package = match local {
-            Some(true) => format!(
-                "'{specifier}' is a local package the analysis does not read, and a package it depends on holds \
-                 analysed modules, so it may change the objects they export"
+        let UnreadOpening { module, line, how, specifier, opened } = opening;
+        let package_remedy = || {
+            let pattern = match module.split_once('/') {
+                Some((top, _)) if top != ".." && top != "." => format!("{top}/**"),
+                _ => module.clone(),
+            };
+            format!(
+                "if {module} and the modules that import it are server or build code that cannot change what the \
+                 app renders, exclude them from the analysis: {}; otherwise add the package's source to the \
+                 analysis, or pass each stage an object literal",
+                exclude_with(&pattern, inputs)
+            )
+        };
+        let (what, remedy, code) = match opened {
+            Opened::Missing => (
+                format!(
+                    "'{specifier}' names no file the analysis holds (one outside its root or excluded from it, one \
+                     generated later, or one in a language it does not read), so it may change any exported object"
+                ),
+                format!(
+                    "{}if the file is generated, generate it before the build",
+                    outside_app_remedy(module, files, inputs).map_or(String::new(), |remedy| format!("{remedy}; "))
+                ),
+                MISSING_MODULE_REACH,
             ),
-            Some(false) => format!(
-                "'{specifier}' is a package installed from a registry, and a local package it depends on holds \
-                 analysed modules, so it may change the objects they export"
+            Opened::Package => (
+                format!(
+                    "'{specifier}' is a package the analysis does not read, and the host could not locate it or read \
+                     its dependencies, so it may change any exported object"
+                ),
+                package_remedy(),
+                UNREAD_PACKAGE_REACH,
             ),
-            None => format!(
-                "'{specifier}' is a package the analysis does not read, and the host could not locate it or read \
-                 its dependencies, so it may change any exported object"
+            Opened::Located { local: true } => (
+                format!(
+                    "'{specifier}' is a local package the analysis does not read, and a package it depends on holds \
+                     analysed modules, so it may change the objects they export"
+                ),
+                package_remedy(),
+                UNREAD_PACKAGE_REACH,
+            ),
+            Opened::Located { local: false } => (
+                format!(
+                    "'{specifier}' is a package installed from a registry, and a local package it depends on holds \
+                     analysed modules, so it may change the objects they export"
+                ),
+                package_remedy(),
+                UNREAD_PACKAGE_REACH,
             ),
         };
         let at = line.map_or(String::new(), |line| format!(" on line {line}"));
-        let more = cost.len().saturating_sub(PACKAGE_REACH_NAMED);
-        let named = cost.iter().take(PACKAGE_REACH_NAMED).cloned().collect::<Vec<_>>().join(", ");
+        let more = cost.len().saturating_sub(OPENING_COST_NAMED);
+        let named = cost.iter().take(OPENING_COST_NAMED).cloned().collect::<Vec<_>>().join(", ");
         let named = if more > 0 { format!("{named} and {more} more") } else { named };
-        let pattern = match module.split_once('/') {
-            Some((top, _)) if top != ".." && top != "." => format!("{top}/**"),
-            _ => module.clone(),
-        };
         let message = format!(
-            "{package}; {module} {how}{at}, so {} that read an exported object {} not extracted: \
-             {named} — if {module} and the modules that import it are server or build code that cannot change \
-             what the app renders, exclude them from the analysis (for example exclude: ['{pattern}', …]); \
-             otherwise add the package's source to the analysis, or pass each stage an object literal",
+            "{what}; {module} {how}{at}, so {} that read an exported object {} not extracted, whole or in part: \
+             {named} — {remedy}",
             count_of(cost.len(), "declaration"),
             if cost.len() == 1 { "is" } else { "are" },
         );
-        let warning = diagnostic(module, specifier, "warn", message, Some(UNREAD_PACKAGE_REACH));
+        let warning = diagnostic(module, specifier, "warn", message, Some(code));
         found.push(match line {
             Some(line) => warning.on_line(*line),
             None => warning,
         });
     }
     diagnostics.extend(found);
+}
+
+/// What to do when `file`, an analysed module no other analysed module
+/// imports, runs outside the app (a Worker, a script): exclude it, by a
+/// pattern that names it alone. `None` for a module another one imports,
+/// which runs where that one does.
+pub(crate) fn outside_app_remedy(file: &str, files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> Option<String> {
+    let imported = runtime_imports(files, inputs)
+        .iter()
+        .any(|(importer, targets)| importer != file && targets.iter().any(|target| target == file));
+    (!imported).then(|| {
+        format!(
+            "if {file} runs outside the app (a Worker, a script), exclude it: {}",
+            exclude_with(&exclude_pattern(file, files), inputs)
+        )
+    })
+}
+
+/// The host's `exclude` option with `pattern` added, as the option is
+/// written; where the host gives no list, the pattern to add.
+fn exclude_with(pattern: &str, inputs: &CssInputs) -> String {
+    let pattern = pattern.to_string();
+    match &inputs.analysis_context.exclude {
+        Some(list) => format!("exclude: [{}]", quoted(list.iter().chain([&pattern]))),
+        None => format!("add '{pattern}' to exclude"),
+    }
+}
+
+/// An `exclude` pattern that excludes `file` and no other analysed module:
+/// its path, or where another analysed path holds that too, a glob with `*`
+/// before its extension (`worker*.js`); the path where neither is alone.
+fn exclude_pattern(file: &str, files: &BTreeMap<String, FileFacts>) -> String {
+    let (dir, name) = file.rsplit_once('/').unwrap_or(("", file));
+    let glob = match name.rsplit_once('.') {
+        Some((stem, extension)) => format!("{stem}*.{extension}"),
+        None => format!("{name}*"),
+    };
+    let glob = if dir.is_empty() { glob } else { format!("{dir}/{glob}") };
+    let alone = |pattern: &str| files.keys().all(|other| other == file || !excludes(pattern, other));
+    if !alone(file) && alone(&glob) {
+        glob
+    } else {
+        file.to_string()
+    }
+}
+
+/// Whether the host's `exclude` pattern excludes the analysed `path`, as the
+/// host reads one (`compilePattern`, core-options.ts): with `*` or `?`, a
+/// glob over the root-relative path or a directory it lies in; otherwise a
+/// substring. The host also reads a substring against the absolute path,
+/// which analysis does not hold.
+fn excludes(pattern: &str, path: &str) -> bool {
+    let mut pattern = pattern;
+    while let Some(rest) = pattern.strip_prefix("./") {
+        pattern = rest;
+    }
+    if !pattern.contains(['*', '?']) {
+        return !pattern.is_empty() && path.contains(pattern);
+    }
+    let Some(glob) = glob_regex(pattern) else { return true };
+    glob.is_match(path) || path.match_indices('/').any(|(at, _)| glob.is_match(&path[..at]))
 }
 
 /// Slot bindings are local identifiers, resolved in the composing file.
@@ -10104,7 +10225,11 @@ fn run_with_system_floor(
                     &format!("'{specifier}'"),
                     candidate,
                     opened,
-                    "spell the import as the file is spelled; until then analysis reads neither file, and nothing is pruned",
+                    &format!(
+                        "spell the import as the file is spelled; until then analysis reads neither file, and nothing \
+                         is pruned{}",
+                        outside_app_remedy(importer, files, inputs).map_or(String::new(), |remedy| format!("; {remedy}"))
+                    ),
                 ),
                 Some(RESOLVE_CASE_MISMATCH),
             )),
@@ -10115,7 +10240,8 @@ fn run_with_system_floor(
                 format!(
                     "'{specifier}' opens {opened}, which analysis does not read, so analysis reads no module \
                      for it, never the later {later:?}, and nothing is pruned — analyse {opened}, or name \
-                     {later:?} in the import"
+                     {later:?} in the import{}",
+                    outside_app_remedy(importer, files, inputs).map_or(String::new(), |remedy| format!("; {remedy}"))
                 ),
                 Some(RESOLVE_SKIPPED_SOURCE),
             )),
@@ -10127,12 +10253,13 @@ fn run_with_system_floor(
                 format!(
                     "'{specifier}' opens {opened}, which analysis does not read, so nothing is pruned: \
                      every variant and state option in the app ships — analyse {opened}{}, or serve it \
-                     as an asset",
+                     as an asset{}",
                     if opened.starts_with("../") {
                         " (it sits outside the analysis root: widen the root, or list its directory in the analysed sources)"
                     } else {
                         ""
-                    }
+                    },
+                    outside_app_remedy(importer, files, inputs).map_or(String::new(), |remedy| format!("; {remedy}")),
                 ),
                 Some(RESOLVE_UNANALYSED_IMPORT),
             )),

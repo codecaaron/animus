@@ -303,6 +303,15 @@ impl Unread {
         }
     }
 
+    /// What the unread module is, as the warning naming its cost says.
+    pub(crate) fn opened(&self) -> Opened {
+        match self {
+            Unread::Package => Opened::Package,
+            Unread::Reaches { local, .. } => Opened::Located { local: *local },
+            Unread::Missing => Opened::Missing,
+        }
+    }
+
     pub(crate) fn reason(&self) -> crate::flow::ReasonId {
         match self {
             Unread::Package | Unread::Reaches { .. } => crate::flow::ReasonId::SkippedSource,
@@ -327,7 +336,7 @@ pub(crate) fn record_module_openings(
     for (name, spec) in &ff.namespace_exports {
         if let Some(unread) = unread_source(module, spec, files, inputs) {
             let reason = format!("{module} re-exports {spec} as the namespace {name}, and {}", unread.clause());
-            let opening = || PackageOpening::new(module, None, format!("re-exports it as the namespace {name}"), spec);
+            let opening = |opened| UnreadOpening::new(module, None, format!("re-exports it as the namespace {name}"), spec, opened);
             open_unread(flow, unread, &reason, inputs, opening, hand_on);
             continue;
         }
@@ -341,7 +350,8 @@ pub(crate) fn record_module_openings(
         let LoadTarget::Specifier(spec) = &import.target else { continue };
         if let Some(unread @ Unread::Missing) = unread_source(module, spec, files, inputs) {
             let reason = format!("{module} imports {spec} on line {}, and {}", import.line, unread.clause());
-            flow.open(unread.reason(), Region::of(RegionAtom::AllExports), reason);
+            let opening = |opened| UnreadOpening::new(module, Some(import.line), "imports it".to_string(), spec, opened);
+            open_unread(flow, unread, &reason, inputs, opening, hand_on);
         }
     }
     // A runtime load hands on every module it may load: the one a literal
@@ -355,9 +365,9 @@ pub(crate) fn record_module_openings(
         if let LoadTarget::Specifier(spec) = &load.target {
             if let Some(unread) = unread_source(module, spec, files, inputs) {
                 let reason = format!("{module} loads {spec} at runtime on line {}, and {}", load.line, unread.clause());
-                let opening = || {
+                let opening = |opened| {
                     let callee = if load.dynamic_import { "import()" } else { "require()" };
-                    PackageOpening::new(module, Some(load.line), format!("loads it at runtime with {callee}"), spec)
+                    UnreadOpening::new(module, Some(load.line), format!("loads it at runtime with {callee}"), spec, opened)
                 };
                 open_unread(flow, unread, &reason, inputs, opening, hand_on);
                 continue;
@@ -389,51 +399,61 @@ pub(crate) fn record_module_openings(
     }
 }
 
-/// A package opening as its diagnostic names it: where a module reaches an
-/// unread package, how, and how the host located the package.
+/// An opening of an unread module as its diagnostic names it: where a
+/// module reaches it, how, and what it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PackageOpening {
+pub(crate) struct UnreadOpening {
     pub module: String,
     pub line: Option<usize>,
-    /// Said of the package: `loads it at runtime with require()`.
+    /// Said of the unread module: `loads it at runtime with require()`.
     pub how: String,
     pub specifier: String,
-    /// Whether the host located it as a local package; None where it did
-    /// not locate it.
-    pub local: Option<bool>,
+    pub opened: Opened,
 }
 
-impl PackageOpening {
-    pub(crate) fn new(module: &str, line: Option<usize>, how: String, specifier: &str) -> Self {
-        PackageOpening { module: module.to_string(), line, how, specifier: specifier.to_string(), local: None }
+/// What an opening's unread module is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Opened {
+    /// A package the host did not locate.
+    Package,
+    /// A package the host located: a local one (`true`), or one installed
+    /// from a registry.
+    Located { local: bool },
+    /// A path that names no file the analysis holds.
+    Missing,
+}
+
+impl UnreadOpening {
+    pub(crate) fn new(module: &str, line: Option<usize>, how: String, specifier: &str, opened: Opened) -> Self {
+        UnreadOpening { module: module.to_string(), line, how, specifier: specifier.to_string(), opened }
     }
 
     /// A write through `module`'s namespace import of the package.
-    pub(crate) fn namespace_write(module: &str, line: Option<usize>, namespace: &str, identity: &str) -> Self {
-        Self::new(module, line, format!("writes through its namespace {namespace}"), identity)
+    pub(crate) fn namespace_write(
+        module: &str,
+        line: Option<usize>,
+        namespace: &str,
+        identity: &str,
+        opened: Opened,
+    ) -> Self {
+        Self::new(module, line, format!("writes through its namespace {namespace}"), identity, opened)
     }
 }
 
 /// Opens what an unread module may reach: any module, or for a package
-/// the host located, the modules it can reach, each handed on. A package
-/// opening is noted, by `reason`, for the diagnostic that names what it
-/// cost.
+/// the host located, the modules it can reach, each handed on. The opening
+/// is noted, by `reason`, for the diagnostic that names what it cost.
 pub(crate) fn open_unread(
     flow: &mut FlowBuilder,
     unread: Unread,
     reason: &str,
     inputs: &CssInputs,
-    opening: impl FnOnce() -> PackageOpening,
+    opening: impl FnOnce(Opened) -> UnreadOpening,
     hand_on: &mut dyn FnMut(&mut FlowBuilder, &str, &str),
 ) {
-    let local = match &unread {
-        Unread::Package => Some(None),
-        Unread::Reaches { local, .. } => Some(Some(*local)),
-        Unread::Missing => None,
-    };
-    if let (Some(local), Ok(mut noted)) = (local, inputs.package_openings.lock()) {
+    if let Ok(mut noted) = inputs.unread_openings.lock() {
         if !noted.contains_key(reason) {
-            noted.insert(reason.to_string(), PackageOpening { local, ..opening() });
+            noted.insert(reason.to_string(), opening(unread.opened()));
         }
     }
     match unread {

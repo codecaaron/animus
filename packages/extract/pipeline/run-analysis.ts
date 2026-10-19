@@ -135,6 +135,10 @@ export interface AnalysisContext {
    *  manifest carries each component's authoring order and each file's tag
    *  table; omitted, it carries neither. */
   propOrder?: boolean;
+  /** The host's `exclude` list as the user wrote it, or the defaults it
+   *  replaces: a remedy that excludes a file names the list in full.
+   *  Diagnostics only. */
+  exclude?: readonly string[];
 }
 
 /**
@@ -255,6 +259,7 @@ export function analysisContextJson(
     fontPreloads: context.fontPreloads,
     // Omitted when off, so the wire is what it was without the option.
     propOrder: context.propOrder === true ? true : undefined,
+    exclude: context.exclude,
   } satisfies AnalysisContextWire;
   return JSON.stringify(wire);
 }
