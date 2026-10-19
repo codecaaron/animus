@@ -663,6 +663,15 @@ pub struct FileFacts {
     /// an array one of them names is not held.
     #[serde(skip)]
     pub(crate) misused_imports: BTreeSet<String>,
+    /// The classes the module declares at its top: a ref to an element of
+    /// one reads the instance, its props included.
+    #[serde(skip)]
+    pub(crate) class_components: BTreeSet<String>,
+    /// Whether the module writes a member of a built-in's prototype, or
+    /// hands the prototype on: no built-in method is then proven anywhere,
+    /// so usage is unproven, as for a direct `eval`.
+    #[serde(skip)]
+    pub(crate) patches_intrinsics: bool,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -1355,6 +1364,8 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         element_consts: BTreeMap::new(),
         held_arrays: BTreeSet::new(),
         misused_imports: BTreeSet::new(),
+        class_components: BTreeSet::new(),
+        patches_intrinsics: false,
         opaque_tags: Vec::new(),
         transforms: Vec::new(),
         captured_transform_bindings: BTreeSet::new(),
@@ -2000,6 +2011,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         opaque_tags,
         held_arrays,
         misused_imports,
+        class_components,
+        patches_intrinsics,
         builder_import_references,
         first_that_works_uses,
         builder_proof,
@@ -2064,6 +2077,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         opaque_tags,
         held_arrays,
         misused_imports,
+        class_components,
+        patches_intrinsics,
         unbound_create_system_calls: unbound_create_system_calls(ast),
         builder_references: builder_references(ast),
         ..structural

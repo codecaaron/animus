@@ -21,8 +21,8 @@ const config = createSystem()
   .toConfig();
 
 // The build sees `p` written only as a literal, so production removes its
-// slot. The test then hands the runtime a value, as a route the analysis
-// missed would. No known route is missed today: this stands in for one.
+// slot. The test then hands the runtime a value directly, standing in for
+// any route by which a value reaches it that the analysis does not follow.
 const path = 'fixtures/pruned-slot.tsx';
 const source = `import { ds } from './setup';
 export const Box = ds.system({ space: true }).asElement('div');

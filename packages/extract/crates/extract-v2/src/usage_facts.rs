@@ -255,10 +255,14 @@ pub(crate) fn animus_named_imports(module: &ModuleRecord<'_>, scoping: &Scoping,
         .collect()
 }
 
+/// The binding `ident` refers to, or `None` for a global.
+pub(crate) fn symbol_of(scoping: &Scoping, ident: &IdentifierReference<'_>) -> Option<SymbolId> {
+    ident.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id())
+}
+
 /// Whether `ident` reads one of `symbols`.
 pub(crate) fn reads_symbol(scoping: &Scoping, ident: &IdentifierReference<'_>, symbols: &FxHashSet<SymbolId>) -> bool {
-    let symbol = ident.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
-    symbol.is_some_and(|symbol| symbols.contains(&symbol))
+    symbol_of(scoping, ident).is_some_and(|symbol| symbols.contains(&symbol))
 }
 
 /// Namespace imports (`import * as ns from 'x'`): local name → specifier.
@@ -924,6 +928,10 @@ pub(crate) struct EnrichedUsage {
     pub held_arrays: BTreeSet<String>,
     /// See `FileFacts::misused_imports`.
     pub misused_imports: BTreeSet<String>,
+    /// See `FileFacts::class_components`.
+    pub class_components: BTreeSet<String>,
+    /// See `FileFacts::patches_intrinsics`.
+    pub patches_intrinsics: bool,
     /// See `FileFacts::builder_import_references`.
     pub builder_import_references: Vec<BuilderImportReferences>,
     /// See `FileFacts::first_that_works_uses`.
@@ -943,6 +951,9 @@ pub(crate) struct OpaqueTag {
     /// A parameter or local never names the module's binding of that name.
     pub origin: TagOrigin,
     pub polymorphic: bool,
+    /// Whether the element sets a `ref`, which reads the instance of a
+    /// class component, its props included.
+    pub exposed: bool,
     pub tags: BTreeSet<String>,
     pub imported_args: Vec<String>,
     pub forwards_from: Vec<String>,
@@ -959,9 +970,9 @@ pub(crate) struct OpaqueCall {
     /// reads when it declares a function or class of that name; `None` for
     /// code the analysis cannot see.
     pub callee: Option<String>,
-    /// Whether `callee` is a read method of an array (`rows.map`), the
-    /// built-in one while the array is held (`FileFacts::held_arrays`).
-    pub held_array: bool,
+    /// The array, when `callee` is a read method of one (`rows.map`): the
+    /// built-in method while the array is held (`FileFacts::held_arrays`).
+    pub held_array: Option<String>,
     /// Component tags of the elements it hands on.
     pub tags: BTreeSet<String>,
     /// Imports it hands on, whose declaring modules' `const`s may hold
@@ -1160,6 +1171,8 @@ pub(crate) fn collect_enriched_usage(
         opaque_tags: records.tags,
         held_arrays: records.held_arrays,
         misused_imports: records.misused_imports,
+        class_components: records.classes,
+        patches_intrinsics: records.patches_intrinsics,
         builder_import_references,
         first_that_works_uses,
         builder_proof,
@@ -6666,6 +6679,9 @@ impl ReactImports {
                 oxc::ast_visit::walk::walk_unary_expression(self, unary);
             }
         }
+        if imports.namespaces.is_empty() {
+            return imports;
+        }
         let mut written = Written { scoping, namespaces: &imports.namespaces, written: FxHashSet::default() };
         written.visit_program(program);
         let written = written.written;
@@ -6676,15 +6692,22 @@ impl ReactImports {
     /// Whether `callee` calls one of React's `functions`, named or through a
     /// React namespace, as the module's scopes resolve it.
     fn calls(&self, scoping: &Scoping, callee: &Expression<'_>, functions: &[&str]) -> bool {
-        let symbol = |id: &IdentifierReference<'_>| id.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id());
-        match crate::chain_walk::unwrap_type_assertions(callee) {
-            Expression::Identifier(id) => symbol(id)
+        self.names(scoping, callee, functions, false)
+    }
+
+    /// Whether `expression` names one of React's `names`, imported or as a
+    /// member of a React namespace, or with `unbound`, of an unbound `React`.
+    fn names(&self, scoping: &Scoping, expression: &Expression<'_>, names: &[&str], unbound: bool) -> bool {
+        match crate::chain_walk::unwrap_type_assertions(expression) {
+            Expression::Identifier(id) => symbol_of(scoping, id)
                 .and_then(|symbol| self.functions.get(&symbol))
-                .is_some_and(|function| functions.contains(&function.as_str())),
+                .is_some_and(|function| names.contains(&function.as_str())),
             Expression::StaticMemberExpression(member) => {
-                functions.contains(&member.property.name.as_str())
-                    && matches!(&member.object, Expression::Identifier(object)
-                        if symbol(object).is_some_and(|symbol| self.namespaces.contains(&symbol)))
+                names.contains(&member.property.name.as_str())
+                    && matches!(&member.object, Expression::Identifier(object) if match symbol_of(scoping, object) {
+                        Some(symbol) => self.namespaces.contains(&symbol),
+                        None => unbound && object.name == "React",
+                    })
             }
             _ => false,
         }

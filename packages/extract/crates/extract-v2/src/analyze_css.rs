@@ -6018,8 +6018,9 @@ fn bounded_prop_tags(
         })
     };
     // Whether `module` is `declaring`, or re-exports from it at any depth.
-    let reexports_from =
-        |module: &String, declaring: &String| reexported_modules(module, files, inputs, links, |next| next == declaring);
+    let reexports_from = |module: &String, declaring: &String| {
+        reexported_modules(module, files, inputs, links, &mut FxHashSet::default(), |next| next == declaring)
+    };
     // A namespace member path (`ns.X`) a module reads, as a declaration,
     // resolved once each.
     let declared_by_path: Declarations = RefCell::default();
@@ -6884,16 +6885,16 @@ fn proven_slot_conditions(
 
 /// Visits `module` and every module it re-exports from at any depth, as
 /// the module table links them: by name, as a namespace, through `export
-/// *`, or as `export default` of an imported binding. Stops, saying so,
-/// once `visit` says to.
+/// *`, or as `export default` of an imported binding, skipping those in
+/// `seen`. Stops, saying so, once `visit` says to.
 fn reexported_modules(
     module: &str,
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
+    seen: &mut FxHashSet<String>,
     mut visit: impl FnMut(&String) -> bool,
 ) -> bool {
-    let mut seen: FxHashSet<String> = FxHashSet::default();
     let mut pending = vec![module.to_string()];
     while let Some(next) = pending.pop() {
         if !seen.insert(next.clone()) {
@@ -6905,11 +6906,8 @@ fn reexported_modules(
         let Some(index) = links.module(&next) else { continue };
         pending.extend(links.table.reexported_modules(index).map(|target| links.paths[target].clone()));
         // `export default X` of an imported X, named or a namespace.
-        let default_import = files.get(&next).and_then(|ff| {
-            let local = ff.default_export_binding.as_ref()?;
-            let named = ff.imports.iter().find(|import| &import.local == local).map(|import| &import.source);
-            named.or_else(|| ff.namespace_imports.get(local))
-        });
+        let default_import =
+            files.get(&next).and_then(|ff| ff.default_export_binding.as_ref().and_then(|local| root_import_source(ff, local)));
         if let Some(source) = default_import {
             pending.extend(resolve_import_source(&next, source, files, inputs));
         }
@@ -6971,12 +6969,16 @@ fn opaque_delivery(
                 if let Some((declaring, binding, _)) = resolve_declaration(path, ff, import, files, inputs, links) {
                     held.remove(&(declaring, binding));
                 }
+                // A name that is a module's namespace (`export * as R`)
+                // reaches every array that module re-exports.
+                reached.extend(crate::family_members::local_namespace(path, ff, import, files, inputs, links));
             }
             reached.extend(ff.namespace_imports.values().filter_map(|source| resolve_import_source(path, source, files, inputs)));
             reached.extend(ff.module_loads.iter().flat_map(|load| loaded_modules(path, load, files, inputs)).cloned());
         }
+        let mut seen = FxHashSet::default();
         for module in &reached {
-            reexported_modules(module, files, inputs, links, |next| {
+            reexported_modules(module, files, inputs, links, &mut seen, |next| {
                 if let Some(declared) = files.get(next) {
                     for array in &declared.held_arrays {
                         held.remove(&(next.clone(), array.clone()));
@@ -6988,12 +6990,9 @@ fn opaque_delivery(
     }
     // A read method of a held array is the built-in one.
     let held_array_method = |file: &str, ff: &FileFacts, call: &crate::usage_facts::OpaqueCall| {
-        let array = call.callee.as_deref().and_then(|callee| callee.split_once('.')).map(|(array, _)| array);
-        call.held_array
-            && array.is_some_and(|array| {
-                resolve_declaration(file, ff, array, files, inputs, links)
-                    .is_some_and(|(declaring, binding, _)| held.contains(&(declaring, binding)))
-            })
+        call.held_array.as_deref().is_some_and(|array| {
+            resolve_declaration(file, ff, array, files, inputs, links).is_some_and(|(declaring, binding, _)| held.contains(&(declaring, binding)))
+        })
     };
     // A call is read only into a function or class its declaring module
     // declares, unwritten, that forwards nothing outside, or a read method
@@ -7026,7 +7025,13 @@ fn opaque_delivery(
             })
             .map(|(declaring, binding, _)| (declaring, binding))
             .or_else(|| ordinary_members.get(&(file.to_string(), tag.tag.clone())).cloned());
-        ordinary.is_none_or(|(declaring, binding)| tag.polymorphic || forwarding.contains(&(declaring, binding)))
+        // A ref to a class component reads the instance, its props
+        // included.
+        ordinary.is_none_or(|(declaring, binding)| {
+            tag.polymorphic
+                || forwarding.contains(&(declaring.clone(), binding.clone()))
+                || (tag.exposed && files.get(&declaring).is_some_and(|declared| declared.class_components.contains(&binding)))
+        })
     };
     let mut forwarding: FxHashSet<(String, String)> = FxHashSet::default();
     loop {
@@ -9861,7 +9866,7 @@ fn run_with_system_floor(
         false => FxHashSet::default(),
     };
     let usage_complete = !analysis_incomplete(files, inputs)
-        && !files.values().any(|ff| ff.direct_eval)
+        && !files.values().any(|ff| ff.direct_eval || ff.patches_intrinsics)
         && (!identity_uncertain
             || uncertainty_leaves_usage_proven(
                 &uncertain_identities,
@@ -13154,8 +13159,11 @@ mod tests {
             ("const Frame = ds.styles({ display: 'grid' }).asElement('section');\nconst Render = ({ children }) => <Foreign><Frame>{children}</Frame></Foreign>;", "", "", true),
             ("const Frame = ds.styles({ display: 'grid' }).asElement('section');\nconst Render = () => { const content = <><Box p={4} /></>; return <Foreign><Frame>{content}</Frame></Foreign>; };", "", "", true),
             ("const Frame = ds.styles({ display: 'grid' }).asElement('section');\nconst Render = ({ children }) => <div><Frame>{children}</Frame></div>;", "", "", false),
-            // What unknown code passes a callback is its own, not the component's.
-            ("const Render = ({ rows }) => <ul>{rows.map((row) => <li key={row}>{row}</li>)}</ul>;", "rows={d}", "", false),
+            // A method of an input gets the input as `this`. The component's
+            // inputs are one value to the walk, so it cannot tell the array
+            // from the children beside it: the method gets them all.
+            ("const Render = ({ rows }) => <ul>{rows.map((row) => <li key={row}>{row}</li>)}</ul>;", "rows={d}", "", true),
+            // Unknown code that a callee resolves to.
             ("const Render = ({ children, decorate }) => (decorate || pad)(children);", "decorate={d}", "", true),
             ("const Render = ({ children, wide }) => (wide ? decorate : pad)(children);", "wide", "", true),
             ("const Render = ({ children }) => useSlot().render(children);", "", "", true),
@@ -13288,9 +13296,150 @@ mod tests {
             ("const Render = ({ children }) => { const run = () => wrap(children); const wrap = (c) => <div>{c}</div>; return run(); };", "", "", false),
             ("const Render = ({ children, items }) => <ul>{items.length > 0 ? children : null}</ul>;", "items={d}", "", false),
             ("import { useMemo } from 'react';\nconst Render = ({ children, a }) => { const v = useMemo(() => a * 2, [a]); return <div title={v}>{children}</div>; };", "a={d}", "", false),
-            ("import { useState, useEffect } from 'react';\nconst Render = ({ children, a }) => { const [s, set] = useState(a); useEffect(() => { set(a); }, [a]); return <div title={s}>{children}</div>; };", "a={d}", "", false),
+            // React calls a setter's argument with the state when it is a
+            // function, and an input may be one: with one inputs flag the
+            // walk cannot tell the state from the input itself.
+            ("import { useState, useEffect } from 'react';\nconst Render = ({ children, a }) => { const [s, set] = useState(a); useEffect(() => { set(a); }, [a]); return <div title={s}>{children}</div>; };", "a={d}", "", true),
             ("const Render = ({ children, ...rest }) => <div {...rest}>{children}</div>;", "id={d}", "", false),
             ("const Render = (props) => <section {...props} />;", "", "", false),
+            // A call on an input carries the input: its result, and the
+            // parameters of the callbacks it gets.
+            ("import { Children } from 'react';\nconst Render = ({ children }) => <Foreign>{Children.toArray(children).filter(Boolean)}</Foreign>;", "", "", true),
+            ("import { Children } from 'react';\nconst Render = ({ children }) => <div>{Children.toArray(children).map((c) => <Foreign>{c}</Foreign>)}</div>;", "", "", true),
+            ("import { Children } from 'react';\nconst Render = ({ children }) => { const kids = Children.toArray(children); return <div>{kids.map((c) => <Foreign>{c}</Foreign>)}</div>; };", "", "", true),
+            ("import { Children } from 'react';\nconst Render = ({ children }) => <Foreign>{Children.toArray(children).slice(0)}</Foreign>;", "", "", true),
+            ("const Render = ({ children }) => <div>{[].concat(children).map((c) => <Foreign>{c}</Foreign>)}</div>;", "", "", true),
+            ("const Render = ({ children }) => { Array.from([children]).forEach((c) => pad(c)); return null; };", "", "", true),
+            ("const Render = (props) => <div>{Object.values(props).map((v) => <Foreign>{v}</Foreign>)}</div>;", "", "", true),
+            ("const List = ({ items }) => items.map((item) => <Foreign key={item.id}>{item.content}</Foreign>);\nconst Render = ({ children }) => <List items={[{ id: 1, content: children }]} />;", "", "", true),
+            ("const Slot = ({ renderIcon }) => <Foreign>{renderIcon()}</Foreign>;\nconst Render = ({ children }) => <Slot renderIcon={() => children} />;", "", "", true),
+            ("const Slot = ({ children }) => <Foreign>{children(true)}</Foreign>;\nconst Render = ({ children }) => <Slot>{(open) => children}</Slot>;", "", "", true),
+            ("import { useCallback } from 'react';\nconst Render = ({ children }) => { const get = useCallback(() => children, [children]); return <Foreign>{get()}</Foreign>; };", "", "", true),
+            ("const Render = ({ children }) => <Foreign>{(() => children)()}</Foreign>;", "", "", true),
+            ("class Render extends Component { getKids = () => this.props.children; render() { return <Foreign>{this.getKids()}</Foreign>; } }", "", "", true),
+            ("const Render = ({ children }) => { const g = pad.bind(null, children); g(); return null; };", "", "", true),
+            ("const Render = ({ children, load }) => { load.then((v) => pad(v)); return <div>{children}</div>; };", "load={d}", "", true),
+            ("const Render = ({ children, items }) => <ul>{items.map((item) => <li key={item}>{item}</li>)}{children}</ul>;", "items={d}", "", true),
+            // React hands a state setter's argument back as the state.
+            ("import { useState, useEffect } from 'react';\nconst Render = ({ children }) => { const [s, set] = useState(null); useEffect(() => { set(children); }, [children]); return <Foreign>{s}</Foreign>; };", "", "", true),
+            // A base class other than React's receives the instance.
+            ("class Render extends Foreign { constructor(props) { super(props); } render() { return <div>{this.props.children}</div>; } }", "", "", true),
+            ("class Render extends Foreign {}", "", "", true),
+            ("class Render extends Component { constructor(props) { super(props); } render() { return <div>{this.props.children}</div>; } }", "", "", false),
+            // A private field carries what it holds.
+            ("class Render extends Component { #c = null; render() { this.#c = this.props.children; return pad(this.#c); } }", "", "", true),
+            ("class Render extends Component { #c = null; render() { this.#c = this.props.children; return <Foreign>{this.#c}</Foreign>; } }", "", "", true),
+            // A top-level function passed as a callback is the callee.
+            ("function send(child) { pad(child); }\nconst Render = ({ children }) => { [children].forEach(send); return null; };", "", "", true),
+            ("import { Children } from 'react';\nfunction wrapChild(child) { return <Foreign>{child}</Foreign>; }\nconst Render = ({ children }) => <div>{Children.map(children, wrapChild)}</div>;", "", "", true),
+            ("function send(child) { pad(child); }\nconst Render = ({ children }) => { setTimeout(send, 0, children); return null; };", "", "", true),
+            ("const Render = ({ children }) => <ul>{[children].map((c) => <li>{c}</li>, 0)}</ul>;", "", "", false),
+            ("import { Children } from 'react';\nconst Render = ({ children }) => <ul>{Children.map(children, (c) => <li>{c}</li>)}</ul>;", "", "", false),
+            // Every store goes through one judgement.
+            ("let current;\nconst Render = ({ children }) => { for (current of [children]) {} return null; };\nexport const Other = () => pad(current);", "", "", true),
+            ("const Render = ({ children }) => { for (globalThis.slot of [children]) {} return null; };", "", "", true),
+            ("const Render = ({ slots }) => { let target = {}; target = slots; target.icon = <Box p={4} />; return null; };", "slots={d}", "", true),
+            ("const Use = () => decorate(useContext(Ctx));\nconst Render = ({ children }) => <Ctx.Provider {...{ value: children }}><Use /></Ctx.Provider>;", "", "", true),
+            ("class Make { static icon() { return <Box p={4} />; } }\nconst Render = () => { decorate(Make); return null; };", "", "", true),
+            ("class Make { icon() { return <Box p={4} />; } }\nconst Render = () => { decorate(Make); return null; };", "", "", true),
+            // Each declarator of a top-level `export const` names its own binding.
+            ("export const A = ({ children }) => <Foreign>{children}</Foreign>, Render = ({ children }) => <div>{children}</div>;", "", "", false),
+            // A store stays local only into a plain local object it owns.
+            ("const Render = ({ children }) => { const o = { set slot(v) { pad(v); } }; o.slot = children; return null; };", "", "", true),
+            ("const Render = ({ children, target }) => { let o = {}; o = target; o.slot = children; return null; };", "target={d}", "", true),
+            ("const Render = ({ children, target }) => { const o = { target }; o.target.slot = children; return null; };", "target={d}", "", true),
+            ("const Render = ({ children }) => { const o = { __proto__: { set slot(v) { pad(v); } } }; o.slot = children; return null; };", "", "", true),
+            ("const Render = ({ children, target }) => { let a = []; a = target; a[0] = children; return null; };", "target={d}", "", true),
+            ("const Render = ({ children, proto }) => { const o = { __proto__: proto }; o.slot = children; return null; };", "proto={d}", "", true),
+            ("const Render = () => { const o = { set slot(v) { pad(v); } }; o.slot = <Box p={4} />; return null; };", "", "", true),
+            ("const Render = ({ children }) => { const o = {}; o.slot = children; return <div>{o.slot}</div>; };", "", "", false),
+            // `bind` is Function.prototype.bind only on a function the module
+            // declares, and the bound function's callee gets its arguments.
+            ("const Render = ({ children }) => <button onClick={pad.bind(null, children)}>go</button>;", "", "", true),
+            ("const Render = ({ children }) => <button onClick={() => pad(children)}>go</button>;", "", "", true),
+            ("const Render = ({ children }) => <div ref={pad.bind(null, children)} />;", "", "", true),
+            ("const Render = ({ children }) => { const send = (c) => pad(c); const g = send.bind(null, children); g(); return null; };", "", "", true),
+            ("const Render = ({ children }) => { useSlot().bind(children); return null; };", "", "", true),
+            ("const Render = ({ children }) => { const o = { bind: pad }; o.bind(children); return null; };", "", "", true),
+            // A state setter is React's only while nothing reassigns it, and
+            // the callbacks React calls see the state.
+            ("import { useState } from 'react';\nconst Render = ({ children }) => { let [s, set] = useState(null); set = pad; set(children); return null; };", "", "", true),
+            ("import { useReducer } from 'react';\nconst Render = ({ children }) => { let [s, dispatch] = useReducer((x) => x, null); dispatch = pad; dispatch(children); return null; };", "", "", true),
+            ("import { useState } from 'react';\nconst Render = ({ children }) => { const [s, set] = useState(children); if (s.props.p === 8) set((v) => pad(v)); return s; };", "", "", true),
+            ("import { useState } from 'react';\nconst Render = ({ children }) => { const [s, set] = useState(children); return <button onClick={() => set((v) => pad(v))}>{s}</button>; };", "", "", true),
+            ("class Render extends Component { render() { return <button onClick={() => this.setState((state, props) => pad(props.children))} />; } }", "", "", true),
+            ("import { useReducer } from 'react';\nconst Render = ({ children }) => { useReducer((s) => s, children, pad); return null; };", "", "", true),
+            ("import { useReducer } from 'react';\nconst Render = ({ children }) => { const [s, dispatch] = useReducer(pad, null); dispatch({ value: children }); return null; };", "", "", true),
+            ("import { useState } from 'react';\nconst Render = ({ children }) => { const [s, set] = useState(children); return <div>{s}</div>; };", "", "", false),
+            // A class's own method is the one a call through `this` runs only
+            // when nothing can replace it.
+            ("class Render extends Component { get pass() { return pad; } render() { return this.pass(this.props.children); } }", "", "", true),
+            ("class Render extends Component { constructor(props) { super(props); this.pass = pad; } pass(v) { return <div>{v}</div>; } render() { return this.pass(this.props.children); } }", "", "", true),
+            ("class Render extends Component { pass(v) { return <div>{v}</div>; } render() { this.pass = pad; return this.pass(this.props.children); } }", "", "", true),
+            ("class Render extends Component { pass(v) { return <div>{v}</div>; } render() { const self = this; self.pass = pad; return this.pass(this.props.children); } }", "", "", true),
+            ("class Render extends Component { pass = pad; pass(v) { return <div>{v}</div>; } render() { return this.pass(this.props.children); } }", "", "", true),
+            ("class Render extends Component { setState = pad; render() { this.setState({ kids: this.props.children }); return null; } }", "", "", true),
+            ("class Render extends Component { pass(v) { return <div>{v}</div>; } render() { return this.pass(this.props.children); } }", "", "", false),
+            // A method of a value that holds inputs or elements gets the value
+            // as `this`.
+            ("const Render = ({ children }) => { const o = { children, run() { pad(this.children); } }; o.run(); return null; };", "", "", true),
+            ("const Render = (props) => { props.deliver(); return null; };", "", "", true),
+            ("const Render = (props) => { props.deliver?.(); return null; };", "", "", true),
+            // `for…of` stores into its target as an assignment does.
+            ("const Render = ({ children }) => { let item; for ([item] of [[children]]) pad(item); return null; };", "", "", true),
+            ("const Render = ({ children }) => { const o = { set slot(v) { pad(v); } }; for (o.slot of [children]) {} return null; };", "", "", true),
+            ("import { saved } from 'outside';\nconst Render = ({ children }) => { for (saved.slot of [children]) {} return null; };", "", "", true),
+            ("const Render = () => { for (globalThis.saved of [<Box p={4} />]) {} return null; };", "", "", true),
+            ("const Render = ({ children }) => { for (const [item] of [[children]]) pad(item); return null; };", "", "", true),
+            // A callback that can see the array it reads may change it.
+            ("const rows = [0];\nrows.forEach((value, index, self) => { self.map = decorate; });\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "", true),
+            // `arguments` holds what the function's calls pass it.
+            ("const Render = () => { function get() { pad(arguments[0]); return null; } return get(<Box p={4} />); };", "", "", true),
+            ("const Render = () => { function get(unused) { pad(arguments[0]); return null; } return get(<Box p={4} />); };", "", "", true),
+            // Coercion runs the hooks of an object the component builds.
+            ("const Render = ({ children, coerce }) => { const o = { children, [Symbol.toPrimitive]: coerce }; return o + 1; };", "coerce={d}", "", true),
+            ("const Render = ({ children, coerce }) => { const o = { children, [Symbol.toPrimitive]: coerce }; return String(o); };", "coerce={d}", "", true),
+            ("const Render = ({ children, coerce }) => { const o = { children, [Symbol.toPrimitive]: coerce }; return `${o}`; };", "coerce={d}", "", true),
+            ("const Render = ({ children, coerce }) => { const o = { children, [Symbol.toPrimitive]: coerce }; const k = { [o]: 1 }; return null; };", "coerce={d}", "", true),
+            ("const Render = ({ children }) => { const o = { children, [Symbol.toPrimitive]() { pad(this.children); return 'x'; } }; return `${o}`; };", "", "", true),
+            ("const Render = ({ children }) => { JSON.stringify(children, decorate); return null; };", "", "", true),
+            ("const Render = () => { JSON.stringify(<Box p={4} />, decorate); return null; };", "", "", true),
+            ("const Render = ({ children }) => { const a = [children]; a[Symbol.iterator] = function* () { pad(this[0]); yield this[0]; }; return <div>{[...a]}</div>; };", "", "", true),
+            ("const Render = ({ children }) => <div hidden={!children} title={typeof children} data-x={children === null}>{children}</div>;", "", "", false),
+            // A host attribute is set as a property on a custom element, and
+            // coerced on any other.
+            ("const Render = () => <x-deliver value={<Box p={4} />} />;", "", "", true),
+            ("const Render = ({ children, coerce }) => <div title={{ children, toString: coerce }} />;", "coerce={d}", "", true),
+            // A ref to a class component reads its props and fields.
+            ("class Render extends Component { render() { return <div>{this.props.children}</div>; } }", "ref={pad}", "", true),
+            ("class Render extends Component { constructor(props) { super(props); this.any = props.children; } render() { return null; } }", "ref={pad}", "", true),
+            ("const Render = ({ children }) => <div>{children}</div>;", "ref={pad}", "", false),
+            // A `using` declaration disposes of what it holds.
+            ("const Render = ({ children }) => { using resource = { children, [Symbol.dispose]: pad }; return null; };", "", "", true),
+            ("const Render = async ({ children }) => { await using resource = { children, [Symbol.asyncDispose]: pad }; return null; };", "", "", true),
+            ("const Render = () => { using resource = { el: <Box p={4} />, [Symbol.dispose]: pad }; return null; };", "", "", true),
+            // A read, an `await` or a store reaches the hooks of an object
+            // the component builds.
+            ("const Render = ({ children }) => { const o = { children, get x() { pad(this.children); return 1; } }; const y = o.x; return null; };", "", "", true),
+            ("const Render = async ({ children }) => { await { children, then(resolve) { pad(this.children); resolve(); } }; return null; };", "", "", true),
+            ("const Render = ({ children }) => { const k = '__proto__'; const o = {}; o[k] = { set slot(v) { pad(v); } }; o.slot = children; return null; };", "", "", true),
+            ("const Render = ({ children }) => { const o = { children, bind: pad }; o.bind(); return null; };", "", "", true),
+            // A class anything outside can subclass may have its methods
+            // replaced, and its base gets what `super` gets.
+            ("export class Render extends Component { pass(v) { return <div>{v}</div>; } render() { return this.pass(this.props.children); } }", "", "", true),
+            ("class Render extends Component { #c = null; render() { this.#c = this.props.children; return <div>{this.#c}</div>; } }", "", "", false),
+            // React's functions call back only at the positions their
+            // signatures list; any other React name is unknown code.
+            ("import { useReducer } from 'react';\nconst Render = ({ children, reducer }) => { useReducer(reducer, children); return null; };", "reducer={d}", "", true),
+            ("import { useState } from 'react';\nconst Render = ({ children, update }) => { const [s, set] = useState(children); set(update); return null; };", "update={d}", "", true),
+            ("import { useOptimistic } from 'react';\nconst Render = ({ children, update }) => { useOptimistic(children, update); return null; };", "update={d}", "", true),
+            ("import { useDebugValue } from 'react';\nconst Render = ({ children, format }) => { useDebugValue(children, format); return null; };", "format={d}", "", true),
+            ("import { unstable_hand } from 'react';\nconst Render = ({ children }) => { unstable_hand(children); return null; };", "", "", true),
+            ("class Render extends Component { render() { return <button onClick={() => this.setState(this.props.update)}>{this.props.children}</button>; } }", "update={d}", "", true),
+            ("import { useRef } from 'react';\nconst Render = ({ children }) => { const r = useRef(children); return <div>{r.current}</div>; };", "", "", false),
+            ("import { useMemo as useComputed } from 'react';\nconst Render = ({ children }) => { const kids = useComputed(() => children, [children]); return <div>{kids}</div>; };", "", "", false),
+            // A binding declared to an object literal with hooks is hookable.
+            ("const Render = ({ children }) => { const o = { [Symbol.toPrimitive]() { pad(this.slot); return ''; } }; o.slot = children; return `${o}`; };", "", "", true),
             // Forwarding is decided per component: an input handed to
             // unknown code (a callback prop called with a prop, `clsx` with
             // a class name) marks every element the component gets.
@@ -13332,12 +13481,23 @@ mod tests {
         ] {
             assert_eq!(keeps_p(component, props, other), keeps, "{component} {props}");
         }
+        // A base other than React's gets what `super` gets.
+        let base = "import { Foreign } from 'outside';\nimport { icon } from './other';\nexport const Box = ds.system({ space: true }).asElement('div');\nclass Render extends Foreign { constructor(props) { super(icon); } render() { return null; } }\nexport const App = () => <Render />;\n";
+        let files = [("a.tsx", base), ("other.tsx", "import { Box } from './a';\nexport const icon = <Box p={4} />;\n")];
+        assert!(analyze(&files, &test_inputs()).dynamic_props.contains_key("p"));
         // A write through a barrel reaches the module that declares the array.
         let a = "import { rows } from './rows';\nexport const Box = ds.system({ space: true }).asElement('div');\nexport const App = () => <ul>{rows.map((row) => <Box key={row} p={4} />)}</ul>;\n";
         for (barrel, other, keeps) in [
             ("export * from './rows';\n", "import * as b from './barrel';\nimport { pad } from 'outside';\nb.rows.map = pad;\n", true),
             ("export { rows } from './rows';\n", "import * as b from './barrel';\nimport { pad } from 'outside';\nb.rows.map = pad;\n", true),
             ("export * from './rows';\n", "import { pad } from 'outside';\nimport('./barrel').then((b) => { b.rows.map = pad; });\n", true),
+            ("export * as R from './rows';\n", "import { R } from './barrel';\nimport { pad } from 'outside';\nR.rows.map = pad;\n", true),
+            ("export * from './rows';\n", "import { rows } from './rows';\nimport { decorate } from 'outside';\nrows.forEach((value, index, self) => { self.map = decorate; });\n", true),
+            ("export * from './rows';\n", "import { decorate } from 'outside';\nArray.prototype.map = decorate;\n", true),
+            ("export * from './rows';\n", "import { decorate } from 'outside';\n[].__proto__.map = decorate;\n", true),
+            ("export * from './rows';\n", "import { decorate } from 'outside';\nglobalThis.Array.prototype.map = decorate;\n", true),
+            ("export * from './rows';\n", "import { decorate } from 'outside';\nObject.getPrototypeOf([]).map = decorate;\n", true),
+            ("export * from './rows';\n", "import { rows } from './rows';\nArray.prototype.forEach.call(rows, (value) => value);\n", true),
             ("export * from './rows';\n", "import { rows } from './barrel';\nexport const n = rows.length;\n", false),
         ] {
             let files = [("a.tsx", a), ("rows.tsx", "export const rows = ['a'];\n"), ("barrel.tsx", barrel), ("other.tsx", other)];
