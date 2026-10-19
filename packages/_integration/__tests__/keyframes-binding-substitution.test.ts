@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { analyzeProject, clearAnalysisCache } from './run-pipeline';
+import { analyzeProjectFull, clearAnalysisCache } from './run-pipeline';
 
 import type { KeyframesBlocks } from './run-pipeline';
 
@@ -19,7 +19,7 @@ const runWithKeyframes = (
   keyframesBlocks: KeyframesBlocks
 ) => {
   clearAnalysisCache();
-  const manifestJson = analyzeProject(JSON.stringify(fileEntries), {
+  const manifestJson = analyzeProjectFull(JSON.stringify(fileEntries), {
     keyframesJson: JSON.stringify(keyframesBlocks),
   });
   return JSON.parse(manifestJson);

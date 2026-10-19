@@ -17,6 +17,18 @@ export declare class ExtractEngine {
    * given. A `prepare` of the same files lends its parse.
    */
   analyze(fileEntriesJson: string, probeEvidenceJson?: string | undefined | null): string
+  /**
+   * The full manifest of the last `analyze`: every section but
+   * `chainBindings`. A host that persists the manifest, and tooling, ask
+   * for it.
+   */
+  fullManifestJson(): string
+  /**
+   * One section the host manifest leaves out (`fileFacts`, `crossFile`,
+   * `usageResidue` or `component_fragments`) of the last `analyze`, as
+   * JSON.
+   */
+  manifestSection(name: string): string
   clearCache(): void
   get parseCount(): number
   transformFile(path: string): string

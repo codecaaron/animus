@@ -5,7 +5,11 @@ import {
 } from '@animus-ui/extract/pipeline';
 import { ANIMUS_CSS_MODULE_ID } from '@animus-ui/extract/session';
 
-import type { ProjectManifest, ServedFiles } from '@animus-ui/extract/pipeline';
+import type {
+  ProjectManifest,
+  PublishedManifest,
+  ServedFiles,
+} from '@animus-ui/extract/pipeline';
 
 export interface LoaderPolicyOptions {
   /** `next dev`: the Turbopack loader waits for and re-delivers the dev
@@ -126,7 +130,7 @@ function manifestServedFiles(manifestJson: string): ServedFiles {
     // SAFETY: the session's own published manifest.
     parsedManifest = {
       json: manifestJson,
-      served: servedFiles(JSON.parse(manifestJson) as ProjectManifest),
+      served: servedFiles(JSON.parse(manifestJson) as PublishedManifest),
     };
   }
   return parsedManifest.served;

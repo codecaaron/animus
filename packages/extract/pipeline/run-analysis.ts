@@ -39,7 +39,11 @@ export interface EmitterConfig {
 
 export interface ProjectAnalysisResult {
   manifest: ProjectManifest;
+  /** The host manifest `analyze` returned. */
   manifestJson: string;
+  /** The full manifest of this analysis, every section, serialized when
+   *  asked: before the engine analyses again. */
+  fullManifestJson: () => string;
   globalCss: string;
   componentCss: string;
   /** The exact analyze-time inputs (serialized `filesJson` included) —
@@ -314,7 +318,8 @@ export function runProjectAnalysis(
     reportErrors?: (message: string) => void;
   }
 ): ProjectAnalysisResult {
-  const { analyzeProject, diagnosticCodes, packageLoads } = engineApi();
+  const { analyzeProject, diagnosticCodes, fullManifestJson, packageLoads } =
+    engineApi();
 
   let t = performance.now();
   const inputs = buildAnalysisInputs(opts);
@@ -388,6 +393,7 @@ export function runProjectAnalysis(
   return {
     manifest,
     manifestJson,
+    fullManifestJson: fullManifestJson ?? (() => manifestJson),
     globalCss: manifest.sheets.global,
     componentCss,
     inputs,

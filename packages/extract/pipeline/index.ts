@@ -259,7 +259,9 @@ export type {
   ManifestMissingInput,
   ManifestComponentSheets,
   ManifestSheets,
+  FullProjectManifest,
   ProjectManifest,
+  PublishedManifest,
 } from './manifest-schema';
 export type {
   DiagnosticLevel,

@@ -2,7 +2,8 @@
 // a fresh engine, over a captured input (see capture.cjs). Constructing the
 // engine is outside the timed interval; `prepare`, where the engine has it,
 // and `analyze` are inside. Prints one JSON line: elapsed ms and a receipt
-// of the emitted manifest.
+// of the emitted manifest: the full one, outside the timed interval, where
+// the engine returns a host manifest from `analyze`.
 // Usage: node analysis.cjs <extract package dir> <captured input>
 
 const { createHash } = require('node:crypto');
@@ -15,8 +16,10 @@ const { config, files, evidence } = JSON.parse(readFileSync(inputPath, 'utf8'));
 const engine = new native.ExtractEngine(config);
 const start = process.hrtime.bigint();
 if ('prepare' in engine) engine.prepare(files);
-const manifestJson = engine.analyze(files, evidence ?? undefined);
+const hostManifestJson = engine.analyze(files, evidence ?? undefined);
 const ms = Number(process.hrtime.bigint() - start) / 1e6;
+const manifestJson =
+  'fullManifestJson' in engine ? engine.fullManifestJson() : hostManifestJson;
 
 // The manifest's own timing differs run to run; the digest covers the rest.
 const { timing: _timing, ...manifest } = JSON.parse(manifestJson);

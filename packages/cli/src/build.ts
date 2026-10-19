@@ -33,7 +33,7 @@ import {
 
 import type { ResolvedCliConfig } from './config';
 import type { ArtifactPayloads } from './writer';
-import type { ProjectManifest } from '@animus-ui/extract/pipeline';
+import type { PublishedManifest } from '@animus-ui/extract/pipeline';
 import type { SessionKey } from '@animus-ui/extract/session';
 
 export class ExtractionFailure extends Error {}
@@ -143,7 +143,7 @@ export function publishSharedPayloads(
     try {
       // SAFETY: these bytes are the session's own `analyze()` output, whose
       // wire type the producing package declares; a non-manifest is caught.
-      const manifest = JSON.parse(manifestJson) as ProjectManifest;
+      const manifest = JSON.parse(manifestJson) as PublishedManifest;
       componentCount = Object.keys(manifest.components).length;
     } catch {
       throw new ExtractionFailure('Analysis published no readable manifest');
@@ -248,9 +248,9 @@ export interface BuildFlags {
 /** Writes the analysed kit's descriptor at the root, from the manifest the
  *  build published. */
 function writeKitDescriptor(root: string, key: SessionKey): string {
-  // SAFETY: the session's own `analyze()` output, which `ProjectManifest`
+  // SAFETY: the session's own published manifest, which `PublishedManifest`
   // mirrors; anything that is not JSON throws here.
-  const manifest = JSON.parse(getManifestJson(key) ?? '') as ProjectManifest;
+  const manifest = JSON.parse(getManifestJson(key) ?? '') as PublishedManifest;
   const path = join(root, KIT_DESCRIPTOR_FILE);
   writeFileSync(
     path,

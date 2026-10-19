@@ -16,7 +16,10 @@ export interface V2ExtractEngine {
   /** Parses the files for the next `analyze` of them, and names each base
    *  their specifiers probe. */
   prepare(filesJson: string): string;
+  /** The host manifest: without the sections no host reads. */
   analyze(filesJson: string, probeEvidenceJson?: string): string;
+  /** The last analysis's full manifest: every section. */
+  fullManifestJson(): string;
   transformFile(path: string): string;
   clearCache(): void;
 }
@@ -134,6 +137,10 @@ export interface EngineApi {
     manifest: string
   ) => TransformFileResult;
   clearAnalysisCache: () => void;
+  /** The last `analyzeProject`'s full manifest, every section, which a
+   *  persisted manifest artifact and tooling read. Absent, `analyzeProject`
+   *  returns the full manifest itself. */
+  fullManifestJson?: () => string;
 }
 
 /**
@@ -426,6 +433,15 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           return { code: source, hasComponents: false };
         }
         return result;
+      },
+      fullManifestJson: () => {
+        const engine = store.getEngine();
+        if (!engine) {
+          throw new Error(
+            `[${label}] v2 fullManifestJson before analyze — engine instance not initialized`
+          );
+        }
+        return engine.fullManifestJson();
       },
       clearAnalysisCache: () => {
         const engine = store.getEngine();

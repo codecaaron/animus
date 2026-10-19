@@ -9,7 +9,7 @@ import {
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 
 import type { ManifestDiagnostic } from './manifest-diagnostics';
-import type { ProjectManifest } from './manifest-schema';
+import type { ProjectManifest, PublishedManifest } from './manifest-schema';
 import type { JsonValue } from './tsconfig-paths';
 
 /** A kit's description, which `animus build --kit` writes at its package
@@ -42,7 +42,7 @@ function posixPath(path: string): string {
 }
 
 /** The descriptor of the kit a build analysed. */
-export function buildKitDescriptor(manifest: ProjectManifest): KitDescriptor {
+export function buildKitDescriptor(manifest: PublishedManifest): KitDescriptor {
   const components: Record<string, KitComponentDescriptor> = {};
   for (const id of Object.keys(manifest.components).sort()) {
     const component = manifest.components[id];
@@ -121,12 +121,12 @@ export function kitDescriptorDiagnostics(
   // diagnostic, so only a component no chain of its analysed file declares
   // is missing. Discovery may read part of a kit, so a file it left out is
   // not judged, nor is one the kit no longer ships.
-  const analysedFiles = new Set(Object.keys(manifest.fileFacts).map(posixPath));
+  const analysedFiles = new Set(
+    Object.keys(manifest.chainBindings).map(posixPath)
+  );
   const declared = new Set(
-    Object.entries(manifest.fileFacts).flatMap(([file, facts]) =>
-      facts.chains.map(
-        (chain) => `${posixPath(file)}::${chain.descriptor.binding}`
-      )
+    Object.entries(manifest.chainBindings).flatMap(([file, bindings]) =>
+      bindings.map((binding) => `${posixPath(file)}::${binding}`)
     )
   );
   for (const record of records) {

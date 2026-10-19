@@ -253,7 +253,7 @@ async function main() {
   for (const unit of units) {
     try {
       api.clearAnalysisCache();
-      const manifestJson: string = api.analyzeProject(
+      const hostManifestJson: string = api.analyzeProject(
         ...buildAnalyzeProjectArgs({
           filesJson: JSON.stringify(unit.files),
           scalesJson: theme.scalesJson,
@@ -278,6 +278,8 @@ async function main() {
           transformSourcesJson: config.transformSources ?? null,
         })
       );
+      // Parity reads every section, as the engine kept them.
+      const manifestJson: string = api.fullManifestJson?.() ?? hostManifestJson;
       const manifest = parseManifest(manifestJson);
 
       const code: Record<string, string> = {};

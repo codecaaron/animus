@@ -86,6 +86,16 @@ export function analyzeProject(
   );
 }
 
+/** Analyzes as `analyzeProject` does; returns the full manifest JSON, every
+ *  section, as tooling reads it. */
+export function analyzeProjectFull(
+  filesJson: string,
+  overrides: Partial<AnalyzeProjectInputs> = {}
+): string {
+  const hostManifestJson = analyzeProject(filesJson, overrides);
+  return engineApi().fullManifestJson?.() ?? hostManifestJson;
+}
+
 /** Transforms one file of the most recent analysis. */
 export function transformFile(path: string, source: string) {
   return engineApi().transformFile(source, path, '');
@@ -134,7 +144,7 @@ export function runPipeline(
   fileEntries: Array<{ path: string; source: string }>,
   options: { devMode?: boolean; inputs?: Partial<AnalyzeProjectInputs> } = {}
 ) {
-  const manifestJson = analyzeProject(JSON.stringify(fileEntries), {
+  const manifestJson = analyzeProjectFull(JSON.stringify(fileEntries), {
     devMode: options.devMode ?? false,
     selectorAliasesJson: config.selectorAliases,
     ...options.inputs,

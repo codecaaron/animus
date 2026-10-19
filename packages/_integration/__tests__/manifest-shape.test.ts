@@ -12,6 +12,7 @@ import { clearAnalysisCache, runPipeline } from './run-pipeline';
 import type { JsonObject, JsonValue } from '@animus-ui/assertions';
 import type {
   DynamicPropMeta,
+  FullProjectManifest,
   ManifestComponentDescriptor,
   ManifestComponentSheets,
   ProjectManifest,
@@ -20,7 +21,7 @@ import type {
 const COMPONENTS = join(__dirname, '..', 'fixtures', 'components');
 
 type IntegrationManifest = Pick<
-  ProjectManifest,
+  FullProjectManifest,
   | 'components'
   | 'files'
   | 'reverse_provenance'
@@ -96,7 +97,7 @@ function parseComponentFragments(candidate: JsonValue) {
   if (!isJsonObject(candidate)) {
     throw new TypeError('manifest.component_fragments must be an object');
   }
-  const fragments: ProjectManifest['component_fragments'] = {};
+  const fragments: FullProjectManifest['component_fragments'] = {};
   for (const [componentId, layers] of Object.entries(candidate)) {
     if (!isJsonObject(layers)) {
       throw new TypeError(

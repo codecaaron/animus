@@ -9,12 +9,12 @@ import { transform as lcssTransform } from 'lightningcss';
 import { join } from 'path';
 import { describe, expect, test } from 'vitest';
 
-import { analyzeProject } from './run-pipeline';
+import { analyzeProjectFull } from './run-pipeline';
 
 const FIXTURES = join(__dirname, '../fixtures/components');
 
 const source = readFileSync(join(FIXTURES, 'cascade-combos.tsx'), 'utf-8');
-const manifestJson = analyzeProject(
+const manifestJson = analyzeProjectFull(
   JSON.stringify([{ path: 'cascade-combos.tsx', source }]),
   { devMode: true }
 );

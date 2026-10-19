@@ -458,6 +458,8 @@ export interface WatchPlan {
 /** One published generation, as a host serving from memory reads it. */
 export interface SessionPublication {
   manifest: ProjectManifest;
+  /** The full manifest where the session persists artifacts, the host
+   *  manifest otherwise (`PublishedManifest`). */
   manifestJson: string;
   /** The analysis sheets with asset() URLs substituted, before Lightning
    *  CSS: what a host assembling its own stylesheet reads. */
@@ -3095,10 +3097,16 @@ export class ExtractionSession {
     }
     const generation = (this.lastCommit?.generation ?? 0) + 1;
 
+    // A persisted manifest is read by tooling (the oracle) and by loaders in
+    // other processes, so it is the full one; in memory the host reads only
+    // the host manifest's sections.
+    const manifestJson = this.persistArtifacts
+      ? result.fullManifestJson()
+      : result.manifestJson;
     this.publishPayloadArtifact(
       'manifest',
       MANIFEST_ARTIFACT,
-      result.manifestJson,
+      manifestJson,
       epoch,
       generation,
       envelopeJsonArtifact
@@ -3149,7 +3157,7 @@ export class ExtractionSession {
     // Staged last: an attempt that fails before here commits nothing.
     this.stagedPublication = {
       manifest,
-      manifestJson: result.manifestJson,
+      manifestJson,
       analysisGlobalCss: sheets.globalCss,
       analysisComponentCss: sheets.componentCss,
       fontPreloads,

@@ -21,16 +21,23 @@ fn derive_compose_context_import(runtime_import: &str) -> String {
     format!("{}/compose-with-context", runtime_import)
 }
 
+/// The manifest. The host manifest `analyze` returns leaves out
+/// `fileFacts`, `crossFile`, `usageResidue` and `component_fragments`, which
+/// no host reads, and carries `chainBindings` in place of `fileFacts`; the
+/// full manifest (`fullManifestJson`) holds every section but `chainBindings`.
 #[derive(serde::Serialize)]
 struct AnalyzeResult<'a> {
-    #[serde(rename = "fileFacts")]
-    file_facts: &'a BTreeMap<String, facts::FileFacts>,
-    #[serde(rename = "crossFile")]
-    cross_file: cross_file::CrossFileFacts,
+    #[serde(rename = "fileFacts", skip_serializing_if = "Option::is_none")]
+    file_facts: Option<&'a BTreeMap<String, facts::FileFacts>>,
+    /// Each analysed file's chain bindings: what a host reads of the facts.
+    #[serde(rename = "chainBindings", skip_serializing_if = "Option::is_none")]
+    chain_bindings: Option<BTreeMap<&'a str, Vec<&'a str>>>,
+    #[serde(rename = "crossFile", skip_serializing_if = "Option::is_none")]
+    cross_file: Option<&'a cross_file::CrossFileFacts>,
     #[serde(rename = "parseCount")]
     parse_count: usize,
-    #[serde(rename = "usageResidue")]
-    usage_residue: &'a [crate::usage_facts::UsageResidueRecord],
+    #[serde(rename = "usageResidue", skip_serializing_if = "Option::is_none")]
+    usage_residue: Option<&'a [crate::usage_facts::UsageResidueRecord]>,
     css: &'a str,
     sheets: &'a crate::css::CssSheets,
     diagnostics: &'a [analyze_css::CssDiagnostic],
@@ -40,7 +47,8 @@ struct AnalyzeResult<'a> {
     dynamic_props: &'a std::collections::BTreeMap<String, crate::dynamic_meta::DynamicPropMeta>,
     admitted_transforms: &'a std::collections::BTreeMap<String, String>,
     typed_system_props: &'a [String],
-    component_fragments: &'a std::collections::BTreeMap<String, crate::css::PerComponentSheets>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    component_fragments: Option<&'a std::collections::BTreeMap<String, crate::css::PerComponentSheets>>,
     system_fingerprint: &'a str,
     reverse_provenance: &'a std::collections::BTreeMap<String, Vec<String>>,
     components: &'a std::collections::BTreeMap<String, analyze_css::ComponentDescriptor>,
@@ -354,8 +362,6 @@ fn path_root(path: &str) -> (String, &str, bool) {
 pub struct ExtractEngine {
     opts: ResolvedOptions,
     facts: BTreeMap<String, facts::FileFacts>,
-    /// Computed once per analyze(); recomputing per transform is O(files²).
-    cross: Option<cross_file::CrossFileFacts>,
     sources: BTreeMap<String, String>,
     /// The files of the last analyze(), by path: the canonical order every
     /// order-sensitive choice reads (registration collisions, first-wins
@@ -1040,7 +1046,6 @@ impl ExtractEngine {
                 css_inputs,
             },
             facts: BTreeMap::new(),
-            cross: None,
             sources: BTreeMap::new(),
             order: Vec::new(),
             css: None,
@@ -1520,18 +1525,76 @@ impl ExtractEngine {
             name_compiled_kit_fix(diagnostic, &compiled_declarations, output_dirs);
         }
         analyze_css::report_unread_openings(&mut css.diagnostics, &self.facts, &self.opts.css_inputs);
-        let cross = cross_file::resolve_cross_file(&self.facts, css.member_bindings.clone());
+        self.css = Some(css);
+        self.manifest_json(false)
+    }
+
+    /// The full manifest of the last `analyze`: every section but
+    /// `chainBindings`. A host that persists the manifest, and tooling, ask
+    /// for it.
+    #[napi]
+    pub fn full_manifest_json(&self) -> napi::Result<String> {
+        self.manifest_json(true)
+    }
+
+    /// `analyze`, then its full manifest: for tests that read a section the
+    /// host manifest leaves out.
+    #[cfg(test)]
+    pub(crate) fn analyze_full(&mut self, file_entries_json: String, probe_evidence_json: Option<String>) -> napi::Result<String> {
+        self.analyze(file_entries_json, probe_evidence_json)?;
+        self.full_manifest_json()
+    }
+
+    /// One section the host manifest leaves out (`fileFacts`, `crossFile`,
+    /// `usageResidue` or `component_fragments`) of the last `analyze`, as
+    /// JSON.
+    #[napi]
+    pub fn manifest_section(&self, name: String) -> napi::Result<String> {
+        let Some(css) = &self.css else {
+            return Err(napi::Error::from_reason("manifestSection: analyze() must run first".to_string()));
+        };
+        let out = match name.as_str() {
+            "fileFacts" => serde_json::to_string(&self.facts),
+            "crossFile" => serde_json::to_string(&self.cross_file(css)),
+            "usageResidue" => serde_json::to_string(&css.usage_residue),
+            "component_fragments" => serde_json::to_string(&css.component_fragments),
+            other => return Err(napi::Error::from_reason(format!("manifestSection: no section {other:?}"))),
+        };
+        out.map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
+    }
+
+    /// The cross-file facts of the last `analyze`, which only the full
+    /// manifest carries.
+    fn cross_file(&self, css: &analyze_css::CssOutput) -> cross_file::CrossFileFacts {
+        cross_file::resolve_cross_file(&self.facts, css.member_bindings.clone())
+    }
+
+    /// The last `analyze`'s manifest: the full one, or the host's.
+    fn manifest_json(&self, full: bool) -> napi::Result<String> {
+        let Some(css) = &self.css else {
+            return Err(napi::Error::from_reason("manifest: analyze() must run first".to_string()));
+        };
+        let cross = full.then(|| self.cross_file(css));
         let builder_files: Vec<&str> = self
             .facts
             .iter()
             .filter(|(_, facts)| !facts.pure_builder_edits.is_empty())
             .map(|(path, _)| path.as_str())
             .collect();
+        let chain_bindings = (!full).then(|| {
+            self.facts
+                .iter()
+                .map(|(path, facts)| {
+                    (path.as_str(), facts.chains.iter().map(|chain| chain.descriptor.binding.as_str()).collect())
+                })
+                .collect()
+        });
         let out = serde_json::to_string(&AnalyzeResult {
-            cross_file: cross.clone(),
-            file_facts: &self.facts,
+            cross_file: cross.as_ref(),
+            file_facts: full.then_some(&self.facts),
+            chain_bindings,
             parse_count: self.parse_count,
-            usage_residue: &css.usage_residue,
+            usage_residue: full.then_some(&css.usage_residue),
             css: &css.css,
             sheets: &css.sheets,
             diagnostics: &css.diagnostics,
@@ -1540,7 +1603,7 @@ impl ExtractEngine {
             dynamic_props: &css.dynamic_props,
             admitted_transforms: &css.admitted_transforms,
             typed_system_props: &css.typed_system_props,
-            component_fragments: &css.component_fragments,
+            component_fragments: full.then_some(&css.component_fragments),
             system_fingerprint: &css.system_fingerprint,
             reverse_provenance: &css.reverse_provenance,
             components: &css.components,
@@ -1554,15 +1617,12 @@ impl ExtractEngine {
             superseded_by: &css.superseded_by,
             timing: serde_json::json!({ "parseCount": self.parse_count }),
         });
-        self.cross = Some(cross);
-        self.css = Some(css);
         out.map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
     }
 
     #[napi]
     pub fn clear_cache(&mut self) {
         self.facts.clear();
-        self.cross = None;
         self.sources.clear();
         self.order.clear();
         self.css = None;
@@ -1585,7 +1645,7 @@ impl ExtractEngine {
             )));
         };
 
-        if self.cross.is_none() {
+        if self.css.is_none() {
             return Err(napi::Error::from_reason(
                 "transformFile: analyze() must run first".to_string(),
             ));
@@ -2164,7 +2224,7 @@ mod tests {
             r#"import { Box } from "./a"; export const B = () => <><Box p={ok ? 4 : 8} /><Box p={gap} /></>;"#;
         let manifest: serde_json::Value = serde_json::from_str(
             &engine
-                .analyze(
+                .analyze_full(
                     serde_json::json!([
                         { "path": "b.tsx", "source": b_source },
                         { "path": "a.tsx", "source": a_source }
@@ -2223,7 +2283,7 @@ mod tests {
         let mut engine = ExtractEngine::new(None).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(
             &engine
-                .analyze(
+                .analyze_full(
                     serde_json::json!([{
                         "path": "raw.tsx",
                         "source": "const GAP = 24; export const App = ({ open }) => <Box p={GAP} display={open ? 'block' : 'none'} />;"
@@ -2436,7 +2496,7 @@ mod tests {
     fn manifest_lists_each_files_family_member_tags() {
         let mut engine = ExtractEngine::new(None).unwrap();
         let manifest = engine
-            .analyze(
+            .analyze_full(
                 serde_json::json!([
                     {
                         "path": "a.tsx",
@@ -2843,7 +2903,7 @@ export const App = () => <Box tone="red" />;
     fn imported_static_resolves_cross_file() {
         let mut engine = ExtractEngine::new(None).unwrap();
         let out = engine
-            .analyze(
+            .analyze_full(
                 r#"[{"path":"tokens.ts","source":"export const pad = { p: 4 };\n"},
                     {"path":"a.tsx","source":"import { pad } from './tokens';\nexport const C = ds.styles(pad).asElement('div');\nexport const App = () => <C />;\n"}]"#
                     .to_string(),
@@ -3028,7 +3088,7 @@ export const App = () => <Box tone="red" />;
                     ),
                 },
             ]);
-            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze_full(files.to_string(), None).unwrap()).unwrap();
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
         // A concise arrow returns the member it evaluates too: a write
@@ -3048,7 +3108,7 @@ export const App = () => <Box tone="red" />;
                                export const C = ds.styles({ ...pad.inner }).asElement('div');\nexport const App = () => <C />;\n",
                 },
             ]);
-            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze_full(files.to_string(), None).unwrap()).unwrap();
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
         // A hot update's data can hold a loader its disposed version stored:
@@ -3068,7 +3128,7 @@ export const App = () => <Box tone="red" />;
                            export const App = () => <C />;\n",
             },
         ]);
-        let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+        let out: serde_json::Value = serde_json::from_str(&engine.analyze_full(files.to_string(), None).unwrap()).unwrap();
         assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "a loader held in hot data: {}", out["css"]);
         // `export default pad` holds `pad`'s object, so a write through the
         // default reaches it: by default import, a re-export by name, a star
@@ -3121,7 +3181,7 @@ export const App = () => <Box tone="red" />;
             files.extend(route.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })));
             let mut engine = ExtractEngine::new(None).unwrap();
             let out: serde_json::Value =
-                serde_json::from_str(&engine.analyze(serde_json::Value::Array(files).to_string(), None).unwrap()).unwrap();
+                serde_json::from_str(&engine.analyze_full(serde_json::Value::Array(files).to_string(), None).unwrap()).unwrap();
             assert_eq!(out["css"].as_str().unwrap_or_default().contains("padding"), extracts, "{row}: {}", out["css"]);
         }
         // An extension of a parent refused for a possibly-mutated static is
@@ -3144,7 +3204,7 @@ export const App = () => <Box tone="red" />;
                 files.push(serde_json::json!({ "path": "mutate.ts", "source": "import { pad } from './tokens';\npad.padding = 9;\n" }));
             }
             let files = serde_json::Value::Array(files);
-            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze_full(files.to_string(), None).unwrap()).unwrap();
             let child = out["component_fragments"]["kit.tsx::Child"]["base"].as_str().unwrap_or_default();
             let named = out["diagnostics"].as_array().unwrap().iter().any(|d| {
                 d["component"] == "Child" && d["code"] == "animus.extension.unresolved-parent"
@@ -3170,7 +3230,7 @@ export const App = () => <Box tone="red" />;
             },
             { "path": "app.tsx", "source": "import { Parent, Child } from './kit';\nexport const App = () => <><Parent /><Child /></>;\n" },
         ]);
-        let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+        let out: serde_json::Value = serde_json::from_str(&engine.analyze_full(files.to_string(), None).unwrap()).unwrap();
         let child = out["component_fragments"]["kit.tsx::Child"]["base"].as_str().unwrap_or_default();
         let skips: Vec<(&str, &str)> = out["diagnostics"]
             .as_array()
@@ -3197,7 +3257,7 @@ export const App = () => <Box tone="red" />;
             },
             { "path": "app.tsx", "source": "import { Child } from './b';\nexport const App = () => <Child />;\n" },
         ]);
-        let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+        let out: serde_json::Value = serde_json::from_str(&engine.analyze_full(files.to_string(), None).unwrap()).unwrap();
         let child = out["component_fragments"]["b.tsx::Child"]["base"].as_str().unwrap_or_default();
         assert!(child.contains("display: flex") && child.contains("color: red"), "{child}: {}", out["diagnostics"]);
         // A type query of eval, or a schema builder's own `Function` member
@@ -3234,7 +3294,7 @@ export const App = () => <Box tone="red" />;
                                export const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
                 },
             ]);
-            let out: serde_json::Value = serde_json::from_str(&engine.analyze(files.to_string(), None).unwrap()).unwrap();
+            let out: serde_json::Value = serde_json::from_str(&engine.analyze_full(files.to_string(), None).unwrap()).unwrap();
             assert!(out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
     }
@@ -3269,7 +3329,7 @@ export const App = () => <Box tone="red" />;
         let entries: Vec<serde_json::Value> =
             files.iter().map(|(path, source)| serde_json::json!({ "path": path, "source": source })).collect();
         let manifest: serde_json::Value =
-            serde_json::from_str(&engine.analyze(serde_json::Value::Array(entries).to_string(), None).unwrap()).unwrap();
+            serde_json::from_str(&engine.analyze_full(serde_json::Value::Array(entries).to_string(), None).unwrap()).unwrap();
         let mut out = Emission::default();
         // What the stylesheets deliver: the CSS and every sheet.
         let mut stylesheet = manifest["css"].as_str().unwrap_or_default().to_string();
@@ -3666,7 +3726,7 @@ export const App = () => <Box tone="red" />;
         .unwrap();
         let manifest: serde_json::Value = serde_json::from_str(
             &engine
-                .analyze(
+                .analyze_full(
                     serde_json::json!([
                         { "path": "tokens.ts", "source": "export const GAP = 24;\nexport const WIDE = 32;\n" },
                         { "path": "barrel.ts", "source": "export { GAP as SPACING } from './tokens';\n" },
@@ -3699,7 +3759,7 @@ export const App = () => <Box tone="red" />;
         .unwrap();
         let manifest: serde_json::Value = serde_json::from_str(
             &engine
-                .analyze(
+                .analyze_full(
                     serde_json::json!([
                         { "path": "tokens.ts", "source": "export const GAP = 24;\nexport const pad = { margin: 4 };\n" },
                         { "path": "barrel.ts", "source": "export * from './tokens';\n" },
@@ -3893,7 +3953,7 @@ export const App = () => <Box tone="red" />;
         .unwrap();
         let manifest: serde_json::Value = serde_json::from_str(
             &engine
-                .analyze(
+                .analyze_full(
                     serde_json::json!([
                         { "path": "tokens.ts", "source": "export const PARTIAL = { _: unknown, sm: 16 };\n" },
                         { "path": "a.tsx", "source": "import { PARTIAL } from './tokens';\nexport const Box = ds.system({ space: true }).asElement('div');\nexport const App = () => <Box mt={PARTIAL} />;\n" }
@@ -3920,7 +3980,7 @@ export const App = () => <Box tone="red" />;
         .unwrap();
         let manifest: serde_json::Value = serde_json::from_str(
             &engine
-                .analyze(
+                .analyze_full(
                     serde_json::json!([{
                         "path": "app.tsx",
                         "source": "export const Box = ds.system({ layout: true }).asElement('div');\nexport const App = ({ open }) => <Box display={open ? 'block' : 'none'} />;\n"
@@ -4162,6 +4222,49 @@ export const App = () => <Box tone="red" />;
             let (extracted, codes) = run_host(system, host);
             assert!(!extracted && codes.contains(&"animus.resolve.unanalysed-import".to_string()), "{host}: {codes:?}");
         }
+    }
+
+    /// Contract: the host manifest `analyze` returns omits the sections no
+    /// host reads (fileFacts, crossFile, usageResidue, component_fragments)
+    /// and carries each file's chain bindings in their place; the full
+    /// manifest holds every section and is otherwise the host manifest, and
+    /// each section on its own is the full manifest's.
+    #[test]
+    fn the_host_manifest_omits_sections_and_the_full_manifest_holds_them() {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let files = serde_json::json!([
+            { "path": "tokens.ts", "source": "export const pad = { padding: 4 };\n" },
+            { "path": "a.tsx", "source": "import { pad } from './tokens';\nexport const Card = ds.styles({ ...pad }).asElement('div');\nexport const Badge = ds.styles({ margin: 2 }).asElement('span');\nexport const App = () => <><Card /><Badge /></>;\n" },
+        ])
+        .to_string();
+        let host: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&engine.analyze(files, None).unwrap()).unwrap();
+        let mut full: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&engine.full_manifest_json().unwrap()).unwrap();
+        let omitted = ["fileFacts", "crossFile", "usageResidue", "component_fragments"];
+        for name in omitted {
+            assert!(!host.contains_key(name), "{name} in the host manifest");
+            let section: serde_json::Value = serde_json::from_str(&engine.manifest_section(name.to_string()).unwrap()).unwrap();
+            assert_eq!(full.get(name), Some(&section), "{name}");
+        }
+        let bindings: serde_json::Map<String, serde_json::Value> = full["fileFacts"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(file, facts)| {
+                let names = facts["chains"].as_array().unwrap().iter().map(|chain| chain["descriptor"]["binding"].clone());
+                (file.clone(), serde_json::Value::Array(names.collect()))
+            })
+            .collect();
+        assert_eq!(host["chainBindings"], serde_json::Value::Object(bindings));
+        assert_eq!(host["chainBindings"]["a.tsx"], serde_json::json!(["Card", "Badge"]));
+        assert!(!full.contains_key("chainBindings"));
+        for name in omitted {
+            full.remove(name);
+        }
+        let mut host = host;
+        host.remove("chainBindings");
+        assert_eq!(host, full);
     }
 
     /// Contract: an import analysis cannot follow names its importing file

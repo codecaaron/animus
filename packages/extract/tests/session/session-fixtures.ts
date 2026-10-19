@@ -163,17 +163,8 @@ export function makeManifest(
   overrides: Partial<ProjectManifest> = {}
 ): ProjectManifest {
   return {
-    fileFacts: {},
-    crossFile: {
-      componentNames: [],
-      classResolvers: [],
-      memberBindings: {},
-      renderedComponents: [],
-      variantOptions: {},
-      stateNames: {},
-    },
+    chainBindings: {},
     parseCount: 0,
-    usageResidue: [],
     css: '',
     sheets: {
       declaration: '',
@@ -205,7 +196,6 @@ export function makeManifest(
     dynamic_props: {},
     admitted_transforms: {},
     typed_system_props: [],
-    component_fragments: {},
     system_fingerprint: '',
     reverse_provenance: {},
     components: {},

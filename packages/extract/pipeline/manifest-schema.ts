@@ -117,14 +117,15 @@ export type ManifestTiming = {
 };
 
 /**
- * The parsed `ExtractEngine.analyze()` manifest. Every top-level field is
- * always present — an empty universe emits `{}` / `[]` / `""`, not absence.
+ * The parsed `ExtractEngine.analyze()` manifest: the host manifest, without
+ * the sections no host reads (`FullProjectManifest` holds them). Every
+ * top-level field is always present — an empty universe emits `{}` / `[]` /
+ * `""`, not absence.
  */
 export interface ProjectManifest {
-  fileFacts: Record<string, ExtractFileFacts>;
-  crossFile: ManifestCrossFileFacts;
+  /** Each analysed file → the bindings of the chains it declares. */
+  chainBindings: Record<string, string[]>;
   parseCount: number;
-  usageResidue: ManifestUsageResidueRecord[];
   /** Complete component CSS, before the TS-side unit fallback. */
   css: string;
   sheets: ManifestSheets;
@@ -152,7 +153,6 @@ export interface ProjectManifest {
    *  which runtime configs reference from the `supersededBy` export; absent
    *  where none is referenced. */
   superseded_by?: Record<string, string[]>;
-  component_fragments: Record<string, ManifestComponentSheets>;
   /** The fingerprint of the system the analysis ran with. */
   system_fingerprint: string;
   /** parent component id → child component ids. */
@@ -177,6 +177,21 @@ export interface ProjectManifest {
    *  resolves. */
   tag_components?: Record<string, Record<string, string>>;
   timing: ManifestTiming;
+}
+
+/** What the host and the full manifest both carry: every host section but
+ *  `chainBindings`. A session's published `manifestJson` is either one. */
+export type PublishedManifest = Omit<ProjectManifest, 'chainBindings'>;
+
+/**
+ * The parsed `ExtractEngine.fullManifestJson()`: every section, as a
+ * persisted manifest artifact holds it.
+ */
+export interface FullProjectManifest extends PublishedManifest {
+  fileFacts: Record<string, ExtractFileFacts>;
+  crossFile: ManifestCrossFileFacts;
+  usageResidue: ManifestUsageResidueRecord[];
+  component_fragments: Record<string, ManifestComponentSheets>;
 }
 
 /** One prop a component accepts, at its place in the authoring order. */
