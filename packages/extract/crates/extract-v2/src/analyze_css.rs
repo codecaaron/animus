@@ -3361,6 +3361,29 @@ fn emit_eval_drop_bail(
     diagnostics.push(diagnostic(file, binding, "bail", message, code));
 }
 
+/// One opening behind a warning: where it is, what it reaches, and what to
+/// do about it.
+struct OpeningCause<'o> {
+    module: &'o str,
+    line: Option<usize>,
+    specifier: &'o str,
+    /// What the unread module is and may change, said alone.
+    what: String,
+    /// What it is and how a module reaches it, said in a list.
+    reached: String,
+    remedy: String,
+    /// How its module reaches it, after `what`.
+    single: String,
+}
+
+/// Openings under one code that cost the same declarations, which one
+/// warning names.
+struct OpeningGroup<'o> {
+    code: &'static str,
+    cost: Vec<String>,
+    causes: Vec<OpeningCause<'o>>,
+}
+
 /// The declarations an unread module's opening cost that a warning names
 /// in full.
 const OPENING_COST_NAMED: usize = 5;
@@ -3398,7 +3421,9 @@ pub(crate) fn report_unread_openings(
             (at, (stated, all))
         })
         .collect();
-    let mut found = Vec::new();
+    // Openings that cost the same declarations, under one code: one warning
+    // names them all, each with its own remedy, and the declarations once.
+    let mut groups: Vec<OpeningGroup> = Vec::new();
     // Each declaration an opening dropped whole (a bail), with the cause its
     // record leads with: the first one its message states, else the first
     // behind it.
@@ -3493,21 +3518,55 @@ pub(crate) fn report_unread_openings(
                 causes.insert(record, lead.clone());
             }
         }
-        let more = cost.len().saturating_sub(OPENING_COST_NAMED);
-        let named = cost.iter().take(OPENING_COST_NAMED).cloned().collect::<Vec<_>>().join(", ");
-        let named = if more > 0 { format!("{named} and {more} more") } else { named };
-        let message = format!(
-            "{what}; {module} {how}{at}, so {} that read an exported object {} not extracted, whole or in part: \
-             {named} — {remedy}",
+        let cause = OpeningCause {
+            module,
+            line: *line,
+            specifier,
+            what,
+            reached: format!("{subject}, and {module} {how}{at}"),
+            remedy,
+            single: format!("{module} {how}{at}"),
+        };
+        match groups.iter_mut().find(|group| group.code == code && group.cost == cost) {
+            Some(group) => group.causes.push(cause),
+            None => groups.push(OpeningGroup { code, cost, causes: vec![cause] }),
+        }
+    }
+    let capped = |items: &[String], separator: &str| {
+        let more = items.len().saturating_sub(OPENING_COST_NAMED);
+        let named = items.iter().take(OPENING_COST_NAMED).cloned().collect::<Vec<_>>().join(separator);
+        if more > 0 { format!("{named} and {more} more") } else { named }
+    };
+    let found = groups.into_iter().map(|OpeningGroup { code, cost, causes }| {
+        let named = capped(&cost, ", ");
+        let lost = format!(
+            "{} that read an exported object {} not extracted, whole or in part: {named}",
             count_of(cost.len(), "declaration"),
             if cost.len() == 1 { "is" } else { "are" },
         );
-        let warning = diagnostic(module, specifier, "warn", message, Some(code));
-        found.push(match line {
-            Some(line) => warning.on_line(*line),
+        let first = &causes[0];
+        let message = match causes.as_slice() {
+            [cause] => format!("{}; {}, so {lost} — {}", cause.what, cause.single, cause.remedy),
+            _ => {
+                let listed: Vec<String> = causes
+                    .iter()
+                    .enumerate()
+                    .map(|(at, cause)| format!("({}) {} — {}", at + 1, cause.reached, cause.remedy))
+                    .collect();
+                format!(
+                    "{} modules the analysis does not read may change the objects analysed modules export: {}; so {lost}",
+                    causes.len(),
+                    capped(&listed, " "),
+                )
+            }
+        };
+        let warning = diagnostic(first.module, first.specifier, "warn", message, Some(code));
+        match first.line {
+            Some(line) => warning.on_line(line),
             None => warning,
-        });
-    }
+        }
+    });
+    let found: Vec<CssDiagnostic> = found.collect();
     for (record, lead) in causes {
         diagnostics[record].message.insert_str(0, &lead);
     }

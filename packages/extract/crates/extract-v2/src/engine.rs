@@ -4368,8 +4368,9 @@ export const App = () => <Box tone="red" />;
     /// record with one cause (the module, how it is reached, and in words
     /// the warning that says what to do) and keeps its own code, kind and
     /// location, so a strict build fails on it as before and its line names
-    /// no code but its own. Every opening that costs the declaration has a
-    /// warning naming it, and a reason is read whole, never inside another.
+    /// no code but its own. Every opening that costs the declaration is
+    /// named, openings costing the same declarations in one warning, and a
+    /// reason is read whole, never inside another.
     #[test]
     fn a_declaration_an_unread_module_dropped_leads_with_that_cause() {
         let analyze = |workers: &[(&str, &str)]| -> Vec<serde_json::Value> {
@@ -4397,12 +4398,12 @@ export const App = () => <Box tone="red" />;
             );
             card["message"].as_str().unwrap().to_string()
         };
-        let reaching = |diagnostics: &[serde_json::Value]| -> Vec<String> {
+        let reaching = |diagnostics: &[serde_json::Value]| -> Vec<(String, String)> {
             diagnostics
                 .iter()
                 .filter(|d| d["code"] == "animus.load.missing-module-reach")
                 .filter(|d| d["message"].as_str().unwrap().contains("Card (card.tsx:3)"))
-                .map(|d| d["file"].as_str().unwrap().to_string())
+                .map(|d| (d["file"].as_str().unwrap().to_string(), d["message"].as_str().unwrap().to_string()))
                 .collect()
         };
 
@@ -4417,12 +4418,23 @@ export const App = () => <Box tone="red" />;
         );
         // The line counts once: no other code in brackets or parentheses.
         assert!(!message.contains("[animus.") && !message.contains("(animus."), "{message}");
-        assert_eq!(reaching(&one), ["worker.js"]);
+        let [(file, _)] = reaching(&one).try_into().expect("one warning");
+        assert_eq!(file, "worker.js");
 
-        // Two missing modules: one leads, and each has its warning.
+        // Two missing modules costing the same declaration: one leads, and
+        // one warning names both, each with its own remedy.
         let two = analyze(&[("a-worker.js", "./aa.js"), ("z-worker.js", "./zz.js")]);
         assert!(card(&two).starts_with("one cause: './aa.js'"), "{}", card(&two));
-        assert_eq!(reaching(&two), ["a-worker.js", "z-worker.js"]);
+        let [(file, message)] = reaching(&two).try_into().expect("one warning");
+        assert_eq!(file, "a-worker.js");
+        for said in [
+            "2 modules the analysis does not read may change the objects analysed modules export: ",
+            "(1) './aa.js' names no file the analysis holds, and a-worker.js imports it on line 1 — ",
+            "(2) './zz.js' names no file the analysis holds, and z-worker.js imports it on line 1 — ",
+            "so 1 declaration that read an exported object is not extracted, whole or in part: Card (card.tsx:3)",
+        ] {
+            assert!(message.contains(said), "{said}: {message}");
+        }
 
         // A reason is read whole: `b/x.js imports …` within `a b/x.js
         // imports …` is no statement of its own.
