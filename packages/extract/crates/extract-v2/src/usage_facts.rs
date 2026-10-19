@@ -1330,6 +1330,7 @@ fn opaque_calls(
         default_export: None,
         calls: Vec::new(),
         tag_calls: Vec::new(),
+        stores: Vec::new(),
     };
     for statement in &program.body {
         scan.top = top_level_names(statement);
@@ -1362,6 +1363,16 @@ fn opaque_calls(
             let (callee, callee_imports) = scan.callee(root);
             Some(OpaqueCall { callee, callee_imports, tags, imported_args, forwards_from })
         })
+        // A component that stores a parameter hands it to whatever reads the
+        // store, as to an unknown call. A store hands on no element: a module
+        // writes what it exports (`exports.App = ...`) the same way.
+        .chain(scan.stores.iter().filter(|(reads, _)| scan.closure(reads).reads_parameter).map(|(_, top)| OpaqueCall {
+            callee: None,
+            callee_imports: Vec::new(),
+            tags: BTreeSet::new(),
+            imported_args: Vec::new(),
+            forwards_from: top.clone(),
+        }))
         .collect();
     let tags = scan
         .tag_calls
@@ -1430,12 +1441,24 @@ fn top_level_names(statement: &Statement<'_>) -> Vec<String> {
 }
 
 /// What an expression reads: the component tags of its elements, the
-/// bindings it names, and whether it names a global outside the built-ins.
+/// bindings it names, whether it names a global outside the built-ins, and
+/// whether it reads `this`, through which a class component reads its
+/// props.
 #[derive(Default, Clone)]
 struct ArgumentReads {
     tags: BTreeSet<String>,
     symbols: FxHashSet<SymbolId>,
     unknown_global: bool,
+    this: bool,
+    /// The functions written inside the expression, whose own parameters
+    /// hold what their caller passes, not what the component receives.
+    functions: Vec<oxc::semantic::ScopeId>,
+}
+
+impl ArgumentReads {
+    fn is_empty(&self) -> bool {
+        self.tags.is_empty() && self.symbols.is_empty() && !self.unknown_global && !self.this
+    }
 }
 
 /// What an expression reads once every `const` it names is followed:
@@ -1478,6 +1501,20 @@ impl<'a> Visit<'a> for ReadCollector<'_, '_> {
             }
             None => self.reads.unknown_global |= !BUILTIN_GLOBALS.contains(&ident.name.as_str()),
         }
+    }
+
+    fn visit_this_expression(&mut self, _this: &oxc::ast::ast::ThisExpression) {
+        self.reads.this = true;
+    }
+
+    fn visit_arrow_function_expression(&mut self, arrow: &oxc::ast::ast::ArrowFunctionExpression<'a>) {
+        self.reads.functions.extend(arrow.scope_id.get());
+        oxc::ast_visit::walk::walk_arrow_function_expression(self, arrow);
+    }
+
+    fn visit_function(&mut self, function: &oxc::ast::ast::Function<'a>, flags: oxc::syntax::scope::ScopeFlags) {
+        self.reads.functions.extend(function.scope_id.get());
+        oxc::ast_visit::walk::walk_function(self, function, flags);
     }
 }
 
@@ -1530,30 +1567,56 @@ struct OpaqueCallScan<'s> {
     /// Component elements: the tag, whether it is polymorphic, and what its
     /// attributes and children read.
     tag_calls: Vec<(String, TagOrigin, bool, ArgumentReads, Vec<String>)>,
+    /// Values stored where a later render may read them, and the enclosing
+    /// top-level bindings.
+    stores: Vec<(ArgumentReads, Vec<String>)>,
 }
 
 impl OpaqueCallScan<'_> {
     /// What a call's callee starts from, or `None` when the call cannot
     /// reach code outside React: a React import, a built-in global, or a
-    /// value a function body declares, which analysed code supplies.
+    /// function a function body declares, which the scan reads in place.
+    /// A value a call returns or `this` holds, any other value a function
+    /// body binds (a parameter, a prop, a hook's result), and a member of a
+    /// module function or class, which any module may write, are unknown.
     fn root(&self, callee: &Expression<'_>) -> Option<CalleeRoot> {
         // A callee rooted in no identifier (`[1].map`) is a value the
         // analysed code builds.
-        let (root, member) = callee_root(callee)?;
+        let (root, member, called) = match callee_base(callee)? {
+            CalleeBase::Identifier(root, member, called) => (root, member, called),
+            CalleeBase::Unknown => return Some(CalleeRoot::Unknown),
+        };
+        // A member of what React's own function returns (a hook's result) is
+        // unknown; React's functions themselves are known.
         if self.is_react(root) {
-            return None;
+            return called.then_some(CalleeRoot::Unknown);
         }
         let Some(symbol) = root.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id()) else {
             return (!BUILTIN_GLOBALS.contains(&root.name.as_str())).then_some(CalleeRoot::Unknown);
         };
-        match self.sources.get(&symbol) {
-            Some(_) => Some(CalleeRoot::Import(match member {
+        if self.sources.contains_key(&symbol) {
+            return Some(CalleeRoot::Import(match member {
                 Some(member) => format!("{}.{member}", root.name),
                 None => root.name.to_string(),
-            })),
-            None => (self.scoping.symbol_scope_id(symbol) == self.scoping.root_scope_id())
-                .then_some(CalleeRoot::Module(symbol)),
+            }));
         }
+        if self.scoping.symbol_scope_id(symbol) == self.scoping.root_scope_id() {
+            // A member of a function or class is whatever any module puts
+            // there.
+            let declared = self.scoping.symbol_flags(symbol).intersects(SymbolFlags::Function | SymbolFlags::Class);
+            return Some(match member {
+                Some(_) if declared => CalleeRoot::Unknown,
+                _ => CalleeRoot::Module(symbol),
+            });
+        }
+        (!self.declares_function(symbol) || member.is_some()).then_some(CalleeRoot::Unknown)
+    }
+
+    /// Whether `symbol` binds a function or class its declaration writes
+    /// in place, which the scan reads.
+    fn declares_function(&self, symbol: SymbolId) -> bool {
+        self.scoping.symbol_flags(symbol).intersects(SymbolFlags::Function | SymbolFlags::Class)
+            || self.consts.get(&symbol).is_some_and(|init| init.function.is_some())
     }
 
     /// The binding a call resolves, `None` when it reaches outside the
@@ -1567,11 +1630,10 @@ impl OpaqueCallScan<'_> {
             CalleeRoot::Import(name) => (Some(name.clone()), Vec::new()),
             CalleeRoot::Module(symbol) => {
                 let name = Some(self.scoping.symbol_name(*symbol).to_string());
-                if self.scoping.symbol_flags(*symbol).intersects(SymbolFlags::Function | SymbolFlags::Class) {
+                if self.declares_function(*symbol) {
                     return (name, Vec::new());
                 }
                 match self.consts.get(symbol) {
-                    Some(init) if init.function.is_some() => (name, Vec::new()),
                     Some(init) => {
                         let closed = self.closure(&init.reads);
                         if closed.unknown_global { (None, Vec::new()) } else { (name, closed.imports) }
@@ -1613,8 +1675,10 @@ impl OpaqueCallScan<'_> {
             unknown_global: reads.unknown_global,
             ..ClosedReads::default()
         };
+        // A class component's props, read through `this`, are its parameter.
+        let mut this = reads.this;
         let mut seen: FxHashSet<SymbolId> = FxHashSet::default();
-        let mut entered: FxHashSet<oxc::semantic::ScopeId> = FxHashSet::default();
+        let mut entered: FxHashSet<oxc::semantic::ScopeId> = reads.functions.iter().copied().collect();
         let mut parameters: Vec<SymbolId> = Vec::new();
         // A binding the walk does not follow (`let held; held = children`)
         // may hold anything a parameter does.
@@ -1641,11 +1705,14 @@ impl OpaqueCallScan<'_> {
                 }
             };
             entered.extend(function);
+            entered.extend(next.functions.iter().copied());
             closed.tags.extend(next.tags.iter().cloned());
             closed.unknown_global |= next.unknown_global;
+            this |= next.this;
             pending.extend(next.symbols.iter().copied());
         }
         closed.reads_parameter = unresolved
+            || this
             || parameters.iter().any(|parameter| !entered.contains(&self.scoping.symbol_scope_id(*parameter)));
         closed.imports.sort();
         closed
@@ -1671,21 +1738,50 @@ impl OpaqueCallScan<'_> {
     }
 }
 
-/// The identifier a callee starts from, through members and calls, and the
-/// member named directly on it.
-fn callee_root<'b, 'a>(callee: &'b Expression<'a>) -> Option<(&'b IdentifierReference<'a>, Option<&'b str>)> {
+/// What a callee starts from, through members and the calls a member is
+/// read from, or `None` for a value the analysed code builds in place.
+enum CalleeBase<'b, 'a> {
+    /// An identifier, the member named directly on it, and whether the
+    /// callee reads a member of a value a call on it returns.
+    Identifier(&'b IdentifierReference<'a>, Option<&'b str>, bool),
+    /// `this`, a value a call returns, or any other value.
+    Unknown,
+}
+
+fn callee_base<'b, 'a>(callee: &'b Expression<'a>) -> Option<CalleeBase<'b, 'a>> {
     match crate::chain_walk::unwrap_type_assertions(callee) {
-        Expression::Identifier(id) => Some((id, None)),
+        Expression::CallExpression(_) => Some(CalleeBase::Unknown),
+        callee => member_base(callee),
+    }
+}
+
+fn member_base<'b, 'a>(object: &'b Expression<'a>) -> Option<CalleeBase<'b, 'a>> {
+    let inner = |base: CalleeBase<'b, 'a>, call: bool| match base {
+        CalleeBase::Identifier(root, _, called) => CalleeBase::Identifier(root, None, called || call),
+        CalleeBase::Unknown => CalleeBase::Unknown,
+    };
+    match crate::chain_walk::unwrap_type_assertions(object) {
+        Expression::Identifier(id) => Some(CalleeBase::Identifier(id, None, false)),
+        Expression::ThisExpression(_) => Some(CalleeBase::Unknown),
         Expression::StaticMemberExpression(member) => match &member.object {
-            Expression::Identifier(id) => Some((id, Some(member.property.name.as_str()))),
-            object => callee_root(object),
+            Expression::Identifier(id) => Some(CalleeBase::Identifier(id, Some(member.property.name.as_str()), false)),
+            object => member_base(object),
         },
-        Expression::ComputedMemberExpression(member) => callee_root(&member.object).map(|(root, _)| (root, None)),
-        Expression::CallExpression(call) => callee_root(&call.callee).map(|(root, _)| (root, None)),
-        Expression::ChainExpression(chain) => chain.expression.as_member_expression().and_then(|member| {
-            callee_root(member.object()).map(|(root, _)| (root, None))
-        }),
-        _ => None,
+        Expression::ComputedMemberExpression(member) => member_base(&member.object).map(|base| inner(base, false)),
+        Expression::CallExpression(call) => member_base(&call.callee).map(|base| inner(base, true)),
+        Expression::ChainExpression(chain) => {
+            chain.expression.as_member_expression().and_then(|member| member_base(member.object()).map(|base| inner(base, false)))
+        }
+        // A value the analysed code builds in place.
+        Expression::ArrayExpression(_)
+        | Expression::ObjectExpression(_)
+        | Expression::StringLiteral(_)
+        | Expression::TemplateLiteral(_)
+        | Expression::ArrowFunctionExpression(_)
+        | Expression::FunctionExpression(_)
+        | Expression::ClassExpression(_) => None,
+        // Any other value (`(a || b)`, `(c ? f : g)`, `new F()`) is unknown.
+        _ => Some(CalleeBase::Unknown),
     }
 }
 
@@ -1699,7 +1795,7 @@ impl<'a> Visit<'a> for OpaqueCallScan<'_> {
         if let Some(initializer) = &parameter.initializer {
             collector.visit_expression(initializer);
         }
-        if !reads.tags.is_empty() || !reads.symbols.is_empty() || reads.unknown_global {
+        if !reads.is_empty() {
             let mut names = BindingNames::default();
             names.visit_binding_pattern(&parameter.pattern);
             for symbol in names.0 {
@@ -1757,6 +1853,28 @@ impl<'a> Visit<'a> for OpaqueCallScan<'_> {
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
         self.record(&call.callee, &call.arguments);
         oxc::ast_visit::walk::walk_call_expression(self, call);
+    }
+
+    // A value stored where a later render may read it (a member of any
+    // object, a binding of the module, or a pattern of them) reaches
+    // whatever reads the store.
+    fn visit_assignment_expression(&mut self, assignment: &oxc::ast::ast::AssignmentExpression<'a>) {
+        use oxc::ast::ast::AssignmentTarget;
+        let stored = match &assignment.left {
+            AssignmentTarget::AssignmentTargetIdentifier(id) => id
+                .reference_id
+                .get()
+                .and_then(|reference| self.scoping.get_reference(reference).symbol_id())
+                .is_none_or(|symbol| self.scoping.symbol_scope_id(symbol) == self.scoping.root_scope_id()),
+            _ => true,
+        };
+        // Only a store inside a top-level binding can forward its parameter.
+        if stored && !self.top.is_empty() {
+            let mut reads = ArgumentReads::default();
+            collect_reads(self.scoping, &assignment.right, &mut reads);
+            self.stores.push((reads, self.top.clone()));
+        }
+        oxc::ast_visit::walk::walk_assignment_expression(self, assignment);
     }
 
     fn visit_new_expression(&mut self, new: &oxc::ast::ast::NewExpression<'a>) {

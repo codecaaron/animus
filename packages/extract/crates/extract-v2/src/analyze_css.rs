@@ -12911,6 +12911,59 @@ mod tests {
         assert!(out.dynamic_props.contains_key("display"));
     }
 
+    /// Contract: a component hands the children it receives outside the
+    /// analysis wherever unknown code gets them, not only through a call or
+    /// tag the module names: a value its props or hooks give it called with
+    /// them, a member of a module binding, `this.props` in a class render,
+    /// or a store of them anywhere a later render may read.
+    #[test]
+    fn children_reaching_unknown_code_are_handed_outside() {
+        let keeps_p = |component: &str, props: &str, other: &str| {
+            let source = format!(
+                "import {{ createContext, useContext, useRef, Component }} from 'react';\n\
+                 import {{ Foreign, useSlot, decorate, pad }} from 'outside';\n\
+                 export const Ctx = createContext(pad);\n\
+                 export const Box = ds.system({{ space: true }}).asElement('div');\n\
+                 {component}\n\
+                 export const App = ({{ d }}) => <Render {props}><Box p={{8}} /></Render>;\n"
+            );
+            let files = [("a.tsx", source.as_str()), ("other.tsx", other)];
+            analyze(&files, &test_inputs()).dynamic_props.contains_key("p")
+        };
+        for (component, props, other, keeps) in [
+            // Rendered in place, directly or through a function it declares.
+            ("const Render = ({ children }) => <div>{children}</div>;", "", "", false),
+            ("const Render = ({ children }) => { const wrap = (c) => <section>{c}</section>; return wrap(children); };", "", "", false),
+            ("class Render extends Component { render() { return <Foreign>{this.props.children}</Foreign>; } }", "", "", true),
+            ("const Render = class { render() { return <Foreign>{this.props.children}</Foreign>; } };", "", "", true),
+            ("class Render extends Component { render() { return this.props.decorate(this.props.children); } }", "decorate={decorate}", "", true),
+            ("const Render = ({ children, decorate }) => decorate(children);", "decorate={decorate}", "", true),
+            ("const Render = ({ children, decorate }) => decorate(children);", "decorate={d}", "", true),
+            ("const Render = ({ children, rows }) => <ul>{rows.map((row) => <li key={row}>{children}</li>)}</ul>;", "rows={d}", "", true),
+            // What unknown code passes a callback is its own, not the component's.
+            ("const Render = ({ rows }) => <ul>{rows.map((row) => <li key={row}>{row}</li>)}</ul>;", "rows={d}", "", false),
+            ("const Render = ({ children, decorate }) => (decorate || pad)(children);", "decorate={d}", "", true),
+            ("const Render = ({ children, wide }) => (wide ? decorate : pad)(children);", "wide", "", true),
+            ("const Render = ({ children }) => useSlot().render(children);", "", "", true),
+            ("const Render = ({ children }) => useContext(Ctx).render(children);", "", "", true),
+            ("const Render = ({ children }) => { const f = useContext(Ctx); return f(children); };", "", "", true),
+            ("const Render = ({ children }) => useContext(Ctx)(children);", "", "", true),
+            ("const Render = ({ children }) => { const s = useSlot(); return s(children); };", "", "", true),
+            ("const Render = ({ children }) => useSlot()(children);", "", "", true),
+            ("const make = () => pad;\nconst Render = ({ children }) => make()(children);", "", "", true),
+            (
+                "export function Render({ children }) { return Render.impl(children); }",
+                "",
+                "import { Render } from './a';\nimport { pad } from 'outside';\nRender.impl = pad;\n",
+                true,
+            ),
+            ("const Render = (props) => { const ref = useRef(null); ref.current = props; return <div>{props.children}</div>; };", "", "", true),
+            ("let saved;\nconst Render = ({ children }) => { saved = children; return <div>{children}</div>; };", "", "", true),
+        ] {
+            assert_eq!(keeps_p(component, props, other), keeps, "{component} {props}");
+        }
+    }
+
     #[test]
     fn total_floor_empty_project_has_no_slots() {
         let out = analyze(&[], &test_inputs());
@@ -20002,7 +20055,7 @@ export const App = ({ n }) => <><Quiet inl={10} /><Base k={10} /><Kid lift={10} 
     #[test]
     fn compiled_jsx_reads_as_the_jsx_it_was_compiled_from() {
         let closed = "export function Priority() { return <Box p=\"8!\" style={{ padding: '3px' }} data-probe=\"priority\">Priority</Box>; }\n\
-            export function List({ items, on }) { return <ul>{items.map((i) => <Btn key={i} size=\"sm\">{i}</Btn>)}<li>one</li>{on && <Btn size=\"sm\" loading />}<></></ul>; }\n\
+            export function List({ on }) { return <ul>{[1, 2].map((i) => <Btn key={i} size=\"sm\">{i}</Btn>)}<li>one</li>{on && <Btn size=\"sm\" loading />}<></></ul>; }\n\
             export function Attr() { return <Box p=\"8\" title={<Btn size=\"sm\" />} />; }\n";
         let open = "export function Spreads(props) { return <><Btn size=\"sm\" {...props} /><Btn {...props} size=\"lg\" loading /><Tag tone=\"a\" key=\"k\" /></>; }\n\
             export function Poly({ as: As = Btn, ...rest }) { return <As size=\"sm\" {...rest} />; }\n\

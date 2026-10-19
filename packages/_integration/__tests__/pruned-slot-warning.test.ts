@@ -20,14 +20,15 @@ const config = createSystem()
   .seal()
   .toConfig();
 
-// A function prop the analysis takes for analysed code hands the element to
-// `enhance`, which clones a runtime `p` into it.
+// An element stored through a built-in method of a module `Map`, which the
+// analysis takes to stay in the module, reaches outside code that reads the
+// exported map and clones a runtime `p` into it.
 const path = 'fixtures/pruned-slot.tsx';
 const source = `import { ds } from './setup';
-import { enhance } from 'ui-lib';
 export const Box = ds.system({ space: true }).asElement('div');
-function Wrap({ apply }) { return <div>{apply(<Box p={8} />)}</div>; }
-export const App = () => <Wrap apply={enhance} />;`;
+export const registry = new Map();
+function Wrap() { registry.set('box', <Box p={8} />); return null; }
+export const App = () => <Wrap />;`;
 const analyze = (devMode: boolean) =>
   JSON.parse(
     analyzeProject(JSON.stringify([{ path, source }]), {
