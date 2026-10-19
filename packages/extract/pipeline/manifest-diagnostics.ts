@@ -264,6 +264,9 @@ export const UNREADABLE_SOURCE_FILE = 'animus.ingestion.unreadable-source-file';
 /** A directory discovery could not list, or an entry it could not stat. */
 export const UNREADABLE_DISCOVERY_PATH = 'animus.discovery.unreadable-path';
 
+/** A pattern the user's `exclude` list adds matched no discovered path. */
+export const EXCLUDE_UNMATCHED = 'animus.discovery.exclude-unmatched';
+
 /** A production client chunk ships `@animus-ui/system`'s builder. */
 export const SYSTEM_BUILDER_SHIPPED = 'animus.bundle.system-builder-shipped';
 
@@ -386,6 +389,22 @@ export function unreadableDiscoveryPathDiagnostic<Thrown>(
     code: UNREADABLE_DISCOVERY_PATH,
     severity: severityFor(UNREADABLE_DISCOVERY_PATH),
   };
+}
+
+/** One warning for each `exclude` pattern that matched nothing: a misspelt
+ *  pattern, or one whose files have moved. */
+export function unmatchedExcludeDiagnostics(
+  patterns: readonly string[]
+): ManifestDiagnostic[] {
+  return patterns.map((pattern) => ({
+    file: 'exclude',
+    component: `'${pattern}'`,
+    kind: 'warn',
+    message:
+      'matched nothing, so it excludes no file — correct it, or remove it',
+    code: EXCLUDE_UNMATCHED,
+    severity: severityFor(EXCLUDE_UNMATCHED),
+  }));
 }
 
 /** The builders of `@animus-ui/system` a chunk renders, each with an import
@@ -548,6 +567,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [UNREADABLE_SOURCE_FILE, 'error'],
   [SYSTEM_BUILDER_SHIPPED, 'info'],
   [UNREADABLE_DISCOVERY_PATH, 'warn'],
+  [EXCLUDE_UNMATCHED, 'warn'],
   [NO_KIT_FILES, 'warn'],
   [KIT_WITHOUT_SOURCE_CONDITION, 'warn'],
   [KIT_WITHOUT_SIDE_EFFECTS, 'warn'],

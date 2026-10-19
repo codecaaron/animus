@@ -3518,12 +3518,15 @@ pub(crate) fn outside_app_remedy(file: &str, files: &BTreeMap<String, FileFacts>
     Some(format!("if {file} runs outside the app (a Worker, a script), exclude it: {}", exclude_with(&pattern, inputs)))
 }
 
+/// Said after a whole `exclude` list: a host's list replaces its defaults.
+pub(crate) const EXCLUDE_LIST_REPLACES: &str = " (the list replaces the defaults, so it repeats the patterns in force)";
+
 /// The host's `exclude` option with `pattern` added, as the option is
 /// written; where the host gives no list, the pattern to add.
 fn exclude_with(pattern: &str, inputs: &CssInputs) -> String {
     let pattern = pattern.to_string();
     match &inputs.analysis_context.exclude {
-        Some(list) => format!("exclude: [{}]", quoted(list.iter().chain([&pattern]))),
+        Some(list) => format!("exclude: [{}]{EXCLUDE_LIST_REPLACES}", quoted(list.iter().chain([&pattern]))),
         None => format!("add '{pattern}' to exclude"),
     }
 }

@@ -304,7 +304,7 @@ describe("a host's engine and logger", () => {
     expect(hostAnalyze).toHaveBeenCalledTimes(1);
     expect(mocks.analyzeProject).not.toHaveBeenCalled();
     expect(lines).toContain(
-      "[animus] exclude pattern 'nothing-matches-this' matched nothing"
+      "[animus] ⚠ exclude: 'nothing-matches-this': matched nothing, so it excludes no file — correct it, or remove it [animus.discovery.exclude-unmatched]"
     );
     expect(consoleWarn).not.toHaveBeenCalled();
     session.close();

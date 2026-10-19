@@ -80,7 +80,7 @@
     "row": "build:vite-app",
     "fixture": "vite-app",
     "baseline": "d03eaa3296e0d23e68d0388403ab97408dd8782cfb08f553e0de46033fa05ee1",
-    "candidate": "2179f40e66626c2fa02c5cd8f77143b421a1b689ce7bc5a78c52fba4d0febf61",
-    "reason": "As the earlier accepted vite-app entry, plus 235 bytes: the runtime resolver reads a call site's firstThatWorks value as its preferred member (firstThatWorks always returns its members, so artifact names and the vocabulary record see every one). Then less 295 bytes: code compiled for the official runtime no longer lists each variant's options, which no runtime path reads (251,740 against 252,035 jsBytes). The CSS is identical (cssDigest unchanged); the one identity-uncertain-tag line fewer is the earlier entry's."
+    "candidate": "cc091d0bdc23ab5da16a632098c718a7b65d00effd049f5c451925a40b8d1614",
+    "reason": "As the earlier accepted vite-app entry, plus 235 bytes: the runtime resolver reads a call site's firstThatWorks value as its preferred member (firstThatWorks always returns its members, so artifact names and the vocabulary record see every one). Then less 295 bytes: code compiled for the official runtime no longer lists each variant's options, which no runtime path reads (251,740 against 252,035 jsBytes). The CSS is identical (cssDigest unchanged); the one identity-uncertain-tag line fewer is the earlier entry's. Plus one animus.discovery.exclude-unmatched warning: the bench's copy of the app leaves out prefixed-variant/, so the config's 'prefixed-variant' pattern matches nothing there. The host used to print that as an uncoded line, which the receipt did not count; it is now a coded warning, which it does. jsBytes and the CSS are unchanged."
   }
 ]

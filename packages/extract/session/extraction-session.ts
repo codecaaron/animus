@@ -101,7 +101,7 @@ import {
   isDeletedSource,
   unreadableDiscoveryPathDiagnostic,
   unreadableSourceDiagnostic,
-  unmatchedExcludeLines,
+  unmatchedExcludeDiagnostics,
   unresolvableIncludesMessage,
   walkPackageSources,
   writeAssetCopy,
@@ -884,20 +884,25 @@ export class ExtractionSession {
    *  `rootDir`: files under it may be missing from the analysis. */
   private reportUndiscoverable(rootDir: string): OnUndiscoverable {
     return (path, err) =>
-      surfaceManifestDiagnostics(
-        {
-          diagnostics: [
-            unreadableDiscoveryPathDiagnostic(relative(rootDir, path), err),
-          ],
-        },
-        (message) => this.warn(message),
-        {
-          levels: this.options.diagnostics,
-          strict: this.options.strict,
-          info: (line) => this.log(line),
-          reportErrors: this.reportErrors(),
-        }
-      );
+      this.surfaceDiscoveryDiagnostics([
+        unreadableDiscoveryPathDiagnostic(relative(rootDir, path), err),
+      ]);
+  }
+
+  /** Reports what discovery found under the host's `diagnostics` levels
+   *  and strictness, as it finds it: an error-severity record fails a
+   *  strict build. */
+  private surfaceDiscoveryDiagnostics(diagnostics: ManifestDiagnostic[]): void {
+    surfaceManifestDiagnostics(
+      { diagnostics },
+      (message) => this.warn(message),
+      {
+        levels: this.options.diagnostics,
+        strict: this.options.strict,
+        info: (line) => this.log(line),
+        reportErrors: this.reportErrors(),
+      }
+    );
   }
 
   /** Forgets that `relPath` could not be read once an incremental pass reads
@@ -1974,9 +1979,9 @@ export class ExtractionSession {
     }
     // Once per build: its first full discovery, whether or not it publishes.
     if (claimReport(this.key, 'unmatched-excludes')) {
-      for (const line of unmatchedExcludeLines(excludeMatcher)) {
-        this.logger.error(line);
-      }
+      this.surfaceDiscoveryDiagnostics(
+        unmatchedExcludeDiagnostics(excludeMatcher.unmatched())
+      );
     }
 
     bt.fileDiscovery = this.elapsed(t);
@@ -2120,19 +2125,10 @@ export class ExtractionSession {
       );
     }
 
-    surfaceManifestDiagnostics(
-      {
-        diagnostics: [...discoveryDiagnostics, ...collected.diagnostics],
-      },
-      (message) => this.warn(message),
-      // An error-severity discovery diagnostic fails a strict build.
-      {
-        levels: this.options.diagnostics,
-        strict: this.options.strict,
-        info: (line) => this.log(line),
-        reportErrors: this.reportErrors(),
-      }
-    );
+    this.surfaceDiscoveryDiagnostics([
+      ...discoveryDiagnostics,
+      ...collected.diagnostics,
+    ]);
     const unresolvableMessage = unresolvableIncludesMessage(
       collected.outcomes,
       relative(rootDir, resolvedSystemPath)

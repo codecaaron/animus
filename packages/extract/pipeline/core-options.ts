@@ -458,8 +458,9 @@ export interface ExcludeMatcher {
    *  discovery means the pattern matched nothing. A user pattern counts
    *  every path it matches, whichever pattern excludes the path. */
   stats(): ReadonlyMap<string, number>;
-  /** The user's patterns that have matched nothing yet; none without a
-   *  user list. */
+  /** The user's patterns that have matched nothing yet, other than
+   *  Animus's own defaults copied into the list; none without a user
+   *  list. */
   unmatched(): string[];
   /** True when the path is excluded; both path forms are tested. */
   matches(fullPath: string, relativePath: string): boolean;
@@ -580,16 +581,11 @@ export function createExcludeMatcher(
     explain,
     stats: () => hits,
     unmatched: () =>
-      (userPatterns ?? []).filter((pattern) => hits.get(pattern) === 0),
+      (userPatterns ?? []).filter(
+        (pattern) =>
+          hits.get(pattern) === 0 && !DEFAULT_EXCLUDE.includes(pattern)
+      ),
   };
-}
-
-/** One line per user pattern that matched nothing, which every host
- *  prints to stderr after its first discovery, as the CLI always has. */
-export function unmatchedExcludeLines(matcher: ExcludeMatcher): string[] {
-  return matcher
-    .unmatched()
-    .map((pattern) => `[animus] exclude pattern '${pattern}' matched nothing`);
 }
 
 /**

@@ -58,6 +58,9 @@ async function buildWithUserExcludes(excludeOrLayout: string[] | BuildLayout) {
   customLogger.error = (line) => {
     reported.push(line);
   };
+  customLogger.warn = (line) => {
+    reported.push(line);
+  };
   const ctx = new PluginContext({ system: './src/system.ts', exclude }, () => ({
     loadSystemModule: () => ({
       propConfig: '{}',
@@ -167,7 +170,9 @@ describe('an unmatched user exclude is reported', () => {
     const { reported } = await buildWithUserExcludes(['stories', 'App']);
 
     expect(reported.filter((line) => line.includes('matched nothing'))).toEqual(
-      ["[animus] exclude pattern 'stories' matched nothing"]
+      [
+        "[animus] ⚠ exclude: 'stories': matched nothing, so it excludes no file — correct it, or remove it [animus.discovery.exclude-unmatched]",
+      ]
     );
   });
 });

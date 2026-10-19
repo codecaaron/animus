@@ -79,7 +79,6 @@ export {
   STRUCTURAL_EXCLUDE,
   resolveMode,
   resolveVerbosity,
-  unmatchedExcludeLines,
 } from './core-options';
 export { compareDiscoveryOrder, discoverFiles } from './discover-files';
 export type {
@@ -280,6 +279,7 @@ export {
   effectiveLevel,
   isDeletedSource,
   noKitFilesDiagnostics,
+  unmatchedExcludeDiagnostics,
   unreadableDiscoveryPathDiagnostic,
   systemBuilderShippedDiagnostic,
   unreadableSourceDiagnostic,

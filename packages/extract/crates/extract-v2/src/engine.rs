@@ -4369,7 +4369,8 @@ export const App = () => <Box tone="red" />;
         let remedy = |named: &[String]| -> Option<String> {
             let found = named.iter().find(|named| named.starts_with("animus.load.missing-module-reach"))?;
             let at = found.find("exclude it: ")? + "exclude it: ".len();
-            Some(found[at..].split(';').next().unwrap_or_default().to_string())
+            let said = found[at..].split(';').next().unwrap_or_default();
+            Some(said.trim_end_matches(crate::analyze_css::EXCLUDE_LIST_REPLACES).to_string())
         };
         let lone = |files: &[(&str, &str)]| remedy(&run(files, Some("[]"), None));
         assert_eq!(

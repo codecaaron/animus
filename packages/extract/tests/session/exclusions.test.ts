@@ -28,6 +28,7 @@ import {
 } from './session-fixtures';
 
 import type { AnalyzeProjectArgs } from '../../pipeline';
+import type { SessionOptions } from '../../session/extraction-session';
 
 let restoreGlobals: () => void;
 let reported: string[];
@@ -38,9 +39,11 @@ beforeEach(() => {
   mocks.analyzeProject.mockReset().mockImplementation(() => buildManifest({}));
   mocks.clearAnalysisCache.mockReset();
   reported = [];
-  vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => {
-    reported.push(parts.map(String).join(' '));
-  });
+  for (const method of ['error', 'warn'] as const) {
+    vi.spyOn(console, method).mockImplementation((...parts: unknown[]) => {
+      reported.push(parts.map(String).join(' '));
+    });
+  }
 });
 
 afterEach(() => {
@@ -61,9 +64,35 @@ describe('an unmatched user exclude is reported', () => {
     await session.runFullPipeline();
 
     expect(unmatched()).toEqual([
-      "[animus] exclude pattern 'stories' matched nothing",
+      "[animus] ⚠ exclude: 'stories': matched nothing, so it excludes no file — correct it, or remove it [animus.discovery.exclude-unmatched]",
     ]);
     session.close();
+  });
+
+  // Contract: the report names only the user's own patterns, never one of
+  // Animus's defaults copied into the list, under a code the diagnostics
+  // option sets.
+  test("names only the user's own patterns, under a code the diagnostics option sets", async () => {
+    const exclude = ['dist', '.test.', '.spec.', 'stories'];
+    const reportedBy = async (options: Partial<SessionOptions>) => {
+      reported = [];
+      const session = makeSession(createProject('animus-unmatched-default-'), {
+        exclude,
+        ...options,
+      });
+      await session.runFullPipeline();
+      session.close();
+      return unmatched();
+    };
+
+    expect(await reportedBy({})).toEqual([
+      "[animus] ⚠ exclude: 'stories': matched nothing, so it excludes no file — correct it, or remove it [animus.discovery.exclude-unmatched]",
+    ]);
+    expect(
+      await reportedBy({
+        diagnostics: { 'animus.discovery.exclude-unmatched': 'off' },
+      })
+    ).toEqual([]);
   });
 
   test('two passes that fail after discovery, then a success, report once', async () => {
