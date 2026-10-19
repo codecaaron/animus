@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { listedPropsSet, resolveConfig } from '../src/runtime/resolveClasses';
+import {
+  listedPropsSet,
+  resolveClasses,
+  resolveConfig,
+} from '../src/runtime/resolveClasses';
 
 /** Seeded, so a failing prop set reproduces. */
 function random(seed: number): () => number {
@@ -22,7 +26,9 @@ const VALUES: PropValue[] = [null, undefined, 0, '', false, 4];
 /**
  * Contract: the system-prop walk visits exactly the listed props a site
  * sets, in list order, as walking the whole list and skipping each unset
- * name does. The loop body is the same for both, so every class string,
+ * name does, and reads each listed value once, as that walk did. The walk
+ * lists the listed props a site holds; the loop skips each unset one as it
+ * reads it. The loop body is the same for both, so every class string,
  * dynamic style, witness and warning is the full-list walk's.
  */
 describe('the system-prop walk', () => {
@@ -48,13 +54,33 @@ describe('the system-prop walk', () => {
               Object.fromEntries(entries)
             )
           : Object.fromEntries(entries);
-      const visited =
+      // The loop's own skip of an unset value narrows what the walk lists.
+      const visited = (
         names.length > 0
           ? listedPropsSet(props, names, config.systemPropIndex ?? new Map())
-          : [];
+          : []
+      ).filter((name) => props[name] != null);
       expect(visited, JSON.stringify({ listed, props })).toEqual(
         names.filter((name) => props[name] != null)
       );
     }
+  });
+
+  // A getter whose value changes resolves its first read, as the full-list
+  // walk did (0.1.65): the walk reads each listed value once.
+  it('reads each listed value once', () => {
+    let reads = 0;
+    const props = {
+      get color() {
+        reads++;
+        return reads === 1 ? 'red' : 'blue';
+      },
+    };
+    const config = resolveConfig('animus-X', { systemPropNames: ['color'] });
+    const { classes } = resolveClasses('animus-X', props, config, {
+      color: { red: 'color-red', blue: 'color-blue' },
+    });
+    expect(classes).toEqual(['animus-X', 'color-red']);
+    expect(reads).toBe(1);
   });
 });

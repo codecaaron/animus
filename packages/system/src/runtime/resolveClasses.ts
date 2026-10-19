@@ -989,14 +989,16 @@ export function resolveConfig(
 const NO_PROPS: readonly string[] = [];
 
 /**
- * The listed props `props` sets, in list order: the props walking the whole
- * list and skipping each unset name visits. A site passes a few props and a
- * component can list a hundred, so this walks the props. For a plain props
- * object, its enumerable keys, inherited ones included, are every listed
- * name that walk could find set, except a name Object.prototype defines,
- * such as `constructor` or `toString`. The list walk read that member and
- * found the prop set on every render, so it dropped a value no site passed,
- * or threw; this walk finds it set only where a site passes it.
+ * The listed props `props` holds, in list order: a superset of the props
+ * walking the whole list and skipping each unset name visits, which the loop
+ * narrows as it reads each value, once. A value is never read here: a getter
+ * read twice could answer twice. A site passes a few props and a component
+ * can list a hundred, so this walks the props. For a plain props object, its
+ * enumerable keys, inherited ones included, are every listed name that walk
+ * could find set, except a name Object.prototype defines, such as
+ * `constructor` or `toString`. The list walk read that member and found the
+ * prop set on every render, so it dropped a value no site passed, or threw;
+ * this walk finds it set only where a site passes it.
  */
 export function listedPropsSet(
   props: Record<string, unknown>,
@@ -1006,7 +1008,7 @@ export function listedPropsSet(
   let found: number[] | undefined;
   for (const key in props) {
     const at = index.get(key);
-    if (at === undefined || props[key] == null) continue;
+    if (at === undefined) continue;
     found ??= [];
     // Kept in list order as found.
     let i = found.push(at) - 1;
