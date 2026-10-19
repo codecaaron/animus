@@ -4231,6 +4231,38 @@ export const App = () => <Box tone="red" />;
             &run(&[("worker.js", manifest_worker), ("service-worker.js", "export {};\n")], Some("[]"), None),
             "exclude: ['worker*.js']",
         );
+        // The remedy names the file alone as the host reads patterns: a
+        // substring, else a glob where `*` and `?` stay in one segment and
+        // brackets are themselves; none where no pattern is alone.
+        let remedy = |named: &[String]| -> Option<String> {
+            let found = named.iter().find(|named| named.starts_with("animus.load.missing-module-reach"))?;
+            let at = found.find("exclude it: ")? + "exclude it: ".len();
+            Some(found[at..].split(';').next().unwrap_or_default().to_string())
+        };
+        let lone = |files: &[(&str, &str)]| remedy(&run(files, Some("[]"), None));
+        assert_eq!(
+            lone(&[("worker.ts", manifest_worker), ("worker-env.ts", "export {};\n"), ("src/people/coworker.tsx", "export {};\n")]),
+            Some("exclude: ['worker.t?']".to_string())
+        );
+        let page = "import data from './data.gen.js';\nexport const x = data;\n";
+        assert_eq!(
+            lone(&[("app/[slug]/page.tsx", page), ("x/app/[slug]/page.tsx", "export {};\n"), ("app/[slug]/page-client.tsx", "export {};\n")]),
+            Some("exclude: ['app/[slug]/page.ts?']".to_string())
+        );
+        assert_eq!(
+            lone(&[
+                ("worker.ts", manifest_worker),
+                ("worker-env.ts", "export {};\n"),
+                ("worker.tx", "export {};\n"),
+                ("src/people/coworker.tsx", "export {};\n"),
+            ]),
+            None
+        );
+        // An entry that renders keeps what it renders only while analysed.
+        let entry = "import routes from './routeTree.gen.js';\nimport { Card } from './card';\nexport const App = () => <Card />;\nexport const r = routes;\n";
+        let rendered = run(&[("main.tsx", entry)], Some("[]"), None);
+        let [rendered] = rendered.as_slice() else { panic!("{rendered:?}") };
+        assert!(rendered.contains("main.tsx imports it on line 1") && !rendered.contains("exclude it"), "{rendered}");
         // A module another analysed module imports runs with it: excluding it
         // is no remedy.
         let imported = run(&[("worker.js", manifest_worker), ("main.tsx", "import './worker.js';\n")], Some("[]"), None);
@@ -4246,6 +4278,14 @@ export const App = () => <Box tone="red" />;
         ] {
             assert!(unanalysed.contains(said), "{said}: {unanalysed}");
         }
+        // A file the host finds is no file generated later.
+        let missing: Vec<&String> = opened.iter().filter(|named| named.starts_with("animus.load.missing-module-reach")).collect();
+        let [missing] = missing.as_slice() else { panic!("{opened:?}") };
+        assert!(
+            missing.contains("the host finds ../hosting/asset-worker.js, which analysis does not read")
+                && !missing.contains("generate it before the build"),
+            "{missing}"
+        );
     }
 
     /// Contract: a load of an unread package unsettles only the exported

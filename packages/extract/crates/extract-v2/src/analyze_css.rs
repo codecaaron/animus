@@ -3398,10 +3398,20 @@ pub(crate) fn report_unread_openings(
                     "'{specifier}' names no file the analysis holds (one outside its root or excluded from it, one \
                      generated later, or one in a language it does not read), so it may change any exported object"
                 ),
-                format!(
-                    "{}if the file is generated, generate it before the build",
-                    outside_app_remedy(module, files, inputs).map_or(String::new(), |remedy| format!("{remedy}; "))
-                ),
+                {
+                    // A file the host found exists: only analysing it helps.
+                    let located = probe_base(module, specifier, inputs)
+                        .and_then(|base| inputs.probe_evidence.as_ref()?.bases.get(&base).map(|host| host.candidate.clone()));
+                    let fix = match located {
+                        Some(candidate) => format!(
+                            "the host finds {candidate}, which analysis does not read: analyse it (widen the root, or \
+                             list its directory in the analysed sources)"
+                        ),
+                        None => "if the file is generated, generate it before the build".to_string(),
+                    };
+                    let outside = outside_app_remedy(module, files, inputs).map_or(String::new(), |remedy| format!("{remedy}; "));
+                    format!("{outside}{fix}")
+                },
                 MISSING_MODULE_REACH,
             ),
             Opened::Package => (
@@ -3451,17 +3461,21 @@ pub(crate) fn report_unread_openings(
 /// What to do when `file`, an analysed module no other analysed module
 /// imports, runs outside the app (a Worker, a script): exclude it, by a
 /// pattern that names it alone. `None` for a module another one imports,
-/// which runs where that one does.
+/// which runs where that one does; for one that declares a component or
+/// renders an element, an entry whose exclusion drops what it renders; and
+/// where no pattern names it alone.
 pub(crate) fn outside_app_remedy(file: &str, files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> Option<String> {
     let imported = runtime_imports(files, inputs)
         .iter()
         .any(|(importer, targets)| importer != file && targets.iter().any(|target| target == file));
-    (!imported).then(|| {
-        format!(
-            "if {file} runs outside the app (a Worker, a script), exclude it: {}",
-            exclude_with(&exclude_pattern(file, files), inputs)
-        )
-    })
+    let renders = files
+        .get(file)
+        .is_some_and(|ff| !ff.chains.is_empty() || !ff.compose.is_empty() || !ff.usage.is_empty());
+    if imported || renders {
+        return None;
+    }
+    let pattern = exclude_pattern(file, files)?;
+    Some(format!("if {file} runs outside the app (a Worker, a script), exclude it: {}", exclude_with(&pattern, inputs)))
 }
 
 /// The host's `exclude` option with `pattern` added, as the option is
@@ -3474,39 +3488,68 @@ fn exclude_with(pattern: &str, inputs: &CssInputs) -> String {
     }
 }
 
-/// An `exclude` pattern that excludes `file` and no other analysed module:
-/// its path, or where another analysed path holds that too, a glob with `*`
-/// before its extension (`worker*.js`); the path where neither is alone.
-fn exclude_pattern(file: &str, files: &BTreeMap<String, FileFacts>) -> String {
+/// An `exclude` pattern that excludes `file` and no other analysed module,
+/// the first of: its path; a glob with `*` before its extension
+/// (`worker*.js`); its path as a glob with `?` for its last character
+/// (`worker.j?`). `None` where none is alone.
+fn exclude_pattern(file: &str, files: &BTreeMap<String, FileFacts>) -> Option<String> {
     let (dir, name) = file.rsplit_once('/').unwrap_or(("", file));
-    let glob = match name.rsplit_once('.') {
-        Some((stem, extension)) => format!("{stem}*.{extension}"),
-        None => format!("{name}*"),
+    let prefix = if dir.is_empty() { String::new() } else { format!("{dir}/") };
+    let starred = match name.rsplit_once('.') {
+        Some((stem, extension)) => format!("{prefix}{stem}*.{extension}"),
+        None => format!("{prefix}{name}*"),
     };
-    let glob = if dir.is_empty() { glob } else { format!("{dir}/{glob}") };
-    let alone = |pattern: &str| files.keys().all(|other| other == file || !excludes(pattern, other));
-    if !alone(file) && alone(&glob) {
-        glob
-    } else {
-        file.to_string()
-    }
+    let last = file.char_indices().last().map_or(0, |(at, _)| at);
+    let questioned = format!("{}?", &file[..last]);
+    // Each candidate excludes `file`: `*` and `?` match themselves too.
+    let alone = |pattern: &String| {
+        let excludes = excluder(pattern);
+        files.keys().all(|other| other == file || !excludes(other))
+    };
+    [file.to_string(), starred, questioned].into_iter().find(alone)
 }
 
-/// Whether the host's `exclude` pattern excludes the analysed `path`, as the
-/// host reads one (`compilePattern`, core-options.ts): with `*` or `?`, a
-/// glob over the root-relative path or a directory it lies in; otherwise a
+/// A test of whether the host's `exclude` pattern excludes an analysed
+/// path, read as the host reads one (`compilePattern` and `globToRegExp`, core-options.ts):
+/// with `*` or `?`, a glob over the root-relative path or a directory it
+/// lies in, where `**/` spans directories, `**` anything, `*` and `?` stay
+/// within one segment, and every other character is itself; otherwise a
 /// substring. The host also reads a substring against the absolute path,
 /// which analysis does not hold.
-fn excludes(pattern: &str, path: &str) -> bool {
-    let mut pattern = pattern;
+fn excluder(pattern: &str) -> Box<dyn Fn(&str) -> bool> {
+    let normalized = pattern.replace('\\', "/");
+    let mut pattern = normalized.as_str();
     while let Some(rest) = pattern.strip_prefix("./") {
         pattern = rest;
     }
-    if !pattern.contains(['*', '?']) {
-        return !pattern.is_empty() && path.contains(pattern);
+    if pattern.is_empty() {
+        return Box::new(|_| false);
     }
-    let Some(glob) = glob_regex(pattern) else { return true };
-    glob.is_match(path) || path.match_indices('/').any(|(at, _)| glob.is_match(&path[..at]))
+    if !pattern.contains(['*', '?']) {
+        let pattern = pattern.to_string();
+        return Box::new(move |path| path.contains(pattern.as_str()));
+    }
+    let mut source = String::from("^");
+    let mut rest = pattern;
+    while let Some(c) = rest.chars().next() {
+        if let Some(after) = rest.strip_prefix("**/") {
+            source.push_str("(?:[^/]+/)*");
+            rest = after;
+        } else if let Some(after) = rest.strip_prefix("**") {
+            source.push_str(".*");
+            rest = after;
+        } else {
+            match c {
+                '*' => source.push_str("[^/]*"),
+                '?' => source.push_str("[^/]"),
+                other => source.push_str(&regex::escape(&other.to_string())),
+            }
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    source.push('$');
+    let glob = regex::Regex::new(&source).expect("every character but `*` and `?` is escaped");
+    Box::new(move |path| glob.is_match(path) || path.match_indices('/').any(|(at, _)| glob.is_match(&path[..at])))
 }
 
 /// Slot bindings are local identifiers, resolved in the composing file.
