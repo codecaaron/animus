@@ -68,6 +68,14 @@ export declare function diagnosticCodes(): string
  */
 export declare function discoverChains(fileEntriesJson: string): string
 
+/**
+ * This build's identity: a digest of the sources compiled into it, the
+ * system loader's included. Two binaries built from the same sources share
+ * it; any source change gives another. A host cache keys on it, never on
+ * the package version.
+ */
+export declare function engineBuildId(): string
+
 export interface EngineOptions {
   runtimeImport?: string
   cssModuleId?: string
@@ -295,6 +303,12 @@ export interface NapiSystemConfig {
    * when there are none.
    */
   loadFindingsJson?: string
+  /**
+   * What the system read that differs from one load to the next (the
+   * clock, `Math.random`), sorted: a host must not reuse this result.
+   * Absent when it read none.
+   */
+  volatile?: Array<string>
 }
 
 /**

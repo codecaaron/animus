@@ -317,6 +317,11 @@ function buildSample(side: Side): Sample {
     recursive: true,
     force: true,
   });
+  // A cold build: the system load is not served from a kept result.
+  rmSync(join(side.app, 'node_modules/.cache/animus'), {
+    recursive: true,
+    force: true,
+  });
   const vite = join(resolvedPackage('vite', side.app), 'bin/vite.js');
   const start = process.hrtime.bigint();
   const result = spawnSync('node', [vite, 'build'], {

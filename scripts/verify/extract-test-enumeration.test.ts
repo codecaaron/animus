@@ -28,6 +28,7 @@ const ENGINE_BOUND = new Set([
   'prefix-contextual-vars.test.ts',
   'skipped-sources.test.ts',
   'static-css-overrides.test.ts',
+  'system-load-cache.test.ts',
 ]);
 
 function taskCommand(name: string): string {

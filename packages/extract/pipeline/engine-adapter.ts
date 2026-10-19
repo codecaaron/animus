@@ -56,6 +56,9 @@ export interface EngineApi {
   /** Which kits a system file's roots extend or include, from the
    *  engine's own parse; lists the modules it needs until supplied. */
   systemMembership?: (inputsJson: string) => string;
+  /** This engine build's identity, a digest of the sources compiled into
+   *  it; absent from an engine that predates it, which nothing caches for. */
+  engineBuildId?: () => string;
   /** The engine's code-to-severity table, as JSON. */
   diagnosticCodes?: () => string;
   /** A specifier resolved as the system loader resolves it, a package from
@@ -238,6 +241,10 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         native.moduleSpecifiers(filesJson, pathAliasesJson),
       systemMembership: (inputsJson) => native.systemMembership(inputsJson),
       diagnosticCodes: () => native.diagnosticCodes(),
+      engineBuildId:
+        native.engineBuildId === undefined
+          ? undefined
+          : () => native.engineBuildId(),
       // Absent where the native module lacks them, so callers can say so.
       resolveSpecifier:
         native.resolveSpecifier === undefined

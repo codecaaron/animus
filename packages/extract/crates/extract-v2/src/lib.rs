@@ -15,6 +15,15 @@ pub fn engine_version() -> String {
     )
 }
 
+/// This build's identity: a digest of the sources compiled into it, the
+/// system loader's included. Two binaries built from the same sources share
+/// it; any source change gives another. A host cache keys on it, never on
+/// the package version.
+#[napi]
+pub fn engine_build_id() -> String {
+    env!("ANIMUS_ENGINE_BUILD_ID").to_string()
+}
+
 /// Every diagnostic code the engine emits, with the severity it carries, as
 /// JSON: `{ "animus.chain.unextractable": "warn", … }`. Hosts check codes
 /// against it instead of keeping a table of their own.
@@ -131,6 +140,10 @@ pub struct NapiSystemConfig {
     /// code the system does not reach, which the load did not apply. Absent
     /// when there are none.
     pub load_findings_json: Option<String>,
+    /// What the system read that differs from one load to the next (the
+    /// clock, `Math.random`), sorted: a host must not reuse this result.
+    /// Absent when it read none.
+    pub volatile: Option<Vec<String>>,
 }
 
 /// A failed load throws an `Error` carrying `dependencies` (the files it
@@ -185,6 +198,7 @@ pub fn load_system_module(
         missing: Some(config.missing),
         source_theme_manifests: config.source_theme_manifests,
         load_findings_json: config.load_findings_json,
+        volatile: (!config.volatile.is_empty()).then_some(config.volatile),
     })
 }
 

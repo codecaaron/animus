@@ -86,6 +86,11 @@ pub struct SystemConfig {
     /// registration in owned code the system does not reach, which the load
     /// did not apply. `None` when there are none.
     pub load_findings_json: Option<String>,
+    /// What the system read that differs from one load to the next (`Date.now`,
+    /// `Date()`, `new Date()`, `Math.random`, `performance.…`), sorted:
+    /// another load of the same files may build another system, so a host
+    /// must not reuse this one. Empty when it read none.
+    pub volatile: Vec<String>,
 }
 
 /// A registration the load found in owned code it did not run.
@@ -1110,6 +1115,8 @@ fn execute_bundle(
         let authored_probe: Function = ctx
             .eval(AUTHORED_CALLABLE_PROBE.as_bytes())
             .map_err(|e| format!("authored-callable probe failed to compile: {}", e))?;
+        ctx.eval::<(), _>(VOLATILE_TRAP.as_bytes())
+            .map_err(|e| format!("volatile-read trap failed to install: {e}"))?;
         ctx.eval::<(), _>(bundle_script.as_bytes())
             .map_err(|e| describe_eval_failure(&ctx, layout, &e))?;
         if !global_origins.is_empty() {
@@ -1129,6 +1136,9 @@ fn execute_bundle(
             transform_provenance(config, &authored_probe, sources, bundle_script, layout)
         })?;
         config.source_theme_manifests = extract_source_theme_manifests(&ctx).map(|scanned| with_routed_themes(&scanned, layout));
+        config.volatile = ctx
+            .eval::<Vec<String>, _>(b"[...globalThis.__animus_volatile].sort()" as &[u8])
+            .map_err(|e| format!("volatile reads failed to read: {e}"))?;
         Ok(config)
     })
 }
@@ -1431,8 +1441,52 @@ fn extract_system_config<'js>(
         // walk needs the live rquickjs context, not the namespace alone).
         source_theme_manifests: None,
         load_findings_json: None,
+        // Populated by execute_bundle once the system is read.
+        volatile: Vec::new(),
     })
 }
+
+/// Records each read whose value differs from one load to the next: the
+/// clock, through `Date.now`, `Date()`, `new Date()` with no argument and any
+/// reading of `performance`, and `Math.random`. Installed before any module
+/// runs.
+/// `Date` stays the constructor of every date: its prototype names the
+/// trapping `Date`, so `date.constructor === Date` and `instanceof` hold.
+const VOLATILE_TRAP: &str = r#"(() => {
+    const read = new Set();
+    Object.defineProperty(globalThis, '__animus_volatile', { value: read });
+    const NativeDate = Date;
+    const nativeNow = NativeDate.now;
+    Object.defineProperty(NativeDate, 'now', {
+        value: () => { read.add('Date.now'); return nativeNow.call(NativeDate); },
+        writable: true,
+        configurable: true,
+    });
+    const TrappedDate = new Proxy(NativeDate, {
+        apply(target, self, args) { read.add('Date()'); return Reflect.apply(target, self, args); },
+        construct(target, args, newTarget) {
+            if (args.length === 0) read.add('new Date()');
+            return Reflect.construct(target, args, newTarget);
+        },
+    });
+    Object.defineProperty(NativeDate.prototype, 'constructor', { value: TrappedDate, writable: true, configurable: true });
+    Object.defineProperty(globalThis, 'Date', { value: TrappedDate, writable: true, configurable: true });
+    const nativeRandom = Math.random;
+    Math.random = () => { read.add('Math.random'); return nativeRandom(); };
+    // Every reading of `performance` is a clock reading, `timeOrigin` too.
+    // The realm fixes `now` on its object, so the global is replaced.
+    if (typeof performance === 'object' && performance !== null) {
+        const nativePerformance = performance;
+        const trappedPerformance = new Proxy({}, {
+            get(_target, key) {
+                read.add(`performance.${String(key)}`);
+                const value = Reflect.get(nativePerformance, key);
+                return typeof value === 'function' ? value.bind(nativePerformance) : value;
+            },
+        });
+        Object.defineProperty(globalThis, 'performance', { value: trappedPerformance, writable: true, configurable: true });
+    }
+})();"#;
 
 /// Reads, for each configured transform, the authored callable an Animus
 /// forwarder links under a registry symbol: its position and text, through

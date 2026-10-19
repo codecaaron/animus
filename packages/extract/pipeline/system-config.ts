@@ -9,6 +9,7 @@ import { parseInternalWire } from './internal-wire';
 import { loadFindingDiagnostics, warnLine } from './manifest-diagnostics';
 import { applyPrefix, applyPropertyNames } from './prefix';
 import { splitInvalidPropertyRegistrations } from './property-registrations';
+import { cachedSystemLoad } from './system-load-cache';
 
 import type { EngineApi } from './engine-adapter';
 import type { HostExtensionPolicy } from './host-extensions';
@@ -126,7 +127,7 @@ function reportFindingsOn<Thrown>(error: Thrown): void {
 function evaluateSystemModule(
   engine: Pick<
     EngineApi,
-    'loadSystemModule' | 'extractFacts' | 'extractModuleFacts'
+    'loadSystemModule' | 'extractFacts' | 'extractModuleFacts' | 'engineBuildId'
   >,
   systemPath: string,
   systemExport: string | undefined,
@@ -136,15 +137,18 @@ function evaluateSystemModule(
   extensions: HostExtensionPolicy | undefined,
   instances: Readonly<Record<string, string>> | undefined
 ) {
+  const args = [
+    systemPath,
+    rootDir,
+    systemExport,
+    conditions,
+    workspaces,
+    extensions && extensionPolicyJson(extensions),
+    instances,
+  ];
   try {
-    return engine.loadSystemModule(
-      systemPath,
-      rootDir,
-      systemExport,
-      conditions,
-      workspaces,
-      extensions && extensionPolicyJson(extensions),
-      instances
+    return cachedSystemLoad(engine.engineBuildId?.(), rootDir, args, () =>
+      engine.loadSystemModule(...args)
     );
   } catch (error) {
     reportFindingsOn(error);

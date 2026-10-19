@@ -5,11 +5,9 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
-  renameSync,
   rmSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from 'fs';
 import {
   basename,
@@ -121,6 +119,7 @@ import {
 import { foreignPackages } from '../pipeline/registry-packages';
 import { moduleFactsCall } from '../pipeline/source-ingestion';
 import { systemInstanceMismatches } from '../pipeline/system-instances';
+import { writeAtomically } from '../pipeline/write-atomically';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
 import { buildPropOrderFile } from './prop-order';
 import {
@@ -299,15 +298,6 @@ function readTextOrNull(path: string): string | null {
   } catch {
     return null;
   }
-}
-
-/** Write-then-rename, so a reader never sees a torn file; the pid in the
- *  tmp name keeps writers apart, and the directory is made on the way. */
-function writeAtomically(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmpPath = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
-  writeFileSync(tmpPath, content);
-  renameSync(tmpPath, path);
 }
 
 const STATUS_WATCHDOG_MS = 2000;
