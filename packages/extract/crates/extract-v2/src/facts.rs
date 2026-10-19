@@ -636,10 +636,11 @@ pub struct FileFacts {
     #[serde(skip)]
     pub(crate) ordinary_components: BTreeSet<String>,
     /// The `ordinary_components` React's `forwardRef` or `memo` builds, each
-    /// with the name of a callback the module names: an object whose
-    /// `render` or `type` React calls, so a write through one or a hand-on
-    /// of one may change what it renders, and it renders what that callback
-    /// does.
+    /// with the name of a callback the module names, and the `const` aliases
+    /// among them, each with the component it names: an object whose
+    /// `render` or `type` React calls, or that one, so a write through one
+    /// or a hand-on of one may change what it renders, and it renders what
+    /// the named component does.
     #[serde(skip)]
     pub(crate) react_wrappers: BTreeMap<String, Option<String>>,
     /// Top-level `const` bindings React's `createContext` builds: a tag

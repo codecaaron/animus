@@ -14179,6 +14179,61 @@ mod tests {
         }
     }
 
+    /// Contract: a `const` alias of exactly one ordinary component of its
+    /// module (`DatePicker = DatePickerTarget`), typed or not, renders what
+    /// that component does, while one that is reassigned, written through or
+    /// handed on, or that names an import, stays unknown.
+    #[test]
+    fn a_const_alias_renders_its_component() {
+        let keeps_p = |target: &str, alias: &str, more: &str, other: &str| {
+            let source = format!(
+                "import {{ forwardRef }} from 'react';\nimport {{ Foreign, pad, consume }} from 'outside';\n\
+                 export const Box = ds.system({{ space: true }}).asElement('div');\n\
+                 {target}\n{alias}\n{more}"
+            );
+            let app = "import { DatePicker } from './a';\nimport { Box } from './a';\n\
+                       export const App = () => <DatePicker><Box p={8} /></DatePicker>;\n";
+            let other = format!("import {{ DatePicker }} from './a';\nimport {{ pad }} from 'outside';\n{other}");
+            analyze(&[("a.tsx", &source), ("app.tsx", app), ("other.tsx", &other)], &test_inputs()).dynamic_props.contains_key("p")
+        };
+        let in_place = "const DatePickerTarget = forwardRef((props, ref) => <div ref={ref}>{props.children}</div>);";
+        let plain = "function DatePickerTarget({ children }) { return <div>{children}</div>; }";
+        let outside = "const DatePickerTarget = ({ children }) => <Foreign>{children}</Foreign>;";
+        for alias in [
+            "export const DatePicker = DatePickerTarget;",
+            "export const DatePicker: ForwardRefExoticComponent<Props> = DatePickerTarget;",
+        ] {
+            for (target, more, other, keeps) in [
+                (in_place, "", "", false),
+                (plain, "", "", false),
+                (outside, "", "", true),
+                (in_place, "DatePicker.render = (props) => pad(props.children);", "", true),
+                (in_place, "consume(DatePicker);", "", true),
+                (in_place, "", "DatePicker.render = (props) => pad(props.children);", true),
+                (plain, "", "consume(DatePicker);", true),
+            ] {
+                assert_eq!(keeps_p(target, alias, more, other), keeps, "{alias} {target} {more} {other}");
+            }
+        }
+        // One its module writes through is no ordinary component: a tag
+        // that imports it stays an unknown identity.
+        let identity = |more: &str| {
+            let source = format!(
+                "import {{ forwardRef }} from 'react';\nimport {{ pad }} from 'outside';\n{in_place}\n\
+                 export const DatePicker = DatePickerTarget;\n{more}"
+            );
+            let app = "import { DatePicker } from './a';\nexport const Box = ds.system({ space: true }).asElement('div');\n\
+                       export const App = () => <><DatePicker /><Box p={8} /></>;\n";
+            let provenance = analyze(&[("a.tsx", &source), ("app.tsx", app)], &inputs_with_provenance()).slot_provenance.unwrap();
+            provenance.usage.iter().any(|gap| gap.rule == "uncertain-identity" && gap.detail.as_deref() == Some("DatePicker"))
+        };
+        assert!(!identity(""));
+        assert!(identity("DatePicker.render = (props) => pad(props.children);\n"));
+        // Reassigned, or naming what another module declares.
+        assert!(keeps_p(in_place, "export let DatePicker = DatePickerTarget;\nDatePicker = Foreign;", "", ""));
+        assert!(keeps_p("import { DatePickerTarget } from './elsewhere';", "export const DatePicker = DatePickerTarget;", "", ""));
+    }
+
     /// Contract: a component a `const` facade holds (`Field = { Root }`) is
     /// read through the facade's members, and holding it hands nothing
     /// off, while what the facade's own uses may do to it (an escape, a

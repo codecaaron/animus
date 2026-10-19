@@ -1095,10 +1095,6 @@ pub(crate) fn collect_enriched_usage(
     collector.visit_program(program);
     let usage = collector.finish();
     let react_imports = origins.map(|scoping| ReactImports::of(program, scoping));
-    let (ordinary_components, react_wrappers) = origins
-        .zip(react_imports.as_ref())
-        .map(|(scoping, react)| ordinary_components(program, scoping, react))
-        .unwrap_or_default();
     // Without scopes a direct `eval` cannot be ruled out.
     let direct_eval = origins.is_none_or(|scoping| scoping.root_unresolved_references().contains_key("eval"));
     let confined = match &scoping {
@@ -1163,6 +1159,10 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeSet::new(),
     };
+    let (ordinary_components, react_wrappers) = origins
+        .zip(react_imports.as_ref())
+        .map(|(scoping, react)| ordinary_components(program, scoping, react, &escapes))
+        .unwrap_or_default();
     let spread_wrappers = match &scoping {
         Some(scoping)
             if !wrapper_candidates.is_empty()
@@ -6842,9 +6842,10 @@ fn context_consts(program: &Program<'_>, scoping: &Scoping, react: &ReactImports
 }
 
 /// Top-level functions and classes, and `const` bindings of a function or
-/// class expression, or of React's `forwardRef` or `memo` of one, that
-/// nothing in the file writes: what a tag naming an ordinary component is
-/// proved by. An ordinary default export is also `default`. React renders
+/// class expression, of React's `forwardRef` or `memo` of one, or of the
+/// name of one (an alias, which the module neither writes through nor
+/// hands on), that nothing in the file writes: what a tag naming an
+/// ordinary component is proved by. An ordinary default export is also `default`. React renders
 /// a wrapper's `render` (`forwardRef`) or `type` (`memo`), which holds its
 /// callback only while nothing changes the wrapper. Each React wrapper
 /// among them maps to the name of the callback it renders, if it is named.
@@ -6852,6 +6853,7 @@ fn ordinary_components(
     program: &Program<'_>,
     scoping: &Scoping,
     react: &ReactImports,
+    escapes: &BTreeSet<String>,
 ) -> (BTreeSet<String>, BTreeMap<String, Option<String>>) {
     use oxc::ast::ast::{BindingIdentifier, Declaration, ExportDefaultDeclarationKind};
     // Direct eval can write any binding by name.
@@ -6926,7 +6928,21 @@ fn ordinary_components(
                             )
                         };
                         match wrapped(scoping, react, init) {
-                            None => inline(init.get_inner_expression()).then_some(&**id),
+                            // A `const` alias renders what it names, while the
+                            // module neither writes through it nor hands it on.
+                            None => match init.get_inner_expression() {
+                                Expression::Identifier(target) => {
+                                    let name = id.name.as_str();
+                                    let escapes = escapes.iter().any(|escaped| {
+                                        escaped.strip_prefix(name).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+                                    });
+                                    if !escapes {
+                                        wrappers.push((&**id, Some(target.name.as_str())));
+                                    }
+                                    None
+                                }
+                                init => inline(init).then_some(&**id),
+                            },
                             Some(callback) if inline(callback) => {
                                 wrappers.push((&**id, None));
                                 None
