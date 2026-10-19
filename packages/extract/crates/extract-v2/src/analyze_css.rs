@@ -12959,6 +12959,26 @@ mod tests {
             ),
             ("const Render = (props) => { const ref = useRef(null); ref.current = props; return <div>{props.children}</div>; };", "", "", true),
             ("let saved;\nconst Render = ({ children }) => { saved = children; return <div>{children}</div>; };", "", "", true),
+            // A member of a component, a helper or an import is whatever any
+            // module puts there.
+            ("export const Render = ({ children }) => Render.impl(children);", "", "import { Render } from './a';\nimport { pad } from 'outside';\nRender.impl = pad;\n", true),
+            ("export const Render = function ({ children }) { return Render.impl(children); };", "", "import { Render } from './a';\nimport { pad } from 'outside';\nRender.impl = pad;\n", true),
+            ("const helper = (c) => c;\nhelper.impl = pad;\nconst Render = ({ children }) => helper.impl(children);", "", "", true),
+            ("import { Impl } from './other';\nconst Render = ({ children }) => Impl.impl(children);", "", "import { pad } from 'outside';\nexport function Impl() {}\nImpl.impl = pad;\n", true),
+            // A member of what any call returns.
+            ("const make = () => ({ render: pad });\nconst Render = ({ children }) => make().render(children);", "", "", true),
+            ("function make() { return { render: pad }; }\nconst Render = ({ children }) => make().render(children);", "", "", true),
+            ("import { useApi } from './other';\nconst Render = ({ children }) => useApi().render(children);", "", "import { pad } from 'outside';\nexport const useApi = () => ({ render: pad });\n", true),
+            // A React DOM root renders in place.
+            ("import { createRoot } from 'react-dom/client';\nconst Render = ({ children }) => createRoot(document.body).render(children);", "", "", false),
+            // A site that names the function it sits in.
+            ("const Render = ({ children, depth }) => <Foreign>{children}{depth ? <Render depth={depth - 1} /> : null}</Foreign>;", "", "", true),
+            ("function Render({ children, depth }) { return <Foreign>{children}{depth ? <Render depth={depth - 1} /> : null}</Foreign>; }", "", "", true),
+            ("const Render = ({ children }) => decorate(children, Render);", "", "", true),
+            ("const Render = ({ children }) => { const visit = (c) => decorate(c, visit); return visit(children); };", "", "", true),
+            ("function renderNode(node) { return <Foreign walk={renderNode}>{node}</Foreign>; }\nconst Render = ({ children }) => renderNode(children);", "", "", true),
+            ("const helpers = { wrap: (c, f) => f(c, helpers) };\nconst Render = ({ children }) => helpers.wrap(children, decorate);", "", "", true),
+            ("const tree = { walk(node, visit) { return visit(node, (n) => tree.walk(n, visit)); } };\nconst Render = ({ children, visit }) => tree.walk(children, visit);", "visit={decorate}", "", true),
         ] {
             assert_eq!(keeps_p(component, props, other), keeps, "{component} {props}");
         }

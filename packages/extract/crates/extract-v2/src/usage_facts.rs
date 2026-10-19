@@ -1132,7 +1132,7 @@ pub(crate) fn collect_enriched_usage(
         _ => BTreeMap::new(),
     };
     let (opaque_calls, opaque_tags, element_consts) =
-        origins.map(|scoping| opaque_calls(program, scoping)).unwrap_or_default();
+        origins.map(|scoping| opaque_calls(program, scoping, chains)).unwrap_or_default();
     let (prop_tags, name_uses, namespace_member_uses) =
         origins.map(|scoping| prop_tags_and_uses(program, scoping, &react)).unwrap_or_default();
     let builder_import_references =
@@ -1309,13 +1309,18 @@ const BUILTIN_GLOBALS: [&str; 33] = [
 fn opaque_calls(
     program: &Program<'_>,
     scoping: &Scoping,
+    chains: &[&ChainDescriptor],
 ) -> (Vec<OpaqueCall>, Vec<OpaqueTag>, BTreeMap<String, ElementConst>) {
     let mut sources: FxHashMap<SymbolId, &str> = FxHashMap::default();
+    let mut namespaces: FxHashSet<SymbolId> = FxHashSet::default();
     for statement in &program.body {
         let Statement::ImportDeclaration(import) = statement else { continue };
         for specifier in import.specifiers.iter().flatten() {
             if let Some(symbol) = specifier.local().symbol_id.get() {
                 sources.insert(symbol, import.source.value.as_str());
+                if matches!(specifier, ImportDeclarationSpecifier::ImportNamespaceSpecifier(_)) {
+                    namespaces.insert(symbol);
+                }
             }
         }
     }
@@ -1331,6 +1336,9 @@ fn opaque_calls(
         calls: Vec::new(),
         tag_calls: Vec::new(),
         stores: Vec::new(),
+        namespaces,
+        chain_spans: chains.iter().map(|chain| chain.span).collect(),
+        scopes: Vec::new(),
     };
     for statement in &program.body {
         scan.top = top_level_names(statement);
@@ -1453,6 +1461,9 @@ struct ArgumentReads {
     /// The functions written inside the expression, whose own parameters
     /// hold what their caller passes, not what the component receives.
     functions: Vec<oxc::semantic::ScopeId>,
+    /// The functions the expression sits in, whose parameters are what the
+    /// site hands on, however the walk reaches them.
+    enclosing: Vec<oxc::semantic::ScopeId>,
 }
 
 impl ArgumentReads {
@@ -1570,15 +1581,29 @@ struct OpaqueCallScan<'s> {
     /// Values stored where a later render may read them, and the enclosing
     /// top-level bindings.
     stores: Vec<(ArgumentReads, Vec<String>)>,
+    /// Namespace imports, whose members name what their module exports.
+    namespaces: FxHashSet<SymbolId>,
+    /// The spans of the module's Animus builder chains, whose calls the
+    /// engine reads.
+    chain_spans: Vec<(u32, u32)>,
+    /// The functions the visit is inside, innermost last.
+    scopes: Vec<oxc::semantic::ScopeId>,
 }
 
 impl OpaqueCallScan<'_> {
+    /// What a site reading `reads` reads, with the functions it sits in.
+    fn site(&self, mut reads: ArgumentReads) -> ArgumentReads {
+        reads.enclosing.clone_from(&self.scopes);
+        reads
+    }
+
     /// What a call's callee starts from, or `None` when the call cannot
     /// reach code outside React: a React import, a built-in global, or a
     /// function a function body declares, which the scan reads in place.
-    /// A value a call returns or `this` holds, any other value a function
-    /// body binds (a parameter, a prop, a hook's result), and a member of a
-    /// module function or class, which any module may write, are unknown.
+    /// A value a call returns or `this` holds, a member of either, any other
+    /// value a function body binds (a parameter, a prop, a hook's result),
+    /// and a member of a module function or class or of a named import,
+    /// which any module may write, are unknown.
     fn root(&self, callee: &Expression<'_>) -> Option<CalleeRoot> {
         // A callee rooted in no identifier (`[1].map`) is a value the
         // analysed code builds.
@@ -1586,30 +1611,54 @@ impl OpaqueCallScan<'_> {
             CalleeBase::Identifier(root, member, called) => (root, member, called),
             CalleeBase::Unknown => return Some(CalleeRoot::Unknown),
         };
-        // A member of what React's own function returns (a hook's result) is
-        // unknown; React's functions themselves are known.
+        // A member of what any call returns (a hook's result) is unknown,
+        // but for a React DOM root, which renders what it gets in place;
+        // React's functions themselves are known.
+        if called {
+            return (!self.react_root(callee)).then_some(CalleeRoot::Unknown);
+        }
         if self.is_react(root) {
-            return called.then_some(CalleeRoot::Unknown);
+            return None;
         }
         let Some(symbol) = root.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id()) else {
             return (!BUILTIN_GLOBALS.contains(&root.name.as_str())).then_some(CalleeRoot::Unknown);
         };
         if self.sources.contains_key(&symbol) {
-            return Some(CalleeRoot::Import(match member {
-                Some(member) => format!("{}.{member}", root.name),
-                None => root.name.to_string(),
-            }));
+            // A member of a namespace names what its module exports; a member
+            // of any other import is whatever any module puts there.
+            return Some(match member {
+                Some(member) if self.namespaces.contains(&symbol) => {
+                    CalleeRoot::Import(format!("{}.{member}", root.name))
+                }
+                Some(_) => CalleeRoot::Unknown,
+                None => CalleeRoot::Import(root.name.to_string()),
+            });
         }
         if self.scoping.symbol_scope_id(symbol) == self.scoping.root_scope_id() {
             // A member of a function or class is whatever any module puts
             // there.
-            let declared = self.scoping.symbol_flags(symbol).intersects(SymbolFlags::Function | SymbolFlags::Class);
             return Some(match member {
-                Some(_) if declared => CalleeRoot::Unknown,
+                Some(_) if self.declares_function(symbol) => CalleeRoot::Unknown,
                 _ => CalleeRoot::Module(symbol),
             });
         }
         (!self.declares_function(symbol) || member.is_some()).then_some(CalleeRoot::Unknown)
+    }
+
+    /// Whether `callee` is a member of a React DOM root
+    /// (`createRoot(el).render`), named or through a namespace of React's.
+    fn react_root(&self, callee: &Expression<'_>) -> bool {
+        let Some(member) = crate::chain_walk::unwrap_type_assertions(callee).as_member_expression() else { return false };
+        let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(member.object()) else { return false };
+        let (root, name) = match crate::chain_walk::unwrap_type_assertions(&call.callee) {
+            Expression::Identifier(id) => (id, id.name.as_str()),
+            Expression::StaticMemberExpression(member) => match &member.object {
+                Expression::Identifier(id) => (id, member.property.name.as_str()),
+                _ => return false,
+            },
+            _ => return false,
+        };
+        matches!(name, "createRoot" | "hydrateRoot") && self.is_react(root)
     }
 
     /// Whether `symbol` binds a function or class its declaration writes
@@ -1711,6 +1760,9 @@ impl OpaqueCallScan<'_> {
             this |= next.this;
             pending.extend(next.symbols.iter().copied());
         }
+        // A site that names a function it sits in (a recursive component)
+        // still hands on that function's own parameters.
+        entered.retain(|scope| !reads.enclosing.contains(scope));
         closed.reads_parameter = unresolved
             || this
             || parameters.iter().any(|parameter| !entered.contains(&self.scoping.symbol_scope_id(*parameter)));
@@ -1718,8 +1770,11 @@ impl OpaqueCallScan<'_> {
         closed
     }
 
-    fn record(&mut self, callee: &Expression<'_>, arguments: &[Argument<'_>]) {
-        if arguments.is_empty() {
+    fn record(&mut self, span: oxc::span::Span, callee: &Expression<'_>, arguments: &[Argument<'_>]) {
+        // An Animus builder chain's calls are the engine's to read.
+        if arguments.is_empty()
+            || self.chain_spans.iter().any(|(start, end)| *start <= span.start && span.end <= *end)
+        {
             return;
         }
         let Some(root) = self.root(callee) else { return };
@@ -1734,7 +1789,7 @@ impl OpaqueCallScan<'_> {
                 }
             }
         }
-        self.calls.push((root, reads, self.top.clone()));
+        self.calls.push((root, self.site(reads), self.top.clone()));
     }
 }
 
@@ -1847,11 +1902,23 @@ impl<'a> Visit<'a> for OpaqueCallScan<'_> {
                 self.functions.insert(symbol, (reads, scope));
             }
         }
+        self.scopes.extend(function.scope_id.get());
         oxc::ast_visit::walk::walk_function(self, function, flags);
+        if function.scope_id.get().is_some() {
+            self.scopes.pop();
+        }
+    }
+
+    fn visit_arrow_function_expression(&mut self, arrow: &oxc::ast::ast::ArrowFunctionExpression<'a>) {
+        self.scopes.extend(arrow.scope_id.get());
+        oxc::ast_visit::walk::walk_arrow_function_expression(self, arrow);
+        if arrow.scope_id.get().is_some() {
+            self.scopes.pop();
+        }
     }
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-        self.record(&call.callee, &call.arguments);
+        self.record(call.span, &call.callee, &call.arguments);
         oxc::ast_visit::walk::walk_call_expression(self, call);
     }
 
@@ -1872,13 +1939,13 @@ impl<'a> Visit<'a> for OpaqueCallScan<'_> {
         if stored && !self.top.is_empty() {
             let mut reads = ArgumentReads::default();
             collect_reads(self.scoping, &assignment.right, &mut reads);
-            self.stores.push((reads, self.top.clone()));
+            self.stores.push((self.site(reads), self.top.clone()));
         }
         oxc::ast_visit::walk::walk_assignment_expression(self, assignment);
     }
 
     fn visit_new_expression(&mut self, new: &oxc::ast::ast::NewExpression<'a>) {
-        self.record(&new.callee, &new.arguments);
+        self.record(new.span, &new.callee, &new.arguments);
         oxc::ast_visit::walk::walk_new_expression(self, new);
     }
 
@@ -1910,6 +1977,7 @@ impl<'a> Visit<'a> for OpaqueCallScan<'_> {
             for child in &element.children {
                 collector.visit_jsx_child(child);
             }
+            let reads = self.site(reads);
             self.tag_calls.push((tag, origin, polymorphic, reads, self.top.clone()));
         }
         oxc::ast_visit::walk::walk_jsx_element(self, element);
