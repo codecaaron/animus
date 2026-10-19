@@ -628,8 +628,11 @@ pub struct FileFacts {
     #[serde(skip)]
     pub(crate) bindingless_imports: Vec<String>,
     /// Top-level functions and classes, and `const` bindings of a function or
-    /// class expression, that nothing in the file writes: a tag that names
-    /// one renders an ordinary component, not an Animus one.
+    /// class expression, or of React's `forwardRef` or `memo` of one, that
+    /// nothing in the file writes: a tag that names one renders an ordinary
+    /// component, not an Animus one. React renders a wrapper's `render`
+    /// (`forwardRef`) or `type` (`memo`), which holds its callback only
+    /// while nothing changes the wrapper.
     #[serde(skip)]
     pub(crate) ordinary_components: BTreeSet<String>,
     /// Top-level `const` bindings React's `createContext` builds: a tag

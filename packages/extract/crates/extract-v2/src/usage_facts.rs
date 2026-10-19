@@ -1091,7 +1091,7 @@ pub(crate) fn collect_enriched_usage(
     };
     collector.visit_program(program);
     let usage = collector.finish();
-    let ordinary_components = origins
+    let (ordinary_components, react_wrappers) = origins
         .map(|scoping| ordinary_components(program, scoping))
         .unwrap_or_default();
     // Without scopes a direct `eval` cannot be ruled out.
@@ -1159,7 +1159,21 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeMap::new(),
     };
-    let records = origins.map(|scoping| forwarding::forwarding(program, scoping, chains, &exported)).unwrap_or_default();
+    let mut records = origins.map(|scoping| forwarding::forwarding(program, scoping, chains, &exported)).unwrap_or_default();
+    // A React wrapper forwards what its callback does.
+    let wrapping = |forwards_from: &mut Vec<String>| {
+        let mut at = 0;
+        while let Some(name) = forwards_from.get(at).cloned() {
+            for (wrapper, _) in react_wrappers.iter().filter(|(_, callback)| **callback == name) {
+                if !forwards_from.contains(wrapper) {
+                    forwards_from.push(wrapper.clone());
+                }
+            }
+            at += 1;
+        }
+    };
+    records.calls.iter_mut().for_each(|call| wrapping(&mut call.forwards_from));
+    records.tags.iter_mut().for_each(|tag| wrapping(&mut tag.forwards_from));
     let (prop_tags, name_uses, namespace_member_uses) =
         origins.map(|scoping| prop_tags_and_uses(program, scoping, &react)).unwrap_or_default();
     let builder_import_references =
@@ -6673,6 +6687,9 @@ impl ReactImports {
                 }
             }
         }
+        if imports.namespaces.is_empty() {
+            return imports;
+        }
         // A namespace the module writes a member of (`React.createContext =
         // …`) no longer holds React's functions.
         struct Written<'s> {
@@ -6772,15 +6789,31 @@ fn context_consts(program: &Program<'_>, scoping: &Scoping, react: &ReactImports
 }
 
 /// Top-level functions and classes, and `const` bindings of a function or
-/// class expression, that nothing in the file writes: what a tag naming an
-/// ordinary component is proved by. An ordinary default export is also
-/// `default`.
-fn ordinary_components(program: &Program<'_>, scoping: &Scoping) -> BTreeSet<String> {
+/// class expression, or of React's `forwardRef` or `memo` of one, that
+/// nothing in the file writes: what a tag naming an ordinary component is
+/// proved by. An ordinary default export is also `default`. React renders
+/// a wrapper's `render` (`forwardRef`) or `type` (`memo`), which holds its
+/// callback only while nothing changes the wrapper. Each wrapper of a named
+/// callback maps to the callback's name.
+fn ordinary_components(program: &Program<'_>, scoping: &Scoping) -> (BTreeSet<String>, BTreeMap<String, String>) {
     use oxc::ast::ast::{BindingIdentifier, Declaration, ExportDefaultDeclarationKind};
     // Direct eval can write any binding by name.
     if scoping.root_unresolved_references().contains_key("eval") {
-        return BTreeSet::new();
+        return Default::default();
     }
+    let react = ReactImports::of(program, scoping);
+    // The callback React's `forwardRef` or `memo` wraps, through nested
+    // wrappers.
+    fn wrapped<'b, 'a>(scoping: &Scoping, react: &ReactImports, expr: &'b Expression<'a>) -> Option<&'b Expression<'a>> {
+        let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(expr) else { return None };
+        if call.arguments.len() != 1 || !react.calls(scoping, &call.callee, &["forwardRef", "memo"]) {
+            return None;
+        }
+        let callback = crate::chain_walk::unwrap_type_assertions(call.arguments[0].as_expression()?);
+        wrapped(scoping, react, callback).or(Some(callback))
+    }
+    // Wrappers of a named callback, with its name.
+    let mut wrappers: Vec<(&BindingIdentifier<'_>, &str)> = Vec::new();
     let unwritten = |id: &BindingIdentifier<'_>| {
         id.symbol_id.get().is_some_and(|symbol| !scoping.symbol_is_mutated(symbol))
     };
@@ -6822,18 +6855,29 @@ fn ordinary_components(program: &Program<'_>, scoping: &Scoping) -> BTreeSet<Str
                 variables
                     .declarations
                     .iter()
-                    .filter_map(|declarator| match (&declarator.id, &declarator.init) {
-                        (oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init))
-                            if matches!(
-                                init.get_inner_expression(),
+                    .filter_map(|declarator| {
+                        let (oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init)) =
+                            (&declarator.id, &declarator.init)
+                        else {
+                            return None;
+                        };
+                        let inline = |expr: &Expression<'_>| {
+                            matches!(
+                                expr,
                                 Expression::ArrowFunctionExpression(_)
                                     | Expression::FunctionExpression(_)
                                     | Expression::ClassExpression(_)
-                            ) =>
-                        {
-                            Some(&**id)
+                            )
+                        };
+                        match wrapped(scoping, &react, init) {
+                            None => inline(init.get_inner_expression()).then_some(&**id),
+                            Some(callback) if inline(callback) => Some(&**id),
+                            Some(Expression::Identifier(callback)) => {
+                                wrappers.push((&**id, callback.name.as_str()));
+                                None
+                            }
+                            Some(_) => None,
                         }
-                        _ => None,
                     })
                     .collect()
             }
@@ -6841,7 +6885,16 @@ fn ordinary_components(program: &Program<'_>, scoping: &Scoping) -> BTreeSet<Str
         };
         names.extend(ids.into_iter().filter(|id| unwritten(id)).map(|id| id.name.to_string()));
     }
-    names
+    // A wrapper of a named callback is one once its callback is, which
+    // may itself be a wrapper declared later.
+    wrappers.retain(|(id, _)| unwritten(id));
+    let mut renders = BTreeMap::new();
+    while let Some(at) = wrappers.iter().position(|(_, callback)| names.contains(*callback)) {
+        let (id, callback) = wrappers.swap_remove(at);
+        names.insert(id.name.to_string());
+        renders.insert(id.name.to_string(), callback.to_string());
+    }
+    (names, renders)
 }
 
 /// React's `createElement` and `cloneElement` as a file can call them:

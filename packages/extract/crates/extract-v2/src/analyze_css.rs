@@ -14068,6 +14068,42 @@ mod tests {
         }
     }
 
+    /// Contract: a component React's own `forwardRef` or `memo` builds from
+    /// a stable analysed callback renders what that callback does while
+    /// nothing changes the wrapper, while a wrapper of any other origin, or
+    /// of a callback the analysis cannot pin down, stays unknown.
+    #[test]
+    fn react_wrappers_render_their_callback() {
+        let keeps_p = |imports: &str, wrapped: &str| {
+            let source = format!(
+                "{imports}\nimport {{ Foreign }} from 'outside';\n\
+                 export const Box = ds.system({{ space: true }}).asElement('div');\n\
+                 const Render = (props, ref) => <div {{...props}} ref={{ref}} />;\n\
+                 const Out = ({{ children }}) => <Foreign>{{children}}</Foreign>;\n\
+                 const Wrapped = {wrapped};\n\
+                 export const App = () => <Wrapped><Box p={{8}} /></Wrapped>;\n"
+            );
+            analyze(&[("app.tsx", &source)], &test_inputs()).dynamic_props.contains_key("p")
+        };
+        let react = "import { memo, forwardRef } from 'react';\nimport * as React from 'react';";
+        for (wrapped, keeps) in [
+            ("memo(forwardRef(Render))", false),
+            ("React.memo((props) => <section>{props.children}</section>)", false),
+            ("forwardRef(function Inline(props, ref) { return <div ref={ref}>{props.children}</div>; })", false),
+            // The callback hands its children outside.
+            ("memo(Out)", true),
+            ("memo((props) => <Foreign>{props.children}</Foreign>)", true),
+            // A callback the analysis cannot pin down.
+            ("memo(Foreign)", true),
+            ("memo(globalThis.choose ? Render : Box)", true),
+            ("memo(Box)", true),
+        ] {
+            assert_eq!(keeps_p(react, wrapped), keeps, "{wrapped}");
+        }
+        // A `forwardRef` or `memo` that is not React's.
+        assert!(keeps_p("import { memo, forwardRef } from 'outside';", "memo(forwardRef(Render))"));
+    }
+
     #[test]
     fn total_floor_empty_project_has_no_slots() {
         let out = analyze(&[], &test_inputs());
