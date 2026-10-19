@@ -546,8 +546,13 @@ describe('the shared build-strictness policy over a real analysis', () => {
       `[animus] strict: ${CLASSIFIED.length + dropped} error diagnostic(s)`
     );
     for (const expected of CLASSIFIED) {
+      // A finding line: `[animus] ✖`, its location, the record, and its own
+      // code in brackets.
       expect(message).toMatch(
-        new RegExp(`${expected.code} — (?:${LOCATION})?${expected.component}:`)
+        new RegExp(
+          `^\\[animus\\] ✖ (?:${LOCATION})?${expected.component}(?::| not extracted:).* \\[${expected.code.replace(/\./g, '\\.')}\\]$`,
+          'm'
+        )
       );
     }
     for (const unclassified of ['LookalikeAxis', 'OutsideAxis']) {
@@ -644,8 +649,8 @@ export const App = () => <Box />;
   test('it warns by default and fails explicit build strictness', () => {
     expect(surface(manifest, undefined).thrown).toBeNull();
     expect(surface(manifest, false).thrown).toBeNull();
-    expect(surface(manifest, true).thrown?.message).toContain(
-      "animus.transform.configured-rejected — system: createTransform('leaky'):"
+    expect(surface(manifest, true).thrown?.message).toMatch(
+      /^\[animus\] ✖ system: createTransform\('leaky'\): .* \[animus\.transform\.configured-rejected\]$/m
     );
   });
 });

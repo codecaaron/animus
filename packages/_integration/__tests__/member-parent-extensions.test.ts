@@ -179,9 +179,11 @@ describe('extending a member of an exported Animus namespace object', () => {
 
   test('explicit build strictness fails through the shared policy with the same attribution', () => {
     expect(strictFailure()).toContain(
-      'animus.extension.unsupported-member-parent — ' +
-        'fixtures/member-child.tsx:2:35: ShortSelectContent: ' +
-        "chain dropped: parent 'Select.Content'"
+      '[animus] ✖ fixtures/member-child.tsx:2:35: ShortSelectContent ' +
+        "not extracted: chain dropped: parent 'Select.Content'"
+    );
+    expect(strictFailure()).toMatch(
+      / \[animus\.extension\.unsupported-member-parent\]$/m
     );
   });
 

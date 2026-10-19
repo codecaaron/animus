@@ -13,6 +13,7 @@ import {
   systemImportFacts,
 } from '../../extract/tests/source-ingestion-fixtures';
 import { runBuildStart } from '../src/build-start';
+import { bundleRemoval } from '../src/bundle-removal';
 import { applyResolvedConfig } from '../src/config';
 import { PluginContext } from '../src/context';
 import { makeManifest } from './manifest-fixture';
@@ -54,6 +55,9 @@ async function buildIncluding(
   customLogger.error = (message) => {
     warnings.push(message);
   };
+  customLogger.info = (message) => {
+    warnings.push(message);
+  };
   const ctx = new PluginContext(
     { system: './src/system.ts', ...options },
     () => ({
@@ -63,12 +67,20 @@ async function buildIncluding(
         scalesJson: '{}',
         variableMapJson: '{}',
         variableCss: '',
+        // A contextual variable the stylesheet animates unregistered: a
+        // property finding at info severity.
+        contextualVarsJson: '{"glow":["glow"]}',
         dependencies: [],
       }),
       extractFacts: factsExtractor({
         [system]: { ...emptyFacts(system), imports: systemImportFacts(source) },
       }),
-      analyzeProject: () => JSON.stringify(makeManifest()),
+      analyzeProject: () =>
+        JSON.stringify(
+          makeManifest({
+            css: '@keyframes pulse { from { --glow: 0 } to { --glow: 1 } }',
+          })
+        ),
       locatePackage: () => null,
       declaresKitSource: () => false,
     })
@@ -84,7 +96,7 @@ async function buildIncluding(
     runBuildStart(ctx, async (specifier) =>
       specifier.startsWith('.') ? resolve(app, 'src', specifier) : null
     );
-  return { run, warnings };
+  return { run, warnings, ctx };
 }
 
 describe('buildStart gate: include resolution', () => {
@@ -94,7 +106,7 @@ describe('buildStart gate: include resolution', () => {
     });
 
     await expect(run()).rejects.toThrow(
-      'animus.discovery.unresolvable-include — src/system.ts: includes: unresolvable include specifier(s): @x/missing, @x/typo'
+      '[animus] ✖ src/system.ts: includes: unresolvable include specifier(s): @x/missing, @x/typo [animus.discovery.unresolvable-include]'
     );
   });
 
@@ -113,7 +125,9 @@ describe('buildStart gate: include resolution', () => {
   // Animus code and answers that code's own level: turning every code off
   // leaves a build that writes none, a `kind:warn` key reaches only
   // warn-severity findings, and the self-check does not report a finding
-  // again under its own code.
+  // again under its own code. Bundle removal's info lines are coded too,
+  // every finding line ends with its own code in brackets, and a strict
+  // failure prints its records the same way.
   test('a build with every Animus code off writes no warning', async () => {
     // An include that resolves to nothing, a pattern that matches nothing,
     // and a tree of build output that is analysed.
@@ -124,9 +138,23 @@ describe('buildStart gate: include resolution', () => {
         { 'out/bundle.js': `export const x = '${'x'.repeat(300 * 1024)}';\n` }
       );
 
-    const reported = await build();
+    // A client build beside another environment keeps every component's
+    // CSS, and says so.
+    const removal = (ctx: PluginContext) =>
+      bundleRemoval(ctx, {}, [], {
+        otherEnvironments: ['ssr'],
+        manifests: new Set(),
+        emit: () => {},
+      });
+
+    // Verbose, so info findings print beside the status lines.
+    const reported = await build({ verbose: true });
     await reported.run();
-    const codes = reported.warnings.map(
+    removal(reported.ctx);
+    const findings = reported.warnings.filter((line) =>
+      /^\[animus\] [⚠ℹ] /.test(line)
+    );
+    const codes = findings.map(
       (line) => / \[(animus\.[a-z.-]+)\]$/.exec(line)?.[1]
     );
     expect(codes).not.toContain(undefined);
@@ -135,11 +163,18 @@ describe('buildStart gate: include resolution', () => {
         'animus.discovery.unresolvable-include',
         'animus.discovery.exclude-unmatched',
         'animus.discovery.output-trees',
+        'animus.bundle.removal-kept',
+        'animus.property.unregistered-animation',
       ])
     );
+    // A code is written in brackets, never in parentheses.
+    expect(
+      reported.warnings.filter((line) => line.includes('(animus.'))
+    ).toEqual([]);
 
     const silenced = await build({ diagnostics: { 'animus.*': 'off' } });
     await silenced.run();
+    removal(silenced.ctx);
     expect(silenced.warnings).toEqual([]);
 
     // An error-severity finding is no `kind:warn` record.
@@ -147,8 +182,10 @@ describe('buildStart gate: include resolution', () => {
       strict: true,
       diagnostics: { 'kind:warn': 'off' },
     });
+    // Each record of a strict failure is a finding line like any other:
+    // `[animus]`, the record, and its own code in brackets.
     await expect(kindOff.run()).rejects.toThrow(
-      'animus.discovery.unresolvable-include'
+      /^\[animus\] strict: 1 error diagnostic\(s\):\n\[animus\] ✖ [^\n]* \[animus\.discovery\.unresolvable-include\]$/
     );
 
     // The include's own level holds: the self-check does not name it again.

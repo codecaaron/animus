@@ -281,7 +281,11 @@ describe("a host's engine and logger", () => {
     const lines: string[] = [];
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const session = new ExtractionSession(
-      { system: './src/system.ts', exclude: ['nothing-matches-this'] },
+      {
+        system: './src/system.ts',
+        exclude: ['nothing-matches-this'],
+        verbose: true,
+      },
       {
         engine: () => ({
           extractFacts: () => '{"files":{},"parseCount":0}',
@@ -304,7 +308,7 @@ describe("a host's engine and logger", () => {
     expect(hostAnalyze).toHaveBeenCalledTimes(1);
     expect(mocks.analyzeProject).not.toHaveBeenCalled();
     expect(lines).toContain(
-      "[animus] ⚠ exclude: 'nothing-matches-this': matched nothing, so it excludes no file — correct it, or remove it [animus.discovery.exclude-unmatched]"
+      "[animus] ℹ exclude: 'nothing-matches-this': matched nothing, so it excludes no file — correct it, remove it, or ignore this if it names files the build generates later [animus.discovery.exclude-unmatched]"
     );
     expect(consoleWarn).not.toHaveBeenCalled();
     session.close();

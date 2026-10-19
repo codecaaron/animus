@@ -167,7 +167,7 @@ describe('a project file that cannot be read', () => {
 
     await expect(session.runFullPipeline()).rejects.toThrow(
       new RegExp(
-        `${UNREADABLE_SOURCE_FILE.replace(/\./g, '\\.')}.*src/App\\.tsx`
+        `src/App\\.tsx.*\\[${UNREADABLE_SOURCE_FILE.replace(/\./g, '\\.')}\\]`
       )
     );
     session.close();

@@ -571,7 +571,7 @@ function mergeVocabularyEntries(
       console.warn(
         `animus: vocabulary "${input.name}" is registered by both ` +
           `${loser.origin} and ${incomingOrigin} — ${incomingOrigin} wins; ` +
-          'rename one entry (animus.vocabulary.collision)'
+          'rename one entry [animus.vocabulary.collision]'
       );
       entries.splice(existingIndex, 1);
     }

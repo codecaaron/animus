@@ -184,11 +184,9 @@ fn name_compiled_kit_fix(
         None if analyze_css::is_external_file(&diagnostic.file, output_dirs) => diagnostic.file.clone(),
         None => return,
     };
-    let Some(advice) = diagnostic.message.strip_suffix(&format!(" ({code})")) else {
-        return;
-    };
     diagnostic.message = format!(
-        "{advice}; '{base}' is declared in {declared_in}, a kit's compiled output, where a bundler can rename a collection's export — publish the kit with an \"animus\" export condition naming its source, through which its keyframes resolve ({code})"
+        "{}; '{base}' is declared in {declared_in}, a kit's compiled output, where a bundler can rename a collection's export — publish the kit with an \"animus\" export condition naming its source, through which its keyframes resolve",
+        diagnostic.message
     );
 }
 
@@ -4078,6 +4076,9 @@ export const App = () => <Box tone="red" />;
                 ds.iter()
                     .filter(|d| d["code"] == crate::eval::KEYFRAMES_UNREGISTERED_REFERENCE)
                     .map(|d| d["message"].as_str().unwrap_or_default().to_string())
+                    // The record carries its code; its message names none,
+                    // so its line prints the code once, in brackets.
+                    .inspect(|message| assert!(!message.contains("(animus."), "{message}"))
                     .collect()
             })
             .unwrap_or_default()

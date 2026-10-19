@@ -122,7 +122,7 @@ describe('reportSurvivingAssetPlaceholders', () => {
     expect(() =>
       reportSurvivingAssetPlaceholders(leaked, () => {}, { strict: true })
     ).toThrow(
-      `${UNSUBSTITUTED_ASSET_CODE} — emitted CSS: asset(): placeholders reached it unsubstituted: @acme/rock.jpg`
+      `[animus] ✖ emitted CSS: asset(): placeholders reached it unsubstituted: @acme/rock.jpg [${UNSUBSTITUTED_ASSET_CODE}]`
     );
   });
 
@@ -169,7 +169,7 @@ describe('generated runtime modules', () => {
         'generated runtime modules'
       )
     ).toThrow(
-      `${UNSUBSTITUTED_ASSET_CODE} — generated runtime modules: asset(): placeholders reached it unsubstituted: @acme/rock.jpg`
+      `[animus] ✖ generated runtime modules: asset(): placeholders reached it unsubstituted: @acme/rock.jpg [${UNSUBSTITUTED_ASSET_CODE}]`
     );
   });
 });

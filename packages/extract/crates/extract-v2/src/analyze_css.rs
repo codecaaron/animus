@@ -681,6 +681,23 @@ impl CssDiagnostic {
     }
 }
 
+/// `message` less every `(animus.…)` it names: the form a reason carries its
+/// code in until a record is made. A record prints only its own code, in
+/// brackets after its message, so a line names one code, and once.
+fn without_codes(mut message: String) -> String {
+    let mut from = 0;
+    while let Some(at) = message[from..].find(" (animus.").map(|at| from + at) {
+        let inner = at + 2;
+        let Some(len) = message[inner..].find(')') else { break };
+        if message[inner..inner + len].chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+            message.replace_range(at..inner + len + 1, "");
+        } else {
+            from = inner;
+        }
+    }
+    message
+}
+
 pub(crate) fn diagnostic_code_from_message(message: &str) -> Option<String> {
     let start = message.rfind("(animus.")?;
     let rest = &message[start + 1..];
@@ -931,7 +948,7 @@ pub(crate) fn diagnostic(
         file: file.to_string(),
         component: component.to_string(),
         kind: kind.to_string(),
-        message,
+        message: without_codes(message),
         code: code.map(str::to_string),
         severity: code.map(|c| diagnostic_severity_for_code(c).to_string()),
         line: None,

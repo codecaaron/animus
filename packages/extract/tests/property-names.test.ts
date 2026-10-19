@@ -306,7 +306,7 @@ describe('system load under a prefix', () => {
     }
     expect(reported).toHaveLength(2);
     expect(reported[1]).toMatch(
-      /animus\.prefix\.name-conflict — system: --acme-tone:/
+      /^\[animus\] ✖ system: --acme-tone: .* \[animus\.prefix\.name-conflict\]$/m
     );
   });
 

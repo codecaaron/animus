@@ -686,7 +686,7 @@ function toDiagnostics(findings: readonly Finding[]): ManifestDiagnostic[] {
       file: finding.owner.file,
       component: finding.owner.component,
       kind: 'warn',
-      message: `${finding.message} (${finding.code})`,
+      message: finding.message,
       code: finding.code,
       severity: severityFor(finding.code),
     });

@@ -472,12 +472,12 @@ impl<'c> Loader<'c> {
         if self.modules[module].record.indirect_exports.iter().any(|(exported, ..)| exported == name) {
             let problem = if code == LINK_ABSENT_IMPORT { "which resolves to no binding" } else { problem };
             return Err(format!(
-                "module '{module}' re-exports '{name}', {problem} ({code}); the system loader links this module graph \
+                "module '{module}' re-exports '{name}', {problem} [{code}]; the system loader links this module graph \
                  as Node does, and Node rejects this too"
             ));
         }
         Err(format!(
-            "module '{importer}' imports '{name}' from '{module}', {problem} ({code}); the system loader links this \
+            "module '{importer}' imports '{name}' from '{module}', {problem} [{code}]; the system loader links this \
              module graph as Node does, and Node rejects this too"
         ))
     }
@@ -749,7 +749,7 @@ impl<'c> Loader<'c> {
             if unknown.is_empty() { String::new() } else { format!(", and these exports may be one: {}", unknown.join(", ")) };
         Err(format!(
             "the system entry '{entry}' does not name its system: {found}{unknown}. Name the system's export with \
-             the `systemExport` option (animus.system.export-uncertain)"
+             the `systemExport` option [animus.system.export-uncertain]"
         ))
     }
 
@@ -1458,7 +1458,7 @@ fn refuse_unsupported(semantic: &oxc::semantic::Semantic<'_>, source: &str, path
             return Err(format!(
                 "{} uses {what}, which the system loader cannot run: it loads only what the system reaches, and \
                  this reads bindings or runs work it cannot see. Move it out of the module the system reads \
-                 (animus.system.unsupported-construction)",
+                 [animus.system.unsupported-construction]",
                 at(offset)
             ));
         }

@@ -135,7 +135,7 @@ export const Hero = ds
           (entry) =>
             entry.includes('log.error') &&
             entry.includes(
-              'animus.asset.unresolvable-specifier — @acme/missing.png'
+              '@acme/missing.png: asset(): no file answers this specifier, so its URL stays as written [animus.asset.unresolvable-specifier]'
             )
         ) ?? false,
       {

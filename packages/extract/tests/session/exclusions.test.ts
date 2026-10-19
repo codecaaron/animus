@@ -58,13 +58,17 @@ const unmatched = () =>
 describe('an unmatched user exclude is reported', () => {
   test('once per build, after its first full discovery', async () => {
     const root = createProject('animus-unmatched-exclude-');
-    const session = makeSession(root, { exclude: ['Button', 'stories'] });
+    const session = makeSession(root, {
+      exclude: ['Button', 'stories'],
+      // An unmatched pattern is an info finding: verbose prints it.
+      verbose: true,
+    });
 
     await session.runFullPipeline();
     await session.runFullPipeline();
 
     expect(unmatched()).toEqual([
-      "[animus] ⚠ exclude: 'stories': matched nothing, so it excludes no file — correct it, or remove it [animus.discovery.exclude-unmatched]",
+      "[animus] ℹ exclude: 'stories': matched nothing, so it excludes no file — correct it, remove it, or ignore this if it names files the build generates later [animus.discovery.exclude-unmatched]",
     ]);
     session.close();
   });
@@ -78,6 +82,7 @@ describe('an unmatched user exclude is reported', () => {
       reported = [];
       const session = makeSession(createProject('animus-unmatched-default-'), {
         exclude,
+        verbose: true,
         ...options,
       });
       await session.runFullPipeline();
@@ -86,7 +91,7 @@ describe('an unmatched user exclude is reported', () => {
     };
 
     expect(await reportedBy({})).toEqual([
-      "[animus] ⚠ exclude: 'stories': matched nothing, so it excludes no file — correct it, or remove it [animus.discovery.exclude-unmatched]",
+      "[animus] ℹ exclude: 'stories': matched nothing, so it excludes no file — correct it, remove it, or ignore this if it names files the build generates later [animus.discovery.exclude-unmatched]",
     ]);
     expect(
       await reportedBy({
@@ -97,7 +102,7 @@ describe('an unmatched user exclude is reported', () => {
 
   test('two passes that fail after discovery, then a success, report once', async () => {
     const root = createProject('animus-report-once-');
-    const session = makeSession(root, { exclude: ['stories'] });
+    const session = makeSession(root, { exclude: ['stories'], verbose: true });
     mocks.analyzeProject
       .mockImplementationOnce(() => {
         throw new Error('boom');

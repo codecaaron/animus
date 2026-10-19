@@ -34,6 +34,7 @@ interface BuildLayout {
   systemSource?: string;
   /** App-relative files written before the build. */
   files?: Record<string, string>;
+  verbose?: boolean;
 }
 
 /** A build of an app with a user exclude list and Vite's default `dist`
@@ -61,28 +62,34 @@ async function buildWithUserExcludes(excludeOrLayout: string[] | BuildLayout) {
   customLogger.warn = (line) => {
     reported.push(line);
   };
-  const ctx = new PluginContext({ system: './src/system.ts', exclude }, () => ({
-    loadSystemModule: () => ({
-      propConfig: '{}',
-      groupRegistry: '{}',
-      scalesJson: '{}',
-      variableMapJson: '{}',
-      variableCss: '',
-      dependencies: [],
-    }),
-    extractFacts: factsExtractor({
-      [join(app, 'src', 'system.ts')]: {
-        ...emptyFacts(join(app, 'src', 'system.ts')),
-        imports: systemImportFacts(systemSource),
+  customLogger.info = (line) => {
+    reported.push(line);
+  };
+  const ctx = new PluginContext(
+    { system: './src/system.ts', exclude, verbose: layout.verbose },
+    () => ({
+      loadSystemModule: () => ({
+        propConfig: '{}',
+        groupRegistry: '{}',
+        scalesJson: '{}',
+        variableMapJson: '{}',
+        variableCss: '',
+        dependencies: [],
+      }),
+      extractFacts: factsExtractor({
+        [join(app, 'src', 'system.ts')]: {
+          ...emptyFacts(join(app, 'src', 'system.ts')),
+          imports: systemImportFacts(systemSource),
+        },
+      }),
+      analyzeProject: (filesJson: string) => {
+        // SAFETY: the host's own JSON.stringify of its analysis entries.
+        const files = JSON.parse(filesJson) as Array<{ path: string }>;
+        analyzed.push(...files.map((file) => file.path));
+        return JSON.stringify(makeManifest());
       },
-    }),
-    analyzeProject: (filesJson: string) => {
-      // SAFETY: the host's own JSON.stringify of its analysis entries.
-      const files = JSON.parse(filesJson) as Array<{ path: string }>;
-      analyzed.push(...files.map((file) => file.path));
-      return JSON.stringify(makeManifest());
-    },
-  }));
+    })
+  );
   applyResolvedConfig(
     ctx,
     await resolveConfig(
@@ -167,11 +174,15 @@ export const system = createSystem({}).extend(kit);
 
 describe('an unmatched user exclude is reported', () => {
   test('after the first discovery', async () => {
-    const { reported } = await buildWithUserExcludes(['stories', 'App']);
+    const { reported } = await buildWithUserExcludes({
+      exclude: ['stories', 'App'],
+      // An unmatched pattern is an info finding: verbose prints it.
+      verbose: true,
+    });
 
     expect(reported.filter((line) => line.includes('matched nothing'))).toEqual(
       [
-        "[animus] ⚠ exclude: 'stories': matched nothing, so it excludes no file — correct it, or remove it [animus.discovery.exclude-unmatched]",
+        "[animus] ℹ exclude: 'stories': matched nothing, so it excludes no file — correct it, remove it, or ignore this if it names files the build generates later [animus.discovery.exclude-unmatched]",
       ]
     );
   });

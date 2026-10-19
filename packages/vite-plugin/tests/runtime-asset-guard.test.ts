@@ -76,7 +76,7 @@ async function build(manifest: ProjectManifest, strict: boolean) {
 test('a placeholder left in a runtime config fails a strict build', async () => {
   const { run } = await build(scaleValuesManifest(ROCK), true);
   await expect(run()).rejects.toThrow(
-    'animus.asset.unsubstituted-placeholder — generated runtime modules: asset(): placeholders reached it unsubstituted: @acme/media/rock.jpg'
+    '[animus] ✖ generated runtime modules: asset(): placeholders reached it unsubstituted: @acme/media/rock.jpg [animus.asset.unsubstituted-placeholder]'
   );
 });
 

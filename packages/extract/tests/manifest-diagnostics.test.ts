@@ -114,24 +114,28 @@ describe('surfaceManifestDiagnostics strict policy', () => {
     expect(warned).toHaveLength(1);
   });
 
-  it('appends the code to printed lines only when the message lacks it', () => {
+  // Contract: a printed line ends with its own code, whatever its message
+  // names: nothing, its own code, or another code in words.
+  it('ends every printed line with its own code', () => {
     const warned: string[] = [];
     surfaceManifestDiagnostics(
       {
         diagnostics: [
           { ...errorDiagnostic, message: 'ancestor prefix unsupported' },
+          errorDiagnostic,
+          {
+            ...errorDiagnostic,
+            message:
+              'one cause: see the animus.load.missing-module-reach warning — chain dropped',
+          },
         ],
       },
       (m) => warned.push(m)
     );
-    expect(warned[0]).toContain(`[${SELECTOR_UNSUPPORTED_SUBJECT}]`);
-    const alreadyCoded: string[] = [];
-    surfaceManifestDiagnostics({ diagnostics: [errorDiagnostic] }, (m) =>
-      alreadyCoded.push(m)
-    );
-    expect(alreadyCoded[0].endsWith(`[${SELECTOR_UNSUPPORTED_SUBJECT}]`)).toBe(
-      false
-    );
+    expect(warned).toHaveLength(3);
+    for (const line of warned) {
+      expect(line.endsWith(` [${SELECTOR_UNSUPPORTED_SUBJECT}]`)).toBe(true);
+    }
   });
 
   it('prints the line and column the engine located a record at', () => {
@@ -252,7 +256,7 @@ describe('surfaceManifestDiagnostics levels', () => {
     // A prefix's `error` fails a warn-severity code; the exact `warn` keeps
     // an error-severity code from failing under strict.
     expect(surface).toThrow(
-      /strict: 1 error diagnostic\(s\):\nanimus\.style\.other — /
+      /strict: 1 error diagnostic\(s\):\n\[animus\] ✖ .* \[animus\.style\.other\]$/
     );
     expect(surface).toThrow(/^(?![\s\S]*unrecognized-key)/);
     expect(warned.filter((m) => m.includes('identity-uncertain'))).toEqual([]);
@@ -286,7 +290,9 @@ describe('surfaceManifestDiagnostics levels', () => {
     };
     expect(() =>
       surfaceManifestDiagnostics({ diagnostics: [hard] }, () => {})
-    ).toThrow(/animus\.prefix\.name-conflict — system: --tone: conflict/);
+    ).toThrow(
+      /\[animus\] ✖ system: --tone: conflict \[animus\.prefix\.name-conflict\]/
+    );
     const reported: string[] = [];
     surfaceManifestDiagnostics({ diagnostics: [hard] }, () => {}, {
       reportErrors: (m) => reported.push(m),
@@ -318,7 +324,9 @@ describe('surfaceManifestDiagnostics levels', () => {
       surfaceManifestDiagnostics({ diagnostics: [kit] }, () => {}, {
         levels: { 'animus.discovery.no-kit-files': 'error' },
       })
-    ).toThrow(/animus\.discovery\.no-kit-files — @acme\/kit: kit: resolved/);
+    ).toThrow(
+      /\[animus\] ✖ @acme\/kit: kit: resolved.* \[animus\.discovery\.no-kit-files\]/
+    );
   });
 });
 

@@ -1,11 +1,14 @@
 import {
   contentHash,
+  COMPONENTS_REMOVED,
   hostFinding,
   noteKept,
   outputEvidence,
+  REMOVAL_KEPT,
   REMOVAL_UNREADABLE,
   removeComponentRules,
   shippedClasses,
+  surfaceManifestDiagnostics,
   unbundledComponents,
 } from '@animus-ui/extract/pipeline';
 import { posix } from 'node:path';
@@ -48,8 +51,20 @@ export function bundleRemoval(
 ): BundleRemoval | null {
   const manifest = ctx.storedManifest;
   if (!manifest) return null;
+  // The removal's own lines are info-severity findings, printed at every
+  // verbosity as before, and set or silenced by a diagnostics level.
+  const inform = (code: string, file: string, message: string) =>
+    surfaceManifestDiagnostics(
+      {
+        diagnostics: [
+          hostFinding(code, file, 'removeUnbundledComponents', message),
+        ],
+      },
+      (line) => ctx.warn(line),
+      { ...ctx.diagnosticPolicy(), info: (line) => ctx.info(line) }
+    );
   const keep = (why: string) => {
-    ctx.info(`kept every component's CSS: ${why}`);
+    inform(REMOVAL_KEPT, 'stylesheet', `kept every component's CSS: ${why}`);
     return null;
   };
   const blocker = removalBlocker(bundle, context.otherEnvironments);
@@ -128,7 +143,11 @@ export function bundleRemoval(
         return keepFile(css);
       }
       if (removal.refused !== null) {
-        ctx.info(`kept ${file.fileName} whole: ${removal.refused}`);
+        inform(
+          REMOVAL_KEPT,
+          file.fileName,
+          `kept it whole: ${removal.refused}`
+        );
         return keepFile(css);
       }
       for (const name of removal.went) went.add(name);
@@ -194,7 +213,9 @@ export function bundleRemoval(
         .map(([reason, n]) => `${KEPT_WHOLE[reason]}: ${n}`)
         .join(', ');
       const wholeCount = [...whole.values()].reduce((sum, n) => sum + n, 0);
-      ctx.info(
+      inform(
+        COMPONENTS_REMOVED,
+        'stylesheet',
         `removed the CSS of ${count} of ${Object.keys(components).length} components no output file includes (${characters} characters of the stylesheet)${wholeCount > 0 ? `; kept ${wholeCount} more whole (${keptWhole})` : ''}${ruleless > 0 ? `; with no rules to remove: ${ruleless}` : ''}`
       );
     },

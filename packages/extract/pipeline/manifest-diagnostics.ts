@@ -49,9 +49,10 @@ function droppedSuffix(diagnostic: ManifestDiagnostic): string {
 
 /** The record's code, when its message does not already quote it. */
 function codeSuffix(diagnostic: ManifestDiagnostic): string {
-  return diagnostic.code && !diagnostic.message.includes(diagnostic.code)
-    ? ` [${diagnostic.code}]`
-    : '';
+  if (!diagnostic.code) return '';
+  const suffix = ` [${diagnostic.code}]`;
+  // A line ends with its own code, whatever its message names.
+  return diagnostic.message.endsWith(suffix) ? '' : suffix;
 }
 
 /** A warn-kind record's line after its mark:
@@ -329,6 +330,14 @@ export const ANALYSED_OUTPUT = 'animus.discovery.analysed-output';
 /** A page preloads a font URL Animus also preloads. */
 export const DUPLICATE_FONT_PRELOAD = 'animus.font.duplicate-preload';
 
+/** `removeUnbundledComponents` removed the CSS of components no output
+ *  file includes: its summary. */
+export const COMPONENTS_REMOVED = 'animus.bundle.components-removed';
+
+/** `removeUnbundledComponents` kept CSS it would otherwise remove: every
+ *  component's, or one file whole. */
+export const REMOVAL_KEPT = 'animus.bundle.removal-kept';
+
 /** The `verify` option's structural self-check failed. */
 export const SELF_CHECK_FAILED = 'animus.verify.self-check-failed';
 
@@ -510,7 +519,7 @@ export function unmatchedExcludeDiagnostics(
       EXCLUDE_UNMATCHED,
       'exclude',
       `'${pattern}'`,
-      'matched nothing, so it excludes no file — correct it, or remove it'
+      'matched nothing, so it excludes no file — correct it, remove it, or ignore this if it names files the build generates later'
     )
   );
 }
@@ -675,7 +684,7 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [UNREADABLE_SOURCE_FILE, 'error'],
   [SYSTEM_BUILDER_SHIPPED, 'info'],
   [UNREADABLE_DISCOVERY_PATH, 'warn'],
-  [EXCLUDE_UNMATCHED, 'warn'],
+  [EXCLUDE_UNMATCHED, 'info'],
   [OUTPUT_TREES, 'warn'],
   [OUTPUT_SOURCE, 'warn'],
   [UNRESOLVABLE_INCLUDE, 'error'],
@@ -697,6 +706,8 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [DUPLICATE_FONT_PRELOAD, 'warn'],
   [REMOVAL_UNREADABLE, 'warn'],
   [SELF_CHECK_FAILED, 'error'],
+  [COMPONENTS_REMOVED, 'info'],
+  [REMOVAL_KEPT, 'info'],
   [NO_KIT_FILES, 'warn'],
   [KIT_WITHOUT_SOURCE_CONDITION, 'warn'],
   [KIT_WITHOUT_SIDE_EFFECTS, 'warn'],
@@ -922,7 +933,7 @@ function tokenCollisionDiagnostics(
         file: 'system',
         component: path,
         kind: record.legacy ? 'warn' : 'error',
-        message: `the ${scale} token ${record.name} (${tokens[path]}) and ${declaration} share this key. A scale read of it, such as {${path}} or a prop on the ${scale} scale set to '${record.name}', resolves to the token, so the ${record.legacy ? 'contextual variable' : 'property'} is unreachable through ${scale}. Rename one of them (${code})`,
+        message: `the ${scale} token ${record.name} (${tokens[path]}) and ${declaration} share this key. A scale read of it, such as {${path}} or a prop on the ${scale} scale set to '${record.name}', resolves to the token, so the ${record.legacy ? 'contextual variable' : 'property'} is unreachable through ${scale}. Rename one of them`,
         code,
         severity: severityFor(code),
       };
@@ -957,8 +968,8 @@ export function surfaceManifestDiagnostics(
   for (const diagnostic of diagnostics) {
     const level = effectiveLevel(diagnostic, policy);
     if (level === 'off') continue;
-    let line: string | null = null;
-    const mark = level === 'info' ? 'ℹ' : '⚠';
+    // What the record's line says after its mark.
+    let body: string | null = null;
     const message = `${diagnostic.message}${droppedSuffix(diagnostic)}`;
     // A warn-, error- or info-kind record is about a file, not a component.
     const located =
@@ -967,29 +978,23 @@ export function surfaceManifestDiagnostics(
       diagnostic.kind === 'info' ||
       diagnostic.kind === STRICT_ERROR_KIND;
     if (diagnostic.kind === 'bail') {
-      line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component} not extracted: ${message}${codeSuffix(diagnostic)}`;
+      body = `${locatedPrefix(diagnostic)}${diagnostic.component} not extracted: ${message}${codeSuffix(diagnostic)}`;
     } else if (diagnostic.kind === 'skip') {
-      line = `${mark} ${locatedPrefix(diagnostic)}${diagnostic.component}: skipped ${message}${codeSuffix(diagnostic)}`;
+      body = `${locatedPrefix(diagnostic)}${diagnostic.component}: skipped ${message}${codeSuffix(diagnostic)}`;
     } else if (located) {
-      line = `${mark} ${warnLine(diagnostic)}`;
+      body = warnLine(diagnostic);
     }
-    if (line === null) continue;
+    if (body === null) continue;
     if (level === 'info') {
-      policy.info?.(line);
+      policy.info?.(`ℹ ${body}`);
       continue;
     }
     if (level === 'error') {
-      // The error line names what the warning line names: a located
-      // record's file, with or without a line.
-      const subject = located
-        ? `${locationOf(diagnostic)}: `
-        : locatedPrefix(diagnostic);
-      errors.add(
-        `${diagnostic.code ?? 'error'} — ${subject}${diagnostic.component}: ${message}`
-      );
+      // An error record prints as every other finding line does.
+      errors.add(`[animus] ✖ ${body}`);
       continue;
     }
-    warn(line);
+    warn(`⚠ ${body}`);
   }
   if (errors.size === 0) return;
   const message = `[animus] strict: ${errors.size} error diagnostic(s):\n${[...errors].join('\n')}`;
