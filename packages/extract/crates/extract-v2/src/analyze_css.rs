@@ -3377,16 +3377,24 @@ pub(crate) fn report_unread_openings(
     let openings = inputs.unread_openings.lock().map(|mut openings| std::mem::take(&mut *openings)).unwrap_or_default();
     // An opening costs a declaration a value it reads: a whole stage, or a
     // property.
-    let lost: Vec<&CssDiagnostic> =
-        diagnostics.iter().filter(|d| d.kind == "bail" || d.code.as_deref() == Some(SKIPPED_VALUE)).collect();
+    let lost: Vec<usize> = (0..diagnostics.len())
+        .filter(|&at| diagnostics[at].kind == "bail" || diagnostics[at].code.as_deref() == Some(SKIPPED_VALUE))
+        .collect();
     let mut found = Vec::new();
+    // Each declaration an opening dropped whole (a bail), with the cause its
+    // record leads with: the first opening that explains it.
+    let mut causes: BTreeMap<usize, String> = BTreeMap::new();
     for (reason, opening) in &openings {
-        let mut cost: Vec<String> = lost
+        let costing: Vec<usize> =
+            lost.iter().copied().filter(|&at| names_reason(&diagnostics[at].message, reason)).collect();
+        let mut cost: Vec<String> = costing
             .iter()
-            .filter(|d| d.message.contains(reason.as_str()))
-            .map(|d| match d.line {
-                Some(line) => format!("{} ({}:{line})", d.component, d.file),
-                None => format!("{} ({})", d.component, d.file),
+            .map(|&at| {
+                let d = &diagnostics[at];
+                match d.line {
+                    Some(line) => format!("{} ({}:{line})", d.component, d.file),
+                    None => format!("{} ({})", d.component, d.file),
+                }
             })
             .collect();
         cost.sort();
@@ -3407,11 +3415,12 @@ pub(crate) fn report_unread_openings(
                 exclude_with(&pattern, inputs)
             )
         };
+        let subject = format!("'{specifier}' {}", opened.kind());
         let (what, remedy, code) = match opened {
             Opened::Missing => (
                 format!(
-                    "'{specifier}' names no file the analysis holds (one outside its root or excluded from it, one \
-                     generated later, or one in a language it does not read), so it may change any exported object"
+                    "{subject} (one outside its root or excluded from it, one generated later, or one in a language \
+                     it does not read), so it may change any exported object"
                 ),
                 {
                     // A file the host found exists: only analysing it helps.
@@ -3431,30 +3440,36 @@ pub(crate) fn report_unread_openings(
             ),
             Opened::Package => (
                 format!(
-                    "'{specifier}' is a package the analysis does not read, and the host could not locate it or read \
-                     its dependencies, so it may change any exported object"
+                    "{subject}, and the host could not locate it or read its dependencies, so it may change any \
+                     exported object"
                 ),
                 package_remedy(),
                 UNREAD_PACKAGE_REACH,
             ),
             Opened::Located { local: true } => (
                 format!(
-                    "'{specifier}' is a local package the analysis does not read, and a package it depends on holds \
-                     analysed modules, so it may change the objects they export"
+                    "{subject}, and a package it depends on holds analysed modules, so it may change the objects \
+                     they export"
                 ),
                 package_remedy(),
                 UNREAD_PACKAGE_REACH,
             ),
             Opened::Located { local: false } => (
                 format!(
-                    "'{specifier}' is a package installed from a registry, and a local package it depends on holds \
-                     analysed modules, so it may change the objects they export"
+                    "{subject}, and a local package it depends on holds analysed modules, so it may change the \
+                     objects they export"
                 ),
                 package_remedy(),
                 UNREAD_PACKAGE_REACH,
             ),
         };
         let at = line.map_or(String::new(), |line| format!(" on line {line}"));
+        // Each declaration it dropped leads with this cause, and the code of
+        // the warning that says what to do.
+        let lead = format!("{subject}, and {module} {how}{at} [{code}] — ");
+        for record in costing.into_iter().filter(|&at| diagnostics[at].kind == "bail") {
+            causes.entry(record).or_insert_with(|| lead.clone());
+        }
         let more = cost.len().saturating_sub(OPENING_COST_NAMED);
         let named = cost.iter().take(OPENING_COST_NAMED).cloned().collect::<Vec<_>>().join(", ");
         let named = if more > 0 { format!("{named} and {more} more") } else { named };
@@ -3470,7 +3485,17 @@ pub(crate) fn report_unread_openings(
             None => warning,
         });
     }
+    for (record, lead) in causes {
+        diagnostics[record].message.insert_str(0, &lead);
+    }
     diagnostics.extend(found);
+}
+
+/// Whether `message` states `reason` whole: where it begins, or after a
+/// space, so `app/worker.js imports …` is not read inside
+/// `src/app/worker.js imports …`.
+fn names_reason(message: &str, reason: &str) -> bool {
+    message.match_indices(reason).any(|(at, _)| at == 0 || message[..at].ends_with(' '))
 }
 
 /// What to do when `file`, an analysed module no other analysed module

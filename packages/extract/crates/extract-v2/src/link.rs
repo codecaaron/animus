@@ -423,6 +423,18 @@ pub(crate) enum Opened {
     Missing,
 }
 
+impl Opened {
+    /// What the unread module is, said after its specifier.
+    pub(crate) fn kind(self) -> &'static str {
+        match self {
+            Opened::Package => "is a package the analysis does not read",
+            Opened::Located { local: true } => "is a local package the analysis does not read",
+            Opened::Located { local: false } => "is a package installed from a registry",
+            Opened::Missing => "names no file the analysis holds",
+        }
+    }
+}
+
 impl UnreadOpening {
     pub(crate) fn new(module: &str, line: Option<usize>, how: String, specifier: &str, opened: Opened) -> Self {
         UnreadOpening { module: module.to_string(), line, how, specifier: specifier.to_string(), opened }

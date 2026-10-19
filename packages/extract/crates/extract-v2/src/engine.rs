@@ -4267,6 +4267,35 @@ export const App = () => <Box tone="red" />;
         assert_eq!(host, full);
     }
 
+    /// Contract: a declaration an unread module's opening dropped leads its
+    /// record with that cause (the module, how it is reached, and the code
+    /// of the warning that says what to do) and keeps its own code, kind and
+    /// location, so a strict build fails on it as before.
+    #[test]
+    fn a_declaration_an_unread_module_dropped_leads_with_that_cause() {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let files = serde_json::json!([
+            { "path": "system.ts", "source": "import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem().build().seal();\n" },
+            { "path": "tokens.ts", "source": "export const pad = { padding: 4 };\n" },
+            { "path": "card.tsx", "source": "import { ds } from './system';\nimport { pad } from './tokens';\nexport const Card = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <Card />;\n" },
+            { "path": "worker.js", "source": "import manifest from './asset-manifest.js';\nexport default { fetch: () => new Response(JSON.stringify(manifest)) };\n" },
+        ])
+        .to_string();
+        let out: serde_json::Value = serde_json::from_str(&engine.analyze(files, None).unwrap()).unwrap();
+        let diagnostics = out["diagnostics"].as_array().cloned().unwrap_or_default();
+        let card = diagnostics.iter().find(|d| d["component"] == "Card" && d["kind"] == "bail").expect("Card's record");
+        assert_eq!((&card["code"], &card["file"], &card["line"]), (&serde_json::json!("animus.chain.stage-evaluation-failed"), &serde_json::json!("card.tsx"), &serde_json::json!(3)));
+        let message = card["message"].as_str().unwrap();
+        assert!(
+            message.starts_with(
+                "'./asset-manifest.js' names no file the analysis holds, and worker.js imports it on line 1 \
+                 [animus.load.missing-module-reach] — chain dropped: "
+            ),
+            "{message}"
+        );
+        assert!(diagnostics.iter().any(|d| d["code"] == "animus.load.missing-module-reach"));
+    }
+
     /// Contract: an import analysis cannot follow names its importing file
     /// and suggests excluding it. A missing module that cost declarations
     /// is named once, where it is imported, with them; a file the host
