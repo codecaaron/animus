@@ -248,6 +248,11 @@ pub struct ChainFacts {
     /// Any stage evaluation error drops the whole component from the
     /// manifest; this holds the first such error.
     pub fatal_error: Option<String>,
+    /// The site of each unread module's opening behind a read the chain's
+    /// evaluation was refused: what its dropped stages and skipped values
+    /// lost to (`report_unread_openings`).
+    #[serde(skip)]
+    pub opened_by: BTreeSet<String>,
 }
 
 /// Directive-prologue boundary owned by the parser: OXC applies lexical
@@ -1708,6 +1713,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         .into_iter()
         .map(|descriptor| {
             let declarer = format!("{}::{}", ast.path, descriptor.binding);
+            // Refusals recorded before this chain are not its own.
+            eval::take_refusing_openings();
             let mut stages: Vec<StageFacts> = Vec::new();
             let mut fatal_error: Option<String> = None;
             for stage in &descriptor.stages {
@@ -1956,6 +1963,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
                 descriptor,
                 stages,
                 fatal_error,
+                opened_by: eval::take_refusing_openings(),
             }
         })
         .collect();

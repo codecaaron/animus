@@ -3380,13 +3380,32 @@ pub(crate) fn report_unread_openings(
     let lost: Vec<usize> = (0..diagnostics.len())
         .filter(|&at| diagnostics[at].kind == "bail" || diagnostics[at].code.as_deref() == Some(SKIPPED_VALUE))
         .collect();
+    // The openings behind each record: those its message states, and those
+    // behind a read its chain's evaluation was refused.
+    let reasons: Vec<&str> = openings.keys().map(String::as_str).collect();
+    let behind: BTreeMap<usize, (BTreeSet<&str>, BTreeSet<&str>)> = lost
+        .iter()
+        .map(|&at| {
+            let d = &diagnostics[at];
+            let stated = stated_reasons(&d.message, &reasons);
+            let refused = files
+                .get(&d.file)
+                .and_then(|ff| ff.chains.iter().find(|chain| chain.descriptor.binding == d.component))
+                .into_iter()
+                .flat_map(|chain| chain.opened_by.iter().map(String::as_str))
+                .filter(|reason| openings.contains_key(*reason));
+            let all = stated.iter().copied().chain(refused).collect();
+            (at, (stated, all))
+        })
+        .collect();
     let mut found = Vec::new();
     // Each declaration an opening dropped whole (a bail), with the cause its
-    // record leads with: the first opening that explains it.
+    // record leads with: the first one its message states, else the first
+    // behind it.
     let mut causes: BTreeMap<usize, String> = BTreeMap::new();
     for (reason, opening) in &openings {
         let costing: Vec<usize> =
-            lost.iter().copied().filter(|&at| names_reason(&diagnostics[at].message, reason)).collect();
+            lost.iter().copied().filter(|at| behind[at].1.contains(reason.as_str())).collect();
         let mut cost: Vec<String> = costing
             .iter()
             .map(|&at| {
@@ -3466,9 +3485,13 @@ pub(crate) fn report_unread_openings(
         let at = line.map_or(String::new(), |line| format!(" on line {line}"));
         // Each declaration it dropped leads with this cause, and the code of
         // the warning that says what to do.
-        let lead = format!("{subject}, and {module} {how}{at} [{code}] — ");
+        // Named in words: a record's line carries only its own code.
+        let lead = format!("one cause: {subject}, and {module} {how}{at}; see the {code} warning — ");
         for record in costing.into_iter().filter(|&at| diagnostics[at].kind == "bail") {
-            causes.entry(record).or_insert_with(|| lead.clone());
+            let (stated, all) = &behind[&record];
+            if stated.first().or(all.first()) == Some(&reason.as_str()) {
+                causes.insert(record, lead.clone());
+            }
         }
         let more = cost.len().saturating_sub(OPENING_COST_NAMED);
         let named = cost.iter().take(OPENING_COST_NAMED).cloned().collect::<Vec<_>>().join(", ");
@@ -3491,11 +3514,22 @@ pub(crate) fn report_unread_openings(
     diagnostics.extend(found);
 }
 
-/// Whether `message` states `reason` whole: where it begins, or after a
-/// space, so `app/worker.js imports …` is not read inside
-/// `src/app/worker.js imports …`.
-fn names_reason(message: &str, reason: &str) -> bool {
-    message.match_indices(reason).any(|(at, _)| at == 0 || message[..at].ends_with(' '))
+/// The reasons `message` states: each occurrence that lies within no other
+/// reason's, so `b/x.js imports …` is not read inside `a b/x.js imports …`.
+pub(crate) fn stated_reasons<'r>(message: &str, reasons: &[&'r str]) -> BTreeSet<&'r str> {
+    let spans: Vec<(usize, usize, &str)> = reasons
+        .iter()
+        .flat_map(|reason| message.match_indices(*reason).map(move |(at, _)| (at, at + reason.len(), *reason)))
+        .collect();
+    spans
+        .iter()
+        .filter(|(start, end, reason)| {
+            !spans.iter().any(|(within_start, within_end, other)| {
+                other != reason && within_start <= start && end <= within_end
+            })
+        })
+        .map(|(_, _, reason)| *reason)
+        .collect()
 }
 
 /// What to do when `file`, an analysed module no other analysed module

@@ -925,12 +925,27 @@ fn mark_lost_value(
 /// A static binding some use may change before a style reads it: every
 /// read refuses, uncertain as Flow's `Stable` exposure of the binding says
 /// (`uncertainty`), and diagnostics name `reason`. `held` is the binding's
-/// `pre_read_static` value, which serialized facts carry.
+/// `pre_read_static` value, which serialized facts carry. `openings` are
+/// the sites of every unread module's opening that may change it, the
+/// first of which `reason` names.
 #[derive(Debug, Clone)]
 pub(crate) struct Unsettled {
     pub(crate) reason: String,
     pub(crate) uncertainty: Uncertainty,
     pub(crate) held: Option<StaticValue>,
+    pub(crate) openings: Vec<String>,
+}
+
+thread_local! {
+    /// The openings behind each read `uncertain_clause` refused since the
+    /// last `take_refusing_openings`.
+    static REFUSING_OPENINGS: std::cell::RefCell<std::collections::BTreeSet<String>> = Default::default();
+}
+
+/// The sites of the openings behind every read refused since the last call,
+/// emptying the record: what a chain evaluated in between lost to them.
+pub(crate) fn take_refusing_openings() -> std::collections::BTreeSet<String> {
+    REFUSING_OPENINGS.with(|openings| std::mem::take(&mut *openings.borrow_mut()))
 }
 
 /// The static values a reader sees in one module, with the bindings that
@@ -1028,6 +1043,7 @@ pub(crate) fn static_value<'s>(statics: Statics<'s>, name: &str, path: &[&str]) 
 /// clause. Diagnostics only: no decision reads it.
 pub(crate) fn uncertain_clause<'s>(statics: Statics<'s>, name: &str, path: &[&str]) -> Option<&'s str> {
     if let Some(unsettled) = statics.unsettled.and_then(|unsettled| unsettled.get(name)) {
+        REFUSING_OPENINGS.with(|openings| openings.borrow_mut().extend(unsettled.openings.iter().cloned()));
         return Some(&unsettled.reason);
     }
     unevaluated_on(statics.values.get(name)?, path).map(|(unevaluated, _)| unevaluated.clause.as_str())
@@ -1554,7 +1570,12 @@ mod tests {
         );
         let unsettled = FxHashMap::from_iter([(
             "preset".to_string(),
-            Unsettled { reason: "preset.size is written".to_string(), uncertainty: written.clone(), held: values.get("preset").cloned() },
+            Unsettled {
+                reason: "preset.size is written".to_string(),
+                uncertainty: written.clone(),
+                held: values.get("preset").cloned(),
+                openings: Vec::new(),
+            },
         )]);
         let none = FxHashMap::default();
         let held = Statics::new(&none, &unsettled, "m.ts");

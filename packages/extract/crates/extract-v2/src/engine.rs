@@ -953,11 +953,11 @@ fn record_style_changes(
 
 /// Each module-scope static that `changes` says may change before a style
 /// reads it, keyed by its module and local name, with the first such change
-/// said as a clause.
+/// said as a clause, and the site of every opening among them.
 fn unstable_style_statics(
     changes: &crate::flow::ValueEffects,
     files: &BTreeMap<String, rustc_hash::FxHashMap<String, crate::static_value::StaticValue>>,
-) -> BTreeMap<(String, String), (String, crate::flow::Uncertainty)> {
+) -> BTreeMap<(String, String), (String, crate::flow::Uncertainty, Vec<String>)> {
     use crate::flow::{AbsenceQuery, ChangeKind, Coverage, ObjectId};
     let mut unstable = BTreeMap::new();
     for (file, statics) in files {
@@ -981,7 +981,14 @@ fn unstable_style_statics(
                     .map(crate::flow::Exposure::uncertainty)
                     .reduce(crate::flow::Uncertainty::join)
                     .expect("an exposed subject has an exposure");
-                unstable.insert((file.clone(), local.clone()), (exposures[0].cause().to_string(), uncertainty));
+                // Every opening among them, which a warning names its cost
+                // under.
+                let openings = exposures
+                    .iter()
+                    .filter(|exposure| matches!(exposure, crate::flow::Exposure::Opened(_)))
+                    .map(|exposure| exposure.cause().to_string())
+                    .collect();
+                unstable.insert((file.clone(), local.clone()), (exposures[0].cause().to_string(), uncertainty, openings));
             }
         }
     }
@@ -1369,7 +1376,7 @@ impl ExtractEngine {
         OPENINGS.with(|openings| openings.borrow_mut().clear());
         #[cfg(test)]
         note_openings("style statics", &changes);
-        for ((file, local), (reason, uncertainty)) in unstable_style_statics(&changes, &statics_by_file) {
+        for ((file, local), (reason, uncertainty, openings)) in unstable_style_statics(&changes, &statics_by_file) {
             if statics_by_file.get_mut(&file).and_then(|statics| statics.remove(&local)).is_some() {
                 // Only a value the binding had before const initializers read
                 // other consts is held; one derived from them is not.
@@ -1380,7 +1387,7 @@ impl ExtractEngine {
                 unsettled_by_file
                     .entry(file)
                     .or_default()
-                    .insert(local, crate::eval::Unsettled { reason, uncertainty, held });
+                    .insert(local, crate::eval::Unsettled { reason, uncertainty, held, openings });
             }
         }
 
@@ -4358,32 +4365,73 @@ export const App = () => <Box tone="red" />;
     }
 
     /// Contract: a declaration an unread module's opening dropped leads its
-    /// record with that cause (the module, how it is reached, and the code
-    /// of the warning that says what to do) and keeps its own code, kind and
-    /// location, so a strict build fails on it as before.
+    /// record with one cause (the module, how it is reached, and in words
+    /// the warning that says what to do) and keeps its own code, kind and
+    /// location, so a strict build fails on it as before and its line names
+    /// no code but its own. Every opening that costs the declaration has a
+    /// warning naming it, and a reason is read whole, never inside another.
     #[test]
     fn a_declaration_an_unread_module_dropped_leads_with_that_cause() {
-        let mut engine = ExtractEngine::new(None).unwrap();
-        let files = serde_json::json!([
-            { "path": "system.ts", "source": "import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem().build().seal();\n" },
-            { "path": "tokens.ts", "source": "export const pad = { padding: 4 };\n" },
-            { "path": "card.tsx", "source": "import { ds } from './system';\nimport { pad } from './tokens';\nexport const Card = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <Card />;\n" },
-            { "path": "worker.js", "source": "import manifest from './asset-manifest.js';\nexport default { fetch: () => new Response(JSON.stringify(manifest)) };\n" },
-        ])
-        .to_string();
-        let out: serde_json::Value = serde_json::from_str(&engine.analyze(files, None).unwrap()).unwrap();
-        let diagnostics = out["diagnostics"].as_array().cloned().unwrap_or_default();
-        let card = diagnostics.iter().find(|d| d["component"] == "Card" && d["kind"] == "bail").expect("Card's record");
-        assert_eq!((&card["code"], &card["file"], &card["line"]), (&serde_json::json!("animus.chain.stage-evaluation-failed"), &serde_json::json!("card.tsx"), &serde_json::json!(3)));
-        let message = card["message"].as_str().unwrap();
+        let analyze = |workers: &[(&str, &str)]| -> Vec<serde_json::Value> {
+            let mut engine = ExtractEngine::new(None).unwrap();
+            let mut files = vec![
+                serde_json::json!({ "path": "system.ts", "source": "import { createSystem } from '@animus-ui/system';\nexport const ds = createSystem().build().seal();\n" }),
+                serde_json::json!({ "path": "tokens.ts", "source": "export const pad = { padding: 4 };\n" }),
+                serde_json::json!({ "path": "card.tsx", "source": "import { ds } from './system';\nimport { pad } from './tokens';\nexport const Card = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <Card />;\n" }),
+            ];
+            for (path, missing) in workers {
+                files.push(serde_json::json!({
+                    "path": path,
+                    "source": format!("import manifest from '{missing}';\nexport default {{ fetch: () => new Response(JSON.stringify(manifest)) }};\n"),
+                }));
+            }
+            let out: serde_json::Value =
+                serde_json::from_str(&engine.analyze(serde_json::Value::Array(files).to_string(), None).unwrap()).unwrap();
+            out["diagnostics"].as_array().cloned().unwrap_or_default()
+        };
+        let card = |diagnostics: &[serde_json::Value]| {
+            let card = diagnostics.iter().find(|d| d["component"] == "Card" && d["kind"] == "bail").expect("Card's record").clone();
+            assert_eq!(
+                (&card["code"], &card["file"], &card["line"]),
+                (&serde_json::json!("animus.chain.stage-evaluation-failed"), &serde_json::json!("card.tsx"), &serde_json::json!(3))
+            );
+            card["message"].as_str().unwrap().to_string()
+        };
+        let reaching = |diagnostics: &[serde_json::Value]| -> Vec<String> {
+            diagnostics
+                .iter()
+                .filter(|d| d["code"] == "animus.load.missing-module-reach")
+                .filter(|d| d["message"].as_str().unwrap().contains("Card (card.tsx:3)"))
+                .map(|d| d["file"].as_str().unwrap().to_string())
+                .collect()
+        };
+
+        let one = analyze(&[("worker.js", "./asset-manifest.js")]);
+        let message = card(&one);
         assert!(
             message.starts_with(
-                "'./asset-manifest.js' names no file the analysis holds, and worker.js imports it on line 1 \
-                 [animus.load.missing-module-reach] — chain dropped: "
+                "one cause: './asset-manifest.js' names no file the analysis holds, and worker.js imports it on \
+                 line 1; see the animus.load.missing-module-reach warning — chain dropped: "
             ),
             "{message}"
         );
-        assert!(diagnostics.iter().any(|d| d["code"] == "animus.load.missing-module-reach"));
+        // The line counts once: no other code in brackets or parentheses.
+        assert!(!message.contains("[animus.") && !message.contains("(animus."), "{message}");
+        assert_eq!(reaching(&one), ["worker.js"]);
+
+        // Two missing modules: one leads, and each has its warning.
+        let two = analyze(&[("a-worker.js", "./aa.js"), ("z-worker.js", "./zz.js")]);
+        assert!(card(&two).starts_with("one cause: './aa.js'"), "{}", card(&two));
+        assert_eq!(reaching(&two), ["a-worker.js", "z-worker.js"]);
+
+        // A reason is read whole: `b/x.js imports …` within `a b/x.js
+        // imports …` is no statement of its own.
+        let spaced = "a b/x.js imports ./m.js on line 1, and a module the analysis cannot find may re-export any module";
+        let inner = "b/x.js imports ./m.js on line 1, and a module the analysis cannot find may re-export any module";
+        assert_eq!(
+            crate::analyze_css::stated_reasons(&format!("stage failed — {spaced}"), &[spaced, inner]),
+            std::collections::BTreeSet::from([spaced])
+        );
     }
 
     /// Contract: an import analysis cannot follow names its importing file
