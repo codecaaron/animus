@@ -4929,6 +4929,9 @@ pub struct SpreadWrapper {
     /// visible ? props : {}`): each also renders its target with only its
     /// own attributes.
     pub may_omit: Vec<(u32, u32)>,
+    /// Keys a `delete` takes from the spread parameter: each forwarding
+    /// element may render without them.
+    pub deleted: Vec<String>,
     /// How many `.asComponent(W)` calls hand it to a component, which then
     /// renders it with the props its own renders forward.
     pub targeted: usize,
@@ -5143,7 +5146,7 @@ fn spread_wrappers(
         handed_on: FxHashMap::default(),
         aliases: FxHashMap::default(),
         may_omit: FxHashMap::default(),
-        deletes: FxHashSet::default(),
+        deletes: FxHashMap::default(),
         referenced: FxHashSet::default(),
         ancestors: Vec::new(),
     };
@@ -5177,11 +5180,15 @@ fn spread_wrappers(
         .filter(|(index, _)| !scan.invalid.contains(index))
         .filter_map(|(index, candidate)| {
             let forwarding = scan.forwarding.remove(&index)?;
-            let may_omit = if scan.deletes.contains(&index) {
-                forwarding.iter().map(|(span, _)| *span).collect()
-            } else {
-                scan.may_omit.remove(&index).unwrap_or_default()
-            };
+            let may_omit = scan.may_omit.remove(&index).unwrap_or_default();
+            // A key the pattern takes out is never in the rest to delete.
+            let deleted: Vec<String> = scan
+                .deletes
+                .remove(&index)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|key| !candidate.named.iter().any(|prop| prop.key == *key))
+                .collect();
             let passed = scan
                 .passed
                 .remove(&index)
@@ -5199,6 +5206,7 @@ fn spread_wrappers(
                     held: scan.held.get(&index).copied().unwrap_or_default(),
                     handed_on: scan.handed_on.remove(&index).unwrap_or_default(),
                     may_omit,
+                    deleted,
                 },
             ))
         })
@@ -5245,9 +5253,9 @@ struct WrapperScan<'a, 's> {
     aliases: FxHashMap<SymbolId, (usize, bool)>,
     /// Candidate index → forwarding elements whose spread may carry nothing.
     may_omit: FxHashMap<usize, Vec<(u32, u32)>>,
-    /// Candidates whose spread parameter a `delete` takes a key from: every
-    /// element it forwards into may lack any key it carries.
-    deletes: FxHashSet<usize>,
+    /// Candidate index → the static keys a `delete` takes from its spread
+    /// parameter.
+    deletes: FxHashMap<usize, BTreeSet<String>>,
     /// Every symbol a reference read so far reached, so an alias read before
     /// its declaration is known.
     referenced: FxHashSet<SymbolId>,
@@ -5458,12 +5466,18 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
         let deleted = {
             let mut up = self.ancestors.iter().rev();
             let (current, parent) = peel_wrappers(ident.span, &mut up);
-            matches!(parent, Some(AstKind::StaticMemberExpression(member))
-                if member.object.span() == current
-                    && matches!(member_effect(member.span, &mut up), Some(MemberEffect::Deleted)))
+            match parent {
+                Some(AstKind::StaticMemberExpression(member))
+                    if member.object.span() == current
+                        && matches!(member_effect(member.span, &mut up), Some(MemberEffect::Deleted)) =>
+                {
+                    Some(member.property.name.to_string())
+                }
+                _ => None,
+            }
         };
-        if deleted {
-            self.deletes.insert(index);
+        if let Some(key) = deleted {
+            self.deletes.entry(index).or_default().insert(key);
             return;
         }
         match ancestors.next() {
@@ -7804,6 +7818,9 @@ pub struct WrapperProxies {
     /// Forwarding elements whose spread may carry nothing: each also renders
     /// its target with only its own attributes.
     pub may_omit: FxHashSet<(u32, u32)>,
+    /// Forwarding element span → keys its spread may lack, which a `delete`
+    /// takes: a variant of that name it does not write keeps its default.
+    pub deleted: FxHashMap<(u32, u32), BTreeSet<String>>,
     /// Opening-element spans of the forwarding elements of a wrapper that
     /// `.asComponent()` takes: their spread carries what the component's
     /// renders forward, which the project proof derives (`Forward`), so it
@@ -8245,6 +8262,15 @@ pub fn filter_usage_scan(
                             &written,
                             spread.is_some() && !omitted,
                         );
+                    }
+                    if let (Some(config), Some(deleted)) = (component_configs.get(tag_name), proxies.deleted.get(span)) {
+                        for key in deleted.iter().filter(|key| config.variants.contains_key(*key) && !written.contains(key.as_str())) {
+                            result.variant_usages.push(VariantUsage {
+                                component_binding: binding.to_string(),
+                                variant_prop: key.clone(),
+                                value: "__default__".to_string(),
+                            });
+                        }
                     }
                 }
             }

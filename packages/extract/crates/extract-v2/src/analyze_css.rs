@@ -4993,6 +4993,11 @@ fn spread_wrapper_targets(
         }
         proxies.forwarding.extend(spans);
         proxies.may_omit.extend(wrapper.may_omit.iter().copied());
+        if !wrapper.deleted.is_empty() {
+            for (span, _) in &wrapper.forwarding {
+                proxies.deleted.entry(*span).or_default().extend(wrapper.deleted.iter().cloned());
+            }
+        }
         for pass in &wrapper.passed {
             let values = crate::usage_facts::passed_values(
                 usage,
@@ -16040,9 +16045,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
 
     /// Contract: a `delete` of a rest parameter's static member, written
     /// plainly, in parentheses or through `?.`, removes a key and can add
-    /// none, so the rest stays bounded: the wrapper keeps what it keeps
-    /// without it, and where the key may be one a render passes, the default
-    /// it may then render with. A write can add a key its pattern takes out.
+    /// none, so the rest stays bounded. An element the rest is spread into
+    /// may then render without the deleted key: a variant of that name it
+    /// does not write itself also keeps its default. A key the pattern
+    /// takes out, or one that names no variant, changes nothing. A write can
+    /// add a key its pattern takes out.
     #[test]
     fn a_delete_through_a_rest_parameter_keeps_it_bounded() {
         let render = "\nexport const App = () => <B size=\"lg\" active />;";
@@ -16065,6 +16072,9 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         let tones = |body: &str| wrapper_kept(&format!("const B = ({{ size, ...rest }}) => {{ {body}return <S {{...rest}} />; }};\nexport const App = () => <B tone=\"b\" />;")).2;
         assert_eq!(tones(""), vec!["b"]);
         assert_eq!(tones("delete rest.tone; "), vec!["a", "b"]);
+        assert_eq!(tones("delete (rest.tone); "), vec!["a", "b"]);
+        assert_eq!(tones("delete rest.x; "), vec!["b"]);
+        assert_eq!(tones("delete rest.size; "), vec!["b"]);
     }
 
     /// Contract: an element's children are its `children` prop, written
