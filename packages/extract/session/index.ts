@@ -54,6 +54,7 @@ export {
   sessionArtifactDir,
   PROP_ORDER_ARTIFACT,
   propOrderPath,
+  cliCacheDir,
   STYLES_ARTIFACT,
   stylesPath,
   SYSTEM_PROPS_ARTIFACT,

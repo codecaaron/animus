@@ -120,6 +120,9 @@ export class PluginContext {
     return this.isProd && this.options.stylesheets === 'split';
   }
   rootDir = '';
+  /** Animus's folder in Vite's cache, where system loads are kept across
+   *  builds; the session's fallback before Vite resolves its config. */
+  cacheDir?: string;
   logger: Logger | null = null;
 
   /** The targets and features Animus's Lightning CSS pass follows, from
@@ -430,6 +433,7 @@ export class PluginContext {
     session.onOutcome = (outcome) => this.observeOutcome(session, outcome);
     session.development = this.development;
     session.rootDir = this.rootDir;
+    session.systemLoadCacheDir = this.cacheDir;
     session.conditions = this.resolveConditions;
     session.extensionPolicy = this.extensionPolicy;
     session.assetClassification = this.assetClassification;

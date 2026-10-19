@@ -8,6 +8,7 @@ import {
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_ARTIFACT_DIR,
+  cliCacheDir,
   collectSessionAssets,
   engineApi,
   ExtractionSession,
@@ -102,6 +103,8 @@ export function createCliSession(config: ResolvedCliConfig): ExtractionSession {
 
   session.driverLabel = 'animus';
   session.rootDir = root;
+  // Animus's own tree whatever --out-dir names, which may be served.
+  session.systemLoadCacheDir = cliCacheDir(root);
   // Every cycle republishes the whole assets set, so a superseded copy
   // would ship in a tree a fresh build of the same source never produces.
   session.staleAssetPruning = 'every-cycle';

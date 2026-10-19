@@ -1,6 +1,7 @@
 import {
   buildPathAliasesJson,
   describeLightningTargets,
+  isPathWithinRoot,
   outputExclusions,
   resolveMode,
   viteAssetClassification,
@@ -67,7 +68,15 @@ export function applyResolvedConfig(
       );
     }
   }
-  ctx.outputExcludes = outputExclusions(config.root, viteOutputTargets(config));
+  const outputs = viteOutputTargets(config);
+  ctx.outputExcludes = outputExclusions(config.root, outputs);
+  // Animus's folder in Vite's cache, unless Vite would serve or ship it:
+  // the cache inside publicDir or a build's outDir keeps the session's own.
+  const cacheDir = resolve(config.cacheDir, 'animus');
+  const shipped = [config.publicDir, ...outputs.dirs].some(
+    (dir) => dir !== '' && isPathWithinRoot(dir, cacheDir)
+  );
+  ctx.cacheDir = shipped ? undefined : cacheDir;
   ctx.configFiles = config.configFile ? [config.configFile] : [];
   // Vite substitutes the mode for its `development|production` condition.
   ctx.resolveConditions = config.resolve.conditions.map((condition) =>

@@ -17,7 +17,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createV2EngineApi } from '../pipeline/engine-adapter';
 import { loadSystemConfig } from '../pipeline/system-config';
 import {
-  SYSTEM_LOAD_CACHE_ENTRIES,
+  SYSTEM_LOAD_CACHE_ENTRIES_PER_KEY,
   SYSTEM_LOAD_SETTLE_MS,
 } from '../pipeline/system-load-cache';
 import { REPO_ROOT } from './engine-prerequisites';
@@ -142,8 +142,9 @@ interface LoadCounter {
   duringLoad?: () => void;
 }
 
-/** Loads through the cache, counting the native loads. */
-function loader(root: string) {
+/** Loads through the cache, counting the native loads; `cache` is the
+ *  host's folder, the nearest `node_modules` when absent. */
+function loader(root: string, cache?: string) {
   const native = nativeApi();
   const counter: LoadCounter = {
     loads: 0,
@@ -166,6 +167,7 @@ function loader(root: string) {
       systemPath: join(root, 'src', 'ds.ts'),
       rootDir: root,
       conditions,
+      cache: { directory: cache },
     });
   const brand = () => /#[0-9a-f]{6}/.exec(load().variableCss)?.[0];
   /** How many native loads `run` made. */
@@ -185,6 +187,10 @@ function loader(root: string) {
  * or `Math.random`, or ran within the settle window of a change, is never
  * served from the cache. A partial entry is a miss, and a project keeps a
  * bounded number of entries.
+ *
+ * Contract: the participants of one build each keep their states, so an
+ * edit and its revert hit for every one of them, and an entry removed while
+ * a lookup lists the folder leaves the rest servable.
  */
 describe('the system-load cache', () => {
   const zone = process.env.TZ;
@@ -271,8 +277,18 @@ describe('the system-load cache', () => {
       writeFileSync(join(directory, name), '{"format":');
     }
     expect(loadsOf(() => load())).toBe(1);
-    expect(readdirSync(directory).length).toBeLessThanOrEqual(
-      SYSTEM_LOAD_CACHE_ENTRIES
+    // A key keeps its most recent states.
+    for (const state of ['#565656', '#575757']) {
+      writeTheme('theme.ts', theme(`'${state}'`));
+      expect(loadsOf(() => load())).toBe(1);
+    }
+    const states = new Map<string, number>();
+    for (const name of readdirSync(directory)) {
+      const key = name.split('.')[0];
+      states.set(key, (states.get(key) ?? 0) + 1);
+    }
+    expect(Math.max(...states.values())).toBe(
+      SYSTEM_LOAD_CACHE_ENTRIES_PER_KEY
     );
 
     // A load that reads the clock or `Math.random` is never served again;
@@ -340,5 +356,36 @@ describe('the system-load cache', () => {
     relink('src/theme', '../themes/b');
     expect(loadsOf(() => expect(brand()).toBe('#cc0000'))).toBe(1);
     expect(loadsOf(() => expect(brand()).toBe('#cc0000'))).toBe(0);
+  });
+
+  it('keeps each participant its states, so a revert hits for all of them', () => {
+    const root = project({ 'src/theme/index.ts': theme("'#111111'") });
+    const cache = join(root, 'host-cache');
+    const { load, loadsOf } = loader(root, cache);
+    // Next's server, edge and client compilers, each its own key.
+    const participants = [['server'], ['edge'], ['client']];
+    const writeTheme = (brand: string) => {
+      write(join(root, 'src', 'theme', 'index.ts'), theme(`'${brand}'`));
+      settle(root);
+    };
+    const build = () =>
+      participants.map((conditions) => loadsOf(() => load(conditions)));
+
+    expect(build()).toEqual([1, 1, 1]);
+    writeTheme('#222222');
+    expect(build()).toEqual([1, 1, 1]);
+    writeTheme('#111111');
+    expect(build()).toEqual([0, 0, 0]);
+
+    // An entry gone between the listing and its read: a link to nowhere
+    // lists and fails to stat.
+    const directory = join(cache, 'system-load');
+    const keys = new Set(
+      readdirSync(directory).map((name) => name.split('.')[0])
+    );
+    for (const key of keys) {
+      symlinkSync(join(root, 'gone'), join(directory, `${key}.gone.json`));
+    }
+    expect(build()).toEqual([0, 0, 0]);
   });
 });

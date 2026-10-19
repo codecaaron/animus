@@ -9,7 +9,10 @@ import { parseInternalWire } from './internal-wire';
 import { loadFindingDiagnostics, warnLine } from './manifest-diagnostics';
 import { applyPrefix, applyPropertyNames } from './prefix';
 import { splitInvalidPropertyRegistrations } from './property-registrations';
-import { cachedSystemLoad } from './system-load-cache';
+import {
+  cachedSystemLoad,
+  type SystemLoadCacheOptions,
+} from './system-load-cache';
 
 import type { EngineApi } from './engine-adapter';
 import type { HostExtensionPolicy } from './host-extensions';
@@ -135,7 +138,8 @@ function evaluateSystemModule(
   conditions: readonly string[] | undefined,
   workspaces: WorkspacePackages | undefined,
   extensions: HostExtensionPolicy | undefined,
-  instances: Readonly<Record<string, string>> | undefined
+  instances: Readonly<Record<string, string>> | undefined,
+  cache: SystemLoadCacheOptions | undefined
 ) {
   const args = [
     systemPath,
@@ -147,8 +151,12 @@ function evaluateSystemModule(
     instances,
   ];
   try {
-    return cachedSystemLoad(engine.engineBuildId?.(), rootDir, args, () =>
-      engine.loadSystemModule(...args)
+    return cachedSystemLoad(
+      engine.engineBuildId?.(),
+      rootDir,
+      args,
+      () => engine.loadSystemModule(...args),
+      cache
     );
   } catch (error) {
     reportFindingsOn(error);
@@ -190,6 +198,8 @@ export function loadSystemConfig(
     /** The host's instance of each kit the system reaches, by package name
      *  (C8): the loader evaluates that instance from every importer. */
     instances?: Readonly<Record<string, string>>;
+    /** Where the load's result is kept, and who hears what became of it. */
+    cache?: SystemLoadCacheOptions;
   }
 ): SystemConfig {
   const config = evaluateSystemModule(
@@ -200,7 +210,8 @@ export function loadSystemConfig(
     opts.conditions,
     opts.workspaces,
     opts.extensions,
-    opts.instances
+    opts.instances,
+    opts.cache
   );
 
   let scalesJson: string = config.scalesJson;

@@ -16,7 +16,7 @@ import { real } from '../../layergate/src/host';
 import { registry } from '../../layergate/src/webpack-state';
 import { AnimusWebpackPlugin } from '../src/plugin';
 import { QUARANTINE_TURBOPACK_MESSAGE } from '../src/quarantine';
-import { withAnimus } from '../src/with-animus';
+import { nextCacheDir, withAnimus } from '../src/with-animus';
 
 import type { AnimusNextOptions } from '../src/types';
 
@@ -452,5 +452,25 @@ describe('withAnimus', () => {
 
     expect(definitionsFor(true)).toEqual({ __ANIMUS_DEV__: 'true' });
     expect(definitionsFor(false)).toEqual({ __ANIMUS_DEV__: 'false' });
+  });
+});
+
+/** Contract: the system-load cache lives in Next's build folder, which Next
+ *  keeps (`cache` survives its clean, and deploy platforms persist it),
+ *  never in a folder Next deletes. With `output: 'export'` a distDir names
+ *  the export folder, which each build deletes, and Next builds into
+ *  `.next`. */
+describe("the system-load cache stays in Next's build folder", () => {
+  const root = resolve('/tmp/animus-next-cache-app');
+  test.each([
+    [{}, '.next'],
+    [{ distDir: 'build' }, 'build'],
+    [{ output: 'standalone' as const, distDir: 'build' }, 'build'],
+    [{ output: 'export' as const }, '.next'],
+    [{ output: 'export' as const, distDir: 'dist' }, '.next'],
+  ])('%o builds into %s', (config, buildDir) => {
+    expect(nextCacheDir(root, config)).toBe(
+      join(root, buildDir, 'cache', 'animus')
+    );
   });
 });

@@ -305,6 +305,7 @@ export function withAnimus(
           { development: context.dev === true, build }
         );
         plugin.setRootDir(rootDir);
+        plugin.setCacheDir(nextCacheDir(rootDir, nextConfig));
         if (nextConfig.distDir) {
           plugin.excludeOutputDir(resolve(rootDir, nextConfig.distDir));
         }
@@ -719,7 +720,8 @@ function turbopackConfig<Config extends NextOwnedConfig>(
       outputExclude,
       nextConfig.images?.disableStaticImages === true,
       build,
-      appRoot
+      appRoot,
+      nextCacheDir(appRoot, nextConfig)
     ).then((fragment) => mergeTurbopackFragment(nextConfig, fragment));
   function then<Resolved = TurbopackNextConfigObject<Config>, Rejected = never>(
     onResolved?:
@@ -769,6 +771,18 @@ function turbopackOwner(build: string): TurbopackOwner {
   return owner;
 }
 
+/** Animus's folder in Next's build cache, which Vercel and Netlify keep
+ *  between deploys. */
+export function nextCacheDir(
+  rootDir: string,
+  { distDir, output }: Pick<NextOwnedConfig, 'distDir' | 'output'>
+): string {
+  // Next's rule: with `output: 'export'` a distDir names the export folder,
+  // which each build deletes, and Next builds into `.next`.
+  const buildDir = output === 'export' ? '.next' : (distDir ?? '.next');
+  return resolve(rootDir, buildDir, 'cache', 'animus');
+}
+
 function loadTurbopackFragment(
   options: AnimusNextOptions,
   phase: string,
@@ -776,7 +790,8 @@ function loadTurbopackFragment(
   outputExclude: string | null,
   disableStaticImages: boolean,
   build: string,
-  rootDir: string
+  rootDir: string,
+  cacheDir: string
 ): Promise<TurbopackConfigFragment> {
   // The extension order is part of the analysis a load shares.
   const key = JSON.stringify([
@@ -794,7 +809,8 @@ function loadTurbopackFragment(
     resolveExtensions,
     outputExclude,
     disableStaticImages,
-    build
+    build,
+    cacheDir
   );
   const load = { key, fragment };
   owner.load = load;
@@ -811,7 +827,8 @@ async function analyzeForTurbopack(
   resolveExtensions: readonly string[] | undefined,
   outputExclude: string | null,
   disableStaticImages: boolean,
-  build: string
+  build: string,
+  cacheDir: string
 ): Promise<TurbopackConfigFragment> {
   const development = phase === PHASE_DEVELOPMENT_SERVER;
   const { mode } = resolveMode(options.mode, () =>
@@ -835,6 +852,7 @@ async function analyzeForTurbopack(
   // diagnostic reports there and the session keeps publishing.
   session.development = development;
   session.rootDir = rootDir;
+  session.systemLoadCacheDir = cacheDir;
   if (outputExclude !== null) session.structuralExclude = [outputExclude];
   session.extensionPolicy = turbopackExtensionPolicy(resolveExtensions);
   session.assetClassification = nextImageAssetClassification(

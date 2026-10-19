@@ -623,6 +623,11 @@ export class AnimusWebpackPlugin {
     this.rejoining = true;
   }
 
+  /** Keeps system loads across builds in `directory`, Next's own cache. */
+  setCacheDir(directory: string): void {
+    this.session.systemLoadCacheDir = directory;
+  }
+
   /** Keeps Next's output directory out of discovery, whatever the user's
    *  exclude list says. Call after `setRootDir`. */
   excludeOutputDir(outDir: string): void {

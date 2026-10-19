@@ -548,6 +548,9 @@ export class ExtractionSession {
   private configInputHashes = new Map<string, string>();
   /** The host's export conditions, in its order, for the system loader. */
   conditions: readonly string[] = [];
+  /** The host's cache folder, where system loads are kept across builds;
+   *  absent, the nearest `node_modules`'s cache. */
+  systemLoadCacheDir?: string;
   private hostExtensionPolicy: HostExtensionPolicy | undefined;
   /** The host's extension order, as its adapter captured it; the built-in
    *  policy where no host resolves. */
@@ -2367,6 +2370,15 @@ export class ExtractionSession {
       workspaces: context.workspaces,
       extensions: context.extensions,
       instances: context.instances,
+      cache: {
+        directory: this.systemLoadCacheDir,
+        // Each participant loads under its own conditions, each its own
+        // entry: the line names whose load it was.
+        report: (outcome) =>
+          this.log(
+            `system load (${context.conditions.join(', ') || 'default conditions'}): ${outcome}`
+          ),
+      },
     });
   }
 

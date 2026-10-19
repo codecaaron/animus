@@ -392,3 +392,45 @@ describe("Vite's load expansion", () => {
     ).toBeUndefined();
   });
 });
+
+/** Contract: the system-load cache never lives where Vite serves or ships
+ *  files. Animus keeps it in Vite's cacheDir, unless that sits inside
+ *  publicDir or a build's outDir: there it keeps the session's own folder,
+ *  as the entry holds absolute paths and the loaded system. */
+describe("the system-load cache stays out of Vite's output", () => {
+  const cacheDirFor = async (config: {
+    cacheDir?: string;
+    publicDir?: string;
+    build?: { outDir: string; emptyOutDir?: boolean };
+  }) => {
+    const ctx = new PluginContext({ system: './src/system.ts' });
+    const root = resolve('/tmp/animus-cache-dir-app');
+    applyResolvedConfig(
+      ctx,
+      await resolveConfig(
+        { configFile: false, root, logLevel: 'silent', ...config },
+        'build'
+      )
+    );
+    return { root, cacheDir: ctx.cacheDir };
+  };
+
+  it("keeps Vite's own cacheDir", async () => {
+    const { root, cacheDir } = await cacheDirFor({ cacheDir: '.vite-cache' });
+    expect(cacheDir).toBe(join(root, '.vite-cache', 'animus'));
+  });
+
+  it('keeps no folder Vite would serve or ship', async () => {
+    for (const config of [
+      { cacheDir: 'public/.cache', publicDir: 'public' },
+      {
+        cacheDir: 'dist/.cache',
+        build: { outDir: 'dist', emptyOutDir: false },
+      },
+    ]) {
+      expect((await cacheDirFor(config)).cacheDir, config.cacheDir).toBe(
+        undefined
+      );
+    }
+  });
+});
