@@ -16038,6 +16038,35 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!((sizes, states), (vec!["md"], vec!["active"]));
     }
 
+    /// Contract: a `delete` of a rest parameter's static member, written
+    /// plainly, in parentheses or through `?.`, removes a key and can add
+    /// none, so the rest stays bounded: the wrapper keeps what it keeps
+    /// without it, and where the key may be one a render passes, the default
+    /// it may then render with. A write can add a key its pattern takes out.
+    #[test]
+    fn a_delete_through_a_rest_parameter_keeps_it_bounded() {
+        let render = "\nexport const App = () => <B size=\"lg\" active />;";
+        let bounded = wrapper_kept(&format!("const B = ({{ size, ...rest }}) => <R {{...rest}} />;{render}"));
+        assert_eq!((&bounded.0, &bounded.1), (&vec!["md"], &vec!["active"]));
+        for delete in ["delete rest.x", "delete (rest.x)", "delete rest?.x"] {
+            let kept =
+                wrapper_kept(&format!("const B = ({{ size, ...rest }}) => {{ {delete}; return <R {{...rest}} />; }};{render}"));
+            assert_eq!(kept, bounded, "{delete}");
+            let called = wrapper_kept(&format!(
+                "import {{ createElement }} from 'react';\nconst B = ({{ size, ...rest }}) => {{ {delete}; return createElement(R, {{ ...rest }}); }};{render}"
+            ));
+            assert_eq!(called, bounded, "createElement, {delete}");
+        }
+        let written =
+            wrapper_kept(&format!("const B = ({{ size, ...rest }}) => {{ rest.size = 'sm'; return <R {{...rest}} />; }};{render}"));
+        assert_eq!(written.0, vec!["sm", "md", "lg"]);
+        // A key the delete takes may be one a render passes: the element it
+        // forwards into may then render without it, at its default.
+        let tones = |body: &str| wrapper_kept(&format!("const B = ({{ size, ...rest }}) => {{ {body}return <S {{...rest}} />; }};\nexport const App = () => <B tone=\"b\" />;")).2;
+        assert_eq!(tones(""), vec!["b"]);
+        assert_eq!(tones("delete rest.tone; "), vec!["a", "b"]);
+    }
+
     /// Contract: an element's children are its `children` prop, written
     /// after every attribute, so they replace a `children` attribute or one
     /// a spread delivers; `createElement`'s extra arguments are those
@@ -16202,7 +16231,6 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "const Button = (props) => items.map((props) => <R {...props} />);",
             "const Button = (props) => { props = { ...props, size: 'lg' }; return <R {...props} />; };",
             "const Button = ({ size, ...rest }) => { rest.size = 'lg'; return <R {...rest} />; };",
-            "const Button = ({ size, ...rest }) => { delete rest.size; return <R {...rest} />; };",
             "const Button = ({ size, ...rest }) => { Object.assign(rest, extra); return <R {...rest} />; };",
             "const Button = (props) => { log(props); return <R {...props} />; };",
             "const Button = (props) => { const p = props; return <R {...p} />; };",

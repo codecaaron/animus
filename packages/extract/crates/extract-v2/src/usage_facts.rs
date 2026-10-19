@@ -5143,6 +5143,7 @@ fn spread_wrappers(
         handed_on: FxHashMap::default(),
         aliases: FxHashMap::default(),
         may_omit: FxHashMap::default(),
+        deletes: FxHashSet::default(),
         referenced: FxHashSet::default(),
         ancestors: Vec::new(),
     };
@@ -5176,6 +5177,11 @@ fn spread_wrappers(
         .filter(|(index, _)| !scan.invalid.contains(index))
         .filter_map(|(index, candidate)| {
             let forwarding = scan.forwarding.remove(&index)?;
+            let may_omit = if scan.deletes.contains(&index) {
+                forwarding.iter().map(|(span, _)| *span).collect()
+            } else {
+                scan.may_omit.remove(&index).unwrap_or_default()
+            };
             let passed = scan
                 .passed
                 .remove(&index)
@@ -5192,7 +5198,7 @@ fn spread_wrappers(
                     targeted: scan.targeted.get(&index).copied().unwrap_or_default(),
                     held: scan.held.get(&index).copied().unwrap_or_default(),
                     handed_on: scan.handed_on.remove(&index).unwrap_or_default(),
-                    may_omit: scan.may_omit.remove(&index).unwrap_or_default(),
+                    may_omit,
                 },
             ))
         })
@@ -5239,6 +5245,9 @@ struct WrapperScan<'a, 's> {
     aliases: FxHashMap<SymbolId, (usize, bool)>,
     /// Candidate index → forwarding elements whose spread may carry nothing.
     may_omit: FxHashMap<usize, Vec<(u32, u32)>>,
+    /// Candidates whose spread parameter a `delete` takes a key from: every
+    /// element it forwards into may lack any key it carries.
+    deletes: FxHashSet<usize>,
     /// Every symbol a reference read so far reached, so an alias read before
     /// its declaration is known.
     referenced: FxHashSet<SymbolId>,
@@ -5441,6 +5450,20 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
                 self.invalid.insert(index);
             }
             self.aliases.insert(alias, (index, omits));
+            return;
+        }
+        // A delete of one of its static members (`delete rest.x`, also in
+        // parentheses or through `?.`) removes a key from the plain object
+        // the parameter is and adds none.
+        let deleted = {
+            let mut up = self.ancestors.iter().rev();
+            let (current, parent) = peel_wrappers(ident.span, &mut up);
+            matches!(parent, Some(AstKind::StaticMemberExpression(member))
+                if member.object.span() == current
+                    && matches!(member_effect(member.span, &mut up), Some(MemberEffect::Deleted)))
+        };
+        if deleted {
+            self.deletes.insert(index);
             return;
         }
         match ancestors.next() {
