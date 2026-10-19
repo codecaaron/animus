@@ -3572,7 +3572,7 @@ export const App = () => <Box tone="red" />;
                 "app.tsx",
                 "import { Base, Box } from './kit';\nimport { Held, HeldChild } from './held';\nimport { Fam } from './fam';\n\
                  import { Skip } from './skip';\nimport { Card } from './card';\n\
-                 export const App = () => <><Base size='sm' /><Box p={8} /><Fam.Box m={4} /><Held /><HeldChild /><Skip /><Card.Root /></>;\n",
+                 export const App = () => <><Base size='sm' /><Box p={8} /><Box p={globalThis.gap} /><Fam.Box m={4} /><Held /><HeldChild /><Skip /><Card.Root /></>;\n",
             ),
         ];
         let modules: Vec<&str> = project.iter().map(|(path, _)| path.trim_end_matches(".tsx").trim_end_matches(".ts")).collect();

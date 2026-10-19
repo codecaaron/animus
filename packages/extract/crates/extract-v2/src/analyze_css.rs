@@ -9772,6 +9772,8 @@ fn run_with_system_floor(
             for prefix in prefixes {
                 changed_ids.extend(resolve_declared_identity(path, prefix, files, inputs, links, &evaluated_ids));
                 changed_ids.extend(member_path_ids(path, ff, prefix, false, files, inputs, links, &evaluated_ids));
+                // A facade hands on or changes what it holds.
+                changed_ids.extend(object_members.escaped_components(path, prefix));
             }
         }
     }
@@ -14104,6 +14106,46 @@ mod tests {
         assert!(keeps_p("import { memo, forwardRef } from 'outside';", "memo(forwardRef(Render))"));
     }
 
+    /// Contract: a component a `const` facade holds (`Field = { Root }`) is
+    /// read through the facade's members, and holding it hands nothing
+    /// off, while what the facade's own uses may do to it (an escape, a
+    /// write through a helper, a member read handed on) still reaches it.
+    #[test]
+    fn a_facade_member_is_the_component_it_holds() {
+        let keeps_p = |tag: &str, more: &str| {
+            let source = format!(
+                "import {{ consume, Other }} from 'outside';\n\
+                 const Root = ds.system({{ display: true }}).asElement('div');\n\
+                 const Box = ds.system({{ space: true }}).asElement('div');\n\
+                 export const Field = {{ Root }};\n\
+                 export const App = () => <{tag}><Box p={{2}} /></{tag}>;\n{more}"
+            );
+            analyze(&[("a.tsx", &source)], &test_inputs()).dynamic_props.contains_key("p")
+        };
+        for (tag, more, keeps) in [
+            ("Field.Root", "", false),
+            ("Root", "", false),
+            // What the facade's uses may do reaches the component, however
+            // a render names it.
+            ("Root", "consume(Field);\n", true),
+            ("Root", "function mirror(family) { family.Root.render = (props) => consume(props.children); }\nmirror(Field);\n", true),
+            ("Root", "export const Copy = { ...Field };\n", true),
+            ("Root", "const Held = Field.Root;\nconsume(Held);\n", true),
+            ("Field.Root", "Field.Root = Other;\n", true),
+        ] {
+            assert_eq!(keeps_p(tag, more), keeps, "<{tag}> {more}");
+        }
+        // A member the object's table cannot record (a later spread may
+        // replace it) stays an escape: the facade's uses never reach it.
+        let source = "import { consume, more } from 'outside';\n\
+                      const Root = ds.system({ display: true }).asElement('div');\n\
+                      const Box = ds.system({ space: true }).asElement('div');\n\
+                      export const Field = { Root, ...more };\n\
+                      consume(Field);\n\
+                      export const App = () => <Root><Box p={2} /></Root>;\n";
+        assert!(analyze(&[("a.tsx", source)], &test_inputs()).dynamic_props.contains_key("p"));
+    }
+
     #[test]
     fn total_floor_empty_project_has_no_slots() {
         let out = analyze(&[], &test_inputs());
@@ -17298,7 +17340,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("const Slot = (props) => null;", "<Slot as={R} size=\"lg\" />"),
             ("const registry = { button: R };\nexport const lookup = () => registry;", "null"),
             ("const list = [R];", "null"),
-            ("const Kit = { Item: R };", "<Kit.Item size=\"lg\" />"),
+            ("const pick = (c) => c;\nconst Kit = { Item: R };\nconst K = pick(Kit);", "<K.Item size=\"lg\" />"),
             (
                 "const pick = (c) => c;\nconst Fam = compose({ Root: R }, { name: 'Fam' });\nconst F = pick(Fam);",
                 "<F.Root size=\"lg\" />",

@@ -2062,6 +2062,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &descriptors,
         &structural.exports,
         &structural.compose,
+        &structural.object_members,
         &structural.assigned_target_calls,
     );
 

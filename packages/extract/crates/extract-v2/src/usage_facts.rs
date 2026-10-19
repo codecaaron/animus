@@ -1035,6 +1035,7 @@ pub(crate) fn collect_enriched_usage(
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
     compose: &[ComposeFamilyInfo],
+    object_members: &BTreeMap<String, BTreeMap<String, String>>,
     assigned_target_calls: &BTreeSet<(u32, u32)>,
 ) -> EnrichedUsage {
     let static_values = crate::eval::Statics::of(static_values, module_path);
@@ -1128,6 +1129,8 @@ pub(crate) fn collect_enriched_usage(
                     .filter(|family| family.addressable())
                     .flat_map(|family| family.slot_values.iter().copied())
                     .collect(),
+                object_members,
+                holders: BTreeSet::new(),
                 assigned_target_calls,
                 react: &react,
                 namespaces: collect_namespace_imports(module).into_keys().collect(),
@@ -1135,6 +1138,11 @@ pub(crate) fn collect_enriched_usage(
                 escapes: BTreeSet::new(),
                 ancestors: Vec::new(),
             };
+            scan.holders = object_members
+                .iter()
+                .filter(|(_, members)| members.values().any(|value| scan.is_candidate(value)))
+                .map(|(object, _)| object.clone())
+                .collect();
             if scoping.root_unresolved_references().contains_key("eval") {
                 // Direct eval can hand any binding anywhere.
                 let every: Vec<String> = scoping
@@ -5075,17 +5083,23 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
 /// component, and records the ones usage tracking does not follow: a
 /// reference that is not a JSX tag, an extracted `.extend()` base, a
 /// `createElement` first argument, a named export, the target of a top-level
-/// `const X = R` or `const X = Object.assign(R, …)`, or a member of a
-/// `compose()` call. Such a component can render anywhere with any props: an
-/// object member (`<Kit.Item>`) and an alias declared inside a function are
-/// escapes, since usage follows neither. A member read records its dotted
-/// path (`Card.Body`).
+/// `const X = R` or `const X = Object.assign(R, …)`, a member of a
+/// `compose()` call, or a member of a top-level `const` object that
+/// `object_members` holds, whose member table follows it. Such a component
+/// can render anywhere with any props: any other object member and an alias
+/// declared inside a function are escapes, since usage follows neither. A
+/// member read records its dotted path (`Card.Body`).
 struct EscapeScan<'a, 's> {
     scoping: &'s Scoping,
     chains: &'s [&'s ChainDescriptor],
     /// See `ComposeFamilyInfo::slot_values`, for every family of the
     /// module's facts that usage follows (`ComposeFamilyInfo::addressable`).
     slot_values: FxHashSet<(u32, u32)>,
+    /// See `FileFacts::object_members`.
+    object_members: &'s BTreeMap<String, BTreeMap<String, String>>,
+    /// The objects among `object_members` that hold a candidate: one hands
+    /// it over where it escapes, whatever its name's case.
+    holders: BTreeSet<String>,
     /// See `FileFacts::assigned_target_calls`.
     assigned_target_calls: &'s BTreeSet<(u32, u32)>,
     react: &'s ReactNames,
@@ -5105,6 +5119,7 @@ impl EscapeScan<'_, '_> {
             || self.namespaces.contains(name)
             || self.imports.contains(name)
             || self.chains.iter().any(|chain| chain.binding == name)
+            || self.holders.contains(name)
     }
 }
 
@@ -5131,81 +5146,88 @@ impl<'a> Visit<'a> for EscapeScan<'a, '_> {
         if !self.is_candidate(name) {
             return;
         }
-        let path = escape_path(name, ident.span, &self.ancestors, self.chains, &self.slot_values, self.assigned_target_calls, self.react);
+        let path = self.escape_path(name, ident.span);
         if let Some(path) = path {
             self.escapes.insert(path);
         }
     }
 }
 
-/// The dotted path under which a reference escapes, or `None` when usage
-/// tracking follows it. `ancestors` runs from the root to the parent.
-fn escape_path(
-    name: &str,
-    span: oxc::span::Span,
-    ancestors: &[AstKind<'_>],
-    chains: &[&ChainDescriptor],
-    slot_values: &FxHashSet<(u32, u32)>,
-    assigned_target_calls: &BTreeSet<(u32, u32)>,
-    react: &ReactNames,
-) -> Option<String> {
-    use oxc::span::GetSpan;
-    let mut path = name.to_string();
-    let mut current = span;
-    let mut rest = ancestors.iter().rev();
-    while let Some(parent) = rest.next() {
-        match parent {
-            kind if is_erased_wrapper(kind) => current = kind.span(),
-            AstKind::JSXOpeningElement(_)
-            | AstKind::JSXClosingElement(_)
-            | AstKind::JSXMemberExpression(_)
-            | AstKind::ExportSpecifier(_) => return None,
-            AstKind::StaticMemberExpression(member) if member.object.span() == current => {
-                let extracted_base = member.property.name == "extend"
-                    && chains.iter().any(|chain| {
-                        chain.extractable
-                            && chain.extends_from.as_deref() == Some(name)
-                            && chain.span.0 <= member.span.start
-                            && member.span.end <= chain.span.1
-                    });
-                if extracted_base {
-                    return None;
+impl EscapeScan<'_, '_> {
+    /// The dotted path under which a reference escapes, or `None` when usage
+    /// tracking follows it.
+    fn escape_path(&self, name: &str, span: oxc::span::Span) -> Option<String> {
+        let (chains, slot_values, object_members, assigned_target_calls, react) =
+            (self.chains, &self.slot_values, self.object_members, self.assigned_target_calls, self.react);
+        use oxc::span::GetSpan;
+        let mut path = name.to_string();
+        let mut current = span;
+        let mut rest = self.ancestors.iter().rev();
+        while let Some(parent) = rest.next() {
+            match parent {
+                kind if is_erased_wrapper(kind) => current = kind.span(),
+                AstKind::JSXOpeningElement(_)
+                | AstKind::JSXClosingElement(_)
+                | AstKind::JSXMemberExpression(_)
+                | AstKind::ExportSpecifier(_) => return None,
+                AstKind::StaticMemberExpression(member) if member.object.span() == current => {
+                    let extracted_base = member.property.name == "extend"
+                        && chains.iter().any(|chain| {
+                            chain.extractable
+                                && chain.extends_from.as_deref() == Some(name)
+                                && chain.span.0 <= member.span.start
+                                && member.span.end <= chain.span.1
+                        });
+                    if extracted_base {
+                        return None;
+                    }
+                    path.push('.');
+                    path.push_str(&member.property.name);
+                    current = member.span;
                 }
-                path.push('.');
-                path.push_str(&member.property.name);
-                current = member.span;
-            }
-            AstKind::CallExpression(call)
-                if call.arguments.first().map(GetSpan::span) == Some(current) =>
-            {
-                // Followed only where usage records the render.
-                if react.element_call(&call.callee).is_some() {
-                    return None;
+                AstKind::CallExpression(call)
+                    if call.arguments.first().map(GetSpan::span) == Some(current) =>
+                {
+                    // Followed only where usage records the render.
+                    if react.element_call(&call.callee).is_some() {
+                        return None;
+                    }
+                    // So is the target of an `Object.assign` call the facts read as
+                    // a top-level `const`'s initializer.
+                    return (!assigned_target_calls.contains(&(call.span.start, call.span.end))).then_some(path);
                 }
-                // So is the target of an `Object.assign` call the facts read as
-                // a top-level `const`'s initializer.
-                return (!assigned_target_calls.contains(&(call.span.start, call.span.end))).then_some(path);
+                // `const B = R` at the top level is followed: `<B>` renders as `R`.
+                // A destructuring declarator reads members, which nothing follows.
+                AstKind::VariableDeclarator(declarator)
+                    if path == name
+                        && matches!(declarator.id, oxc::ast::ast::BindingPattern::BindingIdentifier(_)) =>
+                {
+                    return (!initializes_top_level_const(current, std::iter::once(parent).chain(rest)))
+                        .then_some(path);
+                }
+                // A slot of a compose() family usage follows renders through its
+                // member tags, and so is a member of a top-level `const` object
+                // that `object_members` holds: the object's member table follows
+                // it, and what the object's uses do to it. Any other object
+                // member is not followed, nor is a slot of a compose() call
+                // whose family usage cannot follow.
+                AstKind::ObjectProperty(property) if property.value.span() == current => {
+                    let value = property.value.span();
+                    let held = path == name
+                        && !property.computed
+                        && property.key.static_name().is_some_and(|key| match rest.next() {
+                            Some(AstKind::ObjectExpression(object)) => holder_const(object.span, &mut rest)
+                                .and_then(|holder| object_members.get(&holder)?.get(key.as_ref()))
+                                .is_some_and(|member| member == name),
+                            _ => false,
+                        });
+                    return (!slot_values.contains(&(value.start, value.end)) && !held).then_some(path);
+                }
+                _ => return Some(path),
             }
-            // `const B = R` at the top level is followed: `<B>` renders as `R`.
-            // A destructuring declarator reads members, which nothing follows.
-            AstKind::VariableDeclarator(declarator)
-                if path == name
-                    && matches!(declarator.id, oxc::ast::ast::BindingPattern::BindingIdentifier(_)) =>
-            {
-                return (!initializes_top_level_const(current, std::iter::once(parent).chain(rest)))
-                    .then_some(path);
-            }
-            // A slot of a compose() family usage follows renders through its
-            // member tags; any other object member is not followed, nor is
-            // a slot of a compose() call whose family usage cannot follow.
-            AstKind::ObjectProperty(property) if property.value.span() == current => {
-                let value = property.value.span();
-                return (!slot_values.contains(&(value.start, value.end))).then_some(path);
-            }
-            _ => return Some(path),
         }
+        Some(path)
     }
-    Some(path)
 }
 
 /// Whether the expression at `span` initializes a top-level `const`, given
@@ -7134,7 +7156,7 @@ pub fn collect_usage_facts_with_statics(
     module_path: &str,
 ) -> Vec<UsageFact> {
     let built = SemanticBuilder::new().build(program).semantic.into_scoping();
-    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[], &[], &BTreeSet::new())
+    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[], &[], &BTreeMap::new(), &BTreeSet::new())
         .usage
 }
 
