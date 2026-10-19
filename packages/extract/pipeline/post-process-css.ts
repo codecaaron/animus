@@ -5,7 +5,13 @@ import {
   transform as lcssTransform,
 } from 'lightningcss';
 
-import { LOWERED_DIR_SELECTOR, severityFor } from './manifest-diagnostics';
+import {
+  hostFinding,
+  LOWERED_DIR_SELECTOR,
+  POST_PROCESSING_FAILED,
+  severityFor,
+  surfaceManifestDiagnostics,
+} from './manifest-diagnostics';
 
 import type { ManifestDiagnostic } from './manifest-diagnostics';
 
@@ -132,7 +138,9 @@ function transformOnce(css: string, opts: TransformOptions): string {
 export function postProcessCss(
   css: string,
   opts: TransformOptions & {
-    warnFn?: (msg: string) => void;
+    /** Receives the finding when Lightning CSS fails and the stylesheet
+     *  ships unprocessed; without it, the finding prints as a warning. */
+    reportFailure?: (diagnostic: ManifestDiagnostic) => void;
     /** Called when the targets lowered an authored `:dir()`. */
     onLoweredDir?: () => void;
   }
@@ -143,9 +151,20 @@ export function postProcessCss(
     code = transformOnce(css, opts);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    // eslint-disable-next-line no-console
-    const warnFn = opts.warnFn ?? console.warn;
-    warnFn(`[animus] Lightning CSS post-processing failed: ${msg}`);
+    const failure = hostFinding(
+      POST_PROCESSING_FAILED,
+      'stylesheet',
+      'post-processing',
+      `Lightning CSS post-processing failed, so it ships unprocessed: ${msg}`
+    );
+    const report =
+      opts.reportFailure ??
+      ((d) =>
+        surfaceManifestDiagnostics({ diagnostics: [d] }, (line) =>
+          // eslint-disable-next-line no-console
+          console.warn(`[animus] ${line}`)
+        ));
+    report(failure);
     return css;
   }
   // Lightning CSS lowers every `:dir()` for a target or none. Outside the

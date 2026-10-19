@@ -1,6 +1,5 @@
 import {
   effectiveLevel,
-  surfaceManifestDiagnostics,
   systemBuilderShippedDiagnostic,
 } from '@animus-ui/extract/pipeline';
 import { readFileSync } from 'fs';
@@ -131,11 +130,7 @@ export function reportShippedBuilder(
     return;
   }
   if (diagnostics.length === 0) return;
-  surfaceManifestDiagnostics(
-    { diagnostics },
-    (message) => ctx.warn(message),
-    policy
-  );
+  ctx.surfaceDiagnostics(diagnostics);
 }
 
 /** The name of the package each module id lies in (its nearest

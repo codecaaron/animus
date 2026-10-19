@@ -267,6 +267,36 @@ export const UNREADABLE_DISCOVERY_PATH = 'animus.discovery.unreadable-path';
 /** A pattern the user's `exclude` list adds matched no discovered path. */
 export const EXCLUDE_UNMATCHED = 'animus.discovery.exclude-unmatched';
 
+/** Most of the analysed source sits under trees that look like build
+ *  output. */
+export const OUTPUT_TREES = 'animus.discovery.output-trees';
+
+/** A source path resolves into an output directory: it is not analysed. */
+export const OUTPUT_SOURCE = 'animus.discovery.output-source';
+
+/** An include specifier resolves to no package. */
+export const UNRESOLVABLE_INCLUDE = 'animus.discovery.unresolvable-include';
+
+/** An included package's dist entry is older than its newest source. */
+export const STALE_DIST_INCLUDE = 'animus.discovery.stale-dist-include';
+
+/** An included package's source root is on another volume than the
+ *  project root: the package is not extracted or watched. */
+export const CROSS_VOLUME_SOURCE = 'animus.discovery.cross-volume-source';
+
+/** An `asset()` specifier resolves to no file. */
+export const UNRESOLVABLE_ASSET = 'animus.asset.unresolvable-specifier';
+
+/** Lightning CSS failed on a stylesheet, which ships unprocessed. */
+export const POST_PROCESSING_FAILED = 'animus.css.post-processing-failed';
+
+/** A component no module renders, and none extends, is left out of the
+ *  build's CSS. */
+export const COMPONENT_ELIMINATED = 'animus.reconcile.component-eliminated';
+
+/** A component a development build keeps that production would leave out. */
+export const COMPONENT_ELIMINABLE = 'animus.reconcile.component-eliminable';
+
 /** A production client chunk ships `@animus-ui/system`'s builder. */
 export const SYSTEM_BUILDER_SHIPPED = 'animus.bundle.system-builder-shipped';
 
@@ -391,20 +421,51 @@ export function unreadableDiscoveryPathDiagnostic<Thrown>(
   };
 }
 
+/** A host's finding about `file`, as a record the diagnostics policy
+ *  reports: printed `file: component: message [code]`, at its code's
+ *  severity, so an error-severity finding fails a strict build. */
+export function hostFinding(
+  code: string,
+  file: string,
+  component: string,
+  message: string
+): ManifestDiagnostic {
+  return {
+    file,
+    component,
+    kind: 'warn',
+    message,
+    code,
+    severity: severityFor(code),
+  };
+}
+
+/** An `asset()` specifier no file answers: its URL stays as written, which
+ *  fails a strict build. */
+export function unresolvableAssetDiagnostic(
+  specifier: string
+): ManifestDiagnostic {
+  return hostFinding(
+    UNRESOLVABLE_ASSET,
+    specifier,
+    'asset()',
+    'no file answers this specifier, so its URL stays as written'
+  );
+}
+
 /** One warning for each `exclude` pattern that matched nothing: a misspelt
  *  pattern, or one whose files have moved. */
 export function unmatchedExcludeDiagnostics(
   patterns: readonly string[]
 ): ManifestDiagnostic[] {
-  return patterns.map((pattern) => ({
-    file: 'exclude',
-    component: `'${pattern}'`,
-    kind: 'warn',
-    message:
-      'matched nothing, so it excludes no file — correct it, or remove it',
-    code: EXCLUDE_UNMATCHED,
-    severity: severityFor(EXCLUDE_UNMATCHED),
-  }));
+  return patterns.map((pattern) =>
+    hostFinding(
+      EXCLUDE_UNMATCHED,
+      'exclude',
+      `'${pattern}'`,
+      'matched nothing, so it excludes no file — correct it, or remove it'
+    )
+  );
 }
 
 /** The builders of `@animus-ui/system` a chunk renders, each with an import
@@ -568,6 +629,15 @@ const DIAGNOSTIC_SEVERITY: ReadonlyMap<string, DiagnosticSeverity> = new Map([
   [SYSTEM_BUILDER_SHIPPED, 'info'],
   [UNREADABLE_DISCOVERY_PATH, 'warn'],
   [EXCLUDE_UNMATCHED, 'warn'],
+  [OUTPUT_TREES, 'warn'],
+  [OUTPUT_SOURCE, 'warn'],
+  [UNRESOLVABLE_INCLUDE, 'error'],
+  [STALE_DIST_INCLUDE, 'error'],
+  [CROSS_VOLUME_SOURCE, 'error'],
+  [UNRESOLVABLE_ASSET, 'error'],
+  [POST_PROCESSING_FAILED, 'warn'],
+  [COMPONENT_ELIMINATED, 'warn'],
+  [COMPONENT_ELIMINABLE, 'warn'],
   [NO_KIT_FILES, 'warn'],
   [KIT_WITHOUT_SOURCE_CONDITION, 'warn'],
   [KIT_WITHOUT_SIDE_EFFECTS, 'warn'],

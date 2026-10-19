@@ -24,6 +24,7 @@ import {
 import { postProcessCss } from './css';
 
 import type { PluginContext } from './context';
+import type { ManifestDiagnostic } from '@animus-ui/extract/pipeline';
 
 /**
  * Keyed on the whole option record: two instances sharing a key means the
@@ -70,7 +71,8 @@ function lightningOptions(ctx: PluginContext) {
     targets: ctx.lightning?.targets ?? {},
     features: ctx.lightning?.features,
     keepDirSelector: ctx.options.keepDirSelector,
-    warnFn: (msg: string) => ctx.warn(msg),
+    reportFailure: (diagnostic: ManifestDiagnostic) =>
+      ctx.surfaceDiagnostics([diagnostic]),
   };
 }
 

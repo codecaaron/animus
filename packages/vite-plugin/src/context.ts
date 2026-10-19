@@ -12,6 +12,8 @@ import {
   substituteAssetPlaceholders,
   substituteFontPreloads,
   substituteSheetAssets,
+  surfaceManifestDiagnostics,
+  unresolvableAssetDiagnostic,
   writeAssetCopy,
   toWatchKeys,
 } from '@animus-ui/extract/pipeline';
@@ -48,6 +50,7 @@ import type {
   HostAssetClassification,
   HostExtensionPolicy,
   HostLoadExpander,
+  ManifestDiagnostic,
   ProjectManifest,
   SystemConfig,
 } from '@animus-ui/extract/pipeline';
@@ -691,11 +694,39 @@ export class PluginContext {
     this.invalidateSystemReloadModules(true);
   }
 
+  /** An asset() specifier that could not be copied or emitted: `message`
+   *  fails a strict build, and the URL stays as written. */
   assetFallback(specifier: string, message: string, cause?: unknown): void {
     if (this.options.strict) this.strictFailure(message, cause);
     else this.warn(message);
+    this.keepAssetSpecifier(specifier);
+  }
+
+  /** An asset() specifier no file answers, reported under its code: the
+   *  URL stays as written. */
+  assetUnresolvable(specifier: string): void {
+    this.surfaceDiagnostics([unresolvableAssetDiagnostic(specifier)]);
+    this.keepAssetSpecifier(specifier);
+  }
+
+  private keepAssetSpecifier(specifier: string): void {
     this.assetUrlBySpecifier.set(specifier, specifier);
     this.assetResolutionFailures.add(specifier);
+  }
+
+  /** Reports the plugin's own findings under the `diagnostics` levels and
+   *  strictness: an error-severity record fails a strict build. */
+  surfaceDiagnostics(diagnostics: ManifestDiagnostic[]): void {
+    surfaceManifestDiagnostics(
+      { diagnostics },
+      (message) => this.warn(message),
+      {
+        levels: this.options.diagnostics,
+        strict: this.options.strict,
+        info: (line) => this.log(line),
+        reportErrors: this.reportErrors(),
+      }
+    );
   }
 
   /** Every asset() specifier in the sheets the plugin emits. */
@@ -738,10 +769,7 @@ export class PluginContext {
             this.devAssetUrl(specifier, resolved)
           );
         } else {
-          this.assetFallback(
-            specifier,
-            `[animus-extract] unresolvable asset() specifier: ${specifier}`
-          );
+          this.assetUnresolvable(specifier);
         }
       }
     }

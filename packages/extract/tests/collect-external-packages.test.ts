@@ -19,7 +19,7 @@ import {
   nativeKitSourceRoot,
   nativePackageLocator,
   sourceKitDependencies,
-  staleDistIncludesMessage,
+  staleDistIncludesDiagnostic,
 } from '../pipeline/discover-packages';
 import {
   builtInExtensionPolicy,
@@ -517,7 +517,7 @@ describe('collectExternalPackageSources', () => {
     expect(result.outcomes).toEqual([
       { specifier: '@x/ds', outcome: 'resolved', fileCount: 1 },
     ]);
-    expect(staleDistIncludesMessage(result.outcomes)).toBeNull();
+    expect(staleDistIncludesDiagnostic(result.outcomes)).toBeNull();
   });
 
   test('the freshness gate does not apply without a dist entry or without src/', async () => {

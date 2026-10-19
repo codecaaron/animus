@@ -7,7 +7,10 @@
 import { relative, resolve, sep } from 'path';
 
 import { outputExclusion, REPLACEABLE_DEFAULT_EXCLUDE } from './core-options';
+import { hostFinding, OUTPUT_TREES } from './manifest-diagnostics';
 import { isPathWithinRoot } from './source-identity';
+
+import type { ManifestDiagnostic } from './manifest-diagnostics';
 
 /** Absolute paths. A file target names only itself: an output written
  *  beside sources excludes none of them. */
@@ -195,12 +198,12 @@ const OUTPUT_TREE_LEAST_BYTES = OUTPUT_TREE_BYTES / 4;
  * quarter of the analysed source and 256 KiB. Read from the paths and
  * sources discovery already holds. `exclude` is the user's list, which the
  * suggested one extends; with none, the message names the defaults a list
- * replaces.
+ * replaces. Reported about the largest tree.
  */
-export function outputTreesMessage(
+export function outputTreesDiagnostic(
   entries: ReadonlyArray<{ path: string; source: string }>,
   exclude: readonly string[] | undefined
-): string | null {
+): ManifestDiagnostic | null {
   let total = 0;
   const trees = new Map<string, { files: number; bytes: number }>();
   for (const { path, source } of entries) {
@@ -233,15 +236,18 @@ export function outputTreesMessage(
     ...named.map(([dir]) => `${dir}/**`),
   ].map((pattern) => `'${pattern}'`);
   const defaults = REPLACEABLE_DEFAULT_EXCLUDE.map((pattern) => `'${pattern}'`);
-  return (
+  return hostFinding(
+    OUTPUT_TREES,
+    named[0][0],
+    'discovery',
     `${Math.floor((held / total) * 100)}% of the analysed source ` +
-    `(${(held / 1024 / 1024).toFixed(1)} MB in ${files} files) sits under ` +
-    `directories that look like build output: ${listed}. Analysing them ` +
-    `slows every build; if they are output, exclude them with ` +
-    `exclude: [${suggested.join(', ')}]` +
-    (exclude === undefined
-      ? ` (a list replaces the default excludes ${defaults.join(', ')}; ` +
-        'add those it should keep).'
-      : '.')
+      `(${(held / 1024 / 1024).toFixed(1)} MB in ${files} files) sits under ` +
+      `directories that look like build output: ${listed}. Analysing them ` +
+      `slows every build; if they are output, exclude them with ` +
+      `exclude: [${suggested.join(', ')}]` +
+      (exclude === undefined
+        ? ` (a list replaces the default excludes ${defaults.join(', ')}; ` +
+          'add those it should keep).'
+        : '.')
   );
 }

@@ -9,7 +9,6 @@ import {
   resolveMode,
   sourceKitDependencies,
   splitStylesheet,
-  surfaceManifestDiagnostics,
   systemKitDependencies,
 } from '@animus-ui/extract/pipeline';
 import { resolve } from 'path';
@@ -572,22 +571,12 @@ export function animusExtract(options: AnimusExtractOptions): Plugin {
             )
           ) {
             ctx.warnedLoweredDir = true;
-            surfaceManifestDiagnostics(
-              {
-                diagnostics: [
-                  loweredDirDiagnostic(
-                    "Vite's CSS minification",
-                    'build.cssTarget'
-                  ),
-                ],
-              },
-              (message) => ctx.warn(message),
-              {
-                levels: ctx.options.diagnostics,
-                strict: ctx.options.strict,
-                reportErrors: ctx.reportErrors(),
-              }
-            );
+            ctx.surfaceDiagnostics([
+              loweredDirDiagnostic(
+                "Vite's CSS minification",
+                'build.cssTarget'
+              ),
+            ]);
           }
         }
         if (ctx.isProd && isClient(this)) {

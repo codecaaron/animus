@@ -469,7 +469,7 @@ describe('cross-volume external roots (design D5)', () => {
     session.sharesProjectVolume = () => false;
 
     await expect(session.runFullPipeline()).rejects.toThrow(
-      'ANIMUS_EXTERNAL_CROSS_VOLUME_UNSUPPORTED'
+      'animus.discovery.cross-volume-source'
     );
   });
 
@@ -488,7 +488,7 @@ describe('cross-volume external roots (design D5)', () => {
     expect(session.externalPackageDirs).toEqual([]);
     expect(session.externalSourceEntries.size).toBe(0);
     const warned = warn.mock.calls.map((c) => String(c[0])).join('\n');
-    expect(warned).toContain('ANIMUS_EXTERNAL_CROSS_VOLUME_UNSUPPORTED');
+    expect(warned).toContain('[animus.discovery.cross-volume-source]');
     expect(warned).toContain(join(kit, 'src', 'index.ts'));
     expect(
       [...session.stickyDiagnostics.values()].some((m) =>
@@ -523,7 +523,7 @@ describe('cross-volume external roots (design D5)', () => {
     expect(session.externalRootOwners.size).toBe(0);
     expect(
       warn.mock.calls.some((c) =>
-        String(c[0]).includes('ANIMUS_EXTERNAL_CROSS_VOLUME_UNSUPPORTED')
+        String(c[0]).includes('[animus.discovery.cross-volume-source]')
       )
     ).toBe(true);
 

@@ -20,9 +20,12 @@ import {
   KIT_UNREAD_SIDE_EFFECTS,
   KIT_WITHOUT_SIDE_EFFECTS,
   KIT_WITHOUT_SOURCE_CONDITION,
+  hostFinding,
   noKitFilesDiagnostics,
   PACKAGE_MISMATCH,
   severityFor,
+  STALE_DIST_INCLUDE,
+  UNRESOLVABLE_INCLUDE,
   UNIMPORTED_CREATE_SYSTEM,
   UNFOLLOWED_SYSTEM_BUILDER,
   UNPROVEN_ROOT_BINDING,
@@ -1591,12 +1594,12 @@ export function excludeCollectedPackages(
   };
 }
 
-/** Every unresolvable include, with why where the resolver said, and the
- *  system file that includes them when the caller knows it. */
-export function unresolvableIncludesMessage(
+/** Every unresolvable include, with why where the resolver said, reported
+ *  about the system file that includes them when the caller knows it. */
+export function unresolvableIncludesDiagnostic(
   outcomes: ExternalPackageOutcome[],
   importer?: string
-): string | null {
+): ManifestDiagnostic | null {
   const unresolvable = outcomes
     .filter((record) => record.outcome === 'unresolvable')
     .map((record) =>
@@ -1605,20 +1608,31 @@ export function unresolvableIncludesMessage(
         : `${record.specifier} (${record.reason})`
     );
   if (unresolvable.length === 0) return null;
-  const from = importer === undefined ? '' : ` in ${importer}`;
-  return `[animus-extract] unresolvable include specifier(s)${from}: ${unresolvable.join(', ')}`;
+  return hostFinding(
+    UNRESOLVABLE_INCLUDE,
+    importer ?? 'includes',
+    'includes',
+    `unresolvable include specifier(s): ${unresolvable.join(', ')}`
+  );
 }
 
 /** A stale dist silently skews merged registry content while discovery
- *  compiles the fresh sources; null when no specifier is stale. */
-export function staleDistIncludesMessage(
-  outcomes: ExternalPackageOutcome[]
-): string | null {
+ *  compiles the fresh sources; null when no specifier is stale. Reported
+ *  about the system file that includes them when the caller knows it. */
+export function staleDistIncludesDiagnostic(
+  outcomes: ExternalPackageOutcome[],
+  importer?: string
+): ManifestDiagnostic | null {
   const stale = outcomes
     .filter((record) => record.outcome === 'stale-dist')
     .map((record) => record.specifier);
   if (stale.length === 0) return null;
-  return `[animus-extract] stale dist for include specifier(s): ${stale.join(', ')} — dist entry is older than the newest src/ file; rebuild the package(s) before extracting`;
+  return hostFinding(
+    STALE_DIST_INCLUDE,
+    importer ?? 'includes',
+    'includes',
+    `stale dist for include specifier(s): ${stale.join(', ')} — dist entry is older than the newest src/ file; rebuild the package(s) before extracting`
+  );
 }
 
 /** A module's parsed import and export bindings. */

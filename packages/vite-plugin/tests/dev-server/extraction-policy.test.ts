@@ -134,7 +134,9 @@ export const Hero = ds
         adapter.trace!().find(
           (entry) =>
             entry.includes('log.error') &&
-            entry.includes('unresolvable asset() specifier: @acme/missing.png')
+            entry.includes(
+              'animus.asset.unresolvable-specifier — @acme/missing.png'
+            )
         ) ?? false,
       {
         what: 'a log.error line naming the unresolved specifier',

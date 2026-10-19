@@ -18,7 +18,7 @@ import {
   analysedOutputs,
   esbuildOutputTargets,
   outputExclusions,
-  outputTreesMessage,
+  outputTreesDiagnostic,
   rollupOutputTargets,
   webpackOutputTargets,
 } from '../pipeline/output-targets';
@@ -498,23 +498,26 @@ test('output-named trees that dominate the analysed source are reported', () => 
 
   // An ordinary tree, with a `build` folder of source, and output below
   // the share or the size.
-  expect(outputTreesMessage(source, undefined)).toBeNull();
+  expect(outputTreesDiagnostic(source, undefined)).toBeNull();
   expect(
-    outputTreesMessage([...source, file('dist/c.js', 90)], undefined)
+    outputTreesDiagnostic([...source, file('dist/c.js', 90)], undefined)
   ).toBeNull();
   expect(
-    outputTreesMessage(
+    outputTreesDiagnostic(
       [file('src/App.tsx', 10), file('dist/c.js', 200)],
       undefined
     )
   ).toBeNull();
 
-  const message = outputTreesMessage([...source, ...bundles], undefined);
+  const message = outputTreesDiagnostic(
+    [...source, ...bundles],
+    undefined
+  )?.message;
   expect(message).toContain(
     'look like build output: .publish (1 files), apps/docs/out (1 files)'
   );
   expect(message).toContain("exclude: ['.publish/**', 'apps/docs/out/**']");
   expect(
-    outputTreesMessage([...source, ...bundles], ['fixtures/**'])
+    outputTreesDiagnostic([...source, ...bundles], ['fixtures/**'])?.message
   ).toContain("exclude: ['fixtures/**', '.publish/**', 'apps/docs/out/**'].");
 });

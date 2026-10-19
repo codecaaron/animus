@@ -74,8 +74,8 @@ import {
   loadSystemConfig,
   outputSourceGuard,
   REPLACEABLE_DEFAULT_EXCLUDE,
-  outputSourceMessage,
-  outputTreesMessage,
+  outputSourceDiagnostic,
+  outputTreesDiagnostic,
   loweredDirDiagnostic,
   postProcessCss,
   readTsconfigAliasPairs,
@@ -89,7 +89,7 @@ import {
   sharesVolumeRoot,
   snapshotFilePlans,
   diffFilePlans,
-  staleDistIncludesMessage,
+  staleDistIncludesDiagnostic,
   generatedModuleCode,
   reportSurvivingAssetPlaceholders,
   substituteSheetAssets,
@@ -102,7 +102,10 @@ import {
   unreadableDiscoveryPathDiagnostic,
   unreadableSourceDiagnostic,
   unmatchedExcludeDiagnostics,
-  unresolvableIncludesMessage,
+  unresolvableAssetDiagnostic,
+  hostFinding,
+  CROSS_VOLUME_SOURCE,
+  unresolvableIncludesDiagnostic,
   walkPackageSources,
   writeAssetCopy,
   pruneStaleAssets,
@@ -884,15 +887,15 @@ export class ExtractionSession {
    *  `rootDir`: files under it may be missing from the analysis. */
   private reportUndiscoverable(rootDir: string): OnUndiscoverable {
     return (path, err) =>
-      this.surfaceDiscoveryDiagnostics([
+      this.surfaceHostDiagnostics([
         unreadableDiscoveryPathDiagnostic(relative(rootDir, path), err),
       ]);
   }
 
-  /** Reports what discovery found under the host's `diagnostics` levels
-   *  and strictness, as it finds it: an error-severity record fails a
-   *  strict build. */
-  private surfaceDiscoveryDiagnostics(diagnostics: ManifestDiagnostic[]): void {
+  /** Reports the session's own findings under the host's `diagnostics`
+   *  levels and strictness, as it makes them: an error-severity record
+   *  fails a strict build. */
+  private surfaceHostDiagnostics(diagnostics: ManifestDiagnostic[]): void {
     surfaceManifestDiagnostics(
       { diagnostics },
       (message) => this.warn(message),
@@ -965,20 +968,6 @@ export class ExtractionSession {
     return this.development
       ? (message) => this.logger.error(message)
       : undefined;
-  }
-
-  /** A build-strictness check that failed: a build throws `message`, and
-   *  development reports it at error level and takes the non-strict path. */
-  private strictFailure(message: string): void {
-    const report = this.reportErrors();
-    if (!report) throw new Error(message);
-    report(message);
-  }
-
-  /** A finding `strict` turns into a strict failure; otherwise a warning. */
-  private strictOrWarn(message: string, strictMessage = message): void {
-    if (this.options.strict) this.strictFailure(strictMessage);
-    else this.warn(message);
   }
 
   private now(): number {
@@ -1430,7 +1419,9 @@ export class ExtractionSession {
       const relPath = target.key;
       const outputDir = inOutput(target.abs);
       if (outputDir !== null) {
-        this.warn(outputSourceMessage(relPath, outputDir));
+        this.surfaceHostDiagnostics([
+          outputSourceDiagnostic(relPath, outputDir),
+        ]);
         continue;
       }
       let source: string;
@@ -1979,7 +1970,7 @@ export class ExtractionSession {
     }
     // Once per build: its first full discovery, whether or not it publishes.
     if (claimReport(this.key, 'unmatched-excludes')) {
-      this.surfaceDiscoveryDiagnostics(
+      this.surfaceHostDiagnostics(
         unmatchedExcludeDiagnostics(excludeMatcher.unmatched())
       );
     }
@@ -2021,9 +2012,9 @@ export class ExtractionSession {
 
     bt.fileRead = this.elapsed(t);
     const rawPaths = new Set(rawEntries.map((entry) => entry.path));
-    const outputTrees = outputTreesMessage(rawEntries, this.options.exclude);
+    const outputTrees = outputTreesDiagnostic(rawEntries, this.options.exclude);
     if (outputTrees !== null && claimReport(this.key, 'output-trees')) {
-      this.warn(outputTrees);
+      this.surfaceHostDiagnostics([outputTrees]);
     }
 
     // Package resolution: the host's own where it resolves imports (spec
@@ -2125,19 +2116,20 @@ export class ExtractionSession {
       );
     }
 
-    this.surfaceDiscoveryDiagnostics([
+    this.surfaceHostDiagnostics([
       ...discoveryDiagnostics,
       ...collected.diagnostics,
     ]);
-    const unresolvableMessage = unresolvableIncludesMessage(
-      collected.outcomes,
-      relative(rootDir, resolvedSystemPath)
+    // A stale dist entry, like an unresolvable include, fails a strict
+    // build: merging against it skews registry content away from the
+    // discovered sources.
+    const systemFile = relative(rootDir, resolvedSystemPath);
+    this.surfaceHostDiagnostics(
+      [
+        unresolvableIncludesDiagnostic(collected.outcomes, systemFile),
+        staleDistIncludesDiagnostic(collected.outcomes, systemFile),
+      ].filter((diagnostic) => diagnostic !== null)
     );
-    if (unresolvableMessage !== null) this.strictOrWarn(unresolvableMessage);
-    // A stale dist entry rides the same strict/warn seam: merging against it
-    // skews registry content away from the discovered sources.
-    const staleDistMessage = staleDistIncludesMessage(collected.outcomes);
-    if (staleDistMessage !== null) this.strictOrWarn(staleDistMessage);
 
     // A source root on a different volume than the project root is rejected
     // AT DISCOVERY — never lazily at event time.
@@ -2151,19 +2143,26 @@ export class ExtractionSession {
     this.stickyDiagnostics.delete('cross-volume');
     if (rejectedSpecifiers.size > 0) {
       const message =
-        `ANIMUS_EXTERNAL_CROSS_VOLUME_UNSUPPORTED: external package source ` +
-        `root(s) on a different volume than the project root (${rootDir}): ` +
-        `${crossVolumeDetails.join('; ')} — cross-volume workspace sources ` +
-        `are unsupported; the package(s) are excluded from extraction and watching`;
-      // Strict development reports it on each full pipeline instead.
-      if (this.options.strict) {
-        this.strictFailure(`[${this.driverLabel}] ${message}`);
-      } else {
-        this.stickyDiagnostics.set('cross-volume', message);
+        `external package source root(s) on a different volume than the ` +
+        `project root (${rootDir}): ${crossVolumeDetails.join('; ')} — ` +
+        `cross-volume workspace sources are unsupported; the package(s) are ` +
+        `excluded from extraction and watching`;
+      // Reported on each full pipeline; the CLI's watch also lists it while
+      // it holds, which a strict session never reaches.
+      if (!this.options.strict) {
+        this.stickyDiagnostics.set(
+          'cross-volume',
+          `ANIMUS_EXTERNAL_CROSS_VOLUME_UNSUPPORTED: ${message}`
+        );
       }
+      this.surfaceHostDiagnostics([
+        hostFinding(CROSS_VOLUME_SOURCE, systemFile, 'includes', message),
+      ]);
     }
-    for (const message of this.stickyDiagnostics.values()) {
-      this.warn(message);
+    // Every other sticky line (an external watcher that degraded) repeats
+    // on each full pipeline while it holds.
+    for (const [key, message] of this.stickyDiagnostics) {
+      if (key !== 'cross-volume') this.warn(message);
     }
     const admitted = excludeCollectedPackages(
       collected,
@@ -2311,12 +2310,15 @@ export class ExtractionSession {
    *  an output directory, each reported. */
   private withoutOutputSources(entries: FileEntry[]): FileEntry[] {
     const inOutput = outputSourceGuard(this.rootDir!, this.structuralExclude);
-    return entries.filter((entry) => {
+    const refused: ManifestDiagnostic[] = [];
+    const kept = entries.filter((entry) => {
       const outputDir = inOutput(resolve(this.rootDir!, entry.path));
       if (outputDir === null) return true;
-      this.warn(outputSourceMessage(entry.path, outputDir));
+      refused.push(outputSourceDiagnostic(entry.path, outputDir));
       return false;
     });
+    this.surfaceHostDiagnostics(refused);
+    return kept;
   }
 
   /** Per-generation source state captured as ONE object so the restore
@@ -3021,7 +3023,7 @@ export class ExtractionSession {
       minify: this.options.minify ?? this.startupMode === 'production',
       ...this.lightning,
       keepDirSelector: this.options.keepDirSelector,
-      warnFn: (msg) => this.warn(msg),
+      reportFailure: (diagnostic) => this.surfaceHostDiagnostics([diagnostic]),
       onLoweredDir: () => {
         const diagnostic = loweredDirDiagnostic(
           "Animus's CSS post-processing",
@@ -3871,8 +3873,7 @@ export class ExtractionSession {
   }
 
   private reportUnresolvableAsset(specifier: string): void {
-    const message = `unresolvable asset() specifier: ${specifier}`;
-    this.strictOrWarn(message, `[${this.driverLabel}] ${message}`);
+    this.surfaceHostDiagnostics([unresolvableAssetDiagnostic(specifier)]);
   }
 
   private trackAssetDependency(path: string): void {

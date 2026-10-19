@@ -1,5 +1,8 @@
 import {
   assembleStylesheet,
+  COMPONENT_ELIMINABLE,
+  COMPONENT_ELIMINATED,
+  hostFinding,
   validateLayerOrder,
 } from '@animus-ui/extract/pipeline';
 import { existsSync, readFileSync } from 'fs';
@@ -8,7 +11,10 @@ import { basename, dirname, isAbsolute, join } from 'path';
 import { sweepAbandonedCopyDirs } from './asset-copy-dirs';
 
 import type { PluginContext } from './context';
-import type { HostResolve } from '@animus-ui/extract/pipeline';
+import type {
+  HostResolve,
+  ManifestDiagnostic,
+} from '@animus-ui/extract/pipeline';
 
 /**
  * `resolveSpecifier` maps a specifier to an absolute id. `emitAsset` is
@@ -90,10 +96,7 @@ export async function runBuildStart(
     const resolvedPath =
       await resolveSpecifier(specifier).catch(unexportedAssetFile);
     if (!resolvedPath) {
-      ctx.assetFallback(
-        specifier,
-        `[animus-extract] unresolvable asset() specifier: ${specifier}`
-      );
+      ctx.assetUnresolvable(specifier);
       continue;
     }
     if (emitAsset) {
@@ -138,14 +141,22 @@ export async function runBuildStart(
       `Reconciliation: ${report.components_extracted} kept, ${report.variants_eliminated} variants pruned, ${report.states_eliminated} states pruned`
     );
 
+    const eliminated: ManifestDiagnostic[] = [];
     for (const d of report.eliminated_details) {
       if (d.kind === 'component') {
-        ctx.warn(`⚠ ${d.component} eliminated: ${d.reason}`);
+        eliminated.push(
+          hostFinding(COMPONENT_ELIMINATED, d.component, 'eliminated', d.reason)
+        );
       } else if (d.kind === 'prospective_component' && !ctx.emissionProd) {
         // A production build reports prospective entries only while a skipped
         // source holds pruning off, so this build keeps the component.
-        ctx.warn(
-          `⚠ ${d.component} would be eliminated in production: ${d.reason}`
+        eliminated.push(
+          hostFinding(
+            COMPONENT_ELIMINABLE,
+            d.component,
+            'would be eliminated in production',
+            d.reason
+          )
         );
       } else if (d.kind === 'variant') {
         ctx.trace(`${d.component} variant '${d.name}' pruned: ${d.reason}`);
@@ -155,6 +166,7 @@ export async function runBuildStart(
         ctx.trace(`${d.component} compound ${d.name} pruned: ${d.reason}`);
       }
     }
+    ctx.surfaceDiagnostics(eliminated);
 
     ctx.log(
       `CSS: ${ctx.resolvedComponentCss.length} bytes (${Object.keys(ctx.storedManifest.components).length} components)`

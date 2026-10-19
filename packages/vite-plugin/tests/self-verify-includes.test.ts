@@ -1,5 +1,5 @@
-import { writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { createLogger, resolveConfig } from 'vite';
 import { afterEach, describe, expect, test } from 'vitest';
 
@@ -17,6 +17,8 @@ import { applyResolvedConfig } from '../src/config';
 import { PluginContext } from '../src/context';
 import { serve } from './context-probe';
 import { makeComponent, makeManifest } from './manifest-fixture';
+
+import type { AnimusExtractOptions } from '../src/index';
 
 afterEach(() => {
   disposeTempRoots();
@@ -77,8 +79,16 @@ describe('self-verify: external package include outcomes', () => {
 });
 
 /** A Vite build whose system extends `includes`, none of which resolves. */
-async function buildIncluding(includes: string[], strict: boolean) {
+async function buildIncluding(
+  includes: string[],
+  options: Partial<AnimusExtractOptions> = {},
+  files: Record<string, string> = {}
+) {
   const { app } = createKitWorkspace();
+  for (const [path, source] of Object.entries(files)) {
+    mkdirSync(dirname(join(app, path)), { recursive: true });
+    writeFileSync(join(app, path), source);
+  }
   const system = join(app, 'src', 'system.ts');
   const source =
     "import { createSystem } from '@animus-ui/system';\n" +
@@ -97,22 +107,28 @@ async function buildIncluding(includes: string[], strict: boolean) {
   customLogger.warn = (message) => {
     warnings.push(message);
   };
-  const ctx = new PluginContext({ system: './src/system.ts', strict }, () => ({
-    loadSystemModule: () => ({
-      propConfig: '{}',
-      groupRegistry: '{}',
-      scalesJson: '{}',
-      variableMapJson: '{}',
-      variableCss: '',
-      dependencies: [],
-    }),
-    extractFacts: factsExtractor({
-      [system]: { ...emptyFacts(system), imports: systemImportFacts(source) },
-    }),
-    analyzeProject: () => JSON.stringify(makeManifest()),
-    locatePackage: () => null,
-    declaresKitSource: () => false,
-  }));
+  customLogger.error = (message) => {
+    warnings.push(message);
+  };
+  const ctx = new PluginContext(
+    { system: './src/system.ts', ...options },
+    () => ({
+      loadSystemModule: () => ({
+        propConfig: '{}',
+        groupRegistry: '{}',
+        scalesJson: '{}',
+        variableMapJson: '{}',
+        variableCss: '',
+        dependencies: [],
+      }),
+      extractFacts: factsExtractor({
+        [system]: { ...emptyFacts(system), imports: systemImportFacts(source) },
+      }),
+      analyzeProject: () => JSON.stringify(makeManifest()),
+      locatePackage: () => null,
+      declaresKitSource: () => false,
+    })
+  );
   applyResolvedConfig(
     ctx,
     await resolveConfig(
@@ -129,26 +145,59 @@ async function buildIncluding(includes: string[], strict: boolean) {
 
 describe('buildStart gate: include resolution', () => {
   test('strict mode throws naming every unresolvable specifier', async () => {
-    const { run } = await buildIncluding(['@x/missing', '@x/typo'], true);
+    const { run } = await buildIncluding(['@x/missing', '@x/typo'], {
+      strict: true,
+    });
 
     await expect(run()).rejects.toThrow(
-      '[animus-extract] unresolvable include specifier(s) in src/system.ts: @x/missing, @x/typo'
+      'animus.discovery.unresolvable-include — src/system.ts: includes: unresolvable include specifier(s): @x/missing, @x/typo'
     );
   });
 
   test('non-strict mode warns and continues', async () => {
-    const { run, warnings } = await buildIncluding(['@x/missing'], false);
+    const { run, warnings } = await buildIncluding(['@x/missing']);
 
     await run();
     expect(
       warnings.filter((line) => line.includes('unresolvable include'))
     ).toEqual([
-      '[animus] [animus-extract] unresolvable include specifier(s) in src/system.ts: @x/missing',
+      '[animus] ⚠ src/system.ts: includes: unresolvable include specifier(s): @x/missing [animus.discovery.unresolvable-include]',
     ]);
   });
 
+  // Contract: every warning a build writes about the project carries an
+  // Animus code, so turning every code off leaves a build that writes none.
+  test('a build with every Animus code off writes no warning', async () => {
+    // An include that resolves to nothing, a pattern that matches nothing,
+    // and a tree of build output that is analysed.
+    const build = (diagnostics?: AnimusExtractOptions['diagnostics']) =>
+      buildIncluding(
+        ['@x/missing'],
+        { exclude: ['dist', 'stories'], diagnostics },
+        { 'out/bundle.js': `export const x = '${'x'.repeat(300 * 1024)}';\n` }
+      );
+
+    const reported = await build();
+    await reported.run();
+    const codes = reported.warnings.map(
+      (line) => / \[(animus\.[a-z.-]+)\]$/.exec(line)?.[1]
+    );
+    expect(codes).not.toContain(undefined);
+    expect(codes).toEqual(
+      expect.arrayContaining([
+        'animus.discovery.unresolvable-include',
+        'animus.discovery.exclude-unmatched',
+        'animus.discovery.output-trees',
+      ])
+    );
+
+    const silenced = await build({ 'animus.*': 'off' });
+    await silenced.run();
+    expect(silenced.warnings).toEqual([]);
+  });
+
   test('no unresolvable outcomes is a no-op in both modes', async () => {
-    const { run, warnings } = await buildIncluding([], true);
+    const { run, warnings } = await buildIncluding([], { strict: true });
 
     await run();
     expect(

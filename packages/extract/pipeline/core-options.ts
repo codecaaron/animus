@@ -6,11 +6,18 @@
 import { realpathSync } from 'fs';
 import { relative, resolve, sep } from 'path';
 
-import { DIAGNOSTIC_LEVELS } from './manifest-diagnostics';
+import {
+  DIAGNOSTIC_LEVELS,
+  hostFinding,
+  OUTPUT_SOURCE,
+} from './manifest-diagnostics';
 import { isPathWithinRoot } from './source-identity';
 
 import type { FetchPriority } from './font-preloads';
-import type { DiagnosticLevels } from './manifest-diagnostics';
+import type {
+  DiagnosticLevels,
+  ManifestDiagnostic,
+} from './manifest-diagnostics';
 import type { StylesheetDelivery } from './split-stylesheet';
 import type { StaticCssConfig } from './static-css';
 
@@ -621,11 +628,16 @@ export function outputSourceGuard(
 }
 
 /** The warning for a source a host refused as output. */
-export function outputSourceMessage(
+export function outputSourceDiagnostic(
   relPath: string,
   outputDir: string
-): string {
-  return `${relPath} resolves into the output directory '${outputDir}', which is never source; it is not analysed`;
+): ManifestDiagnostic {
+  return hostFinding(
+    OUTPUT_SOURCE,
+    relPath,
+    'discovery',
+    `resolves into the output directory '${outputDir}', which is never source; it is not analysed`
+  );
 }
 
 function realPathOf(path: string): string {

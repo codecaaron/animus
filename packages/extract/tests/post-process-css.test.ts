@@ -52,18 +52,19 @@ describe('postProcessCss', () => {
   });
 
   test('degrades gracefully on malformed CSS with a contextual warning', () => {
-    const warnFn = vi.fn();
+    const reportFailure = vi.fn();
     const broken = '.a { color: ; @}} nonsense';
     const out = postProcessCss(broken, {
       minify: true,
       targets: CHROME120,
-      warnFn,
+      reportFailure,
     });
     expect(out).toBe(broken);
-    expect(warnFn).toHaveBeenCalledTimes(1);
-    expect(String(warnFn.mock.calls[0][0])).toContain(
-      'Lightning CSS post-processing failed'
-    );
+    expect(reportFailure).toHaveBeenCalledTimes(1);
+    expect(reportFailure.mock.calls[0][0]).toMatchObject({
+      code: 'animus.css.post-processing-failed',
+      message: expect.stringContaining('Lightning CSS post-processing failed'),
+    });
   });
 
   // Contract: targets that lower `:dir()` report it, and `keepDirSelector`
@@ -117,7 +118,7 @@ describe('postProcessCss', () => {
   // Contract: a transform the cache answers still reports its diagnostics.
   test('a repeated transform reports a lowered :dir() and a failure each time', () => {
     const onLoweredDir = vi.fn();
-    const warnFn = vi.fn();
+    const reportFailure = vi.fn();
     const broken = '.a { color: ; @}} nonsense';
     for (let pass = 0; pass < 2; pass++) {
       const lowered = postProcessCss('.r:dir(rtl) { margin-left: 2px; }', {
@@ -127,11 +128,15 @@ describe('postProcessCss', () => {
       });
       expect(lowered).not.toContain(':dir(');
       expect(
-        postProcessCss(broken, { minify: true, targets: CHROME120, warnFn })
+        postProcessCss(broken, {
+          minify: true,
+          targets: CHROME120,
+          reportFailure,
+        })
       ).toBe(broken);
     }
     expect(onLoweredDir).toHaveBeenCalledTimes(2);
-    expect(warnFn).toHaveBeenCalledTimes(2);
+    expect(reportFailure).toHaveBeenCalledTimes(2);
   });
 
   // Contract: the cache answers only the input and options it transformed.

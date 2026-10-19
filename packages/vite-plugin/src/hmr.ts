@@ -1,8 +1,8 @@
 import {
   contentHash,
   isPathWithinRoot,
+  outputSourceDiagnostic,
   outputSourceGuard,
-  outputSourceMessage,
 } from '@animus-ui/extract/pipeline';
 import { CoalescingWindow } from '@animus-ui/extract/session';
 import { extname, relative, resolve } from 'path';
@@ -207,7 +207,7 @@ async function analyzeChangedFile(
   const relPath = relative(ctx.rootDir, absFile);
   const outputDir = outputSourceGuard(ctx.rootDir, ctx.outputExcludes)(absFile);
   if (outputDir !== null) {
-    ctx.warn(outputSourceMessage(relPath, outputDir));
+    ctx.surfaceDiagnostics([outputSourceDiagnostic(relPath, outputDir)]);
     return { kind: 'ignored' };
   }
 
