@@ -20,15 +20,13 @@ const config = createSystem()
   .seal()
   .toConfig();
 
-// An element stored through a built-in method of a module `Map`, which the
-// analysis takes to stay in the module, reaches outside code that reads the
-// exported map and clones a runtime `p` into it.
+// The build sees `p` written only as a literal, so production removes its
+// slot. The test then hands the runtime a value, as a route the analysis
+// missed would. No known route is missed today: this stands in for one.
 const path = 'fixtures/pruned-slot.tsx';
 const source = `import { ds } from './setup';
 export const Box = ds.system({ space: true }).asElement('div');
-export const registry = new Map();
-function Wrap() { registry.set('box', <Box p={8} />); return null; }
-export const App = () => <Wrap />;`;
+export const App = () => <Box p={8} />;`;
 const analyze = (devMode: boolean) =>
   JSON.parse(
     analyzeProject(JSON.stringify([{ path, source }]), {

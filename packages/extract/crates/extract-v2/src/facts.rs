@@ -652,6 +652,17 @@ pub struct FileFacts {
     /// receiver.
     #[serde(skip)]
     pub(crate) opaque_tags: Vec<crate::usage_facts::OpaqueTag>,
+    /// Exported top-level `const` array literals every reference here reads
+    /// in place: their read methods are the built-in ones, unless a module
+    /// that imports one uses it otherwise (`misused_imports`), or reaches
+    /// its module through a namespace or a load, directly or through
+    /// re-exports.
+    #[serde(skip)]
+    pub(crate) held_arrays: BTreeSet<String>,
+    /// Imports this module uses other than by reading an array in place:
+    /// an array one of them names is not held.
+    #[serde(skip)]
+    pub(crate) misused_imports: BTreeSet<String>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -1342,6 +1353,8 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         direct_eval: false,
         opaque_calls: Vec::new(),
         element_consts: BTreeMap::new(),
+        held_arrays: BTreeSet::new(),
+        misused_imports: BTreeSet::new(),
         opaque_tags: Vec::new(),
         transforms: Vec::new(),
         captured_transform_bindings: BTreeSet::new(),
@@ -1985,6 +1998,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         opaque_calls,
         element_consts,
         opaque_tags,
+        held_arrays,
+        misused_imports,
         builder_import_references,
         first_that_works_uses,
         builder_proof,
@@ -2047,6 +2062,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         opaque_calls,
         element_consts,
         opaque_tags,
+        held_arrays,
+        misused_imports,
         unbound_create_system_calls: unbound_create_system_calls(ast),
         builder_references: builder_references(ast),
         ..structural
