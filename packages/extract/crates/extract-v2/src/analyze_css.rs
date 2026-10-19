@@ -1294,17 +1294,28 @@ pub fn resolve_import_source<T>(
 /// render any option, so nothing is pruned. A bindingless import binds
 /// nothing usage follows, but the host loads it for its effects, so it is
 /// probed here.
-fn analysis_gaps(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs) -> Vec<SlotOpening> {
+///
+/// Only the first gap where `all` is false: the proof asks whether one exists.
+fn analysis_gaps(files: &BTreeMap<String, FileFacts>, inputs: &CssInputs, all: bool) -> Vec<SlotOpening> {
     for (file, ff) in files {
         for spec in &ff.bindingless_imports {
             resolve_import_source(file, spec, files, inputs);
         }
     }
+    let take = if all { usize::MAX } else { 1 };
+    let mut gaps: Vec<SlotOpening> = inputs
+        .analysis_context
+        .skipped_sources
+        .iter()
+        .take(take)
+        .map(|file| SlotOpening::rule("skipped-source").in_file(file))
+        .collect();
+    if gaps.len() >= take {
+        return gaps;
+    }
     let config_only = config_only(files, inputs);
-    let mut gaps: Vec<SlotOpening> =
-        inputs.analysis_context.skipped_sources.iter().map(|file| SlotOpening::rule("skipped-source").in_file(file)).collect();
     match inputs.incomplete_probes.lock() {
-        Ok(probes) => gaps.extend(probes.iter().filter(|probe| !config_only.contains(&probe.importer)).map(|probe| {
+        Ok(probes) => gaps.extend(probes.iter().filter(|probe| !config_only.contains(&probe.importer)).take(take).map(|probe| {
             SlotOpening::rule("incomplete-probe").in_file(&probe.importer).detail(probe.specifier.as_str())
         })),
         Err(_) => gaps.push(SlotOpening::rule("incomplete-probe")),
@@ -7303,9 +7314,9 @@ fn project_confined_uses<'a>(
     if results.iter().any(|result| result.unlisted_clone) {
         return None;
     }
-    let mut reject = |id: &str, opening: SlotOpening| {
+    let mut reject = |id: &str, opening: &dyn Fn() -> SlotOpening| {
         if let Some(rejected) = rejected.as_deref_mut() {
-            rejected.entry(id.to_string()).or_default().push(opening);
+            rejected.entry(id.to_string()).or_default().push(opening());
         }
     };
     // A rest a `createElement` spreads may carry any prop it does not exclude.
@@ -7321,9 +7332,9 @@ fn project_confined_uses<'a>(
     let mut uses: FxHashMap<String, ConfinedUse> = FxHashMap::default();
     for (id, class_resolver) in components {
         if class_resolver {
-            reject(id, SlotOpening::rule("class-resolver"));
+            reject(id, &|| SlotOpening::rule("class-resolver"));
         } else if let Some(site) = open.get(id) {
-            reject(id, match site {
+            reject(id, &|| match site {
                 Some(site) => SlotOpening {
                     file: site.file.as_deref().map(str::to_string),
                     at: Some(site.at),
@@ -7367,7 +7378,7 @@ fn project_confined_uses<'a>(
                 }
                 None => {
                     if uses.remove(inner).is_some() {
-                        reject(inner, SlotOpening::rule("forwarded-from-unproven").detail(forward.outer.as_str()));
+                        reject(inner, &|| SlotOpening::rule("forwarded-from-unproven").detail(forward.outer.as_str()));
                     }
                 }
             }
@@ -9561,7 +9572,7 @@ fn run_with_system_floor(
     // A component a reference hands somewhere usage tracking does not follow
     // can render there with any props, so every option it declares stays.
     let mut escaped_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut escape_reasons: Option<FxHashMap<String, SlotOpening>> = inputs.slot_provenance.then(FxHashMap::default);
+    let mut escape_reasons: Option<FxHashMap<String, Vec<SlotOpening>>> = inputs.slot_provenance.then(FxHashMap::default);
     // A module loaded at runtime renders its exports where usage cannot
     // follow. One call site that opens many components is named, so the
     // user can see why pruning stopped.
@@ -10026,7 +10037,7 @@ fn run_with_system_floor(
     };
     // Why usage is not proven project-wide: the proof needs only whether a
     // gap exists, and provenance lists them all.
-    let mut usage_gaps = analysis_gaps(files, inputs);
+    let mut usage_gaps = analysis_gaps(files, inputs, inputs.slot_provenance);
     usage_gaps.extend(files.iter().filter(|(_, ff)| ff.direct_eval).map(|(file, _)| SlotOpening::rule("direct-eval").in_file(file)));
     usage_gaps.extend(files.iter().filter(|(_, ff)| ff.patches_intrinsics).map(|(file, _)| SlotOpening::rule("patches-intrinsics").in_file(file)));
     {
@@ -10050,21 +10061,22 @@ fn run_with_system_floor(
     // What each proof rejects, where provenance asks: the project-wide proof
     // as it would decide even where a gap leaves it unused.
     let mut rejected: Rejections = FxHashMap::default();
-    let unproven: std::collections::BTreeSet<String> = escaped_ids.iter().chain(&forced_ids).cloned().collect();
+    let unproven = || escaped_ids.iter().chain(&forced_ids).cloned().collect::<std::collections::BTreeSet<String>>();
     let components = || evaluated.iter().map(|(id, (_, _, terminal, _, _, _, _))| (id, *terminal == TerminalKind::AsClass));
     if inputs.slot_provenance && !usage_complete {
-        project_confined_uses(&all_usage_results, &forwards, components(), &unproven, Some(&mut rejected));
+        project_confined_uses(&all_usage_results, &forwards, components(), &unproven(), Some(&mut rejected));
     }
     let project_uses = usage_complete
         .then(|| {
             let rejected = inputs.slot_provenance.then_some(&mut rejected);
-            project_confined_uses(&all_usage_results, &forwards, components(), &unproven, rejected)
+            project_confined_uses(&all_usage_results, &forwards, components(), &unproven(), rejected)
         })
         .flatten();
     // Development keeps every slot, and records which ones a production
     // build prunes (`production_uses`), so its runtime can warn when a value
     // reaches one: such a value arrives in a way the proof missed.
-    if inputs.slot_provenance && usage_complete && project_uses.is_none() {
+    // Read on its own: another gap leaves the project proof unrun.
+    if inputs.slot_provenance && all_usage_results.iter().any(|result| result.unlisted_clone) {
         usage_gaps.push(SlotOpening::rule("unlisted-clone"));
     }
     if inputs.slot_provenance && inputs.dev_mode {
@@ -10215,7 +10227,8 @@ fn run_with_system_floor(
         for keeper in keepers.values_mut().flatten().filter(|keeper| keeper.opening.rule == "unproven-owner") {
             owners.entry(keeper.owner.clone()).or_insert_with(|| {
                 let id = keeper.owner.as_str();
-                let mut reasons: Vec<SlotOpening> = escape_reasons.as_ref().and_then(|reasons| reasons.get(id)).cloned().into_iter().collect();
+                let mut reasons: Vec<SlotOpening> =
+                    escape_reasons.as_ref().and_then(|reasons| reasons.get(id)).cloned().unwrap_or_default();
                 if forced_ids.contains(id) {
                     reasons.push(SlotOpening::rule("static-css"));
                 }
@@ -13938,6 +13951,47 @@ mod tests {
         let unproven = analyze(&[("a.tsx", source)], &inputs).slot_provenance.unwrap();
         assert_eq!(unproven.usage, [SlotOpening::rule("skipped-source").in_file("unseen.tsx")]);
         assert_eq!(unproven.owners["a.tsx::Box"].iter().map(|reason| reason.rule).collect::<Vec<_>>(), ["not-module-confined"]);
+        // Each reason by its own kind: a `createElement` render is no spread,
+        // two escapes of one owner are both named, and a clone shows beside
+        // another usage gap.
+        let inputs = &inputs_with_provenance();
+        let rules = |provenance: &SlotProvenance, owner: &str| {
+            provenance.owners[owner].iter().map(|reason| reason.rule).collect::<Vec<_>>()
+        };
+        let created = provenance_of(
+            "import { createElement } from 'react';\n\
+             export const Box = ds.system({ space: true }).asElement('div');\n\
+             export const App = ({ props }) => createElement(Box, props);\n",
+            inputs,
+        );
+        assert_eq!(rules(&created, "a.tsx::Box"), ["create-element"]);
+        let escaped = provenance_of(
+            "import { Foreign } from 'foreign';\n\
+             const Box = ds.system({ space: true }).asElement('div');\n\
+             consume(Box);\n\
+             export const App = () => <Foreign><Box /></Foreign>;\n",
+            inputs,
+        );
+        let escapes = rules(&escaped, "a.tsx::Box");
+        assert!(escapes.contains(&"value-escape") && escapes.contains(&"opaque-delivery"), "{escapes:?}");
+        let cloned = provenance_of(
+            "import { cloneElement } from 'react';\nimport { Unknown } from './missing';\n\
+             export const Box = ds.system({ space: true }).asElement('div');\n\
+             export const App = ({ el, rest }) => <>{cloneElement(el, rest)}<Box /><Unknown /></>;\n",
+            inputs,
+        );
+        let gaps: Vec<&str> = cloned.usage.iter().map(|gap| gap.rule).collect();
+        assert!(gaps.contains(&"uncertain-identity") && gaps.contains(&"unlisted-clone"), "{gaps:?}");
+    }
+
+    fn inputs_with_provenance() -> CssInputs {
+        let mut inputs = test_inputs();
+        inputs.slot_provenance = true;
+        inputs
+    }
+
+    fn provenance_of(source: &str, inputs: &CssInputs) -> SlotProvenance {
+        analyze(&[("a.tsx", source)], inputs).slot_provenance.unwrap()
     }
 
     #[test]

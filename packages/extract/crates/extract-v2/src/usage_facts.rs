@@ -7679,7 +7679,9 @@ pub fn filter_usage_scan(
                     let binding = resolved_binding.clone().unwrap_or_else(|| tag_name.to_string());
                     result.rendered_components.insert(binding.clone());
                     if spread.is_some() && !proxies.forwarding.contains(span) && !proxies.derived.contains(span) {
-                        result.open_components.entry(binding.clone()).or_insert(OpenSite { kind: "spread", file: None, at: span.0 });
+                        // An element written as a call opens as the call does.
+                        let kind = if *written_as_call { "create-element" } else { "spread" };
+                        result.open_components.entry(binding.clone()).or_insert(OpenSite { kind, file: None, at: span.0 });
                     }
 
                     let active_props = component_props.get(tag_name);

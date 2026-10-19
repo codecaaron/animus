@@ -77,18 +77,20 @@ impl SlotProvenance {
 }
 
 /// Adds `new` to the escaped components, recording in `reasons`, where
-/// provenance asks for them, the first reason each escapes for.
+/// provenance asks for them, each distinct reason each escapes for.
 pub(crate) fn escape(
     ids: &mut BTreeSet<String>,
-    reasons: Option<&mut FxHashMap<String, SlotOpening>>,
+    reasons: Option<&mut FxHashMap<String, Vec<SlotOpening>>>,
     new: impl IntoIterator<Item = String>,
     opening: impl Fn() -> SlotOpening,
 ) {
     match reasons {
         Some(reasons) => {
             for id in new {
-                if !reasons.contains_key(&id) {
-                    reasons.insert(id.clone(), opening());
+                let opening = opening();
+                let known = reasons.entry(id.clone()).or_default();
+                if !known.contains(&opening) {
+                    known.push(opening);
                 }
                 ids.insert(id);
             }
