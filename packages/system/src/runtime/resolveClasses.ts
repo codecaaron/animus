@@ -907,6 +907,8 @@ export type ResolvedConfig = Omit<
 > & {
   compounds?: NamedCompound[];
   customDynamicConfig?: DynamicPropConfig;
+  /** Each listed system prop's position in `systemPropNames`. */
+  systemPropIndex?: ReadonlyMap<string, number>;
 };
 
 type EmittedEntry = EmittedDynamicPropConfig[string];
@@ -924,7 +926,9 @@ function hasNames(dc: EmittedEntry): dc is DynamicPropConfig[string] {
  *   config lists every admitted group's props, and groups can share one, as
  *   flexbox and grid share `alignItems`;
  * - `supersededBy` narrowed to the system props the component lists and
- *   does not own, as the extractor's `superseded_props` narrows it.
+ *   does not own, as the extractor's `superseded_props` narrows it;
+ * - each listed system prop's position, so a render walks the props it is
+ *   given rather than the whole list.
  */
 export function resolveConfig(
   className: string,
@@ -943,6 +947,11 @@ export function resolveConfig(
   };
   if (config.systemPropNames && listed.size !== config.systemPropNames.length) {
     resolved.systemPropNames = [...listed];
+  }
+  if (listed.size > 0) {
+    resolved.systemPropIndex = new Map(
+      [...listed].map((name, at) => [name, at])
+    );
   }
   // `Object.fromEntries` defines own properties, so a prop named
   // `__proto__` stays an entry rather than becoming the map's prototype.
@@ -977,6 +986,36 @@ export function resolveConfig(
   return resolved;
 }
 
+const NO_PROPS: readonly string[] = [];
+
+/**
+ * The listed props `props` sets, in list order: the props walking the whole
+ * list and skipping each unset name visits. A site passes a few props and a
+ * component can list a hundred, so this walks the props. For a plain props
+ * object, its enumerable keys, inherited ones included, are every listed
+ * name that walk could find set, except a name Object.prototype defines,
+ * such as `constructor` or `toString`. The list walk read that member and
+ * found the prop set on every render, so it dropped a value no site passed,
+ * or threw; this walk finds it set only where a site passes it.
+ */
+export function listedPropsSet(
+  props: Record<string, unknown>,
+  names: readonly string[],
+  index: ReadonlyMap<string, number>
+): readonly string[] {
+  let found: number[] | undefined;
+  for (const key in props) {
+    const at = index.get(key);
+    if (at === undefined || props[key] == null) continue;
+    found ??= [];
+    // Kept in list order as found.
+    let i = found.push(at) - 1;
+    for (; i > 0 && found[i - 1] > at; i--) found[i] = found[i - 1];
+    found[i] = at;
+  }
+  return found ? found.map((at) => names[at]) : NO_PROPS;
+}
+
 export function resolveClasses(
   baseClassName: string,
   props: Record<string, any>,
@@ -997,8 +1036,12 @@ export function resolveClasses(
   const systemPropNames = config.systemPropNames || [];
   if (systemPropNames.length > 0) {
     const { customPropMap, customDynamicConfig, supersededBy } = config;
+    // A config `resolveConfig` did not build has no index: walk the list.
+    const setProps = config.systemPropIndex
+      ? listedPropsSet(props, systemPropNames, config.systemPropIndex)
+      : systemPropNames;
 
-    for (const propName of systemPropNames) {
+    for (const propName of setProps) {
       const propValue = withoutAbsentBreakpoints(props[propName]);
       if (propValue == null) continue;
       if (

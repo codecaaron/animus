@@ -2,16 +2,16 @@
   {
     "row": "loader:large-closure",
     "fixture": "large-closure",
-    "baseline": "a416b90fe0da73e6e8484c3fd8a2b95b4fb05c257370302f4e60d4a745fe5e7f",
-    "candidate": "e2b015207f97c4c00d2e500d33f43bb9a49efefacc5a61bfc566a45ba06de6a0",
-    "reason": "The audit owns the packages of the monorepo the system's package belongs to, found as package managers find it: the load reads the manifest declaring the workspaces, this repository's root package.json, so 14 paths become 15. The config is identical (configDigest unchanged). Digests are of repository-relative paths, the same in any checkout and on any platform; both sides read this checkout's packages/system/dist, so the digests also name its chunk hashes and move with any runtime change."
+    "baseline": "a31dc1ca914569cc7a4c358d200e1f143987acc389d234cb1da41666f65cecd2",
+    "candidate": "f244cedf3299699b9d7ca4f9265100a2856d745c8664a99df81198de431434c1",
+    "reason": "Both sides read this checkout's packages/system/dist, so the baseline moves with it and an earlier pair for this row cannot recur; this entry replaces them. The path count differs because the audit owns the packages of the monorepo the system's package belongs to and reads the manifest declaring the workspaces, this repository's root package.json (14 paths become 15). The dependency digest differs because those files differ: the runtime resolver now walks the system props a site sets through an index resolveConfig builds, so createClassResolver takes a new hashed name. The config is identical (configDigest unchanged)."
   },
   {
     "row": "loader:showcase",
     "fixture": "showcase",
-    "baseline": "61fe50111423b4983307504224368ee4480721e4b7302f498f1ddfc12c82d1b7",
-    "candidate": "e2a7b0b93c9fdcb2d7204290acadc63587e04e36c4730ca3b619a0c9fb15c7f2",
-    "reason": "The audit owns the packages of the monorepo the system's package belongs to, found as package managers find it: the load reads the manifest declaring the workspaces, this repository's root package.json, so 20 paths become 21. The config is identical (configDigest unchanged). Digests are of repository-relative paths, the same in any checkout and on any platform; both sides read this checkout's packages/system/dist, so the digests also name its chunk hashes and move with any runtime change."
+    "baseline": "64ab38b9c548088d20b50b896bc8b246f1d69d8becf7abc4584c9a0faffab220",
+    "candidate": "e73cc4a87632a733571ec1cf58d190094fcdd9dbaf6fc8fa9dde2350eb09a0d2",
+    "reason": "Both sides read this checkout's packages/system/dist, so the baseline moves with it and an earlier pair for this row cannot recur; this entry replaces them. The path count differs because the audit owns the packages of the monorepo the system's package belongs to and reads the manifest declaring the workspaces, this repository's root package.json (20 paths become 21). The dependency digest differs because those files differ: the runtime resolver now walks the system props a site sets through an index resolveConfig builds, so createClassResolver takes a new hashed name. The config is identical (configDigest unchanged)."
   },
   {
     "row": "analysis:showcase",
@@ -49,38 +49,10 @@
     "reason": "Beside the differences above, emitted configs carry one [prefix, scope] pair instead of slot variable and class names the runtime can derive, compound class names the runtime derives are omitted, each systemPropNames list ships once as a named export of the system-props module, supersededBy references one system table, and transforms are bound per entry instead of by a per-module loop. Class names and CSS are unchanged. The manifest also gains builderFiles, the three system and theme modules whose builder chains the transform marks /* @__PURE__ */ (../test-ds/src/system.ts, ../test-ds/src/theme.ts, src/ds.ts); without it the manifest is byte-identical to the one this entry's previous candidate described. Beside those, each emitted component, class-resolver and composed-family factory call in the replacements begins with /* @__PURE__ */, except an asComponent call whose target is a member path. CSS and diagnostics are identical."
   },
   {
-    "row": "loader:large-closure",
-    "fixture": "large-closure",
-    "baseline": "b77350a204af2ec160c30ccd73193a5eff4534718b4cf91372e1ec8e436c827f",
-    "candidate": "d84067f7ccfe19c3bf47c16c17471f7092e3ae4cf4cad783cd7851e796e81c56",
-    "reason": "The loader records the system module's dependency files and their content digest. The derived-names release changes @animus-ui/system's runtime (configs derive slot and compound names, and shared system data is read from the system-props module), so the recorded system package files differ. The loader's evaluated system value is unchanged."
-  },
-  {
-    "row": "loader:showcase",
-    "fixture": "showcase",
-    "baseline": "a8a1ca0432e44e05f7625623cbcdede1773ec0340b0f5a06a3f33daff178dbd4",
-    "candidate": "7ca9d9bb0e9939bae3779861a3bfb00933b17a60038ad6358a1b53a4aaf0fd39",
-    "reason": "The loader records the system module's dependency files and their content digest. The derived-names release changes @animus-ui/system's runtime (configs derive slot and compound names, and shared system data is read from the system-props module), so the recorded system package files differ. The loader's evaluated system value is unchanged."
-  },
-  {
-    "row": "loader:large-closure",
-    "fixture": "large-closure",
-    "baseline": "fa3786901cc6ff699c0c967721ce5b144b726c64afbcdb2075443c4598dd8615",
-    "candidate": "bc98ee630f44943d3ac62c031478a6bae7524fb32c141f324e783ab9f58dae06",
-    "reason": "Only the dependency digest differs: the runtime resolver now imports firstThatWorks's member reader, so packages/system/dist's chunks, which both sides read from this checkout, take new hashed names; the path count (14 paths become 15) and the config (configDigest unchanged) are as in the earlier accepted entry for this row."
-  },
-  {
-    "row": "loader:showcase",
-    "fixture": "showcase",
-    "baseline": "b59f18967f27d7c87d26af624291987e86008373ada55f4a1aee54d63e42cd65",
-    "candidate": "38d5b85d2623362654e9c4684e8e126e55703e482e424e913e8849c374e8b199",
-    "reason": "Only the dependency digest differs: the runtime resolver now imports firstThatWorks's member reader, so packages/system/dist's chunks, which both sides read from this checkout, take new hashed names; the path count (20 paths become 21) and the config (configDigest unchanged) are as in the earlier accepted entry for this row."
-  },
-  {
     "row": "build:vite-app",
     "fixture": "vite-app",
     "baseline": "d03eaa3296e0d23e68d0388403ab97408dd8782cfb08f553e0de46033fa05ee1",
-    "candidate": "41fa6cb6d6a3bcba382158629b740ef2e0c5412365fe6927e5c98abf76411968",
-    "reason": "As the earlier accepted vite-app entry, plus 235 bytes: the runtime resolver reads a call site's firstThatWorks value as its preferred member (firstThatWorks always returns its members, so artifact names and the vocabulary record see every one). Then less 295 bytes: code compiled for the official runtime no longer lists each variant's options, which no runtime path reads (251,740 against 252,035 jsBytes). The CSS is identical (cssDigest unchanged); the one identity-uncertain-tag line fewer is the earlier entry's. Plus one animus.discovery.exclude-unmatched warning: the bench's copy of the app leaves out prefixed-variant/, so the config's 'prefixed-variant' pattern matches nothing there. The host used to print that as an uncoded line, which the receipt did not count; it is now a coded finding, which it does: at info severity since animus.discovery.exclude-unmatched's default dropped from warn, with the remedy that names generated files. jsBytes and the CSS are unchanged. Against the candidate this entry replaced (cc091d0b…), every value is the same, the exclude-unmatched count of 1 included; the digest moved only because the receipt's diagnostics key order did: the line now prints at info on stdout, which the receipt reads before stderr."
+    "candidate": "335aeae57470c3b9ae1998c2962846d74c8746a2bc8e33d31dc845c0b513742a",
+    "reason": "As the earlier accepted vite-app entry, plus 235 bytes: the runtime resolver reads a call site's firstThatWorks value as its preferred member (firstThatWorks always returns its members, so artifact names and the vocabulary record see every one). Then less 295 bytes: code compiled for the official runtime no longer lists each variant's options, which no runtime path reads (251,740 against 252,035 jsBytes). The CSS is identical (cssDigest unchanged); the one identity-uncertain-tag line fewer is the earlier entry's. Plus one animus.discovery.exclude-unmatched warning: the bench's copy of the app leaves out prefixed-variant/, so the config's 'prefixed-variant' pattern matches nothing there. The host used to print that as an uncoded line, which the receipt did not count; it is now a coded finding, which it does: at info severity since animus.discovery.exclude-unmatched's default dropped from warn, with the remedy that names generated files. jsBytes and the CSS are unchanged. Against the candidate this entry replaced (cc091d0b\u2026), every value is the same, the exclude-unmatched count of 1 included; the digest moved only because the receipt's diagnostics key order did: the line now prints at info on stdout, which the receipt reads before stderr. Then plus 324 bytes (252,064 against 251,740 jsBytes): the runtime resolver walks the system props a site sets, in list order, through a position index resolveConfig builds, rather than every name a component lists; class strings and dynamic styles are unchanged. The CSS and the diagnostic counts are as in the candidate this entry replaced."
   }
 ]
