@@ -756,7 +756,8 @@ impl<'f> ObjectMembers<'f> {
         // A config file runs in its tool, never in the app (`config_files`).
         let config_files = crate::analyze_css::config_files(files, inputs);
         for (module, ff) in files.iter().filter(|(module, _)| !config_files.contains(*module)) {
-            for (name, used) in &ff.unsafe_object_uses {
+            let component = |name: &str| (self.component)(module, name).is_some();
+            for (name, used) in ff.changing_uses(component) {
                 let reason = used.said(name, module);
                 let reach: Reach = match name.split_once('.') {
                     // A member of a namespace import.

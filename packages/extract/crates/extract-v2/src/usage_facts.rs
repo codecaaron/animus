@@ -1432,6 +1432,8 @@ pub(crate) struct ObjectUses {
     pub context_consts: BTreeSet<String>,
     /// See `FileFacts::unsafe_object_uses`.
     pub unsafe_object_uses: BTreeMap<String, ObjectUse>,
+    /// See `FileFacts::extend_calls`.
+    pub extend_calls: BTreeMap<String, ObjectUse>,
     /// See `FileFacts::object_handoffs`.
     pub object_handoffs: Vec<Handoff>,
     /// See `FileFacts::written_namespaces`.
@@ -1530,6 +1532,7 @@ fn scan_object_uses(
         global_object: scoping.get_root_binding("Object".into()).is_none(),
         react: ReactImports::of(program, scoping),
         uses: BTreeMap::new(),
+        extend_calls: BTreeMap::new(),
         ancestors: Vec::new(),
         style: false,
         containers: Vec::new(),
@@ -1552,6 +1555,7 @@ fn scan_object_uses(
     scan.visit_program(program);
     ObjectUses {
         unsafe_object_uses: scan.uses,
+        extend_calls: scan.extend_calls,
         object_handoffs: scan.handoffs,
         written_namespaces: scan.written_namespaces,
         written_bindings: scan.written_bindings,
@@ -1661,6 +1665,7 @@ pub(crate) fn style_object_uses(
         global_object: !binds_anywhere(scoping, "Object"),
         react: ReactImports::of(program, scoping),
         uses: BTreeMap::new(),
+        extend_calls: BTreeMap::new(),
         ancestors: Vec::new(),
         style: true,
         containers: Vec::new(),
@@ -3373,6 +3378,8 @@ struct ObjectUseScan<'a, 's> {
     /// React's own functions, whose context readers change nothing.
     react: ReactImports,
     uses: BTreeMap<String, ObjectUse>,
+    /// See `FileFacts::extend_calls`.
+    extend_calls: BTreeMap<String, ObjectUse>,
     ancestors: Vec<AstKind<'a>>,
     /// Style-value rules (see `style_object_uses`) instead of a facade's.
     style: bool,
@@ -4079,7 +4086,17 @@ impl<'a> Visit<'a> for ObjectUseScan<'a, '_> {
                 }
             }
             if !used {
-                self.uses.insert(binding.name.clone(), used_at);
+                // `X.extend()` calls an extension's parent, which writes
+                // nothing of it, where `X` is one: that is known once
+                // components resolve (`FileFacts::changing_uses`).
+                // Style values are no components: their uses stay whole.
+                let extends =
+                    !self.style && matches!(member, Some((_, Some("extend")))) && writes_nothing(&used_at.what);
+                if extends {
+                    self.extend_calls.entry(binding.name.clone()).or_insert(used_at);
+                } else {
+                    self.uses.insert(binding.name.clone(), used_at);
+                }
             }
             return;
         };

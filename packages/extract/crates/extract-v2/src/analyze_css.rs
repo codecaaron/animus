@@ -9766,7 +9766,8 @@ fn run_with_system_floor(
     // or path a module hands on or changes, and each object along it.
     let mut changed_ids: FxHashSet<String> = FxHashSet::default();
     for (path, ff) in files {
-        for used in ff.value_escapes.iter().chain(ff.unsafe_object_uses.keys()) {
+        let component = |name: &str| declared_component(path, name).is_some();
+        for used in ff.value_escapes.iter().chain(ff.changing_uses(component).map(|(name, _)| name)) {
             let prefixes = used.match_indices('.').map(|(dot, _)| &used[..dot]).chain(std::iter::once(used.as_str()));
             for prefix in prefixes {
                 changed_ids.extend(resolve_declared_identity(path, prefix, files, inputs, links, &evaluated_ids));
@@ -13992,6 +13993,30 @@ mod tests {
 
     fn provenance_of(source: &str, inputs: &CssInputs) -> SlotProvenance {
         analyze(&[("a.tsx", source)], inputs).slot_provenance.unwrap()
+    }
+
+    /// Contract: extending a component is no hand-off of the elements
+    /// rendered inside it, while a use that really may change the
+    /// component still is, even after the extension.
+    #[test]
+    fn extending_a_component_hands_off_nothing_it_renders() {
+        let stack = ("stack.tsx", "export const Stack = ds.system({ space: true }).asElement('div');\n");
+        let app = (
+            "app.tsx",
+            "import { Stack } from './stack';\nimport { StackItem } from './item';\n\
+             export const Box = ds.system({ space: true }).asElement('div');\n\
+             export const App = () => <Stack p={1}><Box p={2} /><StackItem /></Stack>;\n",
+        );
+        let kept = |item: &str| {
+            let out = analyze(&[stack, ("item.tsx", item), app], &test_inputs());
+            out.dynamic_props.keys().cloned().collect::<Vec<_>>()
+        };
+        let extended = "import { Stack } from './stack';\n\
+                        export const StackItem = Stack.extend().styles({ flexShrink: 0 }).asElement('div');\n";
+        assert_eq!(kept(extended), Vec::<String>::new());
+        // A method call other than `extend` may write the component.
+        let changed = format!("{extended}Stack.mutate();\n");
+        assert_eq!(kept(&changed), ["p"]);
     }
 
     #[test]

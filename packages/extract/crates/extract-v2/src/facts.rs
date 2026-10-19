@@ -520,6 +520,13 @@ pub struct FileFacts {
     /// a namespace import.
     #[serde(skip)]
     pub(crate) unsafe_object_uses: BTreeMap<String, crate::usage_facts::ObjectUse>,
+    /// Module-scope bindings whose `extend` member is called as a method,
+    /// each with its first such call, kept apart from `unsafe_object_uses`:
+    /// an extension's parent writes nothing of itself in `.extend()`, so
+    /// the call changes the object only where the binding is no extracted
+    /// component (`changing_uses`).
+    #[serde(skip)]
+    pub(crate) extend_calls: BTreeMap<String, crate::usage_facts::ObjectUse>,
     /// Each object binding the module passes whole to a module-scope
     /// function nothing writes, which the engine judges once every module's
     /// parameter readings are known: a hand-off to a parameter that does
@@ -891,6 +898,20 @@ pub(crate) fn line_column(source: &str, offset: u32) -> (usize, usize) {
 impl FileFacts {
     pub(crate) fn usage_for_analysis(&self) -> &[UsageFact] {
         self.usage_enriched.as_deref().unwrap_or(&self.usage)
+    }
+
+    /// The module's uses that may change a module-scope object or hand it
+    /// outside the analysis: `unsafe_object_uses`, and each `.extend()` call
+    /// on a binding `component` does not resolve to an extracted component.
+    pub(crate) fn changing_uses<'a>(
+        &'a self,
+        component: impl Fn(&str) -> bool + 'a,
+    ) -> impl Iterator<Item = (&'a String, &'a crate::usage_facts::ObjectUse)> + 'a {
+        let extends = self
+            .extend_calls
+            .iter()
+            .filter(move |(name, _)| !self.unsafe_object_uses.contains_key(*name) && !component(name));
+        self.unsafe_object_uses.iter().chain(extends)
     }
 }
 
@@ -1283,6 +1304,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
     let crate::usage_facts::ObjectUses {
         context_consts,
         unsafe_object_uses,
+        extend_calls,
         object_handoffs,
         written_namespaces,
         written_bindings,
@@ -1325,6 +1347,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         object_members: const_initializers.objects,
         facades: const_initializers.facades,
         unsafe_object_uses,
+        extend_calls,
         object_handoffs,
         written_bindings,
         written_member_uses,
