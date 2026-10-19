@@ -18,6 +18,13 @@ export declare class ExtractEngine {
    */
   analyze(fileEntriesJson: string, probeEvidenceJson?: string | undefined | null): string
   /**
+   * What each phase of the last `analyze` took, in milliseconds, as a JSON
+   * object in phase order, with a `prepare` that lent its parse first:
+   * `cssResolution` is the CSS resolution `rust-extract` holds. Hosts
+   * print it as timing; it is never part of the manifest.
+   */
+  analysisTimings(): string
+  /**
    * The full manifest of the last `analyze`: every section but
    * `chainBindings`. A host that persists the manifest, and tooling, ask
    * for it.

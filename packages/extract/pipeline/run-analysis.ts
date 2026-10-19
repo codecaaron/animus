@@ -49,7 +49,14 @@ export interface ProjectAnalysisResult {
   /** The exact analyze-time inputs (serialized `filesJson` included) —
    *  persistable without re-serializing the source corpus. */
   inputs: AnalyzeProjectInputs;
-  timings: { serializeMs: number; extractMs: number; parseMs: number };
+  timings: {
+    serializeMs: number;
+    extractMs: number;
+    parseMs: number;
+    /** The engine's phases inside `extractMs`, in ms, where it reports
+     *  them: `cssResolution` among them. */
+    engine?: Record<string, number>;
+  };
 }
 
 export interface AnalysisOptions {
@@ -318,8 +325,13 @@ export function runProjectAnalysis(
     reportErrors?: (message: string) => void;
   }
 ): ProjectAnalysisResult {
-  const { analyzeProject, diagnosticCodes, fullManifestJson, packageLoads } =
-    engineApi();
+  const {
+    analysisTimings,
+    analyzeProject,
+    diagnosticCodes,
+    fullManifestJson,
+    packageLoads,
+  } = engineApi();
 
   let t = performance.now();
   const inputs = buildAnalysisInputs(opts);
@@ -345,6 +357,10 @@ export function runProjectAnalysis(
     )
   );
   const extractMs = Math.round(performance.now() - t);
+  // SAFETY: the engine's own phase table, `{ phase: ms }`.
+  const engine = analysisTimings
+    ? (JSON.parse(analysisTimings()) as Record<string, number>)
+    : undefined;
 
   t = performance.now();
   // SAFETY: `manifestJson` is this call's own `analyzeProject` return value,
@@ -397,7 +413,7 @@ export function runProjectAnalysis(
     globalCss: manifest.sheets.global,
     componentCss,
     inputs,
-    timings: { serializeMs, extractMs, parseMs },
+    timings: { serializeMs, extractMs, parseMs, engine },
   };
 }
 

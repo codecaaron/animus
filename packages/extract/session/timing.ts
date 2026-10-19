@@ -1,8 +1,13 @@
+import { camelToKebab } from '../pipeline/utils';
+
+/** The build's timing lines: the session's phases, with the engine's own
+ *  (`engineTiming`) under `rust-extract`, which holds them. */
 export function logBuildTimings(
   bt: Record<string, number>,
   rustTiming: Record<string, number> | undefined,
   log: (msg: string) => void,
-  verbose: boolean
+  verbose: boolean,
+  engineTiming?: Record<string, number>
 ): void {
   if (!verbose) return;
   const pad = (label: string, width: number): string =>
@@ -29,6 +34,12 @@ export function logBuildTimings(
       ] as const) {
         const sms = bt[sk] ?? 0;
         log(`    ${pad(sl, 15)}${String(sms).padStart(5)}ms`);
+        if (sk !== 'rustExtract') continue;
+        for (const [phase, phaseMs] of Object.entries(engineTiming ?? {})) {
+          log(
+            `      ${pad(camelToKebab(phase), 17)}${String(Math.round(phaseMs)).padStart(5)}ms`
+          );
+        }
       }
     }
   }
@@ -39,10 +50,8 @@ export function logBuildTimings(
     for (const [k, v] of Object.entries(bt)) {
       merged[`buildStart.${k}`] = v;
     }
-    if (rustTiming) {
-      for (const [k, v] of Object.entries(rustTiming)) {
-        merged[`rust.${k}`] = v;
-      }
+    for (const [k, v] of Object.entries({ ...rustTiming, ...engineTiming })) {
+      merged[`rust.${k}`] = v;
     }
     console.error(`[animus:timing] ${JSON.stringify(merged)}`);
   }

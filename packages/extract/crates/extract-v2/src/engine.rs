@@ -373,6 +373,28 @@ pub struct ExtractEngine {
     /// The files `prepare` parsed, by path and source, and their parse, which
     /// the next `analyze` of the same files reads instead of parsing again.
     prepared: Option<(Vec<(String, String)>, ast_store::AstStore)>,
+    /// What each phase of the last `prepare` and `analyze` took, in order
+    /// (`analysisTimings`): kept beside the manifest, never in it, so the
+    /// manifest's bytes stay the same run to run.
+    timings: Vec<(&'static str, f64)>,
+}
+
+/// Milliseconds per named phase, each measured from the previous mark.
+struct PhaseClock {
+    last: std::time::Instant,
+    phases: Vec<(&'static str, f64)>,
+}
+
+impl PhaseClock {
+    fn start() -> Self {
+        PhaseClock { last: std::time::Instant::now(), phases: Vec::new() }
+    }
+
+    fn mark(&mut self, phase: &'static str) {
+        let now = std::time::Instant::now();
+        self.phases.push((phase, (now - self.last).as_secs_f64() * 1000.0));
+        self.last = now;
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -1051,6 +1073,7 @@ impl ExtractEngine {
             css: None,
             parse_count: 0,
             prepared: None,
+            timings: Vec::new(),
         })
     }
 
@@ -1061,12 +1084,14 @@ impl ExtractEngine {
     /// the host's expansions of (spec §6.3), which carry that identity.
     #[napi]
     pub fn prepare(&mut self, file_entries_json: String) -> napi::Result<String> {
+        let mut clock = PhaseClock::start();
         let entries = canonical_entries(&file_entries_json)?;
         let identity = input_identity(&entries, &self.opts.css_inputs);
         let kept: Vec<(String, String)> = entries.iter().map(|e| (e.path.clone(), e.source.clone())).collect();
         let store = ast_store::AstStore::build(
             entries.into_iter().map(|e| ast_store::FileEntry { path: e.path, source: e.source }).collect(),
         );
+        clock.mark("prepareParse");
         let mut bases = std::collections::BTreeSet::new();
         let mut loads = Vec::new();
         let mut packages = std::collections::BTreeSet::new();
@@ -1098,6 +1123,8 @@ impl ExtractEngine {
             }
         }
         self.prepared = Some((kept, store));
+        clock.mark("prepareProbes");
+        self.timings = clock.phases;
         serde_json::to_string(
             &serde_json::json!({ "identity": identity, "bases": bases, "loads": loads, "packages": packages }),
         )
@@ -1109,6 +1136,7 @@ impl ExtractEngine {
     /// given. A `prepare` of the same files lends its parse.
     #[napi]
     pub fn analyze(&mut self, file_entries_json: String, probe_evidence_json: Option<String>) -> napi::Result<String> {
+        let mut clock = PhaseClock::start();
         let entries = canonical_entries(&file_entries_json)?;
         if let Ok(mut shadowing) = self.opts.css_inputs.shadowing_probes.lock() {
             shadowing.clear();
@@ -1162,6 +1190,11 @@ impl ExtractEngine {
             kept.len() == entries.len()
                 && kept.iter().zip(&entries).all(|((path, source), e)| *path == e.path && *source == e.source)
         });
+        // A `prepare` that lent its parse lends its phases too.
+        if prepared.is_some() {
+            clock.phases = std::mem::take(&mut self.timings);
+        }
+        clock.mark("input");
         let store = match prepared {
             Some((_, store)) => store,
             None => ast_store::AstStore::build(
@@ -1175,6 +1208,7 @@ impl ExtractEngine {
             ),
         };
         self.parse_count = store.parse_count();
+        clock.mark("parse");
 
         use crate::usage_facts::{collect_export_facts, collect_import_facts};
         let mut statics_by_file: std::collections::BTreeMap<
@@ -1201,6 +1235,7 @@ impl ExtractEngine {
                 (ast.path.clone(), facts::structural_facts(ast, lowered, objects))
             })
             .collect();
+        clock.mark("lowering");
         let links = ProjectLinks::of_records(&lowered_by_file, |lowered| &*lowered.record, &self.opts.css_inputs);
         // A hand-off to a function that does more than read is a use like
         // any other, judged before any static value is evaluated.
@@ -1215,6 +1250,7 @@ impl ExtractEngine {
             })
             .collect();
         let read_links = ProjectLinks::of_records(&explicit, |record| record, &self.opts.css_inputs);
+        clock.mark("links");
         for ast in store.iter() {
             let program = ast.program();
             let statics = if crate::analyze_css::is_external_file(&ast.path, &self.opts.css_inputs.external_dirs) {
@@ -1311,6 +1347,7 @@ impl ExtractEngine {
         // a relation of their own, since a call they must assume changes an
         // object (`styles(preset)`) only reads a static; both record a
         // module's openings through one recorder, in the same words.
+        clock.mark("staticsAndUses");
         let mut flow = crate::flow::FlowBuilder::new();
         // A config file runs in its tool, never in the app (`config_files`).
         let config_files = analyze_css::config_files(&structural_by_file, &self.opts.css_inputs);
@@ -1327,6 +1364,7 @@ impl ExtractEngine {
             &mut flow,
         );
         let changes = flow.close();
+        clock.mark("flow");
         #[cfg(test)]
         OPENINGS.with(|openings| openings.borrow_mut().clear());
         #[cfg(test)]
@@ -1456,6 +1494,7 @@ impl ExtractEngine {
             }
         }
 
+        clock.mark("enrich");
         let mut references = crate::transforms::TransformReferences::new(&self.opts.css_inputs);
         for ast in store.iter() {
             let (imports, exports) = &imports_by_file[&ast.path];
@@ -1509,13 +1548,16 @@ impl ExtractEngine {
 
         // Facts own every resolved reference; release the modules' scopings.
         drop(references);
+        clock.mark("fileFacts");
         crate::pure_builders::resolve(&mut self.facts, &links, &self.opts.css_inputs);
+        clock.mark("pureBuilders");
         let mut css = analyze_css::run(
             &self.facts,
             &self.order,
             &self.opts.css_inputs,
             crate::ids::CLASS_PREFIX,
         );
+        clock.mark("cssResolution");
         // Only the engine holds the sources a diagnostic's line and column
         // are read from.
         for diagnostic in &mut css.diagnostics {
@@ -1526,7 +1568,25 @@ impl ExtractEngine {
         }
         analyze_css::report_unread_openings(&mut css.diagnostics, &self.facts, &self.opts.css_inputs);
         self.css = Some(css);
-        self.manifest_json(false)
+        clock.mark("post");
+        let manifest = self.manifest_json(false);
+        clock.mark("serialize");
+        self.timings = clock.phases;
+        manifest
+    }
+
+    /// What each phase of the last `analyze` took, in milliseconds, as a JSON
+    /// object in phase order, with a `prepare` that lent its parse first:
+    /// `cssResolution` is the CSS resolution `rust-extract` holds. Hosts
+    /// print it as timing; it is never part of the manifest.
+    #[napi]
+    pub fn analysis_timings(&self) -> String {
+        let phases: serde_json::Map<String, serde_json::Value> = self
+            .timings
+            .iter()
+            .map(|(phase, ms)| (phase.to_string(), serde_json::json!((ms * 100.0).round() / 100.0)))
+            .collect();
+        serde_json::Value::Object(phases).to_string()
     }
 
     /// The full manifest of the last `analyze`: every section but
@@ -4265,6 +4325,36 @@ export const App = () => <Box tone="red" />;
         let mut host = host;
         host.remove("chainBindings");
         assert_eq!(host, full);
+    }
+
+    /// Contract: `analysisTimings` names each phase of the last analysis in
+    /// order, CSS resolution as `cssResolution`, with a `prepare` that lent
+    /// its parse first; the manifest's own timing is only its parse count,
+    /// so its bytes stay the same run to run.
+    #[test]
+    fn analysis_timings_name_each_phase_and_stay_out_of_the_manifest() {
+        let files = serde_json::json!([
+            { "path": "card.tsx", "source": "export const Card = ds.styles({ padding: 4 }).asElement('div');\n" },
+        ])
+        .to_string();
+        let phases = |engine: &ExtractEngine| -> Vec<String> {
+            let timings: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&engine.analysis_timings()).unwrap();
+            assert!(timings.values().all(|ms| ms.as_f64().is_some_and(|ms| ms >= 0.0)), "{timings:?}");
+            timings.keys().cloned().collect()
+        };
+        let analysed = [
+            "input", "parse", "lowering", "links", "staticsAndUses", "flow", "enrich", "fileFacts", "pureBuilders",
+            "cssResolution", "post", "serialize",
+        ];
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&engine.analyze(files.clone(), None).unwrap()).unwrap();
+        assert_eq!(manifest["timing"], serde_json::json!({ "parseCount": 1 }));
+        assert_eq!(phases(&engine), analysed);
+        let mut engine = ExtractEngine::new(None).unwrap();
+        engine.prepare(files.clone()).unwrap();
+        engine.analyze(files, None).unwrap();
+        assert_eq!(phases(&engine), [&["prepareParse", "prepareProbes"][..], &analysed].concat());
     }
 
     /// Contract: a declaration an unread module's opening dropped leads its

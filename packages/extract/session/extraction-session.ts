@@ -3169,7 +3169,13 @@ export class ExtractionSession {
     };
 
     bt.total = this.elapsed(pipelineStart);
-    logBuildTimings(bt, manifest?.timing, (msg) => this.log(msg), this.verbose);
+    logBuildTimings(
+      bt,
+      manifest?.timing,
+      (msg) => this.log(msg),
+      this.verbose,
+      result.timings.engine
+    );
   }
 
   /** Open a status attempt (attemptId increments once per burst — a

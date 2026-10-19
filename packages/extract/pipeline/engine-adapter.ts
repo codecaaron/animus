@@ -20,6 +20,8 @@ export interface V2ExtractEngine {
   analyze(filesJson: string, probeEvidenceJson?: string): string;
   /** The last analysis's full manifest: every section. */
   fullManifestJson(): string;
+  /** What each phase of the last analysis took, in ms, as JSON. */
+  analysisTimings(): string;
   transformFile(path: string): string;
   clearCache(): void;
 }
@@ -141,6 +143,9 @@ export interface EngineApi {
    *  persisted manifest artifact and tooling read. Absent, `analyzeProject`
    *  returns the full manifest itself. */
   fullManifestJson?: () => string;
+  /** The last `analyzeProject`'s engine phases, in ms, as a JSON object in
+   *  phase order (`cssResolution` among them). Absent, none are reported. */
+  analysisTimings?: () => string;
 }
 
 /**
@@ -443,6 +448,7 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         }
         return engine.fullManifestJson();
       },
+      analysisTimings: () => store.getEngine()?.analysisTimings() ?? '{}',
       clearAnalysisCache: () => {
         const engine = store.getEngine();
         if (engine) engine.clearCache();
