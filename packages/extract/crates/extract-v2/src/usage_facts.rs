@@ -1090,6 +1090,11 @@ impl<N: Ord + Clone> Inputs<N> {
     pub(crate) fn join(&mut self, other: &Inputs<N>) -> bool {
         let next = match (&mut *self, other) {
             (_, Inputs::None) | (Inputs::Every, _) => return false,
+            (Inputs::Named(mine), Inputs::Named(theirs)) | (Inputs::AllBut(mine), Inputs::AllBut(theirs))
+                if std::rc::Rc::ptr_eq(mine, theirs) =>
+            {
+                return false;
+            }
             (Inputs::Named(mine), Inputs::Named(theirs)) => {
                 if theirs.is_subset(mine) {
                     return false;

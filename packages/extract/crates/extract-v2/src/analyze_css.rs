@@ -7532,7 +7532,8 @@ fn opaque_delivery(
             // `as`, `asChild` and spreads only where its own elements judge them.
             // A component that clones its own children with its callers'
             // props renders an `asChild` site's child as that site writes
-            // it: where the site writes no `as`, `is`, spread or ref, and its
+            // it: where the site writes nothing but `asChild` and the child,
+            // since the clone sets what else it writes on the child, and the
             // child's own element is judged, only what it forwards leaves.
             let clones_child = |key: &(String, String)| {
                 let site = &tag.site;
@@ -7540,6 +7541,8 @@ fn opaque_delivery(
                     && !site.as_open
                     && site.spreads.is_empty()
                     && !tag.exposed
+                    && matches!(element_at(file, tag.at), Some(UsageFact::Element { attrs, spread: None, .. })
+                        if attrs.iter().all(|attr| matches!(attr.name.as_str(), "asChild" | "children" | "key")))
                     && files.get(&key.0).is_some_and(|declared| declared.child_cloners.contains(&key.1))
                     && clone_judged(file, ff, tag.at)
             };
@@ -7628,7 +7631,7 @@ fn opaque_delivery(
     // A React wrapper some module hands on or writes through, by any path to
     // it (an import, a `const` alias, an object that holds it), may render
     // anything in its callback's place: it forwards outside.
-    let mut forwarding: Forwards = FxHashMap::default();
+    let mut seeded: Vec<(String, String)> = Vec::new();
     for (path, ff) in files {
         for escaped in &ff.value_escapes {
             let prefixes = escaped.match_indices('.').map(|(dot, _)| &escaped[..dot]).chain(std::iter::once(escaped.as_str()));
@@ -7643,7 +7646,7 @@ fn opaque_delivery(
                 // A hand-on of a wrapper hands on its callback too.
                 if let Some(callback) = declared.react_wrappers.get(&binding) {
                     pending.extend(callback.iter().map(|callback| (declaring.clone(), callback.clone())));
-                    forwarding.insert((declaring, binding), Inputs::Every);
+                    seeded.push((declaring, binding));
                     continue;
                 }
                 let held = declared.aliases.get(&binding).into_iter().chain(declared.object_members.get(&binding).into_iter().flat_map(|members| members.values()));
@@ -7706,10 +7709,10 @@ fn opaque_delivery(
             keys.extend(wrappers_of.get(&key).into_iter().flatten().cloned());
         }
     };
-    let seeded: Vec<((String, String), Inputs<String>)> = forwarding.drain().collect();
+    let mut forwarding: Forwards = FxHashMap::default();
     let mut pending: Vec<Site> = (0..tag_sites.len()).map(Site::Tag).chain((0..call_sites.len()).map(Site::Call)).collect();
-    for (key, inputs) in seeded {
-        grow(&mut forwarding, key, &inputs, &mut pending);
+    for key in seeded {
+        grow(&mut forwarding, key, &Inputs::Every, &mut pending);
     }
     // What each element's receiver hands outside of its props so far, and
     // the props of a site that does so.
@@ -14922,6 +14925,32 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             ("const Render = ({ bag }) => <div>{bag.x}</div>;", "bag={{ child: <Box p={4} />, get x() { return pad(this.child); } }}", "", true),
         ] {
             assert_eq!(keeps_p(component, props, other), keeps, "{component} {props}");
+        }
+        // A clone of the caller's child sets on it what the clone's config
+        // holds: the child renders as its site writes it only where that
+        // config holds nothing but what the caller wrote, never `asChild`,
+        // and the caller wrote nothing but `asChild` and the child.
+        let keeps_unwritten_p = |component: &str, props: &str| {
+            let source = format!(
+                "import {{ renderAsChild }} from '@animus-ui/system';\n\
+                 export const Box = ds.system({{ space: true }}).asElement('div');\n\
+                 {component}\n\
+                 export const App = ({{ d }}) => <Render {props}><Box m={{2}} /></Render>;\n"
+            );
+            analyze(&[("a.tsx", source.as_str())], &test_inputs()).dynamic_props.contains_key("p")
+        };
+        for (component, props, keeps) in [
+            ("const Render = ({ asChild, children, ...props }) => renderAsChild(children, props);", "asChild", false),
+            ("const Render = ({ asChild, children, type, ...props }) => renderAsChild(children, { ...props, type });", "asChild", false),
+            ("const Render = ({ asChild, children, ...props }) => renderAsChild(children, props);", "asChild p={4}", true),
+            ("const Render = ({ asChild, children, ...props }) => renderAsChild(children, { ...props, p: 4 });", "asChild", true),
+            ("const Render = ({ asChild, children, ...props }) => { const p = 4; return renderAsChild(children, { ...props, p }); };", "asChild", true),
+            ("const extra = { p: 4 };\nconst Render = ({ asChild, children, ...props }) => renderAsChild(children, { ...props, ...extra });", "asChild", true),
+            ("const Render = ({ asChild, children, p = 4, ...props }) => renderAsChild(children, { ...props, p });", "asChild", true),
+            ("const Render = ({ children, ...props }) => renderAsChild(children, props);", "asChild", true),
+            ("const Render = (props) => renderAsChild(props.children, props);", "asChild", true),
+        ] {
+            assert_eq!(keeps_unwritten_p(component, props), keeps, "{component} {props}");
         }
         // A React wrapper of an Animus component keeps the component's
         // custom-prop slots: nothing follows the callback.

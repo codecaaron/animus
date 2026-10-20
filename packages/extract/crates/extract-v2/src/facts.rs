@@ -709,8 +709,8 @@ pub struct FileFacts {
     pub(crate) rewrites_object: bool,
     /// The top-level components that clone their own `children` input in
     /// place (`renderAsChild(children, …)`, `cloneElement(children, …)`)
-    /// with props their callers wrote: an `asChild` site's child renders
-    /// as that site writes it.
+    /// with nothing but what their callers wrote, never `asChild`: an
+    /// `asChild` site's child renders as that site writes it.
     #[serde(skip)]
     pub(crate) child_cloners: BTreeSet<String>,
     /// Extracted createTransform() declarations: serialized with the facts

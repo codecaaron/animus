@@ -472,10 +472,12 @@ struct Module<'s> {
     params: FxHashMap<ScopeId, Vec<SymbolId>>,
     /// Each function's parameter bindings with the input each holds.
     param_inputs: FxHashMap<ScopeId, Vec<(SymbolId, ParamInput)>>,
-    /// The parameter bindings of the props object and of its `as`
-    /// (`ParamInput::Props`, `ParamInput::AsType`).
+    /// A component's parameter bindings of its props object and of its `as`
+    /// (`ParamInput::Props`, `ParamInput::AsType`), and those that hold only
+    /// what its caller wrote but `asChild` (`ParamInput::caller`).
     props_params: FxHashSet<SymbolId>,
     as_types: FxHashSet<SymbolId>,
+    caller_params: FxHashSet<SymbolId>,
     /// The imports of Animus's `renderAsChild`.
     slot_renders: FxHashSet<SymbolId>,
     /// See `Records::child_cloners`.
@@ -759,8 +761,9 @@ impl<'s> Module<'s> {
             params,
             slot_renders,
             child_cloners: BTreeSet::new(),
-            props_params: param_inputs.values().flatten().filter(|(_, input)| matches!(input, ParamInput::Props)).map(|(symbol, _)| *symbol).collect(),
-            as_types: param_inputs.values().flatten().filter(|(_, input)| matches!(input, ParamInput::AsType)).map(|(symbol, _)| *symbol).collect(),
+            props_params: FxHashSet::default(),
+            as_types: FxHashSet::default(),
+            caller_params: FxHashSet::default(),
             param_inputs,
             bound: functions.values().copied().collect(),
             functions,
@@ -814,7 +817,6 @@ impl<'s> Module<'s> {
         self.held.get(&symbol).cloned().unwrap_or_default()
     }
 
-    /// Holds `value` in every binding `pattern` declares.
     /// Holds `value` in every binding `pattern` declares; a destructuring of
     /// the props object gives each binding the prop its static key names.
     fn hold_pattern(&mut self, pattern: &BindingPattern<'_>, value: &Held) {
@@ -928,11 +930,19 @@ impl<'s> Module<'s> {
         }
         for index in 0..self.param_inputs.get(&scope).map_or(0, Vec::len) {
             let (symbol, input) = self.param_inputs[&scope][index].clone();
+            match input {
+                ParamInput::Props => self.props_params.insert(symbol),
+                ParamInput::AsType => self.as_types.insert(symbol),
+                _ => false,
+            };
+            if input.caller() {
+                self.caller_params.insert(symbol);
+            }
             let inputs = match input {
                 ParamInput::Props => Inputs::all(),
                 ParamInput::Every => Inputs::Every,
                 ParamInput::AsType => Inputs::named(BTreeSet::from([self.names.id("as")])),
-                ParamInput::Named(name) => Inputs::named(BTreeSet::from([self.names.id(&name)])),
+                ParamInput::Named { key, .. } => Inputs::named(BTreeSet::from([self.names.id(&key)])),
                 ParamInput::Rest(named) => Inputs::all_but(named.iter().map(|name| self.names.id(name)).collect()),
             };
             self.hold(symbol, &Held { inputs, ..Held::default() });
@@ -2373,7 +2383,7 @@ impl<'a> Walk<'_, '_, 'a> {
                 ObjectPropertyKind::ObjectProperty(property) => {
                     !property.computed
                         && property.kind == PropertyKind::Init
-                        && property.key.static_name().is_some_and(|name| !matches!(name.as_ref(), "ref" | "as" | "asChild" | "is"))
+                        && property.key.static_name().is_some_and(|name| plain_key(&name))
                         && match unwrap_type_assertions(&property.value) {
                             Expression::Identifier(_) => inputs_only(&property.value),
                             Expression::StaticMemberExpression(member) => {
@@ -2397,6 +2407,34 @@ impl<'a> Walk<'_, '_, 'a> {
         }
     }
 
+    /// Whether `props`, a clone's config, sets only what the component's
+    /// caller wrote, never its `asChild`: a rest or a prop its parameters
+    /// name with no default (`ParamInput::caller`), or a member of its props
+    /// object, spread or under a plain key. A cloner's own value would set a
+    /// prop the caller's child never wrote.
+    fn callers_only(&self, props: &Expression<'_>) -> bool {
+        let caller = |expression: &Expression<'_>| match unwrap_type_assertions(expression) {
+            Expression::Identifier(id) => self.unchanged(id, &self.module.caller_params),
+            Expression::StaticMemberExpression(member) => {
+                member.property.name != "asChild"
+                    && matches!(unwrap_type_assertions(&member.object), Expression::Identifier(id) if self.unchanged(id, &self.module.props_params))
+            }
+            _ => false,
+        };
+        match unwrap_type_assertions(props) {
+            Expression::ObjectExpression(object) => object.properties.iter().all(|property| match property {
+                ObjectPropertyKind::SpreadProperty(spread) => caller(&spread.argument),
+                ObjectPropertyKind::ObjectProperty(property) => {
+                    !property.computed
+                        && property.kind == PropertyKind::Init
+                        && property.key.static_name().is_some_and(|name| plain_key(&name))
+                        && caller(&property.value)
+                }
+            }),
+            props => caller(props),
+        }
+    }
+
     /// Whether `call` is Animus's `renderAsChild`, which reads what it gets
     /// as `cloneElement` does.
     fn renders_slot(&self, call: &CallExpression<'_>) -> bool {
@@ -2404,35 +2442,40 @@ impl<'a> Walk<'_, '_, 'a> {
             if self.module.symbol(id).is_some_and(|symbol| self.module.slot_renders.contains(&symbol)))
     }
 
-    /// Whether `call` is React's `createElement`.
-    fn creates_element(&self, call: &CallExpression<'_>) -> bool {
+    /// Whether `call` is React's function `name`.
+    fn react_call(&self, call: &CallExpression<'_>, name: &str) -> bool {
         match unwrap_type_assertions(&call.callee) {
-            Expression::Identifier(id) => self.module.react_name(id) == Some("createElement"),
-            Expression::StaticMemberExpression(member) => member.property.name == "createElement" && self.react_callee(&call.callee),
+            Expression::Identifier(id) => self.module.react_name(id) == Some(name),
+            Expression::StaticMemberExpression(member) => member.property.name == name && self.react_callee(&call.callee),
             _ => false,
         }
+    }
+
+    /// Whether `call` is React's `createElement`.
+    fn creates_element(&self, call: &CallExpression<'_>) -> bool {
+        self.react_call(call, "createElement")
     }
 
     /// Whether `expression`, an element's type, is the component's own `as`
     /// input or a host element's name: the element renders what its
     /// caller's site writes, which that site judges, or that host element.
-    fn caller_type(&self, expression: &Expression<'_>) -> bool {
+    /// `Some(true)` where it may be the caller's `as`.
+    fn caller_type(&self, expression: &Expression<'_>) -> Option<bool> {
         match unwrap_type_assertions(expression) {
-            Expression::StringLiteral(name) => !name.value.contains('-'),
-            Expression::Identifier(id) => self.unchanged(id, &self.module.as_types),
-            Expression::StaticMemberExpression(member) => {
-                member.property.name == "as"
-                    && matches!(unwrap_type_assertions(&member.object), Expression::Identifier(id) if self.unchanged(id, &self.module.props_params))
-            }
-            Expression::LogicalExpression(logical) => {
-                matches!(logical.operator, oxc::syntax::operator::LogicalOperator::Coalesce | oxc::syntax::operator::LogicalOperator::Or)
-                    && self.caller_type(&logical.left)
-                    && self.caller_type(&logical.right)
+            Expression::StringLiteral(name) => (!name.value.contains('-')).then_some(false),
+            Expression::Identifier(id) => self.unchanged(id, &self.module.as_types).then_some(true),
+            Expression::StaticMemberExpression(member) => (member.property.name == "as"
+                && matches!(unwrap_type_assertions(&member.object), Expression::Identifier(id) if self.unchanged(id, &self.module.props_params)))
+            .then_some(true),
+            Expression::LogicalExpression(logical)
+                if matches!(logical.operator, oxc::syntax::operator::LogicalOperator::Coalesce | oxc::syntax::operator::LogicalOperator::Or) =>
+            {
+                Some(self.caller_type(&logical.left)? | self.caller_type(&logical.right)?)
             }
             Expression::ConditionalExpression(conditional) => {
-                self.caller_type(&conditional.consequent) && self.caller_type(&conditional.alternate)
+                Some(self.caller_type(&conditional.consequent)? | self.caller_type(&conditional.alternate)?)
             }
-            _ => false,
+            _ => None,
         }
     }
 
@@ -2441,18 +2484,16 @@ impl<'a> Walk<'_, '_, 'a> {
         self.module.symbol(id).is_some_and(|symbol| among.contains(&symbol) && !self.module.scoping.symbol_is_mutated(symbol))
     }
 
-    /// The `as` input, which an element of the caller's type hands on.
-    fn as_input(&mut self) -> Held {
-        Held { inputs: Inputs::named(BTreeSet::from([self.module.names.id("as")])), ..Held::default() }
+    /// An element of the caller's type at `at` renders what reaches it there
+    /// or in a host element, and hands on only the `as` that chose it.
+    fn hands_on_as(&mut self, at: u32) {
+        let as_input = Held { inputs: Inputs::named(BTreeSet::from([self.module.names.id("as")])), ..Held::default() };
+        self.sink(at, None, &as_input);
     }
 
     /// Whether `call` is React's `cloneElement`, or Animus's `renderAsChild`.
     fn clones(&self, call: &CallExpression<'_>) -> bool {
-        match unwrap_type_assertions(&call.callee) {
-            Expression::Identifier(id) => self.module.react_name(id) == Some("cloneElement") || self.renders_slot(call),
-            Expression::StaticMemberExpression(member) => member.property.name == "cloneElement" && self.react_callee(&call.callee),
-            _ => false,
-        }
+        self.react_call(call, "cloneElement") || self.renders_slot(call)
     }
 
     /// The innermost class the visit is inside.
@@ -2623,12 +2664,13 @@ impl<'a> Walk<'_, '_, 'a> {
                 }
                 continue;
             };
-            // An element of the caller's type renders the props there or in
-            // a host element: it hands on only the `as` that chose it.
-            if position == 0 && self.creates_element(call) && self.caller_type(expression) {
-                let as_input = self.as_input();
-                self.sink(call.span.start, None, &as_input);
-                continue;
+            if position == 0 && self.creates_element(call) {
+                if let Some(caller_as) = self.caller_type(expression) {
+                    if caller_as {
+                        self.hands_on_as(call.span.start);
+                    }
+                    continue;
+                }
             }
             match expression {
                 // The argument the value came through: a callback's result
@@ -2750,22 +2792,24 @@ impl<'a> Walk<'_, '_, 'a> {
         }
     }
 
-    /// A read or an iteration of the value: it runs hooks of a hookable one.
     /// A read of the member `name` (at `span`, the ancestor `at`) off the
     /// value: the props object's member is that one prop, unless the member
     /// is called, which gives the call the whole object as `this`.
     fn member_read(&mut self, at: usize, span: Span, name: Option<&str>, value: &Held) -> Place {
-        let place = Self::read_through(value);
-        let called = matches!(self.ancestors.get(at.wrapping_sub(1)), Some(AstKind::CallExpression(call)) if call.callee.span() == span)
-            || matches!(self.ancestors.get(at.wrapping_sub(1)), Some(AstKind::TaggedTemplateExpression(_)));
-        match (place, name) {
-            (Place::Carry, Some(name)) if matches!(value.inputs, Inputs::AllBut(_)) && !called => {
+        match (Self::read_through(value), name) {
+            (Place::Carry, Some(name))
+                if matches!(value.inputs, Inputs::AllBut(_))
+                    && !matches!(self.ancestors.get(at.wrapping_sub(1)),
+                        Some(AstKind::CallExpression(call)) if call.callee.span() == span)
+                    && !matches!(self.ancestors.get(at.wrapping_sub(1)), Some(AstKind::TaggedTemplateExpression(_))) =>
+            {
                 Place::Becomes(value.member(self.module.names.id(name)))
             }
             (place, _) => place,
         }
     }
 
+    /// A read or an iteration of the value: it runs hooks of a hookable one.
     fn read_through(value: &Held) -> Place {
         if value.hookable {
             Place::Handed
@@ -2831,11 +2875,7 @@ impl<'a> Walk<'_, '_, 'a> {
                 self.member_read(at, member.span, Some(member.property.name.as_str()), value)
             }
             AstKind::ComputedMemberExpression(member) if member.object.span() == current => {
-                let name = match &member.expression {
-                    Expression::StringLiteral(name) => Some(name.value.as_str()),
-                    _ => None,
-                };
-                self.member_read(at, member.span, name, value)
+                self.member_read(at, member.span, member.static_property_name().as_ref().map(|name| name.as_str()), value)
             }
             AstKind::PrivateFieldExpression(member) if member.object.span() == current => Self::read_through(value),
             // The value is a computed key.
@@ -3081,11 +3121,8 @@ impl<'a> Walk<'_, '_, 'a> {
             }
             return Place::Carry;
         }
-        // An element of the caller's type renders what reaches it there or
-        // in a host element, and hands on only the `as` that chose it.
         if matches!(&opening.name, JSXElementName::IdentifierReference(id) if self.unchanged(id, &self.module.as_types)) {
-            let as_input = self.as_input();
-            self.sink(element.span.start, None, &as_input);
+            self.hands_on_as(element.span.start);
             return Place::Carry;
         }
         let provider = matches!(&opening.name, JSXElementName::MemberExpression(member) if member.property.name == "Provider");
@@ -3113,8 +3150,9 @@ impl<'a> Walk<'_, '_, 'a> {
             _ => WalkProp::Children,
         };
         if let Some(receiver) = self.module.receivers.get_mut(&element.span.start) {
-            let whole = receiver.reached.held.join(value);
-            if receiver.props.entry(key).or_default().join(value) || whole {
+            // Its climb reads only the whole record; `finish` reads each prop's.
+            receiver.props.entry(key).or_default().join(value);
+            if receiver.reached.held.join(value) {
                 self.module.grew(Key::Receiver(element.span.start));
             }
             return Place::Kept(InPlace::Received);
@@ -3350,7 +3388,7 @@ impl<'a> Walk<'_, '_, 'a> {
             let literal = call.arguments.get(1).is_none_or(|props| {
                 matches!(props.as_expression().map(unwrap_type_assertions), Some(Expression::ObjectExpression(object))
                     if object.properties.iter().all(|property| matches!(property, ObjectPropertyKind::ObjectProperty(property)
-                        if !property.computed && property.key.static_name().is_some_and(|name| !matches!(name.as_ref(), "ref" | "as" | "asChild" | "is")))))
+                        if !property.computed && property.key.static_name().is_some_and(|name| plain_key(&name)))))
             });
             let callers = call.arguments.len() <= 2
                 && call.arguments.get(1).is_none_or(|props| props.as_expression().is_some_and(|props| self.clone_props(props)));
@@ -3358,7 +3396,12 @@ impl<'a> Walk<'_, '_, 'a> {
                 return Place::Handed;
             }
             let children = self.module.names.id("children");
-            if callers && value.inputs == Inputs::named(BTreeSet::from([children])) && !value.has_elements() && !value.hookable {
+            if call.arguments.len() <= 2
+                && call.arguments.get(1).is_none_or(|props| props.as_expression().is_some_and(|props| self.callers_only(props)))
+                && value.inputs == Inputs::named(BTreeSet::from([children]))
+                && !value.has_elements()
+                && !value.hookable
+            {
                 self.module.child_cloners.extend(self.top.iter().cloned());
             }
         }
@@ -3474,8 +3517,9 @@ impl<'a> Walk<'_, '_, 'a> {
     fn enter_function(&mut self, scope: Option<ScopeId>) {
         // A declared function's parameters are its inputs.
         if let Some(scope) = scope.filter(|_| self.declared_root()) {
-            self.module.roots.insert(scope);
-            self.module.seed_inputs(scope);
+            if self.module.roots.insert(scope) {
+                self.module.seed_inputs(scope);
+            }
         }
         self.depth += 1;
     }
@@ -3902,7 +3946,6 @@ fn top_level_names(statement: &Statement<'_>) -> Vec<String> {
     }
 }
 
-/// The bindings a pattern declares.
 /// Which input a function's parameter binding holds: its first parameter
 /// is the props object (`Props`), so a binding its destructuring names by a
 /// static key holds that prop and a rest all but the keys named before it;
@@ -3912,11 +3955,25 @@ fn top_level_names(statement: &Statement<'_>) -> Vec<String> {
 enum ParamInput {
     Props,
     Every,
-    Named(String),
+    /// A prop its destructuring names, `bare` where no default fills it.
+    Named { key: String, bare: bool },
     Rest(Vec<String>),
     /// The `as` prop, with no default or a host element's name: an element
     /// of it renders the caller's `as` or that host element.
     AsType,
+}
+
+impl ParamInput {
+    /// Whether the binding holds only what the component's caller wrote, and
+    /// never its `asChild`: its rest beside a named `asChild`, or a prop but
+    /// `asChild` named with no default.
+    fn caller(&self) -> bool {
+        match self {
+            ParamInput::Named { key, bare } => *bare && key != "asChild",
+            ParamInput::Rest(named) => named.iter().any(|key| key == "asChild"),
+            _ => false,
+        }
+    }
 }
 
 /// The bindings of a function's parameters, each with the input it holds
@@ -3941,7 +3998,7 @@ fn param_inputs(params: &oxc::ast::ast::FormalParameters<'_>) -> Vec<(SymbolId, 
                             if key == "as" && host_default {
                                 ParamInput::AsType
                             } else {
-                                ParamInput::Named(key.to_string())
+                                ParamInput::Named { key: key.to_string(), bare: matches!(&property.value, BindingPattern::BindingIdentifier(_)) }
                             }
                         }
                         _ => ParamInput::Every,
@@ -3964,7 +4021,7 @@ fn param_inputs(params: &oxc::ast::ast::FormalParameters<'_>) -> Vec<(SymbolId, 
                 first(&parameter.pattern, &mut inputs);
                 continue;
             }
-            1 => ParamInput::Named("ref".to_string()),
+            1 => ParamInput::Named { key: "ref".to_string(), bare: false },
             _ => ParamInput::Every,
         };
         inputs.extend(bindings(&parameter.pattern).into_iter().map(|symbol| (symbol, input.clone())));
@@ -3975,6 +4032,14 @@ fn param_inputs(params: &oxc::ast::ast::FormalParameters<'_>) -> Vec<(SymbolId, 
     inputs
 }
 
+/// Whether a config's key `name` sets a plain prop: not a `ref`, which
+/// gives the element a new receiver, nor `as`, `asChild` or `is`, which give
+/// it another target.
+fn plain_key(name: &str) -> bool {
+    !matches!(name, "ref" | "as" | "asChild" | "is")
+}
+
+/// The bindings a pattern declares.
 fn bindings(pattern: &BindingPattern<'_>) -> Vec<SymbolId> {
     let mut bound = Vec::new();
     super::bound_symbols(pattern, &mut bound);
