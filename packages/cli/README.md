@@ -152,7 +152,10 @@ before the swap. `--anchor
 package's components built on another package's `ds`
 (`--anchor @acme/styles#ds`). Declaration maps follow the rewrite. With
 `--json` the report is one JSON document on stdout; otherwise a summary
-goes to stderr. Exit codes: 0 promoted; 1 a check failed or the
+goes to stderr. Its `skipped` list names system declarations whose
+registries were not aliased, such as an empty sealed system, and its
+`warnings` list names files left as emitted and entries that miss an
+augmentation; neither changes the exit code. Exit codes: 0 promoted; 1 a check failed or the
 declarations could not be read; 2 a usage error (a missing directory, an
 `--out` the command did not write or another run owns, a refused `exports`
 route); 3 no TypeScript.
@@ -222,7 +225,8 @@ one failing chain, so an old packet can never stand for a new success.
   ```
 
   The command warns about an entry that does not reach a module
-  augmentation in the packet, and leaves a file as emitted when an entry
+  augmentation in the packet, or an augmentation of `@animus-ui/system` in
+  a package an anchor names (a UI package's theme lives in its foundation), and leaves a file as emitted when an entry
   that reaches it would gain an augmentation from an alias.
 
 - **Fail closed.** `rm -rf .types-raw` and `noEmitOnError` mean a failed

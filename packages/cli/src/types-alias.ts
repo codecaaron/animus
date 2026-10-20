@@ -72,8 +72,9 @@ export interface RegistryAlias {
   tokens: readonly string[];
 }
 
-/** A system declaration whose registries were not aliased, and why. */
-export interface AnchorRefusal {
+/** A system declaration whose registries were not aliased, and why. The
+ *  run goes on; it is reported, not refused. */
+export interface SkippedAnchor {
   file: string;
   anchorExport: string;
   reason: string;
@@ -875,11 +876,14 @@ function registryAliases(
 
 export interface AnchorSet {
   aliases: RegistryAlias[];
-  refusals: AnchorRefusal[];
+  skipped: SkippedAnchor[];
   /** Per packet file, the anchor statements its aliases must not rewrite. */
   anchorSpans: Map<string, Array<readonly [number, number]>>;
   /** The declaration file each anchor's helper import loads. */
   anchorFiles: Map<RegistryAlias, string>;
+  /** The declaration file of every anchor, aliased or skipped: whose
+   *  augmentations an entry's consumers expect. */
+  anchorRoots: Set<string>;
 }
 
 /** The helper module's import of a packet anchor: `src/ds.d.ts` → `./src/ds.js`. */
@@ -898,9 +902,10 @@ export function collectAnchors(
   const taken = new Set<string>();
   const set: AnchorSet = {
     aliases: [],
-    refusals: [],
+    skipped: [],
     anchorSpans: new Map(),
     anchorFiles: new Map(),
+    anchorRoots: new Set(),
   };
   const add = (
     parsed: ParsedDeclaration,
@@ -909,6 +914,7 @@ export function collectAnchors(
     found: SystemDeclaration,
     loads: string
   ): void => {
+    set.anchorRoots.add(loads);
     const recorded = registryAliases(
       parsed.scope,
       specifier,
@@ -920,7 +926,7 @@ export function collectAnchors(
       set.aliases.push(...recorded);
       for (const alias of recorded) set.anchorFiles.set(alias, loads);
     } else
-      set.refusals.push({
+      set.skipped.push({
         file: parsed.rel,
         anchorExport: exportName,
         reason: recorded,
@@ -1035,6 +1041,9 @@ export interface DeclarationScan {
    *  module '…'` or `declare global` block, a script (no import or export,
    *  so every declaration is global), or a `/// <reference lib>`. */
   augments: boolean;
+  /** Whether it augments `@animus-ui/system` (`Theme`, `Selectors`,
+   *  `Conditions`): the augmentations every entry must reach. */
+  augmentsSystem: boolean;
   /** Whether any import carries attributes or a `resolution-mode`, which
    *  can change what it resolves to: such a file is never rewritten. */
   attributed: boolean;
@@ -1075,6 +1084,7 @@ export function scanDeclaration(
     imports: new Set(),
     importStatements: '',
     augments: false,
+    augmentsSystem: false,
     attributed: false,
     localOccurrences: 0,
   };
@@ -1104,6 +1114,12 @@ export function scanDeclaration(
       (statement.kind === 'global' || statement.id.type === 'Literal')
     ) {
       scan.augments = true;
+      if (
+        statement.id.type === 'Literal' &&
+        statement.id.value === SYSTEM_PACKAGE
+      ) {
+        scan.augmentsSystem = true;
+      }
     }
   }
   if (

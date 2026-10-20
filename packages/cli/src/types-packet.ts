@@ -74,7 +74,7 @@ import {
 } from './types-resolve';
 
 import type {
-  AnchorRefusal,
+  SkippedAnchor,
   AnchorSet,
   DeclarationScan,
   ParsedDeclaration,
@@ -112,7 +112,7 @@ export interface TypesAliasReport {
   inputBytes: number;
   outputBytes: number;
   aliases: AliasCount[];
-  refusals: AnchorRefusal[];
+  skipped: SkippedAnchor[];
   probes: { files: number; diagnostics: number };
   /** Files left as emitted, augmentation gaps, and a cleanup failure after
    *  the packet was promoted. */
@@ -556,7 +556,7 @@ interface StagedPacket {
   outputBytes: number;
   inputDigest: string;
   aliases: AliasCount[];
-  refusals: AnchorRefusal[];
+  skipped: SkippedAnchor[];
   witnesses: Witness[];
   warnings: string[];
 }
@@ -617,23 +617,34 @@ function anchorAugmentations(
 
 /** tsc keeps no import for a module whose declarations an entry's inferred
  *  types inline, so an augmentation can fall out of an entry's program.
- *  Reported against the emitted imports. */
+ *  Reported against the emitted imports, for every augmentation in the packet
+ *  and every augmentation of `@animus-ui/system` an anchor reaches in a
+ *  dependency (a UI package's theme lives in its foundation's packet). */
 function augmentationGaps(
   graph: ImportGraph,
+  anchors: AnchorSet,
   entryRoots: readonly string[],
   outDir: string
 ): string[] {
-  const augmenting = [...graph.packet.entries()]
-    .filter(([, scan]) => scan.augments)
-    .map(([file]) => file);
+  const augmenting = new Set(
+    [...graph.packet.entries()]
+      .filter(([, scan]) => scan.augments)
+      .map(([file]) => file)
+  );
+  for (const file of graph.closure(anchors.anchorRoots)) {
+    if (graph.scanOf(file).augmentsSystem) augmenting.add(file);
+  }
   const gaps: string[] = [];
   for (const rel of entryRoots) {
     const reached = graph.closure([join(outDir, rel)]);
     for (const file of augmenting) {
       if (!reached.has(file)) {
+        const where = isPathWithinRoot(outDir, file)
+          ? toPosix(relative(outDir, file))
+          : file;
         gaps.push(
-          `${rel} does not reach the augmentation in ${toPosix(relative(outDir, file))}: ` +
-            `add \`export type {} from '<its source module>'\` to the entry's source`
+          `${rel} does not reach the augmentation in ${where}: ` +
+            `add \`export type {} from '<its source module or package>'\` to the entry's source`
         );
       }
     }
@@ -814,10 +825,13 @@ function stagePacket(
       anchor: `${alias.anchorSpecifier}#${alias.anchorExport}.${alias.member}`,
       replacements: counts.get(alias) ?? 0,
     })),
-    refusals: anchors.refusals,
+    skipped: anchors.skipped,
     witnesses: [...witnesses.values()],
     warnings: routes.gated
-      ? [...warnings, ...augmentationGaps(graph, entryRoots, options.outDir)]
+      ? [
+          ...warnings,
+          ...augmentationGaps(graph, anchors, entryRoots, options.outDir),
+        ]
       : warnings,
   };
 }
@@ -1307,7 +1321,7 @@ export async function runTypesAlias(
       inputBytes: packet.inputBytes,
       outputBytes: packet.outputBytes,
       aliases: packet.aliases,
-      refusals: packet.refusals,
+      skipped: packet.skipped,
       probes,
       warnings:
         cleanup === null ? packet.warnings : [...packet.warnings, cleanup],
@@ -1343,9 +1357,9 @@ export function formatTypesAliasReport(
       `[animus]   ${alias.name} (${alias.anchor}): ${alias.replacements} replacements`
     );
   }
-  for (const refusal of report.refusals) {
+  for (const skip of report.skipped) {
     lines.push(
-      `[animus]   not aliased: ${refusal.file}#${refusal.anchorExport}: ${refusal.reason}`
+      `[animus]   not aliased: ${skip.file}#${skip.anchorExport}: ${skip.reason}`
     );
   }
   for (const warning of report.warnings) {
