@@ -13615,6 +13615,40 @@ mod tests {
             ("new Function('return 1');\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const F = globalThis.Function;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("[].constructor.constructor('return 1')();\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            // A setter runs on a store with its object as `this`.
+            ("const Render = ({ children }) => { const o = { children, set x(v) { pad(this.children); } }; o.x = 1; return null; };", "", "", true),
+            ("const Render = ({ children }) => { const o = { children, set x(v) { pad(this.children); } }; o.x ??= 1; return null; };", "", "", true),
+            ("const Render = () => { const o = { el: <Box p={4} />, set x(v) { pad(this.el); } }; o.x = 1; return null; };", "", "", true),
+            // React's `Component` hands its updater the instance.
+            ("class Render extends Component { constructor(p) { super(p, null, { enqueueSetState: pad }); this.setState({}); } render() { return <div>{this.props.children}</div>; } }", "", "", true),
+            ("class Render extends Component { constructor(p) { super(p, undefined, { enqueueForceUpdate: pad }); this.forceUpdate(); } render() { return <div>{this.props.children}</div>; } }", "", "", true),
+            ("class Render extends Component { constructor(p) { super(p, undefined, p.updater); this.setState({}); } render() { return <div>{this.props.children}</div>; } }", "updater={d}", "", true),
+            ("class Render extends Component { constructor(p) { super(p, null, { el: <Box p={4} />, enqueueSetState: pad }); } render() { return null; } }", "", "", true),
+            // A ref reads an anonymous default class's props.
+            ("import Render from './other';", "ref={pad}", "import { Component } from 'react';\nexport default class extends Component { render() { return <div>{this.props.children}</div>; } }\n", true),
+            // `cloneElement` that may set a `ref` gives the element a reader.
+            ("import { Children, cloneElement } from 'react';\nclass Inner extends Component { render() { return <div>{this.props.children}</div>; } }\nconst Wrap = ({ children }) => <div>{Children.map(children, (c) => cloneElement(c, { ref: pad }))}</div>;\nconst Render = ({ children }) => <Wrap><Inner>{children}</Inner></Wrap>;", "", "", true),
+            ("import { Children, cloneElement } from 'react';\nclass Inner extends Component { render() { return <div>{this.props.children}</div>; } }\nconst Wrap = ({ children, extra }) => <div>{Children.map(children, (c) => cloneElement(c, extra))}</div>;\nconst Render = ({ children, extra }) => <Wrap extra={extra}><Inner>{children}</Inner></Wrap>;", "extra={d}", "", true),
+            ("import { Children, cloneElement } from 'react';\nclass Inner extends Component { render() { return <div>{this.props.children}</div>; } }\nconst Wrap = ({ children }) => <div>{Children.map(children, (c) => cloneElement(c, { className: 'x' }))}</div>;\nconst Render = ({ children }) => <Wrap><Inner>{children}</Inner></Wrap>;", "", "", false),
+            // A component's result, a fragment and an array are rendered as at
+            // an element, where a hookable value runs its hooks.
+            ("const Render = ({ children }) => ({ children, [Symbol.iterator]: decorate });", "", "", true),
+            ("const Render = ({ children }) => { const o = { children, [Symbol.iterator]: decorate }; return <>{o}</>; };", "", "", true),
+            ("const Render = ({ children }) => { const o = { children, [Symbol.iterator]: decorate }; return [o]; };", "", "", true),
+            ("class Render extends Component { render() { return { children: this.props.children, [Symbol.iterator]: decorate }; } }", "", "", true),
+            // An array method converts the arguments it does not call.
+            ("const Render = (props) => <div title={[1, 2].join(props)} />;", "toString={d}", "", true),
+            ("const Render = (props) => <div title={[1, 2].slice(props)} />;", "valueOf={d}", "", true),
+            ("const Render = (props) => <div title={[1, 2].at(props)} />;", "valueOf={d}", "", true),
+            ("const Render = (props) => <div title={[1, 2].with(props, 0)} />;", "valueOf={d}", "", true),
+            ("const Render = (props) => <div title={[1, 2].toSpliced(props)} />;", "valueOf={d}", "", true),
+            ("const Render = (props) => <div title={[1, 2].flat(props)} />;", "valueOf={d}", "", true),
+            ("import { rows } from './other';\nconst Render = (props) => <div title={rows.join(props)} />;", "toString={d}", "export const rows = ['a'];\n", true),
+            // A writer let go as a value, or given a spread target.
+            ("const assign = Object.assign;\nassign([].constructor.prototype, { map: decorate });\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
+            ("Object.assign(...[[].constructor.prototype, { map: decorate }]);\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
+            ("Object.assign.call(null, [].constructor.prototype, { map: decorate });\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
+            ("Reflect.apply(Object.assign, null, [[].constructor.prototype, { map: decorate }]);\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
             ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "export const rows = [0];\n", false),
             // Converting, iterating, awaiting or stringifying an input runs
             // the hooks its caller gave it, the props object's included.

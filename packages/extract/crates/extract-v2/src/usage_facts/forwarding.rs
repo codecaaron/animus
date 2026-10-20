@@ -356,11 +356,16 @@ pub(super) fn forwarding<'a>(
     // Every statement is walked once, in order; then each unit that read
     // something before it grew is walked again, until nothing grows. A unit
     // is the innermost function around a read, so a change inside one
-    // function walks that function again, not the statement around it.
+    // function walks that function again, not the statement around it. The
+    // unit that went stale last is walked first, so a change runs down a
+    // chain of callers before a reader of the whole chain walks again; a
+    // unit already pending keeps its place.
     let mut readers: FxHashMap<Key, FxHashSet<Unit>> = FxHashMap::default();
-    let mut pending: BTreeSet<Unit> = BTreeSet::new();
+    let mut pending: Vec<Unit> = Vec::new();
+    let mut queued: FxHashSet<Unit> = FxHashSet::default();
     let mut first = (0..program.body.len()).map(Unit::Statement);
-    while let Some(unit) = first.next().or_else(|| pending.pop_first()) {
+    while let Some(unit) = first.next().or_else(|| pending.pop()) {
+        queued.remove(&unit);
         module.unit = unit;
         match unit {
             Unit::Statement(index) => {
@@ -384,8 +389,8 @@ pub(super) fn forwarding<'a>(
             for reader in readers.get(&key).into_iter().flatten() {
                 // This walk saw what grew after it read it.
                 let stale = reads.get(&(*reader, key)).is_none_or(|read| *read < at);
-                if stale {
-                    pending.insert(*reader);
+                if stale && queued.insert(*reader) {
+                    pending.push(*reader);
                 }
             }
         }
@@ -611,11 +616,17 @@ impl<'s> Module<'s> {
                 && !scoping.symbol_flags(*symbol).intersects(SymbolFlags::Function | SymbolFlags::Class)
         });
         let patches_intrinsics = declarations.patches_intrinsics || reexports_react || redirected;
+        // A default export's class has no binding of its own when anonymous.
+        let default_class = program.body.iter().any(|statement| {
+            matches!(statement, Statement::ExportDefaultDeclaration(export) if matches!(&export.declaration,
+                oxc::ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(_) | oxc::ast::ast::ExportDefaultDeclarationKind::ClassExpression(_)))
+        });
         let class_names = declarations
             .class_bindings
             .keys()
             .filter(|symbol| scoping.symbol_scope_id(**symbol) == scoping.root_scope_id())
             .map(|symbol| scoping.symbol_name(*symbol).to_string())
+            .chain(default_class.then(|| "default".to_string()))
             .collect();
         let Declarations { params, functions, in_place, setters, hook_states, classes, hookable_objects, .. } = declarations;
         Module {
@@ -1001,16 +1012,19 @@ impl<'r> Declarations<'r> {
             _ => false,
         };
         // `eval` and `Function` read off the global object, or any
-        // `constructor` called (a function's is `Function`), run strings.
+        // `constructor` called (a function's is `Function`), run strings; a
+        // writer let go as a value (an alias, `.call`, `Reflect.apply`)
+        // writes into targets the walk cannot see.
         let global = matches!(unwrap_type_assertions(object), Expression::Identifier(id) if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.symbol(id).is_none());
         let called = matches!(self.ancestors.last(), Some(AstKind::CallExpression(call)) if call.callee.span() == span)
             || matches!(self.ancestors.last(), Some(AstKind::NewExpression(call)) if call.callee.span() == span);
-        let runs_strings = match name {
+        let reflection = matches!(unwrap_type_assertions(object), Expression::Identifier(id) if self.symbol(id).is_none() && name.is_some_and(|name| writer(&id.name, name)));
+        let unseen = match name {
             Some("eval" | "Function") => global,
             Some("constructor") => called,
-            _ => false,
+            _ => reflection && !called,
         };
-        if runs_strings || (prototype && self.reshapes(span)) {
+        if unseen || (prototype && self.reshapes(span)) {
             self.patches_intrinsics = true;
         }
         if matches!(super::member_effect(span, self.ancestors.iter().rev()), Some(MemberEffect::Assigned | MemberEffect::Deleted)) {
@@ -1201,8 +1215,8 @@ impl LiteralShape {
                     let name = property.key.static_name().filter(|_| !property.computed);
                     let sets_prototype = !property.shorthand && name.as_deref() == Some("__proto__");
                     shape.plain &= property.kind == PropertyKind::Init && !sets_prototype;
-                    // A setter runs only on a store, which `plain` judges.
-                    shape.hookable |= property.kind == PropertyKind::Get
+                    // A setter runs on a store with the object as `this`.
+                    shape.hookable |= matches!(property.kind, PropertyKind::Get | PropertyKind::Set)
                         || property.computed
                         || name.is_some_and(|name| HOOK_KEYS.contains(&name.as_ref()));
                 }
@@ -1210,6 +1224,26 @@ impl LiteralShape {
             }
         }
         shape
+    }
+}
+
+/// Whether `object.name` is a built-in that writes into its first argument.
+fn writer(object: &str, name: &str) -> bool {
+    match object {
+        "Object" => matches!(name, "assign" | "defineProperty" | "defineProperties" | "setPrototypeOf"),
+        "Reflect" => matches!(name, "set" | "defineProperty" | "deleteProperty" | "setPrototypeOf"),
+        _ => false,
+    }
+}
+
+/// The argument positions an array's read method `name` calls: its
+/// callback's, for a method that takes one. Any other argument it converts
+/// or compares.
+fn array_calls(name: &str) -> &'static [usize] {
+    if name == "toSorted" || ARRAY_CALLBACK_METHODS.iter().any(|(method, _)| *method == name) {
+        &[0]
+    } else {
+        &[]
     }
 }
 
@@ -1401,14 +1435,22 @@ impl<'a> Visit<'a> for Declarations<'a> {
                 if reflects && self.reshapes(call.span) {
                     self.patches_intrinsics = true;
                 }
-                // A built-in that writes into its first argument.
-                let writer = match object.name.as_str() {
-                    "Object" => matches!(name, "assign" | "defineProperty" | "defineProperties" | "setPrototypeOf"),
-                    "Reflect" => matches!(name, "set" | "defineProperty" | "deleteProperty" | "setPrototypeOf"),
-                    _ => false,
-                };
-                if let Some(target) = call.arguments.first().and_then(|argument| argument.as_expression()).filter(|_| writer) {
-                    self.written_into(target, true);
+                // A built-in that writes into its first argument; a spread
+                // first argument is a target the module does not own.
+                if writer(&object.name, name) {
+                    match call.arguments.first().map(|argument| argument.as_expression()) {
+                        Some(Some(target)) => self.written_into(target, true),
+                        Some(None) => self.patches_intrinsics = true,
+                        None => {}
+                    }
+                }
+            }
+        }
+        // React's `Component` hands the updater it gets the instance.
+        if matches!(call.callee, Expression::Super(_)) && call.arguments.len() > 1 {
+            if let Some((class, _)) = self.this_class() {
+                if let Some(facts) = self.classes.get_mut(&class) {
+                    facts.this_escapes = true;
                 }
             }
         }
@@ -1639,6 +1681,15 @@ impl<'a> Walk<'_, '_, 'a> {
         matches!(unwrap_type_assertions(root), Expression::Identifier(id) if self.module.react(id))
     }
 
+    /// Whether `call` is React's `cloneElement`.
+    fn clones(&self, call: &CallExpression<'_>) -> bool {
+        match unwrap_type_assertions(&call.callee) {
+            Expression::Identifier(id) => self.module.react_name(id) == Some("cloneElement"),
+            Expression::StaticMemberExpression(member) => member.property.name == "cloneElement" && self.react_callee(&call.callee),
+            _ => false,
+        }
+    }
+
     /// The innermost class the visit is inside.
     fn class_facts(&self) -> Option<&ClassFacts> {
         self.class.last().and_then(|class| self.module.classes.get(class))
@@ -1713,7 +1764,7 @@ impl<'a> Walk<'_, '_, 'a> {
                 }
                 if module.built_array(&member.object) {
                     if !ARRAY_WRITE_METHODS.contains(&name) {
-                        return Callee::PassThrough { calls: &[0] };
+                        return Callee::PassThrough { calls: array_calls(name) };
                     }
                     // A module array is anyone's to read, as a module binding is.
                     return match unwrap_type_assertions(&member.object) {
@@ -1883,6 +1934,9 @@ impl<'a> Walk<'_, '_, 'a> {
             Some(AstKind::MethodDefinition(method)) => Some(method.key.static_name().is_some_and(|name| name == "render")),
             _ => None,
         };
+        // Either result reaches a top-level binding, where a hookable value
+        // is handed outside (`declared_hooks`): React renders a result as at
+        // an element.
         if let Some(render) = method {
             self.module.give_back(scope, value);
             self.top_join(current.start, value);
@@ -2279,13 +2333,34 @@ impl<'a> Walk<'_, '_, 'a> {
             return Place::Handed;
         }
         let position = call.arguments.iter().position(|argument| argument.span() == current);
+        // React's `Component` keeps its props; the context and the updater
+        // it also takes are code the class hands its instance.
+        if matches!(call.callee, Expression::Super(_)) && position.is_some_and(|position| position > 0) {
+            return Place::Handed;
+        }
         let converts = match &callee {
             Callee::PassThrough { calls } => position.is_some_and(|position| !calls.contains(&position)),
+            Callee::HeldArray { callee, .. } => {
+                let name = callee.rsplit('.').next().unwrap_or_default();
+                position.is_some_and(|position| !array_calls(name).contains(&position))
+            }
             Callee::Converts { callbacks } => !(*callbacks && position == Some(1)),
             _ => false,
         };
         if converts && value.inputs && !self.react_callee(&call.callee) {
             return Place::Handed;
+        }
+        // `cloneElement` with props that may set a `ref` gives the element a
+        // new receiver: whoever the ref reaches reads its props.
+        if position == Some(0) && self.clones(call) {
+            let plain = call.arguments.get(1).is_none_or(|props| {
+                matches!(props.as_expression().map(unwrap_type_assertions), Some(Expression::ObjectExpression(object))
+                    if object.properties.iter().all(|property| matches!(property, ObjectPropertyKind::ObjectProperty(property)
+                        if !property.computed && property.key.static_name().is_some_and(|name| name != "ref"))))
+            });
+            if !plain {
+                return Place::Handed;
+            }
         }
         // What a call may give a function as its `this` is handed outside.
         if self.this_position(call).is_some_and(|this| call.arguments.get(this).is_some_and(|argument| argument.span() == current)) {
@@ -2336,7 +2411,11 @@ impl<'a> Walk<'_, '_, 'a> {
     /// `current`: its callbacks receive it, and its result carries it on.
     /// A held array's method is named for the analysis to judge.
     fn array_method(&mut self, call: &CallExpression<'a>, current: Span, held: Option<(String, String)>, value: &Held) -> Place {
-        self.callbacks(call, Some(current), &[0], value);
+        let name = match unwrap_type_assertions(&call.callee) {
+            Expression::StaticMemberExpression(member) => member.property.name.as_str(),
+            _ => "",
+        };
+        self.callbacks(call, Some(current), array_calls(name), value);
         if let Some((callee, array)) = held {
             self.module.sink(call.span.start, Some(callee), Some(array), &self.top, value);
         }
