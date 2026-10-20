@@ -65,11 +65,6 @@ describe('SystemBuilder prop overlap equality', () => {
       incoming: prop({ scale: 'sizes' }),
     },
     {
-      field: 'variable',
-      existing: prop({ variable: '--first' }),
-      incoming: prop({ variable: '--second' }),
-    },
-    {
       field: 'negative',
       existing: prop({ negative: true }),
       incoming: prop({ negative: false }),

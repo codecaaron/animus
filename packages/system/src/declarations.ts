@@ -37,7 +37,6 @@ const VALUE_PROP_FIELDS = [
   'transform',
   'negative',
   'strict',
-  'variable',
   'currentVar',
 ] as const satisfies readonly (keyof DeclarationProp)[];
 

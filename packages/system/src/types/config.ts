@@ -31,7 +31,6 @@ export interface Prop extends BaseProperty {
   /** Only a declaration prop has a kind. */
   kind?: never;
   scale?: string | MapScale | ArrayScale;
-  variable?: string;
   negative?: boolean;
   /**
    * When false, scale-bound props accept arbitrary strings alongside scale
@@ -60,7 +59,6 @@ export interface DeclarationProp {
   transform?: never;
   negative?: never;
   strict?: never;
-  variable?: never;
   currentVar?: never;
 }
 

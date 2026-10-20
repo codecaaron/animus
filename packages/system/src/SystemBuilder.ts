@@ -893,7 +893,6 @@ function arePropDefinitionsEqual(
     (structuralScale
       ? scalesEqual(existing.scale, incoming.scale)
       : existing.scale === incoming.scale) &&
-    existing.variable === incoming.variable &&
     existing.negative === incoming.negative &&
     existing.strict === incoming.strict &&
     existing.currentVar === incoming.currentVar &&

@@ -259,7 +259,6 @@ function buildFeatureSystem() {
         transform: px,
         negative: true,
         strict: false,
-        variable: '--m',
       }),
       size: propFixture({
         property: 'width',
