@@ -951,6 +951,9 @@ pub(crate) struct OpaqueTag {
     pub tag: String,
     /// A parameter or local never names the module's binding of that name.
     pub origin: TagOrigin,
+    /// The other tags a local alias's element may render (`LocalAliases`),
+    /// each judged as `tag` is.
+    pub also: Vec<(String, TagOrigin)>,
     pub polymorphic: Polymorphic,
     /// What the element's attributes and children let an Animus receiver do
     /// in its tag's place, judged where the receiver is known.
@@ -1138,7 +1141,8 @@ pub(crate) fn collect_enriched_usage(
         declaring: oxc::ast::ast::VariableDeclarationKind::Var,
     };
     collector.visit_program(program);
-    let usage = collector.finish();
+    let aliases = origins.map(|scoping| LocalAliases::of(program, scoping)).unwrap_or_default();
+    let usage = aliases.rewrite(collector.finish());
     let react_imports = origins.map(|scoping| ReactImports::of(program, scoping));
     // Without scopes a direct `eval` cannot be ruled out.
     let direct_eval = origins.is_none_or(|scoping| scoping.root_unresolved_references().contains_key("eval"));
@@ -1193,6 +1197,7 @@ pub(crate) fn collect_enriched_usage(
                 imports: named_import_locals(module),
                 escapes: BTreeSet::new(),
                 ancestors: Vec::new(),
+                aliases: &aliases,
             };
             scan.holders = object_members
                 .iter()
@@ -1227,7 +1232,7 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeMap::new(),
     };
-    let records = origins.map(|scoping| forwarding::forwarding(program, scoping, chains, &exported)).unwrap_or_default();
+    let records = origins.map(|scoping| forwarding::forwarding(program, scoping, chains, &exported, &aliases)).unwrap_or_default();
     let (prop_tags, name_uses, namespace_member_uses) =
         origins.map(|scoping| prop_tags_and_uses(program, scoping, &react)).unwrap_or_default();
     let builder_import_references =
@@ -5160,6 +5165,9 @@ struct EscapeScan<'a, 's> {
     imports: BTreeSet<String>,
     escapes: BTreeSet<String>,
     ancestors: Vec<AstKind<'a>>,
+    /// See `LocalAliases`: what an alias's initializer reads, its elements
+    /// render.
+    aliases: &'s LocalAliases,
     /// The bindings `ordinary_components` admits ignoring escapes.
     admissible: &'s BTreeSet<String>,
     /// React's wrappers and `const` aliases among them, whatever their
@@ -5198,7 +5206,7 @@ impl<'a> Visit<'a> for EscapeScan<'a, '_> {
             return;
         }
         let name = self.scoping.symbol_name(symbol);
-        if !self.is_candidate(name) {
+        if !self.is_candidate(name) || self.aliases.followed(ident.span) {
             return;
         }
         let path = self.escape_path(name, ident.span);
@@ -8866,3 +8874,229 @@ mod tests {
     }
 }
 
+
+/// Function-local `const` aliases of module-scope components rendered only
+/// as JSX tags (`const Unit = wide ? Panel.Root : Row; <Unit />`): such an
+/// element renders one of the candidates with the tag's props, so it stands
+/// for each, and the alias's initializer hands nothing on. An alias used any
+/// other way (handed on, spread, put in an object, returned, captured by a
+/// nested function that does any of those), or declared with `let`, is
+/// none, and escapes as before.
+#[derive(Debug, Default)]
+pub(crate) struct LocalAliases {
+    /// Each alias element's opening, by where it starts: the tags it may
+    /// render, each with where its root is bound.
+    pub elements: FxHashMap<u32, Vec<(String, TagOrigin)>>,
+    /// The aliases' initializers, whose references are followed.
+    pub inits: Vec<(u32, u32)>,
+}
+
+/// What an alias's initializer may be.
+enum AliasLeaf {
+    Tag(String, TagOrigin),
+    Alias(SymbolId),
+}
+
+impl LocalAliases {
+    pub(crate) fn of(program: &Program<'_>, scoping: &Scoping) -> Self {
+        let mut scan = AliasScan {
+            scoping,
+            aliases: FxHashMap::default(),
+            leaves: FxHashSet::default(),
+            tag: None,
+            uses: Vec::new(),
+            other: FxHashSet::default(),
+        };
+        scan.visit_program(program);
+        let AliasScan { aliases, uses, mut other, .. } = scan;
+        // An alias of a local that is no `const` alias is none. One of an
+        // alias handed on still renders that alias's candidates, which escape
+        // through it.
+        for (symbol, (leaves, _)) in &aliases {
+            if leaves.iter().any(|leaf| matches!(leaf, AliasLeaf::Alias(inner) if !aliases.contains_key(inner))) {
+                other.insert(*symbol);
+            }
+        }
+        fn expand(
+            symbol: SymbolId,
+            aliases: &FxHashMap<SymbolId, (Vec<AliasLeaf>, (u32, u32))>,
+            seen: &mut FxHashSet<SymbolId>,
+            into: &mut Vec<(String, TagOrigin)>,
+        ) {
+            if !seen.insert(symbol) {
+                return;
+            }
+            for leaf in aliases.get(&symbol).map(|(leaves, _)| leaves.as_slice()).unwrap_or_default() {
+                match leaf {
+                    AliasLeaf::Tag(tag, origin) => {
+                        if !into.iter().any(|(known, _)| known == tag) {
+                            into.push((tag.clone(), *origin));
+                        }
+                    }
+                    AliasLeaf::Alias(inner) => expand(*inner, aliases, seen, into),
+                }
+            }
+        }
+        let mut found = LocalAliases::default();
+        for (symbol, (_, init)) in &aliases {
+            if !other.contains(symbol) {
+                found.inits.push(*init);
+            }
+        }
+        for (symbol, at) in uses {
+            if other.contains(&symbol) || !aliases.contains_key(&symbol) {
+                continue;
+            }
+            let mut tags = Vec::new();
+            expand(symbol, &aliases, &mut FxHashSet::default(), &mut tags);
+            if !tags.is_empty() {
+                found.elements.insert(at, tags);
+            }
+        }
+        found.inits.sort_unstable();
+        found
+    }
+
+    /// `usage` with each alias element standing for every tag it may render.
+    pub(crate) fn rewrite(&self, usage: Vec<UsageFact>) -> Vec<UsageFact> {
+        if self.elements.is_empty() {
+            return usage;
+        }
+        let mut out = Vec::with_capacity(usage.len());
+        for fact in usage {
+            let candidates = match &fact {
+                UsageFact::Element { span, .. } => self.elements.get(&span.0),
+                _ => None,
+            };
+            let Some(candidates) = candidates else {
+                out.push(fact);
+                continue;
+            };
+            for (tag, origin) in candidates {
+                let mut copy = fact.clone();
+                if let UsageFact::Element { tag: written, origin: bound, .. } = &mut copy {
+                    *written = if tag.contains('.') { TagFact::Member(tag.clone()) } else { TagFact::Ident(tag.clone()) };
+                    *bound = Some(*origin);
+                }
+                out.push(copy);
+            }
+        }
+        out
+    }
+
+    /// Whether the reference at `span` is in an alias's initializer.
+    pub(crate) fn followed(&self, span: oxc::span::Span) -> bool {
+        let at = self.inits.partition_point(|(start, _)| *start <= span.start);
+        at > 0 && span.end <= self.inits[at - 1].1
+    }
+}
+
+struct AliasScan<'s> {
+    scoping: &'s Scoping,
+    /// Each candidate alias: its initializer's leaves and span.
+    aliases: FxHashMap<SymbolId, (Vec<AliasLeaf>, (u32, u32))>,
+    /// Where the candidates' leaves are, whose references are theirs.
+    leaves: FxHashSet<u32>,
+    /// The JSX element name being visited, with its opening element's start
+    /// (`None` for a closing one's).
+    tag: Option<(u32, Option<u32>)>,
+    /// Each JSX opening tag naming a local binding, with that binding.
+    uses: Vec<(SymbolId, u32)>,
+    /// The local bindings some reference uses otherwise.
+    other: FxHashSet<SymbolId>,
+}
+
+impl<'a> AliasScan<'_> {
+    /// The leaves of an alias's initializer: module-scope bindings, their
+    /// static members, or other local `const`s, through conditional and
+    /// logical choices; false for anything else. An element of a leaf is
+    /// judged as that tag written in place.
+    fn leaves(&self, init: &Expression<'a>, into: &mut Vec<AliasLeaf>, spans: &mut Vec<u32>) -> bool {
+        let root_scope = self.scoping.root_scope_id();
+        let bound = |id: &IdentifierReference<'_>| id.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
+        let origin = |symbol: SymbolId| if self.scoping.symbol_flags(symbol).is_import() { TagOrigin::Import } else { TagOrigin::TopLevel };
+        match crate::chain_walk::unwrap_type_assertions(init) {
+            Expression::ConditionalExpression(conditional) => {
+                self.leaves(&conditional.consequent, into, spans) && self.leaves(&conditional.alternate, into, spans)
+            }
+            Expression::LogicalExpression(logical) => match logical.operator {
+                oxc::syntax::operator::LogicalOperator::And => self.leaves(&logical.right, into, spans),
+                _ => self.leaves(&logical.left, into, spans) && self.leaves(&logical.right, into, spans),
+            },
+            Expression::Identifier(id) => {
+                let Some(symbol) = bound(id) else { return false };
+                spans.push(id.span.start);
+                if self.scoping.symbol_scope_id(symbol) == root_scope {
+                    into.push(AliasLeaf::Tag(id.name.to_string(), origin(symbol)));
+                } else {
+                    into.push(AliasLeaf::Alias(symbol));
+                }
+                true
+            }
+            Expression::StaticMemberExpression(member) => {
+                let (Some(path), Some(root)) = (static_member_path(member), static_member_root(member)) else { return false };
+                let Some(symbol) = bound(root) else { return false };
+                if self.scoping.symbol_scope_id(symbol) != root_scope {
+                    return false;
+                }
+                spans.push(root.span.start);
+                into.push(AliasLeaf::Tag(path, origin(symbol)));
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+impl<'a> Visit<'a> for AliasScan<'_> {
+    fn visit_variable_declaration(&mut self, declaration: &oxc::ast::ast::VariableDeclaration<'a>) {
+        if declaration.kind == oxc::ast::ast::VariableDeclarationKind::Const {
+            for declarator in &declaration.declarations {
+                let (oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init)) = (&declarator.id, &declarator.init) else { continue };
+                let Some(symbol) = id.symbol_id.get().filter(|symbol| self.scoping.symbol_scope_id(*symbol) != self.scoping.root_scope_id()) else {
+                    continue;
+                };
+                let (mut leaves, mut spans) = (Vec::new(), Vec::new());
+                if self.leaves(init, &mut leaves, &mut spans) {
+                    self.leaves.extend(spans);
+                    self.aliases.insert(symbol, (leaves, (init.span().start, init.span().end)));
+                }
+            }
+        }
+        oxc::ast_visit::walk::walk_variable_declaration(self, declaration);
+    }
+
+    fn visit_jsx_opening_element(&mut self, opening: &oxc::ast::ast::JSXOpeningElement<'a>) {
+        if let JSXElementName::IdentifierReference(name) = &opening.name {
+            self.tag = Some((name.span.start, Some(opening.span.start)));
+        }
+        oxc::ast_visit::walk::walk_jsx_opening_element(self, opening);
+    }
+
+    fn visit_jsx_closing_element(&mut self, closing: &oxc::ast::ast::JSXClosingElement<'a>) {
+        if let JSXElementName::IdentifierReference(name) = &closing.name {
+            self.tag = Some((name.span.start, None));
+        }
+        oxc::ast_visit::walk::walk_jsx_closing_element(self, closing);
+    }
+
+    fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
+        let Some(symbol) = id.reference_id.get().and_then(|reference| self.scoping.get_reference(reference).symbol_id()) else {
+            return;
+        };
+        if self.scoping.symbol_scope_id(symbol) == self.scoping.root_scope_id() || self.leaves.contains(&id.span.start) {
+            return;
+        }
+        match self.tag {
+            // The element's own name: an opening tag renders it.
+            Some((at, opening)) if at == id.span.start => {
+                if let Some(opening) = opening {
+                    self.uses.push((symbol, opening));
+                }
+            }
+            _ => {
+                self.other.insert(symbol);
+            }
+        }
+    }
+}

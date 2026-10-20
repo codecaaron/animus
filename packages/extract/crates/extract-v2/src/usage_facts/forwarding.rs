@@ -395,8 +395,10 @@ pub(super) fn forwarding<'a>(
     scoping: &Scoping,
     chains: &[&ChainDescriptor],
     exported: &FxHashSet<&str>,
+    aliases: &super::LocalAliases,
 ) -> Records {
     let mut module = Module::of(program, scoping, chains, exported);
+    module.aliases = aliases.elements.clone();
     let tops: Vec<Rc<[String]>> = program.body.iter().map(|statement| top_level_names(statement).into()).collect();
     let mut contexts: FxHashMap<u32, Context<'a>> = FxHashMap::default();
     // Every statement is walked once, in order; then each unit that read
@@ -490,6 +492,8 @@ struct Module<'s> {
     /// The component tags inside each component element, by span: syntax
     /// alone gives them, once.
     element_tags: FxHashMap<u32, BTreeSet<Name>>,
+    /// See `LocalAliases::elements`: each alias element's tags.
+    aliases: FxHashMap<u32, Vec<(String, TagOrigin)>>,
     names: Names,
     /// The functions a top-level statement declares (a component, a helper,
     /// a class method): their parameters are inputs, and React or the
@@ -527,6 +531,8 @@ struct Reached {
 struct Receiver {
     tag: String,
     origin: TagOrigin,
+    /// The other tags an alias element may render (`OpaqueTag::also`).
+    also: Vec<(String, TagOrigin)>,
     polymorphic: Polymorphic,
     site: SiteShape,
     exposed: bool,
@@ -708,6 +714,7 @@ impl<'s> Module<'s> {
             returns: FxHashMap::default(),
             arguments: FxHashMap::default(),
             element_tags: FxHashMap::default(),
+            aliases: FxHashMap::default(),
             names: Names::default(),
             roots: FxHashSet::default(),
             unit: Unit::Statement(0),
@@ -913,9 +920,9 @@ impl<'s> Module<'s> {
             .receivers
             .into_iter()
             .filter(|(_, receiver)| !receiver.reached.held.is_empty())
-            .map(|(at, Receiver { tag, origin, polymorphic, site, exposed, reached })| {
+            .map(|(at, Receiver { tag, origin, also, polymorphic, site, exposed, reached })| {
                 let (tags, imported_args, forwards_from) = record(reached);
-                OpaqueTag { tag, origin, polymorphic, site, at, exposed, tags, imported_args, forwards_from }
+                OpaqueTag { tag, origin, also, polymorphic, site, at, exposed, tags, imported_args, forwards_from }
             })
             .collect();
         // The module's own top-level bindings that hold elements, by name.
@@ -2511,7 +2518,12 @@ impl<'a> Walk<'_, '_, 'a> {
         let site = self.site_shape(element);
         let exposed = named_attribute(&["ref"]);
         let reached = Reached { top: Rc::clone(&self.top), held: value.clone() };
-        self.module.receivers.insert(element.span.start, Receiver { tag, origin, polymorphic, site, exposed, reached });
+        // An alias element renders each of its tags.
+        let (tag, origin, also) = match self.module.aliases.get(&element.span.start) {
+            Some(tags) if !tags.is_empty() => (tags[0].0.clone(), tags[0].1, tags[1..].to_vec()),
+            _ => (tag, origin, Vec::new()),
+        };
+        self.module.receivers.insert(element.span.start, Receiver { tag, origin, also, polymorphic, site, exposed, reached });
         self.module.grew(Key::Receiver(element.span.start));
         Place::Kept(InPlace::Received)
     }
@@ -3174,7 +3186,10 @@ struct ElementTags<'m, 's> {
 
 impl<'a> Visit<'a> for ElementTags<'_, '_> {
     fn visit_jsx_opening_element(&mut self, opening: &oxc::ast::ast::JSXOpeningElement<'a>) {
-        self.tags.extend(self.module.component_tag(&opening.name).map(|(tag, _)| tag));
+        match self.module.aliases.get(&opening.span.start) {
+            Some(tags) => self.tags.extend(tags.iter().map(|(tag, _)| tag.clone())),
+            None => self.tags.extend(self.module.component_tag(&opening.name).map(|(tag, _)| tag)),
+        }
         oxc::ast_visit::walk::walk_jsx_opening_element(self, opening);
     }
 }

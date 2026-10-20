@@ -7167,6 +7167,11 @@ fn opaque_delivery(
     type Memo<T> = PairMemo<std::rc::Rc<[T]>>;
     let resolved: Memo<String> = PairMemo::new();
     let receiver_ids = |file: &str, ff: &FileFacts, tag: &str| resolved.get_or(file, tag, || receiver_ids(file, ff, tag).into());
+    let targets: PairMemo<Option<(String, String)>> = PairMemo::new();
+    let component_target = |id: &str| {
+        let (file, binding) = id.rsplit_once("::").unwrap_or(("", id));
+        targets.get_or(file, binding, || component_target(id))
+    };
     // Each file's elements by where they open.
     let elements: FxHashMap<&str, FxHashMap<u32, &UsageFact>> = files
         .iter()
@@ -7467,79 +7472,83 @@ fn opaque_delivery(
     };
     let mut cloning = proven.clone();
     settle(&mut proven, &mut cloning, (0..renders.len()).collect());
-    let providers: std::cell::RefCell<FxHashMap<(String, u32), bool>> = Default::default();
+    let providers: std::cell::RefCell<FxHashMap<(String, u32, String), bool>> = Default::default();
     let tag_opaque = |file: &str,
                       ff: &FileFacts,
                       tag: &crate::usage_facts::OpaqueTag,
                       forwarding: &FxHashSet<(String, String)>,
                       (proven, cloning): (&Wrappers, &Wrappers)| {
         use crate::usage_facts::{Polymorphic, TagOrigin};
-        if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
-            return true;
-        }
-        let provider = *providers
-            .borrow_mut()
-            .entry((file.to_string(), tag.at))
-            .or_insert_with(|| names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, links, contexts));
-        if provider {
-            return false;
-        }
-        // A ref to a class component, or to a React wrapper of one, reads
-        // the instance, its props included.
-        let class = |declaring: &str, binding: &str| {
-            let Some(declared) = files.get(declaring) else { return false };
-            let mut binding = binding;
-            while let Some(Some(callback)) = declared.react_wrappers.get(binding) {
-                binding = callback;
-            }
-            declared.class_components.contains(binding)
-        };
-        // An ordinary component the element renders with its props: a
-        // wrapper whose every render the fixpoint above vetted passes on
-        // `as`, `asChild` and spreads only where its own elements judge them.
-        let ordinary_opaque = |key: &(String, String)| {
-            (tag.polymorphic != Polymorphic::No && !cloning.contains(key))
-                || forwarding.contains(key)
-                || (tag.exposed && class(&key.0, &key.1))
-        };
-        let ids = receiver_ids(file, ff, &tag.tag);
-        if !ids.is_empty() {
-            if !ids.iter().all(|id| renders_in_place(id)) {
-                // A component terminal renders its target with the site's
-                // props, `as` and `asChild` included: one the analysis reads
-                // is judged as that component's element.
-                let targets: Option<Vec<(String, String)>> = ids.iter().map(|id| component_target(id)).collect();
-                return targets.is_none_or(|targets| targets.iter().any(ordinary_opaque));
-            }
-            // An Animus string terminal renders its tag in place, unless the
-            // site's `as` names another, a spread may carry one, or `asChild`
-            // clones a child its own record cannot judge with the site's
-            // props. A spread of a wrapper's props that may switch `asChild`
-            // on clones the child each caller passes, which the wrapper's
-            // callers prove, when the element holds no element of its own to
-            // pass with it.
-            let site = &tag.site;
-            if site.as_open {
+        // An alias element renders each of its tags (`OpaqueTag::also`).
+        let judge = |name: &str, origin: TagOrigin| {
+            if matches!(origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
                 return true;
             }
-            if !spreads_proven(file, &site.spreads, proven) {
-                let clones_callers_child = site.as_child.is_none()
-                    && site.own_children
-                    && tag.tags.is_empty()
-                    && tag.imported_args.is_empty()
-                    && site.spreads.iter().all(|spread| {
-                        matches!(spread, SpreadArg::Props(wrapper) if cloning.contains(&(file.to_string(), wrapper.clone())))
-                    });
-                return !clones_callers_child;
+            let provider = *providers
+                .borrow_mut()
+                .entry((file.to_string(), tag.at, name.to_string()))
+                .or_insert_with(|| names_context_provider(file, ff, name, Some(origin), files, inputs, links, contexts));
+            if provider {
+                return false;
             }
-            return match &site.as_child {
-                None => false,
-                Some(None) => true,
-                Some(Some(_)) => !site.spreads.is_empty() || !clone_judged(file, ff, tag.at),
+            // A ref to a class component, or to a React wrapper of one, reads
+            // the instance, its props included.
+            let class = |declaring: &str, binding: &str| {
+                let Some(declared) = files.get(declaring) else { return false };
+                let mut binding = binding;
+                while let Some(Some(callback)) = declared.react_wrappers.get(binding) {
+                    binding = callback;
+                }
+                declared.class_components.contains(binding)
             };
-        }
-        // An ordinary component, named directly or as an object's member.
-        ordinary_named(file, ff, &tag.tag).first().is_none_or(ordinary_opaque)
+            // An ordinary component the element renders with its props: a
+            // wrapper whose every render the fixpoint above vetted passes on
+            // `as`, `asChild` and spreads only where its own elements judge them.
+            let ordinary_opaque = |key: &(String, String)| {
+                (tag.polymorphic != Polymorphic::No && !cloning.contains(key))
+                    || forwarding.contains(key)
+                    || (tag.exposed && class(&key.0, &key.1))
+            };
+            let ids = receiver_ids(file, ff, name);
+            if !ids.is_empty() {
+                if !ids.iter().all(|id| renders_in_place(id)) {
+                    // A component terminal renders its target with the site's
+                    // props, `as` and `asChild` included: one the analysis reads
+                    // is judged as that component's element.
+                    let targets: Option<Vec<(String, String)>> = ids.iter().map(|id| component_target(id)).collect();
+                    return targets.is_none_or(|targets| targets.iter().any(ordinary_opaque));
+                }
+                // An Animus string terminal renders its tag in place, unless the
+                // site's `as` names another, a spread may carry one, or `asChild`
+                // clones a child its own record cannot judge with the site's
+                // props. A spread of a wrapper's props that may switch `asChild`
+                // on clones the child each caller passes, which the wrapper's
+                // callers prove, when the element holds no element of its own to
+                // pass with it.
+                let site = &tag.site;
+                if site.as_open {
+                    return true;
+                }
+                if !spreads_proven(file, &site.spreads, proven) {
+                    let clones_callers_child = site.as_child.is_none()
+                        && site.own_children
+                        && tag.tags.is_empty()
+                        && tag.imported_args.is_empty()
+                        && site.spreads.iter().all(|spread| {
+                            matches!(spread, SpreadArg::Props(wrapper) if cloning.contains(&(file.to_string(), wrapper.clone())))
+                        });
+                    return !clones_callers_child;
+                }
+                return match &site.as_child {
+                    None => false,
+                    Some(None) => true,
+                    Some(Some(_)) => !site.spreads.is_empty() || !clone_judged(file, ff, tag.at),
+                };
+            }
+            // An ordinary component, named directly or as an object's member.
+            ordinary_named(file, ff, name).first().is_none_or(ordinary_opaque)
+        };
+        judge(&tag.tag, tag.origin) || tag.also.iter().any(|(name, origin)| judge(name, *origin))
     };
     // The element `const`s an import reaches: a namespace import every one
     // of its module's, a named one the one it names in another module.
@@ -7606,8 +7615,13 @@ fn opaque_delivery(
             SpreadArg::Props(wrapper) => Some(((*path).clone(), wrapper.clone())),
             _ => None,
         });
-        let targets = receiver_ids(path, ff, &tag.tag).iter().filter_map(|id| component_target(id)).collect::<Vec<_>>();
-        for key in ordinary_named(path, ff, &tag.tag).first().cloned().into_iter().chain(spread).chain(targets) {
+        let names = std::iter::once(tag.tag.as_str()).chain(tag.also.iter().map(|(name, _)| name.as_str()));
+        let mut keys: Vec<(String, String)> = spread.collect();
+        for name in names {
+            keys.extend(ordinary_named(path, ff, name).first().cloned());
+            keys.extend(receiver_ids(path, ff, name).iter().filter_map(|id| component_target(id)));
+        }
+        for key in keys {
             readers.entry(key).or_default().push(Site::Tag(index));
         }
     }
@@ -14574,6 +14588,16 @@ mod tests {
             ("const Section = ({ as: Tag = 'section', ...props }) => <Tag {...props} />;\nconst Frame = ds.styles({ display: 'grid' }).asComponent(Section);\nconst Render = ({ children }) => <Frame as={Foreign}>{children}</Frame>;", "", "", true),
             ("const Frame = ds.styles({ display: 'grid' }).asComponent(Foreign);\nconst Render = ({ children }) => <Frame>{children}</Frame>;", "", "", true),
             ("const Section = (props) => <section {...props} />;\nconst Frame = ds.styles({ display: 'grid' }).asComponent(Section);\nFrame.render = pad;\nconst Render = ({ children }) => <Frame>{children}</Frame>;", "", "", true),
+            // A function's `const` alias of components, used only as JSX tags,
+            // renders one of them in place; used any other way, it escapes.
+            ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst B = ds.styles({ display: 'flex' }).asElement('div');\nconst Render = ({ children, wide }) => { const Unit = wide ? A : B; return <Unit>{children}</Unit>; };", "wide", "", false),
+            ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst B = ds.styles({ display: 'flex' }).asElement('div');\nconst Render = ({ children, wide, open }) => { const Inner = open ? A : B; const Unit = wide ? Inner : (open && A) || B; const draw = () => <Unit>{children}</Unit>; return draw(); };", "wide", "", false),
+            ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst B = ds.styles({ display: 'flex' }).asElement('div');\nconst Render = ({ children, wide }) => { const Unit = wide ? A : Foreign; return <Unit>{children}</Unit>; };", "wide", "", true),
+            ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst B = ds.styles({ display: 'flex' }).asElement('div');\nconst Render = ({ children, wide }) => { const Unit = wide ? A : B; const pick = () => Unit; pad(pick); return <Unit>{children}</Unit>; };", "wide", "", true),
+            ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst B = ds.styles({ display: 'flex' }).asElement('div');\nconst Render = ({ children, wide }) => { const Unit = wide ? A : B; return <><Foreign render={Unit} /><Unit>{children}</Unit></>; };", "wide", "", true),
+            ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst B = ds.styles({ display: 'flex' }).asElement('div');\nconst Render = ({ children, wide }) => { let Unit = wide ? A : B; return <Unit>{children}</Unit>; };", "wide", "", true),
+            ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst B = ds.styles({ display: 'flex' }).asElement('div');\nconst Render = ({ children, wide }) => { const Unit = wide ? A : B; const Other = Unit || pad(); return <Unit>{children}</Unit>; };", "wide", "", true),
+            ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst B = ds.styles({ display: 'flex' }).asElement('div');\nconst Render = ({ children, wide, El }) => { const Unit = wide ? El : B; return <Unit>{children}</Unit>; };", "wide El={Foreign}", "", true),
             // A family member handed on is that member, not its family; one
             // written through changes what holds it too.
             ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst B = ds.styles({ display: 'flex' }).asElement('div');\nconst Fam = compose({ Root: A, Foot: B }, { shared: {}, name: 'Fam' });\npad(Fam.Foot);\nconst Render = ({ children }) => <Fam.Root>{children}</Fam.Root>;", "", "", false),
@@ -15362,6 +15386,24 @@ export const App = ({ n }) => (
         // An element with children of its own clones those instead.
         let own_child = format!("{SITE_KIT}const Scope = ({{ icon, children, ...rest }}) => <Inner {{...rest}}>{{icon}}</Inner>;\nexport const App = () => <Scope asChild size=\"lg\" icon={{<Btn />}}><b /></Scope>;\n");
         assert!(analyze(&[("a.tsx", &own_child)], &test_inputs()).sheets.variants.contains("--size-lg"));
+    }
+
+    /// Contract: an element of a function's `const` alias of components,
+    /// used only as JSX tags, renders each candidate with the tag's props,
+    /// and an alias element handed outside hands each.
+    #[test]
+    fn a_local_alias_renders_each_candidate_with_its_props() {
+        let kit = format!("{SITE_KIT}const Btn2 = ds.styles({{ display: 'inline' }}).variant({{ prop: 'size', defaultVariant: 'md', variants: {{ sm: {{ gap: '1px' }}, md: {{ gap: '2px' }}, lg: {{ gap: '3px' }} }} }}).asElement('a');\n");
+        let run = |body: &str| analyze(&[("a.tsx", &format!("{kit}export const App = ({{ wide }}) => {{ const Unit = wide ? Btn : Btn2; {body} }};\n"))], &test_inputs());
+        let option = |out: &CssOutput, component: &str, option: &str| {
+            out.sheets.variants.lines().any(|line| line.contains(&format!("animus-{component}-")) && line.contains(option))
+        };
+        let out = run("return <Unit size=\"sm\" />;");
+        for component in ["Btn", "Btn2"] {
+            assert!(option(&out, component, "--size-sm") && !option(&out, component, "--size-lg"), "{component}: {}", out.sheets.variants);
+        }
+        let out = run("return <Foreign><Unit size=\"sm\" /></Foreign>;");
+        assert!(option(&out, "Btn2", "--size-lg"), "{}", out.sheets.variants);
     }
 
     fn custom_classes<'a>(out: &'a CssOutput, id: &str, prop: &str) -> &'a HashMap<String, String> {
@@ -18395,17 +18437,16 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
-    /// An alias declared inside a function is not followed, so it opens its
-    /// target instead of losing what it renders.
+    /// An alias declared inside a function and used only as a JSX tag renders
+    /// its target with the tag's props; handed on, it opens its target
+    /// instead of losing what it renders.
     #[test]
-    fn nested_const_aliases_keep_every_option() {
-        let app = "import { R } from './r';\n\
-                   function Make() { const B = R; return <B size=\"lg\" />; }\n\
-                   export const App = () => <><R size=\"sm\" active /><Make /></>;\n";
-        assert_eq!(
-            kept_options(&[("r.tsx", RECIPE), ("app.tsx", app)]),
-            (vec!["sm", "md", "lg"], vec!["active", "busy"])
-        );
+    fn nested_const_aliases_render_their_target_or_keep_every_option() {
+        let make = |body: &str| format!("import {{ R }} from './r';\nfunction Make() {{ const B = R; {body} }}\nexport const App = () => <><R size=\"sm\" active /><Make /></>;\n");
+        let app = make("return <B size=\"lg\" />;");
+        assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.tsx", &app)]), (vec!["sm", "lg"], vec!["active"]));
+        let app = make("pad(B); return <B size=\"lg\" />;");
+        assert_eq!(kept_options(&[("r.tsx", RECIPE), ("app.tsx", &app)]), (vec!["sm", "md", "lg"], vec!["active", "busy"]));
     }
 
     /// A component passed anywhere but a JSX tag can render with any props
