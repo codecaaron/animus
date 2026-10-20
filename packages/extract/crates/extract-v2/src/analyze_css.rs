@@ -14687,6 +14687,14 @@ const Render = ({ children }) => { document.body.onclick = t; return <div>{child
             ("import * as R from 'react';\nconst C = R.Children;\nC.only = pad;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("import * as R from 'react';\nimport { setup } from './other';\nsetup(R.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE);\nconst Render = ({ children }) => <div>{children}</div>;", "", "export const setup = (d) => { d.H = {}; };\n", true),
             ("import * as R from 'react';\nconst use = R.useState;\nclass Frame extends R.Component {}\nconst Render = ({ children }) => <div title={R.version}>{children}</div>;", "", "", false),
+            // A binding may hold the global object (`document.defaultView`,
+            // `top`): a store of a trusted global's name into one, or a
+            // literal that holds a callable under one, may redirect it.
+            ("const w = document.defaultView;\nw.Math = { max: pad };\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const t = top;\nt.Math = pad;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("Object.assign(document.defaultView, { Math: { max: pad } });\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const Render = ({ children }) => { document.body.model = { Map: pad }; return <div>{children}</div>; };", "", "", true),
+            ("const w = document.defaultView;\nw.title = pad;\ndocument.body.model = { Date: 'x', Map: 1 };\nconst Render = ({ children }) => <div>{children}</div>;", "", "", false),
             // A member read may be any object, React's own dispatcher among
             // them (`ReactCurrentDispatcher.current = { useState }`).
             ("const Render = ({ children }) => { const r = useRef(null); r.current.typing.current = { useState: r ? pad : 0 }; return <div>{children}</div>; };", "", "", true),

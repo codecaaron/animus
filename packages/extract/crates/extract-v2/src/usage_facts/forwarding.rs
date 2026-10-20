@@ -1388,7 +1388,7 @@ impl<'r> Declarations<'r> {
             // built-in, except by a key the walk cannot read into an object
             // the module may not own.
             if !self.stores_no_trusted_callable(span) || (computed && !self.unshared(object)) {
-                self.written_into(object, computed || name.is_some_and(built_in_name));
+                self.written_into(object, computed || name.is_some_and(|name| built_in_name(name) || trusted_global(name)));
             }
             // Whatever it stores, a store by a static key into an object that
             // may be a prototype every props object inherits counts where a
@@ -1725,8 +1725,9 @@ impl<'r> Declarations<'r> {
         }
     }
 
-    /// A write into `object`, one that may set a built-in's method or hook
-    /// when `built_in`. Into an object the module does not own (`owned`),
+    /// A write into `object`, one that may set a built-in's method or hook,
+    /// or a trusted global where `object` is the global object, when
+    /// `built_in`. Into an object the module does not own (`owned`),
     /// it may reach a built-in's prototype however the code got there. One
     /// that may set a built-in's method, into a binding, may too, unless the
     /// binding is declared to a literal (`Module::of` judges it).
@@ -1982,9 +1983,12 @@ fn intrinsic(expression: &Expression<'_>, unbound: impl Fn(&IdentifierReference<
 }
 
 /// Whether a store of `name` may redirect what the walk trusts by name: a
-/// built-in's method or hook, React's functions, a writer, or a prototype.
+/// built-in's method or hook, React's functions, a writer, a prototype, or
+/// a trusted global, which an object that may be the global object holds
+/// (`document.defaultView`).
 fn trusted_name(name: &str) -> bool {
     built_in_name(name)
+        || trusted_global(name)
         || !matches!(react_function(name), Callee::Unknown)
         || writer("Object", name)
         || writer("Reflect", name)
