@@ -7024,6 +7024,7 @@ fn opaque_delivery(
     evaluated_ids: &FxHashSet<String>,
     ids_by_binding: &IdsByBinding,
     wrapper_targets: &FxHashMap<String, FxHashMap<String, Vec<String>>>,
+    member_bindings: &BTreeMap<String, FxHashMap<String, String>>,
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
     receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
     renders_in_place: impl Fn(&str) -> bool,
@@ -7230,7 +7231,9 @@ fn opaque_delivery(
             imports.extend(held.imports.iter().map(|import| (declaring.clone(), import.clone(), receiver.clone())));
         }
     }
-    // A private wrapper that spreads its props into components delivers them.
+    // A private wrapper that spreads its props into components delivers them,
+    // and a family's member tag the component it renders, as usage reads it
+    // (an import the analysis cannot follow included).
     let delivered = tags
         .iter()
         .enumerate()
@@ -7238,6 +7241,7 @@ fn opaque_delivery(
             resolve_usage_identity(file, tag, files, inputs, links, evaluated_ids, ids_by_binding)
                 .into_iter()
                 .chain(wrapper_targets.get(file).and_then(|wrappers| wrappers.get(tag)).into_iter().flatten().cloned())
+                .chain(member_bindings.get(file).and_then(|members| members.get(tag)).cloned())
                 .map(move |id| (id, at))
         })
         .collect();
@@ -9873,6 +9877,7 @@ fn run_with_system_floor(
         &evaluated_ids,
         &ids_by_binding,
         &wrapper_targets_by_file,
+        &member_bindings,
         &ordinary_members,
         receiver_ids,
         |id| {
@@ -13957,6 +13962,12 @@ mod tests {
             ("const Stack = ds.system({ display: true }).asElement('div');\nconst Render = () => <Stack is=\"x-widget\" item={<Box p={4} />} />;", "", "", true),
             ("const Render = () => <div is=\"x-widget\" item={<Box p={4} />} />;", "", "", true),
             ("const Stack = ds.system({ display: true }).asElement('div');\nconst Render = () => <Stack as=\"span\" item={<Box p={4} />} />;", "", "", false),
+            // A compose family's member imported through a package the
+            // analysis cannot follow, delivered to code outside it.
+            ("import { BrandPlate } from '@acme/ui';\nimport { AppearanceScope } from '@acme/scopes';\nconst Render = () => <AppearanceScope asChild><BrandPlate.Root p={2} /></AppearanceScope>;", "", "const BrandPlateRoot = ds.system({ space: true }).asElement('div');\nexport const BrandPlate = compose({ Root: BrandPlateRoot }, { shared: {}, name: 'BrandPlate' });\n", true),
+            ("import { MetaStripParts } from '@acme/ui';\nconst Render = ({ items }) => <dl>{items.map((item) => <MetaStripParts.Term key={item} p={2}>{item}</MetaStripParts.Term>)}</dl>;", "items={d}", "const MetaStripTerm = ds.system({ space: true }).asElement('dt');\nexport const MetaStripParts = compose({ Term: MetaStripTerm }, { shared: {}, name: 'MetaStripParts' });\n", true),
+            ("import { Badge } from '@acme/ui';\nimport { Page } from '@acme/page';\nconst Render = () => <Page><Badge.Root p={2} /></Page>;", "", "const BadgeRoot = ds.system({ space: true }).asElement('span');\nexport const Badge = compose({ Root: BadgeRoot }, { shared: {}, name: 'Badge' });\n", true),
+            ("import { Badge } from '@acme/ui';\nconst Render = () => <div><Badge.Root p={2} /></div>;", "", "const BadgeRoot = ds.system({ space: true }).asElement('span');\nexport const Badge = compose({ Root: BadgeRoot }, { shared: {}, name: 'Badge' });\n", false),
             // A ref to a React wrapper of a class reads the class's props.
             ("import { memo } from 'react';\nclass Inner extends Component { render() { return <div>{this.props.children}</div>; } }\nconst Render = memo(Inner);", "ref={pad}", "", true),
             // A setter runs on a store with its object as `this`.
