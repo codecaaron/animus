@@ -239,8 +239,12 @@ one failing chain, so an old packet can never stand for a new success.
 - **Probes are consumer code.** Put files in `type-probes/` that import the
   package by name, as a consumer does: accepted uses and deliberate
   mistakes (a wrong variant, an unknown breakpoint), with no
-  `@ts-expect-error`. Include one use that depends on the augmentation, so
-  a lost augmentation edge changes a diagnostic.
+  `@ts-expect-error`. Make the augmentation visible through rejections:
+  without it, Animus props fall back to permissive CSS types and accept
+  any value, so an accepted theme token proves nothing. Include wrong
+  token values the augmented theme rejects (an unknown color token, an
+  unknown breakpoint); a lost augmentation edge then makes those
+  rejections disappear.
 - **Ignore the intermediates:** `.types-raw/`, `types/`, `.types.lock`,
   and the `.types.staging-*`, `.types.check-*` and `.types.retired-*`
   directories a run leaves only if it is killed. The next run removes the

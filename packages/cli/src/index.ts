@@ -94,6 +94,7 @@ Options:
                       as module specifier and export (repeatable)
   --tsc <path>        types alias: the tsc entry (default: the project's
                       typescript)
+  --version           Print the @animus-ui/cli version
   --help              This text
 
 Exit codes: 0 success · 1 extraction failure · 2 config error · 3 engine
@@ -137,8 +138,11 @@ function reportUsageError(reason: string): void {
   process.exitCode = EXIT_USAGE;
 }
 
+/** `version` is the installed package's, which `bin/animus.mjs` reads from
+ *  its package.json and passes in. */
 export async function main(
-  argv: string[] = process.argv.slice(2)
+  argv: string[] = process.argv.slice(2),
+  version?: string
 ): Promise<void> {
   let parsed;
   try {
@@ -168,6 +172,7 @@ export async function main(
         anchor: { type: 'string', multiple: true },
         tsc: { type: 'string' },
         help: { type: 'boolean' },
+        version: { type: 'boolean' },
       },
     });
   } catch (error) {
@@ -176,6 +181,11 @@ export async function main(
   }
 
   const { values, positionals } = parsed;
+  if (values.version) {
+    console.log(version ?? 'unknown');
+    process.exitCode = EXIT_OK;
+    return;
+  }
   if (values.help || positionals.length === 0) {
     console.error(USAGE);
     process.exitCode =
