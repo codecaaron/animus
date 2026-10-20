@@ -906,6 +906,8 @@ pub(crate) struct EnrichedUsage {
     pub confined: BTreeSet<String>,
     /// See `FileFacts::value_escapes`.
     pub escapes: BTreeSet<String>,
+    /// See `FileFacts::terminal_escapes`.
+    pub terminal_escapes: BTreeSet<String>,
     /// See `FileFacts::spread_wrappers`.
     pub spread_wrappers: BTreeMap<String, SpreadWrapper>,
     /// See `FileFacts::ordinary_components`.
@@ -1324,7 +1326,7 @@ pub(crate) fn collect_enriched_usage(
         .zip(react_imports.as_ref())
         .map(|(scoping, react)| ordinary_components(program, scoping, react, &BTreeSet::new(), direct_eval))
         .unwrap_or_default();
-    let escapes = match &scoping {
+    let (escapes, terminal_escapes) = match &scoping {
         Some(scoping) if may_escape => {
             let mut scan = EscapeScan {
                 admissible: &admissible,
@@ -1344,6 +1346,8 @@ pub(crate) fn collect_enriched_usage(
                 namespaces: collect_namespace_imports(module).into_keys().collect(),
                 imports: named_import_locals(module),
                 escapes: BTreeSet::new(),
+                terminal: BTreeSet::new(),
+                elsewhere: BTreeSet::new(),
                 ancestors: Vec::new(),
                 aliases: &aliases,
             };
@@ -1363,9 +1367,10 @@ pub(crate) fn collect_enriched_usage(
             } else {
                 scan.visit_program(program);
             }
-            scan.escapes
+            let terminal = scan.terminal.difference(&scan.elsewhere).cloned().collect();
+            (scan.escapes, terminal)
         }
-        _ => BTreeSet::new(),
+        _ => (BTreeSet::new(), BTreeSet::new()),
     };
     let (ordinary_components, react_wrappers) = origins
         .zip(react_imports.as_ref())
@@ -1391,6 +1396,7 @@ pub(crate) fn collect_enriched_usage(
         usage,
         confined,
         escapes,
+        terminal_escapes,
         spread_wrappers,
         ordinary_components,
         react_wrappers,
@@ -5336,6 +5342,10 @@ struct EscapeScan<'a, 's> {
     /// re-exports, or a component whatever its name's case.
     imports: BTreeSet<String>,
     escapes: BTreeSet<String>,
+    /// The escapes some reference makes as an extracted `.asComponent()`
+    /// terminal's target, and those some other reference makes.
+    terminal: BTreeSet<String>,
+    elsewhere: BTreeSet<String>,
     ancestors: Vec<AstKind<'a>>,
     /// See `LocalAliases`: what an alias's initializer reads, its elements
     /// render.
@@ -5383,6 +5393,11 @@ impl<'a> Visit<'a> for EscapeScan<'a, '_> {
         }
         let path = self.escape_path(name, ident.span);
         if let Some(path) = path {
+            if path == name && self.terminal_target(name, ident.span) {
+                self.terminal.insert(path.clone());
+            } else {
+                self.elsewhere.insert(path.clone());
+            }
             self.escapes.insert(path);
         }
     }
@@ -5435,6 +5450,25 @@ impl EscapeScan<'_, '_> {
             }
             ancestors = rest;
         }
+    }
+
+    /// Whether the reference to `name` at `span` is the target of an
+    /// extracted `.asComponent()` terminal, which renders it as an element
+    /// and changes nothing in it.
+    fn terminal_target(&self, name: &str, span: oxc::span::Span) -> bool {
+        use oxc::span::GetSpan;
+        let mut up = self.ancestors.iter().rev();
+        let (current, parent) = peel_wrappers(span, &mut up);
+        matches!(parent, Some(AstKind::CallExpression(call))
+            if call.arguments.first().map(GetSpan::span) == Some(current)
+                && matches!(&call.callee, Expression::StaticMemberExpression(member) if member.property.name == "asComponent")
+                && self.chains.iter().any(|chain| {
+                    chain.extractable
+                        && chain.terminal == TerminalKind::AsComponent
+                        && chain.tag == name
+                        && chain.span.0 <= call.span.start
+                        && call.span.end <= chain.span.1
+                }))
     }
 
     /// The dotted path under which a reference escapes, or `None` when usage

@@ -609,6 +609,11 @@ pub struct FileFacts {
     /// call, a prop, an object or an array, or default-exported.
     #[serde(skip)]
     pub(crate) value_escapes: BTreeSet<String>,
+    /// The `value_escapes` whose every reference is an extracted
+    /// `.asComponent()` terminal's target: the terminal renders it with its
+    /// sites' props, and hands the binding to nothing that may write it.
+    #[serde(skip)]
+    pub(crate) terminal_escapes: BTreeSet<String>,
     /// Module-scope function components whose renders stand in for the
     /// components they spread their props into.
     #[serde(skip)]
@@ -1416,6 +1421,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         exports: crate::usage_facts::collect_export_facts(ast.program()),
         confined_components: BTreeSet::new(),
         value_escapes: BTreeSet::new(),
+        terminal_escapes: BTreeSet::new(),
         spread_wrappers: BTreeMap::new(),
         module_loads: lowered.loads.iter().filter_map(|load| load.module_load(source)).collect(),
         runtime_imports: lowered.loads.iter().filter_map(|load| load.runtime_import(source)).collect(),
@@ -2077,6 +2083,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         usage: usage_enriched,
         confined: confined_components,
         escapes: value_escapes,
+        terminal_escapes,
         spread_wrappers,
         ordinary_components,
         react_wrappers,
@@ -2150,6 +2157,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         captured_transform_bindings,
         confined_components,
         value_escapes,
+        terminal_escapes,
         spread_wrappers,
         ordinary_components,
         react_wrappers,

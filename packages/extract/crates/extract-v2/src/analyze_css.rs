@@ -7660,9 +7660,10 @@ fn opaque_delivery(
     // A React wrapper some module hands on or writes through, by any path to
     // it (an import, a `const` alias, an object that holds it), may render
     // anything in its callback's place: it forwards outside.
+    // An `.asComponent()` terminal renders its target and writes nothing in it.
     let mut seeded: Vec<(String, String)> = Vec::new();
     for (path, ff) in files {
-        for escaped in &ff.value_escapes {
+        for escaped in ff.value_escapes.difference(&ff.terminal_escapes) {
             let prefixes = escaped.match_indices('.').map(|(dot, _)| &escaped[..dot]).chain(std::iter::once(escaped.as_str()));
             let mut pending: Vec<(String, String)> =
                 prefixes.filter_map(|prefix| declaration(path, ff, prefix)).map(|(declaring, binding, _)| (declaring, binding)).collect();
@@ -14738,6 +14739,13 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             // the props object as `this`.
             ("const Render = (props) => { (props.render)(); return <div>{props.children}</div>; };", "render={pad}", "", true),
             ("const Render = (props) => { (props.render as any)(); return <div>{props.children}</div>; };", "render={pad}", "", true),
+            // An `.asComponent()` terminal renders its target, a React
+            // `forwardRef` among them, and writes nothing in it: the target
+            // renders its children in place unless something else hands it
+            // on.
+            ("import { forwardRef } from 'react';\nconst Target = forwardRef(function Target({ children, ...rest }, ref) { return <div ref={ref} {...rest}>{children}</div>; });\nconst Render = ds.styles({ display: 'grid' }).asComponent(Target);", "", "", false),
+            ("import { Target } from './other';\nconst Render = ds.styles({ display: 'grid' }).asComponent(Target);", "", "import { forwardRef } from 'react';\nexport const Target = forwardRef(function Target({ children, ...rest }, ref) { return <a ref={ref} {...rest}>{children}</a>; });\n", false),
+            ("import { forwardRef } from 'react';\nconst Target = forwardRef(function Target({ children, ...rest }, ref) { return <div ref={ref} {...rest}>{children}</div>; });\nconst Render = ds.styles({ display: 'grid' }).asComponent(Target);\nexport const all = [Target];", "", "", true),
             // Forwarding is decided per input: an input handed to unknown
             // code (a callback prop called with a prop, `clsx` with a class
             // name) marks the elements that prop carries, not the children
