@@ -17781,6 +17781,27 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         }
     }
 
+    /// Contract: a member an `Object.assign` adds to a followed family is
+    /// the binding it holds, so its member tag renders that component (an
+    /// Animus one, or an ordinary one) with the tag's props and children.
+    #[test]
+    fn a_member_object_assign_adds_to_a_family_renders_its_binding() {
+        let render = ("d.tsx", "import { R } from './r';\nexport const D = () => <R size=\"sm\" busy />;\n");
+        for (extras, app) in [
+            ("{ Extra: R }", "export const App = () => <Page.Extra size=\"lg\" active />;\n"),
+            ("{ Meta }", "export const App = () => <Page.Meta><R size=\"lg\" active /></Page.Meta>;\n"),
+        ] {
+            let family = format!(
+                "{RECIPE}const Plain = ds.styles({{ display: 'flex' }}).asElement('div');\n\
+                 function Meta({{ children }}) {{ return <section>{{children}}</section>; }}\n\
+                 export const Page = Object.assign(compose({{ Root: Plain }}), {extras});\n"
+            );
+            let app = format!("import {{ Page, R }} from './r';\n{app}");
+            let kept = kept_options(&[("r.tsx", family.as_str()), render, ("app.tsx", app.as_str())]);
+            assert_eq!(kept, (vec!["sm", "lg"], vec!["active", "busy"]), "{extras}");
+        }
+    }
+
     #[test]
     fn a_family_star_exported_twice_or_openly_names_no_member() {
         // `ui.Card` is ambiguous through two stars, or open beside an

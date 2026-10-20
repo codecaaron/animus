@@ -35,6 +35,11 @@ pub struct ComposeFamilyInfo {
     /// Built through `Object.assign`, which a module may rewrite.
     #[serde(skip)]
     pub assigned: bool,
+    /// The members such an `Object.assign` adds whose values are bindings
+    /// (`{ MetaLine: PageBarMetaLine }`): (key, binding). A member tag reads
+    /// one as the binding itself, not a slot `compose` wraps.
+    #[serde(skip)]
+    pub extras: Vec<(String, String)>,
     pub name: String,
 }
 
@@ -235,9 +240,22 @@ fn collect_compose_from_expression(
             }),
             _ => false,
         });
-    match families.get_mut(found) {
-        Some(family) if keeps_slots => family.assigned = true,
-        _ => families.truncate(found),
+    let Some(family) = families.get_mut(found).filter(|_| keeps_slots) else {
+        families.truncate(found);
+        return;
+    };
+    family.assigned = true;
+    // Each added member a binding holds renders through the member tag, as a
+    // slot does.
+    for property in call.arguments.iter().skip(1).filter_map(Argument::as_expression) {
+        let Expression::ObjectExpression(object) = crate::chain_walk::unwrap_type_assertions(property) else { continue };
+        for property in &object.properties {
+            let ObjectPropertyKind::ObjectProperty(property) = property else { continue };
+            if let (Some(key), Expression::Identifier(value)) = (eval_property_key(&property.key), crate::chain_walk::unwrap_type_assertions(&property.value)) {
+                family.extras.push((key, value.name.to_string()));
+                family.slot_values.push((value.span.start, value.span.end));
+            }
+        }
     }
 }
 
@@ -335,6 +353,7 @@ fn extract_compose_family(
         context,
         span: (call.span.start, call.span.end),
         assigned: false,
+        extras: Vec::new(),
         name,
     });
 }

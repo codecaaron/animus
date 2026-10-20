@@ -35,6 +35,9 @@ pub(crate) struct FamilyIndex {
     members: Vec<Vec<(String, String)>>,
     /// Per family, whether it may hold members `members` does not list.
     open: Vec<bool>,
+    /// Per family, the members an `Object.assign` adds, each with the
+    /// binding it holds in the family's module (`ComposeFamilyInfo::extras`).
+    extras: Vec<Vec<(String, String)>>,
     /// Per family, its declaration: the module and the binding that holds
     /// it, or the module's default cell for `export default compose(…)`.
     declarations: Vec<(String, String)>,
@@ -54,19 +57,25 @@ impl FamilyIndex {
             by_export: std::cell::OnceCell::new(),
             members: Vec::new(),
             open: Vec::new(),
+            extras: Vec::new(),
             declarations: Vec::new(),
         };
         for (file, ff) in files {
             for family in &ff.compose {
                 let id = index.members.len();
-                index.members.push(
-                    family
-                        .slots
-                        .iter()
-                        .map(|(slot, binding)| (slot.clone(), slot_component(file, binding)))
-                        .collect(),
-                );
+                let mut members: Vec<(String, String)> =
+                    family.slots.iter().map(|(slot, binding)| (slot.clone(), slot_component(file, binding))).collect();
+                // An added member that is an Animus component renders it; an
+                // ordinary one is `ObjectMembers::ordinary_member`'s.
+                for (member, binding) in &family.extras {
+                    let component = slot_component(file, binding);
+                    if component != *binding {
+                        members.push((member.clone(), component));
+                    }
+                }
+                index.members.push(members);
                 index.open.push(family.open);
+                index.extras.push(family.extras.clone());
                 // A family no binding holds and no default export names is
                 // keyed by its position, apart from any binding.
                 let declared = match (&family.family_binding, family.default_export) {
@@ -454,7 +463,21 @@ impl<'f> ObjectMembers<'f> {
     /// names it, through an import too, and nothing may have changed the
     /// object since.
     pub(crate) fn ordinary_member(&mut self, file: &str, tag: &str) -> Option<(String, String)> {
-        let (module, binding, None) = self.member_entry(file, tag)? else { return None };
+        let (module, binding) = match self.member_entry(file, tag) {
+            Some((module, binding, None)) => (module, binding),
+            Some(_) => return None,
+            // A member an `Object.assign` adds to a family holds its binding.
+            None => {
+                let (path, key) = tag.rsplit_once('.')?;
+                let family = self.object_at(file, path)?;
+                let Object::Family(id) = family else { return None };
+                if self.table(&family).open || self.instability(&family).is_some() {
+                    return None;
+                }
+                let (_, binding) = self.families.extras[id].iter().find(|(member, _)| member == key)?;
+                (self.families.declarations[id].0.clone(), binding.clone())
+            }
+        };
         let ff = self.files.get(&module)?;
         let (declaring, declared, _) = resolve_declaration(&module, ff, &binding, self.files, self.inputs, self.links)?;
         self.files.get(&declaring)?.ordinary_components.contains(&declared).then_some((declaring, declared))
