@@ -4483,51 +4483,66 @@ fn foreign_package(source: &str, inputs: &CssInputs) -> bool {
     inputs.analysis_context.foreign_packages.iter().any(|foreign| foreign == package)
 }
 
-/// The renders a foreign tag's `asChild` makes: at each site with one element
-/// child, that child with the tag's own props, after props the tag's code adds
-/// that usage cannot list. With them, the offset of each prop passed so, and
+/// The renders an `asChild` makes: at each site with one element child, that
+/// child with the site's props. A foreign tag passes all of them, after props
+/// its code adds that usage cannot list. An Animus element passes those that
+/// are not its own (`animus_own`: its variants, states, system and custom
+/// props, but never a `data-*` or `aria-*` one). A child with its own
+/// `asChild` leaves its parent handing the props outside. A wrapper
+/// that spreads its props into Animus elements rendering its `children`
+/// (`clone_sites`) passes all of them, with the props those elements write
+/// that are not their own. With them, the offset of each prop passed so, and
 /// the tag that passes it.
-fn as_child_renders<'f>(ff: &'f FileFacts, inputs: &CssInputs) -> (Vec<UsageFact>, FxHashMap<u32, &'f str>) {
+fn as_child_renders<'f>(
+    ff: &'f FileFacts,
+    inputs: &CssInputs,
+    animus_own: &dyn Fn(&str) -> Option<FxHashSet<String>>,
+    clone_sites: &dyn Fn(&str) -> Option<Vec<crate::usage_facts::AttrFact>>,
+) -> (Vec<UsageFact>, FxHashMap<u32, &'f str>) {
     let mut renders = Vec::new();
     let mut passed = FxHashMap::default();
-    if inputs.analysis_context.foreign_packages.is_empty() {
-        return (renders, passed);
-    }
     let usage = ff.usage_for_analysis();
     for (index, fact) in usage.iter().enumerate() {
-        let UsageFact::Element {
-            tag: TagFact::Ident(tag) | TagFact::Member(tag),
-            attrs,
-            spread: None,
-            span,
-            origin: Some(TagOrigin::Import),
-            element_child,
-            ..
-        } = fact
+        let UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), attrs, spread: None, span, origin, element_child, .. } = fact
         else {
             continue;
         };
+        if !attrs.iter().any(|attr| attr.name == "asChild") {
+            continue;
+        }
         let Some(child_span) = as_child_element(ff, *element_child, inputs) else {
             continue;
         };
-        if !attrs.iter().any(|attr| attr.name == "asChild") || foreign_root_source(ff, tag, inputs).is_none() {
+        let foreign = *origin == Some(TagOrigin::Import) && foreign_root_source(ff, tag, inputs).is_some();
+        let own = if foreign { None } else { animus_own(tag) };
+        let written = if foreign || own.is_some() { None } else { clone_sites(tag) };
+        if !foreign && own.is_none() && written.is_none() {
             continue;
         }
         // The child's fact follows its parent's.
-        let Some(UsageFact::Element { tag: child, origin, .. }) =
+        let Some(UsageFact::Element { tag: child, origin: child_origin, .. }) =
             usage[index + 1..].iter().find(|fact| matches!(fact, UsageFact::Element { span, .. } if *span == child_span))
         else {
             continue;
         };
-        let attrs: Vec<_> =
-            attrs.iter().filter(|attr| !matches!(attr.name.as_str(), "asChild" | "children" | "key")).cloned().collect();
+        let mut attrs: Vec<crate::usage_facts::AttrFact> = attrs
+            .iter()
+            .filter(|attr| !matches!(attr.name.as_str(), "asChild" | "children" | "key"))
+            .filter(|attr| own.as_ref().is_none_or(|own| !own.contains(&attr.name)))
+            .cloned()
+            .collect();
         passed.extend(attrs.iter().map(|attr| (attr.at, tag.as_str())));
+        // What the wrapper's elements write is passed at this site.
+        if let Some(written) = written {
+            passed.insert(span.0, tag.as_str());
+            attrs.extend(written.into_iter().map(|attr| crate::usage_facts::AttrFact { at: span.0, ..attr }));
+        }
         renders.push(UsageFact::Element {
             tag: child.clone(),
-            spread: Some(attrs.len()),
+            spread: foreign.then_some(attrs.len()),
             attrs,
             span: *span,
-            origin: *origin,
+            origin: *child_origin,
             written_as_call: false,
             element_child: None,
         });
@@ -4677,6 +4692,26 @@ fn namespace_member_ids(
             (!ids.is_empty()).then(|| (tag.to_string(), ids))
         })
         .collect()
+}
+
+/// The Animus components a receiver's tag in `file` may render: its
+/// declaration (a plain name), a family member usage resolves, or a member
+/// path through namespaces.
+fn receiver_identities(
+    file: &str,
+    ff: &FileFacts,
+    tag: &str,
+    (files, inputs, links): (&BTreeMap<String, FileFacts>, &CssInputs, &crate::link::ProjectLinks),
+    evaluated_ids: &FxHashSet<String>,
+    member_bindings: &BTreeMap<String, FxHashMap<String, String>>,
+) -> Vec<String> {
+    let mut ids = match tag.contains('.') {
+        true => Vec::new(),
+        false => resolve_declared_identity(file, tag, files, inputs, links, evaluated_ids),
+    };
+    ids.extend(member_bindings.get(file).and_then(|members| members.get(tag)).cloned());
+    ids.extend(member_path_ids(file, ff, tag, false, files, inputs, links, evaluated_ids));
+    ids
 }
 
 /// The components a dotted member path in `file` names through namespace
@@ -7031,18 +7066,27 @@ fn opaque_delivery(
     contexts: &crate::flow::ValueEffects,
 ) -> (Vec<(String, usize)>, Vec<OpaqueDelivery>) {
     // The declaration `name` (`lib.enhance` for a namespace import's
-    // member) names from `file`, or `None` outside the analysis.
+    // member) names from `file`, or `None` outside the analysis. The facts
+    // alone decide it, and the passes below ask again and again.
+    type Declared = Option<(String, String, bool)>;
+    let declared: std::cell::RefCell<FxHashMap<(String, String), Declared>> = Default::default();
     let declaration = |file: &str, ff: &FileFacts, name: &str| {
+        let key = (file.to_string(), name.to_string());
+        if let Some(found) = declared.borrow().get(&key) {
+            return found.clone();
+        }
         let (root, member) = match name.split_once('.') {
             Some((root, member)) => (root, Some(member)),
             None => (name, None),
         };
-        match (ff.namespace_imports.get(root), member) {
+        let found = match (ff.namespace_imports.get(root), member) {
             (Some(source), Some(member)) => resolve_export(file, source, member, files, inputs, links),
             (Some(source), None) => resolve_import_source(file, source, files, inputs)
                 .map(|module| (module, String::new(), false)),
             (None, _) => resolve_declaration(file, ff, root, files, inputs, links),
-        }
+        };
+        declared.borrow_mut().insert(key, found.clone());
+        found
     };
     // The arrays every analysed module reads in place: none uses one
     // otherwise through a named import, and none reaches its module through
@@ -7095,25 +7139,381 @@ fn opaque_delivery(
                 })
         })
     };
-    let tag_opaque = |file: &str, ff: &FileFacts, tag: &crate::usage_facts::OpaqueTag, forwarding: &FxHashSet<(String, String)>| {
+    // The wrappers whose own props an Animus element may spread and still
+    // render in place: every render of the wrapper is analysed and writes
+    // neither `as` nor `asChild`, and its spreads can carry neither. Those
+    // that may `clone` are let off `asChild` where each render writing it
+    // has no spread and one element child its own record judges, which the
+    // element then clones with the caller's props (`as_child_renders`). A
+    // greatest fixpoint, since wrappers pass their props on to each other,
+    // and a wrapper whose element is delivered outside renders there too.
+    use crate::usage_facts::SpreadArg;
+    type Wrappers = FxHashSet<(String, String)>;
+    // What a tag names depends on the facts alone, and the passes below ask
+    // again and again.
+    type Memo<T> = std::cell::RefCell<FxHashMap<(String, String), std::rc::Rc<[T]>>>;
+    let resolved: Memo<String> = Default::default();
+    let receiver_ids = |file: &str, ff: &FileFacts, tag: &str| {
+        let key = (file.to_string(), tag.to_string());
+        if let Some(ids) = resolved.borrow().get(&key) {
+            return std::rc::Rc::clone(ids);
+        }
+        let ids: std::rc::Rc<[String]> = receiver_ids(file, ff, tag).into();
+        resolved.borrow_mut().insert(key, std::rc::Rc::clone(&ids));
+        ids
+    };
+    // Each file's elements by where they open.
+    let elements: FxHashMap<&str, FxHashMap<u32, &UsageFact>> = files
+        .iter()
+        .map(|(path, ff)| {
+            let by_start = ff.usage_for_analysis().iter().filter_map(|fact| match fact {
+                UsageFact::Element { span, .. } => Some((span.0, fact)),
+                _ => None,
+            });
+            (path.as_str(), by_start.collect())
+        })
+        .collect();
+    let element_at = |file: &str, at: u32| elements.get(file).and_then(|by_start| by_start.get(&at).copied());
+    // Whether `tag` names a host element, which takes props as attributes.
+    let host = |tag: &str| tag.starts_with(|c: char| c.is_ascii_lowercase()) && !tag.contains('-') && !tag.contains('.');
+    let in_place = |file: &str, ff: &FileFacts, tag: &str| {
+        host(tag) || {
+            let ids = receiver_ids(file, ff, tag);
+            !ids.is_empty() && ids.iter().all(|id| renders_in_place(id))
+        }
+    };
+    // Whether the `asChild` clone of the one element child of the element at
+    // `at`, with that element's props, keeps them where the child's own
+    // record judges them. The child writes no `as` but a host's name, no
+    // `is`, no spread usage cannot list and no `asChild` of its own, any of
+    // which takes the props on to another; and it renders in place, or it is
+    // Animus and the props besides the child itself are static values that
+    // hand nothing on.
+    let clone_judged = |file: &str, ff: &FileFacts, at: u32| {
+        let Some(UsageFact::Element { attrs, element_child, .. }) = element_at(file, at) else { return false };
+        let Some(span) = as_child_element(ff, *element_child, inputs) else { return false };
+        let Some(UsageFact::Element { tag: TagFact::Ident(child) | TagFact::Member(child), attrs: own, spread: None, span: at_child, .. }) =
+            element_at(file, span.0)
+        else {
+            return false;
+        };
+        let keeps = own.iter().all(|attr| match attr.name.as_str() {
+            "as" => matches!(&attr.static_value, Some(serde_json::Value::String(tag)) if !tag.contains('-')),
+            "is" => false,
+            "asChild" => matches!(attr.static_value, Some(serde_json::Value::Bool(false))),
+            _ => true,
+        });
+        *at_child == span
+            && keeps
+            && (in_place(file, ff, child)
+                || (!receiver_ids(file, ff, child).is_empty()
+                    && attrs.iter().filter(|attr| attr.name != "children").all(|attr| !attr.dynamic)))
+    };
+    let spreads_proven = |file: &str, spreads: &[SpreadArg], proven: &Wrappers| {
+        spreads.iter().all(|spread| match spread {
+            SpreadArg::Keys(keys) => !keys.iter().any(|key| key == "as" || key == "asChild"),
+            SpreadArg::Props(wrapper) => proven.contains(&(file.to_string(), wrapper.clone())),
+            SpreadArg::Other => false,
+        })
+    };
+    // The ordinary components a tag may name: by its declaration, or as an
+    // object's member.
+    let named: Memo<(String, String)> = Default::default();
+    let ordinary_named = |file: &str, ff: &FileFacts, tag: &str| {
+        let key = (file.to_string(), tag.to_string());
+        if let Some(keys) = named.borrow().get(&key) {
+            return std::rc::Rc::clone(keys);
+        }
+        let declared = declaration(file, ff, tag).map(|(declaring, binding, _)| (declaring, binding)).filter(|(declaring, binding)| {
+            files.get(declaring).is_some_and(|declared| declared.ordinary_components.contains(binding))
+        });
+        let keys: std::rc::Rc<[(String, String)]> = declared.into_iter().chain(ordinary_members.get(&key).cloned()).collect();
+        named.borrow_mut().insert(key, std::rc::Rc::clone(&keys));
+        keys
+    };
+    let mut proven: Wrappers = FxHashSet::default();
+    for (path, ff) in files {
+        let wrappers = ff.opaque_tags.iter().flat_map(|tag| &tag.site.spreads).filter_map(|spread| match spread {
+            SpreadArg::Props(wrapper) if ff.ordinary_components.contains(wrapper) => Some((path.clone(), wrapper.clone())),
+            _ => None,
+        });
+        proven.extend(wrappers);
+    }
+    if !proven.is_empty() && !analysis_gaps(files, inputs, false).is_empty() {
+        proven.clear();
+    }
+    if !proven.is_empty() {
+        // A wrapper a value escape, an alias, a React wrapper or a runtime
+        // load reaches renders where the analysis cannot see, as does one an
+        // escaped object holds, or a module a namespace or load reaches
+        // through its re-exports declares.
+        let mut reached: FxHashSet<String> = FxHashSet::default();
+        let reach = |module: &str, reached: &mut FxHashSet<String>| {
+            reexported_modules(module, files, inputs, links, reached, |_| false);
+        };
+        for (path, ff) in files {
+            for escaped in &ff.value_escapes {
+                let prefixes = escaped.match_indices('.').map(|(dot, _)| &escaped[..dot]).chain(std::iter::once(escaped.as_str()));
+                for prefix in prefixes {
+                    match declaration(path, ff, prefix) {
+                        Some((module, binding, _)) if binding.is_empty() => reach(&module, &mut reached),
+                        Some((module, binding, _)) => {
+                            let mut pending = vec![(module, binding)];
+                            let mut seen: FxHashSet<(String, String)> = FxHashSet::default();
+                            while let Some((module, binding)) = pending.pop() {
+                                let Some(declared) = files.get(&module).filter(|_| seen.insert((module.clone(), binding.clone()))) else {
+                                    continue;
+                                };
+                                let held = declared.object_members.get(&binding).into_iter().flat_map(|members| members.values());
+                                pending.extend(held.filter_map(|name| declaration(&module, declared, name)).map(|(module, binding, _)| (module, binding)));
+                                proven.remove(&(module, binding));
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
+            for callback in ff.react_wrappers.values().flatten() {
+                proven.remove(&(path.clone(), callback.clone()));
+            }
+            for target in ff.aliases.values() {
+                if let Some((module, binding, _)) = declaration(path, ff, target) {
+                    proven.remove(&(module, binding));
+                }
+            }
+            for load in &ff.module_loads {
+                for module in loaded_modules(path, load, files, inputs) {
+                    reach(module, &mut reached);
+                }
+            }
+        }
+        proven.retain(|(declaring, _)| !reached.contains(declaring));
+    }
+    if !proven.is_empty() {
+        // An import the analysis cannot follow into code it reads may name
+        // a wrapper by any name it is exported or held under, directly or by
+        // a member read, and render it unseen; one handed on whole may name
+        // any. Such an import finds a module, or names a script in
+        // a package the host maps (a file of another extension is an asset);
+        // any other the host opens unread leaves the analysis incomplete.
+        let policy = inputs.analysis_context.extensions.as_ref().unwrap_or_else(|| animus_system_loader::resolution::extension_policy());
+        let script = |spec: &str| {
+            let last = spec.rsplit('/').next().unwrap_or(spec);
+            last.rfind('.').is_none_or(|dot| {
+                let extension = &last[dot..];
+                policy.appended.iter().chain(policy.node_next.iter().flat_map(|(emitted, sources)| std::iter::once(emitted).chain(sources))).any(|known| known == extension)
+            })
+        };
+        let mapped_package = |spec: &str| {
+            let package = animus_system_loader::split_specifier(spec).0;
+            inputs.package_map.keys().any(|mapped| animus_system_loader::split_specifier(mapped).0 == package)
+        };
+        // The names each wrapper goes by: the objects that hold it, which a
+        // member read reaches it by, and the names its module and
+        // re-exports give it or them.
+        let mut holders: FxHashMap<(String, String), Vec<&str>> = FxHashMap::default();
+        for (path, ff) in files {
+            for (object, members) in &ff.object_members {
+                for name in members.values() {
+                    if let Some((declaring, binding, _)) = declaration(path, ff, name) {
+                        holders.entry((declaring, binding)).or_default().push(object.as_str());
+                    }
+                }
+            }
+        }
+        let mut aliases: FxHashMap<&str, Vec<&str>> = FxHashMap::default();
+        for export in files.values().flat_map(|ff| &ff.exports) {
+            if let Some(original) = export.original.as_deref().or(export.local.as_deref()) {
+                aliases.entry(original).or_default().push(export.exported.as_str());
+            }
+        }
+        let names: FxHashMap<&(String, String), FxHashSet<&str>> = proven
+            .iter()
+            .map(|key| {
+                let mut names: FxHashSet<&str> = FxHashSet::from_iter([key.1.as_str()]);
+                names.extend(holders.get(key).into_iter().flatten().copied());
+                let mut pending: Vec<&str> = names.iter().copied().collect();
+                while let Some(name) = pending.pop() {
+                    pending.extend(aliases.get(name).into_iter().flatten().copied().filter(|alias| names.insert(alias)));
+                }
+                (key, names)
+            })
+            .collect();
+        let named_any: FxHashSet<&str> = names.values().flatten().copied().collect();
+        let mut unresolved: FxHashSet<&str> = FxHashSet::default();
+        let mut any = false;
+        for (path, ff) in files {
+            // The roots of the member reads here, which may read a namespace.
+            let usage = ff.usage_for_analysis();
+            let member_tags = usage.iter().filter_map(|fact| match fact {
+                UsageFact::Element { tag: TagFact::Member(tag), .. } | UsageFact::CreateElement { member: Some(tag), .. } => Some(tag),
+                _ => None,
+            });
+            let reads: Vec<&String> = ff.value_escapes.iter().chain(member_tags).collect();
+            let read_as_namespace = |local: &str| reads.iter().any(|read| read.split('.').next() == Some(local) && read.contains('.'));
+            let mut locals: Vec<&str> = Vec::new();
+            for import in &ff.imports {
+                if !named_any.contains(import.imported.as_str()) && !read_as_namespace(&import.local) {
+                    continue;
+                }
+                if resolve_declaration(path, ff, &import.local, files, inputs, links).is_some() {
+                    continue;
+                }
+                // A module found that leaves the binding unresolved, or a
+                // script of a mapped package.
+                let found = resolve_import_source(path, &import.source, files, inputs).is_some();
+                if found || (probe_base(path, &import.source, inputs).is_none() && script(&import.source) && mapped_package(&import.source)) {
+                    unresolved.insert(import.imported.as_str());
+                    locals.push(import.local.as_str());
+                }
+            }
+            for (local, source) in &ff.namespace_imports {
+                if resolve_import_source(path, source, files, inputs).is_none()
+                    && probe_base(path, source, inputs).is_none()
+                    && script(source)
+                    && mapped_package(source)
+                {
+                    locals.push(local.as_str());
+                }
+            }
+            if locals.is_empty() {
+                continue;
+            }
+            for read in reads {
+                let mut segments = read.split('.');
+                if !segments.next().is_some_and(|root| locals.contains(&root)) {
+                    continue;
+                }
+                let members: Vec<&str> = segments.collect();
+                any |= members.is_empty();
+                unresolved.extend(members);
+            }
+        }
+        let dropped: Vec<(String, String)> = match any {
+            true => proven.iter().cloned().collect(),
+            false => names.iter().filter(|(_, names)| !names.is_disjoint(&unresolved)).map(|(key, _)| (*key).clone()).collect(),
+        };
+        for key in dropped {
+            proven.remove(&key);
+        }
+    }
+    // Each render of a wrapper that may be proven: the wrappers it may
+    // render, whether it writes `as` or `asChild`, the receiver its spreads
+    // are on, and whether an `asChild` it writes clones a child its own
+    // record judges. A `createElement` call left as written may carry all.
+    struct Render<'r> {
+        keys: std::rc::Rc<[(String, String)]>,
+        file: &'r str,
+        writes_as: bool,
+        writes_as_child: bool,
+        spread: Option<Option<&'r crate::usage_facts::OpaqueTag>>,
+        clones: bool,
+    }
+    let mut renders: Vec<Render> = Vec::new();
+    if !proven.is_empty() {
+        for (path, ff) in files {
+            for fact in ff.usage_for_analysis() {
+                let (tag, writes_as, writes_as_child, spread, at) = match fact {
+                    UsageFact::Element { tag: TagFact::Ident(tag) | TagFact::Member(tag), attrs, spread, span, .. } => {
+                        let writes = |name: &str| attrs.iter().any(|attr| attr.name == name);
+                        (tag, writes("as"), writes("asChild"), spread.is_some(), span.0)
+                    }
+                    UsageFact::CreateElement { ident: Some(tag), .. } | UsageFact::CreateElement { member: Some(tag), .. } => {
+                        (tag, true, true, true, u32::MAX)
+                    }
+                    _ => continue,
+                };
+                let keys = ordinary_named(path, ff, tag);
+                if !keys.iter().any(|key| proven.contains(key)) {
+                    continue;
+                }
+                let clones = writes_as_child && !spread && clone_judged(path, ff, at);
+                let spread = spread.then(|| ff.opaque_tags.iter().find(|tag| tag.at == at));
+                renders.push(Render { keys, file: path, writes_as, writes_as_child, spread, clones });
+            }
+        }
+    }
+    // The renders each wrapper's leaving reaches: those that may render it,
+    // and those whose spreads it proves.
+    let mut readers_of: FxHashMap<(String, String), Vec<usize>> = FxHashMap::default();
+    for (index, render) in renders.iter().enumerate() {
+        let spread = render.spread.flatten().into_iter().flat_map(|tag| &tag.site.spreads).filter_map(|spread| match spread {
+            SpreadArg::Props(wrapper) => Some((render.file.to_string(), wrapper.clone())),
+            _ => None,
+        });
+        for key in render.keys.iter().cloned().chain(spread) {
+            readers_of.entry(key).or_default().push(index);
+        }
+    }
+    // Judges the renders `pending` names, and again those a wrapper they
+    // drop reaches; returns the wrappers it drops.
+    let settle = |proven: &mut Wrappers, cloning: &mut Wrappers, mut pending: Vec<usize>| {
+        let mut dropped = Vec::new();
+        while let Some(index) = pending.pop() {
+            let render = &renders[index];
+            let Some(key) = render.keys.iter().find(|key| cloning.contains(*key)).cloned() else { continue };
+            let carried = render.spread.is_some_and(|tag| !tag.is_some_and(|tag| spreads_proven(render.file, &tag.site.spreads, proven)));
+            let from_cloning = render.writes_as || carried || (render.writes_as_child && !render.clones);
+            let from_proven = from_cloning || render.writes_as_child;
+            let left = (from_proven && proven.remove(&key)) | (from_cloning && cloning.remove(&key));
+            if left {
+                pending.extend(readers_of.get(&key).into_iter().flatten().copied());
+                dropped.push(key);
+            }
+        }
+        dropped
+    };
+    let mut cloning = proven.clone();
+    settle(&mut proven, &mut cloning, (0..renders.len()).collect());
+    let providers: std::cell::RefCell<FxHashMap<(String, u32), bool>> = Default::default();
+    let tag_opaque = |file: &str,
+                      ff: &FileFacts,
+                      tag: &crate::usage_facts::OpaqueTag,
+                      forwarding: &FxHashSet<(String, String)>,
+                      (proven, cloning): (&Wrappers, &Wrappers)| {
         use crate::usage_facts::{Polymorphic, TagOrigin};
         if matches!(tag.origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
             return true;
         }
-        if names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, links, contexts) {
+        let provider = *providers
+            .borrow_mut()
+            .entry((file.to_string(), tag.at))
+            .or_insert_with(|| names_context_provider(file, ff, &tag.tag, Some(tag.origin), files, inputs, links, contexts));
+        if provider {
             return false;
         }
         let ids = receiver_ids(file, ff, &tag.tag);
         if !ids.is_empty() {
-            return tag.polymorphic == Polymorphic::Open || !ids.iter().all(|id| renders_in_place(id));
+            if !ids.iter().all(|id| renders_in_place(id)) {
+                return true;
+            }
+            // An Animus string terminal renders its tag in place, unless the
+            // site's `as` names another, a spread may carry one, or `asChild`
+            // clones a child its own record cannot judge with the site's
+            // props. A spread of a wrapper's props that may switch `asChild`
+            // on clones the child each caller passes, which the wrapper's
+            // callers prove, when the element holds no element of its own to
+            // pass with it.
+            let site = &tag.site;
+            if site.as_open {
+                return true;
+            }
+            if !spreads_proven(file, &site.spreads, proven) {
+                let clones_callers_child = site.as_child.is_none()
+                    && site.own_children
+                    && tag.tags.is_empty()
+                    && tag.imported_args.is_empty()
+                    && site.spreads.iter().all(|spread| {
+                        matches!(spread, SpreadArg::Props(wrapper) if cloning.contains(&(file.to_string(), wrapper.clone())))
+                    });
+                return !clones_callers_child;
+            }
+            return match &site.as_child {
+                None => false,
+                Some(None) => true,
+                Some(Some(_)) => !site.spreads.is_empty() || !clone_judged(file, ff, tag.at),
+            };
         }
-        // An ordinary component, named directly or as an object's member.
-        let ordinary = declaration(file, ff, &tag.tag)
-            .filter(|(declaring, binding, _)| {
-                files.get(declaring).is_some_and(|declared| declared.ordinary_components.contains(binding))
-            })
-            .map(|(declaring, binding, _)| (declaring, binding))
-            .or_else(|| ordinary_members.get(&(file.to_string(), tag.tag.clone())).cloned());
         // A ref to a class component, or to a React wrapper of one, reads
         // the instance, its props included.
         let class = |declaring: &str, binding: &str| {
@@ -7124,16 +7524,37 @@ fn opaque_delivery(
             }
             declared.class_components.contains(binding)
         };
-        ordinary.is_none_or(|(declaring, binding)| {
-            tag.polymorphic != Polymorphic::No
-                || forwarding.contains(&(declaring.clone(), binding.clone()))
-                || (tag.exposed && class(&declaring, &binding))
+        // An ordinary component, named directly or as an object's member. A
+        // wrapper whose every render the fixpoint above vetted passes on
+        // `as`, `asChild` and spreads only where its own elements judge them.
+        ordinary_named(file, ff, &tag.tag).first().is_none_or(|key| {
+            (tag.polymorphic != Polymorphic::No && !cloning.contains(key))
+                || forwarding.contains(key)
+                || (tag.exposed && class(&key.0, &key.1))
         })
     };
-    let mut forwarding: FxHashSet<(String, String)> = FxHashSet::default();
+    // The element `const`s an import reaches: a namespace import every one
+    // of its module's, a named one the one it names in another module.
+    let held_consts = |file: &str, import: &str| -> Vec<(String, &crate::usage_facts::ElementConst)> {
+        let Some(ff) = files.get(file) else { return Vec::new() };
+        match ff.namespace_imports.get(import) {
+            Some(source) => resolve_import_source(file, source, files, inputs)
+                .and_then(|module| Some((module.clone(), files.get(&module)?)))
+                .map(|(module, declaring)| declaring.element_consts.values().map(|held| (module.clone(), held)).collect())
+                .unwrap_or_default(),
+            None => resolve_declaration(file, ff, import, files, inputs, links)
+                .filter(|(declaring, _, _)| declaring != file)
+                .and_then(|(declaring, binding, _)| {
+                    let held = files.get(&declaring)?.element_consts.get(&binding)?;
+                    Some(vec![(declaring, held)])
+                })
+                .unwrap_or_default(),
+        }
+    };
     // A React wrapper some module hands on or writes through, by any path to
     // it (an import, a `const` alias, an object that holds it), may render
     // anything in its callback's place: it forwards outside.
+    let mut forwarding: FxHashSet<(String, String)> = FxHashSet::default();
     for (path, ff) in files {
         for escaped in &ff.value_escapes {
             let prefixes = escaped.match_indices('.').map(|(dot, _)| &escaped[..dot]).chain(std::iter::once(escaped.as_str()));
@@ -7158,52 +7579,152 @@ fn opaque_delivery(
             }
         }
     }
-    loop {
-        let mut grew = false;
-        for (path, ff) in files {
-            let forwards = ff
-                .opaque_calls
-                .iter()
-                .filter(|call| !call.forwards_from.is_empty() && call_opaque(path, ff, call, &forwarding))
-                .flat_map(|call| &call.forwards_from)
-                .chain(
-                    ff.opaque_tags
-                        .iter()
-                        .filter(|tag| !tag.forwards_from.is_empty() && tag_opaque(path, ff, tag, &forwarding))
-                        .flat_map(|tag| &tag.forwards_from),
-                )
-                .map(|name| (path.clone(), name.clone()))
-                // A React wrapper forwards what its callback does.
-                .chain(ff.react_wrappers.iter().filter_map(|(wrapper, callback)| {
-                    let callback = callback.as_ref()?;
-                    forwarding.contains(&(path.clone(), callback.clone())).then(|| (path.clone(), wrapper.clone()))
-                }))
-                .collect::<Vec<_>>();
-            for key in forwards {
-                grew |= forwarding.insert(key);
-            }
-        }
-        if !grew {
-            break;
+    // Every receiver, judged once and again only when what its verdict reads
+    // changes: a wrapper its spreads or tag name leaving the proof, or a
+    // component its tag or callee names forwarding. Both only make more
+    // receivers opaque, so the verdicts settle as the full passes would.
+    #[derive(Clone, Copy)]
+    enum Site {
+        Tag(usize),
+        Call(usize),
+    }
+    let tag_sites: Vec<(&String, &FileFacts, &crate::usage_facts::OpaqueTag)> =
+        files.iter().flat_map(|(path, ff)| ff.opaque_tags.iter().map(move |tag| (path, ff, tag))).collect();
+    let call_sites: Vec<(&String, &FileFacts, &crate::usage_facts::OpaqueCall)> =
+        files.iter().flat_map(|(path, ff)| ff.opaque_calls.iter().map(move |call| (path, ff, call))).collect();
+    let mut readers: FxHashMap<(String, String), Vec<Site>> = FxHashMap::default();
+    for (index, (path, ff, tag)) in tag_sites.iter().enumerate() {
+        let spread = tag.site.spreads.iter().filter_map(|spread| match spread {
+            SpreadArg::Props(wrapper) => Some(((*path).clone(), wrapper.clone())),
+            _ => None,
+        });
+        for key in ordinary_named(path, ff, &tag.tag).first().cloned().into_iter().chain(spread) {
+            readers.entry(key).or_default().push(Site::Tag(index));
         }
     }
+    for (index, (path, ff, call)) in call_sites.iter().enumerate() {
+        if let Some((declaring, binding, _)) = call.callee.as_deref().and_then(|callee| declaration(path, ff, callee)) {
+            readers.entry((declaring, binding)).or_default().push(Site::Call(index));
+        }
+    }
+    // A React wrapper forwards what its callback does.
+    let mut wrappers_of: FxHashMap<(String, String), Vec<(String, String)>> = FxHashMap::default();
+    for (path, ff) in files {
+        for (wrapper, callback) in &ff.react_wrappers {
+            if let Some(callback) = callback {
+                wrappers_of.entry((path.clone(), callback.clone())).or_default().push((path.clone(), wrapper.clone()));
+            }
+        }
+    }
+    let grow = |forwarding: &mut FxHashSet<(String, String)>, key: (String, String), pending: &mut Vec<Site>| {
+        let mut keys = vec![key];
+        while let Some(key) = keys.pop() {
+            if forwarding.contains(&key) {
+                continue;
+            }
+            pending.extend(readers.get(&key).into_iter().flatten().copied());
+            keys.extend(wrappers_of.get(&key).into_iter().flatten().cloned());
+            forwarding.insert(key);
+        }
+    };
+    let seeded: Vec<(String, String)> = forwarding.iter().cloned().collect();
+    let mut pending: Vec<Site> = (0..tag_sites.len()).map(Site::Tag).chain((0..call_sites.len()).map(Site::Call)).collect();
+    for key in seeded {
+        forwarding.remove(&key);
+        grow(&mut forwarding, key, &mut pending);
+    }
+    let (mut tag_open, mut call_open) = (vec![false; tag_sites.len()], vec![false; call_sites.len()]);
+    let mut followed: FxHashSet<(String, String)> = FxHashSet::default();
+    loop {
+        // Judge what is pending, until nothing more forwards.
+        let mut opened: Vec<Site> = Vec::new();
+        while let Some(site) = pending.pop() {
+            let (path, forwards) = match site {
+                Site::Tag(index) => {
+                    let (path, ff, tag) = tag_sites[index];
+                    if tag_open[index] || !tag_opaque(path, ff, tag, &forwarding, (&proven, &cloning)) {
+                        continue;
+                    }
+                    tag_open[index] = true;
+                    (path, &tag.forwards_from)
+                }
+                Site::Call(index) => {
+                    let (path, ff, call) = call_sites[index];
+                    if call_open[index] || !call_opaque(path, ff, call, &forwarding) {
+                        continue;
+                    }
+                    call_open[index] = true;
+                    (path, &call.forwards_from)
+                }
+            };
+            opened.push(site);
+            for name in forwards {
+                grow(&mut forwarding, (path.clone(), name.clone()), &mut pending);
+            }
+        }
+        // What the newly opaque receivers deliver, followed through imported
+        // `const`s, and the wrappers among it: a wrapper whose element is
+        // delivered outside may render there with any props, so its renders
+        // are no longer all analysed.
+        let mut delivered: Vec<(String, String)> = Vec::new();
+        let mut imports: Vec<(String, String)> = Vec::new();
+        for site in opened {
+            let (path, tags, imported) = match site {
+                Site::Tag(index) => (tag_sites[index].0, &tag_sites[index].2.tags, &tag_sites[index].2.imported_args),
+                Site::Call(index) => (call_sites[index].0, &call_sites[index].2.tags, &call_sites[index].2.imported_args),
+            };
+            delivered.extend(tags.iter().map(|tag| (path.clone(), tag.clone())));
+            imports.extend(imported.iter().map(|import| (path.clone(), import.clone())));
+        }
+        while let Some((file, import)) = imports.pop() {
+            if !followed.insert((file.clone(), import.clone())) {
+                continue;
+            }
+            for (declaring, held) in held_consts(&file, &import) {
+                delivered.extend(held.tags.iter().map(|tag| (declaring.clone(), tag.clone())));
+                imports.extend(held.imports.iter().map(|import| (declaring.clone(), import.clone())));
+            }
+        }
+        let leaked: Vec<(String, String)> = delivered
+            .iter()
+            .filter_map(|(file, tag)| files.get(file).map(|ff| ordinary_named(file, ff, tag)))
+            .flat_map(|keys| keys.iter().filter(|key| cloning.contains(*key)).cloned().collect::<Vec<_>>())
+            .collect();
+        if leaked.is_empty() {
+            break;
+        }
+        let mut reached = Vec::new();
+        for key in &leaked {
+            proven.remove(key);
+            cloning.remove(key);
+            reached.extend(readers_of.get(key).into_iter().flatten().copied());
+        }
+        let dropped = settle(&mut proven, &mut cloning, reached);
+        pending.extend(leaked.iter().chain(&dropped).flat_map(|key| readers.get(key).into_iter().flatten().copied()));
+    }
     // Component tags, each with the file that names it, followed through
-    // imported `const`s to the modules that declare them.
+    // imported `const`s to the modules that declare them, in the order the
+    // receivers come.
     let mut tags: Vec<OpaqueDelivery> = Vec::new();
     let mut imports: Vec<(String, String, Receiver)> = Vec::new();
     let mut deliver = |file: &String, tag: &String, receiver: &Receiver| {
         tags.push(OpaqueDelivery { file: file.clone(), tag: tag.clone(), receiver: receiver.clone() });
     };
-    for (path, ff) in files {
-        for call in ff.opaque_calls.iter().filter(|call| call_opaque(path, ff, call, &forwarding)) {
-            let receiver = Receiver::Call(call.callee.clone());
-            call.tags.iter().for_each(|tag| deliver(path, tag, &receiver));
-            imports.extend(call.imported_args.iter().map(|import| (path.clone(), import.clone(), receiver.clone())));
+    let (mut calls, mut receivers) = (call_sites.iter().zip(&call_open).peekable(), tag_sites.iter().zip(&tag_open).peekable());
+    for path in files.keys() {
+        while let Some(((_, _, call), open)) = calls.next_if(|((file, _, _), _)| *file == path) {
+            if *open {
+                let receiver = Receiver::Call(call.callee.clone());
+                call.tags.iter().for_each(|tag| deliver(path, tag, &receiver));
+                imports.extend(call.imported_args.iter().map(|import| (path.clone(), import.clone(), receiver.clone())));
+            }
         }
-        for tag in ff.opaque_tags.iter().filter(|tag| tag_opaque(path, ff, tag, &forwarding)) {
-            let receiver = Receiver::Tag(tag.tag.clone());
-            tag.tags.iter().for_each(|inner| deliver(path, inner, &receiver));
-            imports.extend(tag.imported_args.iter().map(|import| (path.clone(), import.clone(), receiver.clone())));
+        while let Some(((_, _, tag), open)) = receivers.next_if(|((file, _, _), _)| *file == path) {
+            if *open {
+                let receiver = Receiver::Tag(tag.tag.clone());
+                tag.tags.iter().for_each(|inner| deliver(path, inner, &receiver));
+                imports.extend(tag.imported_args.iter().map(|import| (path.clone(), import.clone(), receiver.clone())));
+            }
         }
     }
     let mut followed: FxHashSet<(String, String)> = FxHashSet::default();
@@ -7211,22 +7732,7 @@ fn opaque_delivery(
         if !followed.insert((file.clone(), import.clone())) {
             continue;
         }
-        let Some(ff) = files.get(&file) else { continue };
-        // A namespace import reaches every element `const` of its module.
-        let held: Vec<(String, &crate::usage_facts::ElementConst)> = match ff.namespace_imports.get(&import) {
-            Some(source) => resolve_import_source(&file, source, files, inputs)
-                .and_then(|module| Some((module.clone(), files.get(&module)?)))
-                .map(|(module, declaring)| declaring.element_consts.values().map(|held| (module.clone(), held)).collect())
-                .unwrap_or_default(),
-            None => resolve_declaration(&file, ff, &import, files, inputs, links)
-                .filter(|(declaring, _, _)| *declaring != file)
-                .and_then(|(declaring, binding, _)| {
-                    let held = files.get(&declaring)?.element_consts.get(&binding)?;
-                    Some(vec![(declaring, held)])
-                })
-                .unwrap_or_default(),
-        };
-        for (declaring, held) in held {
+        for (declaring, held) in held_consts(&file, &import) {
             held.tags.iter().for_each(|tag| deliver(&declaring, tag, &receiver));
             imports.extend(held.imports.iter().map(|import| (declaring.clone(), import.clone(), receiver.clone())));
         }
@@ -9463,8 +9969,47 @@ fn run_with_system_floor(
             _ => false,
         }));
 
-        // A foreign tag's `asChild` passes its props to its one element child.
-        let (as_child, passed) = as_child_renders(ff, inputs);
+        // An `asChild` passes props to its one element child: a foreign tag
+        // all of them, an Animus element those that are not its own.
+        let animus_own_in = |path: &str, ff: &FileFacts, tag: &str| {
+            let ids = receiver_identities(path, ff, tag, (files, inputs, links), &evaluated_ids, &member_bindings);
+            // A name is the element's own only where every component it may
+            // be takes it.
+            ids.iter().map(|id| {
+                let (css, _, _, active, _, custom, _) = evaluated.get(id)?;
+                let mut own: FxHashSet<String> = css.variants.iter().map(|variant| variant.prop.clone()).collect();
+                own.extend(css.states.iter().map(|(state, _)| state.clone()));
+                own.extend(active.iter().flatten().cloned());
+                own.extend(custom.iter().flat_map(|custom| custom.keys().cloned()));
+                own.extend(["as", "asChild", "children", "key"].map(String::from));
+                // The runtime passes every `data-*` and `aria-*` prop on.
+                own.retain(|name| !name.starts_with("data-") && !name.starts_with("aria-"));
+                Some(own)
+            }).reduce(|a, b| Some(a?.intersection(&b?).cloned().collect())).flatten()
+        };
+        let animus_own = |tag: &str| animus_own_in(path, ff, tag);
+        // A wrapper's Animus elements that take its props and render its
+        // `children`, so a caller's `asChild` switches them to clone the
+        // caller's child: the props they write that are not their own.
+        let clone_sites = |tag: &str| {
+            use crate::usage_facts::SpreadArg;
+            let (module, binding, _) = resolve_declaration(path, ff, tag, files, inputs, links)?;
+            let declared = files.get(&module).filter(|declared| declared.ordinary_components.contains(&binding))?;
+            let props = SpreadArg::Props(binding);
+            let mut written = Vec::new();
+            let mut any = false;
+            for site in declared.opaque_tags.iter().filter(|site| site.site.own_children && site.site.spreads.contains(&props)) {
+                let Some(own) = animus_own_in(&module, declared, &site.tag) else { continue };
+                let attrs = declared.usage_for_analysis().iter().find_map(|fact| match fact {
+                    UsageFact::Element { attrs, span, .. } if span.0 == site.at => Some(attrs),
+                    _ => None,
+                })?;
+                written.extend(attrs.iter().filter(|attr| !own.contains(&attr.name)).cloned());
+                any = true;
+            }
+            any.then_some(written)
+        };
+        let (as_child, passed) = as_child_renders(ff, inputs, &animus_own, &clone_sites);
         let usage: std::borrow::Cow<[UsageFact]> = if as_child.is_empty() {
             ff.usage_for_analysis().into()
         } else {
@@ -9806,15 +10351,8 @@ fn run_with_system_floor(
             }
         }
     }
-    let receiver_ids = |path: &str, ff: &FileFacts, tag: &str| {
-        let mut ids = match tag.contains('.') {
-            true => Vec::new(),
-            false => resolve_declared_identity(path, tag, files, inputs, links, &evaluated_ids),
-        };
-        ids.extend(member_bindings.get(path).and_then(|members| members.get(tag)).cloned());
-        ids.extend(member_path_ids(path, ff, tag, false, files, inputs, links, &evaluated_ids));
-        ids
-    };
+    let receiver_ids =
+        |path: &str, ff: &FileFacts, tag: &str| receiver_identities(path, ff, tag, (files, inputs, links), &evaluated_ids, &member_bindings);
     // A component object some module writes a member of (`R.render = Slot`)
     // or hands on may no longer render its children in place: each name
     // or path a module hands on or changes, and each object along it.
@@ -14213,7 +14751,7 @@ mod tests {
 
     /// Contract: an Animus element whose `as` is a static string renders
     /// a host element, so it hands off nothing rendered inside it, while
-    /// an `as` naming a value, `asChild` or a spread still may.
+    /// an `as` naming a value or a spread still may.
     #[test]
     fn a_string_as_hands_off_nothing_it_renders() {
         let keeps_p = |attributes: &str| {
@@ -14228,7 +14766,8 @@ mod tests {
             (r#"as="span""#, false),
             (r#"as={"h2"}"#, false),
             ("as={tag}", true),
-            ("asChild", true),
+            ("asChild", false),
+            ("asChild {...rest}", true),
             ("{...rest}", true),
             (r#"as="span" {...rest}"#, true),
         ] {
@@ -14547,6 +15086,218 @@ export const App = ({ n }) => (
             "{:?}",
             out.diagnostics
         );
+    }
+
+    /// The components of the Animus `as`/`asChild` contracts: a parent with
+    /// a variant of its own, a plain inner element, and a child with a
+    /// variant and a custom prop.
+    const SITE_KIT: &str = "import { Foreign } from 'outside';\n\
+        const Parent = ds.styles({ display: 'block' }).variant({ prop: 'tone', defaultVariant: 'calm', variants: { calm: { opacity: 0.5 }, loud: { opacity: 1 } } }).asElement('div');\n\
+        const Inner = ds.styles({ display: 'flex' }).asElement('span');\n\
+        const Btn = ds.styles({ display: 'inline' }).variant({ prop: 'size', defaultVariant: 'md', variants: { sm: { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' } } }).props({ ink: { property: 'color' } }).asElement('button');\n";
+
+    /// Whether Btn renders `ink="red"`: by its class, or by a runtime slot.
+    fn btn_ink_red(out: &CssOutput) -> bool {
+        let config = &out.replacement_configs["a.tsx::Btn"];
+        config.custom_prop_class_map.as_ref().is_some_and(|map| map.get("ink").is_some_and(|classes| classes.contains_key("red")))
+            || out.components["a.tsx::Btn"].replacement.contains("customDynamicConfig")
+    }
+
+    /// Contract: an Animus element's `asChild` child receives the site's
+    /// props other than the parent's own, and keeps its other slots and
+    /// options closed.
+    #[test]
+    fn an_animus_as_child_child_receives_only_the_passed_props() {
+        let run = |app: &str| analyze(&[("a.tsx", &format!("{SITE_KIT}{app}"))], &test_inputs());
+        // The child takes a passed variant, and nothing else opens.
+        let out = run("export const App = () => <Parent asChild size=\"sm\"><Btn /></Parent>;\n");
+        assert!(out.sheets.variants.contains("--size-sm"), "{}", out.sheets.variants);
+        assert!(!out.sheets.variants.contains("--size-lg"), "{}", out.sheets.variants);
+        // A passed custom prop, directly and through a nested asChild.
+        assert!(btn_ink_red(&run("export const App = () => <Parent asChild ink=\"red\"><Btn /></Parent>;\n")));
+        assert!(btn_ink_red(&run("export const App = () => <Parent asChild ink=\"red\"><Inner asChild><Btn /></Inner></Parent>;\n")));
+        // The child takes the passed props on through its own `as`, a
+        // spread that may carry one, or its own `asChild`; an element it
+        // gets so reaches whatever renders it.
+        let box_kit = format!("{SITE_KIT}export const Box = ds.system({{ space: true }}).asElement('div');\nconst Plate = ds.styles({{ display: 'grid' }}).asComponent(Foreign);\n");
+        let keeps_box = |app: &str| analyze(&[("a.tsx", &format!("{box_kit}{app}"))], &test_inputs()).dynamic_props.contains_key("p");
+        for app in [
+            "export const App = () => <Parent asChild icon={<Box p={8} />}><Btn as={Foreign} /></Parent>;\n",
+            "export const App = () => <Parent asChild icon={<Box p={8} />}><Inner asChild><Foreign /></Inner></Parent>;\n",
+            "const App = ({ d }) => <Parent asChild icon={d}><Inner asChild><Plate /></Inner></Parent>;\nexport const B = () => <App d={<Box p={8} />} />;\n",
+            "const extra = { as: Foreign };\nexport const App = () => <Parent asChild icon={<Box p={8} />}><Btn {...extra} /></Parent>;\n",
+            "export const App = () => <Parent asChild icon={<Box p={8} />}><Btn is=\"x-button\" /></Parent>;\n",
+            "export const App = () => <Parent asChild render={<Box p={8} />}><Parent asChild><Plate /></Parent></Parent>;\n",
+            "export const App = ({ more }) => <Parent asChild icon={<Box p={8} />}><Btn {...more} /></Parent>;\n",
+        ] {
+            assert!(keeps_box(app), "{app}");
+        }
+        assert!(!keeps_box("export const App = () => <Parent asChild><Box p={8} /></Parent>;\n"));
+        // `data-*` and `aria-*` props always reach the child.
+        let data = "const P2 = ds.styles({}).variant({ prop: 'data-tone', defaultVariant: 'calm', variants: { calm: { opacity: 0.5 }, loud: { opacity: 1 } } }).asElement('div');\n\
+                    const B2 = ds.styles({}).variant({ prop: 'data-tone', defaultVariant: 'calm', variants: { calm: { opacity: 0.5 }, loud: { opacity: 1 } } }).asElement('button');\n\
+                    export const App = () => <P2 asChild data-tone=\"loud\"><B2 /></P2>;\n";
+        let data = analyze(&[("a.tsx", data)], &test_inputs());
+        assert!(data.sheets.variants.lines().any(|line| line.contains("B2-") && line.contains("--data-tone-loud")), "{}", data.sheets.variants);
+        // A parent named through a namespace path passes them too.
+        let deep = format!("{SITE_KIT}import * as ui from './index';\nexport const App = () => <ui.sub.Taker asChild ink=\"red\"><Btn /></ui.sub.Taker>;\n");
+        let deep = analyze(
+            &[
+                ("a.tsx", &deep),
+                ("kit.tsx", "export const Taker = ds.styles({ display: 'block' }).asElement('div');\n"),
+                ("index.ts", "import * as sub from './kit';\nexport { sub };\n"),
+            ],
+            &test_inputs(),
+        );
+        assert!(btn_ink_red(&deep) && !deep.sheets.variants.contains("--size-lg"), "{}", deep.sheets.variants);
+        // The parent's own variant and custom prop stay the parent's.
+        let own = run("export const App = () => <Parent asChild tone=\"loud\"><Btn /></Parent>;\n");
+        assert!(own.sheets.variants.contains("--tone-loud") && !own.sheets.variants.contains("--size-lg"), "{}", own.sheets.variants);
+        let taker = "const Taker = ds.styles({}).props({ ink: { property: 'color' } }).asElement('span');\n";
+        assert!(!btn_ink_red(&run(&format!("{taker}export const App = () => <Taker asChild ink=\"red\"><Btn /></Taker>;\n"))));
+        // A spread that switches asChild on clones the child with its props.
+        let spread = run("export const App = () => <Parent {...{ asChild: true, size: 'sm' }}><Btn /></Parent>;\n");
+        assert!(spread.sheets.variants.contains("--size-sm"), "{}", spread.sheets.variants);
+        // Such a spread over the `children` its callers pass clones theirs.
+        let lg = |app: &str| run(app).sheets.variants.contains("--size-lg");
+        assert!(lg("const W = ({ children }) => <Parent {...{ asChild: true }} size=\"lg\">{children}</Parent>;\nexport const App = () => <W><Btn /></W>;\n"));
+        // A prop passed to a child the analysis cannot follow goes with it.
+        assert!(lg("export const App = () => <Parent asChild icon={<Btn />}><Foreign /></Parent>;\n"));
+        // A component terminal child takes static props where its own record
+        // judges them, and any other with it.
+        let plate = "const Plate = ds.styles({ display: 'grid' }).variant({ prop: 'tier', defaultVariant: 'md', variants: { sm: { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' } } }).asComponent(Foreign);\n";
+        let tier_lg = |app: &str| run(&format!("{plate}{app}")).sheets.variants.contains("--tier-lg");
+        assert!(!tier_lg("export const App = () => <Parent asChild tier=\"sm\"><Plate /></Parent>;\n"));
+        assert!(lg(&format!("{plate}export const App = () => <Parent asChild icon={{<Btn />}}><Plate /></Parent>;\n")));
+    }
+
+    /// Contract: an Animus element that spreads its wrapper's own props
+    /// renders in place only when no analysed render of the wrapper writes
+    /// `as` or `asChild`, or can carry them, except an `asChild` over one
+    /// element child in place, which the element clones with the caller's
+    /// props and its own.
+    #[test]
+    fn a_spread_of_a_wrappers_props_stays_in_place_only_when_no_render_writes_as() {
+        let run = |app: &str| {
+            let source = format!("{SITE_KIT}const W = (props) => <Parent {{...props}}><Btn /></Parent>;\n{app}");
+            analyze(&[("a.tsx", &source)], &test_inputs())
+        };
+        let open = |app: &str| run(app).sheets.variants.contains("--size-lg");
+        // Callers that write neither leave the child in place.
+        assert!(!open("export const App = () => <><W /><W tone=\"loud\" /></>;\n"));
+        // A caller's `as` hands the child to its target; its `asChild`
+        // clones the child with the caller's props.
+        assert!(open("export const App = () => <W as={Foreign} />;\n"));
+        assert!(run("export const App = () => <W asChild size=\"sm\" />;\n").sheets.variants.contains("--size-sm"));
+        // A wrapper rendered where the analysis cannot see.
+        assert!(open("export const list = [W];\nexport const App = () => <W />;\n"));
+        assert!(open("const Kit = { W };\nexport const list = [Kit];\nexport const App = () => <W />;\n"));
+        assert!(open("const App = (rest) => <W {...rest} />;\nexport default App;\n"));
+        assert!(open("export const App = (props) => <W {...props.extra} />;\n"));
+        // A wrapper that rewrites its props, or whose element a clone the
+        // analysis cannot name may give `as`.
+        let box_kit = format!("{SITE_KIT}export const Box = ds.system({{ space: true }}).asElement('div');\nconst Plate = ds.styles({{ display: 'grid' }}).asComponent(Foreign);\n");
+        let keeps_box = |app: &str| analyze(&[("a.tsx", &format!("{box_kit}{app}"))], &test_inputs()).dynamic_props.contains_key("p");
+        for app in [
+            "const W = (props) => { props = { ...props, as: Foreign }; return <Parent {...props}><Box p={8} /></Parent>; };\nexport const App = () => <W />;\n",
+            "const W = ({ x, ...rest }) => { rest.as = Foreign; return <Parent {...rest}><Box p={8} /></Parent>; };\nexport const App = () => <W />;\n",
+            "const tweak = (o) => { o.as = Foreign; };\nconst W = ({ x, ...rest }) => { tweak(rest); return <Parent {...rest}><Box p={8} /></Parent>; };\nexport const App = () => <W />;\n",
+            "const W = (props) => { props.as = Foreign; return <Parent {...props}><Box p={8} /></Parent>; };\nexport const App = () => <W />;\n",
+            "import { Children, cloneElement } from 'react';\nconst W = (props) => <Parent {...props}><Box p={8} /></Parent>;\nconst Clone = ({ children }) => Children.map(children, (c) => cloneElement(c, { as: Foreign }));\nexport const App = () => <Clone><W /></Clone>;\n",
+            "import { cloneElement } from 'react';\nconst W = (props) => <Parent {...props}><Box p={8} /></Parent>;\nconst Clone = ({ children }) => cloneElement(children, { as: Foreign });\nexport const App = () => <Clone><W /></Clone>;\n",
+            "const Scope = ({ children, ...rest }) => <Inner {...rest}>{children}</Inner>;\nexport const App = () => <Scope asChild icon={<Box p={8} />}><Btn as={Foreign} /></Scope>;\n",
+        ] {
+            assert!(keeps_box(app), "{app}");
+        }
+        assert!(!keeps_box("const W = (props) => <Parent {...props}><Box p={8} /></Parent>;\nexport const App = () => <W />;\n"));
+        // An element that renders a `children` attribute clones that, not
+        // its callers' child.
+        assert!(keeps_box("const Scope = ({ icon, children, ...rest }) => <Inner {...rest} children={icon} />;\nexport const App = () => <Scope asChild icon={<Plate />} render={<Box p={8} />}><b /></Scope>;\n"));
+        // An element the wrapper's element gets from another module.
+        let icons = "import { Box } from './a';\nexport const icon = <Box p={8} />;\n";
+        let scope = format!("{box_kit}import {{ icon }} from './icons';\nconst Scope = ({{ children, ...rest }}) => <Inner {{...rest}} icon={{icon}}>{{children}}</Inner>;\nexport const App = () => <Scope asChild><Plate /></Scope>;\n");
+        assert!(analyze(&[("a.tsx", &scope), ("icons.tsx", icons)], &test_inputs()).dynamic_props.contains_key("p"));
+        // A wrapper element handed to code the analysis cannot see.
+        assert!(open("export const App = () => <Foreign><W /></Foreign>;\n"));
+        // A wrapper whose props another wrapper spreads takes that one with it.
+        assert!(keeps_box("export const App = () => <W as={Foreign} />;\nconst W = (props) => <V {...props} />;\nconst V = (props) => <Parent {...props}><Box p={8} /></Parent>;\n"));
+        // And the wrapper elements its own element then hands on, wave by wave.
+        assert!(keeps_box("const W0 = (props) => <Parent {...props}><Box p={8} /></Parent>;\nconst W1 = (props) => <Parent {...props}><W0 /></Parent>;\nconst W2 = (props) => <Parent {...props}><W1 /></Parent>;\nexport const App = () => <Foreign><W2 /></Foreign>;\n"));
+        // Renders through an import the analysis cannot follow into code it
+        // reads (a subpath of a package the host maps), under the wrapper's
+        // name, a re-exported alias, or a namespace.
+        let unseen = |files: &[(&str, &str)]| {
+            let wrapper = format!("{SITE_KIT}export const W = (props) => <Parent {{...props}}><Btn /></Parent>;\nexport const Local = () => <W />;\n");
+            let all: Vec<(&str, &str)> = [("a.tsx", wrapper.as_str())].into_iter().chain(files.iter().copied()).collect();
+            let mut inputs = test_inputs();
+            inputs.package_map.insert("@acme/ui".to_string(), "a.tsx".to_string());
+            analyze(&all, &inputs).sheets.variants.contains("--size-lg")
+        };
+        assert!(!unseen(&[]));
+        assert!(!unseen(&[("b.tsx", "import { Foreign } from 'outside';\nimport { W } from 'other-lib';\nexport const B = () => <W as={Foreign} />;\n")]));
+        assert!(unseen(&[("b.tsx", "import { Foreign } from 'outside';\nimport { W } from '@acme/ui/parts';\nexport const B = () => <W as={Foreign} />;\n")]));
+        assert!(unseen(&[
+            ("barrel.ts", "export { W as Wrap } from './a';\n"),
+            ("b.tsx", "import { Foreign } from 'outside';\nimport { Wrap } from '@acme/ui/parts';\nexport const B = () => <Wrap as={Foreign} />;\n"),
+        ]));
+        assert!(unseen(&[("b.tsx", "import { Foreign } from 'outside';\nimport * as ui from '@acme/ui/parts';\nexport const B = () => <ui.W as={Foreign} />;\n")]));
+        assert!(unseen(&[("b.tsx", "import { Foreign } from 'outside';\nimport { ui } from '@acme/ui/parts';\nexport const B = () => <ui.W as={Foreign} />;\n")]));
+        assert!(unseen(&[("b.tsx", "import { ui } from '@acme/ui/parts';\nexport const list = [ui.W];\n")]));
+        assert!(!unseen(&[("b.tsx", "import { Foreign } from 'outside';\nimport * as ui from '@acme/ui/parts';\nexport const B = () => <ui.Other as={Foreign} />;\n")]));
+        assert!(unseen(&[("b.tsx", "import * as ui from '@acme/ui/parts';\nexport const all = [ui];\n")]));
+        assert!(!unseen(&[("b.tsx", "import * as logo from '@acme/ui/logo.svg';\nimport { mark } from '@acme/ui/parts';\nexport const all = [logo, mark];\n")]));
+        assert!(unseen(&[
+            ("kit.ts", "import { W } from './a';\nexport const Kit = { Media: W };\n"),
+            ("b.tsx", "import { Kit } from '@acme/ui/parts';\nexport const all = [Kit];\n"),
+        ]));
+        assert!(unseen(&[
+            ("kit.ts", "import { W } from './a';\nexport const Kit = { Media: W };\n"),
+            ("b.tsx", "import { Foreign } from 'outside';\nimport { Kit } from '@acme/ui/parts';\nexport const B = () => <Kit.Media as={Foreign} />;\n"),
+        ]));
+        assert!(unseen(&[
+            ("kit.ts", "import { W } from './a';\nexport const Kit = { W };\n"),
+            ("b.tsx", "import { createElement } from 'react';\nimport { Kit } from './kit';\nexport const B = (props) => createElement(Kit.W, props.extra);\n"),
+        ]));
+        // A member wrapper delivered outside, and a barrel's namespace or
+        // load that reaches it.
+        assert!(unseen(&[
+            ("kit.ts", "import { W } from './a';\nexport const Kit = { W };\n"),
+            ("b.tsx", "import { Foreign } from 'outside';\nimport { Kit } from './kit';\nexport const B = () => <Foreign><Kit.W /></Foreign>;\n"),
+        ]));
+        assert!(unseen(&[("barrel.ts", "export * from './a';\n"), ("b.tsx", "import * as ui from './barrel';\nexport const list = [ui];\n")]));
+        assert!(unseen(&[("barrel.ts", "export * from './a';\n"), ("b.tsx", "export const load = () => import('./barrel');\n")]));
+        assert!(unseen(&[
+            ("barrel.ts", "export * from '@acme/ui/parts';\n"),
+            ("b.tsx", "import { Foreign } from 'outside';\nimport { W } from './barrel';\nexport const B = () => <W as={Foreign} />;\n"),
+        ]));
+        // A scope that hands its rest and children to an element it writes
+        // a prop on: a caller's `asChild` clones the caller's child.
+        let scope = |app: &str| {
+            let source = format!("{SITE_KIT}const Scope = ({{ mode, children, ...rest }}) => <Inner {{...rest}} ink=\"red\" data-mode={{mode}}>{{children}}</Inner>;\n{app}");
+            analyze(&[("a.tsx", &source)], &test_inputs())
+        };
+        let cloned = scope("export const App = () => <Scope mode=\"dark\" asChild size=\"sm\"><Btn /></Scope>;\n");
+        assert!(cloned.sheets.variants.contains("--size-sm") && !cloned.sheets.variants.contains("--size-lg"), "{}", cloned.sheets.variants);
+        assert!(btn_ink_red(&cloned));
+        assert!(!scope("export const App = () => <Scope><Btn /></Scope>;\n").sheets.variants.contains("--size-lg"));
+        // A child that is not one element in place takes what is passed.
+        assert!(scope("export const App = () => <Scope asChild icon={<Btn />}><Foreign /></Scope>;\n").sheets.variants.contains("--size-lg"));
+        assert!(scope("export const App = ({ el }) => <Scope asChild>{el}</Scope>;\nexport const B = () => <App el={<Btn />} />;\n").sheets.variants.contains("--size-lg"));
+        assert!(scope("export const App = (props) => <Scope asChild {...props.extra}><Btn /></Scope>;\n").sheets.variants.contains("--size-lg"));
+        assert!(scope("const Outer = (props) => <Scope asChild {...props}><Btn /></Scope>;\nexport const App = () => <Outer size=\"lg\" />;\n").sheets.variants.contains("--size-lg"));
+        // A component terminal child takes only literal props, and the
+        // element passes no element of its own.
+        let plate = "const Plate = ds.styles({ display: 'grid' }).variant({ prop: 'size', defaultVariant: 'md', variants: { sm: { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' } } }).asComponent(Foreign);\n";
+        let plate_lg = |out: &CssOutput| out.sheets.variants.lines().any(|line| line.contains("Plate-") && line.contains("--size-lg"));
+        let cloned = scope(&format!("{plate}export const App = () => <Scope mode=\"dark\" asChild size=\"sm\"><Plate /></Scope>;\n"));
+        assert!(!plate_lg(&cloned) && cloned.sheets.variants.lines().any(|line| line.contains("Plate-") && line.contains("--size-sm")), "{}", cloned.sheets.variants);
+        let btn_lg = |out: &CssOutput| out.sheets.variants.lines().any(|line| line.contains("Btn-") && line.contains("--size-lg"));
+        assert!(btn_lg(&scope(&format!("{plate}export const App = () => <Scope asChild icon={{<Btn />}}><Plate /></Scope>;\n"))));
+        let holds = format!("{SITE_KIT}{plate}const Scope = ({{ children, ...rest }}) => <Inner {{...rest}} icon={{<Btn />}}>{{children}}</Inner>;\nexport const App = () => <Scope asChild><Plate /></Scope>;\n");
+        assert!(analyze(&[("a.tsx", &holds)], &test_inputs()).sheets.variants.contains("--size-lg"));
+        // An element with children of its own clones those instead.
+        let own_child = format!("{SITE_KIT}const Scope = ({{ icon, children, ...rest }}) => <Inner {{...rest}}>{{icon}}</Inner>;\nexport const App = () => <Scope asChild size=\"lg\" icon={{<Btn />}}><b /></Scope>;\n");
+        assert!(analyze(&[("a.tsx", &own_child)], &test_inputs()).sheets.variants.contains("--size-lg"));
     }
 
     fn custom_classes<'a>(out: &'a CssOutput, id: &str, prop: &str) -> &'a HashMap<String, String> {

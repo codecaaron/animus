@@ -952,12 +952,49 @@ pub(crate) struct OpaqueTag {
     /// A parameter or local never names the module's binding of that name.
     pub origin: TagOrigin,
     pub polymorphic: Polymorphic,
+    /// What the element's attributes and children let an Animus receiver do
+    /// in its tag's place, judged where the receiver is known.
+    pub site: SiteShape,
+    /// Where the element starts in its file.
+    pub at: u32,
     /// Whether the element sets a `ref`, which reads the instance of a
     /// class component, its props included.
     pub exposed: bool,
     pub tags: BTreeSet<String>,
     pub imported_args: Vec<String>,
     pub forwards_from: Vec<String>,
+}
+
+/// What an element's own attributes and children let an Animus string
+/// terminal render in its tag's place: Animus's runtime renders the tag
+/// unless `as` names another, or `asChild` clones the one element child
+/// with the site's props, and a spread may carry either.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SiteShape {
+    /// An `as` that is not a host element's static name, or an `is`.
+    pub as_open: bool,
+    /// `asChild` is written: the tag of its one direct element child, when it
+    /// has exactly one.
+    pub as_child: Option<Option<String>>,
+    /// Each spread on the element, in order.
+    pub spreads: Vec<SpreadArg>,
+    /// The element's children are none, or exactly the enclosing top-level
+    /// component's own `children` input, so an `asChild` a spread switches on
+    /// clones the element its callers pass.
+    pub own_children: bool,
+}
+
+/// What a spread on an element can carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SpreadArg {
+    /// Object literals of these static keys, a conditional over them
+    /// included.
+    Keys(Vec<String>),
+    /// The props, or the rest of them, of the enclosing top-level component:
+    /// its binding.
+    Props(String),
+    /// Anything else.
+    Other,
 }
 
 /// The first construct in a module that leaves no usage proven

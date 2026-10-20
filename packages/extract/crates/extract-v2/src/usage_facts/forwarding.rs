@@ -49,7 +49,7 @@ use std::rc::Rc;
 
 use super::{
     is_erased_wrapper, jsx_member_path, jsx_member_root, tag_origin, ElementConst, IntrinsicPatch, MemberEffect, OpaqueCall,
-    OpaqueTag, Polymorphic, TagOrigin,
+    OpaqueTag, Polymorphic, SiteShape, SpreadArg, TagOrigin,
 };
 use crate::chain_walk::{unwrap_type_assertions, ChainDescriptor};
 
@@ -464,6 +464,8 @@ struct Module<'s> {
     /// code, unless a store made it hookable (`Held::hookable`), which
     /// hands it on at every member (`Walk::read_through`).
     in_place: FxHashSet<SymbolId>,
+    /// See `Declarations::reshaped`.
+    reshaped: FxHashSet<SymbolId>,
     /// React's state setters, with the state bindings their hook returned
     /// (`const [s, set] = useState()`): one is React's only while nothing
     /// reassigns it (`Walk::callee_of`).
@@ -526,6 +528,7 @@ struct Receiver {
     tag: String,
     origin: TagOrigin,
     polymorphic: Polymorphic,
+    site: SiteShape,
     exposed: bool,
     reached: Reached,
 }
@@ -684,7 +687,7 @@ impl<'s> Module<'s> {
             .map(|symbol| scoping.symbol_name(*symbol).to_string())
             .chain(default_class.then(|| "default".to_string()))
             .collect();
-        let Declarations { params, functions, in_place, setters, hook_states, classes, hookable_objects, .. } = declarations;
+        let Declarations { params, functions, in_place, reshaped, setters, hook_states, classes, hookable_objects, .. } = declarations;
         Module {
             scoping,
             sources,
@@ -696,6 +699,7 @@ impl<'s> Module<'s> {
             bound: functions.values().copied().collect(),
             functions,
             in_place,
+            reshaped,
             setters,
             hook_states,
             classes,
@@ -907,11 +911,11 @@ impl<'s> Module<'s> {
             .collect();
         let tags = self
             .receivers
-            .into_values()
-            .filter(|receiver| !receiver.reached.held.is_empty())
-            .map(|Receiver { tag, origin, polymorphic, exposed, reached }| {
+            .into_iter()
+            .filter(|(_, receiver)| !receiver.reached.held.is_empty())
+            .map(|(at, Receiver { tag, origin, polymorphic, site, exposed, reached })| {
                 let (tags, imported_args, forwards_from) = record(reached);
-                OpaqueTag { tag, origin, polymorphic, exposed, tags, imported_args, forwards_from }
+                OpaqueTag { tag, origin, polymorphic, site, at, exposed, tags, imported_args, forwards_from }
             })
             .collect();
         // The module's own top-level bindings that hold elements, by name.
@@ -964,6 +968,10 @@ struct Declarations<'r> {
     uses_arguments: FxHashSet<ScopeId>,
     functions: FxHashMap<SymbolId, ScopeId>,
     in_place: FxHashSet<SymbolId>,
+    /// The bindings some reference uses other than as a JSX spread's
+    /// argument or to read a member (an assignment's target among them):
+    /// code that may change what they hold.
+    reshaped: FxHashSet<SymbolId>,
     setters: FxHashMap<SymbolId, Vec<SymbolId>>,
     hook_states: FxHashMap<u32, Vec<SymbolId>>,
     /// `const`s declared to an array literal: at the module's top, and in a
@@ -1019,6 +1027,7 @@ impl<'r> Declarations<'r> {
             uses_arguments: FxHashSet::default(),
             functions: FxHashMap::default(),
             in_place: FxHashSet::default(),
+            reshaped: FxHashSet::default(),
             setters: FxHashMap::default(),
             hook_states: FxHashMap::default(),
             module_arrays: FxHashSet::default(),
@@ -1633,6 +1642,19 @@ impl<'a> Visit<'a> for Declarations<'a> {
 
     fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
         let symbol = self.symbol(id);
+        if let Some(symbol) = symbol {
+            let mut up = self.ancestors.iter().rev();
+            let plain = match super::peel_wrappers(id.span, &mut up) {
+                (current, Some(AstKind::JSXSpreadAttribute(spread))) => spread.argument.span() == current,
+                (current, Some(AstKind::StaticMemberExpression(member))) => {
+                    member.object.span() == current && super::member_effect(member.span, up).is_none()
+                }
+                _ => false,
+            };
+            if !plain {
+                self.reshaped.insert(symbol);
+            }
+        }
         if let Some(symbol) = symbol.filter(|symbol| self.may_hold_array(*symbol)) {
             match array_use(&self.ancestors, id.span) {
                 ArrayUse::Is(used) => self.uses[symbol.index()] |= used.bit(),
@@ -2486,11 +2508,135 @@ impl<'a> Walk<'_, '_, 'a> {
             })
             .max()
             .unwrap_or(Polymorphic::No);
+        let site = self.site_shape(element);
         let exposed = named_attribute(&["ref"]);
         let reached = Reached { top: Rc::clone(&self.top), held: value.clone() };
-        self.module.receivers.insert(element.span.start, Receiver { tag, origin, polymorphic, exposed, reached });
+        self.module.receivers.insert(element.span.start, Receiver { tag, origin, polymorphic, site, exposed, reached });
         self.module.grew(Key::Receiver(element.span.start));
         Place::Kept(InPlace::Received)
+    }
+
+    /// What `element`'s attributes and children let an Animus string terminal
+    /// render in its tag's place (`SiteShape`).
+    fn site_shape(&self, element: &JSXElement<'a>) -> SiteShape {
+        use oxc::ast::ast::{JSXAttributeItem, JSXAttributeName, JSXChild};
+        let mut site = SiteShape::default();
+        for attribute in &element.opening_element.attributes {
+            match attribute {
+                JSXAttributeItem::SpreadAttribute(spread) => site.spreads.push(self.spread_arg(&spread.argument)),
+                JSXAttributeItem::Attribute(attribute) => match &attribute.name {
+                    JSXAttributeName::Identifier(name) if name.name == "as" => {
+                        let host = matches!(crate::jsx_scan::eval_jsx_attribute_value(&attribute.value),
+                            crate::jsx_scan::PropValueResult::Static(serde_json::Value::String(tag)) if !tag.contains('-'));
+                        site.as_open |= !host;
+                    }
+                    JSXAttributeName::Identifier(name) if name.name == "is" => site.as_open = true,
+                    JSXAttributeName::Identifier(name) if name.name == "asChild" => {
+                        // The one element child, as JSX passes children.
+                        let child = match super::written_children(&element.children)[..] {
+                            [JSXChild::Element(child)] => match &child.opening_element.name {
+                                JSXElementName::Identifier(id) => Some(id.name.to_string()),
+                                JSXElementName::IdentifierReference(id) => Some(id.name.to_string()),
+                                JSXElementName::MemberExpression(member) => jsx_member_path(member),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        site.as_child = Some(child);
+                    }
+                    _ => {}
+                },
+            }
+        }
+        site.own_children = self.own_children(element);
+        site
+    }
+
+    /// Whether `element`'s children are none, or exactly the `children` the
+    /// enclosing top-level component destructures from its props and never
+    /// reassigns, and it writes no `children` attribute.
+    fn own_children(&self, element: &JSXElement<'a>) -> bool {
+        use oxc::ast::ast::{JSXAttributeItem, JSXAttributeName, JSXChild, JSXExpression};
+        // A `children` attribute is what the element renders instead.
+        let attribute = element.opening_element.attributes.iter().any(|attribute| {
+            matches!(attribute, JSXAttributeItem::Attribute(attribute) if matches!(&attribute.name, JSXAttributeName::Identifier(name) if name.name == "children"))
+        });
+        if attribute {
+            return false;
+        }
+        let child = match super::written_children(&element.children)[..] {
+            [] => return true,
+            [JSXChild::ExpressionContainer(container)] => &container.expression,
+            _ => return false,
+        };
+        let (JSXExpression::Identifier(id), Some(BindingPattern::ObjectPattern(object))) = (child, self.own_param()) else {
+            return false;
+        };
+        let Some(symbol) = self.module.symbol(id) else { return false };
+        !self.module.scoping.symbol_is_mutated(symbol)
+            && object.properties.iter().any(|property| {
+                !property.computed
+                    && property.key.static_name().is_some_and(|key| key == "children")
+                    && matches!(&property.value, BindingPattern::BindingIdentifier(binding) if binding.symbol_id.get() == Some(symbol))
+            })
+    }
+
+    /// The first parameter of the top-level function the walk is in.
+    fn own_param(&self) -> Option<&'a BindingPattern<'a>> {
+        self.ancestors.iter().find_map(|kind| {
+            let (scope, params) = match kind {
+                AstKind::Function(function) => (function.scope_id.get()?, &function.params),
+                AstKind::ArrowFunctionExpression(arrow) => (arrow.scope_id.get()?, &arrow.params),
+                _ => return None,
+            };
+            if !self.module.roots.contains(&scope) {
+                return None;
+            }
+            Some(&params.items.first()?.pattern)
+        })
+    }
+
+    /// What a spread of `argument` can carry: listed literal keys, the
+    /// enclosing top-level component's own props or rest, or anything.
+    fn spread_arg(&self, argument: &Expression<'a>) -> SpreadArg {
+        /// `undefined` names the global only where nothing binds it.
+        type Unbound<'f> = &'f dyn Fn(&IdentifierReference<'_>) -> bool;
+        fn keys(expression: &Expression<'_>, into: &mut Vec<String>, unbound: Unbound<'_>) -> bool {
+            match unwrap_type_assertions(expression) {
+                Expression::ObjectExpression(object) => object.properties.iter().all(|property| match property {
+                    ObjectPropertyKind::ObjectProperty(property) if !property.computed => {
+                        property.key.static_name().map(|name| into.push(name.to_string())).is_some()
+                    }
+                    _ => false,
+                }),
+                Expression::ConditionalExpression(conditional) => {
+                    keys(&conditional.consequent, into, unbound) && keys(&conditional.alternate, into, unbound)
+                }
+                Expression::LogicalExpression(logical) => keys(&logical.right, into, unbound) && keys(&logical.left, into, unbound),
+                Expression::NullLiteral(_) | Expression::BooleanLiteral(_) => true,
+                Expression::Identifier(id) => id.name == "undefined" && unbound(id),
+                _ => false,
+            }
+        }
+        let mut listed = Vec::new();
+        if keys(argument, &mut listed, &|id| self.module.symbol(id).is_none()) {
+            return SpreadArg::Keys(listed);
+        }
+        let Expression::Identifier(id) = unwrap_type_assertions(argument) else { return SpreadArg::Other };
+        let Some(symbol) = self.module.symbol(id) else { return SpreadArg::Other };
+        // The parameter, or its rest, of the top-level function the element
+        // is in.
+        let own = self.own_param().and_then(|pattern| match pattern {
+            BindingPattern::BindingIdentifier(binding) => binding.symbol_id.get(),
+            BindingPattern::ObjectPattern(object) => super::object_rest(object).and_then(|(_, rest)| rest.symbol_id.get()),
+            _ => None,
+        });
+        match (own, self.top.as_ref()) {
+            // Only a binding nothing reassigns, writes through or hands on
+            // holds the props its callers wrote.
+            (Some(own), [name]) if own == symbol && !self.module.reshaped.contains(&symbol) => SpreadArg::Props(name.clone()),
+            _ => SpreadArg::Other,
+        }
     }
 
     /// A value reaching `call` from `current`, its callee or an argument.
