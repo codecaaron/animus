@@ -26,6 +26,7 @@ import { spawn } from 'node:child_process';
 import {
   closeSync,
   copyFileSync,
+  linkSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -58,12 +59,15 @@ import {
   helperReference,
   mayDeclareSystem,
   parseDeclaration,
+  probeSpecifiers,
   rewriteDeclaration,
   scanDeclaration,
 } from './types-alias';
 import { relocateDeclarationMap } from './types-map';
 import {
   DECLARATION_FILE,
+  declarationCandidates,
+  isRelativeSpecifier,
   ModuleIdentities,
   packageRoutes,
   toPosix,
@@ -228,32 +232,74 @@ function isFileExistsError<Value>(
   return error instanceof Object && 'code' in error && error.code === 'EEXIST';
 }
 
-/** The run's exclusive claim on `--out`, from staging through commit. A
- *  lock whose holder is dead is taken over. */
+/** The run's exclusive claim on `--out`, from staging through commit. The
+ *  lock file appears complete or not at all: its pid is written to a private
+ *  file first and linked into place. A lock whose holder is dead is taken
+ *  over only if it is still the lock that was read; anything else, including
+ *  an unreadable lock, fails closed. */
 function acquireLock(outDir: string): () => void {
   const path = join(dirname(outDir), `.${basename(outDir)}.lock`);
+  const owned = `${path}.${process.pid}`;
   mkdirSync(dirname(outDir), { recursive: true });
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      writeFileSync(path, `${process.pid}\n`, { flag: 'wx' });
-      return () => rmSync(path, { force: true });
-    } catch (error) {
-      if (!isFileExistsError(error)) throw error;
+  writeFileSync(owned, `${process.pid}\n`);
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        linkSync(owned, path);
+        return () => rmSync(path, { force: true });
+      } catch (error) {
+        if (!isFileExistsError(error)) throw error;
+      }
+      const observed = readLockHolder(path);
+      if (observed === null) continue;
+      if (observed === 'unreadable') {
+        throw new UsageFailure(
+          `${path} exists but names no process; remove it if no \`animus types alias\` is running`
+        );
+      }
+      if (isLockHolderAlive(observed)) {
+        throw new UsageFailure(
+          `another \`animus types alias\` (pid ${observed}) owns ${outDir}; wait for it to finish`
+        );
+      }
+      // Move the stale lock aside, then confirm it was the one read: a
+      // lock another run took over in between is put back.
+      const aside = `${path}.stale-${process.pid}`;
+      try {
+        renameSync(path, aside);
+      } catch {
+        continue;
+      }
+      if (readLockHolder(aside) !== observed) {
+        try {
+          linkSync(aside, path);
+        } finally {
+          rmSync(aside, { force: true });
+        }
+        throw new UsageFailure(
+          `another \`animus types alias\` took ${outDir} over first`
+        );
+      }
+      rmSync(aside, { force: true });
     }
-    let holder = Number.NaN;
-    try {
-      holder = Number(readFileSync(path, 'utf8').trim());
-    } catch {
-      // Removed by its holder between the two calls: retry.
-    }
-    if (Number.isInteger(holder) && holder > 0 && isLockHolderAlive(holder)) {
-      throw new UsageFailure(
-        `another \`animus types alias\` (pid ${holder}) owns ${outDir}; wait for it to finish`
-      );
-    }
-    rmSync(path, { force: true });
+    throw new UsageFailure(
+      `another \`animus types alias\` took ${outDir} first`
+    );
+  } finally {
+    rmSync(owned, { force: true });
   }
-  throw new UsageFailure(`another \`animus types alias\` took ${outDir} first`);
+}
+
+/** The pid a lock names, null when it is gone, 'unreadable' otherwise. */
+function readLockHolder(path: string): number | 'unreadable' | null {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+  const pid = Number(text.trim());
+  return Number.isInteger(pid) && pid > 0 ? pid : 'unreadable';
 }
 
 /** Only a directory this command promoted may be replaced. */
@@ -706,6 +752,17 @@ function stagePacket(
     const scan = scans.get(file);
     if (scan === undefined) continue;
     let replacements = scan.replacements;
+    if (scan.localOccurrences > 0) {
+      warnings.push(
+        `${rel}: ${scan.localOccurrences} registry occurrence(s) left as emitted: they name a declaration of the file itself`
+      );
+    }
+    if (replacements.length > 0 && scan.attributed) {
+      warnings.push(
+        `${rel} left as emitted: an import there carries attributes or a resolution-mode`
+      );
+      replacements = [];
+    }
     if (replacements.length > 0) {
       const missing = [...required].find((augmentation) =>
         entryClosures.some(
@@ -723,11 +780,13 @@ function stagePacket(
     for (const replacement of replacements) {
       counts.set(replacement.alias, (counts.get(replacement.alias) ?? 0) + 1);
       const flavor = /\.d\.(m|c)ts$/.exec(rel)?.[1] ?? '';
+      // An occurrence naming imported bindings is its own witness; others
+      // share one per alias, directory and module flavor.
       const key = [
         replacement.alias.name,
         dirname(rel),
         flavor,
-        replacement.usesFileBindings ? rel : '',
+        replacement.usesFileBindings ? `${rel}:${replacement.start}` : '',
       ].join('\0');
       if (!witnesses.has(key)) {
         witnesses.set(key, {
@@ -811,10 +870,31 @@ function writeIdentityChecks(staging: string, packet: StagedPacket): string[] {
   });
 }
 
+/** The probe files. A probe is consumer code that reaches the package by
+ *  name: a relative import must name another TypeScript file in `--probes`,
+ *  which the probe views copy; anything else is refused. */
 function probeFiles(probesDir: string): string[] {
-  const files = listFiles(probesDir).filter((rel) => PROBE_FILE.test(rel));
+  const all = listFiles(probesDir);
+  const files = all.filter((rel) => PROBE_FILE.test(rel));
   if (files.length === 0) {
     throw new UsageFailure(`--probes ${probesDir} holds no .ts or .tsx files`);
+  }
+  const probes = new Set(files);
+  for (const rel of files) {
+    const file = join(probesDir, rel);
+    for (const specifier of probeSpecifiers(file, readFileSync(file, 'utf8'))) {
+      if (!isRelativeSpecifier(specifier)) continue;
+      const target = resolve(dirname(file), specifier);
+      const local = declarationCandidates(target).find((candidate) =>
+        probes.has(toPosix(relative(probesDir, candidate)))
+      );
+      if (local === undefined) {
+        throw new UsageFailure(
+          `probe ${rel} imports ${specifier}, which is not a TypeScript file in --probes; ` +
+            `probes import the package by name and other probe files only`
+        );
+      }
+    }
   }
   return files;
 }

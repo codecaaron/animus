@@ -13,7 +13,12 @@
 
 import { readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { parseSync, rawTransferSupported, visitorKeys } from 'oxc-parser';
+import {
+  parseSync,
+  rawTransferSupported,
+  Visitor,
+  visitorKeys,
+} from 'oxc-parser';
 
 import { UsageFailure } from './build';
 import { isRelativeSpecifier, toPosix } from './types-resolve';
@@ -252,6 +257,8 @@ interface SerializeContext {
    *  being read; null outside one. */
   inferNames: string[] | null;
   usesFileBindings: boolean;
+  /** Whether a name resolved to a declaration of the file itself. */
+  usesLocalBindings: boolean;
 }
 
 function serializeContext(
@@ -259,7 +266,14 @@ function serializeContext(
   sink: TokenSink,
   binders: string[]
 ): SerializeContext {
-  return { scope, sink, binders, inferNames: null, usesFileBindings: false };
+  return {
+    scope,
+    sink,
+    binders,
+    inferNames: null,
+    usesFileBindings: false,
+    usesLocalBindings: false,
+  };
 }
 
 /** A type literal's or intersection's first token, which the matcher reads
@@ -292,6 +306,7 @@ function reference(context: SerializeContext, name: string): boolean {
   if (bound === null) return false;
   if (bound !== undefined) {
     context.usesFileBindings = true;
+    if (bound.startsWith('local:')) context.usesLocalBindings = true;
     return emit(context, bound);
   }
   return emit(context, `global:${name}`);
@@ -1016,8 +1031,16 @@ export interface DeclarationScan {
   /** The file's own import statements, which a registry naming one of its
    *  bindings needs beside it to resolve. */
   importStatements: string;
-  /** Whether it holds a `declare module '…'` or `declare global` block. */
+  /** Whether it changes the global scope or another module: a `declare
+   *  module '…'` or `declare global` block, a script (no import or export,
+   *  so every declaration is global), or a `/// <reference lib>`. */
   augments: boolean;
+  /** Whether any import carries attributes or a `resolution-mode`, which
+   *  can change what it resolves to: such a file is never rewritten. */
+  attributed: boolean;
+  /** Registry-shaped occurrences left as emitted because they name a
+   *  declaration of the file itself, which no witness can stand beside. */
+  localOccurrences: number;
 }
 
 type WalkChild = Node | ReadonlyArray<Node | null> | null | undefined;
@@ -1026,7 +1049,16 @@ function isChildList(child: WalkChild): child is ReadonlyArray<Node | null> {
   return Array.isArray(child);
 }
 
-const TRIPLE_SLASH_PATH = /^\/\s*<reference\s+path\s*=\s*["']([^"']+)["']/;
+const TRIPLE_SLASH =
+  /^\/\s*<reference\s+(path|types|lib)\s*=\s*["']([^"']+)["']/;
+const MODULE_SYNTAX = new Set([
+  'ImportDeclaration',
+  'ExportNamedDeclaration',
+  'ExportDefaultDeclaration',
+  'ExportAllDeclaration',
+  'TSExportAssignment',
+  'TSNamespaceExportDeclaration',
+]);
 
 /** Walks `parsed` once. A matched subtree is not entered: the comparison
  *  already read it, and binders inside it are scoped to it. Ambient module
@@ -1043,6 +1075,8 @@ export function scanDeclaration(
     imports: new Set(),
     importStatements: '',
     augments: false,
+    attributed: false,
+    localOccurrences: 0,
   };
   const edge = (specifier: string): void => {
     const target = scope.identities.resolveImport(specifier, scope.file);
@@ -1055,6 +1089,7 @@ export function scanDeclaration(
       (statement.type === 'ExportNamedDeclaration' && statement.source !== null)
     ) {
       if (statement.source !== null) edge(statement.source.value);
+      if (statement.attributes.length > 0) scan.attributed = true;
       if (statement.type === 'ImportDeclaration') {
         scan.importStatements += `${parsed.text.slice(statement.start, statement.end)}\n`;
       }
@@ -1071,11 +1106,20 @@ export function scanDeclaration(
       scan.augments = true;
     }
   }
+  if (
+    !parsed.program.body.some((statement) => MODULE_SYNTAX.has(statement.type))
+  ) {
+    scan.augments = true;
+  }
   for (const comment of parsed.comments) {
-    const path = TRIPLE_SLASH_PATH.exec(comment.value);
-    if (comment.type === 'Line' && path !== null) {
-      edge(path[1].startsWith('.') ? path[1] : `./${path[1]}`);
-    }
+    const directive =
+      comment.type === 'Line' ? TRIPLE_SLASH.exec(comment.value) : null;
+    if (directive === null) continue;
+    if (/resolution-mode/.test(comment.value)) scan.attributed = true;
+    const [, kind, target] = directive;
+    if (kind === 'lib') scan.augments = true;
+    else if (kind === 'types') edge(target);
+    else edge(target.startsWith('.') ? target : `./${target}`);
   }
 
   // Every name bound so far in the file: a superset of the binders around
@@ -1095,6 +1139,10 @@ export function scanDeclaration(
       const comparer = new TokenComparer(alias.tokens);
       const context = serializeContext(scope, comparer, [...seenBinders]);
       if (type(context, node) && comparer.complete) {
+        if (context.usesLocalBindings) {
+          scan.localOccurrences += 1;
+          return true;
+        }
         scan.replacements.push({
           start: node.start,
           end: node.end,
@@ -1116,6 +1164,7 @@ export function scanDeclaration(
         break;
       case 'TSImportType':
         edge(node.source.value);
+        if (node.options !== null) scan.attributed = true;
         break;
       case 'TSTypeLiteral':
       case 'TSIntersectionType':
@@ -1199,4 +1248,45 @@ export function helperModule(aliases: readonly RegistryAlias[]): string {
     );
   }
   return `${lines.join('\n')}\n`;
+}
+
+// ---------------------------------------------------------------------------
+// Probes
+
+/** Every module a probe file names statically: imports, re-exports, import
+ *  types and `import('…')` with a literal. */
+export function probeSpecifiers(file: string, text: string): string[] {
+  const parsed = parseSync(file, text, {
+    lang: file.endsWith('.tsx') ? 'tsx' : 'ts',
+    sourceType: 'module',
+  });
+  if (parsed.errors.length > 0) {
+    throw new UsageFailure(
+      `probe ${file} does not parse: ${parsed.errors[0].message}`
+    );
+  }
+  const specifiers: string[] = [];
+  new Visitor({
+    ImportDeclaration(node) {
+      specifiers.push(node.source.value);
+    },
+    ExportAllDeclaration(node) {
+      specifiers.push(node.source.value);
+    },
+    ExportNamedDeclaration(node) {
+      if (node.source !== null) specifiers.push(node.source.value);
+    },
+    TSImportType(node) {
+      specifiers.push(node.source.value);
+    },
+    ImportExpression(node) {
+      if (
+        node.source.type === 'Literal' &&
+        node.source.value === String(node.source.value)
+      ) {
+        specifiers.push(node.source.value);
+      }
+    },
+  }).visit(parsed.program);
+  return specifiers;
 }
