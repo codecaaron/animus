@@ -707,6 +707,12 @@ pub struct FileFacts {
     /// it is followed anywhere.
     #[serde(skip)]
     pub(crate) rewrites_object: bool,
+    /// The top-level components that clone their own `children` input in
+    /// place (`renderAsChild(children, …)`, `cloneElement(children, …)`)
+    /// with props their callers wrote: an `asChild` site's child renders
+    /// as that site writes it.
+    #[serde(skip)]
+    pub(crate) child_cloners: BTreeSet<String>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -1433,6 +1439,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         outside_let_goes: Vec::new(),
         keyed_stores: Vec::new(),
         rewrites_object: false,
+        child_cloners: BTreeSet::new(),
         opaque_tags: Vec::new(),
         transforms: Vec::new(),
         captured_transform_bindings: BTreeSet::new(),
@@ -2085,6 +2092,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         outside_let_goes,
         keyed_stores,
         rewrites_object,
+        child_cloners,
         builder_import_references,
         first_that_works_uses,
         builder_proof,
@@ -2157,6 +2165,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         outside_let_goes,
         keyed_stores,
         rewrites_object,
+        child_cloners,
         unbound_create_system_calls: unbound_create_system_calls(ast),
         builder_references: builder_references(ast),
         ..structural

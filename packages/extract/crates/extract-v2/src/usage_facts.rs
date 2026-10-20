@@ -940,6 +940,8 @@ pub(crate) struct EnrichedUsage {
     pub keyed_stores: Vec<(u32, String)>,
     /// See `FileFacts::rewrites_object`.
     pub rewrites_object: bool,
+    /// See `FileFacts::child_cloners`.
+    pub child_cloners: BTreeSet<String>,
     /// See `FileFacts::builder_import_references`.
     pub builder_import_references: Vec<BuilderImportReferences>,
     /// See `FileFacts::first_that_works_uses`.
@@ -974,7 +976,21 @@ pub(crate) struct OpaqueTag {
     pub forwards_from: Vec<String>,
     /// What each prop carries, by the prop it reaches the element through:
     /// a receiver that hands only some of its props outside delivers those.
+    /// An element reached through one prop records only its key there, and
+    /// its whole record is that prop's (`prop_tags`, `prop_imports`).
     pub props: Vec<PropReach>,
+}
+
+impl OpaqueTag {
+    /// The component tags the prop at `at` carries.
+    pub(crate) fn prop_tags(&self, at: usize) -> &BTreeSet<String> {
+        if self.props.len() == 1 { &self.tags } else { &self.props[at].tags }
+    }
+
+    /// The imports the prop at `at` hands on.
+    pub(crate) fn prop_imports(&self, at: usize) -> &[String] {
+        if self.props.len() == 1 { &self.imported_args } else { &self.props[at].imported_args }
+    }
 }
 
 /// What an element's own attributes and children let an Animus string
@@ -1387,6 +1403,7 @@ pub(crate) fn collect_enriched_usage(
         outside_let_goes: records.outside_let_goes,
         keyed_stores: records.keyed_stores,
         rewrites_object: records.rewrites_object,
+        child_cloners: records.child_cloners,
         builder_import_references,
         first_that_works_uses,
         builder_proof,

@@ -7530,8 +7530,21 @@ fn opaque_delivery(
             // An ordinary component the element renders with its props: a
             // wrapper whose every render the fixpoint above vetted passes on
             // `as`, `asChild` and spreads only where its own elements judge them.
+            // A component that clones its own children with its callers'
+            // props renders an `asChild` site's child as that site writes
+            // it: where the site writes no `as`, `is`, spread or ref, and its
+            // child's own element is judged, only what it forwards leaves.
+            let clones_child = |key: &(String, String)| {
+                let site = &tag.site;
+                matches!(site.as_child, Some(Some(_)))
+                    && !site.as_open
+                    && site.spreads.is_empty()
+                    && !tag.exposed
+                    && files.get(&key.0).is_some_and(|declared| declared.child_cloners.contains(&key.1))
+                    && clone_judged(file, ff, tag.at)
+            };
             let ordinary_opens = |key: &(String, String)| {
-                if (tag.polymorphic != Polymorphic::No && !cloning.contains(key)) || (tag.exposed && class(&key.0, &key.1)) {
+                if (tag.polymorphic != Polymorphic::No && !cloning.contains(key) && !clones_child(key)) || (tag.exposed && class(&key.0, &key.1)) {
                     Inputs::Every
                 } else {
                     forwarding.get(key).cloned().unwrap_or_default()
@@ -7751,8 +7764,8 @@ fn opaque_delivery(
                 Site::Tag(index) => {
                     let (path, _, tag) = tag_sites[index];
                     for at in opened_props(tag, &tag_opened[index]) {
-                        delivered.extend(tag.props[at].tags.iter().map(|inner| (path.clone(), inner.clone())));
-                        imports.extend(tag.props[at].imported_args.iter().map(|import| (path.clone(), import.clone())));
+                        delivered.extend(tag.prop_tags(at).iter().map(|inner| (path.clone(), inner.clone())));
+                        imports.extend(tag.prop_imports(at).iter().map(|import| (path.clone(), import.clone())));
                     }
                 }
                 Site::Call(index) => {
@@ -7810,8 +7823,8 @@ fn opaque_delivery(
             if !props.is_empty() {
                 let receiver = Receiver::Tag(tag.tag.clone());
                 for at in props {
-                    tag.props[at].tags.iter().for_each(|inner| deliver(path, inner, &receiver));
-                    imports.extend(tag.props[at].imported_args.iter().map(|import| (path.clone(), import.clone(), receiver.clone())));
+                    tag.prop_tags(at).iter().for_each(|inner| deliver(path, inner, &receiver));
+                    imports.extend(tag.prop_imports(at).iter().map(|import| (path.clone(), import.clone(), receiver.clone())));
                 }
             }
         }
@@ -14646,6 +14659,40 @@ const Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const Render = ({ children, onClose }: { children: unknown; onClose: Function; rows: Array<string> }) => <div onClick={() => onClose()}>{children}</div>;", "", "", false),
             ("const M = window.Math;\nM.max = pad;\nconst Render = ({ children }) => <div title={Math.max(children)} />;", "", "", true),
             ("const Render = ({ children }) => <div>{children}</div>;", "", "export * from 'react';\n", true),
+            // Animus's `renderAsChild` clones the component's own children
+            // with its callers' props: an `asChild` site's child renders as
+            // the site writes it, unless the site or the wrapper may give it
+            // another target or a ref.
+            ("import { createElement } from 'react';\nimport { renderAsChild } from '@animus-ui/system';\nconst Render = ({ as, asChild, type, ...props }) => (asChild ? renderAsChild(props.children, { ...props, type }) : createElement(as ?? 'button', { ...props, type }));", "asChild", "", false),
+            ("import { createElement } from 'react';\nimport { renderAsChild } from '@animus-ui/system';\nconst Render = ({ as, asChild, type, ...props }) => (asChild ? renderAsChild(props.children, { ...props, type }) : createElement(as ?? 'button', { ...props, type }));", "asChild ref={d}", "", true),
+            ("import { createElement } from 'react';\nimport { renderAsChild } from '@animus-ui/system';\nconst Render = ({ as, asChild, type, ...props }) => (asChild ? renderAsChild(props.children, { ...props, type }) : createElement(as ?? 'button', { ...props, type }));", "asChild as={Foreign}", "", true),
+            ("import { createElement } from 'react';\nimport { renderAsChild } from '@animus-ui/system';\nconst Render = ({ as, asChild, type, ...props }) => (asChild ? renderAsChild(props.children, { ...props, type }) : createElement(as ?? 'button', { ...props, type }));", "asChild {...d}", "", true),
+            ("import { createElement } from 'react';\nimport { renderAsChild } from '@animus-ui/system';\nconst Render = ({ as, asChild, type, ...props }) => (asChild ? renderAsChild(props.children, { ...props, as: Foreign }) : createElement(as ?? 'button', { ...props, type }));", "asChild", "", true),
+            ("import { createElement } from 'react';\nimport { renderAsChild } from '@animus-ui/system';\nconst Render = ({ as, asChild, type, ...props }) => (asChild ? renderAsChild(props.children, { ...props, icon: <Box p={4} /> }) : createElement(as ?? 'button', { ...props, type }));", "asChild", "", true),
+            ("import { createElement } from 'react';\nimport { renderAsChild } from '@animus-ui/system';\nconst Render = ({ as, asChild, type, ...props }) => (asChild ? renderAsChild(<Foreign>{props.children}</Foreign>, props) : createElement(as ?? 'button', { ...props, type }));", "asChild", "", true),
+            ("import { createElement } from 'react';\nimport { renderAsChild } from './slot';\nconst Render = ({ as, asChild, ...props }) => (asChild ? renderAsChild(props.children, props) : createElement(as ?? 'button', props));", "asChild", "", true),
+            // An element's config of what the caller wrote holds no getter;
+            // one that may is handed with what it holds.
+            ("import { createElement } from 'react';\nconst Render = ({ children }) => createElement('div', { get title() { pad(this); return ''; }, children });", "", "", true),
+            ("import { createElement } from 'react';\nconst Render = ({ children }) => { const o = { toString() { return pad(this); }, children }; return createElement('div', { ...o }); };", "", "", true),
+            ("import { createElement } from 'react';\nconst Render = ({ children, ...props }) => createElement('div', { ...props, children });", "", "", false),
+            ("import { createElement } from 'react';\nconst Render = ({ as, ...props }) => createElement(as ?? 'x-panel', props);", "", "", true),
+            ("const Render = ({ as: Tag, ...props }) => { Tag = Tag || Foreign; return <Tag {...props} />; };", "", "", true),
+            ("import { renderAsChild } from '@animus-ui/system';\nconst extra = { icon: <Box p={4} /> };
+const Render = ({ asChild, ...props }) => renderAsChild(props.children, { ...extra });", "asChild", "", true),
+            ("import { renderAsChild } from '@animus-ui/system';\nconst Render = ({ asChild, ...props }) => renderAsChild(props.icon, props);", "asChild icon={<Foreign />}", "", true),
+            // An element whose type is the component's own `as` input, or a
+            // host element's name, renders the caller's `as`, which the
+            // caller's site judges, or that host element.
+            ("const Render = ({ as: Tag = 'section', ...props }) => <Tag {...props} />;", "", "", false),
+            ("import { createElement } from 'react';\nconst Render = ({ as, ...props }) => createElement(as ?? 'button', props);", "", "", false),
+            ("const Render = ({ as: Tag = 'section', ...props }) => <Tag {...props} />;", "as={Foreign}", "", true),
+            ("const Render = ({ as: Tag = Foreign, ...props }) => <Tag {...props} />;", "", "", true),
+            ("const Render = ({ as: Tag = 'x-panel', ...props }) => <Tag {...props} />;", "", "", true),
+            ("import { createElement } from 'react';\nconst Render = ({ as, ...props }) => { as = as || Foreign; return createElement(as, props); };", "", "", true),
+            ("import { createElement } from 'react';\nconst Render = ({ as, ...props }) => createElement(as ?? Foreign, props);", "", "", true),
+            ("import { createElement } from 'react';\nconst Render = ({ as: Tag = 'div', ...props }) => <Tag {...props} />;
+export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);", "", "", true),
             // Forwarding is decided per input: an input handed to unknown
             // code (a callback prop called with a prop, `clsx` with a class
             // name) marks the elements that prop carries, not the children
