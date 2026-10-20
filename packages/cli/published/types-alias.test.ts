@@ -22,6 +22,10 @@ import type { TypesAliasOptions } from '../src/types-packet';
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '../../..');
 const TSC = join(REPO, 'node_modules/typescript/bin/tsc');
 const SYSTEM_TYPES = join(REPO, 'packages/system/dist/index.d.ts');
+// Each test runs the compiler several times (emit, then the command's own
+// checks): about 3.5 s here and over 5 s on CI runners, past vitest's 5 s
+// default. The limit only catches a hang.
+const COMPILER_TEST_TIMEOUT_MS = 60_000;
 
 // The fixture compiles against the built system declarations: verify:types
 // runs this file after its fresh-dist checks, and it fails loud without them.
@@ -198,47 +202,55 @@ afterAll(() => {
 
 describe('animus types alias', () => {
   // Contract: an aliased packet type-checks exactly as the ordinary one.
-  test('an aliased packet type-checks exactly as the ordinary one', async () => {
-    expect(emitDeclarations()).toBe(0);
-    const report = await runTypesAlias(aliasOptions());
+  test(
+    'an aliased packet type-checks exactly as the ordinary one',
+    async () => {
+      expect(emitDeclarations()).toBe(0);
+      const report = await runTypesAlias(aliasOptions());
 
-    // Not vacuous: the packet differs from the ordinary declarations.
-    expect(
-      report.aliases.reduce((sum, alias) => sum + alias.replacements, 0)
-    ).toBeGreaterThan(0);
-    const expected = [
-      'probes/use.tsx(4,34) TS2769',
-      'probes/use.tsx(5,51) TS2769',
-      'probes/use.tsx(6,32) TS2769',
-    ];
-    expect(consumerSites(join(root, '.types-raw/index.d.ts'))).toEqual(
-      expected
-    );
-    expect(consumerSites(null)).toEqual(expected);
-  });
+      // Not vacuous: the packet differs from the ordinary declarations.
+      expect(
+        report.aliases.reduce((sum, alias) => sum + alias.replacements, 0)
+      ).toBeGreaterThan(0);
+      const expected = [
+        'probes/use.tsx(4,34) TS2769',
+        'probes/use.tsx(5,51) TS2769',
+        'probes/use.tsx(6,32) TS2769',
+      ];
+      expect(consumerSites(join(root, '.types-raw/index.d.ts'))).toEqual(
+        expected
+      );
+      expect(consumerSites(null)).toEqual(expected);
+    },
+    COMPILER_TEST_TIMEOUT_MS
+  );
 
   // Contract: a failed producer never promotes.
-  test('a failed producer never promotes', async () => {
-    expect(emitDeclarations()).toBe(0);
-    await runTypesAlias(aliasOptions());
-    const promoted = packetSnapshot();
+  test(
+    'a failed producer never promotes',
+    async () => {
+      expect(emitDeclarations()).toBe(0);
+      await runTypesAlias(aliasOptions());
+      const promoted = packetSnapshot();
 
-    // The compiler fails: noEmitOnError leaves no output to alias.
-    const button = join(root, 'src/Button.ts');
-    const source = readFileSync(button, 'utf8');
-    appendFileSync(button, "export const broken: number = 'x';\n");
-    expect(emitDeclarations()).not.toBe(0);
-    await expect(runTypesAlias(aliasOptions())).rejects.toThrow();
-    writeFileSync(button, source);
+      // The compiler fails: noEmitOnError leaves no output to alias.
+      const button = join(root, 'src/Button.ts');
+      const source = readFileSync(button, 'utf8');
+      appendFileSync(button, "export const broken: number = 'x';\n");
+      expect(emitDeclarations()).not.toBe(0);
+      await expect(runTypesAlias(aliasOptions())).rejects.toThrow();
+      writeFileSync(button, source);
 
-    // The output does not check: the staged packet is discarded.
-    expect(emitDeclarations()).toBe(0);
-    appendFileSync(
-      join(root, '.types-raw/Box.d.ts'),
-      '\nexport declare const missing: import("./nowhere").X;\n'
-    );
-    await expect(runTypesAlias(aliasOptions())).rejects.toThrow();
+      // The output does not check: the staged packet is discarded.
+      expect(emitDeclarations()).toBe(0);
+      appendFileSync(
+        join(root, '.types-raw/Box.d.ts'),
+        '\nexport declare const missing: import("./nowhere").X;\n'
+      );
+      await expect(runTypesAlias(aliasOptions())).rejects.toThrow();
 
-    expect(packetSnapshot()).toBe(promoted);
-  });
+      expect(packetSnapshot()).toBe(promoted);
+    },
+    COMPILER_TEST_TIMEOUT_MS
+  );
 });
