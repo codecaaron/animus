@@ -589,7 +589,8 @@ impl<'s> Module<'s> {
         let react_imports = sources.iter().filter(|(_, source)| REACT_MODULES.contains(&source.as_str())).map(|(symbol, _)| *symbol).collect();
         let mut declarations = Declarations::new(scoping, &react, react_imports);
         declarations.visit_program(program);
-        let arrays = Arrays::of(program, scoping, &declarations, &sources, &namespaces, exported);
+        let uses = declarations.decided_uses();
+        let arrays = Arrays::of(scoping, &declarations, &uses, &sources, &namespaces, exported);
         // A class nothing outside can reshape: unexported (`exported` names
         // no class declaration), and named only as a JSX tag.
         let exported_classes: FxHashSet<u32> = program
@@ -955,6 +956,17 @@ struct Declarations<'r> {
     patches_intrinsics: Option<IntrinsicPatch>,
     /// The bindings importing from React's modules, written or not.
     react_imports: FxHashSet<SymbolId>,
+    /// How the references to each import (type-only ones included) and
+    /// each unwritten variable use it (`array_use`), as `Use` bits by
+    /// symbol; `decided_uses` adds `blind_calls`.
+    uses: Vec<u8>,
+    /// The callback-taking read-method calls whose use `callback_blind`
+    /// decides once every function is declared, with the binding and the
+    /// method's name.
+    blind_calls: Vec<(SymbolId, &'r str, &'r CallExpression<'r>)>,
+    /// Whether each variable is never written (`symbol_is_mutated`, which
+    /// scans every reference), once known: 0 unknown, 1 unwritten, 2 written.
+    unwritten: Vec<u8>,
     depth: usize,
 }
 
@@ -985,8 +997,58 @@ impl<'r> Declarations<'r> {
             built_in_writes: FxHashMap::default(),
             patches_intrinsics: None,
             react_imports,
+            uses: vec![0; scoping.symbols_len()],
+            blind_calls: Vec::new(),
+            unwritten: vec![0; scoping.symbols_len()],
             depth: 0,
         }
+    }
+
+    /// The `Use` bits of each binding's references (`uses`), every
+    /// read-method call decided.
+    fn decided_uses(&mut self) -> Vec<u8> {
+        let mut uses = std::mem::take(&mut self.uses);
+        for (symbol, name, call) in std::mem::take(&mut self.blind_calls) {
+            let used = if self.callback_blind(name, call) { Use::Read } else { Use::Other };
+            uses[symbol.index()] |= used.bit();
+        }
+        uses
+    }
+
+    /// Whether a reference to `symbol` may name an array or an import, a
+    /// type-only one included (`sources` names it), whose uses `Arrays::of`
+    /// reads: an array is a variable never written.
+    fn may_hold_array(&mut self, symbol: SymbolId) -> bool {
+        let flags = self.scoping.symbol_flags(symbol);
+        if flags.intersects(SymbolFlags::Import | SymbolFlags::TypeImport | SymbolFlags::ConstVariable) {
+            return true;
+        }
+        if !flags.intersects(SymbolFlags::Variable) {
+            return false;
+        }
+        let known = &mut self.unwritten[symbol.index()];
+        if *known == 0 {
+            *known = if self.scoping.symbol_is_mutated(symbol) { 2 } else { 1 };
+        }
+        *known == 1
+    }
+
+    /// Whether the callback a read method `name` gets cannot see the array:
+    /// a function the module declares, with no parameter at the array's
+    /// position, no rest parameter and no use of `arguments`.
+    fn callback_blind(&self, name: &str, call: &CallExpression<'_>) -> bool {
+        let Some(&(_, position)) = ARRAY_CALLBACK_METHODS.iter().find(|(method, _)| *method == name) else { return true };
+        let scope = match call.arguments.first().and_then(|argument| argument.as_expression()).map(unwrap_type_assertions) {
+            None => return true,
+            Some(Expression::Identifier(id)) => super::symbol_of(self.scoping, id)
+                .filter(|symbol| !self.scoping.symbol_is_mutated(*symbol))
+                .and_then(|symbol| self.functions.get(&symbol).copied()),
+            Some(expression) => function_scope(expression),
+        };
+        scope.is_some_and(|scope| {
+            let (count, rest) = self.arity.get(&scope).copied().unwrap_or((usize::MAX, true));
+            count <= position && !rest && !self.uses_arguments.contains(&scope)
+        })
     }
 
     fn symbol(&self, id: &IdentifierReference<'_>) -> Option<SymbolId> {
@@ -1534,11 +1596,18 @@ impl<'a> Visit<'a> for Declarations<'a> {
     }
 
     fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
-        if id.name == "arguments" && self.symbol(id).is_none() {
+        let symbol = self.symbol(id);
+        if let Some(symbol) = symbol.filter(|symbol| self.may_hold_array(*symbol)) {
+            match array_use(&self.ancestors, id.span) {
+                ArrayUse::Is(used) => self.uses[symbol.index()] |= used.bit(),
+                ArrayUse::Callback(name, call) => self.blind_calls.push((symbol, name, call)),
+            }
+        }
+        if id.name == "arguments" && symbol.is_none() {
             self.uses_arguments.extend(own_function(&self.ancestors));
         }
         // Indirect `eval` and `Function` run strings the analysis cannot read.
-        let runs_strings = matches!(id.name.as_str(), "eval" | "Function") && self.symbol(id).is_none();
+        let runs_strings = matches!(id.name.as_str(), "eval" | "Function") && symbol.is_none();
         if runs_strings {
             self.patch(id.span.start, "string-code");
         } else if self.redirects(id) {
@@ -2804,9 +2873,9 @@ struct Arrays {
 
 impl Arrays {
     fn of(
-        program: &Program<'_>,
         scoping: &Scoping,
         declarations: &Declarations<'_>,
+        uses: &[u8],
         sources: &FxHashMap<SymbolId, String>,
         namespaces: &FxHashSet<SymbolId>,
         exported: &FxHashSet<&str>,
@@ -2814,14 +2883,7 @@ impl Arrays {
         let imports: Vec<SymbolId> = sources.keys().copied().filter(|symbol| !namespaces.contains(symbol)).collect();
         // A direct `eval` leaves no usage proven (`FileFacts::direct_eval`).
         let name = |symbol: &SymbolId| scoping.symbol_name(*symbol).to_string();
-        let candidates: FxHashSet<SymbolId> =
-            declarations.module_arrays.iter().chain(&declarations.local_arrays).chain(&imports).copied().collect();
-        let mut uses = ArrayUses { scoping, declarations, candidates: &candidates, ancestors: Vec::new(), uses: FxHashMap::default() };
-        if !candidates.is_empty() {
-            uses.visit_program(program);
-        }
-        let uses = uses.uses;
-        let allowed = |symbol: &SymbolId, kinds: &[Use]| uses.get(symbol).is_none_or(|used| used.iter().all(|kind| kinds.contains(kind)));
+        let allowed = |symbol: &SymbolId, kinds: &[Use]| uses[symbol.index()] & !kinds.iter().fold(0, |bits, kind| bits | kind.bit()) == 0;
         let (exported_arrays, private_arrays): (Vec<SymbolId>, Vec<SymbolId>) =
             declarations.module_arrays.iter().partition(|symbol| exported.contains(scoping.symbol_name(**symbol)));
         // A module array outlives every call, so only what keeps it where it
@@ -2862,93 +2924,63 @@ enum Use {
     Other,
 }
 
-/// The uses of the `candidates` arrays.
-struct ArrayUses<'s, 'd, 'a> {
-    scoping: &'s Scoping,
-    declarations: &'d Declarations<'d>,
-    candidates: &'s FxHashSet<SymbolId>,
-    ancestors: Vec<AstKind<'a>>,
-    uses: FxHashMap<SymbolId, BTreeSet<Use>>,
-}
-
-impl<'a> Visit<'a> for ArrayUses<'_, '_, 'a> {
-    fn enter_node(&mut self, kind: AstKind<'a>) {
-        self.ancestors.push(kind);
-    }
-
-    fn leave_node(&mut self, _kind: AstKind<'a>) {
-        self.ancestors.pop();
-    }
-
-    fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
-        let Some(symbol) = super::symbol_of(self.scoping, id) else { return };
-        if self.candidates.contains(&symbol) {
-            let used = self.array_use(id.span);
-            self.uses.entry(symbol).or_default().insert(used);
-        }
+impl Use {
+    /// The use's bit in `Declarations::uses`.
+    fn bit(self) -> u8 {
+        1 << self as u8
     }
 }
 
-impl ArrayUses<'_, '_, '_> {
-    /// How the reference at `span` uses the array it names.
-    fn array_use(&self, span: Span) -> Use {
-        let mut up = self.ancestors.iter().rev();
-        let (current, parent) = super::peel_wrappers(span, &mut up);
-        match parent {
-            Some(AstKind::ExportSpecifier(_) | AstKind::SpreadElement(_)) => Use::Read,
-            Some(AstKind::ForOfStatement(statement)) if statement.right.span() == current => Use::Read,
-            Some(AstKind::StaticMemberExpression(member)) if member.object.span() == current => {
-                let name = member.property.name.as_str();
-                let mut call = up.clone();
-                match super::member_effect(member.span, up) {
-                    None if name == "length" => Use::Read,
-                    Some(MemberEffect::Method) if ARRAY_READ_METHODS.contains(&name) => {
-                        match super::peel_wrappers(member.span, &mut call) {
-                            (_, Some(AstKind::CallExpression(call))) if self.callback_blind(name, call) => Use::Read,
-                            _ => Use::Other,
+/// How a reference uses the array it names, or the callback-taking
+/// read-method call whose callback decides it (`Declarations::callback_blind`).
+enum ArrayUse<'a> {
+    Is(Use),
+    Callback(&'a str, &'a CallExpression<'a>),
+}
+
+/// How the reference at `span`, under `ancestors`, uses the array it names.
+fn array_use<'a>(ancestors: &[AstKind<'a>], span: Span) -> ArrayUse<'a> {
+    let mut up = ancestors.iter().rev();
+    let (current, parent) = super::peel_wrappers(span, &mut up);
+    ArrayUse::Is(match parent {
+        Some(AstKind::ExportSpecifier(_) | AstKind::SpreadElement(_)) => Use::Read,
+        Some(AstKind::ForOfStatement(statement)) if statement.right.span() == current => Use::Read,
+        Some(AstKind::StaticMemberExpression(member)) if member.object.span() == current => {
+            let name = member.property.name.as_str();
+            let mut call = up.clone();
+            match super::member_effect(member.span, up) {
+                None if name == "length" => Use::Read,
+                Some(MemberEffect::Method) if ARRAY_READ_METHODS.contains(&name) => {
+                    match super::peel_wrappers(member.span, &mut call) {
+                        (_, Some(AstKind::CallExpression(call))) if ARRAY_CALLBACK_METHODS.iter().any(|(method, _)| *method == name) => {
+                            return ArrayUse::Callback(name, call);
                         }
+                        (_, Some(AstKind::CallExpression(_))) => Use::Read,
+                        _ => Use::Other,
                     }
-                    Some(MemberEffect::Method) if ARRAY_WRITE_METHODS.contains(&name) => Use::Write,
-                    _ => Use::Other,
                 }
-            }
-            Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == current => {
-                if super::member_effect(member.span, up).is_none() {
-                    Use::Read
-                } else {
-                    Use::Other
-                }
-            }
-            Some(AstKind::JSXExpressionContainer(_)) => match up.next() {
-                Some(AstKind::JSXElement(element))
-                    if matches!(element.opening_element.name, JSXElementName::Identifier(_) | JSXElementName::NamespacedName(_)) =>
-                {
-                    Use::Rendered
-                }
+                Some(MemberEffect::Method) if ARRAY_WRITE_METHODS.contains(&name) => Use::Write,
                 _ => Use::Other,
-            },
-            Some(AstKind::ReturnStatement(_)) => Use::Returned,
-            _ => Use::Other,
+            }
         }
-    }
-
-    /// Whether the callback a read method `name` gets cannot see the array:
-    /// a function the module declares, with no parameter at the array's
-    /// position, no rest parameter and no use of `arguments`.
-    fn callback_blind(&self, name: &str, call: &CallExpression<'_>) -> bool {
-        let Some(&(_, position)) = ARRAY_CALLBACK_METHODS.iter().find(|(method, _)| *method == name) else { return true };
-        let scope = match call.arguments.first().and_then(|argument| argument.as_expression()).map(unwrap_type_assertions) {
-            None => return true,
-            Some(Expression::Identifier(id)) => super::symbol_of(self.scoping, id)
-                .filter(|symbol| !self.scoping.symbol_is_mutated(*symbol))
-                .and_then(|symbol| self.declarations.functions.get(&symbol).copied()),
-            Some(expression) => function_scope(expression),
-        };
-        scope.is_some_and(|scope| {
-            let (count, rest) = self.declarations.arity.get(&scope).copied().unwrap_or((usize::MAX, true));
-            count <= position && !rest && !self.declarations.uses_arguments.contains(&scope)
-        })
-    }
+        Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == current => {
+            if super::member_effect(member.span, up).is_none() {
+                Use::Read
+            } else {
+                Use::Other
+            }
+        }
+        Some(AstKind::JSXExpressionContainer(_)) => match up.next() {
+            Some(AstKind::JSXElement(element))
+                if matches!(element.opening_element.name, JSXElementName::Identifier(_) | JSXElementName::NamespacedName(_)) =>
+            {
+                Use::Rendered
+            }
+            _ => Use::Other,
+        },
+        Some(AstKind::ReturnStatement(_)) => Use::Returned,
+        _ => Use::Other,
+    })
 }
 
 /// The component tags of the elements inside an element, its own included.
