@@ -6,6 +6,8 @@ import {
   REPLACEABLE_DEFAULT_EXCLUDE,
   STRUCTURAL_EXCLUDE,
 } from '@animus-ui/extract/pipeline';
+import { ANIMUS_ARTIFACT_DIR } from '@animus-ui/extract/session';
+import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { EnvironmentFailure, err, runBuild, UsageFailure } from './build';
@@ -14,7 +16,9 @@ import {
   projectResolvedConfig,
   resolveCliConfig,
 } from './config';
+import { formatCssAudit, runCssAudit } from './css-audit';
 import { runWatch } from './watch';
+import { MANIFEST_FILE } from './writer';
 
 export { renderFontPreloads } from '@animus-ui/extract/pipeline';
 export type { FontPreload } from '@animus-ui/extract/pipeline';
@@ -37,6 +41,10 @@ Usage:
   animus prop-order [opts]    Write only .animus/prop-order.json, which the
                               animus/prop-order lint rule reads, without a
                               dev server
+  animus css audit [opts]     Report what would shrink the shipped CSS,
+                              ranked by measured Brotli savings; reads a
+                              full manifest and the built output, writes
+                              nothing
 
 Options:
   --system <path>     SystemInstance module (required unless configured)
@@ -61,6 +69,12 @@ Options:
                       has no per-item lines yet, so it logs what --verbose
                       logs
   --print-config      Alias of the print-config command
+  --manifest <path>   css audit: the full manifest \`animus build --verbose\`
+                      writes, or one a host captured (default:
+                      manifest.json in --out-dir)
+  --dist <path>       css audit: the built output (default: <root>/dist)
+  --json              css audit: print the report as one JSON document on
+                      stdout instead of text on stderr
   --help              This text
 
 Exit codes: 0 success · 1 extraction failure · 2 config error · 3 engine
@@ -126,6 +140,9 @@ export async function main(
         kit: { type: 'boolean' },
         'fail-on-degraded': { type: 'boolean' },
         'print-config': { type: 'boolean' },
+        manifest: { type: 'string' },
+        dist: { type: 'string' },
+        json: { type: 'boolean' },
         help: { type: 'boolean' },
       },
     });
@@ -143,6 +160,21 @@ export async function main(
   }
 
   const command = positionals[0];
+  // Each command reads only its own flags: one it does not read is a
+  // mistake, never silently ignored.
+  const foreign = Object.keys(values).filter((flag) =>
+    command === 'css' ? !CSS_AUDIT_FLAGS.has(flag) : AUDIT_ONLY_FLAGS.has(flag)
+  );
+  if (foreign.length > 0) {
+    reportUsageError(
+      `--${foreign[0]} is not an option of '${command === 'css' ? 'css audit' : command}'`
+    );
+    return;
+  }
+  if (command === 'css') {
+    await runCssAuditCommand(positionals.slice(1), values);
+    return;
+  }
   // Command shape is decided from argv alone, before any filesystem work,
   // and the narrowing is what makes the dispatch below total.
   if (positionals.length > 1) {
@@ -201,6 +233,53 @@ export async function main(
     process.exitCode = await runWatch(config, {
       failOnDegraded: values['fail-on-degraded'] === true,
     });
+  } catch (error) {
+    console.error(`[animus] ${String(readThrownMessage(error) ?? error)}`);
+    process.exitCode = exitCodeFor(error);
+  }
+}
+
+/** `animus css audit`: reads, measures and reports; it never writes the
+ *  project, and exits 0 unless its input is unreadable. */
+/** The flags `css audit` reads; the build commands read none of the
+ *  audit's own. */
+const CSS_AUDIT_FLAGS = new Set([
+  'root',
+  'out-dir',
+  'manifest',
+  'dist',
+  'json',
+]);
+const AUDIT_ONLY_FLAGS = new Set(['manifest', 'dist', 'json']);
+
+async function runCssAuditCommand(
+  subcommand: string[],
+  values: {
+    root?: string;
+    'out-dir'?: string;
+    manifest?: string;
+    dist?: string;
+    json?: boolean;
+  }
+): Promise<void> {
+  if (subcommand.length !== 1 || subcommand[0] !== 'audit') {
+    reportUsageError(
+      subcommand.length === 0
+        ? "'css' needs a subcommand: audit"
+        : `Unknown css subcommand '${subcommand.join(' ')}'`
+    );
+    return;
+  }
+  const root = resolve(values.root ?? process.cwd());
+  try {
+    const outDir = resolve(root, values['out-dir'] ?? ANIMUS_ARTIFACT_DIR);
+    const report = await runCssAudit({
+      manifest: resolve(root, values.manifest ?? join(outDir, MANIFEST_FILE)),
+      dist: resolve(root, values.dist ?? 'dist'),
+    });
+    if (values.json) console.log(JSON.stringify(report, null, 2));
+    else process.stderr.write(formatCssAudit(report));
+    process.exitCode = EXIT_OK;
   } catch (error) {
     console.error(`[animus] ${String(readThrownMessage(error) ?? error)}`);
     process.exitCode = exitCodeFor(error);

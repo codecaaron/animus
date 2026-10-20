@@ -195,6 +195,7 @@
       },
       "dependencies": {
         "@animus-ui/extract": "workspace:*",
+        "@animus-ui/properties": "workspace:*",
       },
     },
     "packages/extract": {

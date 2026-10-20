@@ -1015,7 +1015,8 @@ pub struct CssOutput {
     pub runtime_tables: crate::dynamic_meta::RuntimeTables,
     /// File → each tag written there as JSX that renders exactly one
     /// analysed component, as written (`B`, `ui.Box`, `Card.Body`) → it;
-    /// built only for a host that publishes the prop-order file.
+    /// built only for a host that publishes the prop-order file, and where
+    /// slot provenance is asked for, which `animus css audit` reads it with.
     pub tag_components: BTreeMap<String, BTreeMap<String, String>>,
     /// Each `systemPropNames` list runtime configs reference, by key, as its
     /// source in the system-props module (`PropNameLists`).
@@ -10519,7 +10520,7 @@ fn run_with_system_floor(
     // reassigned) may no longer be what the tag renders.
     let tag_components: BTreeMap<String, BTreeMap<String, String>> = files
         .iter()
-        .filter(|_| inputs.analysis_context.prop_order)
+        .filter(|_| inputs.analysis_context.prop_order || inputs.slot_provenance)
         .filter_map(|(path, ff)| {
             let mut top_level: BTreeMap<&str, bool> = BTreeMap::new();
             for fact in ff.usage_for_analysis() {

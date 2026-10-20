@@ -33,6 +33,20 @@ export interface SlotProvenance {
   components: Record<string, Record<string, SlotOpening[]>>;
 }
 
+/** What keeps a slot open for `owner`: each of `openings`, an unproven
+ *  owner's expanded to every reason its uses are unproven. */
+export function slotReasons(
+  provenance: SlotProvenance,
+  owner: string,
+  openings: readonly SlotOpening[]
+): SlotOpening[] {
+  return openings.flatMap((opening) =>
+    opening.rule === 'unproven-owner'
+      ? (provenance.owners[owner] ?? [opening])
+      : [opening]
+  );
+}
+
 /** The owners each kept prop lists in full before `+N more`. */
 const OWNERS_SHOWN = 3;
 
@@ -62,9 +76,7 @@ export function slotProvenanceLines(
   if (props.length === 0 && slots.length === 0) return [];
   // An unproven owner keeps its slots for each of its reasons.
   const keeping = (keeper: SlotKeeper): SlotOpening[] =>
-    keeper.rule === 'unproven-owner'
-      ? (provenance.owners[keeper.owner] ?? [keeper])
-      : [keeper];
+    slotReasons(provenance, keeper.owner, [keeper]);
   const byRule = new Map<string, number>();
   for (const [, keepers] of props) {
     const rules = new Set(
@@ -105,11 +117,7 @@ export function slotProvenanceLines(
   if (slots.length === 0) return lines;
   // A component slot an unproven owner keeps stays for each of its reasons.
   const reasons = (owner: string, openings: SlotOpening[]): SlotOpening[] =>
-    openings.flatMap((opening) =>
-      opening.rule === 'unproven-owner'
-        ? (provenance.owners[owner] ?? [opening])
-        : [opening]
-    );
+    slotReasons(provenance, owner, openings);
   const slotsByRule = new Map<string, number>();
   let total = 0;
   for (const [owner, byProp] of slots) {

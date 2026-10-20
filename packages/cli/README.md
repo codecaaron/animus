@@ -52,6 +52,33 @@ stdout with per-key provenance, including `extensions` and `staticCss`.
 Stream discipline is a contract: **stdout carries machine output only**;
 every human-facing line goes to stderr.
 
+## `animus css audit`
+
+```bash
+animus build --root . --system ./src/ds.ts --verbose
+animus css audit --root . --dist dist
+```
+
+A report of what would make the shipped CSS smaller, ranked by measured
+savings. It reads a full manifest (`--manifest`, default
+`<root>/.animus/manifest.json`, which `animus build --verbose` writes) and
+the built output (`--dist`, default `<root>/dist`), and writes nothing.
+Each estimate edits the shipped CSS and recompresses each file on its own
+(gzip level 9, Brotli quality 11 with a 22-bit window); Brotli ranks them.
+
+1. **Delivery:** whether `stylesheets: 'split'` with
+   `removeUnbundledComponents` would cost or save bytes for this app, with
+   the preconditions to check.
+2. **Slot keepers:** the system props that keep a runtime slot, grouped by
+   the rule that keeps them, with the components and sites that keep them.
+3. **Restructures** saving at least 0.25% of the CSS's Brotli size: unused
+   variant options a dynamic site keeps, extensions that only change
+   defaults, and base blocks several components repeat. Each has a
+   confidence and the cases it refuses; the rest are listed collapsed.
+
+The text report goes to stderr; `--json` prints the report as one JSON
+document on stdout. It exits 0 unless its input cannot be read (2).
+
 ## `--strict`
 
 `--strict` fails the build on every diagnostic that means **a configured

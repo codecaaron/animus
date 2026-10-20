@@ -358,11 +358,18 @@ export type {
   RuleRemoval,
 } from './bundle-removal';
 export {
+  classStem,
   noteKept,
   outputEvidence,
   removeComponentRules,
   shippedClasses,
   unbundledComponents,
 } from './bundle-removal';
+export type {
+  SlotKeeper,
+  SlotOpening,
+  SlotProvenance,
+} from './slot-provenance';
+export { slotReasons } from './slot-provenance';
 export type { ServedFiles } from './served-files';
 export { droppedExtensionMessage, servedFiles } from './served-files';

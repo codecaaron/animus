@@ -5,7 +5,7 @@ import type { Rule, Selector } from 'lightningcss';
 
 /** A class's component class: the name before a derived suffix
  *  (`{class}--size-sm`), or the name itself. */
-function classStem(name: string): string {
+export function classStem(name: string): string {
   const stem = name.indexOf('--');
   return stem > 0 ? name.slice(0, stem) : name;
 }

@@ -67,7 +67,8 @@ struct AnalyzeResult<'a> {
     /// Present only where a runtime config references a shared table.
     #[serde(skip_serializing_if = "crate::dynamic_meta::RuntimeTables::is_empty")]
     runtime_tables: &'a crate::dynamic_meta::RuntimeTables,
-    /// Present only for a host that publishes the prop-order file.
+    /// Present only for a host that publishes the prop-order file, or
+    /// where slot provenance is asked for.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     tag_components: &'a std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     /// Present only where a runtime config references a shared list.

@@ -41,7 +41,8 @@
     "compile": "bun check"
   },
   "dependencies": {
-    "@animus-ui/extract": "workspace:*"
+    "@animus-ui/extract": "workspace:*",
+    "@animus-ui/properties": "workspace:*"
   },
   "engines": {
     "node": ">=22.12.0"

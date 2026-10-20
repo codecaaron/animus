@@ -177,8 +177,8 @@ export interface ProjectManifest {
   font_preloads?: ManifestFontPreload[];
   /** File → each tag written there as JSX that renders exactly one
    *  analysed component, as written (`B`, `ui.Box`, `Card.Body`) → it.
-   *  Present only where the host publishes the prop-order file and a tag
-   *  resolves. */
+   *  Present only where the host publishes the prop-order file, or verbose
+   *  output asks for slot provenance, and a tag resolves. */
   tag_components?: Record<string, Record<string, string>>;
   timing: ManifestTiming;
 }
