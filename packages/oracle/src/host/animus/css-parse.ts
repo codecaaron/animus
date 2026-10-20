@@ -100,6 +100,103 @@ export const splitTopLevel = (text: string, separator: string): string[] => {
   return parts;
 };
 
+/** One plain pseudo-class (`:hover`) or attribute selector (`[data-x]`),
+ *  its quoted values read with their escapes. */
+const SIMPLE =
+  /:[A-Za-z_-][\w-]*|\[(?:[^\]"'\\]|\\.|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')*\]/y;
+
+/** How many plain pseudo-classes and attribute selectors `item` is made
+ *  of, or 0 when it holds anything else. */
+const simpleCount = (item: string): number => {
+  SIMPLE.lastIndex = 0;
+  let count = 0;
+  while (SIMPLE.lastIndex < item.length) {
+    if (!SIMPLE.exec(item)) return 0;
+    count += 1;
+  }
+  return count;
+};
+
+/**
+ * Walks `text` as `splitTopLevel` does, skipping quoted strings and
+ * escapes, and calls `visit` with each other character's index and its
+ * parenthesis and bracket depth; returns the first index `visit` accepts,
+ * or -1.
+ */
+const walkTopLevel = (
+  text: string,
+  start: number,
+  visit: (index: number, depth: number) => boolean
+): number => {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote !== null) {
+      if (char === '\\') index += 1;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '\\') {
+      index += 1;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (visit(index, depth)) return index;
+    if (char === '(' || char === '[') depth += 1;
+    else if (char === ')' || char === ']') depth -= 1;
+  }
+  return -1;
+};
+
+/**
+ * A state's alternatives as the extractor groups them, `.c:is(:disabled,
+ * [disabled])`, read back as the selectors they stand for, `.c:disabled`
+ * and `.c[disabled]`, in order. Only a top-level group attached to a
+ * compound expands, of two or more alternatives that each attach the same
+ * number of plain pseudo-classes and attribute selectors, so the group
+ * weighs what each of them does; every other `:is()` stays as written.
+ */
+export const stateAlternatives = (selector: string): string[] => {
+  let expanded: string[] | null = null;
+  walkTopLevel(selector, 0, (index, depth) => {
+    if (
+      depth !== 0 ||
+      index === 0 ||
+      !selector.startsWith(':is(', index) ||
+      /[\s>+~(,]/.test(selector[index - 1])
+    ) {
+      return false;
+    }
+    const close = walkTopLevel(
+      selector,
+      index + 3,
+      (at, inner) => inner === 1 && selector[at] === ')'
+    );
+    if (close === -1) return false;
+    const items = splitTopLevel(selector.slice(index + 4, close), ',').map(
+      (item) => item.trim()
+    );
+    const counts = items.map(simpleCount);
+    if (
+      items.length < 2 ||
+      counts.some((count) => count === 0 || count !== counts[0])
+    ) {
+      return false;
+    }
+    const head = selector.slice(0, index);
+    const tail = selector.slice(close + 1);
+    expanded = items.flatMap((item) =>
+      stateAlternatives(`${head}${item}${tail}`)
+    );
+    return true;
+  });
+  return expanded ?? [selector];
+};
+
 /**
  * Splits on the first top-level `:`, which keeps `src: url(animus-asset:…)`
  * intact: the inner colon sits inside parentheses.
@@ -322,16 +419,18 @@ export const parseStylesheet = (
     );
 
     for (const part of splitTopLevel(selectorList, ',')) {
-      const selector = collapseWhitespace(part);
-      if (selector === '') fail('empty selector in a selector list', part);
-      rules.push({
-        selector,
-        declarations,
-        atStack,
-        layerPath,
-        orderIndex,
-      });
-      orderIndex += 1;
+      const listed = collapseWhitespace(part);
+      if (listed === '') fail('empty selector in a selector list', part);
+      for (const selector of stateAlternatives(listed)) {
+        rules.push({
+          selector,
+          declarations,
+          atStack,
+          layerPath,
+          orderIndex,
+        });
+        orderIndex += 1;
+      }
     }
   };
 

@@ -75,6 +75,7 @@ pub mod property_names;
 pub mod reconcile;
 pub mod runtime_assets;
 pub mod chain_merge;
+pub(crate) mod selector_group;
 pub(crate) mod selector_subject;
 pub mod static_value;
 pub mod transforms;

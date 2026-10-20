@@ -37,8 +37,8 @@ const manifest = JSON.parse(
 );
 const baseSheet: string = manifest.sheets.base.replace(/\s+/g, ' ');
 
-/** Each rule a component's base emits, in order: its media query, its first
- *  selector branch after the class, and its declarations. */
+/** Each rule a component's base emits, in order: its media query, its
+ *  selector after the class, and its declarations. */
 const rulesOf = (binding: string) => {
   const className = `.${manifest.components[`fixtures/raw-order.tsx::${binding}`].class_name}`;
   return [
@@ -46,11 +46,7 @@ const rulesOf = (binding: string) => {
   ]
     .filter(([, , selector]) => selector.trim().startsWith(className))
     .map(([, media, selector, body]) =>
-      [
-        media?.trim(),
-        selector.trim().split(',')[0].slice(className.length),
-        body.trim(),
-      ]
+      [media?.trim(), selector.trim().slice(className.length), body.trim()]
         .filter(Boolean)
         .join(' ')
     );
@@ -60,7 +56,7 @@ test('raw keys and aliases keep their authored order together', () => {
   expect(rulesOf('Row')).toEqual([
     'cursor: default;',
     '[data-accent="danger"] cursor: help;',
-    ':disabled opacity: 0.5;',
+    ':is(:disabled, [disabled], [aria-disabled="true"], [data-disabled]) opacity: 0.5;',
     ':hover cursor: pointer;',
     '@media print cursor: auto;',
     ':hover outline: none;',
@@ -70,7 +66,7 @@ test('raw keys and aliases keep their authored order together', () => {
 
 test('selector and condition aliases alone keep their authored order, not a registered rank', () => {
   expect(rulesOf('Chip')).toEqual([
-    ':disabled opacity: 0.5;',
+    ':is(:disabled, [disabled], [aria-disabled="true"], [data-disabled]) opacity: 0.5;',
     ':hover opacity: 1;',
   ]);
   expect(rulesOf('Badge')).toEqual([

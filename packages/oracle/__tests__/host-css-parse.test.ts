@@ -47,6 +47,20 @@ describe('parseStylesheet — the animus emission dialect', () => {
     expect(sheet.rules.map((rule) => rule.orderIndex)).toEqual([0, 1, 2]);
   });
 
+  it('reads a state group back as its alternatives, quoted values included', () => {
+    const sheet = parseStylesheet(
+      '.c:is([data-label="a)b"], [data-y]) { margin: 0; } .c:is([data-q="x\\"y"], [data-z]) { margin: 0; }',
+      'g'
+    );
+
+    expect(sheet.rules.map((rule) => rule.selector)).toEqual([
+      '.c[data-label="a)b"]',
+      '.c[data-y]',
+      '.c[data-q="x\\"y"]',
+      '.c[data-z]',
+    ]);
+  });
+
   it('reads both container query spellings and names anonymous ones', () => {
     const sheet = parseStylesheet(
       [

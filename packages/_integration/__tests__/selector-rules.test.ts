@@ -70,8 +70,9 @@ describe('selector rules — compound _selected + token ref', () => {
   const { css } = runPipeline([entry]);
 
   test('compound selector emitted with both aria and data attrs', () => {
-    expect(css).toMatch(/\.animus-PatternD-\w+\[aria-selected="true"\]/);
-    expect(css).toMatch(/\.animus-PatternD-\w+\[data-selected\]/);
+    expect(css).toMatch(
+      /\.animus-PatternD-\w+:is\(\[aria-selected="true"\],\s*\[data-selected\]\)/
+    );
   });
 
   test('token ref inside compound-sibling _focusVisible resolves', () => {

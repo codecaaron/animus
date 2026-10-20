@@ -1225,11 +1225,11 @@ fn format_composed_pseudo(selector: &str, pseudo: &str) -> String {
     if first_top_level_branch(pseudo).len() == pseudo.len() {
         return anchor_one(pseudo);
     }
-    split_top_level_commas(pseudo)
-        .into_iter()
-        .map(anchor_one)
-        .collect::<Vec<_>>()
-        .join(", ")
+    let branches = split_top_level_commas(pseudo);
+    if let Some(grouped) = crate::selector_group::grouped_alternatives(selector, &branches) {
+        return grouped;
+    }
+    branches.into_iter().map(anchor_one).collect::<Vec<_>>().join(", ")
 }
 
 pub fn content_hash(input: &str) -> String {
@@ -3823,19 +3823,19 @@ mod tests {
     }
 
     #[test]
-    fn format_pseudo_selector_ampersand_adjacent_byte_identity() {
+    fn format_pseudo_selector_groups_ampersand_adjacent_alternatives() {
         assert_eq!(
             format_pseudo_selector("c", ":hover,[data-x]"),
-            ".c:hover, .c[data-x]"
+            ".c:is(:hover, [data-x])"
         );
         assert_eq!(
             format_pseudo_selector("c", ":disabled,[disabled]"),
-            ".c:disabled, .c[disabled]"
+            ".c:is(:disabled, [disabled])"
         );
         assert_eq!(format_pseudo_selector("c", ":hover"), ".c:hover");
         assert_eq!(
             format_pseudo_selector("c", ":disabled,[disabled],[aria-disabled=\"true\"],[data-disabled]"),
-            ".c:disabled, .c[disabled], .c[aria-disabled=\"true\"], .c[data-disabled]"
+            ".c:is(:disabled, [disabled], [aria-disabled=\"true\"], [data-disabled])"
         );
     }
 
@@ -3867,7 +3867,7 @@ mod tests {
         );
         assert_eq!(
             format_composed_pseudo(".Root", ":hover,[data-x]"),
-            ".Root:hover, .Root[data-x]"
+            ".Root:is(:hover, [data-x])"
         );
     }
 
@@ -3892,7 +3892,7 @@ mod tests {
             "{}",
             out
         );
-        assert!(out.contains(".C:hover, .C[data-x] {"), "{}", out);
+        assert!(out.contains(".C:is(:hover, [data-x]) {"), "{}", out);
     }
 
     #[test]
