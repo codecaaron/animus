@@ -399,6 +399,7 @@ struct ComponentFunction<'b, 'a> {
 }
 
 /// A function's body, or an arrow's block or concise body.
+#[derive(Clone, Copy)]
 enum ComponentBody<'b, 'a> {
     Function(&'b oxc::ast::ast::FunctionBody<'a>),
     Arrow(&'b oxc::ast::ast::ArrowFunctionBody<'a>),
@@ -7171,7 +7172,7 @@ fn ordinary_components(
     // React's wrappers, with the name of a named callback, and the aliases
     // of an import, with the import.
     let mut wrappers: Vec<(&BindingIdentifier<'_>, Option<&str>)> = Vec::new();
-    let mut aliases: Vec<(&BindingIdentifier<'_>, &str)> = Vec::new();
+    let mut aliases: BTreeMap<String, String> = BTreeMap::new();
     let unwritten = |id: &BindingIdentifier<'_>| {
         id.symbol_id.get().is_some_and(|symbol| !scoping.symbol_is_mutated(symbol))
     };
@@ -7236,12 +7237,14 @@ fn ordinary_components(
                                     let escapes = escapes.iter().any(|escaped| {
                                         escaped.strip_prefix(name).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
                                     });
-                                    let imported = target.reference_id.get().and_then(|reference| scoping.get_reference(reference).symbol_id())
-                                        .is_some_and(|symbol| scoping.symbol_flags(symbol).contains(oxc::semantic::SymbolFlags::Import));
-                                    match (escapes, imported) {
-                                        (true, _) => {}
-                                        (false, true) => aliases.push((&**id, target.name.as_str())),
-                                        (false, false) => wrappers.push((&**id, Some(target.name.as_str()))),
+                                    let imported = || {
+                                        target.reference_id.get().and_then(|reference| scoping.get_reference(reference).symbol_id())
+                                            .is_some_and(|symbol| scoping.symbol_flags(symbol).contains(oxc::semantic::SymbolFlags::Import))
+                                    };
+                                    if !escapes && !imported() {
+                                        wrappers.push((&**id, Some(target.name.as_str())));
+                                    } else if !escapes && unwritten(id) {
+                                        aliases.insert(name.to_string(), target.name.to_string());
                                     }
                                     None
                                 }
@@ -7273,7 +7276,6 @@ fn ordinary_components(
         names.insert(id.name.to_string());
         renders.insert(id.name.to_string(), callback.map(str::to_string));
     }
-    let aliases = aliases.into_iter().filter(|(id, _)| unwritten(id)).map(|(id, import)| (id.name.to_string(), import.to_string())).collect();
     (names, renders, aliases)
 }
 

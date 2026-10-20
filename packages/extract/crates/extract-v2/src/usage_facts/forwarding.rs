@@ -48,7 +48,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use super::{
-    is_erased_wrapper, jsx_member_path, jsx_member_root, tag_origin, ElementConst, Inputs, IntrinsicPatch, MemberEffect,
+    is_erased_wrapper, ComponentBody, jsx_member_path, jsx_member_root, tag_origin, ElementConst, Inputs, IntrinsicPatch, MemberEffect,
     OpaqueCall, OpaqueTag, Polymorphic, PropKey, PropReach, SiteShape, SpreadArg, TagOrigin,
 };
 use crate::chain_walk::{unwrap_type_assertions, ChainDescriptor};
@@ -1455,13 +1455,13 @@ impl<'r> Declarations<'r> {
         }
     }
 
-    /// Whether `object` is the global `Object` by its name (`Object`,
+    /// Whether `object` is the global `name` by its name (`Object`,
     /// `globalThis.Object`).
-    fn global_object(&self, object: &Expression<'_>) -> bool {
+    fn named_global(&self, object: &Expression<'_>, name: &str) -> bool {
         match unwrap_type_assertions(object) {
-            Expression::Identifier(id) => id.name == "Object" && self.symbol(id).is_none(),
+            Expression::Identifier(id) => id.name == name && self.symbol(id).is_none(),
             Expression::StaticMemberExpression(member) => {
-                member.property.name == "Object"
+                member.property.name == name
                     && matches!(&member.object, Expression::Identifier(id) if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.symbol(id).is_none())
             }
             _ => false,
@@ -1478,10 +1478,8 @@ impl<'r> Declarations<'r> {
             Expression::ArrayExpression(_) => true,
             Expression::CallExpression(call) => match unwrap_type_assertions(&call.callee) {
                 Expression::StaticMemberExpression(member) => match member.property.name.as_str() {
-                    "keys" | "values" | "entries" => self.global_object(&member.object),
-                    "from" | "of" => {
-                        matches!(unwrap_type_assertions(&member.object), Expression::Identifier(id) if id.name == "Array" && self.symbol(id).is_none())
-                    }
+                    "keys" | "values" | "entries" => self.named_global(&member.object, "Object"),
+                    "from" | "of" => self.named_global(&member.object, "Array"),
                     "filter" | "map" | "slice" | "concat" | "flat" | "flatMap" | "toSorted" | "toReversed" => self.fresh_array(&member.object),
                     _ => false,
                 },
@@ -1501,7 +1499,7 @@ impl<'r> Declarations<'r> {
         &self,
         span: Span,
         params: &oxc::ast::ast::FormalParameters<'_>,
-        body: Returning<'_, '_>,
+        body: ComponentBody<'_, '_>,
     ) -> Option<SymbolId> {
         let (current, Some(AstKind::CallExpression(call))) = super::peel_wrappers(span, &mut self.ancestors.iter().rev()) else {
             return None;
@@ -1559,20 +1557,13 @@ impl<'r> Declarations<'r> {
         }
     }
 
-    /// Whether `object` is the global `Object` (`Object`, `globalThis.Object`).
+    /// Whether `object` may be the global `Object` (`Object`,
+    /// `globalThis.Object`, `globalThis[k]`).
     fn global_object_binding(&self, object: &Expression<'_>) -> bool {
-        match unwrap_type_assertions(object) {
-            Expression::Identifier(id) => id.name == "Object" && self.symbol(id).is_none(),
-            Expression::StaticMemberExpression(member) => {
-                member.property.name == "Object"
-                    && matches!(&member.object, Expression::Identifier(id) if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.symbol(id).is_none())
-            }
-            Expression::ComputedMemberExpression(member) => {
-                member.static_property_name().is_none_or(|name| name == "Object")
-                    && matches!(&member.object, Expression::Identifier(id) if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.symbol(id).is_none())
-            }
-            _ => false,
-        }
+        self.named_global(object, "Object")
+            || matches!(unwrap_type_assertions(object), Expression::ComputedMemberExpression(member)
+                if member.static_property_name().is_none_or(|name| name == "Object")
+                    && matches!(&member.object, Expression::Identifier(id) if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.symbol(id).is_none()))
     }
 
     /// Whether `object` is a binding the module declares (not an import).
@@ -2026,37 +2017,31 @@ fn own_function(ancestors: &[AstKind<'_>]) -> Option<ScopeId> {
     })
 }
 
-/// A function's body, or an arrow's block or concise body: what
-/// `every_return` reads.
-#[derive(Clone, Copy)]
-enum Returning<'b, 'a> {
-    Body(&'b oxc::ast::ast::FunctionBody<'a>),
-    Arrow(&'b oxc::ast::ast::ArrowFunctionBody<'a>),
-}
-
 /// Whether `test` holds of every value a function returns: an arrow's
 /// concise body, or each of its body's own `return`s, and `None` for
 /// running off its end or a bare `return`.
-fn every_return(body: Returning<'_, '_>, test: &dyn Fn(Option<&Expression<'_>>) -> bool) -> bool {
+fn every_return(body: ComponentBody<'_, '_>, test: &dyn Fn(Option<&Expression<'_>>) -> bool) -> bool {
+    // A `return` is a statement outside any nested function or class, so
+    // the walk skips expressions, and stops at the first that fails.
     struct Returns<'t> {
         test: &'t dyn Fn(Option<&Expression<'_>>) -> bool,
         every: bool,
     }
     impl<'a> Visit<'a> for Returns<'_> {
         fn visit_return_statement(&mut self, statement: &oxc::ast::ast::ReturnStatement<'a>) {
-            self.every &= (self.test)(statement.argument.as_ref());
+            self.every = self.every && (self.test)(statement.argument.as_ref());
         }
+        fn visit_expression(&mut self, _expression: &Expression<'a>) {}
         fn visit_function(&mut self, _function: &Function<'a>, _flags: oxc::syntax::scope::ScopeFlags) {}
-        fn visit_arrow_function_expression(&mut self, _arrow: &oxc::ast::ast::ArrowFunctionExpression<'a>) {}
         fn visit_class(&mut self, _class: &Class<'a>) {}
     }
-    let body = match body {
-        Returning::Body(body) => body,
-        Returning::Arrow(oxc::ast::ast::ArrowFunctionBody::FunctionBody(body)) => body,
-        Returning::Arrow(body) => return body.as_expression().is_some_and(|value| test(Some(value))),
-    };
+    if let ComponentBody::Arrow(body) = body {
+        if let Some(value) = body.as_expression() {
+            return test(Some(value));
+        }
+    }
     let mut returns = Returns { test, every: test(None) };
-    returns.visit_function_body(body);
+    body.visit(&mut returns);
     returns.every
 }
 
@@ -2080,16 +2065,16 @@ impl<'a> Visit<'a> for Declarations<'a> {
         self.ancestors.pop();
         let (id, body) = match kind {
             AstKind::Function(function) if !function.generator && !function.r#async => {
-                (function.id.as_ref(), function.body.as_deref().map(Returning::Body))
+                (function.id.as_ref(), function.body.as_deref().map(ComponentBody::Function))
             }
             AstKind::VariableDeclarator(declarator) => match (&declarator.id, declarator.init.as_ref().map(unwrap_type_assertions)) {
                 (BindingPattern::BindingIdentifier(id), Some(Expression::ArrowFunctionExpression(arrow))) if !arrow.r#async => {
-                    (Some(&**id), Some(Returning::Arrow(&arrow.body)))
+                    (Some(&**id), Some(ComponentBody::Arrow(&arrow.body)))
                 }
                 (BindingPattern::BindingIdentifier(id), Some(Expression::FunctionExpression(function)))
                     if !function.generator && !function.r#async =>
                 {
-                    (Some(&**id), function.body.as_deref().map(Returning::Body))
+                    (Some(&**id), function.body.as_deref().map(ComponentBody::Function))
                 }
                 _ => return,
             },
@@ -2401,7 +2386,7 @@ impl<'a> Visit<'a> for Declarations<'a> {
             }
         }
         if let Some(body) = &function.body {
-            self.literal_bindings.extend(self.accumulator(function.span, &function.params, Returning::Body(body)));
+            self.literal_bindings.extend(self.accumulator(function.span, &function.params, ComponentBody::Function(body)));
         }
         self.depth += 1;
         oxc::ast_visit::walk::walk_function(self, function, flags);
@@ -2412,7 +2397,7 @@ impl<'a> Visit<'a> for Declarations<'a> {
         if let Some(scope) = arrow.scope_id.get() {
             self.declare_params(scope, &arrow.params);
         }
-        self.literal_bindings.extend(self.accumulator(arrow.span, &arrow.params, Returning::Arrow(&arrow.body)));
+        self.literal_bindings.extend(self.accumulator(arrow.span, &arrow.params, ComponentBody::Arrow(&arrow.body)));
         self.depth += 1;
         oxc::ast_visit::walk::walk_arrow_function_expression(self, arrow);
         self.depth -= 1;

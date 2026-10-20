@@ -1697,6 +1697,11 @@ pub(crate) fn ordinary_declaration(
     inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
 ) -> Option<(String, String)> {
+    let ff = files.get(module)?;
+    if ff.ordinary_components.contains(binding) {
+        return Some((module.to_string(), binding.to_string()));
+    }
+    ff.import_aliases.get(binding)?;
     let (mut module, mut binding) = (module.to_string(), binding.to_string());
     let mut seen: FxHashSet<(String, String)> = FxHashSet::default();
     loop {
@@ -6587,7 +6592,8 @@ fn uncertain_tag_reason(
     let member = root != tag;
     // What a declaration in `module` proves the binding is, said of the
     // place `at`.
-    let declared = |module: &str, ff: &FileFacts, binding: &str, at: &str| {
+    let declared = |module: &str, binding: &str, at: &str| {
+        let ff = files.get(module)?;
         if ordinary_declaration(module, binding, files, inputs, links).is_some() {
             Some((TagClass::Ordinary, format!("is an ordinary component declared in {at}")))
         } else if ff.chains.iter().any(|chain| chain.descriptor.binding == binding) {
@@ -6618,7 +6624,7 @@ fn uncertain_tag_reason(
                         // fact, so a declaration the file does not import is
                         // its own.
                         let own = local || !dff.imports.iter().any(|import| import.local == binding);
-                        own.then(|| declared(&declaring_file, dff, &binding, &declaring_file)).flatten()
+                        own.then(|| declared(&declaring_file, &binding, &declaring_file)).flatten()
                     },
                 ),
             };
@@ -6633,7 +6639,7 @@ fn uncertain_tag_reason(
             TagClass::Member,
             format!("is a member of '{root}', declared in this file, that extraction cannot follow to a component"),
         ),
-        Some(TagOrigin::TopLevel) => declared(file, ff, tag, "this file").unwrap_or_else(|| {
+        Some(TagOrigin::TopLevel) => declared(file, tag, "this file").unwrap_or_else(|| {
             (
                 TagClass::OtherDeclaration,
                 "is declared in this file by something other than a function or class: a call \
@@ -10172,7 +10178,8 @@ fn run_with_system_floor(
         let clone_sites = |tag: &str| {
             use crate::usage_facts::SpreadArg;
             let (module, binding, _) = resolve_declaration(path, ff, tag, files, inputs, links)?;
-            let declared = files.get(&module).filter(|declared| declared.ordinary_components.contains(&binding))?;
+            let (module, binding) = ordinary_declaration(&module, &binding, files, inputs, links)?;
+            let declared = files.get(&module)?;
             let props = SpreadArg::Props(binding);
             let mut written = Vec::new();
             let mut any = false;
