@@ -351,6 +351,8 @@ pub(super) struct Records {
     pub outside_let_goes: Vec<(u32, String)>,
     /// See `FileFacts::keyed_stores`.
     pub keyed_stores: Vec<(u32, String)>,
+    /// See `FileFacts::rewrites_object`.
+    pub rewrites_object: bool,
 }
 
 /// What the walk reads that a later change can grow: the unit that read
@@ -523,6 +525,8 @@ struct Module<'s> {
     outside_let_goes: Vec<(u32, String)>,
     /// See `FileFacts::keyed_stores`.
     keyed_stores: Vec<(u32, String)>,
+    /// See `FileFacts::rewrites_object`.
+    rewrites_object: bool,
     /// The module's top-level class bindings, declared or `const X = class`.
     class_names: BTreeSet<String>,
 }
@@ -707,8 +711,9 @@ impl<'s> Module<'s> {
             .collect();
         let outside_let_goes =
             declarations.outside_let_goes.iter().filter_map(|(at, import)| Some((*at, sources.get(import)?.clone()))).collect();
-        let Declarations { params, functions, in_place, reshaped, setters, hook_states, classes, hookable_objects, keyed_stores, .. } =
-            declarations;
+        let Declarations {
+            params, functions, in_place, reshaped, setters, hook_states, classes, hookable_objects, keyed_stores, rewrites_object, ..
+        } = declarations;
         Module {
             scoping,
             sources,
@@ -742,6 +747,7 @@ impl<'s> Module<'s> {
             patches_intrinsics,
             outside_let_goes,
             keyed_stores,
+            rewrites_object,
             class_names,
         }
     }
@@ -966,6 +972,7 @@ impl<'s> Module<'s> {
             patches_intrinsics: self.patches_intrinsics,
             outside_let_goes: self.outside_let_goes,
             keyed_stores: self.keyed_stores,
+            rewrites_object: self.rewrites_object,
         }
     }
 }
@@ -1031,6 +1038,8 @@ struct Declarations<'r> {
     primitive_consts: FxHashSet<SymbolId>,
     /// See `FileFacts::keyed_stores`.
     keyed_stores: Vec<(u32, String)>,
+    /// See `FileFacts::rewrites_object`.
+    rewrites_object: bool,
     /// The bindings importing from React's modules, written or not.
     react_imports: FxHashSet<SymbolId>,
     /// How the references to each import (type-only ones included) and
@@ -1077,6 +1086,7 @@ impl<'r> Declarations<'r> {
             outside_let_goes: Vec::new(),
             primitive_consts: FxHashSet::default(),
             keyed_stores: Vec::new(),
+            rewrites_object: false,
             react_imports,
             uses: vec![0; scoping.symbols_len()],
             blind_calls: Vec::new(),
@@ -1305,6 +1315,22 @@ impl<'r> Declarations<'r> {
         }
     }
 
+    /// Whether `object` is the global `Object` (`Object`, `globalThis.Object`).
+    fn global_object_binding(&self, object: &Expression<'_>) -> bool {
+        match unwrap_type_assertions(object) {
+            Expression::Identifier(id) => id.name == "Object" && self.symbol(id).is_none(),
+            Expression::StaticMemberExpression(member) => {
+                member.property.name == "Object"
+                    && matches!(&member.object, Expression::Identifier(id) if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.symbol(id).is_none())
+            }
+            Expression::ComputedMemberExpression(member) => {
+                member.static_property_name().is_none_or(|name| name == "Object")
+                    && matches!(&member.object, Expression::Identifier(id) if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.symbol(id).is_none())
+            }
+            _ => false,
+        }
+    }
+
     /// Whether `object` is a binding the module declares (not an import).
     fn module_binding(&self, object: &Expression<'_>) -> bool {
         matches!(unwrap_type_assertions(object), Expression::Identifier(id)
@@ -1467,6 +1493,9 @@ impl<'r> Declarations<'r> {
             return;
         }
         let at = object.span().start;
+        if self.global_object_binding(object) {
+            self.rewrites_object = true;
+        }
         if !self.owned(object) {
             self.patch(at, "unowned-write");
         } else if let (true, Expression::Identifier(id)) = (built_in, unwrap_type_assertions(object)) {
@@ -2027,6 +2056,9 @@ impl<'a> Visit<'a> for Declarations<'a> {
                 self.patch(id.span.start, "string-code");
             }
         } else if self.redirects(id) {
+            if id.name == "Object" {
+                self.rewrites_object = true;
+            }
             match self.import_receiver(id.span) {
                 Some(import) => self.outside_let_goes.push((id.span.start, import)),
                 None => self.patch(id.span.start, "trusted-let-go"),

@@ -10494,6 +10494,16 @@ fn run_with_system_floor(
     for (id, at) in delivered_ids {
         escape(&mut escaped_ids, escape_reasons.as_mut(), [id], || delivered_tags[at].opening());
     }
+    // A family built through `Object.assign` is followed only while no
+    // module may make `Object.assign` something else.
+    if files.values().any(|ff| ff.rewrites_object) {
+        for (file, ff) in files {
+            for (_, binding) in ff.compose.iter().filter(|family| family.assigned).flat_map(|family| &family.slots) {
+                let ids = resolve_declared_identity(file, binding, files, inputs, links, &evaluated_ids);
+                escape(&mut escaped_ids, escape_reasons.as_mut(), ids, || SlotOpening::rule("object-rewritten").in_file(file));
+            }
+        }
+    }
     // A member tag that may be any of several families' keeps every option
     // of each.
     for (file, tags) in &ambiguous_members {
@@ -17704,8 +17714,49 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             kept_options(&[("r.tsx", RECIPE), render, ("page.tsx", page.as_str()), app])
         };
         assert_eq!(kept("export const Page = compose({ Root: R });\n"), (vec!["sm", "lg"], vec!["active", "busy"]));
+        // `Object.assign` returns the family it gets, and a literal of static
+        // keys no slot has leaves every slot as `compose` made it.
         for page in [
             "const useFrame = () => null;\nexport const Page = Object.assign(compose({ Root: R }), { useFrame });\n",
+            "export const Page: Fam = Object.assign(compose({ Root: R }, { name: 'Page' }), { useFrame: () => null, 'size': 1 }, {});\n",
+            // A source value that cannot run with the family as `this`: a
+            // literal, an arrow, a `const` of one or of an Animus component,
+            // or a function that reads no `this` of its own.
+            "function useFrame() { const later = function () { return this; }; return later; }\nconst Meta = ds.styles({}).asElement('div');\nconst tone = 'x';\nexport const Page = Object.assign(compose({ Root: R }), { useFrame, Meta, tone, n: 1 });\nexport const X = () => Page.useFrame();\n",
+        ] {
+            assert_eq!(kept(page), (vec!["sm", "lg"], vec!["active", "busy"]), "{page}");
+        }
+        for page in [
+            "export const Page = Object.assign(compose({ Root: R }), { Root: () => null });\n",
+            "export const Page = Object.assign(compose({ Root: R }), { ['Ro' + 'ot']: () => null });\n",
+            "export const Page = Object.assign(compose({ Root: R }), { ...extra });\n",
+            "export const Page = Object.assign(compose({ Root: R }), extra);\n",
+            "export const Page = Object.assign(compose({ Root: R, ...more }), { useFrame: () => null });\n",
+            "import { Object } from './shim';\nexport const Page = Object.assign(compose({ Root: R }), { useFrame: () => null });\n",
+            "function Object() {}\nexport const Page = Object.assign(compose({ Root: R }), { useFrame: () => null });\n",
+            "const { Object } = shim;\nexport const Page = Object.assign(compose({ Root: R }), { useFrame: () => null });\n",
+            "export const Page = Reflect.assign(compose({ Root: R }), { useFrame: () => null });\n",
+            // A source value that may run with the family as `this`.
+            "function Busy() { return createElement(this.Root, { size: 'md' }); }\nexport const Page = Object.assign(compose({ Root: R }), { Busy });\nexport const X = () => Page.Busy();\n",
+            "function Busy() { const draw = () => createElement(this.Root, { size: 'md' }); return draw(); }\nexport const Page = Object.assign(compose({ Root: R }), { Busy });\nexport const X = () => Page.Busy();\n",
+            "export const Page = Object.assign(compose({ Root: R }), { Busy() { return createElement(this.Root, { size: 'md' }); } });\nexport const X = () => Page.Busy();\n",
+            "export const Page = Object.assign(compose({ Root: R }), { Busy: function () { return createElement(this.Root, { size: 'md' }); } });\nexport const X = () => Page.Busy();\n",
+            "import { Busy } from './busy';\nexport const Page = Object.assign(compose({ Root: R }), { Busy });\n",
+            "const Busy = make();\nexport const Page = Object.assign(compose({ Root: R }), { Busy });\n",
+            "let Busy = () => null;\nBusy = make();\nexport const Page = Object.assign(compose({ Root: R }), { Busy });\n",
+            // A `__proto__` key, in any spelling, may install a setter.
+            "export const Page = Object.assign(compose({ Root: R }), { ['__proto__']: proto, foo: 1 });\n",
+            "export const Page = Object.assign(compose({ Root: R }), { '__proto__': proto, foo: 1 });\n",
+            "export const Page = Object.assign(compose({ Root: R }), { __proto__: null, foo: 1 });\n",
+            "export const Page = Object.assign(compose({ Root: R }), { [key]: 1 });\n",
+            "export const Page = Object.assign(compose({ Root: R }), { ['tone']: 1 });\n",
+            "function Busy() { return null; }\nBusy = make();\nexport const Page = Object.assign(compose({ Root: R }), { Busy });\n",
+            // A module binding of `Object` the scan reads semantically.
+            "import Object = require('./shim');\nexport const Page = Object.assign(compose({ Root: R }), { useFrame: () => null });\n",
+            "export default function Object() {}\nexport const Page = Object.assign(compose({ Root: R }), { useFrame: () => null });\n",
+            "{ var Object = shim; }\nexport const Page = Object.assign(compose({ Root: R }), { useFrame: () => null });\n",
+            // `Object.assign` rewritten, here or in any analysed module.
+            "Object.assign = (t) => t;\nexport const Page = Object.assign(compose({ Root: R }), { useFrame: () => null });\n",
             "const make = () => compose({ Root: R });\nexport const Page = make();\n",
             "export const Page = (compose as any)({ Root: R });\n",
             "export const Page = compose({ Root: R as any });\n",
@@ -17719,6 +17770,14 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "const F = compose({ Root: R });\nexport const { Root: Root2, ...Page } = Object.assign(F, { useFrame: () => null });\n",
         ] {
             assert_eq!(kept(page), (vec!["sm", "md", "lg"], vec!["active", "busy"]), "{page}");
+        }
+        let page = "import { R } from './r';\nexport const Page = Object.assign(compose({ Root: R }), { useFrame: () => null });\n";
+        for patch in ["Object.assign = (t) => t;\n", "const O = Object;\nO.assign = (t) => t;\n", "Reflect.set(globalThis.Object, 'assign', (t) => t);\n"] {
+            assert_eq!(
+                kept_options(&[("r.tsx", RECIPE), render, ("page.tsx", page), app, ("patch.tsx", patch)]),
+                (vec!["sm", "md", "lg"], vec!["active", "busy"]),
+                "{patch}"
+            );
         }
     }
 

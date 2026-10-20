@@ -702,6 +702,11 @@ pub struct FileFacts {
     /// render reads that key by name.
     #[serde(skip)]
     pub(crate) keyed_stores: Vec<(u32, String)>,
+    /// The module writes into the global `Object` or lets it go as a value,
+    /// so `Object.assign` may not be the built-in: no family built through
+    /// it is followed anywhere.
+    #[serde(skip)]
+    pub(crate) rewrites_object: bool,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -1309,7 +1314,7 @@ pub(crate) fn object_facts(program: &Program<'_>, lowered: &crate::link::Lowered
     let scoping = &lowered.scoping;
     let props_forwarding = crate::usage_facts::collect_props_forwarding(program, scoping);
     let const_initializers = collect_const_initializers(program, &props_forwarding);
-    let compose = scan_compose_calls(program);
+    let compose = scan_compose_calls(program, scoping);
     // The module's own bindings that can hold a family or facade, flagged
     // when a facade, whose top-level member writes its entries record.
     let object_consts: BTreeMap<&str, bool> = const_initializers
@@ -1427,6 +1432,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         patches_intrinsics: None,
         outside_let_goes: Vec::new(),
         keyed_stores: Vec::new(),
+        rewrites_object: false,
         opaque_tags: Vec::new(),
         transforms: Vec::new(),
         captured_transform_bindings: BTreeSet::new(),
@@ -1545,7 +1551,7 @@ fn identifier_members(entries: &[FacadeEntry]) -> BTreeMap<String, String> {
     members
 }
 
-fn is_object_assign(callee: &Expression<'_>) -> bool {
+pub(crate) fn is_object_assign(callee: &Expression<'_>) -> bool {
     matches!(
         callee,
         Expression::StaticMemberExpression(member)
@@ -2078,6 +2084,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         patches_intrinsics,
         outside_let_goes,
         keyed_stores,
+        rewrites_object,
         builder_import_references,
         first_that_works_uses,
         builder_proof,
@@ -2149,6 +2156,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         patches_intrinsics,
         outside_let_goes,
         keyed_stores,
+        rewrites_object,
         unbound_create_system_calls: unbound_create_system_calls(ast),
         builder_references: builder_references(ast),
         ..structural

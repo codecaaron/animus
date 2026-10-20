@@ -32,6 +32,9 @@ pub struct ComposeFamilyInfo {
     pub context: bool,
     /// Byte range of the `compose()` call expression.
     pub span: (u32, u32),
+    /// Built through `Object.assign`, which a module may rewrite.
+    #[serde(skip)]
+    pub assigned: bool,
     pub name: String,
 }
 
@@ -46,10 +49,11 @@ impl ComposeFamilyInfo {
 
 /// Scan top-level statements for `compose(...)` calls. compose wraps slot
 /// components via `createElement` at runtime, which the JSX scanner misses.
-pub fn scan_compose_calls(program: &Program) -> Vec<ComposeFamilyInfo> {
+pub fn scan_compose_calls(program: &Program, scoping: &oxc::semantic::Scoping) -> Vec<ComposeFamilyInfo> {
     let mut families: Vec<ComposeFamilyInfo> = Vec::new();
+    let sources = AssignSources { program, scoping, assign: scoping.get_root_binding("Object".into()).is_none() };
     for stmt in &program.body {
-        collect_compose_from_statement(stmt, &mut families);
+        collect_compose_from_statement(stmt, &sources, &mut families);
     }
     let default_binding = program.body.iter().find_map(|stmt| match stmt {
         Statement::ExportDefaultDeclaration(export) => match export.declaration.as_expression() {
@@ -68,13 +72,98 @@ pub fn scan_compose_calls(program: &Program) -> Vec<ComposeFamilyInfo> {
     families
 }
 
-fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFamilyInfo>) {
+/// What judges `Object.assign`'s sources: the module, and whether it binds
+/// no `Object` of its own, so `Object.assign` there is the built-in.
+struct AssignSources<'s, 'a> {
+    program: &'s Program<'a>,
+    scoping: &'s oxc::semantic::Scoping,
+    assign: bool,
+}
+
+impl AssignSources<'_, '_> {
+    /// Whether `value`, a source's member, cannot run with the family as
+    /// `this` when called as its method: a literal that is no function, an
+    /// arrow, or a module-scope binding of either, of an Animus component
+    /// (an object, not callable), or of a function that reads no `this` of
+    /// its own and nothing reassigns.
+    fn inert(&self, value: &Expression<'_>) -> bool {
+        match crate::chain_walk::unwrap_type_assertions(value) {
+            Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BigIntLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::TemplateLiteral(_)
+            | Expression::ArrowFunctionExpression(_) => true,
+            Expression::Identifier(id) => {
+                let Some(symbol) = self.scoping.get_root_binding(id.name) else { return false };
+                !self.scoping.symbol_is_mutated(symbol) && self.declared_inert(id.name.as_str())
+            }
+            _ => false,
+        }
+    }
+
+    /// See `inert`: the module's top-level declaration of `name`.
+    fn declared_inert(&self, name: &str) -> bool {
+        self.program.body.iter().any(|statement| {
+            let declaration = match statement {
+                Statement::ExportDeclaration(export) => &export.declaration,
+                statement => match statement.as_declaration() {
+                    Some(declaration) => declaration,
+                    None => return false,
+                },
+            };
+            match declaration {
+                Declaration::FunctionDeclaration(function) => {
+                    function.id.as_ref().is_some_and(|id| id.name == name)
+                        && !function.generator
+                        && function.body.as_ref().is_some_and(|body| !reads_own_this(body))
+                }
+                Declaration::VariableDeclaration(declaration) if declaration.kind == oxc::ast::ast::VariableDeclarationKind::Const => {
+                    declaration.declarations.iter().any(|declarator| {
+                        matches!(&declarator.id, BindingPattern::BindingIdentifier(id) if id.name == name)
+                            && declarator.init.as_ref().is_some_and(|init| {
+                                let init = crate::chain_walk::unwrap_type_assertions(init);
+                                animus_component(init) || (!matches!(init, Expression::Identifier(_)) && self.inert(init))
+                            })
+                    })
+                }
+                _ => false,
+            }
+        })
+    }
+}
+
+/// Whether `init` is an Animus chain's terminal (`….asElement('div')`).
+fn animus_component(init: &Expression<'_>) -> bool {
+    matches!(init, Expression::CallExpression(call) if matches!(&call.callee, Expression::StaticMemberExpression(member)
+        if matches!(member.property.name.as_str(), "asElement" | "asComponent")))
+}
+
+/// Whether a function's body reads `this` of its own: anywhere but inside a
+/// nested function or class, which has its own.
+fn reads_own_this(body: &oxc::ast::ast::FunctionBody<'_>) -> bool {
+    use oxc::ast_visit::Visit;
+    struct Reads(bool);
+    impl<'a> Visit<'a> for Reads {
+        fn visit_this_expression(&mut self, _: &oxc::ast::ast::ThisExpression) {
+            self.0 = true;
+        }
+        fn visit_function(&mut self, _: &oxc::ast::ast::Function<'a>, _: oxc::syntax::scope::ScopeFlags) {}
+        fn visit_class(&mut self, _: &oxc::ast::ast::Class<'a>) {}
+    }
+    let mut reads = Reads(false);
+    reads.visit_function_body(body);
+    reads.0
+}
+
+fn collect_compose_from_statement(stmt: &Statement, sources: &AssignSources<'_, '_>, families: &mut Vec<ComposeFamilyInfo>) {
     match stmt {
         Statement::VariableDeclaration(decl) => {
             for declarator in &decl.declarations {
                 if let Some(init) = &declarator.init {
                     let binding_name = extract_binding_name(&declarator.id);
-                    collect_compose_from_expression(init, binding_name, families);
+                    collect_compose_from_expression(init, binding_name, sources, families);
                 }
             }
         }
@@ -83,7 +172,7 @@ fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFa
                 for declarator in &var_decl.declarations {
                     if let Some(init) = &declarator.init {
                         let binding_name = extract_binding_name(&declarator.id);
-                        collect_compose_from_expression(init, binding_name, families);
+                        collect_compose_from_expression(init, binding_name, sources, families);
                     }
                 }
             }
@@ -91,7 +180,7 @@ fn collect_compose_from_statement(stmt: &Statement, families: &mut Vec<ComposeFa
         Statement::ExportDefaultDeclaration(export) => {
             if let Some(expr) = export.declaration.as_expression() {
                 let found = families.len();
-                collect_compose_from_expression(expr, None, families);
+                collect_compose_from_expression(expr, None, sources, families);
                 if let Some(family) = families.get_mut(found) {
                     family.default_export = true;
                 }
@@ -108,13 +197,47 @@ fn extract_binding_name(pattern: &BindingPattern) -> Option<String> {
     }
 }
 
+/// A `compose()` call, or one `Object.assign` adds members to
+/// (`Object.assign(compose({ Root, … }), { useFrame })`) where the module
+/// binds no `Object` of its own: the call returns the family it gets, and
+/// literals of static keys no slot has, none `__proto__` (which may install
+/// a setter that runs on the family), whose values cannot run with the
+/// family as `this` (`AssignSources::inert`), leave every slot as `compose`
+/// made it. Any other source keeps the family unfollowed, and a module that
+/// may rewrite `Object.assign` unfollows it later (`FileFacts::rewrites_object`).
 fn collect_compose_from_expression(
     expr: &Expression,
     family_binding: Option<String>,
+    sources: &AssignSources<'_, '_>,
     families: &mut Vec<ComposeFamilyInfo>,
 ) {
-    if let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(expr) {
-        extract_compose_family(call, family_binding, families);
+    let Expression::CallExpression(call) = crate::chain_walk::unwrap_type_assertions(expr) else { return };
+    let assigns = sources.assign && crate::facts::is_object_assign(&call.callee);
+    if !assigns {
+        return extract_compose_family(call, family_binding, families);
+    }
+    let Some(Expression::CallExpression(compose)) = call.arguments.first().and_then(Argument::as_expression).map(crate::chain_walk::unwrap_type_assertions)
+    else {
+        return;
+    };
+    let found = families.len();
+    extract_compose_family(compose, family_binding, families);
+    let Some(family) = families.get(found) else { return };
+    let keeps_slots = !family.open
+        && call.arguments.iter().skip(1).all(|source| match source.as_expression().map(crate::chain_walk::unwrap_type_assertions) {
+            Some(Expression::ObjectExpression(object)) => object.properties.iter().all(|property| match property {
+                ObjectPropertyKind::ObjectProperty(property) => {
+                    !property.computed
+                        && eval_property_key(&property.key).is_some_and(|key| key != "__proto__" && family.slots.iter().all(|(slot, _)| *slot != key))
+                        && sources.inert(&property.value)
+                }
+                ObjectPropertyKind::SpreadProperty(_) => false,
+            }),
+            _ => false,
+        });
+    match families.get_mut(found) {
+        Some(family) if keeps_slots => family.assigned = true,
+        _ => families.truncate(found),
     }
 }
 
@@ -211,6 +334,7 @@ fn extract_compose_family(
         shared_keys,
         context,
         span: (call.span.start, call.span.end),
+        assigned: false,
         name,
     });
 }

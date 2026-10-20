@@ -978,7 +978,8 @@ mod tests {
     fn parse_compose_families(source: &str) -> Vec<ComposeFamilyInfo> {
         let ast = parse_tsx(source);
         let result_program = ast.program();
-        scan_compose_calls(result_program)
+        let scoping = oxc::semantic::SemanticBuilder::new().build(result_program).semantic.into_scoping();
+        scan_compose_calls(result_program, &scoping)
     }
 
     #[test]

@@ -938,6 +938,8 @@ pub(crate) struct EnrichedUsage {
     pub outside_let_goes: Vec<(u32, String)>,
     /// See `FileFacts::keyed_stores`.
     pub keyed_stores: Vec<(u32, String)>,
+    /// See `FileFacts::rewrites_object`.
+    pub rewrites_object: bool,
     /// See `FileFacts::builder_import_references`.
     pub builder_import_references: Vec<BuilderImportReferences>,
     /// See `FileFacts::first_that_works_uses`.
@@ -1267,6 +1269,7 @@ pub(crate) fn collect_enriched_usage(
         patches_intrinsics: records.patches_intrinsics,
         outside_let_goes: records.outside_let_goes,
         keyed_stores: records.keyed_stores,
+        rewrites_object: records.rewrites_object,
         builder_import_references,
         first_that_works_uses,
         builder_proof,
