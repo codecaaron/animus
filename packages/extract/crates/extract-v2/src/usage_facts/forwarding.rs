@@ -136,8 +136,37 @@ struct Held {
     /// computed or hook-named store reached, or into an array any named
     /// store (`hookable_bindings`, `named_stores`).
     hookable: bool,
-    tags: BTreeSet<String>,
-    imports: BTreeSet<String>,
+    tags: BTreeSet<Name>,
+    imports: BTreeSet<SymbolId>,
+}
+
+/// A component tag, interned by the module's walk (`Names`): a value is
+/// copied, joined and compared as one number, and named only in
+/// `Module::finish`.
+type Name = u32;
+
+/// The component tags a module's walk has met, each under one `Name`.
+#[derive(Default)]
+struct Names {
+    ids: FxHashMap<String, Name>,
+    texts: Vec<String>,
+}
+
+impl Names {
+    fn id(&mut self, name: &str) -> Name {
+        if let Some(id) = self.ids.get(name) {
+            return *id;
+        }
+        let id = self.texts.len() as Name;
+        self.ids.insert(name.to_string(), id);
+        self.texts.push(name.to_string());
+        id
+    }
+
+    /// The names of `ids`, in name order.
+    fn texts(&self, ids: &BTreeSet<Name>) -> BTreeSet<String> {
+        ids.iter().map(|id| self.texts[*id as usize].clone()).collect()
+    }
 }
 
 impl Held {
@@ -155,13 +184,11 @@ impl Held {
         let mut grew = (!self.inputs && other.inputs) || (!self.hookable && other.hookable);
         self.inputs |= other.inputs;
         self.hookable |= other.hookable;
-        for (into, from) in [(&mut self.tags, &other.tags), (&mut self.imports, &other.imports)] {
-            for name in from {
-                if !into.contains(name) {
-                    into.insert(name.clone());
-                    grew = true;
-                }
-            }
+        for tag in &other.tags {
+            grew |= self.tags.insert(*tag);
+        }
+        for import in &other.imports {
+            grew |= self.imports.insert(*import);
         }
         grew
     }
@@ -460,7 +487,8 @@ struct Module<'s> {
     arguments: FxHashMap<ScopeId, Held>,
     /// The component tags inside each component element, by span: syntax
     /// alone gives them, once.
-    element_tags: FxHashMap<u32, BTreeSet<String>>,
+    element_tags: FxHashMap<u32, BTreeSet<Name>>,
+    names: Names,
     /// The functions a top-level statement declares (a component, a helper,
     /// a class method): their parameters are inputs, and React or the
     /// module's callers receive what they return.
@@ -487,7 +515,7 @@ struct Module<'s> {
 
 /// What reaches a forwarding record, and the top-level bindings around it.
 struct Reached {
-    top: Vec<String>,
+    top: Rc<[String]>,
     held: Held,
 }
 
@@ -580,7 +608,7 @@ impl<'s> Module<'s> {
                 }
                 // An import may hold elements its module builds.
                 if !REACT_MODULES.contains(&source) {
-                    let imports = BTreeSet::from([specifier.local().name.to_string()]);
+                    let imports = BTreeSet::from([symbol]);
                     held.insert(symbol, Held { imports, ..Held::default() });
                 }
             }
@@ -676,6 +704,7 @@ impl<'s> Module<'s> {
             returns: FxHashMap::default(),
             arguments: FxHashMap::default(),
             element_tags: FxHashMap::default(),
+            names: Names::default(),
             roots: FxHashSet::default(),
             unit: Unit::Statement(0),
             reads: FxHashMap::default(),
@@ -789,8 +818,8 @@ impl<'s> Module<'s> {
         }
     }
 
-    fn sink(&mut self, at: u32, callee: Option<String>, held_array: Option<String>, top: &[String], value: &Held) {
-        let entry = self.sinks.entry((at, callee, held_array)).or_insert_with(|| Reached { top: top.to_vec(), held: Held::default() });
+    fn sink(&mut self, at: u32, callee: Option<String>, held_array: Option<String>, top: &Rc<[String]>, value: &Held) {
+        let entry = self.sinks.entry((at, callee, held_array)).or_insert_with(|| Reached { top: Rc::clone(top), held: Held::default() });
         entry.held.join(value);
     }
 
@@ -856,9 +885,16 @@ impl<'s> Module<'s> {
     }
 
     fn finish(self) -> Records {
+        let (names, scoping) = (&self.names, self.scoping);
+        // The imports a value holds, in name order.
+        let imported = |held: &Held| {
+            let mut imports: Vec<String> = held.imports.iter().map(|symbol| scoping.symbol_name(*symbol).to_string()).collect();
+            imports.sort_unstable();
+            imports
+        };
         let record = |Reached { top, held }: Reached| {
-            let forwards_from = if held.inputs { top } else { Vec::new() };
-            (held.tags, held.imports.into_iter().collect::<Vec<_>>(), forwards_from)
+            let forwards_from = if held.inputs { top.to_vec() } else { Vec::new() };
+            (names.texts(&held.tags), imported(&held), forwards_from)
         };
         let calls = self
             .sinks
@@ -879,8 +915,8 @@ impl<'s> Module<'s> {
             })
             .collect();
         // The module's own top-level bindings that hold elements, by name.
-        let (scoping, sources) = (self.scoping, &self.sources);
-        let element_const = |held: &Held| ElementConst { tags: held.tags.clone(), imports: held.imports.iter().cloned().collect() };
+        let sources = &self.sources;
+        let element_const = |held: &Held| ElementConst { tags: names.texts(&held.tags), imports: imported(held) };
         let mut element_consts: BTreeMap<String, ElementConst> = self
             .held
             .iter()
@@ -2451,7 +2487,7 @@ impl<'a> Walk<'_, '_, 'a> {
             .max()
             .unwrap_or(Polymorphic::No);
         let exposed = named_attribute(&["ref"]);
-        let reached = Reached { top: self.top.to_vec(), held: value.clone() };
+        let reached = Reached { top: Rc::clone(&self.top), held: value.clone() };
         self.module.receivers.insert(element.span.start, Receiver { tag, origin, polymorphic, exposed, reached });
         self.module.grew(Key::Receiver(element.span.start));
         Place::Kept(InPlace::Received)
@@ -2791,7 +2827,7 @@ impl<'a> Visit<'a> for Walk<'_, '_, 'a> {
             if !self.module.element_tags.contains_key(&element.span.start) {
                 let mut tags = ElementTags { module: &*self.module, tags: BTreeSet::new() };
                 tags.visit_jsx_element(element);
-                let tags = tags.tags;
+                let tags = tags.tags.iter().map(|tag| self.module.names.id(tag)).collect();
                 self.module.element_tags.insert(element.span.start, tags);
             }
             let mut value = Held { tags: self.module.element_tags[&element.span.start].clone(), ..Held::default() };
