@@ -7069,6 +7069,7 @@ fn opaque_delivery(
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
     receiver_ids: impl Fn(&str, &FileFacts, &str) -> Vec<String>,
     renders_in_place: impl Fn(&str) -> bool,
+    component_target: impl Fn(&str) -> Option<(String, String)>,
     contexts: &crate::flow::ValueEffects,
 ) -> (Vec<(String, usize)>, Vec<OpaqueDelivery>) {
     // The declaration `name` (`lib.enhance` for a namespace import's
@@ -7483,10 +7484,32 @@ fn opaque_delivery(
         if provider {
             return false;
         }
+        // A ref to a class component, or to a React wrapper of one, reads
+        // the instance, its props included.
+        let class = |declaring: &str, binding: &str| {
+            let Some(declared) = files.get(declaring) else { return false };
+            let mut binding = binding;
+            while let Some(Some(callback)) = declared.react_wrappers.get(binding) {
+                binding = callback;
+            }
+            declared.class_components.contains(binding)
+        };
+        // An ordinary component the element renders with its props: a
+        // wrapper whose every render the fixpoint above vetted passes on
+        // `as`, `asChild` and spreads only where its own elements judge them.
+        let ordinary_opaque = |key: &(String, String)| {
+            (tag.polymorphic != Polymorphic::No && !cloning.contains(key))
+                || forwarding.contains(key)
+                || (tag.exposed && class(&key.0, &key.1))
+        };
         let ids = receiver_ids(file, ff, &tag.tag);
         if !ids.is_empty() {
             if !ids.iter().all(|id| renders_in_place(id)) {
-                return true;
+                // A component terminal renders its target with the site's
+                // props, `as` and `asChild` included: one the analysis reads
+                // is judged as that component's element.
+                let targets: Option<Vec<(String, String)>> = ids.iter().map(|id| component_target(id)).collect();
+                return targets.is_none_or(|targets| targets.iter().any(ordinary_opaque));
             }
             // An Animus string terminal renders its tag in place, unless the
             // site's `as` names another, a spread may carry one, or `asChild`
@@ -7515,24 +7538,8 @@ fn opaque_delivery(
                 Some(Some(_)) => !site.spreads.is_empty() || !clone_judged(file, ff, tag.at),
             };
         }
-        // A ref to a class component, or to a React wrapper of one, reads
-        // the instance, its props included.
-        let class = |declaring: &str, binding: &str| {
-            let Some(declared) = files.get(declaring) else { return false };
-            let mut binding = binding;
-            while let Some(Some(callback)) = declared.react_wrappers.get(binding) {
-                binding = callback;
-            }
-            declared.class_components.contains(binding)
-        };
-        // An ordinary component, named directly or as an object's member. A
-        // wrapper whose every render the fixpoint above vetted passes on
-        // `as`, `asChild` and spreads only where its own elements judge them.
-        ordinary_named(file, ff, &tag.tag).first().is_none_or(|key| {
-            (tag.polymorphic != Polymorphic::No && !cloning.contains(key))
-                || forwarding.contains(key)
-                || (tag.exposed && class(&key.0, &key.1))
-        })
+        // An ordinary component, named directly or as an object's member.
+        ordinary_named(file, ff, &tag.tag).first().is_none_or(ordinary_opaque)
     };
     // The element `const`s an import reaches: a namespace import every one
     // of its module's, a named one the one it names in another module.
@@ -7599,7 +7606,8 @@ fn opaque_delivery(
             SpreadArg::Props(wrapper) => Some(((*path).clone(), wrapper.clone())),
             _ => None,
         });
-        for key in ordinary_named(path, ff, &tag.tag).first().cloned().into_iter().chain(spread) {
+        let targets = receiver_ids(path, ff, &tag.tag).iter().filter_map(|id| component_target(id)).collect::<Vec<_>>();
+        for key in ordinary_named(path, ff, &tag.tag).first().cloned().into_iter().chain(spread).chain(targets) {
             readers.entry(key).or_default().push(Site::Tag(index));
         }
     }
@@ -10431,6 +10439,20 @@ fn run_with_system_floor(
         |id| {
             !changed_ids.contains(id)
                 && evaluated.get(id).is_some_and(|(_, _, terminal, ..)| *terminal == TerminalKind::AsElement)
+        },
+        // The ordinary component an unchanged `.asComponent()` terminal
+        // renders, where the analysis reads it.
+        |id| {
+            if changed_ids.contains(id) {
+                return None;
+            }
+            let (file, index) = chain_lookup.get(id)?;
+            let (ff, descriptor) = (files.get(*file)?, &files.get(*file)?.chains[*index].descriptor);
+            if descriptor.terminal != TerminalKind::AsComponent || descriptor.tag.is_empty() {
+                return None;
+            }
+            let (declaring, binding, _) = resolve_declaration(file, ff, &descriptor.tag, files, inputs, links)?;
+            files.get(&declaring)?.ordinary_components.contains(&binding).then_some((declaring, binding))
         },
         object_members.changes(),);
     for (id, at) in delivered_ids {
@@ -14542,6 +14564,13 @@ mod tests {
             ("import { Children, cloneElement } from 'react';\nclass Inner extends Component { render() { return <div>{this.props.children}</div>; } }\nconst Wrap = ({ children }) => <div>{Children.map(children, (c) => cloneElement(c, { ref: pad }))}</div>;\nconst Render = ({ children }) => <Wrap><Inner>{children}</Inner></Wrap>;", "", "", true),
             ("import { Children, cloneElement } from 'react';\nclass Inner extends Component { render() { return <div>{this.props.children}</div>; } }\nconst Wrap = ({ children, extra }) => <div>{Children.map(children, (c) => cloneElement(c, extra))}</div>;\nconst Render = ({ children, extra }) => <Wrap extra={extra}><Inner>{children}</Inner></Wrap>;", "extra={d}", "", true),
             ("import { Children, cloneElement } from 'react';\nclass Inner extends Component { render() { return <div>{this.props.children}</div>; } }\nconst Wrap = ({ children }) => <div>{Children.map(children, (c) => cloneElement(c, { className: 'x' }))}</div>;\nconst Render = ({ children }) => <Wrap><Inner>{children}</Inner></Wrap>;", "", "", false),
+            // A component terminal renders its target with the site's props:
+            // one the analysis reads is judged by its own record.
+            ("const Section = (props) => <section {...props} />;\nconst Frame = ds.styles({ display: 'grid' }).asComponent(Section);\nconst Render = ({ children }) => <Frame>{children}</Frame>;", "", "", false),
+            ("const Section = ({ children, ...props }) => <section {...props}><Foreign>{children}</Foreign></section>;\nconst Frame = ds.styles({ display: 'grid' }).asComponent(Section);\nconst Render = ({ children }) => <Frame>{children}</Frame>;", "", "", true),
+            ("const Section = ({ as: Tag = 'section', ...props }) => <Tag {...props} />;\nconst Frame = ds.styles({ display: 'grid' }).asComponent(Section);\nconst Render = ({ children }) => <Frame as={Foreign}>{children}</Frame>;", "", "", true),
+            ("const Frame = ds.styles({ display: 'grid' }).asComponent(Foreign);\nconst Render = ({ children }) => <Frame>{children}</Frame>;", "", "", true),
+            ("const Section = (props) => <section {...props} />;\nconst Frame = ds.styles({ display: 'grid' }).asComponent(Section);\nFrame.render = pad;\nconst Render = ({ children }) => <Frame>{children}</Frame>;", "", "", true),
             // `cloneElement` that may set `as`, `asChild` or `is` gives the
             // element another target.
             ("import { cloneElement } from 'react';\nconst Render = ({ children }) => <div>{cloneElement(children, { as: Foreign })}</div>;", "", "", true),
@@ -15238,6 +15267,12 @@ export const App = ({ n }) => (
         assert!(analyze(&[("a.tsx", &scope), ("icons.tsx", icons)], &test_inputs()).dynamic_props.contains_key("p"));
         // A wrapper element handed to code the analysis cannot see.
         assert!(open("export const App = () => <Foreign><W /></Foreign>;\n"));
+        // A component terminal over a wrapper renders the wrapper with its
+        // own sites' props, wherever the terminal renders.
+        let framed = |app: &str| keeps_box(&format!("const W = (props) => <Parent {{...props}}><Box p={{8}} /></Parent>;\nconst Frame = ds.styles({{ display: 'grid' }}).asComponent(W);\nexport const Local = () => <W />;\n{app}"));
+        assert!(framed("export const App = () => <Frame as={Foreign} />;\n"));
+        assert!(framed("export const App = () => <Frame />;\nexport const list = [Frame];\n"));
+        assert!(framed("export const App = () => <Foreign><Frame /></Foreign>;\n"));
         // A wrapper whose props another wrapper spreads takes that one with it.
         assert!(keeps_box("export const App = () => <W as={Foreign} />;\nconst W = (props) => <V {...props} />;\nconst V = (props) => <Parent {...props}><Box p={8} /></Parent>;\n"));
         // And the wrapper elements its own element then hands on, wave by wave.
