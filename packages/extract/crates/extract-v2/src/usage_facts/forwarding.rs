@@ -48,8 +48,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use super::{
-    is_erased_wrapper, jsx_member_path, jsx_member_root, tag_origin, ElementConst, MemberEffect, OpaqueCall, OpaqueTag,
-    Polymorphic, TagOrigin,
+    is_erased_wrapper, jsx_member_path, jsx_member_root, tag_origin, ElementConst, IntrinsicPatch, MemberEffect, OpaqueCall,
+    OpaqueTag, Polymorphic, TagOrigin,
 };
 use crate::chain_walk::{unwrap_type_assertions, ChainDescriptor};
 
@@ -319,7 +319,7 @@ pub(super) struct Records {
     /// See `FileFacts::class_components`.
     pub classes: BTreeSet<String>,
     /// See `FileFacts::patches_intrinsics`.
-    pub patches_intrinsics: bool,
+    pub patches_intrinsics: Option<IntrinsicPatch>,
 }
 
 /// What the walk reads that a later change can grow: the unit that read
@@ -480,7 +480,7 @@ struct Module<'s> {
     /// The elements a default export holds, which no binding names.
     default: Held,
     /// See `FileFacts::patches_intrinsics`.
-    patches_intrinsics: bool,
+    patches_intrinsics: Option<IntrinsicPatch>,
     /// The module's top-level class bindings, declared or `const X = class`.
     class_names: BTreeSet<String>,
 }
@@ -624,17 +624,25 @@ impl<'s> Module<'s> {
         }
         // A re-export of React's own lets its exports go where the analysis
         // cannot follow writes to them.
-        let reexports_react = program.body.iter().any(|statement| match statement {
-            Statement::ExportFromDeclaration(export) => REACT_MODULES.contains(&export.source.value.as_str()),
-            Statement::ExportAllDeclaration(export) => REACT_MODULES.contains(&export.source.value.as_str()),
-            _ => false,
+        let reexports_react = program.body.iter().find_map(|statement| match statement {
+            Statement::ExportFromDeclaration(export) if REACT_MODULES.contains(&export.source.value.as_str()) => Some(export.span.start),
+            Statement::ExportAllDeclaration(export) if REACT_MODULES.contains(&export.source.value.as_str()) => Some(export.span.start),
+            _ => None,
         });
         // A built-in's name written into a binding that may hold a prototype.
-        let redirected = declarations.built_in_writes.iter().any(|symbol| {
-            !declarations.literal_bindings.contains(symbol)
-                && !scoping.symbol_flags(*symbol).intersects(SymbolFlags::Function | SymbolFlags::Class)
-        });
-        let patches_intrinsics = declarations.patches_intrinsics || reexports_react || redirected;
+        let redirected = declarations
+            .built_in_writes
+            .iter()
+            .filter(|(symbol, _)| {
+                !declarations.literal_bindings.contains(symbol)
+                    && !scoping.symbol_flags(**symbol).intersects(SymbolFlags::Function | SymbolFlags::Class)
+            })
+            .map(|(_, at)| *at)
+            .min();
+        let patches_intrinsics = declarations
+            .patches_intrinsics
+            .or(reexports_react.map(|at| IntrinsicPatch { at, rule: "react-reexport" }))
+            .or(redirected.map(|at| IntrinsicPatch { at, rule: "prototype-name-write" }));
         // A default export's class has no binding of its own when anonymous.
         let default_class = program.body.iter().any(|statement| {
             matches!(statement, Statement::ExportDefaultDeclaration(export) if matches!(&export.declaration,
@@ -941,10 +949,10 @@ struct Declarations<'r> {
     /// reassigned: none holds a built-in's prototype.
     literal_bindings: FxHashSet<SymbolId>,
     /// Bindings written by a built-in's method or hook name, or by a
-    /// bracketed key (`written_into`).
-    built_in_writes: FxHashSet<SymbolId>,
+    /// bracketed key (`written_into`), with the first such write.
+    built_in_writes: FxHashMap<SymbolId, u32>,
     /// See `FileFacts::patches_intrinsics`.
-    patches_intrinsics: bool,
+    patches_intrinsics: Option<IntrinsicPatch>,
     /// The bindings importing from React's modules, written or not.
     react_imports: FxHashSet<SymbolId>,
     depth: usize,
@@ -974,8 +982,8 @@ impl<'r> Declarations<'r> {
             hookable_bindings: FxHashSet::default(),
             named_stores: FxHashSet::default(),
             literal_bindings: FxHashSet::default(),
-            built_in_writes: FxHashSet::default(),
-            patches_intrinsics: false,
+            built_in_writes: FxHashMap::default(),
+            patches_intrinsics: None,
             react_imports,
             depth: 0,
         }
@@ -1043,8 +1051,10 @@ impl<'r> Declarations<'r> {
             Some("constructor") => called,
             _ => reflection && !called,
         };
-        if unseen || (prototype && self.reshapes(span)) {
-            self.patches_intrinsics = true;
+        if unseen {
+            self.patch(span.start, if reflection && !called { "writer-let-go" } else { "string-code" });
+        } else if prototype && self.reshapes(span) {
+            self.patch(span.start, "prototype-use");
         }
         if matches!(super::member_effect(span, self.ancestors.iter().rev()), Some(MemberEffect::Assigned | MemberEffect::Deleted)) {
             self.written_into(object, computed || name.is_some_and(built_in_name));
@@ -1057,11 +1067,19 @@ impl<'r> Declarations<'r> {
     /// that may set a built-in's method, into a binding, may too, unless the
     /// binding is declared to a literal (`Module::of` judges it).
     fn written_into(&mut self, object: &Expression<'_>, built_in: bool) {
+        let at = object.span().start;
         if !self.owned(object) {
-            self.patches_intrinsics = true;
+            self.patch(at, "unowned-write");
         } else if let (true, Expression::Identifier(id)) = (built_in, unwrap_type_assertions(object)) {
-            self.built_in_writes.extend(self.symbol(id));
+            if let Some(symbol) = self.symbol(id) {
+                self.built_in_writes.entry(symbol).or_insert(at);
+            }
         }
+    }
+
+    /// Records the first construct, at `at`, that leaves no usage proven.
+    fn patch(&mut self, at: u32, rule: &'static str) {
+        self.patches_intrinsics.get_or_insert(IntrinsicPatch { at, rule });
     }
 
     /// Whether `object` is `this` in a class's instance member, a binding the
@@ -1456,14 +1474,14 @@ impl<'a> Visit<'a> for Declarations<'a> {
             if self.symbol(object).is_none() {
                 let reflects = matches!(object.name.as_str(), "Object" | "Reflect") && name == "getPrototypeOf";
                 if reflects && self.reshapes(call.span) {
-                    self.patches_intrinsics = true;
+                    self.patch(call.span.start, "prototype-use");
                 }
                 // A built-in that writes into its first argument; a spread
                 // first argument is a target the module does not own.
                 if writer(&object.name, name) {
                     match call.arguments.first().map(|argument| argument.as_expression()) {
                         Some(Some(target)) => self.written_into(target, true),
-                        Some(None) => self.patches_intrinsics = true,
+                        Some(None) => self.patch(call.span.start, "spread-target"),
                         None => {}
                     }
                 }
@@ -1521,8 +1539,10 @@ impl<'a> Visit<'a> for Declarations<'a> {
         }
         // Indirect `eval` and `Function` run strings the analysis cannot read.
         let runs_strings = matches!(id.name.as_str(), "eval" | "Function") && self.symbol(id).is_none();
-        if runs_strings || self.redirects(id) {
-            self.patches_intrinsics = true;
+        if runs_strings {
+            self.patch(id.span.start, "string-code");
+        } else if self.redirects(id) {
+            self.patch(id.span.start, "trusted-let-go");
         }
     }
 

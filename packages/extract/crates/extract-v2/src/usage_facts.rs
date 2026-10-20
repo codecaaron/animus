@@ -933,7 +933,7 @@ pub(crate) struct EnrichedUsage {
     /// See `FileFacts::class_components`.
     pub class_components: BTreeSet<String>,
     /// See `FileFacts::patches_intrinsics`.
-    pub patches_intrinsics: bool,
+    pub patches_intrinsics: Option<IntrinsicPatch>,
     /// See `FileFacts::builder_import_references`.
     pub builder_import_references: Vec<BuilderImportReferences>,
     /// See `FileFacts::first_that_works_uses`.
@@ -958,6 +958,14 @@ pub(crate) struct OpaqueTag {
     pub tags: BTreeSet<String>,
     pub imported_args: Vec<String>,
     pub forwards_from: Vec<String>,
+}
+
+/// The first construct in a module that leaves no usage proven
+/// (`FileFacts::patches_intrinsics`): where it starts, and what it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IntrinsicPatch {
+    pub at: u32,
+    pub rule: &'static str,
 }
 
 /// What an element's attributes let it render in place of its tag.

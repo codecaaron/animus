@@ -689,7 +689,7 @@ pub struct FileFacts {
     /// hands the prototype on: no built-in method is then proven anywhere,
     /// so usage is unproven, as for a direct `eval`.
     #[serde(skip)]
-    pub(crate) patches_intrinsics: bool,
+    pub(crate) patches_intrinsics: Option<crate::usage_facts::IntrinsicPatch>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -1411,7 +1411,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         held_arrays: BTreeSet::new(),
         misused_imports: BTreeSet::new(),
         class_components: BTreeSet::new(),
-        patches_intrinsics: false,
+        patches_intrinsics: None,
         opaque_tags: Vec::new(),
         transforms: Vec::new(),
         captured_transform_bindings: BTreeSet::new(),

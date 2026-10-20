@@ -10084,7 +10084,10 @@ fn run_with_system_floor(
     // gap exists, and provenance lists them all.
     let mut usage_gaps = analysis_gaps(files, inputs, inputs.slot_provenance);
     usage_gaps.extend(files.iter().filter(|(_, ff)| ff.direct_eval).map(|(file, _)| SlotOpening::rule("direct-eval").in_file(file)));
-    usage_gaps.extend(files.iter().filter(|(_, ff)| ff.patches_intrinsics).map(|(file, _)| SlotOpening::rule("patches-intrinsics").in_file(file)));
+    usage_gaps.extend(files.iter().filter_map(|(file, ff)| {
+        let patch = ff.patches_intrinsics?;
+        Some(SlotOpening { at: Some(patch.at), ..SlotOpening::rule("patches-intrinsics").in_file(file).detail(patch.rule) })
+    }));
     {
         let mut unsettled = unsettled_identities(
             &uncertain_identities,
@@ -14065,6 +14068,15 @@ mod tests {
         assert_eq!(tone.components["a.tsx::Card"]["tone"], [SlotOpening::rule("runtime-value").in_file("a.tsx")]);
         assert_eq!(tone.components["a.tsx::Tag"]["tone"], [SlotOpening::rule("unproven-owner")]);
         assert!(rules(&tone, "a.tsx::Tag").contains(&"opaque-delivery"), "{:?}", tone.owners);
+        // A write that leaves no usage proven names its construct and site.
+        let patched = provenance_of(
+            "export const Box = ds.system({ space: true }).asElement('div');\n\
+             document.title = 'x';\n\
+             export const App = () => <Box p={2} />;\n",
+            inputs,
+        );
+        let gap = patched.usage.iter().find(|gap| gap.rule == "patches-intrinsics").unwrap();
+        assert_eq!((gap.detail.as_deref(), gap.file.as_deref(), gap.at), (Some("unowned-write"), Some("a.tsx"), Some(64)));
     }
 
     fn inputs_with_provenance() -> CssInputs {
