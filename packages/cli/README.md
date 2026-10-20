@@ -89,6 +89,137 @@ document on stdout. It exits 0 unless its input cannot be read: a missing
 or partial manifest, one whose classes the output's CSS never names, or an
 output file it cannot read, each exit 2 with the remedy.
 
+## `animus types alias`
+
+```bash
+animus types alias .types-raw --out types \
+  --project tsconfig.types.json --probes type-probes
+```
+
+Turns ordinary compiler declaration output (`tsc` with `declaration` and
+`emitDeclarationOnly`) into a packet for consumers to type-check against.
+It infers nothing: the compiler's declarations are the contract. Inferred
+component declarations spell each system's prop and group registries out
+in full, many times per component; the command finds each system
+declaration (`export declare const ds: SealedSystemInstance<…>` from
+`@animus-ui/system`), and replaces every structurally identical registry
+subtree elsewhere with an alias in an isolated helper module,
+`__animus_registry__.d.ts`, which reads the type back from that
+declaration. Two subtrees match only when their structure, modifiers and
+literals are equal and every name in them resolves to the same declaration
+(the same packet file, or the same physical package directory); printed
+text and assignability are never the test. A subtree the matcher cannot
+resolve stays as emitted. On the benchmark's 1,000-component app the
+declarations shrink from 94.6 MB to 2.1 MB.
+
+The packet is written to a staging directory beside `--out` and promoted
+only when every check passes; on any failure `--out` is left exactly as it
+was and the command exits non-zero. The checks:
+
+1. Every packet file type-checks with `skipLibCheck: false` under the
+   `--project` compiler options, and each alias is the same type as a
+   literal it replaced.
+2. The probe files in `--probes` are checked twice, against the compiler's
+   declarations and against the packet, each reached through the
+   package's own `exports` `types` routing. Both must report the same
+   diagnostics at the same sites, neither may load package source or the
+   other route's files, and every `types` target into `--out` must exist.
+
+`--out` is replaced only when it is missing or holds the
+`__animus_packet__.json` manifest a previous run wrote. `--anchor
+<module>#<export>` adds a system declared outside the packet, such as a UI
+package's components built on another package's `ds`
+(`--anchor @acme/styles#ds`). Declaration maps follow the rewrite. With
+`--json` the report is one JSON document on stdout; otherwise a summary
+goes to stderr. Exit codes: 0 promoted; 1 a check failed or the
+declarations could not be read; 2 a usage error (a missing directory, an
+`--out` the command did not write, no `types` routing into `--out`); 3 no
+TypeScript.
+
+The packet is a type contract only: extraction never reads it, and a
+TypeScript annotation never decides what CSS ships.
+
+### Package recipe
+
+The package build owns freshness: emit, alias, validate and promote run as
+one failing chain, so an old packet can never stand for a new success.
+
+```jsonc
+// package.json
+{
+  "exports": {
+    ".": { "types": "./types/index.d.ts", "import": "./dist/index.js" },
+    "./tokens": {
+      "types": "./types/tokens.d.ts",
+      "import": "./dist/tokens.js",
+    },
+  },
+  "files": ["dist", "types"],
+  "scripts": {
+    "build:types": "rm -rf .types-raw && tsc -p tsconfig.types.json && animus types alias .types-raw --out types --project tsconfig.types.json --probes type-probes",
+  },
+}
+```
+
+```jsonc
+// tsconfig.types.json
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationMap": true,
+    "noEmitOnError": true,
+    "outDir": "./.types-raw",
+    "rootDir": "./src",
+  },
+  "include": ["src"],
+}
+```
+
+- **Route every public type subpath to the packet.** Each `exports` entry
+  that consumers type-check against gets a `types` condition inside
+  `--out`; runtime and extraction entries stay as they are. A consumer
+  that reaches the package's source through a relative import, a `paths`
+  alias or an editor redirect bypasses the packet and checks the builders
+  again.
+- **Keep an explicit augmentation edge in every type entry.** A component's
+  inferred declaration inlines what it read from the module that augments
+  `Theme` (or `Selectors`, `Conditions`), so tsc drops that import, and a
+  consumer of the entry would check against an unaugmented theme. tsc
+  keeps a type-only re-export, and it has no runtime effect:
+
+  ```ts
+  // src/index.ts
+  export type {} from './theme-augmentation';
+  export * from './components';
+  ```
+
+  The command warns about an entry that does not reach a module
+  augmentation in the packet.
+
+- **Fail closed.** `rm -rf .types-raw` and `noEmitOnError` mean a failed
+  compile leaves nothing to alias, `&&` stops the chain there, and the
+  command promotes only a packet that passed its checks. Make consumers'
+  type checks depend on this script in the task graph (for turbo,
+  `"typecheck": { "dependsOn": ["^build:types"] }`), and key any build
+  cache on the compiler, its options and every input the producer reads,
+  augmentation files included.
+- **Probes are consumer code.** Put files in `type-probes/` that import the
+  package by name, as a consumer does: accepted uses and deliberate
+  mistakes (a wrong variant, an unknown breakpoint), with no
+  `@ts-expect-error`. Include one use that depends on the augmentation, so
+  a lost augmentation edge changes a diagnostic.
+- **Ignore the intermediates:** `.types-raw/`, `types/`, and the
+  `.types.staging-*`, `.types.check-*` and `.types.retired-*` directories
+  a run leaves only if it is killed (the next run removes them).
+
+What can still go stale: a consumer check that bypasses the build, a
+stopped watch, an editor holding unsaved builder edits, or a cache restoring
+`types/` under a key that misses an input. The packet does not make a clean
+source check free: the producer still checks every builder once.
+
 ## `--strict`
 
 `--strict` fails the build on every diagnostic that means **a configured

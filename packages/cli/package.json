@@ -42,7 +42,8 @@
   },
   "dependencies": {
     "@animus-ui/extract": "workspace:*",
-    "@animus-ui/properties": "workspace:*"
+    "@animus-ui/properties": "workspace:*",
+    "oxc-parser": "0.153.0"
   },
   "engines": {
     "node": ">=22.12.0"

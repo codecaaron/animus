@@ -17,6 +17,7 @@ import {
   resolveCliConfig,
 } from './config';
 import { formatCssAudit, runCssAudit } from './css-audit';
+import { formatTypesAliasReport, runTypesAlias } from './types-packet';
 import { runWatch } from './watch';
 import { MANIFEST_FILE } from './writer';
 
@@ -45,6 +46,10 @@ Usage:
                               ranked by measured Brotli savings; reads a
                               full manifest and the built output, writes
                               nothing
+  animus types alias <declDir> --out <dir> --probes <dir> [opts]
+                              Turn compiler declaration output into a
+                              validated packet with shared registry aliases,
+                              promoted to --out only when every check passes
 
 Options:
   --system <path>     SystemInstance module (required unless configured)
@@ -73,8 +78,18 @@ Options:
                       writes, or one a host captured (default:
                       manifest.json in --out-dir)
   --dist <path>       css audit: the built output (default: <root>/dist)
-  --json              css audit: print the report as one JSON document on
-                      stdout instead of text on stderr
+  --json              css audit, types alias: print the report as one JSON
+                      document on stdout instead of text on stderr
+  --out <dir>         types alias: the packet directory (required); replaced
+                      only when it is a packet this command wrote
+  --project <path>    types alias: the producer tsconfig the checks inherit
+                      options from (default: tsconfig.json)
+  --probes <dir>      types alias: consumer probe files (required), checked
+                      against the ordinary declarations and the packet
+  --anchor <m>#<x>    types alias: a system declaration outside the packet,
+                      as module specifier and export (repeatable)
+  --tsc <path>        types alias: the tsc entry (default: the project's
+                      typescript)
   --help              This text
 
 Exit codes: 0 success · 1 extraction failure · 2 config error · 3 engine
@@ -143,6 +158,11 @@ export async function main(
         manifest: { type: 'string' },
         dist: { type: 'string' },
         json: { type: 'boolean' },
+        out: { type: 'string' },
+        project: { type: 'string' },
+        probes: { type: 'string' },
+        anchor: { type: 'string', multiple: true },
+        tsc: { type: 'string' },
         help: { type: 'boolean' },
       },
     });
@@ -160,19 +180,24 @@ export async function main(
   }
 
   const command = positionals[0];
-  // `css audit` reads only its own flags, and the build commands none of
-  // the audit's: such a flag is a mistake, never silently ignored.
-  const foreign = Object.keys(values).filter((flag) =>
-    command === 'css' ? !CSS_AUDIT_FLAGS.has(flag) : AUDIT_ONLY_FLAGS.has(flag)
-  );
+  // `css audit` and `types alias` read only their own flags, and the build
+  // commands none of theirs: such a flag is a mistake, never silently
+  // ignored.
+  const subcommand = SUBCOMMANDS.get(command);
+  const ownFlags = subcommand?.flags ?? BUILD_FLAGS;
+  const foreign = Object.keys(values).filter((flag) => !ownFlags.has(flag));
   if (foreign.length > 0) {
     reportUsageError(
-      `--${foreign[0]} is not an option of '${command === 'css' ? 'css audit' : command}'`
+      `--${foreign[0]} is not an option of '${subcommand?.label ?? command}'`
     );
     return;
   }
   if (command === 'css') {
     await runCssAuditCommand(positionals.slice(1), values);
+    return;
+  }
+  if (command === 'types') {
+    await runTypesAliasCommand(positionals.slice(1), values);
     return;
   }
   // Command shape is decided from argv alone, before any filesystem work,
@@ -249,7 +274,35 @@ const CSS_AUDIT_FLAGS = new Set([
   'dist',
   'json',
 ]);
-const AUDIT_ONLY_FLAGS = new Set(['manifest', 'dist', 'json']);
+const TYPES_ALIAS_FLAGS = new Set([
+  'out',
+  'project',
+  'probes',
+  'anchor',
+  'tsc',
+  'json',
+]);
+/** The flags the build commands read. */
+const BUILD_FLAGS = new Set([
+  'system',
+  'root',
+  'config',
+  'out-dir',
+  'exclude',
+  'mode',
+  'targets',
+  'strict',
+  'verbose',
+  'trace',
+  'kit',
+  'fail-on-degraded',
+  'print-config',
+  'help',
+]);
+const SUBCOMMANDS = new Map([
+  ['css', { label: 'css audit', flags: CSS_AUDIT_FLAGS }],
+  ['types', { label: 'types alias', flags: TYPES_ALIAS_FLAGS }],
+]);
 
 /** `animus css audit`: reads, measures and reports; it never writes the
  *  project, and exits 0 unless its input is unreadable. Its paths resolve
@@ -287,6 +340,52 @@ async function runCssAuditCommand(
     process.exitCode = EXIT_OK;
   } catch (error) {
     console.error(`[animus] ${String(readThrownMessage(error) ?? error)}`);
+    process.exitCode = exitCodeFor(error);
+  }
+}
+
+/** `animus types alias <declDir>`: paths resolve against the working
+ *  directory, as a package build script passes them. */
+async function runTypesAliasCommand(
+  subcommand: string[],
+  values: {
+    out?: string;
+    project?: string;
+    probes?: string;
+    anchor?: string[];
+    tsc?: string;
+    json?: boolean;
+  }
+): Promise<void> {
+  if (subcommand[0] !== 'alias' || subcommand.length !== 2) {
+    reportUsageError(
+      subcommand[0] === 'alias'
+        ? "'types alias' takes one declaration directory"
+        : "'types' needs a subcommand: alias <declDir>"
+    );
+    return;
+  }
+  if (values.out === undefined || values.probes === undefined) {
+    reportUsageError("'types alias' needs --out <dir> and --probes <dir>");
+    return;
+  }
+  const cwd = process.cwd();
+  const outDir = resolve(cwd, values.out);
+  try {
+    const report = await runTypesAlias({
+      declDir: resolve(cwd, subcommand[1]),
+      outDir,
+      project: resolve(cwd, values.project ?? 'tsconfig.json'),
+      probesDir: resolve(cwd, values.probes),
+      anchors: values.anchor ?? [],
+      tsc: values.tsc === undefined ? undefined : resolve(cwd, values.tsc),
+    });
+    if (values.json) console.log(JSON.stringify(report, null, 2));
+    else process.stderr.write(formatTypesAliasReport(report, outDir));
+    process.exitCode = EXIT_OK;
+  } catch (error) {
+    console.error(`[animus] ${String(readThrownMessage(error) ?? error)}`);
+    console.error(`[animus] ${outDir} was not changed.`);
     process.exitCode = exitCodeFor(error);
   }
 }
