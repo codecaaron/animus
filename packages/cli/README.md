@@ -247,6 +247,12 @@ stopped watch, an editor holding unsaved builder edits, or a cache restoring
 `types/` under a key that misses an input. The packet does not make a clean
 source check free: the producer still checks every builder once.
 
+The packet matches the compiler's declaration output, which can check
+differently from source. For example, an entry whose emitted declarations
+reference `import("./index.ts")` reaches that module's augmentation, though
+its source never imports it, so a consumer of that entry is stricter against
+both the declarations and the packet than against source.
+
 ## `--strict`
 
 `--strict` fails the build on every diagnostic that means **a configured
