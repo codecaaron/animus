@@ -7757,7 +7757,9 @@ fn opaque_delivery(
     }
     for (index, (path, ff, call)) in call_sites.iter().enumerate() {
         if let Some((declaring, binding, _)) = call.callee.as_deref().and_then(|callee| declaration(path, ff, callee)) {
-            readers.entry((declaring, binding)).or_default().push(Site::Call(index));
+            // Under the component `call_opaque` reads: an alias's, its target.
+            let key = ordinary_declaration(&declaring, &binding, files, inputs, links).unwrap_or((declaring, binding));
+            readers.entry(key).or_default().push(Site::Call(index));
         }
     }
     // A React wrapper forwards what its callback does.
@@ -15467,6 +15469,12 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
         // Reassigned, or naming what another module declares.
         assert!(keeps_p(in_place, "export let DatePicker = DatePickerTarget;\nDatePicker = Foreign;", "", ""));
         assert!(keeps_p("import { DatePickerTarget } from './elsewhere';", "export const DatePicker = DatePickerTarget;", "", ""));
+        // A call of an alias of an import is judged by its target, and again
+        // when the target starts forwarding.
+        let target = "import { Foreign } from 'outside';\nexport const Render = ({ children }) => <Foreign>{children}</Foreign>;\n";
+        let alias = "import { Render } from './target';\nexport const Alias = Render;\n";
+        let app = "import { Alias } from './alias';\nexport const Box = ds.system({ space: true }).asElement('div');\nexport const App = () => Alias({ children: <Box p={8} /> });\n";
+        assert!(analyze(&[("target.tsx", target), ("alias.tsx", alias), ("app.tsx", app)], &test_inputs()).dynamic_props.contains_key("p"));
         // An alias of an import, named directly or as a facade's member.
         let keeps_imported = |target: &str, more: &str, other: &str, tag: &str| {
             let target = format!("import {{ forwardRef }} from 'react';\nimport {{ Foreign, pad }} from 'outside';\nexport {target}\n");
