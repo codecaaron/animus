@@ -1686,6 +1686,33 @@ pub(crate) fn resolve_declaration(
     resolve_export(file_path, specifier, imported, files, inputs, links)
 }
 
+/// The ordinary component that `binding`, declared in `module`, is: the
+/// binding itself (`FileFacts::ordinary_components`), or, for a `const`
+/// alias of an import (`FileFacts::import_aliases`), the one the import
+/// names, through further such aliases. `None` for any other binding.
+pub(crate) fn ordinary_declaration(
+    module: &str,
+    binding: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> Option<(String, String)> {
+    let (mut module, mut binding) = (module.to_string(), binding.to_string());
+    let mut seen: FxHashSet<(String, String)> = FxHashSet::default();
+    loop {
+        let ff = files.get(&module)?;
+        if ff.ordinary_components.contains(&binding) {
+            return Some((module, binding));
+        }
+        let import = ff.import_aliases.get(&binding)?;
+        let (declaring, declared, _) = resolve_declaration(&module, ff, import, files, inputs, links)?;
+        if !seen.insert((module, binding)) {
+            return None;
+        }
+        (module, binding) = (declaring, declared);
+    }
+}
+
 /// The declaration `imported` from `specifier` lands on, through analyzed
 /// re-exports, and whether that file declares it locally.
 fn resolve_export(
@@ -6558,9 +6585,10 @@ fn uncertain_tag_reason(
 ) -> (TagClass, String) {
     let root = tag.split('.').next().unwrap_or(tag);
     let member = root != tag;
-    // What a declaration proves the binding is, said of the place `at`.
-    let declared = |ff: &FileFacts, binding: &str, at: &str| {
-        if ff.ordinary_components.contains(binding) {
+    // What a declaration in `module` proves the binding is, said of the
+    // place `at`.
+    let declared = |module: &str, ff: &FileFacts, binding: &str, at: &str| {
+        if ordinary_declaration(module, binding, files, inputs, links).is_some() {
             Some((TagClass::Ordinary, format!("is an ordinary component declared in {at}")))
         } else if ff.chains.iter().any(|chain| chain.descriptor.binding == binding) {
             Some((TagClass::FailedChain, format!("is an Animus chain in {at} that extraction could not extract")))
@@ -6590,7 +6618,7 @@ fn uncertain_tag_reason(
                         // fact, so a declaration the file does not import is
                         // its own.
                         let own = local || !dff.imports.iter().any(|import| import.local == binding);
-                        own.then(|| declared(dff, &binding, &declaring_file)).flatten()
+                        own.then(|| declared(&declaring_file, dff, &binding, &declaring_file)).flatten()
                     },
                 ),
             };
@@ -6605,7 +6633,7 @@ fn uncertain_tag_reason(
             TagClass::Member,
             format!("is a member of '{root}', declared in this file, that extraction cannot follow to a component"),
         ),
-        Some(TagOrigin::TopLevel) => declared(ff, tag, "this file").unwrap_or_else(|| {
+        Some(TagOrigin::TopLevel) => declared(file, ff, tag, "this file").unwrap_or_else(|| {
             (
                 TagClass::OtherDeclaration,
                 "is declared in this file by something other than a function or class: a call \
@@ -7187,12 +7215,12 @@ fn opaque_delivery(
         call.callee.as_deref().is_none_or(|callee| {
             !held_array_method(file, ff, call)
                 && declaration(file, ff, callee).is_none_or(|(declaring, binding, _)| {
-                    forwarding.get(&(declaring.clone(), binding.clone())).is_some_and(Inputs::any)
-                        || !files.get(&declaring).is_some_and(|declared| {
-                            // A call's props may set what a cloner's clone
-                            // gives its child.
-                            declared.ordinary_components.contains(&binding) && !declared.child_cloners.contains_key(&binding)
-                        })
+                    // A call's props may set what a cloner's clone gives its
+                    // child.
+                    ordinary_declaration(&declaring, &binding, files, inputs, links).is_none_or(|key| {
+                        forwarding.get(&key).is_some_and(Inputs::any)
+                            || files.get(&key.0).is_some_and(|declared| declared.child_cloners.contains_key(&key.1))
+                    })
                 })
         })
     };
@@ -7275,9 +7303,8 @@ fn opaque_delivery(
     let named: Memo<(String, String)> = PairMemo::new();
     let ordinary_named = |file: &str, ff: &FileFacts, tag: &str| {
         named.get_or(file, tag, || {
-            let declared = declaration(file, ff, tag).map(|(declaring, binding, _)| (declaring, binding)).filter(|(declaring, binding)| {
-                files.get(declaring).is_some_and(|declared| declared.ordinary_components.contains(binding))
-            });
+            let declared = declaration(file, ff, tag)
+                .and_then(|(declaring, binding, _)| ordinary_declaration(&declaring, &binding, files, inputs, links));
             let member = ordinary_members.get(&(file.to_string(), tag.to_string())).cloned();
             declared.into_iter().chain(member).collect()
         })
@@ -10588,7 +10615,7 @@ fn run_with_system_floor(
                 return None;
             }
             let (declaring, binding, _) = resolve_declaration(file, ff, &descriptor.tag, files, inputs, links)?;
-            files.get(&declaring)?.ordinary_components.contains(&binding).then_some((declaring, binding))
+            ordinary_declaration(&declaring, &binding, files, inputs, links)
         },
         object_members.changes(),);
     for (id, at) in delivered_ids {
@@ -15378,9 +15405,12 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
     }
 
     /// Contract: a `const` alias of exactly one ordinary component of its
-    /// module (`DatePicker = DatePickerTarget`), typed or not, renders what
-    /// that component does, while one that is reassigned, written through or
-    /// handed on, or that names an import, stays unknown.
+    /// module (`DatePicker = DatePickerTarget`), or of an import that names
+    /// one in another module, typed or not, renders what that component
+    /// does, while one that is reassigned, written through or handed on, or
+    /// that names an import the analysis cannot follow, stays unknown. A
+    /// write through or a hand-on of an alias of an import elsewhere reaches
+    /// the component it names.
     #[test]
     fn a_const_alias_renders_its_component() {
         let keeps_p = |target: &str, alias: &str, more: &str, other: &str| {
@@ -15430,6 +15460,35 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
         // Reassigned, or naming what another module declares.
         assert!(keeps_p(in_place, "export let DatePicker = DatePickerTarget;\nDatePicker = Foreign;", "", ""));
         assert!(keeps_p("import { DatePickerTarget } from './elsewhere';", "export const DatePicker = DatePickerTarget;", "", ""));
+        // An alias of an import, named directly or as a facade's member.
+        let keeps_imported = |target: &str, more: &str, other: &str, tag: &str| {
+            let target = format!("import {{ forwardRef }} from 'react';\nimport {{ Foreign, pad }} from 'outside';\nexport {target}\n");
+            let source = format!(
+                "import {{ consume, pad }} from 'outside';\nimport {{ DatePickerTarget }} from './target';\n\
+                 export const Box = ds.system({{ space: true }}).asElement('div');\n\
+                 export const DatePicker = DatePickerTarget;\nexport const Kit = {{ DatePicker }};\n{more}"
+            );
+            let app = format!("import {{ DatePicker, Kit, Box }} from './a';\nexport const App = () => <{tag}><Box p={{8}} /></{tag}>;\n");
+            let other = format!("import {{ DatePicker }} from './a';\nimport {{ pad, consume }} from 'outside';\n{other}");
+            let files = [("target.tsx", target.as_str()), ("a.tsx", source.as_str()), ("app.tsx", app.as_str()), ("other.tsx", other.as_str())];
+            analyze(&files, &test_inputs()).dynamic_props.contains_key("p")
+        };
+        let written = format!("{in_place}\nDatePickerTarget.render = (props) => pad(props.children);");
+        for tag in ["DatePicker", "Kit.DatePicker"] {
+            for (target, more, other, keeps) in [
+                (in_place, "", "", false),
+                (plain, "", "", false),
+                (outside, "", "", true),
+                (written.as_str(), "", "", true),
+                (in_place, "DatePicker.render = (props) => pad(props.children);", "", true),
+                (in_place, "consume(DatePicker);", "", true),
+                (plain, "consume(DatePicker);", "", true),
+                (in_place, "", "DatePicker.render = (props) => pad(props.children);", true),
+                (in_place, "", "consume(DatePicker);", true),
+            ] {
+                assert_eq!(keeps_imported(target, more, other, tag), keeps, "{tag} {target} {more} {other}");
+            }
+        }
     }
 
     /// Contract: a component a `const` facade holds (`Field = { Root }`) is

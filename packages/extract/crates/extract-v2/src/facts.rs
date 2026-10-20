@@ -648,6 +648,12 @@ pub struct FileFacts {
     /// the named component does.
     #[serde(skip)]
     pub(crate) react_wrappers: BTreeMap<String, Option<String>>,
+    /// Top-level `const` aliases of an import (`const Fields = SettingsGrid`)
+    /// that nothing in the file writes, and that the file neither writes
+    /// through nor hands on, each with the import it names: the alias is the
+    /// component the import names, as a re-export of it is.
+    #[serde(skip)]
+    pub(crate) import_aliases: BTreeMap<String, String>,
     /// Top-level `const` bindings React's `createContext` builds: a tag
     /// naming one's `Provider` renders its children in place.
     #[serde(skip)]
@@ -1433,6 +1439,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
             .collect(),
         ordinary_components: BTreeSet::new(),
         react_wrappers: BTreeMap::new(),
+        import_aliases: BTreeMap::new(),
         context_consts,
         prop_tags: Vec::new(),
         name_uses: BTreeMap::new(),
@@ -2087,6 +2094,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         spread_wrappers,
         ordinary_components,
         react_wrappers,
+        import_aliases,
         prop_tags,
         name_uses,
         namespace_member_uses,
@@ -2161,6 +2169,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         spread_wrappers,
         ordinary_components,
         react_wrappers,
+        import_aliases,
         prop_tags,
         name_uses,
         namespace_member_uses,

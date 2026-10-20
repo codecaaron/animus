@@ -480,7 +480,7 @@ impl<'f> ObjectMembers<'f> {
         };
         let ff = self.files.get(&module)?;
         let (declaring, declared, _) = resolve_declaration(&module, ff, &binding, self.files, self.inputs, self.links)?;
-        self.files.get(&declaring)?.ordinary_components.contains(&declared).then_some((declaring, declared))
+        crate::analyze_css::ordinary_declaration(&declaring, &declared, self.files, self.inputs, self.links)
     }
 
     /// Every wrapper `object`'s initializer holds, whatever came later.

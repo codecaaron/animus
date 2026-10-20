@@ -914,6 +914,8 @@ pub(crate) struct EnrichedUsage {
     pub ordinary_components: BTreeSet<String>,
     /// See `FileFacts::react_wrappers`.
     pub react_wrappers: BTreeMap<String, Option<String>>,
+    /// See `FileFacts::import_aliases`.
+    pub import_aliases: BTreeMap<String, String>,
     /// See `FileFacts::prop_tags`.
     pub prop_tags: Vec<PropTag>,
     /// See `FileFacts::name_uses`.
@@ -1322,7 +1324,7 @@ pub(crate) fn collect_enriched_usage(
     // React wrappers and `const` aliases a write or hand-on may change,
     // whatever their names' case, and the callbacks a wrapper's position
     // is followed for.
-    let (admissible, admissible_wrappers) = origins
+    let (admissible, admissible_wrappers, admissible_aliases) = origins
         .zip(react_imports.as_ref())
         .map(|(scoping, react)| ordinary_components(program, scoping, react, &BTreeSet::new(), direct_eval))
         .unwrap_or_default();
@@ -1330,7 +1332,7 @@ pub(crate) fn collect_enriched_usage(
         Some(scoping) if may_escape => {
             let mut scan = EscapeScan {
                 admissible: &admissible,
-                react_bindings: admissible_wrappers.keys().cloned().collect(),
+                react_bindings: admissible_wrappers.keys().chain(admissible_aliases.keys()).cloned().collect(),
                 scoping,
                 chains,
                 slot_values: compose
@@ -1372,7 +1374,7 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => (BTreeSet::new(), BTreeSet::new()),
     };
-    let (ordinary_components, react_wrappers) = origins
+    let (ordinary_components, react_wrappers, import_aliases) = origins
         .zip(react_imports.as_ref())
         .map(|(scoping, react)| ordinary_components(program, scoping, react, &escapes, direct_eval))
         .unwrap_or_default();
@@ -1400,6 +1402,7 @@ pub(crate) fn collect_enriched_usage(
         spread_wrappers,
         ordinary_components,
         react_wrappers,
+        import_aliases,
         prop_tags,
         name_uses,
         namespace_member_uses,
@@ -7141,13 +7144,15 @@ fn context_consts(program: &Program<'_>, scoping: &Scoping, react: &ReactImports
 /// a wrapper's `render` (`forwardRef`) or `type` (`memo`), which holds its
 /// callback only while nothing changes the wrapper. Each React wrapper
 /// among them maps to the name of the callback it renders, if it is named.
+/// Such an alias of an import is no component of the module: it maps to
+/// the import (`FileFacts::import_aliases`).
 fn ordinary_components(
     program: &Program<'_>,
     scoping: &Scoping,
     react: &ReactImports,
     escapes: &BTreeSet<String>,
     direct_eval: bool,
-) -> (BTreeSet<String>, BTreeMap<String, Option<String>>) {
+) -> (BTreeSet<String>, BTreeMap<String, Option<String>>, BTreeMap<String, String>) {
     use oxc::ast::ast::{BindingIdentifier, Declaration, ExportDefaultDeclarationKind};
     // Direct eval can write any binding by name.
     if direct_eval {
@@ -7163,8 +7168,10 @@ fn ordinary_components(
         let callback = crate::chain_walk::unwrap_type_assertions(call.arguments[0].as_expression()?);
         wrapped(scoping, react, callback).or(Some(callback))
     }
-    // React's wrappers, with the name of a named callback.
+    // React's wrappers, with the name of a named callback, and the aliases
+    // of an import, with the import.
     let mut wrappers: Vec<(&BindingIdentifier<'_>, Option<&str>)> = Vec::new();
+    let mut aliases: Vec<(&BindingIdentifier<'_>, &str)> = Vec::new();
     let unwritten = |id: &BindingIdentifier<'_>| {
         id.symbol_id.get().is_some_and(|symbol| !scoping.symbol_is_mutated(symbol))
     };
@@ -7229,8 +7236,12 @@ fn ordinary_components(
                                     let escapes = escapes.iter().any(|escaped| {
                                         escaped.strip_prefix(name).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
                                     });
-                                    if !escapes {
-                                        wrappers.push((&**id, Some(target.name.as_str())));
+                                    let imported = target.reference_id.get().and_then(|reference| scoping.get_reference(reference).symbol_id())
+                                        .is_some_and(|symbol| scoping.symbol_flags(symbol).contains(oxc::semantic::SymbolFlags::Import));
+                                    match (escapes, imported) {
+                                        (true, _) => {}
+                                        (false, true) => aliases.push((&**id, target.name.as_str())),
+                                        (false, false) => wrappers.push((&**id, Some(target.name.as_str()))),
                                     }
                                     None
                                 }
@@ -7262,7 +7273,8 @@ fn ordinary_components(
         names.insert(id.name.to_string());
         renders.insert(id.name.to_string(), callback.map(str::to_string));
     }
-    (names, renders)
+    let aliases = aliases.into_iter().filter(|(id, _)| unwritten(id)).map(|(id, import)| (id.name.to_string(), import.to_string())).collect();
+    (names, renders, aliases)
 }
 
 /// React's `createElement` and `cloneElement` as a file can call them:
