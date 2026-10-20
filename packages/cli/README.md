@@ -115,10 +115,15 @@ would bring an augmentation (a `declare module`/`declare global` block, a
 script declaration file or a `/// <reference lib>`) into a public entry
 that does not already load it; a file with an import that carries
 attributes or a `resolution-mode`; and an occurrence that names a
-declaration of its own file. On the benchmark's 1,000-component app the
+declaration of its own file. When an import with attributes or a
+`resolution-mode` sits anywhere an anchor reaches, nothing is aliased in
+that run. On the benchmark's 1,000-component app the
 declarations shrink from 94.6 MB to 2.1 MB.
 
-One run owns `--out` at a time, through a `.<out>.lock` file beside it. The
+One run owns `--out` at a time, through a `.<out>.lock` file beside it. A
+lock is never taken over: a run killed before it released its lock leaves
+it behind, and the next run refuses (exit 2) and names it; delete it once
+no run is active. The
 packet is written to a staging directory beside `--out` and promoted only
 when every check passes and the declaration output still has the
 fingerprint it was built from; on any failure `--out` is left exactly as it
@@ -234,8 +239,8 @@ one failing chain, so an old packet can never stand for a new success.
   a lost augmentation edge changes a diagnostic.
 - **Ignore the intermediates:** `.types-raw/`, `types/`, `.types.lock`,
   and the `.types.staging-*`, `.types.check-*` and `.types.retired-*`
-  directories a run leaves only if it is killed (the next run removes
-  them).
+  directories a run leaves only if it is killed. The next run removes the
+  directories; it refuses a leftover lock, which you delete.
 
 What can still go stale: a consumer check that bypasses the build, a
 stopped watch, an editor holding unsaved builder edits, or a cache restoring

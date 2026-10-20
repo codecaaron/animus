@@ -234,56 +234,26 @@ function isFileExistsError<Value>(
 
 /** The run's exclusive claim on `--out`, from staging through commit. The
  *  lock file appears complete or not at all: its pid is written to a private
- *  file first and linked into place. A lock whose holder is dead is taken
- *  over only if it is still the lock that was read; anything else, including
- *  an unreadable lock, fails closed. */
+ *  file first and linked into place. An existing lock always refuses the
+ *  run, whether its holder is alive, dead or unreadable: a lock is never
+ *  taken over, so two runs can never both own `--out`. */
 function acquireLock(outDir: string): () => void {
   const path = join(dirname(outDir), `.${basename(outDir)}.lock`);
   const owned = `${path}.${process.pid}`;
   mkdirSync(dirname(outDir), { recursive: true });
   writeFileSync(owned, `${process.pid}\n`);
   try {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        linkSync(owned, path);
-        return () => rmSync(path, { force: true });
-      } catch (error) {
-        if (!isFileExistsError(error)) throw error;
-      }
-      const observed = readLockHolder(path);
-      if (observed === null) continue;
-      if (observed === 'unreadable') {
-        throw new UsageFailure(
-          `${path} exists but names no process; remove it if no \`animus types alias\` is running`
-        );
-      }
-      if (isLockHolderAlive(observed)) {
-        throw new UsageFailure(
-          `another \`animus types alias\` (pid ${observed}) owns ${outDir}; wait for it to finish`
-        );
-      }
-      // Move the stale lock aside, then confirm it was the one read: a
-      // lock another run took over in between is put back.
-      const aside = `${path}.stale-${process.pid}`;
-      try {
-        renameSync(path, aside);
-      } catch {
-        continue;
-      }
-      if (readLockHolder(aside) !== observed) {
-        try {
-          linkSync(aside, path);
-        } finally {
-          rmSync(aside, { force: true });
-        }
-        throw new UsageFailure(
-          `another \`animus types alias\` took ${outDir} over first`
-        );
-      }
-      rmSync(aside, { force: true });
-    }
+    linkSync(owned, path);
+    return () => rmSync(path, { force: true });
+  } catch (error) {
+    if (!isFileExistsError(error)) throw error;
+    const holder = readLockHolder(path);
     throw new UsageFailure(
-      `another \`animus types alias\` took ${outDir} first`
+      holder !== null && holder !== 'unreadable' && isLockHolderAlive(holder)
+        ? `another \`animus types alias\` (pid ${holder}) owns ${outDir}; wait for it to finish`
+        : `${path} is held by a run that is no longer active` +
+            `${holder === 'unreadable' || holder === null ? '' : ` (pid ${holder})`}; ` +
+            `delete it once no \`animus types alias\` is running`
     );
   } finally {
     rmSync(owned, { force: true });
@@ -729,6 +699,12 @@ function stagePacket(
   // `exports` map every file is a public entry.
   const graph = new ImportGraph(identities, scans);
   const required = anchorAugmentations(graph, anchors);
+  // An attributed import can resolve to a declaration this graph does not
+  // follow, so the augmentations the helper would bring are unknown: alias
+  // nothing.
+  const attributedAnchorEdge = [
+    ...graph.closure(anchors.anchorFiles.values()),
+  ].find((file) => graph.scanOf(file).attributed);
   const entryRoots = routes.gated
     ? declarations.filter((rel) =>
         routes.entries.some((entry) => entryMatches(entry, rel))
@@ -751,7 +727,8 @@ function stagePacket(
     const file = join(options.outDir, rel);
     const scan = scans.get(file);
     if (scan === undefined) continue;
-    let replacements = scan.replacements;
+    let replacements =
+      attributedAnchorEdge === undefined ? scan.replacements : [];
     if (scan.localOccurrences > 0) {
       warnings.push(
         `${rel}: ${scan.localOccurrences} registry occurrence(s) left as emitted: they name a declaration of the file itself`
@@ -820,6 +797,11 @@ function stagePacket(
     }
   }
 
+  if (attributedAnchorEdge !== undefined) {
+    warnings.push(
+      `nothing aliased: ${attributedAnchorEdge}, which an anchor reaches, has an import with attributes or a resolution-mode`
+    );
+  }
   const used = anchors.aliases.filter((alias) => (counts.get(alias) ?? 0) > 0);
   if (used.length > 0) write(ALIAS_HELPER_FILE, helperModule(used));
   return {
