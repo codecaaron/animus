@@ -11,6 +11,26 @@
 //! analysis cannot see can run there with the value: any other position,
 //! an expression shape the walk does not know included, hands the value to
 //! unknown code, a forwarding record.
+//!
+//! What the allowlist trusts by name (the built-ins it lists, React's
+//! functions, the prototypes their methods come from) is proven against the
+//! analysed code: any analysed write that could redirect one of them (into
+//! a global or React, into any object the module does not own, or of a
+//! built-in's method name into a binding that may hold a prototype), or
+//! any use that lets one escape as a value the walk cannot follow, leaves
+//! no usage proven (`FileFacts::patches_intrinsics`). Code outside the
+//! analysis is assumed not to redirect them: the trust every static
+//! analyser places in the platform and the framework it targets. A
+//! prototype the analysed code reaches through a computed key it cannot
+//! name and writes through another is beyond this proof.
+//!
+//! An input's caller may have put any key on it, the props object React
+//! builds included (`toString={…}`, or a spread of what its own caller
+//! gave it): converting, iterating, awaiting or stringifying an input
+//! hands it outside, and only the positions that run none of its code
+//! (`typeof`, `!`, a truth test, `===`) keep it. React reads what it gets
+//! as at an element, where a value the caller built with hooks
+//! (`Held::hookable`) is handed outside.
 
 use oxc::ast::ast::{
     AssignmentOperator, AssignmentTarget, BindingPattern, CallExpression, Class, Expression, Function,
@@ -52,13 +72,14 @@ enum InPlace {
     /// result.
     Returned,
     /// A position that yields a primitive and runs no code of the value's
-    /// but its own: a truth test (`if`, loops, `?:`, `&&`), `!`, `typeof`,
-    /// `void`, `===` and `!==`, `switch` and `case`, the right side of `in`
-    /// and `#x in`, the right side of `for…in`, and a conversion (arithmetic,
-    /// a comparison, `+=`, `++`, an untagged template, a computed key, a
-    /// converting built-in such as `String` or `Math.max`) of a value that
-    /// is not hookable: what converts it is its own conversion, which sees
-    /// only itself.
+    /// but its own: a truth test (`if` and loop tests, the test of `?:`),
+    /// `!`, `typeof`, `void`, `===` and `!==`, `switch` and `case`, the right
+    /// side of `in` and `#x in`, the right side of `for…in`, and a
+    /// conversion (arithmetic, a comparison, `+=`, `++`, an untagged
+    /// template, a computed key, a converting built-in such as `String` or
+    /// `Math.max`) of a value that is neither hookable nor an input: what
+    /// converts it is its own conversion, which sees only itself. `&&`,
+    /// `||` and `??` carry their operands on.
     Primitive,
     /// A statement that discards the value (an expression statement, a
     /// sequence's earlier expressions, a block reached other than through a
@@ -74,12 +95,14 @@ enum InPlace {
     /// (React hands its argument back as the state, which the state binding
     /// then holds, and its updater sees the state), `setState` on a class
     /// that extends React's `Component` and nothing can override, the
-    /// constructor of React's `Component`, `createPortal`, and a DOM root's
-    /// `render`.
+    /// constructor of React's `Component`, `createPortal`, a DOM root's
+    /// `render`, React DOM's `render`, `hydrate` and `hydrateRoot`, and the
+    /// server renderers `renderToString`, `renderToStaticMarkup`,
+    /// `renderToPipeableStream` and `renderToReadableStream`.
     KeptByReact,
     /// A built-in that reads its argument without running any of its code:
     /// `Boolean`, `Array.isArray`, `Number.isFinite`, `Number.isNaN`,
-    /// `Object.is` and `Object.keys`.
+    /// and `Object.is`.
     Builtin,
     /// A call inside an Animus builder chain, which the engine reads.
     Builder,
@@ -106,10 +129,11 @@ struct Held {
     inputs: bool,
     /// The value may be an object this module built whose own properties
     /// hold code that converting, iterating, reading, awaiting or disposing
-    /// of it runs, with the object as `this`: an accessor, a computed or
+    /// of it runs, with the object as `this`: a getter, a computed or
     /// spread property, a property named for a conversion or `then`, or a
     /// prototype it sets (`Declarations::hookable_objects`), or one a
-    /// computed or hook-named store reached (`hookable_bindings`).
+    /// computed or hook-named store reached, or into an array any named
+    /// store (`hookable_bindings`, `named_stores`).
     hookable: bool,
     tags: BTreeSet<String>,
     imports: BTreeSet<String>,
@@ -151,6 +175,13 @@ impl Held {
         Held { hookable: true, ..self.clone() }
     }
 
+    /// Whether converting, iterating or awaiting it may run hooks: of an
+    /// object this module built (`hookable`), or of an input, whose caller
+    /// may have put any key on it, the props object React builds included.
+    fn runs_hooks(&self) -> bool {
+        self.hookable || self.inputs
+    }
+
     const INPUTS: Held = Held { inputs: true, hookable: false, tags: BTreeSet::new(), imports: BTreeSet::new() };
 }
 
@@ -160,18 +191,20 @@ enum Callee {
     Kept(InPlace),
     /// A built-in that converts what it gets to a primitive (`String`,
     /// `parseInt`, `Math.*`, `console.*`, `JSON.stringify`): a hookable
-    /// value hands its hooks the value. With `callbacks`, a callback
-    /// (`JSON.stringify`'s replacer) receives it.
+    /// value or an input hands its hooks the value. With `callbacks`, a
+    /// callback (`JSON.stringify`'s replacer) receives it.
     Converts { callbacks: bool },
     /// Returns what it gets: React's functions and hooks, a built-in array
-    /// method on an array built in place, `Object.entries`, `Object.values`,
-    /// `Object.fromEntries`, `Array.of`, `Array.from`, the scheduling
-    /// globals. The result carries the arguments on, and a callback the
+    /// method on an array built in place, `Object.keys`, `Object.entries`,
+    /// `Object.values`, `Object.fromEntries`, `Array.of`, `Array.from`, the
+    /// scheduling globals. The result carries the arguments on, and a callback the
     /// module declares receives them (`Walk::callbacks`). One that calls the
     /// callbacks it gets at the positions `calls` lists (an array method's
     /// first, `Children.map`'s and `Array.from`'s second, `setTimeout`'s
     /// first) makes any other function there unknown code that receives
-    /// them. A hookable value is handed: these read or iterate it.
+    /// them. A hookable value is handed: these read or iterate it; so is an
+    /// input anywhere but a position they call, React's own functions
+    /// aside.
     PassThrough { calls: &'static [usize] },
     /// React's state setter, by the state bindings its hook returned.
     State(Vec<SymbolId>),
@@ -224,6 +257,32 @@ const INTRINSICS: [&str; 14] = [
     "Iterator", "Date", "Error",
 ];
 
+/// The globals that read what they get and run none of its code.
+const READ_GLOBALS: [&str; 1] = ["Boolean"];
+
+/// The globals that convert what they get to a primitive.
+const CONVERTING_GLOBALS: [&str; 9] = [
+    "String", "Number", "isNaN", "isFinite", "parseInt", "parseFloat", "encodeURIComponent", "decodeURIComponent", "Symbol",
+];
+
+/// The globals that schedule the callbacks they get.
+const SCHEDULING_GLOBALS: [&str; 5] = ["setTimeout", "setInterval", "queueMicrotask", "requestAnimationFrame", "requestIdleCallback"];
+
+/// The globals the allowlist trusts by name, beside `INTRINSICS` and the
+/// global functions above: read off the global object (`window.Math`) and
+/// let go, one could be redirected.
+const TRUSTED_GLOBALS: [&str; 9] = ["Math", "JSON", "Reflect", "console", "React", "ReactDOM", "Proxy", "WeakMap", "WeakSet"];
+
+/// Whether the allowlist trusts the global `name`.
+fn trusted_global(name: &str) -> bool {
+    [&TRUSTED_GLOBALS[..], &INTRINSICS, &GLOBAL_OBJECTS, &READ_GLOBALS, &CONVERTING_GLOBALS, &SCHEDULING_GLOBALS]
+        .iter()
+        .any(|names| names.contains(&name))
+}
+
+/// The names of the global object: a trusted global is a member of it.
+const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "self", "global"];
+
 /// What one module's walk records.
 #[derive(Default)]
 pub(super) struct Records {
@@ -240,45 +299,89 @@ pub(super) struct Records {
     pub patches_intrinsics: bool,
 }
 
-/// What the walk reads that a later change can grow: a top-level statement
-/// that read one is walked again when it grows.
+/// What the walk reads that a later change can grow: the unit that read
+/// one is walked again when it grows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Key {
     Held(SymbolId),
     Returns(ScopeId),
     Arguments(ScopeId),
+    /// What reaches a receiving element, by its span, which the element's
+    /// own climb carries.
+    Receiver(u32),
+}
+
+/// What the fixpoint walks again: a top-level statement, by index, or a
+/// function inside one, by its span, which the walk re-enters where it
+/// first found it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Unit {
+    Statement(usize),
+    Function(u32),
+}
+
+/// Where the walk first found a function: what it needs to walk the
+/// function again on its own.
+#[derive(Clone)]
+struct Context<'a> {
+    function: FunctionNode<'a>,
+    ancestors: Vec<AstKind<'a>>,
+    depth: usize,
+    class: Vec<u32>,
+    top: Rc<[String]>,
+}
+
+#[derive(Clone, Copy)]
+enum FunctionNode<'a> {
+    Function(&'a Function<'a>, oxc::syntax::scope::ScopeFlags),
+    Arrow(&'a oxc::ast::ast::ArrowFunctionExpression<'a>),
 }
 
 /// The forwarding records, receiving elements, element-holding top-level
 /// bindings and held arrays of `program`, whose `exported` locals other
 /// modules may read.
-pub(super) fn forwarding(
-    program: &Program<'_>,
+pub(super) fn forwarding<'a>(
+    program: &Program<'a>,
     scoping: &Scoping,
     chains: &[&ChainDescriptor],
     exported: &FxHashSet<&str>,
 ) -> Records {
     let mut module = Module::of(program, scoping, chains, exported);
     let tops: Vec<Rc<[String]>> = program.body.iter().map(|statement| top_level_names(statement).into()).collect();
-    let mut ancestors = Vec::new();
-    // Every statement is walked once, then again whenever something it
-    // read before it grew grows, until nothing does.
-    let mut readers: FxHashMap<Key, FxHashSet<usize>> = FxHashMap::default();
-    let mut pending: BTreeSet<usize> = (0..program.body.len()).collect();
-    while let Some(index) = pending.pop_first() {
-        let mut walk = Walk { module: &mut module, top: Rc::clone(&tops[index]), ancestors, depth: 0, class: Vec::new() };
-        walk.visit_statement(&program.body[index]);
-        ancestors = walk.ancestors;
+    let mut contexts: FxHashMap<u32, Context<'a>> = FxHashMap::default();
+    // Every statement is walked once, in order; then each unit that read
+    // something before it grew is walked again, until nothing grows. A unit
+    // is the innermost function around a read, so a change inside one
+    // function walks that function again, not the statement around it.
+    let mut readers: FxHashMap<Key, FxHashSet<Unit>> = FxHashMap::default();
+    let mut pending: BTreeSet<Unit> = BTreeSet::new();
+    let mut first = (0..program.body.len()).map(Unit::Statement);
+    while let Some(unit) = first.next().or_else(|| pending.pop_first()) {
+        module.unit = unit;
+        match unit {
+            Unit::Statement(index) => {
+                let mut walk = Walk::new(&mut module, &mut contexts, Rc::clone(&tops[index]), Vec::new(), 0, Vec::new());
+                walk.visit_statement(&program.body[index]);
+            }
+            Unit::Function(start) => {
+                let Context { function, ancestors, depth, class, top } = contexts[&start].clone();
+                let mut walk = Walk::new(&mut module, &mut contexts, top, ancestors, depth, class);
+                match function {
+                    FunctionNode::Function(function, flags) => walk.visit_function(function, flags),
+                    FunctionNode::Arrow(arrow) => walk.visit_arrow_function_expression(arrow),
+                }
+            }
+        }
         let reads = std::mem::take(&mut module.reads);
-        for key in reads.keys() {
-            readers.entry(*key).or_default().insert(index);
+        for (reader, key) in reads.keys() {
+            readers.entry(*key).or_default().insert(*reader);
         }
         for (key, at) in std::mem::take(&mut module.changed) {
-            for statement in readers.get(&key).into_iter().flatten() {
+            for reader in readers.get(&key).into_iter().flatten() {
                 // This walk saw what grew after it read it.
-                let stale = *statement != index || reads.get(&key).is_some_and(|read| *read < at);
+                let stale = reads.get(&(*reader, key)).is_none_or(|read| *read < at);
                 if stale {
-                    pending.insert(*statement);
+                    pending.insert(*reader);
                 }
             }
         }
@@ -303,7 +406,7 @@ struct Module<'s> {
     /// Bindings a function body declares, and never reassigns, to an array
     /// literal or to an object literal of plain data properties (no
     /// accessor, no `__proto__`): a store of a property into one runs no
-    /// code, unless a computed or hook-named store made it hookable, which
+    /// code, unless a store made it hookable (`Held::hookable`), which
     /// hands it on at every member (`Walk::read_through`).
     in_place: FxHashSet<SymbolId>,
     /// React's state setters, with the state bindings their hook returned
@@ -334,10 +437,11 @@ struct Module<'s> {
     /// a class method): their parameters are inputs, and React or the
     /// module's callers receive what they return.
     roots: FxHashSet<ScopeId>,
-    /// What the statement being walked reads, each when it first read it,
-    /// and what grew since the last statement, each when it grew, by a
-    /// clock that each growth advances.
-    reads: FxHashMap<Key, u64>,
+    /// The unit being walked, what each unit the walk passed through read,
+    /// each when it first read it, and what grew since the last walk, each
+    /// when it grew, by a clock that each growth advances.
+    unit: Unit,
+    reads: FxHashMap<(Unit, Key), u64>,
     changed: Vec<(Key, u64)>,
     clock: u64,
     /// Forwarding records: by site, callee and the array whose read method
@@ -349,6 +453,8 @@ struct Module<'s> {
     default: Held,
     /// See `FileFacts::patches_intrinsics`.
     patches_intrinsics: bool,
+    /// The module's top-level class bindings, declared or `const X = class`.
+    class_names: BTreeSet<String>,
 }
 
 /// What reaches a forwarding record, and the top-level bindings around it.
@@ -401,14 +507,17 @@ struct ClassFacts {
 
 impl ClassFacts {
     /// Whether nothing can reshape an instance: no code outside reaches the
-    /// class, and none inside lets `this` go.
+    /// class, none inside lets `this` go, and no base but React's puts its
+    /// own members on it.
     fn closed(&self) -> bool {
-        self.sealed && !self.this_escapes
+        self.sealed && !self.this_escapes && matches!(self.base, Base::None | Base::React)
     }
 
     /// Whether `this.name` is the class's own method whenever its code runs.
     fn own_method(&self, name: &str) -> Option<ScopeId> {
-        let unchanged = self.closed() && !self.written.contains(name) && !self.members.contains(name);
+        let unchanged = self.closed()
+            && !self.written.contains(name)
+            && !self.members.contains(name);
         self.methods.get(name).copied().filter(|_| unchanged)
     }
 
@@ -423,7 +532,7 @@ impl ClassFacts {
     /// Whether a store into `this.name` runs no code: the class and its
     /// base declare no setter for it.
     fn plain_store(&self, name: &str) -> bool {
-        matches!(self.base, Base::None | Base::React) && self.closed() && !self.accessors.contains(name)
+        self.closed() && !self.accessors.contains(name)
     }
 }
 
@@ -449,7 +558,8 @@ impl<'s> Module<'s> {
             }
         }
         let react = super::ReactImports::from(program, scoping, &REACT_MODULES);
-        let mut declarations = Declarations::new(scoping, &react);
+        let react_imports = sources.iter().filter(|(_, source)| REACT_MODULES.contains(&source.as_str())).map(|(symbol, _)| *symbol).collect();
+        let mut declarations = Declarations::new(scoping, &react, react_imports);
         declarations.visit_program(program);
         let arrays = Arrays::of(program, scoping, &declarations, &sources, &namespaces, exported);
         // A class nothing outside can reshape: unexported (`exported` names
@@ -477,10 +587,32 @@ impl<'s> Module<'s> {
                     !exported_classes.contains(class) && !exported.contains(scoping.symbol_name(*symbol)) && references == tags;
             }
         }
-        for symbol in &declarations.hookable_bindings {
+        let arrays_named = declarations
+            .named_stores
+            .iter()
+            .filter(|symbol| declarations.module_arrays.contains(symbol) || declarations.local_arrays.contains(symbol));
+        for symbol in declarations.hookable_bindings.iter().chain(arrays_named) {
             held.entry(*symbol).or_insert_with(Held::default).hookable = true;
         }
-        let patches_intrinsics = declarations.patches_intrinsics;
+        // A re-export of React's own lets its exports go where the analysis
+        // cannot follow writes to them.
+        let reexports_react = program.body.iter().any(|statement| match statement {
+            Statement::ExportFromDeclaration(export) => REACT_MODULES.contains(&export.source.value.as_str()),
+            Statement::ExportAllDeclaration(export) => REACT_MODULES.contains(&export.source.value.as_str()),
+            _ => false,
+        });
+        // A built-in's name written into a binding that may hold a prototype.
+        let redirected = declarations.built_in_writes.iter().any(|symbol| {
+            !declarations.literal_bindings.contains(symbol)
+                && !scoping.symbol_flags(*symbol).intersects(SymbolFlags::Function | SymbolFlags::Class)
+        });
+        let patches_intrinsics = declarations.patches_intrinsics || reexports_react || redirected;
+        let class_names = declarations
+            .class_bindings
+            .keys()
+            .filter(|symbol| scoping.symbol_scope_id(**symbol) == scoping.root_scope_id())
+            .map(|symbol| scoping.symbol_name(*symbol).to_string())
+            .collect();
         let Declarations { params, functions, in_place, setters, hook_states, classes, hookable_objects, .. } = declarations;
         Module {
             scoping,
@@ -502,6 +634,7 @@ impl<'s> Module<'s> {
             arguments: FxHashMap::default(),
             element_tags: FxHashMap::default(),
             roots: FxHashSet::default(),
+            unit: Unit::Statement(0),
             reads: FxHashMap::default(),
             changed: Vec::new(),
             clock: 0,
@@ -509,6 +642,7 @@ impl<'s> Module<'s> {
             receivers: BTreeMap::new(),
             default: Held::default(),
             patches_intrinsics,
+            class_names,
         }
     }
 
@@ -523,9 +657,14 @@ impl<'s> Module<'s> {
         }
     }
 
-    /// What `symbol` holds, read by the statement being walked.
+    /// Records that the unit being walked reads `key`.
+    fn note_read(&mut self, key: Key) {
+        self.reads.entry((self.unit, key)).or_insert(self.clock);
+    }
+
+    /// What `symbol` holds, read by the unit being walked.
     fn read(&mut self, symbol: SymbolId) -> Held {
-        self.reads.entry(Key::Held(symbol)).or_insert(self.clock);
+        self.note_read(Key::Held(symbol));
         self.held.get(&symbol).cloned().unwrap_or_default()
     }
 
@@ -542,10 +681,9 @@ impl<'s> Module<'s> {
         }
     }
 
-    /// What the function at `scope` returns, read by the statement being
-    /// walked.
+    /// What the function at `scope` returns, read by the unit being walked.
     fn returned_by(&mut self, scope: ScopeId) -> Option<Held> {
-        self.reads.entry(Key::Returns(scope)).or_insert(self.clock);
+        self.note_read(Key::Returns(scope));
         self.returns.get(&scope).cloned()
     }
 
@@ -637,6 +775,17 @@ impl<'s> Module<'s> {
 
     /// Whether `id` is a React namespace: a default or namespace import of
     /// one of React's modules, or an unbound `React`.
+    /// Whether `object` is React's `Children`, imported or read off React.
+    fn children(&self, object: &Expression<'_>) -> bool {
+        match unwrap_type_assertions(object) {
+            Expression::Identifier(id) => self.react_name(id) == Some("Children"),
+            Expression::StaticMemberExpression(member) => {
+                member.property.name == "Children" && matches!(&member.object, Expression::Identifier(id) if self.react_namespace(id))
+            }
+            _ => false,
+        }
+    }
+
     fn react_namespace(&self, id: &IdentifierReference<'_>) -> bool {
         match self.symbol(id) {
             Some(symbol) => self.react.namespaces.contains(&symbol),
@@ -661,19 +810,6 @@ impl<'s> Module<'s> {
             return declared.then(|| (Some(id.name.to_string()), scope));
         }
         scope.map(|scope| (None, Some(scope)))
-    }
-
-    /// Whether `expression` is a function the module declares and never
-    /// reassigns, so its `bind` is `Function.prototype.bind`.
-    fn declared_function(&self, expression: &Expression<'_>) -> bool {
-        match unwrap_type_assertions(expression) {
-            Expression::Identifier(id) => self.symbol(id).is_some_and(|symbol| {
-                !self.sources.contains_key(&symbol)
-                    && !self.scoping.symbol_is_mutated(symbol)
-                    && (self.functions.contains_key(&symbol) || self.scoping.symbol_flags(symbol).intersects(SymbolFlags::Function))
-            }),
-            _ => false,
-        }
     }
 
     fn finish(self) -> Records {
@@ -713,19 +849,13 @@ impl<'s> Module<'s> {
         if self.default.has_elements() {
             element_consts.insert("default".to_string(), element_const(&self.default));
         }
-        let classes = self
-            .scoping
-            .iter_bindings_in(self.scoping.root_scope_id())
-            .filter(|symbol| self.scoping.symbol_flags(*symbol).intersects(SymbolFlags::Class))
-            .map(|symbol| self.scoping.symbol_name(symbol).to_string())
-            .collect();
         Records {
             calls,
             tags,
             element_consts,
             held_arrays: self.arrays.held_names,
             misused_imports: self.arrays.misused_imports,
-            classes,
+            classes: self.class_names,
             patches_intrinsics: self.patches_intrinsics,
         }
     }
@@ -770,15 +900,26 @@ struct Declarations<'r> {
     /// Bindings some code stores into by a computed key or a hook-named
     /// key: they may hold hooks.
     hookable_bindings: FxHashSet<SymbolId>,
+    /// Bindings some code stores into by any other name: an array among
+    /// them may hold hooks.
+    named_stores: FxHashSet<SymbolId>,
+    /// Bindings declared to a literal, a function or a class, never
+    /// reassigned: none holds a built-in's prototype.
+    literal_bindings: FxHashSet<SymbolId>,
+    /// Bindings a built-in's method or hook name is written into
+    /// (`written_into`).
+    built_in_writes: FxHashSet<SymbolId>,
     /// See `FileFacts::patches_intrinsics`.
     patches_intrinsics: bool,
+    /// The bindings importing from React's modules, written or not.
+    react_imports: FxHashSet<SymbolId>,
     depth: usize,
 }
 
 // `Declarations` borrows the program for its ancestors; the lifetime of the
 // scoping reference stands in for both.
 impl<'r> Declarations<'r> {
-    fn new(scoping: &'r Scoping, react: &'r super::ReactImports) -> Self {
+    fn new(scoping: &'r Scoping, react: &'r super::ReactImports, react_imports: FxHashSet<SymbolId>) -> Self {
         Declarations {
             scoping,
             react,
@@ -797,7 +938,11 @@ impl<'r> Declarations<'r> {
             tag_references: FxHashMap::default(),
             hookable_objects: FxHashSet::default(),
             hookable_bindings: FxHashSet::default(),
+            named_stores: FxHashSet::default(),
+            literal_bindings: FxHashSet::default(),
+            built_in_writes: FxHashSet::default(),
             patches_intrinsics: false,
+            react_imports,
             depth: 0,
         }
     }
@@ -835,6 +980,60 @@ impl<'r> Declarations<'r> {
         }
     }
 
+    /// The member `name` (`None` when computed) of `object`, at `span`. A
+    /// prototype reached by name (`Array.prototype`) or through a value
+    /// (`[].__proto__`) is changed by any use but a member's read, and
+    /// `getPrototypeOf` let go as a value reaches prototypes. A write is
+    /// judged by `written_into`.
+    fn member(&mut self, span: Span, object: &Expression<'_>, name: Option<&str>) {
+        let prototype = match name {
+            Some("prototype") => self.intrinsic(object),
+            Some("__proto__") => true,
+            Some("getPrototypeOf" | "setPrototypeOf") => {
+                matches!(unwrap_type_assertions(object), Expression::Identifier(id) if matches!(id.name.as_str(), "Object" | "Reflect") && self.symbol(id).is_none())
+                    && !matches!(self.ancestors.last(), Some(AstKind::CallExpression(call)) if call.callee.span() == span)
+            }
+            _ => false,
+        };
+        if prototype && self.reshapes(span) {
+            self.patches_intrinsics = true;
+        }
+        if matches!(super::member_effect(span, self.ancestors.iter().rev()), Some(MemberEffect::Assigned | MemberEffect::Deleted)) {
+            self.written_into(object, name.is_some_and(built_in_name));
+        }
+    }
+
+    /// A write into `object`, of a built-in's method or hook name when
+    /// `built_in`. Into an object the module does not own (`owned`), it may
+    /// reach a built-in's prototype however the code got there. A built-in
+    /// name written into a binding may too, unless the binding is declared
+    /// to a literal (`Module::of` judges it).
+    fn written_into(&mut self, object: &Expression<'_>, built_in: bool) {
+        if !self.owned(object) {
+            self.patches_intrinsics = true;
+        } else if let (true, Expression::Identifier(id)) = (built_in, unwrap_type_assertions(object)) {
+            self.built_in_writes.extend(self.symbol(id));
+        }
+    }
+
+    /// Whether `object` is `this`, a binding the module declares (not an
+    /// import), or a literal: an object the module owns rather than one it
+    /// reached.
+    fn owned(&self, object: &Expression<'_>) -> bool {
+        match unwrap_type_assertions(object) {
+            Expression::ThisExpression(_)
+            | Expression::ObjectExpression(_)
+            | Expression::ArrayExpression(_)
+            | Expression::FunctionExpression(_)
+            | Expression::ArrowFunctionExpression(_)
+            | Expression::ClassExpression(_) => true,
+            Expression::Identifier(id) => {
+                self.symbol(id).is_some_and(|symbol| !self.scoping.symbol_flags(symbol).intersects(SymbolFlags::Import))
+            }
+            _ => false,
+        }
+    }
+
     /// Whether `expression` names a built-in whose prototype every value of
     /// its kind shares: `Array`, or `globalThis.Array`.
     fn intrinsic(&self, expression: &Expression<'_>) -> bool {
@@ -843,33 +1042,125 @@ impl<'r> Declarations<'r> {
             Expression::StaticMemberExpression(member) => {
                 INTRINSICS.contains(&member.property.name.as_str())
                     && matches!(&member.object, Expression::Identifier(id)
-                        if matches!(id.name.as_str(), "globalThis" | "window" | "self" | "global") && self.symbol(id).is_none())
+                        if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.symbol(id).is_none())
             }
             _ => false,
         }
     }
 
-    /// The class whose instance `this` is at the visit's position: the
-    /// nearest class, unless a non-arrow function that is not one of its
-    /// members comes first.
-    fn this_class(&self) -> Option<u32> {
-        let mut inside_member = false;
+    /// The class whose `this` is at the visit's position, and whether the
+    /// position is static, where `this` is the class itself: the nearest
+    /// class, unless a non-arrow function that is not one of its members
+    /// comes first.
+    fn this_class(&self) -> Option<(u32, bool)> {
+        let mut member: Option<bool> = None;
         for (index, kind) in self.ancestors.iter().enumerate().rev() {
             match kind {
-                AstKind::Function(_) => {
-                    let member = matches!(self.ancestors.get(index.wrapping_sub(1)), Some(AstKind::MethodDefinition(_)));
-                    if !member {
-                        return None;
-                    }
-                    inside_member = true;
-                }
-                AstKind::PropertyDefinition(_) | AstKind::StaticBlock(_) => inside_member = true,
-                AstKind::Class(class) if inside_member => return Some(class.span.start),
-                AstKind::Class(_) => return None,
+                AstKind::Function(_) => match self.ancestors.get(index.wrapping_sub(1)) {
+                    Some(AstKind::MethodDefinition(method)) => member = Some(method.r#static),
+                    _ => return None,
+                },
+                AstKind::PropertyDefinition(property) => member = member.or(Some(property.r#static)),
+                AstKind::StaticBlock(_) => member = Some(true),
+                AstKind::Class(class) => return member.map(|statics| (class.span.start, statics)),
                 _ => {}
             }
         }
         None
+    }
+
+    /// How the member chain from the reference at `span` (`a.b.c`) ends:
+    /// how many members it reads, the first one's name (`None` for a
+    /// computed one), whether it is called, and the position it ends in.
+    fn chain(&self, span: Span) -> (usize, Option<&'r str>, bool, Option<&AstKind<'r>>) {
+        let (mut members, mut first) = (0, None);
+        let mut up = self.ancestors.iter().rev();
+        let mut current = span;
+        loop {
+            let (at, parent) = super::peel_wrappers(current, &mut up);
+            let member = match parent {
+                Some(AstKind::StaticMemberExpression(member)) if member.object.span() == at => {
+                    if members == 0 {
+                        first = Some(member.property.name.as_str());
+                    }
+                    member.span
+                }
+                Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == at => {
+                    if members == 0 {
+                        first = member.static_property_name().map(|name| name.as_str());
+                    }
+                    member.span
+                }
+                Some(AstKind::CallExpression(call)) if call.callee.span() == at => return (members, first, true, parent),
+                Some(AstKind::NewExpression(call)) if call.callee.span() == at => return (members, first, true, parent),
+                parent => return (members, first, false, parent),
+            };
+            members += 1;
+            current = member;
+        }
+    }
+
+    /// Whether a trusted name, used itself as a value under `parent`, stays
+    /// where the walk can see it: tested, compared, `typeof`, a base class,
+    /// or handed to a built-in array method, a global function or React.
+    fn harmless_value(&self, parent: Option<&AstKind<'r>>, span: Span) -> bool {
+        match parent {
+            None => true,
+            Some(AstKind::UnaryExpression(unary)) => matches!(unary.operator, UnaryOperator::Typeof | UnaryOperator::LogicalNot),
+            Some(AstKind::BinaryExpression(binary)) => {
+                binary.operator.is_equality() || (binary.operator == BinaryOperator::Instanceof && binary.right.span() == span)
+            }
+            Some(AstKind::LogicalExpression(logical)) => {
+                logical.operator == oxc::syntax::operator::LogicalOperator::And && logical.left.span() == span
+            }
+            Some(AstKind::IfStatement(_) | AstKind::ConditionalExpression(_) | AstKind::WhileStatement(_)) => true,
+            Some(AstKind::Class(class)) => class.heritage.as_ref().is_some_and(|heritage| heritage.expression.span() == span),
+            Some(AstKind::JSXOpeningElement(_) | AstKind::JSXClosingElement(_) | AstKind::JSXMemberExpression(_)) => true,
+            Some(AstKind::CallExpression(call)) => match unwrap_type_assertions(&call.callee) {
+                Expression::StaticMemberExpression(member) => {
+                    ARRAY_READ_METHODS.contains(&member.property.name.as_str())
+                        || matches!(&member.object, Expression::Identifier(object) if self.symbol(object).is_some_and(|symbol| self.react_imports.contains(&symbol)))
+                }
+                Expression::Identifier(callee) => match self.symbol(callee) {
+                    None => true,
+                    Some(symbol) => self.react_imports.contains(&symbol),
+                },
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Whether the reference `id`, to a global (any name the module does
+    /// not bind) or a React import, could redirect what the allowlist
+    /// trusts: a trusted global, the global object or a React import let go
+    /// as a value, or a trusted global read off the global object
+    /// (`window.Math`) and let go. A write into anything reached from it is
+    /// `written_into`'s.
+    fn redirects(&self, id: &IdentifierReference<'_>) -> bool {
+        // A type is erased: it reaches nothing at run time.
+        let value = id.reference_id.get().is_some_and(|reference| self.scoping.get_reference(reference).is_value());
+        if !value {
+            return false;
+        }
+        let name = id.name.as_str();
+        let reached = match self.symbol(id) {
+            None => !matches!(name, "undefined" | "NaN" | "Infinity" | "arguments"),
+            Some(symbol) => self.react_imports.contains(&symbol),
+        };
+        if !reached {
+            return false;
+        }
+        // A write into anything reached from it is a write into an object
+        // the module does not own (`written_into`).
+        let (members, first, called, parent) = self.chain(id.span);
+        let let_go = match members {
+            _ if called => false,
+            0 => self.symbol(id).is_some() || trusted_global(name),
+            1 => GLOBAL_OBJECTS.contains(&name) && first.is_none_or(trusted_global),
+            _ => false,
+        };
+        let_go && !self.harmless_value(parent, id.span)
     }
 
 }
@@ -879,8 +1170,8 @@ struct LiteralShape {
     /// Data properties only, with no prototype it sets: a store of a
     /// property into it runs no code.
     plain: bool,
-    /// An accessor, a computed or spread property (which may be a
-    /// conversion's or an iterator's), or a property named for a
+    /// A getter, a computed or spread property (which may
+    /// be a conversion's or an iterator's), or a property named for a
     /// conversion, `then` or the prototype: see `Held::hookable`.
     hookable: bool,
 }
@@ -894,7 +1185,8 @@ impl LiteralShape {
                     let name = property.key.static_name().filter(|_| !property.computed);
                     let sets_prototype = !property.shorthand && name.as_deref() == Some("__proto__");
                     shape.plain &= property.kind == PropertyKind::Init && !sets_prototype;
-                    shape.hookable |= property.kind != PropertyKind::Init
+                    // A setter runs only on a store, which `plain` judges.
+                    shape.hookable |= property.kind == PropertyKind::Get
                         || property.computed
                         || name.is_some_and(|name| HOOK_KEYS.contains(&name.as_ref()));
                 }
@@ -905,11 +1197,33 @@ impl LiteralShape {
     }
 }
 
-/// The method `this.m.bind` binds, when `callee` is one.
-fn method_bind<'e>(callee: &'e Expression<'_>) -> Option<&'e str> {
-    let Expression::StaticMemberExpression(bind) = unwrap_type_assertions(callee) else { return None };
-    let Expression::StaticMemberExpression(method) = unwrap_type_assertions(&bind.object) else { return None };
-    (bind.property.name == "bind" && matches!(method.object, Expression::ThisExpression(_))).then(|| method.property.name.as_str())
+/// Whether `name` is a method of a built-in's prototype the allowlist
+/// trusts, or a hook a built-in runs: written into a prototype, it would
+/// redirect it for every value.
+fn built_in_name(name: &str) -> bool {
+    ARRAY_READ_METHODS.contains(&name)
+        || ARRAY_WRITE_METHODS.contains(&name)
+        || HOOK_KEYS.contains(&name)
+        || matches!(name, "constructor" | "call" | "apply" | "bind")
+}
+
+/// The call `expression` is, under type assertions.
+fn current_call<'e, 'a>(expression: Option<&'e Expression<'a>>) -> Option<&'e CallExpression<'a>> {
+    match expression.map(unwrap_type_assertions) {
+        Some(Expression::CallExpression(call)) => Some(call),
+        _ => None,
+    }
+}
+
+/// Whether `class` or one of its members has a decorator.
+fn decorated(class: &Class<'_>) -> bool {
+    !class.decorators.is_empty()
+        || class.body.body.iter().any(|element| match element {
+            oxc::ast::ast::ClassElement::MethodDefinition(method) => !method.decorators.is_empty(),
+            oxc::ast::ast::ClassElement::PropertyDefinition(property) => !property.decorators.is_empty(),
+            oxc::ast::ast::ClassElement::AccessorProperty(property) => !property.decorators.is_empty(),
+            _ => false,
+        })
 }
 
 /// The scope of the nearest non-arrow function among `ancestors`, whose
@@ -999,16 +1313,18 @@ impl<'a> Visit<'a> for Declarations<'a> {
     }
 
     fn visit_this_expression(&mut self, this: &oxc::ast::ast::ThisExpression) {
-        let Some(class) = self.this_class() else { return };
+        let Some((class, statics)) = self.this_class() else { return };
+        // `this` in a static block, field or method is the class itself,
+        // whose prototype its code can reach.
+        if statics {
+            if let Some(facts) = self.classes.get_mut(&class) {
+                facts.this_escapes = true;
+            }
+            return;
+        }
         // The ancestors end at the parent of `this`.
         let mut up = self.ancestors.iter().rev();
         let (current, parent) = super::peel_wrappers(this.span, &mut up);
-        // `this.m.bind(this)` binds the class's own method to the instance.
-        if let Some(AstKind::CallExpression(call)) = parent {
-            if call.arguments.len() == 1 && call.arguments[0].span() == current && method_bind(&call.callee).is_some() {
-                return;
-            }
-        }
         let (member, name) = match parent {
             Some(AstKind::StaticMemberExpression(member)) if member.object.span() == current => {
                 (member.span, Some(member.property.name.to_string()))
@@ -1018,23 +1334,12 @@ impl<'a> Visit<'a> for Declarations<'a> {
             }
             _ => (this.span, None),
         };
-        // `this.m = this.m.bind(this)` leaves `this.m` the class's own
-        // method, bound.
-        let rebound = self.ancestors.iter().rev().find_map(|kind| match kind {
-            AstKind::AssignmentExpression(assignment) => Some(*assignment),
-            _ => None,
-        });
-        let rebound = rebound.is_some_and(|assignment| {
-            assignment.left.span() == member
-                && matches!(unwrap_type_assertions(&assignment.right), Expression::CallExpression(call)
-                    if call.arguments.len() == 1
-                        && matches!(call.arguments[0].as_expression(), Some(Expression::ThisExpression(_)))
-                        && method_bind(&call.callee).is_some_and(|bound| Some(bound) == name.as_deref()))
-        });
         let Some(facts) = self.classes.get_mut(&class) else { return };
         match name {
+            // The class itself, whose prototype any code given it can change.
+            Some(name) if name == "constructor" => facts.this_escapes = true,
             Some(name) => {
-                if !rebound && matches!(super::member_effect(member, up), Some(MemberEffect::Assigned | MemberEffect::Deleted)) {
+                if matches!(super::member_effect(member, up), Some(MemberEffect::Assigned | MemberEffect::Deleted)) {
                     facts.written.insert(name);
                 }
             }
@@ -1052,26 +1357,33 @@ impl<'a> Visit<'a> for Declarations<'a> {
         oxc::ast_visit::walk::walk_jsx_closing_element(self, closing);
     }
 
-    /// A prototype reached by name (`Array.prototype`) or through a value
-    /// (`[].__proto__`) is changed by any use but a member's read.
     fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
-        let prototype = match member.property.name.as_str() {
-            "prototype" => self.intrinsic(&member.object),
-            "__proto__" => true,
-            _ => false,
-        };
-        if prototype && self.reshapes(member.span) {
-            self.patches_intrinsics = true;
-        }
+        self.member(member.span, &member.object, Some(member.property.name.as_str()));
         oxc::ast_visit::walk::walk_static_member_expression(self, member);
     }
 
+    fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
+        self.member(member.span, &member.object, member.static_property_name().map(|name| name.as_str()));
+        oxc::ast_visit::walk::walk_computed_member_expression(self, member);
+    }
+
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-        if let Expression::StaticMemberExpression(member) = unwrap_type_assertions(&call.callee) {
-            let reflects = member.property.name == "getPrototypeOf"
-                && matches!(&member.object, Expression::Identifier(id) if matches!(id.name.as_str(), "Object" | "Reflect") && self.symbol(id).is_none());
-            if reflects && self.reshapes(call.span) {
-                self.patches_intrinsics = true;
+        let callee = unwrap_type_assertions(&call.callee).as_member_expression();
+        if let Some((Expression::Identifier(object), Some(name))) = callee.map(|member| (member.object(), member.static_property_name())) {
+            if self.symbol(object).is_none() {
+                let reflects = matches!(object.name.as_str(), "Object" | "Reflect") && name == "getPrototypeOf";
+                if reflects && self.reshapes(call.span) {
+                    self.patches_intrinsics = true;
+                }
+                // A built-in that writes into its first argument.
+                let writer = match object.name.as_str() {
+                    "Object" => matches!(name, "assign" | "defineProperty" | "defineProperties" | "setPrototypeOf"),
+                    "Reflect" => matches!(name, "set" | "defineProperty" | "deleteProperty" | "setPrototypeOf"),
+                    _ => false,
+                };
+                if let Some(target) = call.arguments.first().and_then(|argument| argument.as_expression()).filter(|_| writer) {
+                    self.written_into(target, true);
+                }
             }
         }
         oxc::ast_visit::walk::walk_call_expression(self, call);
@@ -1086,17 +1398,26 @@ impl<'a> Visit<'a> for Declarations<'a> {
 
     fn visit_assignment_expression(&mut self, assignment: &oxc::ast::ast::AssignmentExpression<'a>) {
         // A store by a computed key may set any property, a hook or the
-        // prototype included; so may one by a hook's name.
+        // prototype included; so may one by a hook's name. Into an array,
+        // any named property may be one its built-ins run (`join`,
+        // `constructor`).
         if let Some(member) = assignment.left.as_member_expression() {
             if let Expression::Identifier(object) = unwrap_type_assertions(member.object()) {
-                let hooked = match member {
-                    oxc::ast::ast::MemberExpression::ComputedMemberExpression(computed) => {
-                        !matches!(computed.expression, Expression::NumericLiteral(_))
+                if let Some(symbol) = self.symbol(object) {
+                    match member {
+                        oxc::ast::ast::MemberExpression::ComputedMemberExpression(computed) => {
+                            if !matches!(computed.expression, Expression::NumericLiteral(_)) {
+                                self.hookable_bindings.insert(symbol);
+                            }
+                        }
+                        member => {
+                            if member.static_property_name().is_some_and(|name| HOOK_KEYS.contains(&name)) {
+                                self.hookable_bindings.insert(symbol);
+                            } else {
+                                self.named_stores.insert(symbol);
+                            }
+                        }
                     }
-                    member => member.static_property_name().is_some_and(|name| HOOK_KEYS.contains(&name)),
-                };
-                if let Some(symbol) = self.symbol(object).filter(|_| hooked) {
-                    self.hookable_bindings.insert(symbol);
                 }
             }
         }
@@ -1106,6 +1427,9 @@ impl<'a> Visit<'a> for Declarations<'a> {
     fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
         if id.name == "arguments" && self.symbol(id).is_none() {
             self.uses_arguments.extend(own_function(&self.ancestors));
+        }
+        if self.redirects(id) {
+            self.patches_intrinsics = true;
         }
     }
 
@@ -1140,6 +1464,11 @@ impl<'a> Visit<'a> for Declarations<'a> {
                         self.class_bindings.insert(symbol, class.span.start);
                     }
                     let constant = !self.scoping.symbol_is_mutated(symbol);
+                    let literal = matches!(init, Expression::ArrayExpression(_) | Expression::ObjectExpression(_) | Expression::ClassExpression(_))
+                        || function_scope(init).is_some();
+                    if constant && literal {
+                        self.literal_bindings.insert(symbol);
+                    }
                     match init {
                         Expression::ArrayExpression(_) if constant && self.depth == 0 => {
                             self.module_arrays.insert(symbol);
@@ -1188,9 +1517,11 @@ impl<'a> Visit<'a> for Declarations<'a> {
     }
 }
 
-/// The walk over one top-level statement.
+/// The walk over one unit.
 struct Walk<'m, 's, 'a> {
     module: &'m mut Module<'s>,
+    /// Where the walk found each function, for walking it again alone.
+    contexts: &'m mut FxHashMap<u32, Context<'a>>,
     /// The names the statement binds, which a forwarding record names.
     top: Rc<[String]>,
     ancestors: Vec<AstKind<'a>>,
@@ -1213,6 +1544,30 @@ enum Place {
     Handed,
 }
 
+impl<'m, 's, 'a> Walk<'m, 's, 'a> {
+    fn new(
+        module: &'m mut Module<'s>,
+        contexts: &'m mut FxHashMap<u32, Context<'a>>,
+        top: Rc<[String]>,
+        ancestors: Vec<AstKind<'a>>,
+        depth: usize,
+        class: Vec<u32>,
+    ) -> Self {
+        Walk { module, contexts, top, ancestors, depth, class }
+    }
+
+    /// Records where `function` is, the first time the walk finds it, and
+    /// makes it the unit the walk's reads belong to, returning the unit to
+    /// restore after it.
+    fn enter_unit(&mut self, start: u32, function: FunctionNode<'a>) -> Unit {
+        if !self.contexts.contains_key(&start) {
+            let context = Context { function, ancestors: self.ancestors.clone(), depth: self.depth, class: self.class.clone(), top: Rc::clone(&self.top) };
+            self.contexts.insert(start, context);
+        }
+        std::mem::replace(&mut self.module.unit, Unit::Function(start))
+    }
+}
+
 impl<'a> Walk<'_, '_, 'a> {
     fn sink(&mut self, at: u32, callee: Option<String>, value: &Held) {
         self.module.sink(at, callee, None, &self.top, value);
@@ -1225,19 +1580,19 @@ impl<'a> Walk<'_, '_, 'a> {
         }
     }
 
+    /// Whether `callee` is one of React's functions: `useRef`,
+    /// `React.useMemo`, `Children.map`, `React.Children.map`.
+    fn react_callee(&self, callee: &Expression<'_>) -> bool {
+        let root = match unwrap_type_assertions(callee) {
+            Expression::StaticMemberExpression(member) => member.get_first_object(),
+            callee => callee,
+        };
+        matches!(unwrap_type_assertions(root), Expression::Identifier(id) if self.module.react(id))
+    }
+
     /// The innermost class the visit is inside.
     fn class_facts(&self) -> Option<&ClassFacts> {
         self.class.last().and_then(|class| self.module.classes.get(class))
-    }
-
-    /// Whether `expression` is a function whose `bind` is
-    /// `Function.prototype.bind`: one the module declares and never
-    /// reassigns, or the class's own method through `this`.
-    fn bindable(&self, expression: &Expression<'_>) -> bool {
-        self.module.declared_function(expression)
-            || matches!(unwrap_type_assertions(expression), Expression::StaticMemberExpression(member)
-                if matches!(member.object, Expression::ThisExpression(_))
-                    && self.class_facts().and_then(|facts| facts.own_method(&member.property.name)).is_some())
     }
 
     /// Whether the visit is inside a class declared at the module's top.
@@ -1270,13 +1625,6 @@ impl<'a> Walk<'_, '_, 'a> {
     /// What the callee expression `callee` does with what a call's
     /// arguments carry.
     fn callee_of(&self, callee: &Expression<'_>) -> Callee {
-        const READ_GLOBALS: [&str; 1] = ["Boolean"];
-        const CONVERTING_GLOBALS: [&str; 9] = [
-            "String", "Number", "isNaN", "isFinite", "parseInt", "parseFloat", "encodeURIComponent", "decodeURIComponent",
-            "Symbol",
-        ];
-        const SCHEDULING_GLOBALS: [&str; 5] =
-            ["setTimeout", "setInterval", "queueMicrotask", "requestAnimationFrame", "requestIdleCallback"];
         let module = &self.module;
         match unwrap_type_assertions(callee) {
             // A base class's constructor gets the arguments.
@@ -1310,19 +1658,22 @@ impl<'a> Walk<'_, '_, 'a> {
             },
             Expression::StaticMemberExpression(member) => {
                 let name = member.property.name.as_str();
-                // `Function.prototype.bind` passes its arguments to the
-                // function it binds.
+                // A function's own `bind` may be replaced like any property.
                 if name == "bind" {
-                    return if self.bindable(&member.object) { self.callee_of(&member.object) } else { Callee::Unknown };
+                    return Callee::Unknown;
                 }
                 if module.built_array(&member.object) {
                     if !ARRAY_WRITE_METHODS.contains(&name) {
                         return Callee::PassThrough { calls: &[0] };
                     }
-                    return Callee::Stores(match unwrap_type_assertions(&member.object) {
-                        Expression::Identifier(id) => module.symbol(id),
-                        _ => None,
-                    });
+                    // A module array is anyone's to read, as a module binding is.
+                    return match unwrap_type_assertions(&member.object) {
+                        Expression::Identifier(id) => match module.symbol(id) {
+                            Some(symbol) if module.at_root(symbol) => Callee::Unknown,
+                            symbol => Callee::Stores(symbol),
+                        },
+                        _ => Callee::Stores(None),
+                    };
                 }
                 if let Some((callee, array)) = self.held_array_method(member) {
                     return Callee::HeldArray { callee, array };
@@ -1342,16 +1693,16 @@ impl<'a> Walk<'_, '_, 'a> {
                         }
                         _ => Callee::Unknown,
                     },
-                    Expression::Identifier(object) if module.react_name(object) == Some("Children") => Callee::PassThrough { calls: &[1] },
+                    _ if module.children(&member.object) => Callee::PassThrough { calls: &[1] },
                     Expression::Identifier(object) if module.react_namespace(object) => react_function(name),
                     Expression::Identifier(object) if module.react(object) => Callee::Unknown,
                     Expression::Identifier(object) => match module.symbol(object) {
                         None if object.name == "Math" || object.name == "console" => Callee::Converts { callbacks: false },
                         None if matches!((object.name.as_str(), name), ("JSON", "stringify")) => Callee::Converts { callbacks: true },
-                        None if matches!((object.name.as_str(), name), ("Object", "keys" | "is") | ("Array", "isArray") | ("Number", "isFinite" | "isNaN")) => {
+                        None if matches!((object.name.as_str(), name), ("Object", "is") | ("Array", "isArray") | ("Number", "isFinite" | "isNaN")) => {
                             Callee::Kept(InPlace::Builtin)
                         }
-                        None if matches!((object.name.as_str(), name), ("Object", "entries" | "values" | "fromEntries") | ("Array", "of")) => {
+                        None if matches!((object.name.as_str(), name), ("Object", "keys" | "entries" | "values" | "fromEntries") | ("Array", "of")) => {
                             Callee::PassThrough { calls: &[] }
                         }
                         None if (object.name.as_str(), name) == ("Array", "from") => Callee::PassThrough { calls: &[1] },
@@ -1359,17 +1710,24 @@ impl<'a> Walk<'_, '_, 'a> {
                         Some(symbol) if module.namespaces.contains(&symbol) => Callee::Named(format!("{}.{name}", object.name)),
                         Some(_) => Callee::Unknown,
                     },
-                    // `React.Children.map`
-                    Expression::StaticMemberExpression(inner) => match &inner.object {
-                        Expression::Identifier(object) if module.react_namespace(object) && inner.property.name == "Children" => {
-                            Callee::PassThrough { calls: &[1] }
-                        }
-                        _ => Callee::Unknown,
-                    },
                     _ => Callee::Unknown,
                 }
             }
             _ => Callee::Unknown,
+        }
+    }
+
+    /// The position of the argument a call may give a function as its
+    /// `this`, by the method's name alone: the `thisArg` of any method
+    /// named for an array's callback method, and any `from`'s or
+    /// `Children.map`'s third.
+    fn this_position(&self, call: &CallExpression<'a>) -> Option<usize> {
+        let Expression::StaticMemberExpression(member) = unwrap_type_assertions(&call.callee) else { return None };
+        match member.property.name.as_str() {
+            "from" => Some(2),
+            "map" | "forEach" if self.module.children(&member.object) => Some(2),
+            name if ARRAY_CALLBACK_METHODS.iter().any(|(method, _)| *method == name) && !name.starts_with("reduce") => Some(1),
+            _ => None,
         }
     }
 
@@ -1495,12 +1853,22 @@ impl<'a> Walk<'_, '_, 'a> {
         None
     }
 
-    /// A conversion of the value: its own runs, unless it may be hookable.
+    /// A conversion of the value: its own runs, unless it may be hookable
+    /// or be an input, whose caller may have given it any hook.
     fn converted(value: &Held) -> Place {
-        if value.hookable {
+        if value.runs_hooks() {
             Place::Handed
         } else {
             Place::Kept(InPlace::Primitive)
+        }
+    }
+
+    /// An iteration or an `await` of the value: as a conversion.
+    fn iterated(value: &Held) -> Place {
+        if value.runs_hooks() {
+            Place::Handed
+        } else {
+            Place::Carry
         }
     }
 
@@ -1541,6 +1909,9 @@ impl<'a> Walk<'_, '_, 'a> {
             AstKind::ObjectExpression(object) if self.module.hookable_objects.contains(&object.span.start) && !value.hookable => {
                 Place::Becomes(value.hooked())
             }
+            // An async function's result is awaited.
+            AstKind::Function(function) if function.r#async && value.runs_hooks() => Place::Handed,
+            AstKind::ArrowFunctionExpression(arrow) if arrow.r#async && value.runs_hooks() => Place::Handed,
             AstKind::ChainExpression(_)
             | AstKind::ArrayExpression(_)
             | AstKind::ObjectExpression(_)
@@ -1555,11 +1926,13 @@ impl<'a> Walk<'_, '_, 'a> {
             | AstKind::ArrowFunctionExpression(_)
             // Climb to the function it returns from.
             | AstKind::ReturnStatement(_) => Place::Carry,
-            // An iteration, a spread, an `await`: hooks of a hookable value
-            // run.
-            AstKind::AwaitExpression(_) | AstKind::SpreadElement(_) | AstKind::JSXSpreadAttribute(_) | AstKind::JSXSpreadChild(_) => {
+            // An object's spread reads its properties; an array's or an
+            // argument's spread iterates.
+            AstKind::SpreadElement(_) if matches!(self.ancestors.get(at.wrapping_sub(1)), Some(AstKind::ObjectExpression(_))) => {
                 Self::read_through(value)
             }
+            AstKind::JSXSpreadAttribute(_) => Self::read_through(value),
+            AstKind::AwaitExpression(_) | AstKind::SpreadElement(_) | AstKind::JSXSpreadChild(_) => Self::iterated(value),
             // A member read: a getter of a hookable value runs.
             AstKind::StaticMemberExpression(member) if member.object.span() == current => Self::read_through(value),
             AstKind::ComputedMemberExpression(member) if member.object.span() == current => Self::read_through(value),
@@ -1625,7 +1998,18 @@ impl<'a> Walk<'_, '_, 'a> {
                 // A `using` declaration disposes of what it holds, with it as
                 // `this`; an array pattern iterates it.
                 let using = matches!(self.ancestors.get(at.wrapping_sub(1)), Some(AstKind::VariableDeclaration(declaration)) if declaration.kind.is_using());
-                if using || (value.hookable && !matches!(declarator.id, BindingPattern::BindingIdentifier(_))) {
+                // A pattern reads the value's members; an array pattern
+                // iterates it, unless it is an array React's hook built.
+                let read = match &declarator.id {
+                    BindingPattern::BindingIdentifier(_) => Place::Carry,
+                    BindingPattern::ArrayPattern(_)
+                        if !matches!(current_call(declarator.init.as_ref()), Some(call) if self.react_callee(&call.callee)) =>
+                    {
+                        Self::iterated(value)
+                    }
+                    _ => Self::read_through(value),
+                };
+                if using || matches!(read, Place::Handed) {
                     return Place::Handed;
                 }
                 self.module.hold_pattern(&declarator.id, value);
@@ -1658,7 +2042,7 @@ impl<'a> Walk<'_, '_, 'a> {
                 self.store(&assignment.left, value)
             }
             AstKind::ForOfStatement(statement) if statement.right.span() == current => {
-                if value.hookable {
+                if value.runs_hooks() {
                     return Place::Handed;
                 }
                 self.store_for(&statement.left, value)
@@ -1770,9 +2154,14 @@ impl<'a> Walk<'_, '_, 'a> {
             JSXElementName::NamespacedName(_) => Some(false),
             _ => None,
         };
+        // React converts, iterates or reads what a host element gets, and a
+        // component's code what it does: the hooks of a hookable value run
+        // there, out of its own module's sight.
+        if value.hookable {
+            return Place::Handed;
+        }
         if let Some(custom) = host {
-            // React converts, iterates or reads what a host element gets.
-            if value.hookable || (custom && through.is_some()) {
+            if custom && through.is_some() {
                 return Place::Handed;
             }
             return Place::Carry;
@@ -1791,7 +2180,9 @@ impl<'a> Walk<'_, '_, 'a> {
         // The element's own climb reads what its receiver gets
         // (`visit_jsx_element`).
         if let Some(receiver) = self.module.receivers.get_mut(&element.span.start) {
-            receiver.reached.held.join(value);
+            if receiver.reached.held.join(value) {
+                self.module.grew(Key::Receiver(element.span.start));
+            }
             return Place::Kept(InPlace::Received);
         }
         let named = match &opening.name {
@@ -1800,8 +2191,9 @@ impl<'a> Walk<'_, '_, 'a> {
             _ => None,
         };
         let Some((tag, root)) = named else { return Place::Handed };
+        // React's own components (`Fragment`, `Suspense`) render what they get.
         if root.is_some_and(|root| self.module.react(root)) {
-            return Self::read_through(value);
+            return Place::Carry;
         }
         let origin = root.map_or(TagOrigin::Nested, |root| tag_origin(self.module.scoping, root));
         let named_attribute = |names: &[&str]| {
@@ -1816,6 +2208,7 @@ impl<'a> Walk<'_, '_, 'a> {
         let exposed = named_attribute(&["ref"]);
         let reached = Reached { top: self.top.to_vec(), held: value.clone() };
         self.module.receivers.insert(element.span.start, Receiver { tag, origin, polymorphic, exposed, reached });
+        self.module.grew(Key::Receiver(element.span.start));
         Place::Kept(InPlace::Received)
     }
 
@@ -1829,8 +2222,23 @@ impl<'a> Walk<'_, '_, 'a> {
         }
         let callee = self.callee_of(&call.callee);
         // A built-in reads, iterates or converts what it gets: a hookable
-        // value runs its hooks.
+        // value runs its hooks, and an input those its caller gave it, at
+        // any position the built-in does not call. React reads inputs as it
+        // does at an element, where a hookable value is handed outside.
         if value.hookable && matches!(callee, Callee::Kept(_) | Callee::PassThrough { .. } | Callee::Converts { .. } | Callee::State(_) | Callee::ClassState) {
+            return Place::Handed;
+        }
+        let position = call.arguments.iter().position(|argument| argument.span() == current);
+        let converts = match &callee {
+            Callee::PassThrough { calls } => position.is_some_and(|position| !calls.contains(&position)),
+            Callee::Converts { callbacks } => !(*callbacks && position == Some(1)),
+            _ => false,
+        };
+        if converts && value.inputs && !self.react_callee(&call.callee) {
+            return Place::Handed;
+        }
+        // What a call may give a function as its `this` is handed outside.
+        if self.this_position(call).is_some_and(|this| call.arguments.get(this).is_some_and(|argument| argument.span() == current)) {
             return Place::Handed;
         }
         match callee {
@@ -1890,6 +2298,11 @@ impl<'a> Walk<'_, '_, 'a> {
     fn called(&mut self, call: &CallExpression<'a>, value: &Held) -> Place {
         let callee = unwrap_type_assertions(&call.callee);
         let Expression::StaticMemberExpression(member) = callee else {
+            // A computed or private member's call gets the object as
+            // `this`, whatever the key.
+            if callee.is_member_expression() {
+                return Place::Handed;
+            }
             // A function value is called: what it gets reaches it as its
             // arguments, each judged where it is, and the call's result
             // carries what the value holds (`InPlace::Returned`).
@@ -1897,7 +2310,6 @@ impl<'a> Walk<'_, '_, 'a> {
         };
         let this = matches!(member.object, Expression::ThisExpression(_));
         match member.property.name.as_str() {
-            "bind" if self.bindable(&member.object) => return Place::Carry,
             "setState" | "forceUpdate" if this && self.class_facts().is_some_and(ClassFacts::react_state) => {
                 return Place::Kept(InPlace::KeptByReact);
             }
@@ -1908,6 +2320,10 @@ impl<'a> Walk<'_, '_, 'a> {
                 return Place::Kept(InPlace::Instance);
             }
             _ => {}
+        }
+        // An array's conversion converts each element.
+        if matches!(member.property.name.as_str(), "join" | "toString" | "toLocaleString") && value.runs_hooks() {
+            return Place::Handed;
         }
         // A method of an array built in place is a built-in's: its callbacks
         // receive what it holds.
@@ -1991,15 +2407,20 @@ impl<'a> Visit<'a> for Walk<'_, '_, 'a> {
     }
 
     fn visit_function(&mut self, function: &Function<'a>, flags: oxc::syntax::scope::ScopeFlags) {
+        let node = FunctionNode::Function(self.alloc(function), flags);
+        let outer = self.enter_unit(function.span.start, node);
         self.enter_function(function.scope_id.get());
         oxc::ast_visit::walk::walk_function(self, function, flags);
         self.depth -= 1;
+        self.module.unit = outer;
     }
 
     fn visit_arrow_function_expression(&mut self, arrow: &oxc::ast::ast::ArrowFunctionExpression<'a>) {
+        let outer = self.enter_unit(arrow.span.start, FunctionNode::Arrow(self.alloc(arrow)));
         self.enter_function(arrow.scope_id.get());
         oxc::ast_visit::walk::walk_arrow_function_expression(self, arrow);
         self.depth -= 1;
+        self.module.unit = outer;
     }
 
     fn visit_class(&mut self, class: &Class<'a>) {
@@ -2010,6 +2431,11 @@ impl<'a> Visit<'a> for Walk<'_, '_, 'a> {
             if let Some(Base::Other(name)) = self.class_facts().map(|facts| facts.base.clone()) {
                 self.sink(class.span.start, name, &Held::INPUTS);
             }
+        }
+        // A decorator receives the class, or a member, whose code runs with
+        // the props.
+        if decorated(class) {
+            self.sink(class.span.start, None, &Held::INPUTS);
         }
         oxc::ast_visit::walk::walk_class(self, class);
         self.class.pop();
@@ -2063,7 +2489,7 @@ impl<'a> Visit<'a> for Walk<'_, '_, 'a> {
             // `arguments`: what the calls of the function it is in pass it.
             None if id.name == "arguments" => {
                 own_function(&self.ancestors).and_then(|scope| {
-                    self.module.reads.entry(Key::Arguments(scope)).or_insert(self.module.clock);
+                    self.module.note_read(Key::Arguments(scope));
                     self.module.arguments.get(&scope).cloned()
                 })
             }
@@ -2094,6 +2520,7 @@ impl<'a> Visit<'a> for Walk<'_, '_, 'a> {
                 self.module.element_tags.insert(element.span.start, tags);
             }
             let mut value = Held { tags: self.module.element_tags[&element.span.start].clone(), ..Held::default() };
+            self.module.note_read(Key::Receiver(element.span.start));
             if let Some(receiver) = self.module.receivers.get(&element.span.start) {
                 value.join(&receiver.reached.held);
             }

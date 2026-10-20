@@ -13288,14 +13288,17 @@ mod tests {
             // A callback written in place receives what it is called with.
             ("const Render = ({ children }) => [children].map((c) => <Foreign>{c}</Foreign>);", "", "", true),
             ("const Render = ({ children }) => { setTimeout(decorate, 0, children); return null; };", "", "", true),
+            // Converting an input runs whatever hooks its caller gave it.
+            ("const Render = ({ children }) => { console.log(children); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children, items }) => <ul>{items.length > 0 ? children : null}</ul>;", "items={d}", "", true),
+            // Every `bind` is unknown code, a method's on its own instance too.
+            ("class Render extends Component { constructor(props) { super(props); this.onClick = this.onClick.bind(this); } onClick() {} render() { return <div onClick={this.onClick}>{this.props.children}</div>; } }", "", "", true),
             // Uses the allowlist keeps in place.
-            ("const Render = ({ children }) => { console.log(children); return <div>{children}</div>; };", "", "", false),
             ("const Render = ({ children, color }) => { const s = {}; s.color = color; return <div style={s}>{children}</div>; };", "", "", false),
-            ("class Render extends Component { constructor(props) { super(props); this.onClick = this.onClick.bind(this); } onClick() {} render() { return <div onClick={this.onClick}>{this.props.children}</div>; } }", "", "", false),
             ("class Render extends Component { render() { return <div onClick={() => this.setState({ open: !this.state.open })}>{this.props.children}</div>; } }", "", "", false),
             ("const Render = ({ children }) => { const run = () => wrap(children); const wrap = (c) => <div>{c}</div>; return run(); };", "", "", false),
-            ("const Render = ({ children, items }) => <ul>{items.length > 0 ? children : null}</ul>;", "items={d}", "", false),
-            ("import { useMemo } from 'react';\nconst Render = ({ children, a }) => { const v = useMemo(() => a * 2, [a]); return <div title={v}>{children}</div>; };", "a={d}", "", false),
+            ("const Render = ({ children, items }) => <ul>{items ? children : null}</ul>;", "items={d}", "", false),
+            ("import { useMemo } from 'react';\nconst Render = ({ children, a }) => { const v = useMemo(() => ({ a }), [a]); return <div title={v.a}>{children}</div>; };", "a={d}", "", false),
             // React calls a setter's argument with the state when it is a
             // function, and an input may be one: with one inputs flag the
             // walk cannot tell the state from the input itself.
@@ -13440,6 +13443,78 @@ mod tests {
             ("import { useMemo as useComputed } from 'react';\nconst Render = ({ children }) => { const kids = useComputed(() => children, [children]); return <div>{kids}</div>; };", "", "", false),
             // A binding declared to an object literal with hooks is hookable.
             ("const Render = ({ children }) => { const o = { [Symbol.toPrimitive]() { pad(this.slot); return ''; } }; o.slot = children; return `${o}`; };", "", "", true),
+            // A callback's `thisArg` and `bind`'s first argument are handed
+            // outside, whatever the function.
+            ("const Render = ({ children }) => { [1].forEach(function () { pad(this); }, children); return null; };", "", "", true),
+            ("const Render = ({ children }) => <div>{[1].map(function () { return <Foreign>{this}</Foreign>; }, children)}</div>;", "", "", true),
+            ("const Render = ({ children }) => { Array.from([1], function () { pad(this); }, children); return null; };", "", "", true),
+            ("function helper() { pad(this); }\nconst Render = ({ children }) => { helper.bind(children)(); return null; };", "", "", true),
+            ("const Render = ({ children }) => { const helper = function () { pad(this); }; helper.bind(children)(); return null; };", "", "", true),
+            ("import { Children } from 'react';\nconst Render = (props) => <div>{Children.map(props.items, function () { pad(this); return null; }, props)}</div>;", "items={d}", "", true),
+            ("const Render = ({ children }) => <ul>{[1].map(function (n) { return <li>{n}</li>; }, children)}</ul>;", "", "", true),
+            // A base other than React's may put its own members on the
+            // instance.
+            ("class Base extends Component { constructor(p) { super(p); this.helper = pad; } }\nclass Render extends Base { helper(c) { return null; } render() { this.helper(this.props.children); return null; } }", "", "", true),
+            ("class Base extends Component { helper = pad; }\nclass Render extends Base { helper(c) { return null; } render() { this.helper(this.props.children); return null; } }", "", "", true),
+            // A write into a module array is a store into a module binding.
+            ("const list = [];\nconst Render = ({ children }) => { list.push({ c: children }); return null; };\nexport const Other = () => { list.forEach((e) => pad(e.c)); return null; };", "", "", true),
+            ("const list = [];\nconst Render = ({ children }) => { list.push([children]); return null; };\nexport const Other = () => <div>{list.map((e) => <Foreign>{e[0]}</Foreign>)}</div>;", "", "", true),
+            ("const list = [];\nconst Render = ({ children }) => { list.unshift({ c: children }); return null; };\nexport const Other = () => { list.forEach((e) => pad(e.c)); return null; };", "", "", true),
+            ("const list = [];\nconst Render = ({ children }) => { list.splice(0, 0, { c: children }); return null; };\nexport const Other = () => { list.forEach((e) => pad(e.c)); return null; };", "", "", true),
+            // What reaches an element from inside a function, late, reaches
+            // what the element reaches.
+            ("const Frame = ds.styles({ display: 'grid' }).asElement('section');\nconst Render = ({ children }) => { const box = <Frame>{[1].map(function () { return get(); })}</Frame>; function get() { return children; } return decorate(box); };", "", "", true),
+            ("import { icon } from 'outside';\nconst Frame = ds.styles({ display: 'grid' }).asElement('section');\nconst Render = ({ children }) => { const box = <Frame>{icon}{[1].map(function () { return get(); })}</Frame>; function get() { return children; } return decorate(box); };", "", "", true),
+            // Any getter makes its object hookable.
+            ("const Render = () => { const o = { get icon() { return <Box p={4} />; } }; return <div>{o.icon}</div>; };", "", "", true),
+            // A static block, `this` in a static member and `this.constructor`
+            // reach the class, so its instance may change.
+            ("class Render extends Component { static { this.prototype.wrap = pad; } wrap(c) { return <div>{c}</div>; } render() { return this.wrap(this.props.children); } }", "", "", true),
+            ("class Render extends Component { static hook = (this.prototype.wrap = pad); wrap(c) { return <div>{c}</div>; } render() { return this.wrap(this.props.children); } }", "", "", true),
+            ("const Render = class extends Component { static { this.prototype.wrap = pad; } wrap(c) { return <div>{c}</div>; } render() { return this.wrap(this.props.children); } };", "", "", true),
+            ("class Render extends Component { wrap(c) { return <div>{c}</div>; } render() { this.constructor.prototype.wrap = pad; return this.wrap(this.props.children); } }", "", "", true),
+            ("class Render extends Component { static { const p = this.prototype; p.wrap = pad; } wrap(c) { return <div>{c}</div>; } render() { return this.wrap(this.props.children); } }", "", "", true),
+            ("class Render extends Component { wrap(c) { return <div>{c}</div>; } render() { const p = this.constructor.prototype; p.wrap = pad; return this.wrap(this.props.children); } }", "", "", true),
+            // A decorator gets the class or the member it decorates.
+            ("@decorate\nclass Render extends Component { wrap(c) { return <div>{c}</div>; } render() { return this.wrap(this.props.children); } }", "", "", true),
+            ("class Render extends Component { @decorate wrap(c) { return <div>{c}</div>; } render() { return this.wrap(this.props.children); } }", "", "", true),
+            ("@decorate\nclass Render extends Component { render() { return <div>{this.props.children}</div>; } }", "", "", true),
+            // Any named store into an array may set a method its built-ins run.
+            ("const Render = ({ children }) => { const arr = [<Box p={4} />]; arr.join = pad; return <div title={`${arr}`}>{children}</div>; };", "", "", true),
+            // A ref reads the instance of a class expression too.
+            ("const Render = class extends Component { render() { return <div>{this.props.children}</div>; } };", "ref={pad}", "", true),
+            ("const Render = class Inner extends Component { render() { return <div>{this.props.children}</div>; } };", "ref={pad}", "", true),
+            ("function Visit() { return pad(this); }\nconst Render = ({ children }) => { [0].forEach(Visit, children); return null; };", "", "", true),
+            ("import { Children } from 'react';\nconst Render = ({ children }) => { Children.forEach([0], function () { pad(this); }, children); return null; };", "", "", true),
+            ("import * as R from 'react';\nconst Render = ({ children }) => <div>{R.Children.map([0], function () { return pad(this); }, children)}</div>;", "", "", true),
+            // A write that can redirect a built-in, a global or React's code
+            // leaves no usage proven.
+            ("console.log = pad;\nconst Render = ({ children }) => { console.log(children); return null; };", "", "", true),
+            ("Math.max = pad;\nconst Render = ({ children }) => <div title={Math.max(children)} />;", "", "", true),
+            ("JSON.stringify = pad;\nconst Render = ({ children }) => <div title={JSON.stringify(children)} />;", "", "", true),
+            ("globalThis.String = pad;\nconst Render = ({ children }) => <div title={String(children)} />;", "", "", true),
+            ("Object.keys = pad;\nconst Render = ({ children }) => <div title={Object.keys(children)} />;", "", "", true),
+            ("window.setTimeout = pad;\nconst Render = ({ children }) => { setTimeout(() => {}, 0, children); return null; };", "", "", true),
+            ("Array.from = pad;\nconst Render = ({ children }) => <div>{Array.from([children])}</div>;", "", "", true),
+            ("Object.defineProperty(Array, Symbol.species, { value: pad });\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
+            ("Array['prototype'].map = pad;\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
+            ("const { prototype } = Array;\nprototype.map = pad;\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
+            ("[].constructor.prototype.map = pad;\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
+            ("const gp = Object.getPrototypeOf;\ngp([]).map = pad;\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
+            ("globalThis['Array'].prototype.map = pad;\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
+            ("Object.defineProperty(Object['prototype'], 'x', { set: pad });\nconst Render = ({ children }) => { const o = {}; o.x = children; return null; };", "", "", true),
+            ("React.createPortal = pad;\nconst Render = ({ children }) => React.createPortal(children, document.body);", "", "", true),
+            ("import ReactDOM from 'react-dom';\nconst R = ReactDOM;\nR.createPortal = pad;\nconst Render = ({ children }) => ReactDOM.createPortal(children, document.body);", "", "", true),
+            ("import ReactDOM from 'react-dom';\nObject.assign(ReactDOM, { createPortal: pad });\nconst Render = ({ children }) => ReactDOM.createPortal(children, document.body);", "", "", true),
+            ("import { createPortal } from 'react-dom';\nconst Render = ({ children }) => createPortal(children, document.body);", "", "import ReactDOM from 'react-dom';\nimport { pad } from 'outside';\nReactDOM.createPortal = pad;\n", true),
+            ("const Render = ({ children }) => <div>{children}</div>;", "", "import { options } from 'preact';\nimport { pad } from 'outside';\noptions.vnode = pad;\n", true),
+            // Any analysed write into a global counts, the harmless included:
+            // no measured app makes one.
+            ("const Render = ({ children }) => { document.title = 'x'; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => <div title={process.env.NODE_ENV} hidden={typeof window === 'undefined'}>{children}</div>;", "", "", false),
+            ("const Render = ({ children }: { children: React.ReactNode }): React.ReactElement => <div>{children}</div>;", "", "", false),
+            ("const M = window.Math;\nM.max = pad;\nconst Render = ({ children }) => <div title={Math.max(children)} />;", "", "", true),
+            ("const Render = ({ children }) => <div>{children}</div>;", "", "export * from 'react';\n", true),
             // Forwarding is decided per component: an input handed to
             // unknown code (a callback prop called with a prop, `clsx` with
             // a class name) marks every element the component gets.
@@ -13478,6 +13553,42 @@ mod tests {
             ("function useState() { return [0, pad]; }\nconst Render = ({ children }) => { const [, set] = useState(); set(children); return null; };", "", "", true),
             // `arguments` of a function the inputs reach late in the walk.
             ("const Render = ({ children }) => { function h() { pad(arguments[0]); } function g() { h(arguments[0]); } g(children); return null; };", "", "", true),
+            // A computed member's call gets the object as `this`.
+            ("const Render = ({ children }) => { const o = { children, run() { pad(this.children); } }; o['run'](); return null; };", "", "", true),
+            ("const Render = ({ children }) => { const o = { children, run() { pad(this.children); } }; o[`run`](); return null; };", "", "", true),
+            ("const Render = (props) => { props['deliver'](); return null; };", "deliver={d}", "", true),
+            ("const Render = (props) => { props['deliver']?.(); return null; };", "deliver={d}", "", true),
+            ("const Render = ({ children }) => { [children]['forEach'](pad); return null; };", "", "", true),
+            ("const Render = () => { [<Box p={4} />]['forEach'](pad); return null; };", "", "", true),
+            // A function's own `bind` may be replaced.
+            ("const Render = ({ children }) => { function f() {} f.bind = pad; f.bind(children); return null; };", "", "", true),
+            ("const Render = ({ children }) => { function f() {} Object.assign(f, { bind: pad }); f.bind(children); return null; };", "", "", true),
+            ("const Render = ({ children }) => { function f() {} Object.defineProperty(f, 'bind', { get() { return pad; } }); f.bind(children); return null; };", "", "", true),
+            ("class Render extends Component { pass(v) { return <div>{v}</div>; } constructor(p) { super(p); this.pass.bind = pad; this.pass = this.pass.bind(this); } render() { return this.pass(this.props.children); } }", "", "", true),
+            // A write into an object the module does not own may reach a
+            // built-in's prototype, however it was spelled.
+            ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nArray['prototype'].map = decorate;\n", true),
+            ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nconst A = Array;\nA.prototype.map = decorate;\n", true),
+            ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nReflect['getPrototypeOf']([]).map = decorate;\n", true),
+            ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\n[].constructor.prototype.map = decorate;\n", true),
+            ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nObject.defineProperty([].constructor.prototype, 'map', { value: decorate });\n", true),
+            ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nconst p = [].constructor.prototype;\np.map = decorate;\n", true),
+            ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nconst p = [].constructor.prototype;\np['map'] = decorate;\n", true),
+            ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "export const rows = [0];\n", false),
+            // Converting, iterating, awaiting or stringifying an input runs
+            // the hooks its caller gave it, the props object's included.
+            ("const Render = (props) => { String(props); return null; };", "toString={d}", "", true),
+            ("const Render = (props) => { JSON.stringify(props); return null; };", "toJSON={d}", "", true),
+            ("const Render = ({ bag }) => { String(bag); return null; };", "bag={{ child: <Box p={4} />, toString: d }}", "", true),
+            ("const Render = async (props) => { await props; return null; };", "then={d}", "", true),
+            ("const Render = ({ items }) => <div>{[...items]}</div>;", "items={{ child: <Box p={4} />, [Symbol.iterator]: d }}", "", true),
+            ("const Render = (props) => <div title={Object.keys(props).length} />;", "", "", true),
+            ("const Render = (props) => { const load = async () => props; load(); return null; };", "then={d}", "", true),
+            ("const Render = ({ items, children }) => { const [first] = items; return <div>{children}</div>; };", "items={d}", "", true),
+            ("const Render = ({ items, children }) => { for (const item of items) {} return <div>{children}</div>; };", "items={d}", "", true),
+            ("const Render = ({ children, a }) => <div title={[a].join()}>{children}</div>;", "a={d}", "", true),
+            // A hookable value given to a component runs its hooks there.
+            ("const Render = ({ bag }) => <div>{bag.x}</div>;", "bag={{ child: <Box p={4} />, get x() { return pad(this.child); } }}", "", true),
         ] {
             assert_eq!(keeps_p(component, props, other), keeps, "{component} {props}");
         }
