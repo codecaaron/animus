@@ -110,9 +110,12 @@ kinds are equal and every name in them resolves to the same declaration:
 the same packet file, or the same physical package directory seen in the
 same module mode (an ESM and a CommonJS view never match). Printed text and
 assignability are never the test. A subtree the matcher cannot resolve
-stays as emitted, and so does every file whose aliases would bring an
-augmentation into a public entry that does not already load it (each such
-file is listed as a warning). On the benchmark's 1,000-component app the
+stays as emitted, and so are, each with a warning: a file whose aliases
+would bring an augmentation (a `declare module`/`declare global` block, a
+script declaration file or a `/// <reference lib>`) into a public entry
+that does not already load it; a file with an import that carries
+attributes or a `resolution-mode`; and an occurrence that names a
+declaration of its own file. On the benchmark's 1,000-component app the
 declarations shrink from 94.6 MB to 2.1 MB.
 
 One run owns `--out` at a time, through a `.<out>.lock` file beside it. The
@@ -127,7 +130,9 @@ was and the command exits non-zero. The checks:
 2. The probe files in `--probes` are checked twice, against the compiler's
    declarations and against the packet. Each run sees a copy of the package
    whose `--out` is that route's declarations, and imports the package by
-   name, so tsc resolves it through the package's real `exports`. Both
+   name, so tsc resolves it through the package's real `exports`. A probe
+   may import other TypeScript files in `--probes`; any other relative
+   import is refused. Both
    must report the same diagnostics at the same sites, and neither may
    load a package file outside its route.
 
