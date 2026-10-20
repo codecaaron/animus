@@ -7187,7 +7187,11 @@ fn opaque_delivery(
             !held_array_method(file, ff, call)
                 && declaration(file, ff, callee).is_none_or(|(declaring, binding, _)| {
                     forwarding.get(&(declaring.clone(), binding.clone())).is_some_and(Inputs::any)
-                        || !files.get(&declaring).is_some_and(|declared| declared.ordinary_components.contains(&binding))
+                        || !files.get(&declaring).is_some_and(|declared| {
+                            // A call's props may set what a cloner's clone
+                            // gives its child.
+                            declared.ordinary_components.contains(&binding) && !declared.child_cloners.contains_key(&binding)
+                        })
                 })
         })
     };
@@ -7277,6 +7281,18 @@ fn opaque_delivery(
             declared.into_iter().chain(member).collect()
         })
     };
+    // The components whose `defaultProps` some module references: React
+    // gives their renders props no site writes.
+    let defaulted: FxHashSet<(String, String)> = files
+        .iter()
+        .flat_map(|(path, ff)| {
+            ff.usage_for_analysis().iter().filter_map(move |fact| match fact {
+                UsageFact::DefaultProps { tag: TagFact::Ident(tag) | TagFact::Member(tag), .. } => Some(ordinary_named(path, ff, tag).iter().cloned().collect::<Vec<_>>()),
+                _ => None,
+            })
+        })
+        .flatten()
+        .collect();
     let mut proven: Wrappers = FxHashSet::default();
     for (path, ff) in files {
         let wrappers = ff.opaque_tags.iter().flat_map(|tag| &tag.site.spreads).filter_map(|spread| match spread {
@@ -7543,11 +7559,23 @@ fn opaque_delivery(
                     && !tag.exposed
                     && matches!(element_at(file, tag.at), Some(UsageFact::Element { attrs, spread: None, .. })
                         if attrs.iter().all(|attr| matches!(attr.name.as_str(), "asChild" | "children" | "key")))
-                    && files.get(&key.0).is_some_and(|declared| declared.child_cloners.contains(&key.1))
+                    && files.get(&key.0).is_some_and(|declared| declared.child_cloners.contains_key(&key.1))
+                    && !defaulted.contains(key)
                     && clone_judged(file, ff, tag.at)
             };
+            // A cloner's clone runs at the site unless only its caller's
+            // `asChild` runs it and the site writes none, nor a spread or
+            // `defaultProps` that may set one.
+            let clone_runs = |key: &(String, String)| {
+                files.get(&key.0).and_then(|declared| declared.child_cloners.get(&key.1)).is_some_and(|gated| {
+                    !gated || tag.site.as_child.is_some() || !tag.site.spreads.is_empty() || defaulted.contains(key)
+                })
+            };
             let ordinary_opens = |key: &(String, String)| {
-                if (tag.polymorphic != Polymorphic::No && !cloning.contains(key) && !clones_child(key)) || (tag.exposed && class(&key.0, &key.1)) {
+                if (clone_runs(key) && !clones_child(key))
+                    || (tag.polymorphic != Polymorphic::No && !cloning.contains(key) && !clones_child(key))
+                    || (tag.exposed && class(&key.0, &key.1))
+                {
                     Inputs::Every
                 } else {
                     forwarding.get(key).cloned().unwrap_or_default()
@@ -14696,6 +14724,19 @@ const Render = ({ asChild, ...props }) => renderAsChild(props.children, { ...ext
             ("import { createElement } from 'react';\nconst Render = ({ as, ...props }) => createElement(as ?? Foreign, props);", "", "", true),
             ("import { createElement } from 'react';\nconst Render = ({ as: Tag = 'div', ...props }) => <Tag {...props} />;
 export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);", "", "", true),
+            // A value that may be the props object or one of its members
+            // holds every input, and its members are no props.
+            ("const Render = (props) => { const cfg = props.config || props; return <div><Foreign>{cfg.header}</Foreign>{props.children}</div>; };", "config={{ header: <Box p={4} /> }}", "", true),
+            ("const Render = (props) => { const options = props.options ?? props; return <div><Foreign>{options.render}</Foreign>{props.children}</div>; };", "options={{ render: <Box p={4} /> }}", "", true),
+            ("import { useMemo } from 'react';\nconst Render = (props) => { const o = useMemo(() => props.slots ?? props, [props]); return <div><Foreign>{o.icon}</Foreign>{props.children}</div>; };", "slots={{ icon: <Box p={4} /> }}", "", true),
+            ("const Render = ({ children, ...rest }) => { const t = rest.wrap ? rest : children; return <Foreign>{t.props}</Foreign>; };", "", "", true),
+            ("const Render = (props) => { const t = props.wrap ? props : props.children; return <Foreign>{t.props}</Foreign>; };", "", "", true),
+            ("const Render = (props) => { let node = props; node = node.children; return <Foreign>{node.props}</Foreign>; };", "", "", true),
+            ("const Render = ({ slot, ...props }) => { const el = props[slot]; return <Foreign>{el.props.children}</Foreign>; };", "slot=\"icon\" icon={<section><Box p={4} /></section>}", "", true),
+            // A member called through parentheses or a type assertion gets
+            // the props object as `this`.
+            ("const Render = (props) => { (props.render)(); return <div>{props.children}</div>; };", "render={pad}", "", true),
+            ("const Render = (props) => { (props.render as any)(); return <div>{props.children}</div>; };", "render={pad}", "", true),
             // Forwarding is decided per input: an input handed to unknown
             // code (a callback prop called with a prop, `clsx` with a class
             // name) marks the elements that prop carries, not the children
@@ -14949,6 +14990,24 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             ("const Render = ({ asChild, children, p = 4, ...props }) => renderAsChild(children, { ...props, p });", "asChild", true),
             ("const Render = ({ children, ...props }) => renderAsChild(children, props);", "asChild", true),
             ("const Render = (props) => renderAsChild(props.children, props);", "asChild", true),
+            // A clone that runs at a site writing more than `asChild` and the
+            // child sets what else it writes on the child, a `ref` among
+            // them; one with the cloner's own values, or of no child of its
+            // caller's, sets props no site writes.
+            ("const Render = ({ children, ...rest }) => renderAsChild(children, rest);", "p={4}", true),
+            ("const Render = ({ children, ...rest }) => renderAsChild(children, rest);", "ref={d}", true),
+            ("const Render = ({ children }) => renderAsChild(children, { p: 4 });", "", true),
+            ("const Render = () => renderAsChild(<Box m={2} />, { p: 4 });", "", true),
+            ("const Render = ({ children, ...rest }) => renderAsChild(<Box m={2} />, rest);", "p={4}", true),
+            // A clone only where the site writes `asChild`: elsewhere the
+            // child renders in place.
+            ("const Render = ({ asChild, children, ...rest }) => (asChild ? renderAsChild(children, rest) : <button {...rest}>{children}</button>);", "p={4}", false),
+            // A rest something writes into, or a component's `defaultProps`,
+            // holds the cloner's own props.
+            ("const Render = ({ asChild, children, ...rest }) => { rest.p = 4; return asChild ? renderAsChild(children, rest) : <button {...rest}>{children}</button>; };", "asChild", true),
+            ("const Render = ({ asChild, children, ...rest }) => { Object.assign(rest, { p: 4 }); return asChild ? renderAsChild(children, rest) : <button {...rest}>{children}</button>; };", "asChild", true),
+            ("const Render = ({ asChild, children, ...rest }) => (asChild ? renderAsChild(children, rest) : <button {...rest}>{children}</button>);\nRender.defaultProps = { p: 4 };", "asChild", true),
+            ("const Render = ({ asChild, children, ...rest }) => (asChild ? renderAsChild(children, rest) : <button {...rest}>{children}</button>);\nexport const Use = () => Render({ asChild: true, children: <Box m={2} />, p: 4 });", "", true),
         ] {
             assert_eq!(keeps_unwritten_p(component, props), keeps, "{component} {props}");
         }

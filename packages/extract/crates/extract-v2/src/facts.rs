@@ -708,11 +708,13 @@ pub struct FileFacts {
     #[serde(skip)]
     pub(crate) rewrites_object: bool,
     /// The top-level components that clone their own `children` input in
-    /// place (`renderAsChild(children, …)`, `cloneElement(children, …)`)
-    /// with nothing but what their callers wrote, never `asChild`: an
-    /// `asChild` site's child renders as that site writes it.
+    /// place with `renderAsChild(children, …)`, whose config no usage lists,
+    /// with nothing but what their callers wrote, never `asChild`, each
+    /// with whether only its caller's `asChild` runs the clone: a site
+    /// whose clone runs renders its child as it writes it only where it
+    /// writes nothing else.
     #[serde(skip)]
-    pub(crate) child_cloners: BTreeSet<String>,
+    pub(crate) child_cloners: BTreeMap<String, bool>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -1439,7 +1441,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         outside_let_goes: Vec::new(),
         keyed_stores: Vec::new(),
         rewrites_object: false,
-        child_cloners: BTreeSet::new(),
+        child_cloners: BTreeMap::new(),
         opaque_tags: Vec::new(),
         transforms: Vec::new(),
         captured_transform_bindings: BTreeSet::new(),

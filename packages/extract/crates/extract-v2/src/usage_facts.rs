@@ -941,7 +941,7 @@ pub(crate) struct EnrichedUsage {
     /// See `FileFacts::rewrites_object`.
     pub rewrites_object: bool,
     /// See `FileFacts::child_cloners`.
-    pub child_cloners: BTreeSet<String>,
+    pub child_cloners: BTreeMap<String, bool>,
     /// See `FileFacts::builder_import_references`.
     pub builder_import_references: Vec<BuilderImportReferences>,
     /// See `FileFacts::first_that_works_uses`.
