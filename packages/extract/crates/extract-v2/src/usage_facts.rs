@@ -1325,7 +1325,7 @@ pub(crate) fn collect_enriched_usage(
     // React wrappers and `const` aliases a write or hand-on may change,
     // whatever their names' case, and the callbacks a wrapper's position
     // is followed for.
-    let (admissible, admissible_wrappers, admissible_aliases) = origins
+    let OrdinaryComponents { names: admissible, react_wrappers: admissible_wrappers, import_aliases: admissible_aliases } = origins
         .zip(react_imports.as_ref())
         .map(|(scoping, react)| ordinary_components(program, scoping, react, &BTreeSet::new(), direct_eval))
         .unwrap_or_default();
@@ -1375,7 +1375,7 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => (BTreeSet::new(), BTreeSet::new()),
     };
-    let (ordinary_components, react_wrappers, import_aliases) = origins
+    let OrdinaryComponents { names: ordinary_components, react_wrappers, import_aliases } = origins
         .zip(react_imports.as_ref())
         .map(|(scoping, react)| ordinary_components(program, scoping, react, &escapes, direct_eval))
         .unwrap_or_default();
@@ -7147,13 +7147,24 @@ fn context_consts(program: &Program<'_>, scoping: &Scoping, react: &ReactImports
 /// among them maps to the name of the callback it renders, if it is named.
 /// Such an alias of an import is no component of the module: it maps to
 /// the import (`FileFacts::import_aliases`).
+#[derive(Default)]
+struct OrdinaryComponents {
+    /// See `FileFacts::ordinary_components`.
+    names: BTreeSet<String>,
+    /// See `FileFacts::react_wrappers`.
+    react_wrappers: BTreeMap<String, Option<String>>,
+    /// See `FileFacts::import_aliases`.
+    import_aliases: BTreeMap<String, String>,
+}
+
+/// See `OrdinaryComponents`.
 fn ordinary_components(
     program: &Program<'_>,
     scoping: &Scoping,
     react: &ReactImports,
     escapes: &BTreeSet<String>,
     direct_eval: bool,
-) -> (BTreeSet<String>, BTreeMap<String, Option<String>>, BTreeMap<String, String>) {
+) -> OrdinaryComponents {
     use oxc::ast::ast::{BindingIdentifier, Declaration, ExportDefaultDeclarationKind};
     // Direct eval can write any binding by name.
     if direct_eval {
@@ -7276,7 +7287,7 @@ fn ordinary_components(
         names.insert(id.name.to_string());
         renders.insert(id.name.to_string(), callback.map(str::to_string));
     }
-    (names, renders, aliases)
+    OrdinaryComponents { names, react_wrappers: renders, import_aliases: aliases }
 }
 
 /// React's `createElement` and `cloneElement` as a file can call them:
