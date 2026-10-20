@@ -1883,13 +1883,18 @@ impl<'r> Declarations<'r> {
             return false;
         }
         // A write into anything reached from it is a write into an object
-        // the module does not own (`written_into`).
+        // the module does not own (`written_into`). An object React keeps
+        // under a member (`Children`, its internals' hooks dispatcher) is
+        // let go through that member, where a binding may then be written
+        // into unseen: only React's functions and classes are not objects
+        // whose members redirect React.
         let (members, first, called, parent) = self.chain(id.span);
+        let react = self.symbol(id).is_some();
         let let_go = match members {
             _ if called => false,
-            0 => self.symbol(id).is_some() || trusted_global(name),
-            1 => GLOBAL_OBJECTS.contains(&name) && first.is_none_or(trusted_global),
-            _ => false,
+            0 => react || trusted_global(name),
+            1 if !react => GLOBAL_OBJECTS.contains(&name) && first.is_none_or(trusted_global),
+            _ => react && first.is_none_or(|first| !react_value(first)),
         };
         let_go && !self.harmless_value(parent, id.span)
     }
@@ -1984,6 +1989,12 @@ fn trusted_name(name: &str) -> bool {
         || writer("Object", name)
         || writer("Reflect", name)
         || matches!(name, "prototype" | "getPrototypeOf" | "Children" | "setState" | "forceUpdate")
+}
+
+/// Whether a React module's export `name` holds nothing whose members
+/// redirect React: one of its functions, a component class, or `version`.
+fn react_value(name: &str) -> bool {
+    !matches!(react_function(name), Callee::Unknown) || matches!(name, "Component" | "PureComponent" | "version")
 }
 
 /// The call `expression` is, under type assertions.

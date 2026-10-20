@@ -14680,6 +14680,13 @@ const Render = ({ children }) => { document.body.onclick = t; return <div>{child
             ("const Render = ({ children }) => { document.body.model = { active: false, type: null, count: 0, map: [pad], then: undefined }; return <div>{children}</div>; };", "", "", false),
             ("const Render = ({ children }) => { document.body.model = { count: pad }; return <div>{children}</div>; };", "", "", true),
             ("const Render = ({ children }) => { document.body.model = { map: { call: pad } }; return <div>{children}</div>; };", "", "", true),
+            // React's own objects let go through a member, its internals and
+            // `Children`, may be written into wherever they go; its
+            // functions, classes and `version` hold nothing that redirects it.
+            ("import * as R from 'react';\nconst d = R.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;\nd.H = { useState: pad };\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("import * as R from 'react';\nconst C = R.Children;\nC.only = pad;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("import * as R from 'react';\nimport { setup } from './other';\nsetup(R.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE);\nconst Render = ({ children }) => <div>{children}</div>;", "", "export const setup = (d) => { d.H = {}; };\n", true),
+            ("import * as R from 'react';\nconst use = R.useState;\nclass Frame extends R.Component {}\nconst Render = ({ children }) => <div title={R.version}>{children}</div>;", "", "", false),
             // A member read may be any object, React's own dispatcher among
             // them (`ReactCurrentDispatcher.current = { useState }`).
             ("const Render = ({ children }) => { const r = useRef(null); r.current.typing.current = { useState: r ? pad : 0 }; return <div>{children}</div>; };", "", "", true),
