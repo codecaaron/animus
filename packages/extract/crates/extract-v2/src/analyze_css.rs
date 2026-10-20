@@ -13615,6 +13615,13 @@ mod tests {
             ("new Function('return 1');\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const F = globalThis.Function;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("[].constructor.constructor('return 1')();\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            // `Math` and `console` are trusted only under their own member
+            // names, and a write of one into a binding may redirect them.
+            ("import * as lib from 'outside';\nconst m = lib.mathOf();\nm.wrap = pad;\nconst Render = () => <div title={Math.wrap(<Box p={4} />)} />;", "", "", true),
+            ("import * as lib from 'outside';\nconst m = lib.mathOf();\nm.max = pad;\nconst Render = () => <div title={Math.max(<Box p={4} />)} />;", "", "", true),
+            ("import * as lib from 'outside';\nconst c = lib.consoleOf();\nc.show = pad;\nconst Render = () => { console.show(<Box p={4} />); return null; };", "", "", true),
+            ("import * as lib from 'outside';\nconst o = lib.objectOf();\no.is = pad;\nconst Render = () => <div title={Object.is(<Box p={4} />, 1)} />;", "", "", true),
+            ("const Render = () => <div title={Math.max(<Box p={4} />)} />;", "", "", false),
             // A setter runs on a store with its object as `this`.
             ("const Render = ({ children }) => { const o = { children, set x(v) { pad(this.children); } }; o.x = 1; return null; };", "", "", true),
             ("const Render = ({ children }) => { const o = { children, set x(v) { pad(this.children); } }; o.x ??= 1; return null; };", "", "", true),

@@ -191,7 +191,7 @@ enum Callee {
     /// Keeps it in place.
     Kept(InPlace),
     /// A built-in that converts what it gets to a primitive (`String`,
-    /// `parseInt`, `Math.*`, `console.*`, `JSON.stringify`): a hookable
+    /// `parseInt`, `Math`'s and `console`'s methods, `JSON.stringify`): a hookable
     /// value or an input hands its hooks the value. With `callbacks`, a
     /// callback (`JSON.stringify`'s replacer) receives it.
     Converts { callbacks: bool },
@@ -271,6 +271,25 @@ const CONVERTING_GLOBALS: [&str; 9] = [
 
 /// The globals that schedule the callbacks they get.
 const SCHEDULING_GLOBALS: [&str; 5] = ["setTimeout", "setInterval", "queueMicrotask", "requestAnimationFrame", "requestIdleCallback"];
+
+/// The methods of `Math` the allowlist trusts: any other member is unknown
+/// code.
+const MATH_METHODS: [&str; 37] = [
+    "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "ceil", "clz32", "cos", "cosh", "exp", "expm1",
+    "f16round", "floor", "fround", "hypot", "imul", "log", "log10", "log1p", "log2", "max", "min", "pow", "random", "round",
+    "sign", "sin", "sinh", "sqrt", "sumPrecise", "tan", "tanh", "trunc",
+];
+
+/// The methods of `console` the allowlist trusts: any other member is
+/// unknown code.
+const CONSOLE_METHODS: [&str; 21] = [
+    "assert", "clear", "count", "countReset", "debug", "dir", "dirxml", "error", "group", "groupCollapsed", "groupEnd", "info",
+    "log", "table", "time", "timeEnd", "timeLog", "timeStamp", "trace", "warn", "profile",
+];
+
+/// The statics the allowlist trusts on `Object`, `Array`, `Number` and
+/// `JSON` beyond the array methods' names.
+const TRUSTED_STATICS: [&str; 8] = ["is", "fromEntries", "isArray", "of", "from", "isFinite", "isNaN", "stringify"];
 
 /// The globals the allowlist trusts by name, beside `INTRINSICS` and the
 /// global functions above: read off the global object (`window.Math`) and
@@ -1247,13 +1266,17 @@ fn array_calls(name: &str) -> &'static [usize] {
     }
 }
 
-/// Whether `name` is a method of a built-in's prototype the allowlist
-/// trusts, or a hook a built-in runs: written into a prototype, it would
-/// redirect it for every value.
+/// Whether `name` is a method the allowlist trusts on a built-in's
+/// prototype or namespace (`Math`, `console`, a static), or a hook a
+/// built-in runs: written into the object, it would redirect it for every
+/// use.
 fn built_in_name(name: &str) -> bool {
     ARRAY_READ_METHODS.contains(&name)
         || ARRAY_WRITE_METHODS.contains(&name)
         || HOOK_KEYS.contains(&name)
+        || MATH_METHODS.contains(&name)
+        || CONSOLE_METHODS.contains(&name)
+        || TRUSTED_STATICS.contains(&name)
         || matches!(name, "constructor" | "call" | "apply" | "bind")
 }
 
@@ -1797,7 +1820,9 @@ impl<'a> Walk<'_, '_, 'a> {
                     Expression::Identifier(object) if module.react_namespace(object) => react_function(name),
                     Expression::Identifier(object) if module.react(object) => Callee::Unknown,
                     Expression::Identifier(object) => match module.symbol(object) {
-                        None if object.name == "Math" || object.name == "console" => Callee::Converts { callbacks: false },
+                        None if (object.name == "Math" && MATH_METHODS.contains(&name)) || (object.name == "console" && CONSOLE_METHODS.contains(&name)) => {
+                            Callee::Converts { callbacks: false }
+                        }
                         None if matches!((object.name.as_str(), name), ("JSON", "stringify")) => Callee::Converts { callbacks: true },
                         None if matches!((object.name.as_str(), name), ("Object", "is") | ("Array", "isArray") | ("Number", "isFinite" | "isNaN")) => {
                             Callee::Kept(InPlace::Builtin)
