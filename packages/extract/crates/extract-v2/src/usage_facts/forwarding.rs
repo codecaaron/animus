@@ -2298,9 +2298,15 @@ impl<'a> Walk<'_, '_, 'a> {
             (Some(AstKind::JSXOpeningElement(_)), Some(kind)) => Some(*kind),
             _ => None,
         };
+        // A custom element (a name with `-`, or a host element given `is`)
+        // takes its props as properties, handing them to its own code.
+        let is = opening.attributes.iter().any(|attribute| {
+            matches!(attribute, oxc::ast::ast::JSXAttributeItem::Attribute(attribute)
+                if matches!(&attribute.name, oxc::ast::ast::JSXAttributeName::Identifier(name) if name.name == "is"))
+        });
         let host = match &opening.name {
-            JSXElementName::Identifier(id) => Some(id.name.contains('-')),
-            JSXElementName::NamespacedName(_) => Some(false),
+            JSXElementName::Identifier(id) => Some(id.name.contains('-') || is),
+            JSXElementName::NamespacedName(_) => Some(is),
             _ => None,
         };
         // React converts, iterates or reads what a host element gets, and a
@@ -2353,7 +2359,8 @@ impl<'a> Walk<'_, '_, 'a> {
                 }
             })
         };
-        // An `as` of a static string renders that host element in place.
+        // An `as` of a static string renders that host element in place,
+        // unless it names a custom element; `is` makes any element one.
         let polymorphic = opening
             .attributes
             .iter()
@@ -2362,11 +2369,13 @@ impl<'a> Walk<'_, '_, 'a> {
                 oxc::ast::ast::JSXAttributeItem::Attribute(attribute) => match &attribute.name {
                     oxc::ast::ast::JSXAttributeName::Identifier(name) if name.name == "as" => {
                         match crate::jsx_scan::eval_jsx_attribute_value(&attribute.value) {
-                            crate::jsx_scan::PropValueResult::Static(serde_json::Value::String(_)) => Polymorphic::Host,
+                            crate::jsx_scan::PropValueResult::Static(serde_json::Value::String(tag)) if !tag.contains('-') => {
+                                Polymorphic::Host
+                            }
                             _ => Polymorphic::Open,
                         }
                     }
-                    oxc::ast::ast::JSXAttributeName::Identifier(name) if name.name == "asChild" => Polymorphic::Open,
+                    oxc::ast::ast::JSXAttributeName::Identifier(name) if name.name == "asChild" || name.name == "is" => Polymorphic::Open,
                     _ => Polymorphic::No,
                 },
             })

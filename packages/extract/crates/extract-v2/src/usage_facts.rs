@@ -1127,9 +1127,19 @@ pub(crate) fn collect_enriched_usage(
         }
         _ => BTreeSet::new(),
     };
+    // What `ordinary_components` would admit were nothing to escape: the
+    // React wrappers and `const` aliases a write or hand-on may change,
+    // whatever their names' case, and the callbacks a wrapper's position
+    // is followed for.
+    let (admissible, admissible_wrappers) = origins
+        .zip(react_imports.as_ref())
+        .map(|(scoping, react)| ordinary_components(program, scoping, react, &BTreeSet::new()))
+        .unwrap_or_default();
     let escapes = match &scoping {
         Some(scoping) if may_escape => {
             let mut scan = EscapeScan {
+                admissible: &admissible,
+                react_bindings: admissible_wrappers.keys().cloned().collect(),
                 scoping,
                 chains,
                 slot_values: compose
@@ -5113,11 +5123,17 @@ struct EscapeScan<'a, 's> {
     imports: BTreeSet<String>,
     escapes: BTreeSet<String>,
     ancestors: Vec<AstKind<'a>>,
+    /// The bindings `ordinary_components` admits ignoring escapes.
+    admissible: &'s BTreeSet<String>,
+    /// React's wrappers and `const` aliases among them, whatever their
+    /// names' case: what a write or hand-on of one changes, it renders.
+    react_bindings: BTreeSet<String>,
 }
 
 impl EscapeScan<'_, '_> {
     fn is_candidate(&self, name: &str) -> bool {
         name.starts_with(|c: char| c.is_ascii_uppercase())
+            || self.react_bindings.contains(name)
             || self.namespaces.contains(name)
             || self.imports.contains(name)
             || self.chains.iter().any(|chain| chain.binding == name)
@@ -5169,6 +5185,23 @@ impl EscapeScan<'_, '_> {
             call.arguments.len() == 1 && react.calls(self.scoping, &call.callee, &["forwardRef", "memo"])
         };
         if !wrapper(call) {
+            return false;
+        }
+        // Only a callback `ordinary_components` admits is followed: an
+        // Animus component, or an import, keeps its escape here.
+        let mut callback = call.arguments[0].as_expression().map(crate::chain_walk::unwrap_type_assertions);
+        while let Some(Expression::CallExpression(inner)) = callback {
+            if !wrapper(inner) {
+                break;
+            }
+            callback = inner.arguments[0].as_expression().map(crate::chain_walk::unwrap_type_assertions);
+        }
+        let admitted = match callback {
+            Some(Expression::Identifier(callback)) => self.admissible.contains(callback.name.as_str()),
+            Some(Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) | Expression::ClassExpression(_)) => true,
+            _ => false,
+        };
+        if !admitted {
             return false;
         }
         let mut current = call.span;
@@ -7646,13 +7679,15 @@ pub fn filter_custom_prop_scan(
 }
 
 /// Renders that can deliver any custom prop at runtime — a `{...props}`
-/// spread or a `createElement` call — as one dynamic usage per custom prop.
+/// spread, a `createElement` call or a clone's overrides — as one dynamic
+/// usage per custom prop, with the render's kind (`spread`,
+/// `create-element`, `clone`).
 pub fn uncertain_custom_renders(
     facts: &[UsageFact],
     component_props: &impl Keyed<FxHashSet<String>>,
     member_expr_bindings: &FxHashMap<String, String>,
     proxies: &WrapperProxies,
-) -> Vec<DynamicPropUsage> {
+) -> Vec<(DynamicPropUsage, &'static str)> {
     let mut seen = FxHashSet::default();
     let mut usages = Vec::new();
     for fact in facts {
@@ -7661,35 +7696,29 @@ pub fn uncertain_custom_renders(
             for (binding, custom) in component_props.sorted_entries() {
                 for (prop, _) in props.iter().filter(|(prop, _)| custom.contains(prop)) {
                     if seen.insert((binding.as_str(), prop)) {
-                        usages.push(DynamicPropUsage {
-                            prop_name: prop.clone(),
-                            binding: binding.clone(),
-                        });
+                        usages.push((DynamicPropUsage { prop_name: prop.clone(), binding: binding.clone() }, "clone"));
                     }
                 }
             }
             continue;
         }
-        let binding = match fact {
+        let (binding, kind) = match fact {
             UsageFact::Element { span, .. } if proxies.forwarding.contains(span) => continue,
-            UsageFact::Element { tag, spread: Some(_), origin, .. } => match resolve_tag(tag, *origin, member_expr_bindings) {
-                Some((binding, _)) => binding,
+            UsageFact::Element { tag, spread: Some(_), origin, written_as_call, .. } => match resolve_tag(tag, *origin, member_expr_bindings) {
+                Some((binding, _)) => (binding, if *written_as_call { "create-element" } else { "spread" }),
                 None => continue,
             },
             UsageFact::CreateElement { member, origin, .. } if bound_elsewhere(member.is_some(), *origin) => continue,
-            UsageFact::CreateElement { ident: Some(name), .. } => name.as_str(),
+            UsageFact::CreateElement { ident: Some(name), .. } => (name.as_str(), "create-element"),
             UsageFact::CreateElement { member: Some(key), .. } => match member_expr_bindings.get(key) {
-                Some(binding) => binding.as_str(),
+                Some(binding) => (binding.as_str(), "create-element"),
                 None => continue,
             },
             _ => continue,
         };
         for prop in component_props.get(binding).into_iter().flatten() {
             if seen.insert((binding, prop)) {
-                usages.push(DynamicPropUsage {
-                    prop_name: prop.clone(),
-                    binding: binding.to_string(),
-                });
+                usages.push((DynamicPropUsage { prop_name: prop.clone(), binding: binding.to_string() }, kind));
             }
         }
     }

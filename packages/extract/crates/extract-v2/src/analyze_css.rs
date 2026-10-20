@@ -7113,12 +7113,20 @@ fn opaque_delivery(
             })
             .map(|(declaring, binding, _)| (declaring, binding))
             .or_else(|| ordinary_members.get(&(file.to_string(), tag.tag.clone())).cloned());
-        // A ref to a class component reads the instance, its props
-        // included.
+        // A ref to a class component, or to a React wrapper of one, reads
+        // the instance, its props included.
+        let class = |declaring: &str, binding: &str| {
+            let Some(declared) = files.get(declaring) else { return false };
+            let mut binding = binding;
+            while let Some(Some(callback)) = declared.react_wrappers.get(binding) {
+                binding = callback;
+            }
+            declared.class_components.contains(binding)
+        };
         ordinary.is_none_or(|(declaring, binding)| {
             tag.polymorphic != Polymorphic::No
                 || forwarding.contains(&(declaring.clone(), binding.clone()))
-                || (tag.exposed && files.get(&declaring).is_some_and(|declared| declared.class_components.contains(&binding)))
+                || (tag.exposed && class(&declaring, &binding))
         })
     };
     let mut forwarding: FxHashSet<(String, String)> = FxHashSet::default();
@@ -9534,14 +9542,8 @@ fn run_with_system_floor(
                 member_expr_bindings,
                 &proxies,
             );
-            custom_scan
-                .dynamic_usages
-                .extend(crate::usage_facts::uncertain_custom_renders(
-                    &usage,
-                    &lookup.custom_props,
-                    member_expr_bindings,
-                    &proxies,
-                ));
+            let renders =
+                crate::usage_facts::uncertain_custom_renders(&usage, &lookup.custom_props, member_expr_bindings, &proxies);
             identity_policy
                 .attribute_dynamic_usages(&mut custom_scan.dynamic_usages, &lookup.attribution);
             for usage in &custom_scan.static_usages {
@@ -9573,6 +9575,13 @@ fn run_with_system_floor(
                 keep_component_slot(&mut component_slot_reasons, &usage.binding, &usage.prop_name, || {
                     SlotOpening::rule("runtime-value").in_file(path)
                 });
+            }
+            // A render that can deliver any custom prop, by its own kind.
+            for (usage, kind) in renders {
+                for binding in identity_policy.resolve_all(&usage.binding, &lookup.attribution) {
+                    keep_component_slot(&mut component_slot_reasons, &binding, &usage.prop_name, || SlotOpening::rule(kind).in_file(path));
+                    custom_scan.dynamic_usages.push(DynamicPropUsage { prop_name: usage.prop_name.clone(), binding });
+                }
             }
             all_custom_dynamic_usages.extend(custom_scan.dynamic_usages.iter().cloned());
         }
@@ -9873,6 +9882,20 @@ fn run_with_system_floor(
         object_members.changes(),);
     for (id, at) in delivered_ids {
         escape(&mut escaped_ids, escape_reasons.as_mut(), [id], || delivered_tags[at].opening());
+    }
+    // A delivered facade member hands over what its object holds, under
+    // whatever key: the component, or the wrapper and what it renders.
+    for delivery in &delivered_tags {
+        let Some((facade, _)) = delivery.tag.rsplit_once('.') else { continue };
+        if object_members.facade_at(&delivery.file, facade).is_none() {
+            continue;
+        }
+        escape(&mut escaped_ids, escape_reasons.as_mut(), object_members.escaped_components(&delivery.file, &delivery.tag), || {
+            delivery.opening()
+        });
+        for (module, wrapper) in object_members.escaped_wrappers(&delivery.file, &delivery.tag) {
+            escape(&mut escaped_ids, escape_reasons.as_mut(), held_ids(&module, &wrapper), || delivery.opening());
+        }
     }
     // A held wrapper some render of which no member tag shows renders with
     // props no analysed use shows.
@@ -13919,6 +13942,23 @@ mod tests {
             ("import * as lib from 'outside';\nconst c = lib.consoleOf();\nc.show = pad;\nconst Render = () => { console.show(<Box p={4} />); return null; };", "", "", true),
             ("import * as lib from 'outside';\nconst o = lib.objectOf();\no.is = pad;\nconst Render = () => <div title={Object.is(<Box p={4} />, 1)} />;", "", "", true),
             ("const Render = () => <div title={Math.max(<Box p={4} />)} />;", "", "", false),
+            // A facade member delivered outside escapes, whatever its key.
+            ("import { Kit } from './other';\nconst Render = () => <Foreign><Kit.Media p={2} /></Foreign>;", "", "export const IdMedia = ds.system({ space: true }).asElement('div');\nexport const Kit = { Media: IdMedia };\n", true),
+            // A React wrapper or alias written through or handed on, whatever
+            // its name's case.
+            ("import { memo } from 'react';\nconst render = (props) => <div>{props.children}</div>;\nconst wrapped = memo(render);\nwrapped.type = pad;\nconst Render = wrapped;", "", "", true),
+            ("import { forwardRef } from 'react';\nconst Render = forwardRef((props, ref) => <div ref={ref}>{props.children}</div>);\nconst alias = Render;\nalias.render = pad;", "", "", true),
+            ("import { forwardRef } from 'react';\nconst target = forwardRef((props, ref) => <div ref={ref}>{props.children}</div>);\nconsume(target);\nconst Render = target;", "", "", true),
+            ("import { memo } from 'react';\nconst inner = memo((props) => <div>{props.children}</div>);\nfunction patch(c) { c.type = pad; }\npatch(inner);\nconst Render = inner;", "", "", true),
+            // A custom element (an `as` with `-`, or `is`) takes its props as
+            // properties, handing them to its own code.
+            ("const Stack = ds.system({ display: true }).asElement('div');\nconst Render = () => <Stack as=\"x-widget\" item={<Box p={4} />} />;", "", "", true),
+            ("const Stack = ds.system({ display: true }).asElement('div');\nconst Render = () => <Stack as={'x-widget'} config={{ slot: <Box p={4} /> }} />;", "", "", true),
+            ("const Stack = ds.system({ display: true }).asElement('div');\nconst Render = () => <Stack is=\"x-widget\" item={<Box p={4} />} />;", "", "", true),
+            ("const Render = () => <div is=\"x-widget\" item={<Box p={4} />} />;", "", "", true),
+            ("const Stack = ds.system({ display: true }).asElement('div');\nconst Render = () => <Stack as=\"span\" item={<Box p={4} />} />;", "", "", false),
+            // A ref to a React wrapper of a class reads the class's props.
+            ("import { memo } from 'react';\nclass Inner extends Component { render() { return <div>{this.props.children}</div>; } }\nconst Render = memo(Inner);", "ref={pad}", "", true),
             // A setter runs on a store with its object as `this`.
             ("const Render = ({ children }) => { const o = { children, set x(v) { pad(this.children); } }; o.x = 1; return null; };", "", "", true),
             ("const Render = ({ children }) => { const o = { children, set x(v) { pad(this.children); } }; o.x ??= 1; return null; };", "", "", true),
@@ -13971,6 +14011,12 @@ mod tests {
         ] {
             assert_eq!(keeps_p(component, props, other), keeps, "{component} {props}");
         }
+        // A React wrapper of an Animus component keeps the component's
+        // custom-prop slots: nothing follows the callback.
+        let wrapped = "import { memo } from 'react';\nexport const Card = ds.props({ tone: { property: 'color' } }).asElement('div');\nconst W = memo(Card);\nexport const App = ({ c }) => <W tone={c} />;\n";
+        let out = analyze(&[("a.tsx", wrapped)], &test_inputs());
+        let card = out.components.values().find(|component| component.replacement.contains("Card")).unwrap();
+        assert!(card.replacement.contains("customDynamicConfig"), "{}", card.replacement);
         // A base other than React's gets what `super` gets.
         let base = "import { Foreign } from 'outside';\nimport { icon } from './other';\nexport const Box = ds.system({ space: true }).asElement('div');\nclass Render extends Foreign { constructor(props) { super(icon); } render() { return null; } }\nexport const App = () => <Render />;\n";
         let files = [("a.tsx", base), ("other.tsx", "import { Box } from './a';\nexport const icon = <Box p={4} />;\n")];
@@ -14068,6 +14114,18 @@ mod tests {
         assert_eq!(tone.components["a.tsx::Card"]["tone"], [SlotOpening::rule("runtime-value").in_file("a.tsx")]);
         assert_eq!(tone.components["a.tsx::Tag"]["tone"], [SlotOpening::rule("unproven-owner")]);
         assert!(rules(&tone, "a.tsx::Tag").contains(&"opaque-delivery"), "{:?}", tone.owners);
+        // A render that can deliver any custom prop names its own kind.
+        let card = "import { createElement, cloneElement } from 'react';\n\
+                    const Card = ds.props({ tone: { property: 'color' } }).asElement('div');\n";
+        for (render, rule) in [
+            ("export const App = ({ rest }) => <Card {...rest} />;\n", "spread"),
+            ("export const App = ({ props }) => createElement(Card, props);\n", "create-element"),
+            ("export const App = ({ el, c }) => cloneElement(el, { tone: c });\nexport const Used = () => <Card />;\n", "clone"),
+        ] {
+            let kept = provenance_of(&format!("{card}{render}"), inputs);
+            let rules: Vec<&str> = kept.components["a.tsx::Card"]["tone"].iter().map(|opening| opening.rule).collect();
+            assert!(rules.contains(&rule) && !rules.contains(&"runtime-value"), "{rule}: {rules:?}");
+        }
         // A write that leaves no usage proven names its construct and site.
         let patched = provenance_of(
             "export const Box = ds.system({ space: true }).asElement('div');\n\
