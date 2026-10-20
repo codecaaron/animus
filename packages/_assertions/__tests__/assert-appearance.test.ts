@@ -127,6 +127,50 @@ describe('assertSystemFallbackParity', () => {
   });
 });
 
+// Contract: a folded fallback counts for its scheme only beside the other
+// scheme's guarded block, which follows it and declares every custom property
+// it does, so it overrides each one under the other preference.
+describe('the folded fallback counts only beside a guarded block that covers it', () => {
+  const FOLDED_LIGHT = `:root{--color-primary:var(--color-blue-500);color-scheme:light}[data-color-mode=light],:root:not([data-color-mode]){--color-primary:#1d4ed8;color-scheme:light}@media (prefers-color-scheme:dark){:root:not([data-color-mode]){--color-primary:#3b82f6;color-scheme:dark}}[data-color-mode=dark]{--color-primary:#3b82f6;color-scheme:dark}@layer anm-base{@media (prefers-color-scheme:dark){.animus-Card-74286a66{border-color:var(--color-border)}}}`;
+  const all = (css: string) => [
+    () => assertSystemSchemeGuard(css, { expectSchemes: ['light', 'dark'] }),
+    () =>
+      assertColorSchemeEmission(css, {
+        root: 'light',
+        modes: { light: 'light', dark: 'dark' },
+        system: { light: 'light', dark: 'dark' },
+      }),
+    () =>
+      assertSystemFallbackParity(css, {
+        mapping: { light: 'light', dark: 'dark' },
+      }),
+  ];
+
+  it("accepts the fold ahead of the other scheme's guarded block", () => {
+    for (const assertion of all(FOLDED_LIGHT)) expect(assertion).not.toThrow();
+  });
+
+  it("rejects the fold once the other scheme's guarded block is gone", () => {
+    const alone = FOLDED_LIGHT.replace(
+      '@media (prefers-color-scheme:dark){:root:not([data-color-mode]){--color-primary:#3b82f6;color-scheme:dark}}',
+      ''
+    );
+    for (const assertion of all(alone)) {
+      expect(assertion).toThrow(AssertionError);
+    }
+  });
+
+  it('rejects a fold that declares a custom property the guarded block lacks', () => {
+    const uncovered = FOLDED_LIGHT.replace(
+      ':root:not([data-color-mode]){--color-primary:#1d4ed8;',
+      ':root:not([data-color-mode]){--color-primary:#1d4ed8;--color-muted:#666;'
+    );
+    for (const assertion of all(uncovered)) {
+      expect(assertion).toThrow(AssertionError);
+    }
+  });
+});
+
 describe('systemSchemeVariableSpans', () => {
   const authorBlock = VITE_APP_LIGHTNING_CSS_ARTIFACT.indexOf(
     '@media (prefers-color-scheme:dark){.animus-Card'

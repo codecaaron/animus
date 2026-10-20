@@ -83,7 +83,7 @@ function replacedByFrom() {
 
 // Recorded from the builder before contextual variables moved onto property
 // records; every value must stay byte-identical. The manifest digests are
-// those recordings less the removed `contractHash` key.
+// those recordings less the removed `contractHash` key, at emitterVersion 2.
 const recorded = {
   everyRegistration: {
     variableCss:
@@ -93,7 +93,7 @@ const recorded = {
     registrationsJson:
       '{"isolated":{"syntax":"<color> | transparent","inherits":false,"initialValue":"transparent"},"universal":{"syntax":"*","inherits":true},"typed":{"syntax":"<color>","inherits":true,"initialValue":"black"},"gap":{"inherits":false,"syntax":"<length>","initialValue":"0px"},"pad":{"syntax":"<length>","inherits":true,"initialValue":"0px"}}',
     manifestDigest:
-      'd6eebe89f0081204d1b7e733510ac2c36da0342b0790c0b6909eae9e371435a5',
+      '2b36bdc1240e9fe97461bd088b81cf48a01e4852d2237c54791f5a0fcf5c2e62',
   },
   extended: {
     variableCss:
@@ -103,7 +103,7 @@ const recorded = {
     registrationsJson:
       '{"shared":{"syntax":"<length>","inherits":false,"initialValue":"0px"},"tone":{"syntax":"*","inherits":false}}',
     manifestDigest:
-      '3a1d5b5eef8deb6ac19648d00fd537294cbcdfc7df2e6fb0e7e7221e3741f57a',
+      'ba918ce8b8edbd52b30517ed9257f971fb1e3f90b62101a795744a483ed13c58',
   },
   replacedByFrom: {
     variableCss:
@@ -112,7 +112,7 @@ const recorded = {
     registrationsJson:
       '{"local":{"syntax":"*","inherits":true},"shared":{"syntax":"<length>","inherits":true,"initialValue":"0px"}}',
     manifestDigest:
-      '6f994dee5cc21c2bae2a28ab7309e0968e4039cb8b473a3c985f54824016e80d',
+      '6563f842b7f35b1f3eadfcb4856fec5c12a94834d1af0b4b6b4ddf66d12a6d6f',
   },
 };
 

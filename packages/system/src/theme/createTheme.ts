@@ -2017,7 +2017,7 @@ function parseTokenDefinition(rawValue: string): TokenDefinition {
  * Version of the CSS emitter that composed a manifest's fragments. Bump when
  * any emitted byte changes for the same authored input.
  */
-const EMITTER_VERSION = 1;
+const EMITTER_VERSION = 2;
 
 interface SystemEmissionConfig {
   initialMode?: string;
@@ -2050,34 +2050,54 @@ function buildVariableCss(
     parts.push(`:root {\n${rootLines.join('\n')}\n}`);
   }
 
+  // A mode's declarations: its variables, then its browser colour scheme.
+  const modeDeclarations = (modeName: string): [string, string][] => {
+    const declarations = Object.entries(modeVariables[modeName] ?? {});
+    const scheme = browserColorScheme?.[modeName];
+    if (scheme) declarations.push(['color-scheme', scheme]);
+    return declarations;
+  };
+  const lines = (declarations: [string, string][], indent: string) =>
+    declarations.map(([name, value]) => `${indent}${name}: ${value};`);
+  // Each system preference with something to declare, and its mode.
+  const preferences = systemPreference
+    ? (['light', 'dark'] as const)
+        .map((scheme) => ({ scheme, mode: systemPreference[scheme] }))
+        .filter(({ mode }) => modeDeclarations(mode).length > 0)
+    : [];
+  const mediaRule = ({ scheme, mode }: (typeof preferences)[number]) =>
+    `@media (prefers-color-scheme: ${scheme}) {\n  :root:not([data-color-mode]) {\n${lines(modeDeclarations(mode), '    ').join('\n')}\n  }\n}`;
+  // The initial mode's system-preference rule repeats its explicit rule, so
+  // the explicit rule takes the preference's selector too, unconditionally.
+  // Exact when the other preference's rule follows it and declares every
+  // property it does, so it overrides each one where it applies. A browser
+  // with neither preference would read the fold; every browser with
+  // `@layer`, which Animus's stylesheet needs, has them.
+  const initial = preferences.find(({ mode }) => mode === initialMode);
+  const other = preferences.find(({ mode }) => mode !== initialMode);
+  const otherNames =
+    other && new Set(modeDeclarations(other.mode).map(([name]) => name));
+  const foldedMode =
+    initial &&
+    otherNames &&
+    modeDeclarations(initial.mode).every(([name]) => otherNames.has(name))
+      ? initial.mode
+      : undefined;
+
   // These follow `:root` so they override the initial mode, and the
   // `:not([data-color-mode])` guard lets an explicit attribute win in CSS.
-  if (systemPreference) {
-    for (const scheme of ['light', 'dark'] as const) {
-      const modeName = systemPreference[scheme];
-      const mediaLines: string[] = [];
-      const modeVars = modeVariables[modeName];
-      if (modeVars) {
-        for (const [varName, value] of Object.entries(modeVars)) {
-          mediaLines.push(`    ${varName}: ${value};`);
-        }
-      }
-      const mediaScheme = browserColorScheme?.[modeName];
-      if (mediaScheme) mediaLines.push(`    color-scheme: ${mediaScheme};`);
-      if (mediaLines.length === 0) continue;
-      parts.push(
-        `@media (prefers-color-scheme: ${scheme}) {\n  :root:not([data-color-mode]) {\n${mediaLines.join('\n')}\n  }\n}`
-      );
-    }
+  if (foldedMode !== undefined && other) {
+    parts.push(
+      `[data-color-mode="${foldedMode}"],\n:root:not([data-color-mode]) {\n${lines(modeDeclarations(foldedMode), '  ').join('\n')}\n}`,
+      mediaRule(other)
+    );
+  } else {
+    for (const preference of preferences) parts.push(mediaRule(preference));
   }
 
-  for (const [modeName, modeVars] of Object.entries(modeVariables)) {
-    const modeLines: string[] = [];
-    for (const [varName, value] of Object.entries(modeVars)) {
-      modeLines.push(`  ${varName}: ${value};`);
-    }
-    const modeScheme = browserColorScheme?.[modeName];
-    if (modeScheme) modeLines.push(`  color-scheme: ${modeScheme};`);
+  for (const modeName of Object.keys(modeVariables)) {
+    if (modeName === foldedMode) continue;
+    const modeLines = lines(modeDeclarations(modeName), '  ');
     if (modeLines.length > 0) {
       parts.push(
         `[data-color-mode="${modeName}"] {\n${modeLines.join('\n')}\n}`

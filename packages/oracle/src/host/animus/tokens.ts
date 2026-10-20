@@ -12,6 +12,9 @@ import type { ParsedDeclaration } from './css-parse';
 export { ROOT_MODE };
 
 export const MODE_SELECTOR = /^\[data-color-mode=["']?([A-Za-z0-9_-]+)["']?\]$/;
+// The initial mode's attribute rule with its system-preference rule folded in.
+const FOLDED_MODE_SELECTOR =
+  /^\[data-color-mode=["']?([A-Za-z0-9_-]+)["']?\] ?, ?:root:not\(\[data-color-mode\]\)$/;
 const SCHEME_AT_RULE =
   /^@media\s*\(\s*prefers-color-scheme\s*:\s*([A-Za-z0-9_-]+)\s*\)$/;
 const PURE_ALIAS = /^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/;
@@ -82,6 +85,8 @@ interface Collected {
   colorScheme: Map<string, string>;
   modes: string[];
   schemeFallbacks: string[];
+  /** The mode whose rule also takes the system-preference guard. */
+  folded: string | null;
 }
 
 const record = (
@@ -115,6 +120,7 @@ export const createAnimusTokens = (stylesheet: string): AnimusTokens => {
     colorScheme: new Map(),
     modes: [],
     schemeFallbacks: [],
+    folded: null,
   };
 
   for (const block of eachBlock(prelude)) {
@@ -123,7 +129,9 @@ export const createAnimusTokens = (stylesheet: string): AnimusTokens => {
       continue;
     }
 
-    const mode = MODE_SELECTOR.exec(block.selector);
+    const folded = FOLDED_MODE_SELECTOR.exec(block.selector);
+    if (folded !== null) collected.folded = folded[1];
+    const mode = MODE_SELECTOR.exec(block.selector) ?? folded;
     if (mode !== null) {
       if (!collected.modes.includes(mode[1])) collected.modes.push(mode[1]);
       record(collected, mode[1], declarationsOf(block.body, block.selector));
@@ -151,12 +159,6 @@ export const createAnimusTokens = (stylesheet: string): AnimusTokens => {
     definitions.set(variable, { variable, valuesByMode, references });
   }
 
-  const rootScheme = collected.colorScheme.get(ROOT_MODE);
-  const matchesRoot = (mode: string): boolean =>
-    rootScheme !== undefined && collected.colorScheme.get(mode) === rootScheme;
-  const defaultMode =
-    collected.modes.find(matchesRoot) ?? collected.modes[0] ?? ROOT_MODE;
-
   const breakpoints: Breakpoint[] = [];
   for (const [variable, definition] of definitions) {
     const match = BREAKPOINT.exec(variable);
@@ -167,6 +169,11 @@ export const createAnimusTokens = (stylesheet: string): AnimusTokens => {
     breakpoints.push({ name: match[1], px: Number(px[1]) });
   }
   breakpoints.sort((a, b) => a.px - b.px);
+
+  // The folded rule is the fallback for the scheme no media block names.
+  if (collected.folded !== null && collected.schemeFallbacks.length === 1) {
+    collected.schemeFallbacks = ['light', 'dark'];
+  }
 
   const notes: string[] = [];
   if (collected.schemeFallbacks.length > 0) {
@@ -211,8 +218,41 @@ export const createAnimusTokens = (stylesheet: string): AnimusTokens => {
     }
   };
 
+  // The emitter writes mode rules in sorted order, save the one a fold moves
+  // ahead: sorted, the modes keep one order whether or not it fired.
+  const modes = [...collected.modes].sort();
+
+  // The mode an attributeless root shows: the folded mode, whose rule matches
+  // that root, else the one whose every value resolves as the root's own
+  // declarations do. Then the mode whose color-scheme the root declares, then
+  // the first.
+  const showsAtRoot = (mode: string): boolean => {
+    let declares = false;
+    for (const definition of definitions.values()) {
+      if (definition.valuesByMode[mode] === undefined) continue;
+      declares = true;
+      const own = resolve(definition.variable, mode)?.value;
+      if (
+        own === undefined ||
+        own !== resolve(definition.variable, ROOT_MODE)?.value
+      ) {
+        return false;
+      }
+    }
+    return declares;
+  };
+  const rootScheme = collected.colorScheme.get(ROOT_MODE);
+  const matchesRoot = (mode: string): boolean =>
+    rootScheme !== undefined && collected.colorScheme.get(mode) === rootScheme;
+  const defaultMode =
+    collected.folded ??
+    modes.find(showsAtRoot) ??
+    modes.find(matchesRoot) ??
+    modes[0] ??
+    ROOT_MODE;
+
   return {
-    modes: () => collected.modes,
+    modes: () => modes,
     defaultMode: () => defaultMode,
     token: (variable: string) => definitions.get(variable),
     all: () => Array.from(definitions.values()),

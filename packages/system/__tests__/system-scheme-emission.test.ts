@@ -152,19 +152,15 @@ describe('system preference mapping configuration', () => {
 });
 
 describe('guarded system fallback emission', () => {
-  it('emits every prefers-color-scheme block under :root:not([data-color-mode])', () => {
+  it('emits the remaining prefers-color-scheme block under :root:not([data-color-mode])', () => {
     const css = buildFullyConfiguredTheme().serialize().variableCss;
     const blocks = css.split('@media (prefers-color-scheme:').slice(1);
-    expect(blocks.length).toBe(2);
-    for (const block of blocks) {
-      const selector = block
-        .slice(
-          block.indexOf('{') + 1,
-          block.indexOf('{', block.indexOf('{') + 1)
-        )
-        .trim();
-      expect(selector).toBe(':root:not([data-color-mode])');
-    }
+    expect(blocks.length).toBe(1);
+    const [block] = blocks;
+    const open = block.indexOf('{') + 1;
+    expect(block.slice(open, block.indexOf('{', open)).trim()).toBe(
+      ':root:not([data-color-mode])'
+    );
   });
 
   it('applies the mapped dark mode declarations under the dark media block', () => {
@@ -186,30 +182,19 @@ describe('guarded system fallback emission', () => {
     ]);
   });
 
-  it('duplicates the mapped modes attribute-block declarations verbatim', () => {
+  it('duplicates the other mode attribute-block declarations verbatim', () => {
     const css = buildSystemTheme().serialize().variableCss;
-    for (const [scheme, modeName] of [
-      ['light', 'paper'],
-      ['dark', 'midnight'],
-    ] as const) {
-      const attributeDecls = blockDeclarations(
-        css,
-        `[data-color-mode="${modeName}"]`
-      );
-      const mediaSlice = css.slice(
-        css.indexOf(`@media (prefers-color-scheme: ${scheme})`)
-      );
-      const mediaDecls = blockDeclarations(
-        mediaSlice,
-        ':root:not([data-color-mode])'
-      );
-      expect(mediaDecls).toEqual(attributeDecls);
-    }
+    const mediaSlice = css.slice(
+      css.indexOf('@media (prefers-color-scheme: dark)')
+    );
+    expect(
+      blockDeclarations(mediaSlice, ':root:not([data-color-mode])')
+    ).toEqual(blockDeclarations(css, '[data-color-mode="midnight"]'));
   });
 
   it('keeps the explicit mode block alongside the guarded media blocks', () => {
     const css = buildSystemTheme().serialize().variableCss;
-    expect(css).toContain('[data-color-mode="paper"] {');
+    expect(css).toContain('[data-color-mode="paper"],');
     expect(blockDeclarations(css, '[data-color-mode="paper"]')).toEqual([
       '--color-bg: #f5f2ea;',
       '--color-fg: #101014;',
@@ -220,16 +205,16 @@ describe('guarded system fallback emission', () => {
     expect(css).toContain(':root:not([data-color-mode])');
   });
 
-  it('orders :root, media light, media dark, then attribute blocks', () => {
+  it('orders :root, the folded initial mode, media dark, then attribute blocks', () => {
     const css = buildSystemTheme().serialize().variableCss;
     const rootIdx = css.indexOf(':root {');
-    const lightIdx = css.indexOf('@media (prefers-color-scheme: light)');
+    const foldedIdx = css.indexOf('[data-color-mode="paper"],');
     const darkIdx = css.indexOf('@media (prefers-color-scheme: dark)');
-    const firstAttrIdx = css.indexOf('[data-color-mode=');
+    const otherIdx = css.indexOf('[data-color-mode="midnight"]');
     expect(rootIdx).toBeGreaterThanOrEqual(0);
-    expect(lightIdx).toBeGreaterThan(rootIdx);
-    expect(darkIdx).toBeGreaterThan(lightIdx);
-    expect(firstAttrIdx).toBeGreaterThan(darkIdx);
+    expect(foldedIdx).toBeGreaterThan(rootIdx);
+    expect(darkIdx).toBeGreaterThan(foldedIdx);
+    expect(otherIdx).toBeGreaterThan(darkIdx);
   });
 
   it('emits no @scope or anm-theme wrapper for a system-configured theme', () => {
@@ -435,16 +420,16 @@ describe('browser color-scheme classification', () => {
     expect(blockDeclarations(css, ':root {')).toContain('color-scheme: light;');
   });
 
-  it('emits the mapped modes classification inside each media block', () => {
+  it('emits the mapped modes classification for each system preference', () => {
     const css = buildFullyConfiguredTheme().serialize().variableCss;
-    const lightSlice = css.slice(
-      css.indexOf('@media (prefers-color-scheme: light)')
-    );
     const darkSlice = css.slice(
       css.indexOf('@media (prefers-color-scheme: dark)')
     );
     expect(
-      blockDeclarations(lightSlice, ':root:not([data-color-mode])')
+      blockDeclarations(
+        css,
+        '[data-color-mode="paper"],\n:root:not([data-color-mode])'
+      )
     ).toContain('color-scheme: light;');
     expect(
       blockDeclarations(darkSlice, ':root:not([data-color-mode])')
@@ -485,6 +470,87 @@ describe('browser color-scheme classification', () => {
     const css = buildClassificationOnlyTheme().serialize().variableCss;
     expect(css).not.toContain('@media');
     expect(css).not.toContain(':root:not([data-color-mode])');
+  });
+});
+
+// Contract: the initial mode's system-preference values are folded only when
+// the maps match: the other preference's mode declares every property the
+// initial mode does. Folded, its explicit rule also matches
+// `:root:not([data-color-mode])` and the other preference's media rule follows
+// it; otherwise both media rules stay as they were.
+describe("the initial mode's system-preference values are folded only when the maps match", () => {
+  const FOLDED = '[data-color-mode="paper"],\n:root:not([data-color-mode]) {';
+  const media = (css: string) =>
+    [...css.matchAll(/@media \(prefers-color-scheme: (\w+)\)/g)].map(
+      ([, scheme]) => scheme
+    );
+  const build = (
+    initial: string,
+    modes: Record<string, Record<string, string>>
+  ) =>
+    createTheme()
+      .addBreakpoints(breakpoints)
+      .addColors(makeColors())
+      .addColorModes(initial, modes, {
+        systemPreference: { light: 'paper', dark: 'midnight' },
+      })
+      .build()
+      .serialize().variableCss;
+
+  it('folds the initial mode when both maps declare the same properties', () => {
+    const css = buildFullyConfiguredTheme().serialize().variableCss;
+    expect(blockDeclarations(css, FOLDED)).toEqual([
+      '--color-bg: #f5f2ea;',
+      '--color-fg: #101014;',
+      '--color-muted: #8a8a8a;',
+      'color-scheme: light;',
+    ]);
+    expect(media(css)).toEqual(['dark']);
+    expect(css.indexOf('@media')).toBeGreaterThan(css.indexOf(FOLDED));
+    expect(css.split('[data-color-mode="paper"]').length).toBe(2);
+  });
+
+  it('folds an initial mode mapped to the dark preference ahead of the light rule', () => {
+    const css = build('midnight', makeModes());
+    const folded =
+      '[data-color-mode="midnight"],\n:root:not([data-color-mode]) {';
+    expect(blockDeclarations(css, folded)).toEqual([
+      '--color-bg: #101014;',
+      '--color-fg: #f5f2ea;',
+      '--color-muted: #8a8a8a;',
+    ]);
+    expect(media(css)).toEqual(['light']);
+    expect(css.indexOf('@media')).toBeGreaterThan(css.indexOf(folded));
+  });
+
+  it('folds when the other map declares more properties than the initial one', () => {
+    const css = build('paper', {
+      paper: { fg: 'ink', bg: 'bone' },
+      midnight: { fg: 'bone', bg: 'ink', muted: 'ash' },
+    });
+    expect(blockDeclarations(css, FOLDED)).toEqual([
+      '--color-bg: #f5f2ea;',
+      '--color-fg: #101014;',
+    ]);
+    expect(media(css)).toEqual(['dark']);
+  });
+
+  it('keeps both media rules when the initial map declares a property the other lacks', () => {
+    const css = build('paper', {
+      paper: { fg: 'ink', bg: 'bone', muted: 'ash' },
+      midnight: { fg: 'bone', bg: 'ink' },
+    });
+    expect(media(css)).toEqual(['light', 'dark']);
+    expect(css).not.toContain('[data-color-mode="paper"],');
+  });
+
+  it('keeps both media rules when the initial mode is not a system preference', () => {
+    const css = build('sepia', {
+      ...makeModes(),
+      sepia: { fg: 'ash', bg: 'bone', muted: 'ink' },
+    });
+    expect(media(css)).toEqual(['light', 'dark']);
+    expect(css).not.toContain(',\n:root:not([data-color-mode])');
   });
 });
 

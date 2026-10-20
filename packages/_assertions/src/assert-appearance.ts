@@ -107,6 +107,82 @@ function targetsRoot(selector: string): boolean {
     .some((part) => /(^|[\s>+~]):root\b/.test(part.trim()));
 }
 
+/**
+ * The initial mode's attribute rule when it also carries the guard: the theme
+ * emitter folds that mode's system-preference block into it, so it is the
+ * fallback for the scheme no media block covers, and must precede the media
+ * block that covers the other.
+ */
+function foldedFallback(
+  css: string,
+  guard = DEFAULT_GUARD
+): { mode: string; rule: Rule } | undefined {
+  const inScheme = schemeBlocks(css).map(
+    (block) =>
+      [block.index, matchBrace(css, css.indexOf('{', block.index))] as const
+  );
+  for (const rule of styleRules(css)) {
+    if (
+      inScheme.some(([open, close]) => rule.index > open && rule.index < close)
+    ) {
+      continue;
+    }
+    const parts = rule.prelude.split(',').map((part) => compact(part));
+    if (parts.length !== 2 || !parts.includes(compact(guard))) continue;
+    const mode = /^\[data-color-mode=["']?([\w-]+)["']?\]$/.exec(
+      parts.find((part) => part !== compact(guard)) ?? ''
+    );
+    if (mode) return { mode: mode[1], rule };
+  }
+  return undefined;
+}
+
+/** A scheme block's rules that carry exactly the guard. */
+function guardedRules(block: SchemeBlock, guard = DEFAULT_GUARD): Rule[] {
+  return block.rules.filter((rule) => compact(rule.prelude) === compact(guard));
+}
+
+/** The custom properties a rule body declares, by name. */
+function customProperties(body: string): string[] {
+  return declarationList(body)
+    .filter((declaration) => declaration.startsWith('--'))
+    .map((declaration) => declaration.split(':')[0].trim());
+}
+
+/** The folded fallback, when it serves `scheme`: no guarded media block
+ *  covers `scheme`, and the other scheme's guarded block follows the fold and
+ *  declares every custom property it does, so it overrides each one under
+ *  the other preference. A component's own scheme conditions are not
+ *  fallbacks. */
+function foldedFallbackFor(
+  css: string,
+  scheme: OsScheme,
+  guard = DEFAULT_GUARD
+): { mode: string; rule: Rule } | undefined {
+  const fallbacks = schemeBlocks(css).filter(
+    (block) => guardedRules(block, guard).length > 0
+  );
+  if (fallbacks.some((block) => block.scheme === scheme)) return undefined;
+  const folded = foldedFallback(css, guard);
+  if (
+    !folded ||
+    fallbacks.length === 0 ||
+    fallbacks.some((block) => block.index < folded.rule.index)
+  ) {
+    return undefined;
+  }
+  const overridden = new Set(
+    fallbacks
+      .flatMap((block) => guardedRules(block, guard))
+      .flatMap((rule) => customProperties(rule.body))
+  );
+  return customProperties(folded.rule.body).every((name) =>
+    overridden.has(name)
+  )
+    ? folded
+    : undefined;
+}
+
 function modeRule(css: string, mode: string): Rule | undefined {
   const re = new RegExp(
     `\\[data-color-mode\\s*=\\s*["']?${mode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?\\]`
@@ -189,14 +265,15 @@ export function assertSystemSchemeGuard(
   }
 
   for (const scheme of config?.expectSchemes ?? []) {
-    const guarded = blocks
-      .filter((block) => block.scheme === scheme)
-      .flatMap((block) => block.rules)
-      .filter((rule) => compact(rule.prelude) === compactGuard);
-    const withVariables = guarded.filter((rule) =>
-      declarationList(rule.body).some((declaration) =>
-        declaration.startsWith('--')
-      )
+    const folded = foldedFallbackFor(css, scheme, guard);
+    const guarded = [
+      ...blocks
+        .filter((block) => block.scheme === scheme)
+        .flatMap((block) => guardedRules(block, guard)),
+      ...(folded ? [folded.rule] : []),
+    ];
+    const withVariables = guarded.filter(
+      (rule) => customProperties(rule.body).length > 0
     );
     if (withVariables.length === 0) {
       throw new AssertionError(
@@ -264,10 +341,14 @@ export function assertColorSchemeEmission(
   }
 
   for (const [scheme, expected] of Object.entries(config.system ?? {})) {
-    const guarded = schemeBlocks(css)
-      .filter((block) => block.scheme === scheme)
-      .flatMap((block) => block.rules)
-      .filter((rule) => compact(rule.prelude) === compact(DEFAULT_GUARD));
+    // SAFETY: `system` is keyed by `OsScheme`; entries widen it to string.
+    const folded = foldedFallbackFor(css, scheme as OsScheme);
+    const guarded = [
+      ...schemeBlocks(css)
+        .filter((block) => block.scheme === scheme)
+        .flatMap((block) => guardedRules(block)),
+      ...(folded ? [folded.rule] : []),
+    ];
     const found = guarded.map((rule) => declarationOf(rule.body));
     if (!found.includes(expected)) {
       throw new AssertionError(
@@ -306,7 +387,26 @@ export function assertSystemFallbackParity(
   const blocks = schemeBlocks(css);
   for (const [scheme, mode] of Object.entries(config.mapping)) {
     if (!mode) continue;
-    const block = blocks.find((candidate) => candidate.scheme === scheme);
+    // The theme's fallback block, not a component's own scheme condition.
+    const block =
+      blocks.find(
+        (candidate) =>
+          candidate.scheme === scheme && guardedRules(candidate).length > 0
+      ) ?? blocks.find((candidate) => candidate.scheme === scheme);
+    // SAFETY: `mapping` is keyed by `OsScheme`; entries widen it to string.
+    const folded = foldedFallbackFor(css, scheme as OsScheme);
+    if (folded) {
+      // The fold is the mode's own attribute rule, so parity holds by
+      // construction; what remains is that it names this mode and follows
+      // `:root`.
+      if (folded.mode !== mode || folded.rule.index < rootRule.index) {
+        throw new AssertionError(
+          `assertSystemFallbackParity: the folded '${scheme}' fallback names '${folded.mode}' (offset ${folded.rule.index}), expected '${mode}' after :root (offset ${rootRule.index})`,
+          { scheme, mode, folded: folded.mode, rootIndex: rootRule.index }
+        );
+      }
+      continue;
+    }
     if (!block) {
       throw new AssertionError(
         `assertSystemFallbackParity: no '@media (prefers-color-scheme: ${scheme})' block found`,

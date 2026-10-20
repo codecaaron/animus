@@ -344,13 +344,12 @@ const SYSTEM_FIXTURE_VARIABLE_CSS = `@property --current-bg { syntax: "<color>";
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: light) {
-  :root:not([data-color-mode]) {
-    --color-bg: #f5f2ea;
-    --color-fg: #101014;
-    --color-muted: #8a8a8a;
-    color-scheme: light;
-  }
+[data-color-mode="paper"],
+:root:not([data-color-mode]) {
+  --color-bg: #f5f2ea;
+  --color-fg: #101014;
+  --color-muted: #8a8a8a;
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -367,13 +366,6 @@ const SYSTEM_FIXTURE_VARIABLE_CSS = `@property --current-bg { syntax: "<color>";
   --color-fg: #f5f2ea;
   --color-muted: #8a8a8a;
   color-scheme: dark;
-}
-
-[data-color-mode="paper"] {
-  --color-bg: #f5f2ea;
-  --color-fg: #101014;
-  --color-muted: #8a8a8a;
-  color-scheme: light;
 }`;
 
 describe('zero-variant emission parity (G1 pin)', () => {
