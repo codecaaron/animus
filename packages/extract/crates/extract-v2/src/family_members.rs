@@ -24,9 +24,13 @@ pub(crate) struct FamilyIndex {
     /// (module, exported name) → position in `members`, for importers; an
     /// export alias never renames the family inside its own module.
     exports: FxHashMap<(String, String), usize>,
-    /// Binding name → the only family with it, or `None` when several share
-    /// it. Imports the analysis cannot resolve fall back to it.
-    by_binding: FxHashMap<String, Option<usize>>,
+    /// Binding name → every family bound to it. Imports the analysis cannot
+    /// resolve fall back to it, and to `by_export`.
+    by_binding: FxHashMap<String, Vec<usize>>,
+    /// Exported name → every family some analysed module exports under it,
+    /// through aliases, barrels and default exports: built at the first
+    /// import the analysis cannot resolve.
+    by_export: std::cell::OnceCell<FxHashMap<String, Vec<usize>>>,
     /// Per family, each slot name with the component it renders.
     members: Vec<Vec<(String, String)>>,
     /// Per family, whether it may hold members `members` does not list.
@@ -47,6 +51,7 @@ impl FamilyIndex {
             locals: FxHashMap::default(),
             exports: FxHashMap::default(),
             by_binding: FxHashMap::default(),
+            by_export: std::cell::OnceCell::new(),
             members: Vec::new(),
             open: Vec::new(),
             declarations: Vec::new(),
@@ -72,11 +77,7 @@ impl FamilyIndex {
                 index.declarations.push((file.clone(), declared));
                 if let Some(binding) = &family.family_binding {
                     index.locals.insert((file.clone(), binding.clone()), id);
-                    index
-                        .by_binding
-                        .entry(binding.clone())
-                        .and_modify(|only| *only = None)
-                        .or_insert(Some(id));
+                    index.by_binding.entry(binding.clone()).or_default().push(id);
                 }
                 if family.default_export {
                     index
@@ -99,7 +100,9 @@ impl FamilyIndex {
     }
 
     /// The member tags `file` can write, as written there (`Panel.Body`,
-    /// `ui.Card.Body`), each mapped to the component its slot renders.
+    /// `ui.Card.Body`), each mapped to the component its slot renders. A tag
+    /// an unresolved import may give several families maps to the first,
+    /// with every candidate in `ambiguous`.
     pub(crate) fn members_for(
         &self,
         file: &str,
@@ -107,45 +110,77 @@ impl FamilyIndex {
         files: &BTreeMap<String, FileFacts>,
         inputs: &CssInputs,
         links: &crate::link::ProjectLinks,
+        ambiguous: &mut FxHashMap<String, Vec<String>>,
     ) -> FxHashMap<String, String> {
         let mut members = FxHashMap::default();
-        let mut add = |prefix: &str, id: usize| {
-            for (slot, component) in &self.members[id] {
-                members.insert(format!("{prefix}.{slot}"), component.clone());
+        let mut add_all = |prefix: &str, ids: &[usize]| {
+            for &id in ids {
+                for (slot, component) in &self.members[id] {
+                    let tag = format!("{prefix}.{slot}");
+                    if ids.len() > 1 {
+                        ambiguous.entry(tag.clone()).or_default().push(component.clone());
+                    }
+                    members.entry(tag).or_insert_with(|| component.clone());
+                }
             }
         };
         for binding in ff.compose.iter().filter_map(|f| f.family_binding.as_ref()) {
             if let Some(&id) = self.locals.get(&(file.to_string(), binding.clone())) {
-                add(binding, id);
+                add_all(binding, &[id]);
             }
         }
         for import in &ff.imports {
-            let id = match resolve_import_source(file, &import.source, files, inputs) {
-                Some(module) => self.exported(&module, import.imported.clone(), files, links),
-                // A default import is named by its local binding.
-                None if import.imported == "default" => self.only(&import.local),
-                None => self.only(&import.imported),
+            let ids = match resolve_import_source(file, &import.source, files, inputs) {
+                Some(module) => self.exported(&module, import.imported.clone(), files, links).into_iter().collect(),
+                // A default import is named by its local binding too.
+                None if import.imported == "default" => self.candidates(&["default", &import.local], files, links),
+                None => self.candidates(&[&import.imported], files, links),
             };
-            if let Some(id) = id {
-                add(&import.local, id);
-            }
+            add_all(&import.local, &ids);
         }
         for (namespace, source) in &ff.namespace_imports {
             let Some(module) = resolve_import_source(file, source, files, inputs) else {
-                for (binding, id) in &self.by_binding {
-                    if let Some(id) = id {
-                        add(&format!("{namespace}.{binding}"), *id);
-                    }
+                let names: BTreeSet<&String> = self.by_binding.keys().chain(self.exported_names(files, links).keys()).collect();
+                for name in names {
+                    add_all(&format!("{namespace}.{name}"), &self.candidates(&[name], files, links));
                 }
                 continue;
             };
             for name in module_export_names(&module, links) {
                 if let Some(id) = self.exported(&module, name.clone(), files, links) {
-                    add(&format!("{namespace}.{name}"), id);
+                    add_all(&format!("{namespace}.{name}"), &[id]);
                 }
             }
         }
         members
+    }
+
+    /// Every family an import the analysis cannot resolve may name by
+    /// `names`: those bound to one, and those an analysed module exports
+    /// under one.
+    fn candidates(&self, names: &[&str], files: &BTreeMap<String, FileFacts>, links: &crate::link::ProjectLinks) -> Vec<usize> {
+        let exported = self.exported_names(files, links);
+        let ids: BTreeSet<usize> = names
+            .iter()
+            .flat_map(|name| self.by_binding.get(*name).into_iter().flatten().chain(exported.get(*name).into_iter().flatten()))
+            .copied()
+            .collect();
+        ids.into_iter().collect()
+    }
+
+    /// See `by_export`.
+    fn exported_names(&self, files: &BTreeMap<String, FileFacts>, links: &crate::link::ProjectLinks) -> &FxHashMap<String, Vec<usize>> {
+        self.by_export.get_or_init(|| {
+            let mut by_export: FxHashMap<String, Vec<usize>> = FxHashMap::default();
+            for module in files.keys() {
+                for name in module_export_names(module, links) {
+                    if let Some(id) = self.exported(module, name.clone(), files, links) {
+                        by_export.entry(name).or_default().push(id);
+                    }
+                }
+            }
+            by_export
+        })
     }
 
     /// The family `module` exports as `name`, following re-exports and
@@ -161,11 +196,6 @@ impl FamilyIndex {
     ) -> Option<usize> {
         let (declaring, exported, declared) = declared_export(module, name, files, links)?;
         self.exports.get(&(declaring.clone(), exported)).or_else(|| self.locals.get(&(declaring, declared))).copied()
-    }
-
-    /// The only family bound to `binding` anywhere in the analysis.
-    fn only(&self, binding: &str) -> Option<usize> {
-        self.by_binding.get(binding).copied().flatten()
     }
 }
 

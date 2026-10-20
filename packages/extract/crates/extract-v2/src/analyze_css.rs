@@ -9599,11 +9599,20 @@ fn run_with_system_floor(
         crate::family_members::ObjectMembers::new(files, inputs, links, &family_index, &declared_component, &evaluated_ids);
     // A member tag written through a facade or alias whose member is stable
     // resolves like a family member tag.
+    // A member tag an unresolved import may give several families resolves
+    // to the first, and each keeps every option (`ambiguous_members`).
+    let mut ambiguous_members: BTreeMap<String, Vec<(String, Vec<String>)>> = BTreeMap::new();
     let member_bindings: BTreeMap<String, FxHashMap<String, String>> = order
         .iter()
         .filter_map(|path| {
             let ff = files.get(path)?;
-            let mut members = family_index.members_for(path, ff, files, inputs, links);
+            let mut ambiguous = FxHashMap::default();
+            let mut members = family_index.members_for(path, ff, files, inputs, links, &mut ambiguous);
+            if !ambiguous.is_empty() {
+                let mut ambiguous: Vec<(String, Vec<String>)> = ambiguous.into_iter().collect();
+                ambiguous.sort();
+                ambiguous_members.insert(path.clone(), ambiguous);
+            }
             for tag in written_member_tags(ff) {
                 if members.contains_key(tag) {
                     continue;
@@ -10425,6 +10434,15 @@ fn run_with_system_floor(
         object_members.changes(),);
     for (id, at) in delivered_ids {
         escape(&mut escaped_ids, escape_reasons.as_mut(), [id], || delivered_tags[at].opening());
+    }
+    // A member tag that may be any of several families' keeps every option
+    // of each.
+    for (file, tags) in &ambiguous_members {
+        for (tag, candidates) in tags {
+            escape(&mut escaped_ids, escape_reasons.as_mut(), candidates.iter().cloned(), || {
+                SlotOpening::rule("ambiguous-family").in_file(file).detail(tag)
+            });
+        }
     }
     // A delivered facade member hands over what its object holds, under
     // whatever key: the component, or the wrapper and what it renders.
@@ -20229,19 +20247,37 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert_eq!(out.member_bindings["fam.tsx"]["Card.Body"], "fam.tsx::Body");
     }
 
-    /// A package import the analysis cannot resolve still finds the one
-    /// family with its name; two such families leave it unresolved.
+    /// Contract: a package import the analysis cannot resolve finds the
+    /// families any analysed module exports under the imported name, through
+    /// aliases, barrels and default exports, or binds to it. One is the
+    /// family; of several, the member renders the first, and each keeps its
+    /// slots and options open.
     #[test]
-    fn unresolvable_imports_fall_back_to_the_only_family_with_that_name() {
+    fn unresolvable_imports_fall_back_to_every_family_they_may_name() {
         let family = barrel_family("export const Card = compose({ Root, Body }, { name: 'Card' });");
         let app = "import { Card } from '@acme/ui';\nexport const App = () => <Card.Body p={8} />;\n";
         let out = analyze(&[("a.tsx", family.as_str()), ("app.tsx", app)], &test_inputs());
         assert_eq!(out.member_bindings["app.tsx"]["Card.Body"], "a.tsx::Body");
-        let out = analyze(
-            &[("a.tsx", family.as_str()), ("b.tsx", family.as_str()), ("app.tsx", app)],
-            &test_inputs(),
-        );
-        assert!(!out.member_bindings.contains_key("app.tsx"), "{:?}", out.member_bindings);
+        // By the name a module, or a barrel, exports it under.
+        let resolves = |files: &[(&str, &str)], app: &str| {
+            let all: Vec<(&str, &str)> = files.iter().copied().chain([("app.tsx", app)]).collect();
+            analyze(&all, &test_inputs()).member_bindings.get("app.tsx").and_then(|members| members.get("Chip.Body").cloned())
+        };
+        let aliased = barrel_family("const CardFamily = compose({ Root, Body }, { name: 'Card' });\nexport { CardFamily as Chip };");
+        let chip = "import { Chip } from '@acme/ui';\nexport const App = () => <Chip.Body p={8} />;\n";
+        assert_eq!(resolves(&[("a.tsx", &aliased)], chip).as_deref(), Some("a.tsx::Body"));
+        let barrel = "export { Card as Chip } from './a';\n";
+        assert_eq!(resolves(&[("a.tsx", &family), ("index.ts", barrel)], chip).as_deref(), Some("a.tsx::Body"));
+        let default = barrel_family("const Card = compose({ Root, Body }, { name: 'Card' });\nexport default Card;");
+        let named = "import Chip from '@acme/ui';\nexport const App = () => <Chip.Body p={8} />;\n";
+        assert_eq!(resolves(&[("a.tsx", &default)], named).as_deref(), Some("a.tsx::Body"));
+        // Two families with the name: each renders the member's usage, with
+        // its slots and options open.
+        let out = analyze(&[("a.tsx", family.as_str()), ("b.tsx", family.as_str()), ("app.tsx", app)], &test_inputs());
+        assert!(out.css.contains("padding: 0.5rem") && out.dynamic_props.contains_key("p"), "{}", out.css);
+        for id in ["a.tsx::Body", "b.tsx::Body"] {
+            assert!(out.components[id].replacement.contains("customDynamicConfig"), "{id}: {}", out.components[id].replacement);
+        }
     }
 
     #[test]
