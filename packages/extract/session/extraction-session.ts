@@ -181,7 +181,7 @@ import {
   setWatchTransaction,
   requireEngine,
 } from './singleton';
-import { logBuildTimings } from './timing';
+import { logBuildTimings, timingRequested } from './timing';
 
 import type { PackageReadRecord } from '../pipeline/alias-agreement';
 import type { OnUndiscoverable } from '../pipeline/discover-files';
@@ -810,6 +810,9 @@ export class ExtractionSession {
   readonly sessionId: string;
   /** The log tier, from the option and `ANIMUS_DEBUG` at construction. */
   private readonly verbosity: Verbosity;
+  /** Whether the build times its phases (`timingRequested`), at
+   *  construction. */
+  private readonly timed: boolean;
   /** The emission mode at construction: explicit, else `NODE_ENV`'s. It
    *  defaults minify. */
   private readonly startupMode: AnimusMode;
@@ -873,6 +876,10 @@ export class ExtractionSession {
     this.verbosity = resolveVerbosity(
       options.verbose,
       process.env.ANIMUS_DEBUG
+    );
+    this.timed = timingRequested(
+      this.verbosity !== 'quiet',
+      process.env.ANIMUS_TIMING_JSON
     );
     this.startupMode = resolveMode(options.mode, () =>
       process.env.NODE_ENV === 'production' ? 'production' : 'development'
@@ -979,10 +986,10 @@ export class ExtractionSession {
   }
 
   private now(): number {
-    return this.verbose ? performance.now() : 0;
+    return this.timed ? performance.now() : 0;
   }
   private elapsed(t: number): number {
-    return this.verbose ? Math.round(performance.now() - t) : 0;
+    return this.timed ? Math.round(performance.now() - t) : 0;
   }
 
   /** Diagnostic prefix label — drivers set their own so one host's errors
@@ -3178,8 +3185,8 @@ export class ExtractionSession {
     logBuildTimings(
       bt,
       manifest?.timing,
-      (msg) => this.log(msg),
-      this.verbose,
+      (msg) => this.logger.info(`[animus] ${msg}`),
+      this.timed,
       result.timings.engine
     );
     if (manifest?.slot_provenance) {

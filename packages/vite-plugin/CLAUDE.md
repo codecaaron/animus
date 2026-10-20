@@ -81,6 +81,7 @@ All output is prefixed with `[animus]` for grep filtering. Three tiers:
 
 - **Always on:** component elimination warnings (`⚠ ComponentName eliminated`, and in dev `would be eliminated in production`), bail/skip diagnostics, and `info` events.
 - **`verbose: true` or `ANIMUS_DEBUG=1`:** phase checkpoints, summaries (reconciliation counts, HMR updates and invalidation totals, system reloads) and timing.
+- **`ANIMUS_TIMING_JSON=1`:** the timing lines and their `[animus:timing]` JSON alone, verbose or not; it turns on nothing else (no slot provenance), so its timings measure a quiet build.
 - **`verbose: 'trace'` or `ANIMUS_DEBUG=trace`:** adds one line per item: pruned variant/state options, transformed files, per-file HMR events, skips and invalidations. Use `ctx.trace()` for a new per-item line and `ctx.log()` for a summary.
 
 The plugin runs from `dist/index.mjs` — after editing source, rebuild: `bun run --filter './packages/vite-plugin' build`.

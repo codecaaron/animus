@@ -56,6 +56,7 @@ afterEach(() => {
   restoreGlobals();
   setEngineApiOverride(null);
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   disposeTempRoots();
 });
 
@@ -312,6 +313,63 @@ describe("a host's engine and logger", () => {
     );
     expect(consoleWarn).not.toHaveBeenCalled();
     session.close();
+  });
+
+  test('ANIMUS_TIMING_JSON prints the timings without turning on slot provenance', async () => {
+    const hostAnalyze = vi.fn<(...args: AnalyzeProjectArgs) => string>(() =>
+      buildManifest({})
+    );
+    setEngineApiOverride(null);
+    vi.stubEnv('ANIMUS_DEBUG', '');
+    vi.stubEnv('ANIMUS_TIMING_JSON', '1');
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    // The system load takes at least 5 ms, which its timing line reports.
+    mocks.loadSystemModule.mockImplementation(() => {
+      const until = performance.now() + 5;
+      while (performance.now() < until);
+      return { ...SYSTEM_CONFIG };
+    });
+    const lines: string[] = [];
+    const session = new ExtractionSession(
+      { system: './src/system.ts' },
+      {
+        engine: () => ({
+          extractFacts: () => '{"files":{},"parseCount":0}',
+          loadSystemModule: mocks.loadSystemModule,
+          analyzeProject: hostAnalyze,
+          clearAnalysisCache: mocks.clearAnalysisCache,
+          transformFile: () => ({ code: '', hasComponents: false }),
+        }),
+        logger: {
+          info: (line) => lines.push(line),
+          warn: (line) => lines.push(line),
+          error: (line) => lines.push(line),
+        },
+      }
+    );
+    session.rootDir = createProject('animus-timing-switch-');
+
+    try {
+      await session.runFullPipeline();
+
+      const systemLoad = lines
+        .map((line) => /^\[animus\] {3}system-load +(\d+)ms$/.exec(line)?.[1])
+        .find((ms) => ms !== undefined);
+      expect(Number(systemLoad)).toBeGreaterThanOrEqual(5);
+      const json = consoleError.mock.calls
+        .map(([line]) => /^\[animus:timing\] (\{.*\})$/.exec(String(line))?.[1])
+        .find((text) => text !== undefined);
+      expect(
+        JSON.parse(json ?? '{}')['buildStart.systemLoad']
+      ).toBeGreaterThanOrEqual(5);
+      expect(JSON.stringify(hostAnalyze.mock.calls)).not.toContain(
+        'slot_provenance'
+      );
+    } finally {
+      session.close();
+    }
   });
 });
 

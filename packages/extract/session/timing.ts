@@ -1,15 +1,26 @@
 import { camelToKebab } from '../pipeline/utils';
 
+/** Whether a build times its phases and prints their lines: when verbose,
+ *  or when `ANIMUS_TIMING_JSON=1` (`timingJson`) asks for them alone, which
+ *  turns on nothing else verbose does (slot provenance among it). */
+export function timingRequested(
+  verbose: boolean,
+  timingJson: string | undefined
+): boolean {
+  return verbose || timingJson === '1';
+}
+
 /** The build's timing lines: the session's phases, with the engine's own
- *  (`engineTiming`) under `rust-extract`, which holds them. */
+ *  (`engineTiming`) under `rust-extract`, which holds them, when `timed`
+ *  (`timingRequested`); `log` prints whatever the verbosity. */
 export function logBuildTimings(
   bt: Record<string, number>,
   rustTiming: Record<string, number> | undefined,
   log: (msg: string) => void,
-  verbose: boolean,
+  timed: boolean,
   engineTiming?: Record<string, number>
 ): void {
-  if (!verbose) return;
+  if (!timed) return;
   const pad = (label: string, width: number): string =>
     label + ' '.repeat(Math.max(0, width - label.length));
   const jsPhases: [string, string][] = [
