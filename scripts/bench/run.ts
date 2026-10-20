@@ -247,6 +247,7 @@ function installSide(
     filter: (path) => path === APP || !APP_COPY_SKIP.has(basename(path)),
   });
   const modules = join(app, 'node_modules');
+  mkdirSync(modules, { recursive: true });
   for (const name of readdirSync(join(APP, 'node_modules'))) {
     if (name.startsWith('.') || name === '@animus-ui') continue;
     const source = join(APP, 'node_modules', name);
