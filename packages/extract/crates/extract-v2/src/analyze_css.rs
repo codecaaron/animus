@@ -6017,22 +6017,28 @@ fn names_react_pass_through(ff: &FileFacts, tag: &str, origin: Option<TagOrigin>
     }
 }
 
-/// A declaration each (file, name) resolves to, once resolved.
-type Declarations = RefCell<FxHashMap<String, FxHashMap<String, Option<(String, String)>>>>;
+/// Answers by (file, name) that the facts alone decide: a lookup borrows
+/// both, and only a first answer stores them.
+struct PairMemo<T>(RefCell<FxHashMap<String, FxHashMap<String, T>>>);
 
-/// `file`'s `name` in `cache`, resolved by `resolve` on its first ask.
-fn memoized(
-    cache: &Declarations,
-    file: &str,
-    name: &str,
-    resolve: impl FnOnce() -> Option<(String, String)>,
-) -> Option<(String, String)> {
-    if let Some(known) = cache.borrow().get(file).and_then(|names| names.get(name)) {
-        return known.clone();
+impl<T: Clone> PairMemo<T> {
+    fn new() -> Self {
+        PairMemo(Default::default())
     }
-    let declaration = resolve();
-    cache.borrow_mut().entry(file.to_string()).or_default().insert(name.to_string(), declaration.clone());
-    declaration
+
+    /// The answer for `file` and `name`, from `answer` the first time.
+    fn get_or(&self, file: &str, name: &str, answer: impl FnOnce() -> T) -> T {
+        if let Some(found) = self.0.borrow().get(file).and_then(|names| names.get(name)) {
+            return found.clone();
+        }
+        let found = answer();
+        let mut memo = self.0.borrow_mut();
+        match memo.get_mut(file) {
+            Some(names) => names.insert(name.to_string(), found.clone()),
+            None => memo.entry(file.to_string()).or_default().insert(name.to_string(), found.clone()),
+        };
+        found
+    }
 }
 
 /// The tags whose type a function's own prop chooses (`PropTag`) that
@@ -6068,9 +6074,9 @@ fn bounded_prop_tags(
     // The declaration a module's name or default import resolves to, through
     // any barrel. Each target below asks again of the same names, so each
     // answer is resolved once.
-    let declared_by_name: Declarations = RefCell::default();
+    let declared_by_name: PairMemo<Option<(String, String)>> = PairMemo::new();
     let declared = |file: &str, ff: &FileFacts, name: &str| {
-        memoized(&declared_by_name, file, name, || {
+        declared_by_name.get_or(file, name, || {
             resolve_declaration(file, ff, name, files, inputs, links).map(|(declaring, binding, _)| (declaring, binding))
         })
     };
@@ -6080,9 +6086,9 @@ fn bounded_prop_tags(
     };
     // A namespace member path (`ns.X`) a module reads, as a declaration,
     // resolved once each.
-    let declared_by_path: Declarations = RefCell::default();
+    let declared_by_path: PairMemo<Option<(String, String)>> = PairMemo::new();
     let namespace_declared = |file: &str, ff: &FileFacts, path: &str| {
-        memoized(&declared_by_path, file, path, || {
+        declared_by_path.get_or(file, path, || {
             namespace_member_declaration(file, ff, path, files, inputs, links).map(|(declaring, binding, _)| (declaring, binding))
         })
     };
@@ -7069,24 +7075,30 @@ fn opaque_delivery(
     // member) names from `file`, or `None` outside the analysis. The facts
     // alone decide it, and the passes below ask again and again.
     type Declared = Option<(String, String, bool)>;
-    let declared: std::cell::RefCell<FxHashMap<(String, String), Declared>> = Default::default();
+    let declared: PairMemo<Declared> = PairMemo::new();
     let declaration = |file: &str, ff: &FileFacts, name: &str| {
-        let key = (file.to_string(), name.to_string());
-        if let Some(found) = declared.borrow().get(&key) {
-            return found.clone();
+        declared.get_or(file, name, || {
+            let (root, member) = match name.split_once('.') {
+                Some((root, member)) => (root, Some(member)),
+                None => (name, None),
+            };
+            match (ff.namespace_imports.get(root), member) {
+                (Some(source), Some(member)) => resolve_export(file, source, member, files, inputs, links),
+                (Some(source), None) => resolve_import_source(file, source, files, inputs)
+                    .map(|module| (module, String::new(), false)),
+                (None, _) => resolve_declaration(file, ff, root, files, inputs, links),
+            }
+        })
+    };
+    // `resolve_declaration(file, ff, name)`, through `declaration`'s memo
+    // where the two agree: a name with no `.` that no namespace import
+    // binds.
+    let binding_declaration = |file: &str, ff: &FileFacts, name: &str| {
+        if name.contains('.') || ff.namespace_imports.contains_key(name) {
+            resolve_declaration(file, ff, name, files, inputs, links)
+        } else {
+            declaration(file, ff, name)
         }
-        let (root, member) = match name.split_once('.') {
-            Some((root, member)) => (root, Some(member)),
-            None => (name, None),
-        };
-        let found = match (ff.namespace_imports.get(root), member) {
-            (Some(source), Some(member)) => resolve_export(file, source, member, files, inputs, links),
-            (Some(source), None) => resolve_import_source(file, source, files, inputs)
-                .map(|module| (module, String::new(), false)),
-            (None, _) => resolve_declaration(file, ff, root, files, inputs, links),
-        };
-        declared.borrow_mut().insert(key, found.clone());
-        found
     };
     // The arrays every analysed module reads in place: none uses one
     // otherwise through a named import, and none reaches its module through
@@ -7099,7 +7111,7 @@ fn opaque_delivery(
         let mut reached: FxHashSet<String> = FxHashSet::default();
         for (path, ff) in files {
             for import in &ff.misused_imports {
-                if let Some((declaring, binding, _)) = resolve_declaration(path, ff, import, files, inputs, links) {
+                if let Some((declaring, binding, _)) = binding_declaration(path, ff, import) {
                     held.remove(&(declaring, binding));
                 }
                 // A name that is a module's namespace (`export * as R`)
@@ -7124,7 +7136,7 @@ fn opaque_delivery(
     // A read method of a held array is the built-in one.
     let held_array_method = |file: &str, ff: &FileFacts, call: &crate::usage_facts::OpaqueCall| {
         call.held_array.as_deref().is_some_and(|array| {
-            resolve_declaration(file, ff, array, files, inputs, links).is_some_and(|(declaring, binding, _)| held.contains(&(declaring, binding)))
+            binding_declaration(file, ff, array).is_some_and(|(declaring, binding, _)| held.contains(&(declaring, binding)))
         })
     };
     // A call is read only into a function or class its declaring module
@@ -7151,17 +7163,9 @@ fn opaque_delivery(
     type Wrappers = FxHashSet<(String, String)>;
     // What a tag names depends on the facts alone, and the passes below ask
     // again and again.
-    type Memo<T> = std::cell::RefCell<FxHashMap<(String, String), std::rc::Rc<[T]>>>;
-    let resolved: Memo<String> = Default::default();
-    let receiver_ids = |file: &str, ff: &FileFacts, tag: &str| {
-        let key = (file.to_string(), tag.to_string());
-        if let Some(ids) = resolved.borrow().get(&key) {
-            return std::rc::Rc::clone(ids);
-        }
-        let ids: std::rc::Rc<[String]> = receiver_ids(file, ff, tag).into();
-        resolved.borrow_mut().insert(key, std::rc::Rc::clone(&ids));
-        ids
-    };
+    type Memo<T> = PairMemo<std::rc::Rc<[T]>>;
+    let resolved: Memo<String> = PairMemo::new();
+    let receiver_ids = |file: &str, ff: &FileFacts, tag: &str| resolved.get_or(file, tag, || receiver_ids(file, ff, tag).into());
     // Each file's elements by where they open.
     let elements: FxHashMap<&str, FxHashMap<u32, &UsageFact>> = files
         .iter()
@@ -7218,18 +7222,15 @@ fn opaque_delivery(
     };
     // The ordinary components a tag may name: by its declaration, or as an
     // object's member.
-    let named: Memo<(String, String)> = Default::default();
+    let named: Memo<(String, String)> = PairMemo::new();
     let ordinary_named = |file: &str, ff: &FileFacts, tag: &str| {
-        let key = (file.to_string(), tag.to_string());
-        if let Some(keys) = named.borrow().get(&key) {
-            return std::rc::Rc::clone(keys);
-        }
-        let declared = declaration(file, ff, tag).map(|(declaring, binding, _)| (declaring, binding)).filter(|(declaring, binding)| {
-            files.get(declaring).is_some_and(|declared| declared.ordinary_components.contains(binding))
-        });
-        let keys: std::rc::Rc<[(String, String)]> = declared.into_iter().chain(ordinary_members.get(&key).cloned()).collect();
-        named.borrow_mut().insert(key, std::rc::Rc::clone(&keys));
-        keys
+        named.get_or(file, tag, || {
+            let declared = declaration(file, ff, tag).map(|(declaring, binding, _)| (declaring, binding)).filter(|(declaring, binding)| {
+                files.get(declaring).is_some_and(|declared| declared.ordinary_components.contains(binding))
+            });
+            let member = ordinary_members.get(&(file.to_string(), tag.to_string())).cloned();
+            declared.into_iter().chain(member).collect()
+        })
     };
     let mut proven: Wrappers = FxHashSet::default();
     for (path, ff) in files {
@@ -7542,7 +7543,7 @@ fn opaque_delivery(
                 .and_then(|module| Some((module.clone(), files.get(&module)?)))
                 .map(|(module, declaring)| declaring.element_consts.values().map(|held| (module.clone(), held)).collect())
                 .unwrap_or_default(),
-            None => resolve_declaration(file, ff, import, files, inputs, links)
+            None => binding_declaration(file, ff, import)
                 .filter(|(declaring, _, _)| declaring != file)
                 .and_then(|(declaring, binding, _)| {
                     let held = files.get(&declaring)?.element_consts.get(&binding)?;
