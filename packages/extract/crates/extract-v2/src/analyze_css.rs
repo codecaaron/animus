@@ -7572,9 +7572,16 @@ fn opaque_delivery(
                     !gated || tag.site.as_child.is_some() || !tag.site.spreads.is_empty() || defaulted.contains(key)
                 })
             };
+            // An `as`, `asChild` or `is` the site may write reaches the
+            // component as a prop, which its own elements judge where it
+            // renders them: only one it hands on renders the caller's choice
+            // where no site judges it.
+            let retargets = |key: &(String, String)| {
+                forwarding.get(key).is_some_and(|opens| ["as", "asChild", "is"].iter().any(|name| opens.contains(&name.to_string())))
+            };
             let ordinary_opens = |key: &(String, String)| {
                 if (clone_runs(key) && !clones_child(key))
-                    || (tag.polymorphic != Polymorphic::No && !cloning.contains(key) && !clones_child(key))
+                    || (tag.polymorphic != Polymorphic::No && retargets(key) && !cloning.contains(key) && !clones_child(key))
                     || (tag.exposed && class(&key.0, &key.1))
                 {
                     Inputs::Every
@@ -14746,6 +14753,15 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             ("import { forwardRef } from 'react';\nconst Target = forwardRef(function Target({ children, ...rest }, ref) { return <div ref={ref} {...rest}>{children}</div>; });\nconst Render = ds.styles({ display: 'grid' }).asComponent(Target);", "", "", false),
             ("import { Target } from './other';\nconst Render = ds.styles({ display: 'grid' }).asComponent(Target);", "", "import { forwardRef } from 'react';\nexport const Target = forwardRef(function Target({ children, ...rest }, ref) { return <a ref={ref} {...rest}>{children}</a>; });\n", false),
             ("import { forwardRef } from 'react';\nconst Target = forwardRef(function Target({ children, ...rest }, ref) { return <div ref={ref} {...rest}>{children}</div>; });\nconst Render = ds.styles({ display: 'grid' }).asComponent(Target);\nexport const all = [Target];", "", "", true),
+            // A site's `as`, `asChild` or `is`, written or in a spread, reaches
+            // the component as a prop: it renders the caller's choice where
+            // no site judges it only where it hands that prop on.
+            ("const Base = ({ children, ...rest }) => <a {...rest}>{children}</a>;\nconst Render = ({ children, ...rest }) => <Base {...rest}>{children}</Base>;", "", "", false),
+            ("const Base = ({ children, ...rest }) => <a {...rest}>{children}</a>;\nconst Render = ({ children, ...rest }) => <Base {...rest}>{children}</Base>;", "as={Foreign}", "", false),
+            ("const Inner = ({ as: Tag = 'div', ...props }) => <Tag {...props} />;\nconst Render = ({ children, ...rest }) => <Inner {...rest}>{children}</Inner>;", "as={Foreign}", "", true),
+            ("const Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children, ...rest }) => <Stack {...rest}>{children}</Stack>;", "as={Foreign}", "", true),
+            ("import { createElement } from 'react';\nconst Render = ({ children, ...rest }) => createElement(rest.as ?? 'div', rest, children);", "as={Foreign}", "", true),
+            ("const Inner = ({ tag: Tag = 'div', children }) => <Tag>{children}</Tag>;\nconst Render = ({ children, ...rest }) => <Inner tag={rest.as}>{children}</Inner>;", "as={Foreign}", "", true),
             // Forwarding is decided per input: an input handed to unknown
             // code (a callback prop called with a prop, `clsx` with a class
             // name) marks the elements that prop carries, not the children
