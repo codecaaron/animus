@@ -14621,7 +14621,43 @@ mod tests {
             ("let t = 'x';
 t = pad;
 const Render = ({ children }) => { document.body.onclick = t; return <div>{children}</div>; };", "", "", true),
+            // A delete counts as a write: which object it reaches, and so
+            // whether a Proxy's delete trap runs, needs value provenance.
+            ("const Render = ({ children }) => { const r = useRef(null); delete document.body.dataset.mode; delete r.current.style['color']; delete r.current.x; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { delete document.body.dataset[document.body.id]; return <div>{children}</div>; };", "", "", true),
             ("const Render = ({ children }) => { delete document.body.title; return <div>{children}</div>; };", "", "", true),
+            ("import { proxy } from 'outside';\ndelete proxy.count;\nconst Render = ({ children }) => <div>{[children].map((x) => x)}</div>;", "", "", true),
+            ("import { proxy } from 'outside';\ndelete proxy['count'];\nconst Render = ({ children }) => <div>{[children].map((x) => x)}</div>;", "", "", true),
+            ("import { proxy } from 'outside';\nconst Render = ({ children }) => { delete proxy.dataset.mode; return <div>{[children].map((x) => x)}</div>; };", "", "", true),
+            ("import { root } from 'outside';\nconst held = root;\ndelete held.dataset.mode;\nconst Render = ({ children }) => <div>{[children].map((x) => x)}</div>;", "", "", true),
+            ("import { proxy } from 'outside';\nconst Render = ({ children }) => { const r = useRef(proxy); delete r.current.mode; return <div>{[children].map((x) => x)}</div>; };", "", "", true),
+            // A call of a function the module binds, every return of which is
+            // a primitive by its form, is one.
+            ("const size = (n) => (n ? String(n) : '');\nconst Render = ({ children }) => { document.body.style.width = size(document.body.clientWidth); return <div>{children}</div>; };", "", "", false),
+            ("function size(n) { if (!n) return; return `${n}px`; }\nconst Render = ({ children }) => { document.body.onclick = size(document.body.clientWidth); return <div>{children}</div>; };", "", "", false),
+            ("const size = (n) => n;\nconst Render = ({ children }) => { document.body.onclick = size(pad); return <div>{children}</div>; };", "", "", true),
+            ("function size(n) { if (n) return pad; return ''; }\nconst Render = ({ children }) => { document.body.onclick = size(1); return <div>{children}</div>; };", "", "", true),
+            ("let size = () => '';\nsize = () => pad;\nconst Render = ({ children }) => { document.body.onclick = size(); return <div>{children}</div>; };", "", "", true),
+            ("const size = async () => '';\nconst Render = ({ children }) => { document.body.onclick = size(); return <div>{children}</div>; };", "", "", true),
+            ("import { size } from './other';\nconst Render = ({ children }) => { document.body.onclick = size(); return <div>{children}</div>; };", "", "export const size = () => '';\n", true),
+            // A trusted key that holds no callable itself.
+            ("const Render = ({ children }) => { document.body.model = { active: false, type: null, count: 0, map: [pad], then: undefined }; return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { document.body.model = { count: pad }; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { document.body.model = { map: { call: pad } }; return <div>{children}</div>; };", "", "", true),
+            // A member read may be any object, React's own dispatcher among
+            // them (`ReactCurrentDispatcher.current = { useState }`).
+            ("const Render = ({ children }) => { const r = useRef(null); r.current.typing.current = { useState: r ? pad : 0 }; return <div>{children}</div>; };", "", "", true),
+            // A reduce accumulator that only ever holds the literal it starts
+            // as, over an array a built-in builds, and such an array's copy,
+            // are the module's own.
+            ("const Render = ({ children }) => { const byKey = Object.keys(document.body.dataset).filter(Boolean).reduce((acc, key) => { acc[key] = { label: key }; return acc; }, {}); return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { const all = ['a'].reduceRight(function (acc, key) { acc[key] = pad; return acc; }, []); const rows = Array.from(document.body.children); rows[document.body.id] = pad; return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { useSlot().reduce((acc, key) => { acc[key] = pad; return acc; }, {}); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { [1].reduce((acc, key) => { acc[key] = pad; return acc; }, useSlot()); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { [1].reduce((acc, key) => { acc[key] = pad; return useSlot(); }, {}); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { [1].reduce((acc, key) => { acc = useSlot(); acc[key] = pad; return acc; }, {}); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { [1].reduce((acc = useSlot(), key) => { acc[key] = pad; return acc; }, {}); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { const rows = useSlot().slice(); rows[document.body.id] = pad; return <div>{children}</div>; };", "", "", true),
             // A store onto an object that may be a prototype every props
             // object inherits counts when a render reads its key by name.
             ("({}).constructor.prototype.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
@@ -14653,6 +14689,24 @@ const Render = ({ children }) => { document.body.onclick = t; return <div>{child
             ("const P = Object.getPrototypeOf.bind(null)({});\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const Render = ({ children }) => { const { constructor: { prototype: P } } = children; P.p = 12; return <div>{children}</div>; };", "", "", true),
             ("let P;\n({ prototype: P } = Object);\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            // A function's binding that no code reads takes nothing anywhere.
+            ("const Render = ({ children }) => { const { [document.body.id]: _left, ...rest } = document.body.dataset; return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { const { [document.body.id]: P } = document.body; P.p = 12; return <div>{children}</div>; };", "", "", true),
+            // A prototype handed to `Object.getOwnPropertyDescriptor` is let
+            // go: which constructor it is, and what its descriptor holds,
+            // need value provenance.
+            ("const Render = ({ children }) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(document.body, ''); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { Object.getOwnPropertyDescriptor(Node.prototype, '__proto__')?.get?.call(document.body); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { Object.getOwnPropertyDescriptor(Node.prototype, 'constructor')?.get?.call(document.body); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { Object.getOwnPropertyDescriptor(Node.prototype, document.body.id)?.get?.call(document.body); return <div>{children}</div>; };", "", "", true),
+            ("import { Holder } from 'outside';\nconst d = Object.getOwnPropertyDescriptor(Holder.prototype, 'value');\npad(d.value);\nconst Render = ({ children }) => <div>{[children].map((x) => x)}</div>;", "", "", true),
+            ("import { Holder } from 'outside';\nconst Render = ({ children }) => { Object.getOwnPropertyDescriptor(Holder.prototype, 'value')?.set?.call(document.body, ''); return <div>{[children].map((x) => x)}</div>; };", "", "", true),
+            ("import { Holder } from 'outside';\nconst HTMLInputElement = Holder;\nconst Render = ({ children }) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(document.body, ''); return <div>{[children].map((x) => x)}</div>; };", "", "", true),
+            ("import { Holder } from 'outside';\nHTMLInputElement = Holder;\nconst Render = ({ children }) => { pad(Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.get?.call(document.body)); return <div>{[children].map((x) => x)}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { pad(Object.getOwnPropertyDescriptor(HTMLTrapElement.prototype, 'value')?.get?.call(document.body)); return <div>{[children].map((x) => x)}</div>; };", "", "", true),
+            ("const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');\npad(d);\nconst Render = ({ children }) => <div>{[children].map((x) => x)}</div>;", "", "", true),
+            ("const Render = ({ children }) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.value?.call(document.body); return <div>{[children].map((x) => x)}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { pad(Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.get?.bind(document.body)); return <div>{[children].map((x) => x)}</div>; };", "", "", true),
             ("let P;\n({ __proto__: P } = {});\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const k = 'prototype';\nconst P = ({}).constructor[k];\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             // `in` asks a global object only whether a property exists.

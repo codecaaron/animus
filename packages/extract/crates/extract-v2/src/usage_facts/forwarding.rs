@@ -1161,8 +1161,10 @@ struct Declarations<'r> {
     /// Bindings some code stores into by any other name: an array among
     /// them may hold hooks.
     named_stores: FxHashSet<SymbolId>,
-    /// Bindings declared to a literal, a function or a class, never
-    /// reassigned: none holds a built-in's prototype.
+    /// Bindings declared to a literal, a function, a class or an array a
+    /// built-in builds (`fresh_array`), never reassigned, and reduce
+    /// accumulators that only ever hold their literal (`accumulator`): none
+    /// holds a built-in's prototype.
     literal_bindings: FxHashSet<SymbolId>,
     /// Bindings written by a built-in's method or hook name, or by a
     /// bracketed key (`written_into`), with the first such write.
@@ -1174,6 +1176,10 @@ struct Declarations<'r> {
     outside_let_goes: Vec<(u32, SymbolId)>,
     /// `const`s declared to a provably primitive value (`primitive`).
     primitive_consts: FxHashSet<SymbolId>,
+    /// Functions bound to a name, never reassigned, whose every return is
+    /// provably primitive by `primitive`'s forms other than such a call:
+    /// each is added once the walk leaves its body.
+    primitive_functions: FxHashSet<SymbolId>,
     /// See `FileFacts::keyed_stores`.
     keyed_stores: Vec<(u32, String)>,
     /// See `FileFacts::rewrites_object`.
@@ -1249,6 +1255,7 @@ impl<'r> Declarations<'r> {
             patches_intrinsics: None,
             outside_let_goes: Vec::new(),
             primitive_consts: FxHashSet::default(),
+            primitive_functions: FxHashSet::default(),
             keyed_stores: Vec::new(),
             rewrites_object: false,
             react_imports,
@@ -1448,6 +1455,78 @@ impl<'r> Declarations<'r> {
         }
     }
 
+    /// Whether `object` is the global `Object` by its name (`Object`,
+    /// `globalThis.Object`).
+    fn global_object(&self, object: &Expression<'_>) -> bool {
+        match unwrap_type_assertions(object) {
+            Expression::Identifier(id) => id.name == "Object" && self.symbol(id).is_none(),
+            Expression::StaticMemberExpression(member) => {
+                member.property.name == "Object"
+                    && matches!(&member.object, Expression::Identifier(id) if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.symbol(id).is_none())
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `expression` is a new array a built-in builds, whose methods
+    /// are the built-in ones and whose elements no module put a prototype
+    /// in: an array literal, `Object.keys`, `values` or `entries`,
+    /// `Array.from` or `Array.of`, or a built-in array method that returns
+    /// a new array called on one.
+    fn fresh_array(&self, expression: &Expression<'_>) -> bool {
+        match unwrap_type_assertions(expression) {
+            Expression::ArrayExpression(_) => true,
+            Expression::CallExpression(call) => match unwrap_type_assertions(&call.callee) {
+                Expression::StaticMemberExpression(member) => match member.property.name.as_str() {
+                    "keys" | "values" | "entries" => self.global_object(&member.object),
+                    "from" | "of" => {
+                        matches!(unwrap_type_assertions(&member.object), Expression::Identifier(id) if id.name == "Array" && self.symbol(id).is_none())
+                    }
+                    "filter" | "map" | "slice" | "concat" | "flat" | "flatMap" | "toSorted" | "toReversed" => self.fresh_array(&member.object),
+                    _ => false,
+                },
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// The accumulator of the function at `span`, when it only ever holds
+    /// the literal it starts as: the function is the callback of a built-in
+    /// `reduce` or `reduceRight` of a `fresh_array`, given an object or
+    /// array literal to start, its first parameter a plain binding never
+    /// reassigned, and each of its returns that binding, a literal or
+    /// nothing.
+    fn accumulator(
+        &self,
+        span: Span,
+        params: &oxc::ast::ast::FormalParameters<'_>,
+        body: Returning<'_, '_>,
+    ) -> Option<SymbolId> {
+        let (current, Some(AstKind::CallExpression(call))) = super::peel_wrappers(span, &mut self.ancestors.iter().rev()) else {
+            return None;
+        };
+        let reduces = matches!(unwrap_type_assertions(&call.callee), Expression::StaticMemberExpression(member)
+            if matches!(member.property.name.as_str(), "reduce" | "reduceRight") && self.fresh_array(&member.object));
+        let starts = call.arguments.get(1).and_then(|argument| argument.as_expression()).map(unwrap_type_assertions);
+        if !reduces
+            || call.arguments.len() != 2
+            || call.arguments[0].span() != current
+            || !matches!(starts, Some(Expression::ObjectExpression(_) | Expression::ArrayExpression(_)))
+        {
+            return None;
+        }
+        let parameter = params.items.first().filter(|parameter| parameter.initializer.is_none())?;
+        let BindingPattern::BindingIdentifier(id) = &parameter.pattern else { return None };
+        let symbol = id.symbol_id.get().filter(|symbol| !self.scoping.symbol_is_mutated(*symbol))?;
+        let returned = |value: Option<&Expression<'_>>| match value.map(unwrap_type_assertions) {
+            None | Some(Expression::ObjectExpression(_) | Expression::ArrayExpression(_)) => true,
+            Some(Expression::Identifier(returned)) => self.symbol(returned) == Some(symbol),
+            Some(_) => false,
+        };
+        every_return(body, &returned).then_some(symbol)
+    }
+
     /// Whether `object` reaches prototypes by a member it reads: a built-in,
     /// the global object, or a chain through a prototype, constructor or
     /// `__proto__`.
@@ -1530,7 +1609,7 @@ impl<'r> Declarations<'r> {
     /// Whether the member at `span` is assigned a value with no callable
     /// under a key trusted code calls by name: a primitive (a compound
     /// assignment or `++` stores one), an array literal, or an object
-    /// literal of untrusted static keys, whatever their values. A built-in
+    /// literal of static keys whose trusted ones hold none. A built-in
     /// redirected so is never called, and the store itself runs only a
     /// setter the platform or the module (where it installs one) owns. What
     /// its key may change for a render is `keyed_stores`'.
@@ -1553,7 +1632,8 @@ impl<'r> Declarations<'r> {
     }
 
     /// Whether `value` holds no callable under a trusted key: see
-    /// `stores_no_trusted_callable`.
+    /// `stores_no_trusted_callable`. A trusted key may hold a value that
+    /// holds none itself (`{ count: 0 }`).
     fn no_trusted_callable(&self, value: &Expression<'_>) -> bool {
         match unwrap_type_assertions(value) {
             Expression::ArrayExpression(_) => true,
@@ -1561,7 +1641,7 @@ impl<'r> Declarations<'r> {
                 ObjectPropertyKind::ObjectProperty(property) => {
                     property.kind == PropertyKind::Init
                         && !property.computed
-                        && property.key.static_name().is_some_and(|key| !trusted_name(&key))
+                        && property.key.static_name().is_some_and(|key| !trusted_name(&key) || self.no_trusted_callable(&property.value))
                 }
                 ObjectPropertyKind::SpreadProperty(_) => false,
             }),
@@ -1572,9 +1652,17 @@ impl<'r> Declarations<'r> {
     /// Whether `value` is provably primitive: a literal, `undefined`, `NaN`
     /// or `Infinity`, an untagged template, an operator's result, a
     /// conversion by `String`, `Number` or `Boolean`, an array literal's
-    /// `join`, a `const` declared to one, or a choice among them.
+    /// `join`, a call of one of `primitive_functions`, a `const` declared to
+    /// one, or a choice among them.
     fn primitive(&self, value: &Expression<'_>) -> bool {
+        self.primitive_by(value, true)
+    }
+
+    /// `primitive`, counting the calls of `primitive_functions` only where
+    /// `calls`: what such a function returns is judged without them.
+    fn primitive_by(&self, value: &Expression<'_>, calls: bool) -> bool {
         use oxc::syntax::operator::AssignmentOperator;
+        let primitive = |value: &Expression<'_>| self.primitive_by(value, calls);
         match unwrap_type_assertions(value) {
             Expression::StringLiteral(_)
             | Expression::NumericLiteral(_)
@@ -1591,17 +1679,18 @@ impl<'r> Declarations<'r> {
                 Some(symbol) => self.primitive_consts.contains(&symbol),
             },
             Expression::AssignmentExpression(assignment) => match assignment.operator {
-                AssignmentOperator::Assign => self.primitive(&assignment.right),
+                AssignmentOperator::Assign => primitive(&assignment.right),
                 AssignmentOperator::LogicalOr | AssignmentOperator::LogicalAnd | AssignmentOperator::LogicalNullish => false,
                 _ => true,
             },
-            Expression::ConditionalExpression(conditional) => self.primitive(&conditional.consequent) && self.primitive(&conditional.alternate),
-            Expression::LogicalExpression(logical) => self.primitive(&logical.left) && self.primitive(&logical.right),
-            Expression::SequenceExpression(sequence) => sequence.expressions.last().is_some_and(|last| self.primitive(last)),
+            Expression::ConditionalExpression(conditional) => primitive(&conditional.consequent) && primitive(&conditional.alternate),
+            Expression::LogicalExpression(logical) => primitive(&logical.left) && primitive(&logical.right),
+            Expression::SequenceExpression(sequence) => sequence.expressions.last().is_some_and(primitive),
             Expression::CallExpression(call) => match unwrap_type_assertions(&call.callee) {
-                Expression::Identifier(callee) => {
-                    matches!(callee.name.as_str(), "String" | "Number" | "Boolean") && self.symbol(callee).is_none()
-                }
+                Expression::Identifier(callee) => match self.symbol(callee) {
+                    None => matches!(callee.name.as_str(), "String" | "Number" | "Boolean"),
+                    Some(symbol) => calls && self.primitive_functions.contains(&symbol),
+                },
                 Expression::StaticMemberExpression(member) => {
                     member.property.name == "join" && matches!(unwrap_type_assertions(&member.object), Expression::ArrayExpression(_))
                 }
@@ -1937,6 +2026,40 @@ fn own_function(ancestors: &[AstKind<'_>]) -> Option<ScopeId> {
     })
 }
 
+/// A function's body, or an arrow's block or concise body: what
+/// `every_return` reads.
+#[derive(Clone, Copy)]
+enum Returning<'b, 'a> {
+    Body(&'b oxc::ast::ast::FunctionBody<'a>),
+    Arrow(&'b oxc::ast::ast::ArrowFunctionBody<'a>),
+}
+
+/// Whether `test` holds of every value a function returns: an arrow's
+/// concise body, or each of its body's own `return`s, and `None` for
+/// running off its end or a bare `return`.
+fn every_return(body: Returning<'_, '_>, test: &dyn Fn(Option<&Expression<'_>>) -> bool) -> bool {
+    struct Returns<'t> {
+        test: &'t dyn Fn(Option<&Expression<'_>>) -> bool,
+        every: bool,
+    }
+    impl<'a> Visit<'a> for Returns<'_> {
+        fn visit_return_statement(&mut self, statement: &oxc::ast::ast::ReturnStatement<'a>) {
+            self.every &= (self.test)(statement.argument.as_ref());
+        }
+        fn visit_function(&mut self, _function: &Function<'a>, _flags: oxc::syntax::scope::ScopeFlags) {}
+        fn visit_arrow_function_expression(&mut self, _arrow: &oxc::ast::ast::ArrowFunctionExpression<'a>) {}
+        fn visit_class(&mut self, _class: &Class<'a>) {}
+    }
+    let body = match body {
+        Returning::Body(body) => body,
+        Returning::Arrow(oxc::ast::ast::ArrowFunctionBody::FunctionBody(body)) => body,
+        Returning::Arrow(body) => return body.as_expression().is_some_and(|value| test(Some(value))),
+    };
+    let mut returns = Returns { test, every: test(None) };
+    returns.visit_function_body(body);
+    returns.every
+}
+
 /// The scope of a function written as `expression`.
 fn function_scope(expression: &Expression<'_>) -> Option<ScopeId> {
     match expression {
@@ -1951,8 +2074,31 @@ impl<'a> Visit<'a> for Declarations<'a> {
         self.ancestors.push(kind);
     }
 
-    fn leave_node(&mut self, _kind: AstKind<'a>) {
+    // Once the walk has left a function bound to a name, the `const`s its
+    // returns may name are known.
+    fn leave_node(&mut self, kind: AstKind<'a>) {
         self.ancestors.pop();
+        let (id, body) = match kind {
+            AstKind::Function(function) if !function.generator && !function.r#async => {
+                (function.id.as_ref(), function.body.as_deref().map(Returning::Body))
+            }
+            AstKind::VariableDeclarator(declarator) => match (&declarator.id, declarator.init.as_ref().map(unwrap_type_assertions)) {
+                (BindingPattern::BindingIdentifier(id), Some(Expression::ArrowFunctionExpression(arrow))) if !arrow.r#async => {
+                    (Some(&**id), Some(Returning::Arrow(&arrow.body)))
+                }
+                (BindingPattern::BindingIdentifier(id), Some(Expression::FunctionExpression(function)))
+                    if !function.generator && !function.r#async =>
+                {
+                    (Some(&**id), function.body.as_deref().map(Returning::Body))
+                }
+                _ => return,
+            },
+            _ => return,
+        };
+        let (Some(symbol), Some(body)) = (id.and_then(|id| id.symbol_id.get()), body) else { return };
+        if !self.scoping.symbol_is_mutated(symbol) && every_return(body, &|value| value.is_none_or(|value| self.primitive_by(value, false))) {
+            self.primitive_functions.insert(symbol);
+        }
     }
 
     fn visit_class(&mut self, class: &Class<'a>) {
@@ -2060,9 +2206,13 @@ impl<'a> Visit<'a> for Declarations<'a> {
     }
 
     // A destructuring that reads a prototype, `__proto__` or a computed key
-    // may take a prototype into a binding.
+    // may take a prototype into a binding, unless a function's binding no
+    // code reads takes it (`const { [k]: _left, ...rest } = o`).
     fn visit_binding_property(&mut self, property: &oxc::ast::ast::BindingProperty<'a>) {
-        if property.computed || property.key.static_name().is_some_and(|key| matches!(key.as_ref(), "prototype" | "__proto__")) {
+        let unread = matches!(&property.value, BindingPattern::BindingIdentifier(id) if id.symbol_id.get().is_some_and(|symbol| {
+            self.scoping.symbol_scope_id(symbol) != self.scoping.root_scope_id() && self.scoping.get_resolved_reference_ids(symbol).is_empty()
+        }));
+        if (property.computed && !unread) || property.key.static_name().is_some_and(|key| matches!(key.as_ref(), "prototype" | "__proto__")) {
             self.patch(property.span.start, "prototype-let-go");
         }
         oxc::ast_visit::walk::walk_binding_property(self, property);
@@ -2250,6 +2400,9 @@ impl<'a> Visit<'a> for Declarations<'a> {
                 self.functions.insert(symbol, scope);
             }
         }
+        if let Some(body) = &function.body {
+            self.literal_bindings.extend(self.accumulator(function.span, &function.params, Returning::Body(body)));
+        }
         self.depth += 1;
         oxc::ast_visit::walk::walk_function(self, function, flags);
         self.depth -= 1;
@@ -2259,6 +2412,7 @@ impl<'a> Visit<'a> for Declarations<'a> {
         if let Some(scope) = arrow.scope_id.get() {
             self.declare_params(scope, &arrow.params);
         }
+        self.literal_bindings.extend(self.accumulator(arrow.span, &arrow.params, Returning::Arrow(&arrow.body)));
         self.depth += 1;
         oxc::ast_visit::walk::walk_arrow_function_expression(self, arrow);
         self.depth -= 1;
@@ -2274,8 +2428,9 @@ impl<'a> Visit<'a> for Declarations<'a> {
                         self.class_bindings.insert(symbol, class.span.start);
                     }
                     let constant = !self.scoping.symbol_is_mutated(symbol);
-                    let literal = matches!(init, Expression::ArrayExpression(_) | Expression::ObjectExpression(_) | Expression::ClassExpression(_))
-                        || function_scope(init).is_some();
+                    let literal = matches!(init, Expression::ObjectExpression(_) | Expression::ClassExpression(_))
+                        || function_scope(init).is_some()
+                        || self.fresh_array(init);
                     if constant && literal {
                         self.literal_bindings.insert(symbol);
                     }
