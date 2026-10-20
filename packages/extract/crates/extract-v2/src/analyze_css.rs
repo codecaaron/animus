@@ -7011,6 +7011,32 @@ fn proven_slot_conditions(
     slots.into_iter().filter_map(|(slot, conditions)| Some((slot, conditions.filter(|c| !c.is_empty())?))).collect()
 }
 
+/// Whether `spec`, imported in `file` and not resolved, may still name code
+/// the analysis reads: a script by a subpath of a package the host maps,
+/// which the map leaves out. A file of another extension is an asset, and
+/// any other specifier the host opens unread leaves the analysis
+/// incomplete.
+fn unread_package_script(file: &str, spec: &str, inputs: &CssInputs) -> bool {
+    if probe_base(file, spec, inputs).is_some() {
+        return false;
+    }
+    let policy = inputs.analysis_context.extensions.as_ref().unwrap_or_else(|| animus_system_loader::resolution::extension_policy());
+    let last = spec.rsplit('/').next().unwrap_or(spec);
+    let script = last.rfind('.').is_none_or(|dot| {
+        let extension = &last[dot..];
+        let mut known = policy.appended.iter().chain(policy.node_next.iter().flat_map(|(emitted, sources)| std::iter::once(emitted).chain(sources)));
+        known.any(|known| known == extension)
+    });
+    let package = animus_system_loader::split_specifier(spec).0;
+    script && inputs.package_map.keys().any(|mapped| animus_system_loader::split_specifier(mapped).0 == package)
+}
+
+/// Whether `spec`, imported in `file`, may name code the analysis reads: a
+/// module it finds, or `unread_package_script`.
+fn import_reads_code<T>(file: &str, spec: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> bool {
+    resolve_import_source(file, spec, files, inputs).is_some() || unread_package_script(file, spec, inputs)
+}
+
 /// Visits `module` and every module it re-exports from at any depth, as
 /// the module table links them: by name, as a namespace, through `export
 /// *`, or as `export default` of an imported binding, skipping those in
@@ -7311,21 +7337,8 @@ fn opaque_delivery(
         // An import the analysis cannot follow into code it reads may name
         // a wrapper by any name it is exported or held under, directly or by
         // a member read, and render it unseen; one handed on whole may name
-        // any. Such an import finds a module, or names a script in
-        // a package the host maps (a file of another extension is an asset);
-        // any other the host opens unread leaves the analysis incomplete.
-        let policy = inputs.analysis_context.extensions.as_ref().unwrap_or_else(|| animus_system_loader::resolution::extension_policy());
-        let script = |spec: &str| {
-            let last = spec.rsplit('/').next().unwrap_or(spec);
-            last.rfind('.').is_none_or(|dot| {
-                let extension = &last[dot..];
-                policy.appended.iter().chain(policy.node_next.iter().flat_map(|(emitted, sources)| std::iter::once(emitted).chain(sources))).any(|known| known == extension)
-            })
-        };
-        let mapped_package = |spec: &str| {
-            let package = animus_system_loader::split_specifier(spec).0;
-            inputs.package_map.keys().any(|mapped| animus_system_loader::split_specifier(mapped).0 == package)
-        };
+        // any: one that finds a module but not the binding, or
+        // `unread_package_script`.
         // The names each wrapper goes by: the objects that hold it, which a
         // member read reaches it by, and the names its module and
         // re-exports give it or them.
@@ -7379,18 +7392,13 @@ fn opaque_delivery(
                 }
                 // A module found that leaves the binding unresolved, or a
                 // script of a mapped package.
-                let found = resolve_import_source(path, &import.source, files, inputs).is_some();
-                if found || (probe_base(path, &import.source, inputs).is_none() && script(&import.source) && mapped_package(&import.source)) {
+                if import_reads_code(path, &import.source, files, inputs) {
                     unresolved.insert(import.imported.as_str());
                     locals.push(import.local.as_str());
                 }
             }
             for (local, source) in &ff.namespace_imports {
-                if resolve_import_source(path, source, files, inputs).is_none()
-                    && probe_base(path, source, inputs).is_none()
-                    && script(source)
-                    && mapped_package(source)
-                {
+                if resolve_import_source(path, source, files, inputs).is_none() && unread_package_script(path, source, inputs) {
                     locals.push(local.as_str());
                 }
             }
@@ -10720,8 +10728,31 @@ fn run_with_system_floor(
     let mut usage_gaps = analysis_gaps(files, inputs, inputs.slot_provenance);
     usage_gaps.extend(files.iter().filter(|(_, ff)| ff.direct_eval).map(|(file, _)| SlotOpening::rule("direct-eval").in_file(file)));
     usage_gaps.extend(files.iter().filter_map(|(file, ff)| {
-        let patch = ff.patches_intrinsics?;
-        Some(SlotOpening { at: Some(patch.at), ..SlotOpening::rule("patches-intrinsics").in_file(file).detail(patch.rule) })
+        // A trusted global handed to code the analysis reads may be
+        // redirected there; code outside can read it anyway.
+        let (at, rule) = ff.patches_intrinsics.map(|patch| (patch.at, patch.rule)).or_else(|| {
+            let (at, _) = ff.outside_let_goes.iter().find(|(_, source)| import_reads_code(file, source, files, inputs))?;
+            Some((*at, "trusted-let-go"))
+        })?;
+        Some(SlotOpening { at: Some(at), ..SlotOpening::rule("patches-intrinsics").in_file(file).detail(rule) })
+    }));
+    // A store onto an object that may be a prototype every props object
+    // inherits changes what a render reads by its key: a prop's name, or
+    // one React or the runtime reads.
+    let prop_named = |key: &str| {
+        matches!(key, "children" | "key" | "ref" | "className" | "style" | "as" | "asChild")
+            || inputs.config.contains_key(key)
+            || inputs.selector_aliases.contains_key(key)
+            || inputs.condition_aliases.contains_key(key)
+            || evaluated.values().any(|(css, _, _, _, _, custom, _)| {
+                css.variants.iter().any(|variant| variant.prop == key)
+                    || css.states.iter().any(|(state, _)| state == key)
+                    || custom.as_ref().is_some_and(|custom| custom.contains_key(key))
+            })
+    };
+    usage_gaps.extend(files.iter().filter_map(|(file, ff)| {
+        let (at, _) = ff.keyed_stores.iter().find(|(_, key)| prop_named(key))?;
+        Some(SlotOpening { at: Some(*at), ..SlotOpening::rule("patches-intrinsics").in_file(file).detail("prop-key-store") })
     }));
     {
         let mut unsettled = unsettled_identities(
@@ -14210,6 +14241,11 @@ mod tests {
             ("class Render extends Component { static defaultProps = { icon: <Box p={8} /> }; render() { return null; } }", "", "", true),
             // `instanceof` hands the value to the class's `Symbol.hasInstance`.
             ("const Render = ({ children }) => (children instanceof Foreign ? null : <div>{children}</div>);", "", "", true),
+            ("const Render = ({ children }) => (children instanceof Function ? null : <div>{children}</div>);", "", "", false),
+            ("const Function = Foreign;\nconst Render = ({ children }) => (children instanceof Function ? null : <div>{children}</div>);", "", "", true),
+            ("Object.defineProperty(Function, Symbol.hasInstance, { value: decorate });\nconst Render = ({ children }) => (children instanceof Function ? null : <div>{children}</div>);", "", "", true),
+            ("Function[Symbol.hasInstance] = decorate;\nconst Render = ({ children }) => (children instanceof Function ? null : <div>{children}</div>);", "", "", true),
+            ("Reflect.defineProperty(Array, Symbol.hasInstance, { value: decorate });\nconst Render = ({ children }) => (children instanceof Array ? null : <div>{children}</div>);", "", "", true),
             // A function's result reaches whoever calls it or gets it.
             ("const Render = () => { const make = () => <Box p={8} />; return decorate(make()); };", "", "", true),
             ("const Render = () => { const make = () => { if (globalThis.wide) { return <Box p={8} />; } return null; }; return decorate(make()); };", "", "", true),
@@ -14440,11 +14476,107 @@ mod tests {
             ("import ReactDOM from 'react-dom';\nObject.assign(ReactDOM, { createPortal: pad });\nconst Render = ({ children }) => ReactDOM.createPortal(children, document.body);", "", "", true),
             ("import { createPortal } from 'react-dom';\nconst Render = ({ children }) => createPortal(children, document.body);", "", "import ReactDOM from 'react-dom';\nimport { pad } from 'outside';\nReactDOM.createPortal = pad;\n", true),
             ("const Render = ({ children }) => <div>{children}</div>;", "", "import { options } from 'preact';\nimport { pad } from 'outside';\noptions.vnode = pad;\n", true),
-            // Any analysed write into a global counts, the harmless included:
-            // no measured app makes one.
-            ("const Render = ({ children }) => { document.title = 'x'; return <div>{children}</div>; };", "", "", true),
+            // A write of a value that can carry no callable, wherever it goes:
+            // a primitive, by its form or a `const` holding one, an array
+            // literal, or an object literal of untrusted static keys.
+            ("const Render = ({ children }) => { document.title = 'x'; return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { document.title += pad; return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { document.body.style.width = `${window.innerWidth / 2}px`; return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { const r = useRef(null); r.current.indeterminate = 2 > 1 && !r; r.current.count += 1; r.current.count++; return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { const n = document.body.clientWidth; document.body.dataset.mode = n ? 'a' : String(n); document.body.dataset.k ??= 'b'; return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { const title = [document.body.clientWidth, 'x'].join(' '); const t = title; document.title = t; return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { const sheet = document.styleSheets[0]; document.adoptedStyleSheets = [sheet]; document.body.model = { active: false, when: sheet }; return <div>{children}</div>; };", "", "", false),
+            // A value that may carry one still counts.
+            ("const Render = ({ children }) => { document.body.onclick = () => {}; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children, n }) => { document.body.onclick = n ? 'a' : pad; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { document.body.model = { then: pad }; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children, n }) => { document.body.model = { ...n }; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { document.body.model = { ...pad }; return <div>{children}</div>; };", "", "", true),
+            ("const String = (v) => v;\nconst Render = ({ children }) => { document.body.onclick = String(pad); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { document.body.onclick = pad.join(); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { let t = ''; document.body.onclick = (t ||= pad); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children, n }) => { document.body.model = { [n]: 1 }; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { document.body.model = { get x() { return 1; } }; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children, n }) => { document.body.onclick ||= n; return <div>{children}</div>; };", "", "", true),
+            ("let t = 'x';
+t = pad;
+const Render = ({ children }) => { document.body.onclick = t; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { delete document.body.title; return <div>{children}</div>; };", "", "", true),
+            // A store onto an object that may be a prototype every props
+            // object inherits counts when a render reads its key by name.
+            ("({}).constructor.prototype.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("window['Object'].prototype.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const k = 'proto' + 'type';\nObject[k].p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("Object.assign(({}).constructor.prototype, { p: 12 });\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const Render = ({ children }) => { children.constructor.prototype.p = 12; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => <div>{children}</div>;", "", "({}).constructor.prototype.p = 12;\n", true),
+            ("({}).constructor.prototype.p = [4, 12];\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const P = ({}).constructor.prototype;\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("function set(o) { o.p = 12; }\nset(({}).constructor.prototype);\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("({}).constructor.prototype.title = 'x';\nObject.assign(useSlot(), { authId: 1 });\nconst Render = ({ children }) => <div>{children}</div>;", "", "", false),
+            ("function set(o) { o.className = 'x'; }\nset(window);\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("window.Object.prototype.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("document.constructor.prototype.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const k = 'p';\n({}).constructor.prototype[k] = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const Render = ({ children }) => { document.body.dataset.p = '1'; window.p = 2; const own = {}; own.p = 2; Object.assign(own, { p: 3 }); return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { const r = useRef(null); const el = document.getElementById('x'); r.current.p = 1; el.style.p = 2; Object.assign(el.dataset, { p: 3 }); return <div>{children}</div>; };", "", "", false),
+            ("const P = Object.getPrototypeOf({});\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("function set(o) { o.p = 12; }\nset(Object.getPrototypeOf({}));\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const k = 'proto' + 'type';\nObject.assign(Object[k], { p: 12 });\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const a = {};\na.b = ({}).constructor.prototype;\na.b.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const { __proto__: P } = {};\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const k = 'proto' + 'type';\nconst P = Object[k];\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const P = Object.prototype.valueOf();\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const P = ({}).__proto__.valueOf();\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const P = globalThis.Object.getPrototypeOf({});\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const P = Object.getPrototypeOf.call(null, {});\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const P = Object.getPrototypeOf.bind(null)({});\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const Render = ({ children }) => { const { constructor: { prototype: P } } = children; P.p = 12; return <div>{children}</div>; };", "", "", true),
+            ("let P;\n({ prototype: P } = Object);\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("let P;\n({ __proto__: P } = {});\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const k = 'prototype';\nconst P = ({}).constructor[k];\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            // `in` asks a global object only whether a property exists.
+            ("const Render = ({ children }) => ('EyeDropper' in window ? <div>{children}</div> : null);", "", "", false),
+            ("const w = window;
+const Render = ({ children }) => ('EyeDropper' in w ? <div>{children}</div> : null);", "", "", true),
+            // A trusted global handed to code outside the analysis, which can
+            // read it anyway, unlike code the analysis reads.
+            ("import { z } from 'zod';
+const schema = z.string().transform(String);
+const Render = ({ children }) => <div>{children}</div>;", "", "", false),
+            ("import { lib } from './other';
+const schema = lib.use(String);
+const Render = ({ children }) => <div>{children}</div>;", "", "export const lib = { use: (f) => f };\n", true),
+            ("const Render = ({ children }) => { const lib = useSlot(); lib.run(Array); return <div>{children}</div>; };", "", "", true),
+            ("import lib = require('./other');\nlib.use(String);\nconst Render = ({ children }) => <div>{children}</div>;", "", "export const use = (f) => f;\n", true),
+            ("function patch(F) { F.is = pad; }
+patch(Object);
+const Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            // `Object.assign` of literal sources whose static keys nothing
+            // trusted reads.
+            ("const Render = ({ children }) => { const user = useSlot(); Object.assign(user, { authId: 1, Meta: pad }); Object.assign(useSlot(), { CrumbMenu: pad }); return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children, user }) => { Object.assign(user, { map: pad }); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children, user }) => { Object.assign(user, { createElement: pad }); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children, user }) => { Object.assign(user, { prototype: pad }); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children, user, data }) => { Object.assign(user, data); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children, user, k }) => { Object.assign(user, { [k]: pad }); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { Object.assign(useSlot(), { map: pad }); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { Object.assign(useSlot(), { defineProperty: pad }); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { Object.assign(useSlot(), decorate); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children, user }) => { Object.assign(user, { get x() { return pad; } }); return <div>{children}</div>; };", "", "", true),
+            // A write into either of two objects the module owns.
+            ("const Render = ({ children }) => { const a = {}; const b = []; const k = document.body.id; (k ? a : b)[k] = () => 1; return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children, wide, k }) => { const a = {}; (wide ? a : useSlot())[k] = () => 1; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children, wide, k, p }) => { const a = {}; (wide ? a : p)[k] = () => 1; return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { const a = {}; const k = document.body.id; (k ? a : useSlot()).map = pad; return <div>{children}</div>; };", "", "", true),
+            // `typeof` and the right of `instanceof` run no string.
+            ("const Render = ({ children, r }) => (r instanceof Function || typeof eval === 'function' ? <div>{children}</div> : null);", "", "", false),
+            ("const Render = ({ children, r }) => <div title={Function(r)}>{children}</div>;", "", "", true),
+            ("const Render = ({ children }) => (Function instanceof Foreign ? null : <div>{children}</div>);", "", "", true),
+            ("const Render = ({ children }) => (children instanceof Foo ? null : <div>{children}</div>);", "", "", true),
             ("const Render = ({ children }) => <div title={process.env.NODE_ENV} hidden={typeof window === 'undefined'}>{children}</div>;", "", "", false),
             ("const Render = ({ children }: { children: React.ReactNode }): React.ReactElement => <div>{children}</div>;", "", "", false),
+            ("const Render = ({ children, onClose }: { children: unknown; onClose: Function; rows: Array<string> }) => <div onClick={() => onClose()}>{children}</div>;", "", "", false),
             ("const M = window.Math;\nM.max = pad;\nconst Render = ({ children }) => <div title={Math.max(children)} />;", "", "", true),
             ("const Render = ({ children }) => <div>{children}</div>;", "", "export * from 'react';\n", true),
             // Forwarding is decided per component: an input handed to
@@ -14781,7 +14913,7 @@ mod tests {
         // A write that leaves no usage proven names its construct and site.
         let patched = provenance_of(
             "export const Box = ds.system({ space: true }).asElement('div');\n\
-             document.title = 'x';\n\
+             document.onclick = () => {};\n\
              export const App = () => <Box p={2} />;\n",
             inputs,
         );

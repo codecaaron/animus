@@ -347,6 +347,10 @@ pub(super) struct Records {
     pub classes: BTreeSet<String>,
     /// See `FileFacts::patches_intrinsics`.
     pub patches_intrinsics: Option<IntrinsicPatch>,
+    /// See `FileFacts::outside_let_goes`.
+    pub outside_let_goes: Vec<(u32, String)>,
+    /// See `FileFacts::keyed_stores`.
+    pub keyed_stores: Vec<(u32, String)>,
 }
 
 /// What the walk reads that a later change can grow: the unit that read
@@ -515,6 +519,10 @@ struct Module<'s> {
     default: Held,
     /// See `FileFacts::patches_intrinsics`.
     patches_intrinsics: Option<IntrinsicPatch>,
+    /// See `FileFacts::outside_let_goes`.
+    outside_let_goes: Vec<(u32, String)>,
+    /// See `FileFacts::keyed_stores`.
+    keyed_stores: Vec<(u32, String)>,
     /// The module's top-level class bindings, declared or `const X = class`.
     class_names: BTreeSet<String>,
 }
@@ -677,10 +685,14 @@ impl<'s> Module<'s> {
             })
             .map(|(_, at)| *at)
             .min();
+        // A let-go to an import with no source the analysis may follow
+        // (`import lib = require(…)`) may reach code it reads.
+        let unsourced = declarations.outside_let_goes.iter().find(|(_, import)| !sources.contains_key(import)).map(|(at, _)| *at);
         let patches_intrinsics = declarations
             .patches_intrinsics
             .or(reexports_react.map(|at| IntrinsicPatch { at, rule: "react-reexport" }))
-            .or(redirected.map(|at| IntrinsicPatch { at, rule: "prototype-name-write" }));
+            .or(redirected.map(|at| IntrinsicPatch { at, rule: "prototype-name-write" }))
+            .or(unsourced.map(|at| IntrinsicPatch { at, rule: "trusted-let-go" }));
         // A default export's class has no binding of its own when anonymous.
         let default_class = program.body.iter().any(|statement| {
             matches!(statement, Statement::ExportDefaultDeclaration(export) if matches!(&export.declaration,
@@ -693,7 +705,10 @@ impl<'s> Module<'s> {
             .map(|symbol| scoping.symbol_name(*symbol).to_string())
             .chain(default_class.then(|| "default".to_string()))
             .collect();
-        let Declarations { params, functions, in_place, reshaped, setters, hook_states, classes, hookable_objects, .. } = declarations;
+        let outside_let_goes =
+            declarations.outside_let_goes.iter().filter_map(|(at, import)| Some((*at, sources.get(import)?.clone()))).collect();
+        let Declarations { params, functions, in_place, reshaped, setters, hook_states, classes, hookable_objects, keyed_stores, .. } =
+            declarations;
         Module {
             scoping,
             sources,
@@ -725,6 +740,8 @@ impl<'s> Module<'s> {
             receivers: BTreeMap::new(),
             default: Held::default(),
             patches_intrinsics,
+            outside_let_goes,
+            keyed_stores,
             class_names,
         }
     }
@@ -947,6 +964,8 @@ impl<'s> Module<'s> {
             misused_imports: self.arrays.misused_imports,
             classes: self.class_names,
             patches_intrinsics: self.patches_intrinsics,
+            outside_let_goes: self.outside_let_goes,
+            keyed_stores: self.keyed_stores,
         }
     }
 }
@@ -1005,6 +1024,13 @@ struct Declarations<'r> {
     built_in_writes: FxHashMap<SymbolId, u32>,
     /// See `FileFacts::patches_intrinsics`.
     patches_intrinsics: Option<IntrinsicPatch>,
+    /// A trusted global let go to a callee rooted at an import, with the
+    /// import (see `FileFacts::outside_let_goes`).
+    outside_let_goes: Vec<(u32, SymbolId)>,
+    /// `const`s declared to a provably primitive value (`primitive`).
+    primitive_consts: FxHashSet<SymbolId>,
+    /// See `FileFacts::keyed_stores`.
+    keyed_stores: Vec<(u32, String)>,
     /// The bindings importing from React's modules, written or not.
     react_imports: FxHashSet<SymbolId>,
     /// How the references to each import (type-only ones included) and
@@ -1048,6 +1074,9 @@ impl<'r> Declarations<'r> {
             literal_bindings: FxHashSet::default(),
             built_in_writes: FxHashMap::default(),
             patches_intrinsics: None,
+            outside_let_goes: Vec::new(),
+            primitive_consts: FxHashSet::default(),
+            keyed_stores: Vec::new(),
             react_imports,
             uses: vec![0; scoping.symbols_len()],
             blind_calls: Vec::new(),
@@ -1147,8 +1176,7 @@ impl<'r> Declarations<'r> {
             Some("prototype") => self.intrinsic(object),
             Some("__proto__") => true,
             Some("getPrototypeOf" | "setPrototypeOf") => {
-                matches!(unwrap_type_assertions(object), Expression::Identifier(id) if matches!(id.name.as_str(), "Object" | "Reflect") && self.symbol(id).is_none())
-                    && !matches!(self.ancestors.last(), Some(AstKind::CallExpression(call)) if call.callee.span() == span)
+                !self.module_binding(object) && !matches!(self.ancestors.last(), Some(AstKind::CallExpression(call)) if call.callee.span() == span)
             }
             _ => false,
         };
@@ -1169,9 +1197,260 @@ impl<'r> Declarations<'r> {
             self.patch(span.start, if reflection && !called { "writer-let-go" } else { "string-code" });
         } else if prototype && self.reshapes(span) {
             self.patch(span.start, "prototype-use");
+        } else if self.prototype_let_go(span, object, name) {
+            self.patch(span.start, "prototype-let-go");
         }
-        if matches!(super::member_effect(span, self.ancestors.iter().rev()), Some(MemberEffect::Assigned | MemberEffect::Deleted)) {
-            self.written_into(object, computed || name.is_some_and(built_in_name));
+        let effect = super::member_effect(span, self.ancestors.iter().rev());
+        if matches!(effect, Some(MemberEffect::Assigned | MemberEffect::Deleted)) {
+            // A value with no callable under a trusted key redirects no
+            // built-in, except by a key the walk cannot read into an object
+            // the module may not own.
+            if !self.stores_no_trusted_callable(span) || (computed && !self.unshared(object)) {
+                self.written_into(object, computed || name.is_some_and(built_in_name));
+            }
+            // Whatever it stores, a store by a static key into an object that
+            // may be a prototype every props object inherits counts where a
+            // render reads that key.
+            if let (Some(name), false, Some(MemberEffect::Assigned)) = (name, computed, effect) {
+                if !self.unshared(object) && self.maybe_prototype(object) {
+                    self.keyed_stores.push((span.start, name.to_string()));
+                }
+            }
+        }
+    }
+
+    /// Whether `object` can be no prototype a store into it would change
+    /// for other objects: a fresh literal, or a global or a static chain off
+    /// one (`document.body.style`) that names no prototype or constructor on
+    /// the way. A binding's writes are `written_into`'s.
+    fn unshared(&self, object: &Expression<'_>) -> bool {
+        match unwrap_type_assertions(object) {
+            Expression::ObjectExpression(_)
+            | Expression::ArrayExpression(_)
+            | Expression::FunctionExpression(_)
+            | Expression::ArrowFunctionExpression(_)
+            | Expression::ClassExpression(_) => true,
+            Expression::Identifier(_) | Expression::StaticMemberExpression(_) => self.platform(object),
+            _ => false,
+        }
+    }
+
+    /// Whether `object` may be a prototype by how the module reaches it: by
+    /// a computed key, a prototype, constructor or `__proto__` link, or off
+    /// anything but a binding. A binding, or a static chain off one, holds
+    /// a prototype only where the module lets one go as a value
+    /// (`prototype_let_go`), which leaves no usage proven already.
+    fn maybe_prototype(&self, object: &Expression<'_>) -> bool {
+        match unwrap_type_assertions(object) {
+            Expression::Identifier(_) => false,
+            Expression::StaticMemberExpression(member) => {
+                matches!(member.property.name.as_str(), "prototype" | "constructor" | "__proto__") || self.maybe_prototype(&member.object)
+            }
+            _ => true,
+        }
+    }
+
+    /// Whether the member at `span` hands a prototype on as a value: a
+    /// `.prototype`, a member the walk cannot name off something that
+    /// reaches prototypes (`Object[k]`), a call of a method off a prototype
+    /// (`Object.prototype.valueOf()`, which may return it), or
+    /// `getPrototypeOf` called through `call`, `bind` or `apply`.
+    fn prototype_let_go(&self, span: Span, object: &Expression<'_>, name: Option<&str>) -> bool {
+        let reaches = match name {
+            Some("prototype") => true,
+            None => self.reaches_prototypes(object),
+            _ => false,
+        };
+        if reaches && self.let_go(span, 0) {
+            return true;
+        }
+        let called = |call: &&CallExpression<'_>| call.callee.span() == span;
+        match (name, self.ancestors.last()) {
+            (_, Some(AstKind::CallExpression(call))) if called(call) && self.prototype_value(object) => self.let_go(call.span, 1),
+            (Some("call" | "bind" | "apply"), _) => matches!(unwrap_type_assertions(object), Expression::StaticMemberExpression(member)
+                if member.property.name == "getPrototypeOf" && !self.module_binding(&member.object)),
+            _ => false,
+        }
+    }
+
+    /// Whether `object` reaches prototypes by a member it reads: a built-in,
+    /// the global object, or a chain through a prototype, constructor or
+    /// `__proto__`.
+    fn reaches_prototypes(&self, object: &Expression<'_>) -> bool {
+        self.intrinsic(object)
+            || matches!(unwrap_type_assertions(object), Expression::Identifier(id) if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.symbol(id).is_none())
+            || Self::named_link(object)
+    }
+
+    /// Whether a static chain names a prototype, constructor or `__proto__`.
+    fn named_link(object: &Expression<'_>) -> bool {
+        match unwrap_type_assertions(object) {
+            Expression::StaticMemberExpression(member) => {
+                matches!(member.property.name.as_str(), "prototype" | "constructor" | "__proto__") || Self::named_link(&member.object)
+            }
+            Expression::ComputedMemberExpression(member) => Self::named_link(&member.object),
+            _ => false,
+        }
+    }
+
+    /// Whether `object` is a prototype by its last link (`X.prototype`,
+    /// `x.__proto__`).
+    fn prototype_value(&self, object: &Expression<'_>) -> bool {
+        match unwrap_type_assertions(object) {
+            Expression::StaticMemberExpression(member) => matches!(member.property.name.as_str(), "prototype" | "__proto__"),
+            Expression::ComputedMemberExpression(member) => {
+                member.static_property_name().is_some_and(|name| matches!(name.as_str(), "prototype" | "__proto__"))
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `object` is a binding the module declares (not an import).
+    fn module_binding(&self, object: &Expression<'_>) -> bool {
+        matches!(unwrap_type_assertions(object), Expression::Identifier(id)
+            if self.symbol(id).is_some_and(|symbol| !self.scoping.symbol_flags(symbol).intersects(SymbolFlags::Import)))
+    }
+
+    /// Whether the value at `span` (`skip` ancestors under the walk's
+    /// position) is let go: stored, passed, returned or chosen. A member
+    /// read, a call of it, a comparison, `typeof` and a write of it keep it.
+    fn let_go(&self, span: Span, skip: usize) -> bool {
+        match super::peel_wrappers(span, &mut self.ancestors.iter().rev().skip(skip)) {
+            (_, Some(AstKind::StaticMemberExpression(_))) => false,
+            (current, Some(AstKind::ComputedMemberExpression(member))) => member.object.span() != current,
+            (current, Some(AstKind::CallExpression(call))) => call.callee.span() != current,
+            (_, Some(AstKind::BinaryExpression(_) | AstKind::UnaryExpression(_))) => false,
+            (current, Some(AstKind::AssignmentExpression(assignment))) => assignment.left.span() != current,
+            _ => true,
+        }
+    }
+
+    /// See `unshared`: a static chain off an unbound global.
+    fn platform(&self, object: &Expression<'_>) -> bool {
+        match unwrap_type_assertions(object) {
+            Expression::Identifier(id) => self.symbol(id).is_none(),
+            Expression::StaticMemberExpression(member) => {
+                !matches!(member.property.name.as_str(), "prototype" | "constructor" | "__proto__") && self.platform(&member.object)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the member at `span` is assigned a value with no callable
+    /// under a key trusted code calls by name: a primitive (a compound
+    /// assignment or `++` stores one), an array literal, or an object
+    /// literal of untrusted static keys, whatever their values. A built-in
+    /// redirected so is never called, and the store itself runs only a
+    /// setter the platform or the module (where it installs one) owns. What
+    /// its key may change for a render is `keyed_stores`'.
+    fn stores_no_trusted_callable(&self, span: Span) -> bool {
+        use oxc::syntax::operator::AssignmentOperator;
+        let mut up = self.ancestors.iter().rev();
+        match super::peel_wrappers(span, &mut up) {
+            (current, Some(AstKind::AssignmentExpression(assignment))) if assignment.left.span() == current => {
+                match assignment.operator {
+                    AssignmentOperator::Assign
+                    | AssignmentOperator::LogicalOr
+                    | AssignmentOperator::LogicalAnd
+                    | AssignmentOperator::LogicalNullish => self.no_trusted_callable(&assignment.right),
+                    _ => true,
+                }
+            }
+            (_, Some(AstKind::UpdateExpression(_))) => true,
+            _ => false,
+        }
+    }
+
+    /// Whether `value` holds no callable under a trusted key: see
+    /// `stores_no_trusted_callable`.
+    fn no_trusted_callable(&self, value: &Expression<'_>) -> bool {
+        match unwrap_type_assertions(value) {
+            Expression::ArrayExpression(_) => true,
+            Expression::ObjectExpression(object) => object.properties.iter().all(|property| match property {
+                ObjectPropertyKind::ObjectProperty(property) => {
+                    property.kind == PropertyKind::Init
+                        && !property.computed
+                        && property.key.static_name().is_some_and(|key| !trusted_name(&key))
+                }
+                ObjectPropertyKind::SpreadProperty(_) => false,
+            }),
+            value => self.primitive(value),
+        }
+    }
+
+    /// Whether `value` is provably primitive: a literal, `undefined`, `NaN`
+    /// or `Infinity`, an untagged template, an operator's result, a
+    /// conversion by `String`, `Number` or `Boolean`, an array literal's
+    /// `join`, a `const` declared to one, or a choice among them.
+    fn primitive(&self, value: &Expression<'_>) -> bool {
+        use oxc::syntax::operator::AssignmentOperator;
+        match unwrap_type_assertions(value) {
+            Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BigIntLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::TemplateLiteral(_)
+            | Expression::UnaryExpression(_)
+            | Expression::BinaryExpression(_)
+            | Expression::PrivateInExpression(_)
+            | Expression::UpdateExpression(_) => true,
+            Expression::Identifier(id) => match self.symbol(id) {
+                None => matches!(id.name.as_str(), "undefined" | "NaN" | "Infinity"),
+                Some(symbol) => self.primitive_consts.contains(&symbol),
+            },
+            Expression::AssignmentExpression(assignment) => match assignment.operator {
+                AssignmentOperator::Assign => self.primitive(&assignment.right),
+                AssignmentOperator::LogicalOr | AssignmentOperator::LogicalAnd | AssignmentOperator::LogicalNullish => false,
+                _ => true,
+            },
+            Expression::ConditionalExpression(conditional) => self.primitive(&conditional.consequent) && self.primitive(&conditional.alternate),
+            Expression::LogicalExpression(logical) => self.primitive(&logical.left) && self.primitive(&logical.right),
+            Expression::SequenceExpression(sequence) => sequence.expressions.last().is_some_and(|last| self.primitive(last)),
+            Expression::CallExpression(call) => match unwrap_type_assertions(&call.callee) {
+                Expression::Identifier(callee) => {
+                    matches!(callee.name.as_str(), "String" | "Number" | "Boolean") && self.symbol(callee).is_none()
+                }
+                Expression::StaticMemberExpression(member) => {
+                    member.property.name == "join" && matches!(unwrap_type_assertions(&member.object), Expression::ArrayExpression(_))
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Whether the reference at `span` is only inspected: `typeof`'s
+    /// operand, or the right of `instanceof`, which asks the native
+    /// `Symbol.hasInstance`.
+    fn only_inspected(&self, span: Span) -> bool {
+        let mut up = self.ancestors.iter().rev();
+        match super::peel_wrappers(span, &mut up) {
+            (_, Some(AstKind::UnaryExpression(unary))) => unary.operator == UnaryOperator::Typeof,
+            (current, Some(AstKind::BinaryExpression(binary))) => {
+                binary.operator == BinaryOperator::Instanceof && binary.right.span() == current
+            }
+            _ => false,
+        }
+    }
+
+    /// The import a call that gets the reference at `span` as an argument
+    /// is rooted at (`z` in `z.string().transform(String)`): code the
+    /// analysis may not read, which `FileFacts::outside_let_goes` decides.
+    fn import_receiver(&self, span: Span) -> Option<SymbolId> {
+        let (_, _, _, parent) = self.chain(span);
+        let Some(AstKind::CallExpression(call)) = parent else { return None };
+        let mut root = &call.callee;
+        loop {
+            root = match unwrap_type_assertions(root) {
+                Expression::StaticMemberExpression(member) => &member.object,
+                Expression::CallExpression(inner) => &inner.callee,
+                Expression::Identifier(id) => {
+                    let symbol = self.symbol(id)?;
+                    return self.scoping.symbol_flags(symbol).intersects(SymbolFlags::Import).then_some(symbol);
+                }
+                _ => return None,
+            };
         }
     }
 
@@ -1181,6 +1460,12 @@ impl<'r> Declarations<'r> {
     /// that may set a built-in's method, into a binding, may too, unless the
     /// binding is declared to a literal (`Module::of` judges it).
     fn written_into(&mut self, object: &Expression<'_>, built_in: bool) {
+        // A write into a choice of objects is a write into either.
+        if let Expression::ConditionalExpression(conditional) = unwrap_type_assertions(object) {
+            self.written_into(&conditional.consequent, built_in);
+            self.written_into(&conditional.alternate, built_in);
+            return;
+        }
         let at = object.span().start;
         if !self.owned(object) {
             self.patch(at, "unowned-write");
@@ -1215,18 +1500,8 @@ impl<'r> Declarations<'r> {
         }
     }
 
-    /// Whether `expression` names a built-in whose prototype every value of
-    /// its kind shares: `Array`, or `globalThis.Array`.
     fn intrinsic(&self, expression: &Expression<'_>) -> bool {
-        match unwrap_type_assertions(expression) {
-            Expression::Identifier(id) => INTRINSICS.contains(&id.name.as_str()) && self.symbol(id).is_none(),
-            Expression::StaticMemberExpression(member) => {
-                INTRINSICS.contains(&member.property.name.as_str())
-                    && matches!(&member.object, Expression::Identifier(id)
-                        if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.symbol(id).is_none())
-            }
-            _ => false,
-        }
+        intrinsic(expression, |id| self.symbol(id).is_none())
     }
 
     /// The class whose `this` is at the visit's position, and whether the
@@ -1289,7 +1564,8 @@ impl<'r> Declarations<'r> {
             None => true,
             Some(AstKind::UnaryExpression(unary)) => matches!(unary.operator, UnaryOperator::Typeof | UnaryOperator::LogicalNot),
             Some(AstKind::BinaryExpression(binary)) => {
-                binary.operator.is_equality() || (binary.operator == BinaryOperator::Instanceof && binary.right.span() == span)
+                binary.operator.is_equality()
+                    || (matches!(binary.operator, BinaryOperator::Instanceof | BinaryOperator::In) && binary.right.span() == span)
             }
             Some(AstKind::LogicalExpression(logical)) => {
                 logical.operator == oxc::syntax::operator::LogicalOperator::And && logical.left.span() == span
@@ -1410,6 +1686,30 @@ fn built_in_name(name: &str) -> bool {
         || CONSOLE_METHODS.contains(&name)
         || TRUSTED_STATICS.contains(&name)
         || matches!(name, "constructor" | "call" | "apply" | "bind")
+}
+
+/// Whether `expression` names a built-in whose prototype every value of its
+/// kind shares, `unbound` saying which names no binding shadows: `Array`, or
+/// `globalThis.Array`.
+fn intrinsic(expression: &Expression<'_>, unbound: impl Fn(&IdentifierReference<'_>) -> bool) -> bool {
+    match unwrap_type_assertions(expression) {
+        Expression::Identifier(id) => INTRINSICS.contains(&id.name.as_str()) && unbound(id),
+        Expression::StaticMemberExpression(member) => {
+            INTRINSICS.contains(&member.property.name.as_str())
+                && matches!(&member.object, Expression::Identifier(id) if GLOBAL_OBJECTS.contains(&id.name.as_str()) && unbound(id))
+        }
+        _ => false,
+    }
+}
+
+/// Whether a store of `name` may redirect what the walk trusts by name: a
+/// built-in's method or hook, React's functions, a writer, or a prototype.
+fn trusted_name(name: &str) -> bool {
+    built_in_name(name)
+        || !matches!(react_function(name), Callee::Unknown)
+        || writer("Object", name)
+        || writer("Reflect", name)
+        || matches!(name, "prototype" | "getPrototypeOf" | "Children" | "setState" | "forceUpdate")
 }
 
 /// The call `expression` is, under type assertions.
@@ -1565,6 +1865,29 @@ impl<'a> Visit<'a> for Declarations<'a> {
         oxc::ast_visit::walk::walk_jsx_closing_element(self, closing);
     }
 
+    // A destructuring that reads a prototype, `__proto__` or a computed key
+    // may take a prototype into a binding.
+    fn visit_binding_property(&mut self, property: &oxc::ast::ast::BindingProperty<'a>) {
+        if property.computed || property.key.static_name().is_some_and(|key| matches!(key.as_ref(), "prototype" | "__proto__")) {
+            self.patch(property.span.start, "prototype-let-go");
+        }
+        oxc::ast_visit::walk::walk_binding_property(self, property);
+    }
+
+    fn visit_assignment_target_property_property(&mut self, property: &oxc::ast::ast::AssignmentTargetPropertyProperty<'a>) {
+        if property.computed || property.name.static_name().is_some_and(|key| matches!(key.as_ref(), "prototype" | "__proto__")) {
+            self.patch(property.span.start, "prototype-let-go");
+        }
+        oxc::ast_visit::walk::walk_assignment_target_property_property(self, property);
+    }
+
+    fn visit_assignment_target_property_identifier(&mut self, property: &oxc::ast::ast::AssignmentTargetPropertyIdentifier<'a>) {
+        if matches!(property.binding.name.as_str(), "prototype" | "__proto__") {
+            self.patch(property.span.start, "prototype-let-go");
+        }
+        oxc::ast_visit::walk::walk_assignment_target_property_identifier(self, property);
+    }
+
     fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
         self.member(member.span, &member.object, Some(member.property.name.as_str()), false);
         oxc::ast_visit::walk::walk_static_member_expression(self, member);
@@ -1584,16 +1907,38 @@ impl<'a> Visit<'a> for Declarations<'a> {
         }) {
             self.written_into(member.object(), true);
         }
+        // `getPrototypeOf`'s result, off any root but a binding the module
+        // declares, is a prototype.
+        if callee.is_some_and(|member| member.static_property_name() == Some("getPrototypeOf") && !self.module_binding(member.object()))
+            && self.reshapes(call.span)
+        {
+            self.patch(call.span.start, "prototype-use");
+        }
         if let Some((Expression::Identifier(object), Some(name))) = callee.map(|member| (member.object(), member.static_property_name())) {
             if self.symbol(object).is_none() {
-                let reflects = matches!(object.name.as_str(), "Object" | "Reflect") && name == "getPrototypeOf";
-                if reflects && self.reshapes(call.span) {
-                    self.patch(call.span.start, "prototype-use");
-                }
                 // A built-in that writes into its first argument; a spread
                 // first argument is a target the module does not own.
+                // `Object.assign` writes exactly its sources' own keys: from
+                // sources that can carry no callable under a trusted key, into
+                // any target, it redirects nothing.
                 if writer(&object.name, name) {
                     match call.arguments.first().map(|argument| argument.as_expression()) {
+                        Some(Some(target))
+                            if (object.name.as_str(), name) == ("Object", "assign")
+                                && call.arguments.iter().skip(1).all(|source| source.as_expression().is_some_and(|source| self.no_trusted_callable(source))) =>
+                        {
+                            if !self.unshared(target) && self.maybe_prototype(target) {
+                                for source in call.arguments.iter().skip(1).filter_map(|argument| argument.as_expression()) {
+                                    if let Expression::ObjectExpression(literal) = unwrap_type_assertions(source) {
+                                        let keys = literal.properties.iter().filter_map(|property| match property {
+                                            ObjectPropertyKind::ObjectProperty(property) => property.key.static_name(),
+                                            ObjectPropertyKind::SpreadProperty(_) => None,
+                                        });
+                                        self.keyed_stores.extend(keys.map(|key| (call.span.start, key.to_string())));
+                                    }
+                                }
+                            }
+                        }
                         Some(Some(target)) => self.written_into(target, true),
                         Some(None) => self.patch(call.span.start, "spread-target"),
                         None => {}
@@ -1671,12 +2016,21 @@ impl<'a> Visit<'a> for Declarations<'a> {
         if id.name == "arguments" && symbol.is_none() {
             self.uses_arguments.extend(own_function(&self.ancestors));
         }
+        // A type reference (`onClose: Function`) runs and hands on nothing.
+        if !id.reference_id.get().is_some_and(|reference| self.scoping.get_reference(reference).is_value()) {
+            return;
+        }
         // Indirect `eval` and `Function` run strings the analysis cannot read.
         let runs_strings = matches!(id.name.as_str(), "eval" | "Function") && symbol.is_none();
         if runs_strings {
-            self.patch(id.span.start, "string-code");
+            if !self.only_inspected(id.span) {
+                self.patch(id.span.start, "string-code");
+            }
         } else if self.redirects(id) {
-            self.patch(id.span.start, "trusted-let-go");
+            match self.import_receiver(id.span) {
+                Some(import) => self.outside_let_goes.push((id.span.start, import)),
+                None => self.patch(id.span.start, "trusted-let-go"),
+            }
         }
     }
 
@@ -1724,6 +2078,9 @@ impl<'a> Visit<'a> for Declarations<'a> {
                         || function_scope(init).is_some();
                     if constant && literal {
                         self.literal_bindings.insert(symbol);
+                    }
+                    if constant && self.primitive(init) {
+                        self.primitive_consts.insert(symbol);
                     }
                     match init {
                         Expression::ArrayExpression(_) if constant && self.depth == 0 => {
@@ -2240,8 +2597,15 @@ impl<'a> Walk<'_, '_, 'a> {
             }
             AstKind::BinaryExpression(binary) => match binary.operator {
                 // `value instanceof Other` hands the value to Other's
-                // `Symbol.hasInstance`.
-                BinaryOperator::Instanceof if binary.left.span() == current => Place::Handed,
+                // `Symbol.hasInstance`; a built-in's is `Function.prototype`'s,
+                // which only reads the value's prototype chain.
+                BinaryOperator::Instanceof if binary.left.span() == current => {
+                    if intrinsic(&binary.right, |id| self.module.symbol(id).is_none()) {
+                        Place::Kept(InPlace::Primitive)
+                    } else {
+                        Place::Handed
+                    }
+                }
                 BinaryOperator::StrictEquality | BinaryOperator::StrictInequality => Place::Kept(InPlace::Primitive),
                 BinaryOperator::In if binary.right.span() == current => Place::Kept(InPlace::Primitive),
                 _ => Self::converted(value),

@@ -934,6 +934,10 @@ pub(crate) struct EnrichedUsage {
     pub class_components: BTreeSet<String>,
     /// See `FileFacts::patches_intrinsics`.
     pub patches_intrinsics: Option<IntrinsicPatch>,
+    /// See `FileFacts::outside_let_goes`.
+    pub outside_let_goes: Vec<(u32, String)>,
+    /// See `FileFacts::keyed_stores`.
+    pub keyed_stores: Vec<(u32, String)>,
     /// See `FileFacts::builder_import_references`.
     pub builder_import_references: Vec<BuilderImportReferences>,
     /// See `FileFacts::first_that_works_uses`.
@@ -1087,6 +1091,7 @@ pub(crate) fn collect_enriched_usage(
     compose: &[ComposeFamilyInfo],
     object_members: &BTreeMap<String, BTreeMap<String, String>>,
     assigned_target_calls: &BTreeSet<(u32, u32)>,
+    calls_eval: bool,
 ) -> EnrichedUsage {
     let static_values = crate::eval::Statics::of(static_values, module_path);
     let exported: FxHashSet<&str> = exports.iter().filter_map(|e| e.local.as_deref()).collect();
@@ -1148,7 +1153,7 @@ pub(crate) fn collect_enriched_usage(
     let usage = aliases.rewrite(usage);
     let react_imports = origins.map(|scoping| ReactImports::of(program, scoping));
     // Without scopes a direct `eval` cannot be ruled out.
-    let direct_eval = origins.is_none_or(|scoping| scoping.root_unresolved_references().contains_key("eval"));
+    let direct_eval = origins.is_none() || calls_eval;
     let confined = match &scoping {
         // Direct eval can read any binding by name.
         Some(scoping) if !direct_eval => {
@@ -1177,7 +1182,7 @@ pub(crate) fn collect_enriched_usage(
     // is followed for.
     let (admissible, admissible_wrappers) = origins
         .zip(react_imports.as_ref())
-        .map(|(scoping, react)| ordinary_components(program, scoping, react, &BTreeSet::new()))
+        .map(|(scoping, react)| ordinary_components(program, scoping, react, &BTreeSet::new(), direct_eval))
         .unwrap_or_default();
     let escapes = match &scoping {
         Some(scoping) if may_escape => {
@@ -1207,7 +1212,7 @@ pub(crate) fn collect_enriched_usage(
                 .filter(|(_, members)| members.values().any(|value| scan.is_candidate(value)))
                 .map(|(object, _)| object.clone())
                 .collect();
-            if scoping.root_unresolved_references().contains_key("eval") {
+            if direct_eval {
                 // Direct eval can hand any binding anywhere.
                 let every: Vec<String> = scoping
                     .iter_bindings_in(scoping.root_scope_id())
@@ -1224,12 +1229,11 @@ pub(crate) fn collect_enriched_usage(
     };
     let (ordinary_components, react_wrappers) = origins
         .zip(react_imports.as_ref())
-        .map(|(scoping, react)| ordinary_components(program, scoping, react, &escapes))
+        .map(|(scoping, react)| ordinary_components(program, scoping, react, &escapes, direct_eval))
         .unwrap_or_default();
     let spread_wrappers = match &scoping {
         Some(scoping)
-            if !wrapper_candidates.is_empty()
-                && !scoping.root_unresolved_references().contains_key("eval") =>
+            if !wrapper_candidates.is_empty() && !direct_eval =>
         {
             spread_wrappers(program, scoping, wrapper_candidates)
         }
@@ -1261,6 +1265,8 @@ pub(crate) fn collect_enriched_usage(
         misused_imports: records.misused_imports,
         class_components: records.classes,
         patches_intrinsics: records.patches_intrinsics,
+        outside_let_goes: records.outside_let_goes,
+        keyed_stores: records.keyed_stores,
         builder_import_references,
         first_that_works_uses,
         builder_proof,
@@ -1542,6 +1548,7 @@ pub(crate) fn object_uses(
     object_consts: &BTreeMap<&str, bool>,
     assigned_targets: &BTreeSet<&str>,
     wrapped: FxHashMap<(u32, u32), String>,
+    direct_eval: bool,
 ) -> ObjectUses {
     let context_consts = context_consts(program, scoping, &ReactImports::of(program, scoping));
     // A context is watched as an object too: its `Provider` must stay React's.
@@ -1549,18 +1556,18 @@ pub(crate) fn object_uses(
     for context in &context_consts {
         watched.entry(context.as_str()).or_insert(false);
     }
-    let uses = scan_object_uses(program, scoping, object_bindings(program, scoping, &watched, assigned_targets), wrapped);
+    let uses = scan_object_uses(program, scoping, object_bindings(program, scoping, &watched, assigned_targets), wrapped, direct_eval);
     ObjectUses { context_consts, ..uses }
 }
 
 /// See `FileFacts::written_namespaces`: the module's namespace imports
 /// alone, for static style values.
-pub(crate) fn written_namespaces(program: &Program<'_>, scoping: &Scoping) -> WrittenNamespaces {
+pub(crate) fn written_namespaces(program: &Program<'_>, scoping: &Scoping, direct_eval: bool) -> WrittenNamespaces {
     let namespaces = object_bindings(program, scoping, &BTreeMap::new(), &BTreeSet::new())
         .into_iter()
         .filter(|(_, binding)| binding.namespace)
         .collect();
-    scan_object_uses(program, scoping, namespaces, FxHashMap::default()).written_namespaces
+    scan_object_uses(program, scoping, namespaces, FxHashMap::default(), direct_eval).written_namespaces
 }
 
 /// The uses of `candidates` that may change their objects; `context_consts`
@@ -1570,11 +1577,12 @@ fn scan_object_uses(
     scoping: &Scoping,
     candidates: FxHashMap<SymbolId, ObjectBinding>,
     wrapped: FxHashMap<(u32, u32), String>,
+    direct_eval: bool,
 ) -> ObjectUses {
     if candidates.is_empty() {
         return ObjectUses::default();
     }
-    if scoping.root_unresolved_references().contains_key("eval") {
+    if direct_eval {
         // Direct eval can reach any binding by name.
         let what = ObjectUse { line: None, at: None, what: "can be changed by a direct eval".to_string() };
         let written_namespaces = candidates
@@ -1723,6 +1731,7 @@ pub(crate) fn style_object_uses(
     program: &Program<'_>,
     scoping: &Scoping,
     statics: &FxHashMap<String, StaticValue>,
+    direct_eval: bool,
 ) -> StyleObjectFacts {
     let mut consts: BTreeMap<&str, bool> = statics
         .iter()
@@ -1737,7 +1746,7 @@ pub(crate) fn style_object_uses(
     if candidates.is_empty() {
         return StyleObjectFacts::default();
     }
-    if scoping.root_unresolved_references().contains_key("eval") {
+    if direct_eval {
         let what = ObjectUse { line: None, at: None, what: "can be changed by a direct eval".to_string() };
         let names: BTreeSet<String> = candidates.into_values().map(|binding| binding.name).collect();
         let uses = names.into_iter().map(|name| (name, what.clone(), UseAt::WHOLE)).collect();
@@ -2438,8 +2447,18 @@ fn style_object_use(
 /// query, and the bare name as a `typeof` operand or the right side of
 /// `instanceof`, run nothing. Not followed: a computed member
 /// (`globalThis['ev' + 'al']`) and an alias of the global object.
-pub(crate) fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::Scoping) -> Option<&'static str> {
-    use oxc::ast::ast::{BinaryExpression, Expression, IdentifierReference, StaticMemberExpression, UnaryExpression};
+///
+/// It calls `eval` directly, reading and writing any binding by name, only
+/// where a call's callee is the unbound `eval` itself (`eval(…)`,
+/// `(eval)(…)`); any other call of it runs in the global scope.
+pub(crate) struct StringCode {
+    pub(crate) reads: Option<&'static str>,
+    pub(crate) direct_eval: bool,
+}
+
+/// How `program` runs code from strings: see `StringCode`.
+pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::Scoping) -> StringCode {
+    use oxc::ast::ast::{BinaryExpression, CallExpression, Expression, IdentifierReference, StaticMemberExpression, UnaryExpression};
     use oxc::ast_visit::Visit;
     use oxc::syntax::operator::{BinaryOperator, UnaryOperator};
     const RUNNERS: [&str; 2] = ["eval", "Function"];
@@ -2447,6 +2466,7 @@ pub(crate) fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::
     struct Reads<'s> {
         scoping: &'s oxc::semantic::Scoping,
         found: Option<&'static str>,
+        direct_eval: bool,
     }
     impl Reads<'_> {
         fn unbound(&self, id: &IdentifierReference<'_>) -> bool {
@@ -2468,6 +2488,12 @@ pub(crate) fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::
             if value && RUNNERS.contains(&id.name.as_str()) && self.unbound(id) {
                 self.record(&id.name);
             }
+        }
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            if matches!(call.callee.get_inner_expression(), Expression::Identifier(id) if id.name == "eval" && self.unbound(id)) {
+                self.direct_eval = true;
+            }
+            oxc::ast_visit::walk::walk_call_expression(self, call);
         }
         fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
             let global = matches!(member.object.get_inner_expression(), Expression::Identifier(object)
@@ -2491,9 +2517,9 @@ pub(crate) fn dynamic_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::
             oxc::ast_visit::walk::walk_binary_expression(self, binary);
         }
     }
-    let mut reads = Reads { scoping, found: None };
+    let mut reads = Reads { scoping, found: None, direct_eval: false };
     reads.visit_program(program);
-    reads.found
+    StringCode { reads: reads.found, direct_eval: reads.direct_eval }
 }
 
 /// How a module lets a loader escape, which can load any module. The
@@ -2971,6 +2997,7 @@ pub(crate) fn returned_function(name: &str, depth: usize) -> String {
 pub(crate) fn function_param_readings(
     program: &Program<'_>,
     scoping: &Scoping,
+    direct_eval: bool,
 ) -> BTreeMap<String, Vec<ParamReading>> {
     use oxc::ast::ast::{BindingPattern, Declaration, ExportDefaultDeclarationKind};
     // A function with no body (an ambient `declare function` or an overload
@@ -3056,7 +3083,7 @@ pub(crate) fn function_param_readings(
     if params.is_empty() {
         return readings;
     }
-    if scoping.root_unresolved_references().contains_key("eval") {
+    if direct_eval {
         for reading in readings.values_mut() {
             reading.iter_mut().for_each(|param| *param = ParamReading::Unsafe);
         }
@@ -6943,10 +6970,11 @@ fn ordinary_components(
     scoping: &Scoping,
     react: &ReactImports,
     escapes: &BTreeSet<String>,
+    direct_eval: bool,
 ) -> (BTreeSet<String>, BTreeMap<String, Option<String>>) {
     use oxc::ast::ast::{BindingIdentifier, Declaration, ExportDefaultDeclarationKind};
     // Direct eval can write any binding by name.
-    if scoping.root_unresolved_references().contains_key("eval") {
+    if direct_eval {
         return Default::default();
     }
     // The callback React's `forwardRef` or `memo` wraps, through nested
@@ -7298,7 +7326,8 @@ pub fn collect_usage_facts_with_statics(
     module_path: &str,
 ) -> Vec<UsageFact> {
     let built = SemanticBuilder::new().build(program).semantic.into_scoping();
-    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[], &[], &BTreeMap::new(), &BTreeSet::new())
+    let direct_eval = string_code(program, &built).direct_eval;
+    collect_enriched_usage(built, program, module, static_values, module_path, &[], &[], &[], &BTreeMap::new(), &BTreeSet::new(), direct_eval)
         .usage
 }
 

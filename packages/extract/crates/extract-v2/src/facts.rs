@@ -690,6 +690,18 @@ pub struct FileFacts {
     /// so usage is unproven, as for a direct `eval`.
     #[serde(skip)]
     pub(crate) patches_intrinsics: Option<crate::usage_facts::IntrinsicPatch>,
+    /// Trusted globals let go to calls rooted at an import, with its
+    /// specifier: each leaves no usage proven where the import reaches code
+    /// the analysis reads, and is harmless where it does not, since code
+    /// outside can read the global itself.
+    #[serde(skip)]
+    pub(crate) outside_let_goes: Vec<(u32, String)>,
+    /// Stores by a static key into objects that may be a prototype every
+    /// props object inherits (`({}).constructor.prototype.p = 12`, `o.p = 12`
+    /// into a parameter), with the key: each leaves no usage proven where a
+    /// render reads that key by name.
+    #[serde(skip)]
+    pub(crate) keyed_stores: Vec<(u32, String)>,
     /// Extracted createTransform() declarations: serialized with the facts
     /// for probes, and the source of their bail diagnostics. They are never
     /// registered with the evaluator.
@@ -1293,7 +1305,8 @@ pub(crate) struct ObjectFacts {
 }
 
 /// `program`'s object facts, through its one semantic build.
-pub(crate) fn object_facts(program: &Program<'_>, scoping: &oxc::semantic::Scoping) -> ObjectFacts {
+pub(crate) fn object_facts(program: &Program<'_>, lowered: &crate::link::Lowered) -> ObjectFacts {
+    let scoping = &lowered.scoping;
     let props_forwarding = crate::usage_facts::collect_props_forwarding(program, scoping);
     let const_initializers = collect_const_initializers(program, &props_forwarding);
     let compose = scan_compose_calls(program);
@@ -1311,7 +1324,7 @@ pub(crate) fn object_facts(program: &Program<'_>, scoping: &oxc::semantic::Scopi
     let assigned_targets: BTreeSet<&str> = const_initializers.targets.values().map(String::as_str).collect();
     // The components the module's `.asComponent()` terminals take.
     let wrapped = chain_walk::wrapped_components(program);
-    let uses = crate::usage_facts::object_uses(program, scoping, &object_consts, &assigned_targets, wrapped);
+    let uses = crate::usage_facts::object_uses(program, scoping, &object_consts, &assigned_targets, wrapped, lowered.direct_eval);
     ObjectFacts { props_forwarding, const_initializers, compose, uses }
 }
 
@@ -1412,6 +1425,8 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         misused_imports: BTreeSet::new(),
         class_components: BTreeSet::new(),
         patches_intrinsics: None,
+        outside_let_goes: Vec::new(),
+        keyed_stores: Vec::new(),
         opaque_tags: Vec::new(),
         transforms: Vec::new(),
         captured_transform_bindings: BTreeSet::new(),
@@ -1733,7 +1748,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
     // caller lowers this one here.
     let lowered = lowered.unwrap_or_else(|| crate::link::Lowered::of(ast));
     let structural =
-        structural.unwrap_or_else(|| structural_facts(ast, &lowered, object_facts(program, &lowered.scoping)));
+        structural.unwrap_or_else(|| structural_facts(ast, &lowered, object_facts(program, &lowered)));
+    let calls_eval = lowered.direct_eval;
     let scoping = lowered.scoping;
     let source = ast.source();
     let directive_prologue = program.directives.last().map(|last| {
@@ -2060,6 +2076,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         misused_imports,
         class_components,
         patches_intrinsics,
+        outside_let_goes,
+        keyed_stores,
         builder_import_references,
         first_that_works_uses,
         builder_proof,
@@ -2074,6 +2092,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &structural.compose,
         &structural.object_members,
         &structural.assigned_target_calls,
+        calls_eval,
     );
 
     FileFacts {
@@ -2128,6 +2147,8 @@ pub(crate) fn extract_file_facts_from_static_maps(
         misused_imports,
         class_components,
         patches_intrinsics,
+        outside_let_goes,
+        keyed_stores,
         unbound_create_system_calls: unbound_create_system_calls(ast),
         builder_references: builder_references(ast),
         ..structural

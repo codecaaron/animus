@@ -259,6 +259,17 @@ export function collectSelectorAliasDiagnostics(
 
 export const UNREADABLE_SOURCE_FILE = 'animus.ingestion.unreadable-source-file';
 
+/** Why usage is not proven project-wide (the verbose slot provenance). */
+export const USAGE_UNPROVEN = 'animus.usage.unproven';
+
+/** The system slots kept, by rule and by prop (the verbose slot
+ *  provenance). */
+export const SLOTS_KEPT = 'animus.slots.kept';
+
+/** The component slots kept, by rule and by component (the verbose slot
+ *  provenance). */
+export const COMPONENT_SLOTS_KEPT = 'animus.component-slots.kept';
+
 /** A directory discovery could not list, or an entry it could not stat. */
 export const UNREADABLE_DISCOVERY_PATH = 'animus.discovery.unreadable-path';
 

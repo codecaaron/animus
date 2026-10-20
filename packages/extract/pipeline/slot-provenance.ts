@@ -1,4 +1,9 @@
-import { locationOf } from './manifest-diagnostics';
+import {
+  COMPONENT_SLOTS_KEPT,
+  locationOf,
+  SLOTS_KEPT,
+  USAGE_UNPROVEN,
+} from './manifest-diagnostics';
 
 import type { ManifestComponentDescriptor } from './manifest-schema';
 
@@ -72,7 +77,7 @@ export function slotProvenanceLines(
     .map(([rule, count]) => `${rule} ${count}`)
     .join(', ');
   const lines = [
-    `slots kept for ${props.length} system props; props each rule keeps: ${counts}`,
+    `slots kept for ${props.length} system props; props each rule keeps: ${counts} [${SLOTS_KEPT}]`,
   ];
   const gaps = new Map<string, number>();
   for (const gap of provenance.usage) {
@@ -81,7 +86,7 @@ export function slotProvenanceLines(
   }
   for (const [key, count] of gaps) {
     lines.push(
-      `usage not proven project-wide: ${key}${count > 1 ? ` (×${count})` : ''}`
+      `usage not proven project-wide: ${key}${count > 1 ? ` (×${count})` : ''} [${USAGE_UNPROVEN}]`
     );
   }
   for (const [prop, keepers] of props) {
@@ -93,7 +98,9 @@ export function slotProvenanceLines(
       keepers.length > OWNERS_SHOWN
         ? `, +${keepers.length - OWNERS_SHOWN} more`
         : '';
-    lines.push(`slot '${prop}' kept by ${shown.join(', ')}${more}`);
+    lines.push(
+      `slot '${prop}' kept by ${shown.join(', ')}${more} [${SLOTS_KEPT}]`
+    );
   }
   if (slots.length === 0) return lines;
   // A component slot an unproven owner keeps stays for each of its reasons.
@@ -119,7 +126,7 @@ export function slotProvenanceLines(
     .map(([rule, count]) => `${rule} ${count}`)
     .join(', ');
   lines.push(
-    `component slots kept: ${total} on ${slots.length} components; slots each rule keeps: ${slotCounts}`
+    `component slots kept: ${total} on ${slots.length} components; slots each rule keeps: ${slotCounts} [${COMPONENT_SLOTS_KEPT}]`
   );
   const largest = slots
     .map(([owner, byProp]) => [owner, Object.keys(byProp).length] as const)
@@ -134,7 +141,9 @@ export function slotProvenanceLines(
         )
       ),
     ];
-    lines.push(`${name} keeps ${count} component slots (${why.join('; ')})`);
+    lines.push(
+      `${name} keeps ${count} component slots (${why.join('; ')}) [${COMPONENT_SLOTS_KEPT}]`
+    );
   }
   return lines;
 }

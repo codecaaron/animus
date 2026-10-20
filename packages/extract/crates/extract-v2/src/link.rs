@@ -37,6 +37,8 @@ pub(crate) struct Lowered {
     pub(crate) readings: crate::usage_facts::ParamReadings,
     /// How the module runs code from a string, if it does.
     pub(crate) dynamic_code: Option<&'static str>,
+    /// Whether the module may call `eval` directly (`StringCode`).
+    pub(crate) direct_eval: bool,
     /// How the module lets a loader escape, if it does.
     pub(crate) loader_escape: Option<&'static str>,
 }
@@ -52,8 +54,8 @@ impl Lowered {
         let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
         let bindings = BindingTable::prepare(IdentityInput { module, program, module_record, scoping: &scoping });
         let record = copy_module_record(module_record, &bindings, program.source_text, program);
-        let readings = std::sync::Arc::new(crate::usage_facts::function_param_readings(program, &scoping));
-        let dynamic_code = crate::usage_facts::dynamic_code(program, &scoping);
+        let strings = crate::usage_facts::string_code(program, &scoping);
+        let readings = std::sync::Arc::new(crate::usage_facts::function_param_readings(program, &scoping, strings.direct_eval));
         let loader_escape = crate::usage_facts::loader_escape(program, &scoping);
         Self {
             scoping,
@@ -61,7 +63,8 @@ impl Lowered {
             record: std::sync::Arc::new(record),
             loads: crate::loads::collect(program),
             readings,
-            dynamic_code,
+            dynamic_code: strings.reads,
+            direct_eval: strings.direct_eval,
             loader_escape,
         }
     }

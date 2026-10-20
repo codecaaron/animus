@@ -633,7 +633,8 @@ pub fn package_loads(file_entries_json: String) -> napi::Result<String> {
                 }
             }
             let scoping = oxc::semantic::SemanticBuilder::new().build(program).semantic.into_scoping();
-            let escape = crate::usage_facts::dynamic_code(program, &scoping)
+            let escape = crate::usage_facts::string_code(program, &scoping)
+                .reads
                 .or_else(|| crate::usage_facts::loader_escape(program, &scoping));
             if let Some(how) = escape {
                 open.get_or_insert_with(|| how.to_string());

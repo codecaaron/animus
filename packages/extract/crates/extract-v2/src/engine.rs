@@ -1243,7 +1243,7 @@ impl ExtractEngine {
             .iter()
             .map(|ast| {
                 let lowered = &lowered_by_file[&ast.path];
-                let objects = facts::object_facts(ast.program(), &lowered.scoping);
+                let objects = facts::object_facts(ast.program(), lowered);
                 (ast.path.clone(), facts::structural_facts(ast, lowered, objects))
             })
             .collect();
@@ -1329,7 +1329,7 @@ impl ExtractEngine {
                     object_exports.contains(import.imported.as_str()) || namespace_exports.contains(&import.imported)
                 })
             {
-                crate::usage_facts::style_object_uses(program, &lowered_by_file[&ast.path].scoping, statics)
+                crate::usage_facts::style_object_uses(program, &lowered_by_file[&ast.path].scoping, statics, lowered_by_file[&ast.path].direct_eval)
             } else {
                 crate::usage_facts::StyleObjectFacts::default()
             };
@@ -1340,7 +1340,7 @@ impl ExtractEngine {
                     written_namespaces: if namespace_imports.is_empty() {
                         BTreeMap::new()
                     } else {
-                        crate::usage_facts::written_namespaces(program, &lowered_by_file[&ast.path].scoping)
+                        crate::usage_facts::written_namespaces(program, &lowered_by_file[&ast.path].scoping, lowered_by_file[&ast.path].direct_eval)
                     },
                 },
             );
