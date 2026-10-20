@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   clearAnalysisCache: vi.fn(),
 }));
 
+import { requireNativeEngine } from '../../pipeline/native-resolution';
 import { ExtractionSession } from '../../session/extraction-session';
 import {
   REPLACEMENT_EPOCH_ARTIFACT,
@@ -366,6 +367,83 @@ describe("a host's engine and logger", () => {
       ).toBeGreaterThanOrEqual(5);
       expect(JSON.stringify(hostAnalyze.mock.calls)).not.toContain(
         'slot_provenance'
+      );
+    } finally {
+      session.close();
+    }
+  });
+
+  test('ANIMUS_TIMING_JSON prints the probe evidence the host gathers inside rust-extract', async () => {
+    // The engine's prepare names a probe and the host answers it. The clock
+    // stands still but for 7 ms at each file the host looks for, which only
+    // the gatherer does.
+    const engine = requireNativeEngine();
+    let advanced = 0;
+    const hostAnalyze = vi.fn<(...args: AnalyzeProjectArgs) => string>(
+      (...args) => {
+        // `probeEvidence`, the last of `AnalyzeProjectArgs`.
+        const gather = args[25];
+        const start = performance.now();
+        const clock = vi
+          .spyOn(performance, 'now')
+          .mockImplementation(() => start + advanced);
+        const seeFile = engine.seeFile.bind(engine);
+        const looks = vi
+          .spyOn(engine, 'seeFile')
+          .mockImplementation((...seen) => {
+            advanced += 7;
+            return seeFile(...seen);
+          });
+        try {
+          gather?.(['./absent'], 'identity');
+        } finally {
+          clock.mockRestore();
+          looks.mockRestore();
+        }
+        return buildManifest({});
+      }
+    );
+    setEngineApiOverride(null);
+    vi.stubEnv('ANIMUS_DEBUG', '');
+    vi.stubEnv('ANIMUS_TIMING_JSON', '1');
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    const lines: string[] = [];
+    const session = new ExtractionSession(
+      { system: './src/system.ts' },
+      {
+        engine: () => ({
+          extractFacts: () => '{"files":{},"parseCount":0}',
+          loadSystemModule: mocks.loadSystemModule,
+          analyzeProject: hostAnalyze,
+          clearAnalysisCache: mocks.clearAnalysisCache,
+          transformFile: () => ({ code: '', hasComponents: false }),
+        }),
+        logger: {
+          info: (line) => lines.push(line),
+          warn: (line) => lines.push(line),
+          error: (line) => lines.push(line),
+        },
+      }
+    );
+    session.rootDir = createProject('animus-probe-evidence-timing-');
+
+    try {
+      await session.runFullPipeline();
+
+      const probeEvidence = lines
+        .map(
+          (line) => /^\[animus\] {7}probe-evidence +(\d+)ms$/.exec(line)?.[1]
+        )
+        .find((ms) => ms !== undefined);
+      expect(advanced).toBeGreaterThan(0);
+      expect(Number(probeEvidence)).toBe(advanced);
+      const json = consoleError.mock.calls
+        .map(([line]) => /^\[animus:timing\] (\{.*\})$/.exec(String(line))?.[1])
+        .find((text) => text !== undefined);
+      expect(JSON.parse(json ?? '{}')['buildStart.probeEvidence']).toBe(
+        advanced
       );
     } finally {
       session.close();

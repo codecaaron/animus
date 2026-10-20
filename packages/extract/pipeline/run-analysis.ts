@@ -7,7 +7,10 @@ import {
   surfaceManifestDiagnostics,
   systemLoadDiagnostics,
 } from './manifest-diagnostics';
-import { gatherProbeEvidence } from './probe-evidence';
+import {
+  gatherProbeEvidence,
+  type ProbeEvidenceGatherer,
+} from './probe-evidence';
 import { checkCustomProperties } from './property-diagnostics';
 import { applyUnitFallback } from './unit-fallback';
 
@@ -58,6 +61,9 @@ export interface ProjectAnalysisResult {
     /** The engine's phases inside `extractMs`, in ms, where it reports
      *  them: `cssResolution` among them. */
     engine?: Record<string, number>;
+    /** The host's probe evidence inside `extractMs`, in ms: it runs
+     *  between the engine's prepare and its analysis, in no engine phase. */
+    probeEvidenceMs: number;
   };
 }
 
@@ -344,25 +350,36 @@ export function runProjectAnalysis(
   const serializeMs = Math.round(performance.now() - t);
 
   t = performance.now();
+  const gather =
+    opts.rootDir === undefined
+      ? undefined
+      : gatherProbeEvidence(
+          opts.rootDir,
+          new Set(opts.fileEntries.map((entry) => entry.path)),
+          opts.analysisContext?.extensions,
+          {
+            isAsset: opts.assets?.isAsset,
+            adapted: opts.adapted,
+            expander: opts.loadExpander,
+            packageLoads,
+          }
+        );
+  let probeEvidence = 0;
+  const timedGather: ProbeEvidenceGatherer | undefined =
+    gather &&
+    ((...args) => {
+      const start = performance.now();
+      try {
+        return gather(...args);
+      } finally {
+        probeEvidence += performance.now() - start;
+      }
+    });
   const manifestJson: string = analyzeProject(
-    ...buildAnalyzeProjectArgs(
-      inputs,
-      opts.rootDir === undefined
-        ? undefined
-        : gatherProbeEvidence(
-            opts.rootDir,
-            new Set(opts.fileEntries.map((entry) => entry.path)),
-            opts.analysisContext?.extensions,
-            {
-              isAsset: opts.assets?.isAsset,
-              adapted: opts.adapted,
-              expander: opts.loadExpander,
-              packageLoads,
-            }
-          )
-    )
+    ...buildAnalyzeProjectArgs(inputs, timedGather)
   );
   const extractMs = Math.round(performance.now() - t);
+  const probeEvidenceMs = Math.round(probeEvidence);
   // SAFETY: the engine's own phase table, `{ phase: ms }`.
   const engine = analysisTimings
     ? (JSON.parse(analysisTimings()) as Record<string, number>)
@@ -419,7 +436,7 @@ export function runProjectAnalysis(
     globalCss: manifest.sheets.global,
     componentCss,
     inputs,
-    timings: { serializeMs, extractMs, parseMs, engine },
+    timings: { serializeMs, extractMs, parseMs, engine, probeEvidenceMs },
   };
 }
 

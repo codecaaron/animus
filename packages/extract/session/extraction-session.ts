@@ -2995,6 +2995,7 @@ export class ExtractionSession {
 
     bt.jsonSerialize = result.timings.serializeMs;
     bt.rustExtract = result.timings.extractMs;
+    bt.probeEvidence = result.timings.probeEvidenceMs;
     bt.jsonParse = result.timings.parseMs;
 
     const manifest = result.manifest;

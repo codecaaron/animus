@@ -11,7 +11,8 @@ export function timingRequested(
 }
 
 /** The build's timing lines: the session's phases, with the engine's own
- *  (`engineTiming`) under `rust-extract`, which holds them, when `timed`
+ *  (`engineTiming`) and the host's probe evidence, which runs after the
+ *  engine's prepare, under `rust-extract`, which holds them, when `timed`
  *  (`timingRequested`); `log` prints whatever the verbosity. */
 export function logBuildTimings(
   bt: Record<string, number>,
@@ -46,7 +47,13 @@ export function logBuildTimings(
         const sms = bt[sk] ?? 0;
         log(`    ${pad(sl, 15)}${String(sms).padStart(5)}ms`);
         if (sk !== 'rustExtract') continue;
-        for (const [phase, phaseMs] of Object.entries(engineTiming ?? {})) {
+        const phases = Object.entries(engineTiming ?? {});
+        if (Object.hasOwn(bt, 'probeEvidence')) {
+          // After the engine's prepare, which names the probes.
+          const at = phases.findIndex(([phase]) => phase === 'prepareProbes');
+          phases.splice(at + 1, 0, ['probeEvidence', bt.probeEvidence]);
+        }
+        for (const [phase, phaseMs] of phases) {
           log(
             `      ${pad(camelToKebab(phase), 17)}${String(Math.round(phaseMs)).padStart(5)}ms`
           );
