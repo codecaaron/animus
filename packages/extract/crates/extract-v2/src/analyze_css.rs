@@ -7111,13 +7111,24 @@ fn opaque_delivery(
     if !held.is_empty() {
         let mut reached: FxHashSet<String> = FxHashSet::default();
         for (path, ff) in files {
+            // Each local's import, the first that binds it, as
+            // `local_namespace` finds it.
+            let mut by_local: FxHashMap<&str, &crate::usage_facts::ImportFact> = FxHashMap::default();
+            for import in &ff.imports {
+                by_local.entry(import.local.as_str()).or_insert(import);
+            }
             for import in &ff.misused_imports {
                 if let Some((declaring, binding, _)) = binding_declaration(path, ff, import) {
                     held.remove(&(declaring, binding));
                 }
                 // A name that is a module's namespace (`export * as R`)
                 // reaches every array that module re-exports.
-                reached.extend(crate::family_members::local_namespace(path, ff, import, files, inputs, links));
+                let namespace = if ff.namespace_imports.contains_key(import) {
+                    crate::family_members::local_namespace(path, ff, import, files, inputs, links)
+                } else {
+                    by_local.get(import.as_str()).and_then(|named| crate::family_members::imported_namespace(path, named, files, inputs, links))
+                };
+                reached.extend(namespace);
             }
             reached.extend(ff.namespace_imports.values().filter_map(|source| resolve_import_source(path, source, files, inputs)));
             reached.extend(ff.module_loads.iter().flat_map(|load| loaded_modules(path, load, files, inputs)).cloned());

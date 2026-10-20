@@ -1020,6 +1020,18 @@ pub(crate) fn local_namespace(
         return held_namespace(file, ff, local, files, inputs);
     }
     let import = ff.imports.iter().find(|import| import.local == local)?;
+    imported_namespace(file, import, files, inputs, links)
+}
+
+/// The module the named import `import` of `file` binds as a namespace
+/// another module exports, as `local_namespace` finds it for that import.
+pub(crate) fn imported_namespace(
+    file: &str,
+    import: &crate::usage_facts::ImportFact,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> Option<String> {
     let module = resolve_import_source(file, &import.source, files, inputs)?;
     namespace_export(module, import.imported.clone(), files, inputs, links)
 }
