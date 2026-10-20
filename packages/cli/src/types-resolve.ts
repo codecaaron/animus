@@ -163,8 +163,8 @@ export function packageRoutes(manifest: PackageManifest): PackageRoutes {
 // ---------------------------------------------------------------------------
 // Identities
 
-/** The files a module target can name, in TypeScript's order: a script
- *  target stands for its sibling declaration. */
+/** The files a module target can name, in TypeScript's order: a script or
+ *  TypeScript source target stands for its sibling declaration. */
 export function declarationCandidates(target: string): string[] {
   const stems: Array<[string, string[]]> = [];
   const jsExtension = /\.(m|c)?jsx?$/.exec(target);
@@ -173,7 +173,17 @@ export function declarationCandidates(target: string): string[] {
     const flavor = jsExtension[1] ?? '';
     stems.push([stem, [`.d.${flavor}ts`, `.${flavor}ts`, '.tsx']]);
   }
-  if (DECLARATION_FILE.test(target)) stems.push([target, ['']]);
+  if (DECLARATION_FILE.test(target)) {
+    stems.push([target, ['']]);
+  } else {
+    // `allowImportingTsExtensions` sources keep `./x.ts` in emitted
+    // declarations, and tsc reads it as `./x.d.ts`.
+    const tsExtension = /\.(m|c)?tsx?$/.exec(target);
+    if (tsExtension !== null) {
+      const stem = target.slice(0, -tsExtension[0].length);
+      stems.push([stem, [`.d.${tsExtension[1] ?? ''}ts`]], [target, ['']]);
+    }
+  }
   stems.push([target, ['.d.ts', '.ts', '.tsx', '.d.mts', '.d.cts']]);
   stems.push([`${target}/index`, ['.d.ts', '.ts', '.tsx']]);
   return stems.flatMap(([stem, extensions]) =>
