@@ -16,13 +16,12 @@
 //! functions, the prototypes their methods come from) is proven against the
 //! analysed code: any analysed write that could redirect one of them (into
 //! a global or React, into any object the module does not own, or of a
-//! built-in's method name into a binding that may hold a prototype), or
-//! any use that lets one escape as a value the walk cannot follow, leaves
-//! no usage proven (`FileFacts::patches_intrinsics`). Code outside the
-//! analysis is assumed not to redirect them: the trust every static
-//! analyser places in the platform and the framework it targets. A
-//! prototype the analysed code reaches through a computed key it cannot
-//! name and writes through another is beyond this proof.
+//! built-in's method name or by a bracketed key into a binding that may
+//! hold a prototype), or any use that lets one escape as a value the walk
+//! cannot follow, leaves no usage proven (`FileFacts::patches_intrinsics`).
+//! Code outside the analysis is assumed not to redirect them: the trust
+//! every static analyser places in the platform and the framework it
+//! targets.
 //!
 //! An input's caller may have put any key on it, the props object React
 //! builds included (`toString={…}`, or a spread of what its own caller
@@ -906,8 +905,8 @@ struct Declarations<'r> {
     /// Bindings declared to a literal, a function or a class, never
     /// reassigned: none holds a built-in's prototype.
     literal_bindings: FxHashSet<SymbolId>,
-    /// Bindings a built-in's method or hook name is written into
-    /// (`written_into`).
+    /// Bindings written by a built-in's method or hook name, or by a
+    /// bracketed key (`written_into`).
     built_in_writes: FxHashSet<SymbolId>,
     /// See `FileFacts::patches_intrinsics`.
     patches_intrinsics: bool,
@@ -980,12 +979,13 @@ impl<'r> Declarations<'r> {
         }
     }
 
-    /// The member `name` (`None` when computed) of `object`, at `span`. A
-    /// prototype reached by name (`Array.prototype`) or through a value
-    /// (`[].__proto__`) is changed by any use but a member's read, and
-    /// `getPrototypeOf` let go as a value reaches prototypes. A write is
-    /// judged by `written_into`.
-    fn member(&mut self, span: Span, object: &Expression<'_>, name: Option<&str>) {
+    /// The member `name` (`None` when the code computes it) of `object`, at
+    /// `span`, its key `computed` in brackets. A prototype reached by name
+    /// (`Array.prototype`) or through a value (`[].__proto__`) is changed
+    /// by any use but a member's read, and `getPrototypeOf` let go as a
+    /// value reaches prototypes. A write is judged by `written_into`: by a
+    /// bracketed key, whatever it names, it may set any built-in's method.
+    fn member(&mut self, span: Span, object: &Expression<'_>, name: Option<&str>, computed: bool) {
         let prototype = match name {
             Some("prototype") => self.intrinsic(object),
             Some("__proto__") => true,
@@ -999,15 +999,15 @@ impl<'r> Declarations<'r> {
             self.patches_intrinsics = true;
         }
         if matches!(super::member_effect(span, self.ancestors.iter().rev()), Some(MemberEffect::Assigned | MemberEffect::Deleted)) {
-            self.written_into(object, name.is_some_and(built_in_name));
+            self.written_into(object, computed || name.is_some_and(built_in_name));
         }
     }
 
-    /// A write into `object`, of a built-in's method or hook name when
-    /// `built_in`. Into an object the module does not own (`owned`), it may
-    /// reach a built-in's prototype however the code got there. A built-in
-    /// name written into a binding may too, unless the binding is declared
-    /// to a literal (`Module::of` judges it).
+    /// A write into `object`, one that may set a built-in's method or hook
+    /// when `built_in`. Into an object the module does not own (`owned`),
+    /// it may reach a built-in's prototype however the code got there. One
+    /// that may set a built-in's method, into a binding, may too, unless the
+    /// binding is declared to a literal (`Module::of` judges it).
     fn written_into(&mut self, object: &Expression<'_>, built_in: bool) {
         if !self.owned(object) {
             self.patches_intrinsics = true;
@@ -1358,12 +1358,12 @@ impl<'a> Visit<'a> for Declarations<'a> {
     }
 
     fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
-        self.member(member.span, &member.object, Some(member.property.name.as_str()));
+        self.member(member.span, &member.object, Some(member.property.name.as_str()), false);
         oxc::ast_visit::walk::walk_static_member_expression(self, member);
     }
 
     fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
-        self.member(member.span, &member.object, member.static_property_name().map(|name| name.as_str()));
+        self.member(member.span, &member.object, member.static_property_name().map(|name| name.as_str()), true);
         oxc::ast_visit::walk::walk_computed_member_expression(self, member);
     }
 

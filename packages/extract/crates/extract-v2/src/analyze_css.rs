@@ -13574,6 +13574,12 @@ mod tests {
             ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nObject.defineProperty([].constructor.prototype, 'map', { value: decorate });\n", true),
             ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nconst p = [].constructor.prototype;\np.map = decorate;\n", true),
             ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nconst p = [].constructor.prototype;\np['map'] = decorate;\n", true),
+            // A write by a key the code computes may name any built-in's
+            // method, into anything but a binding declared to a literal.
+            ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nconst [k, j, m] = ['constructor', 'prototype', 'map'];\nconst p = [][k][j];\np[m] = decorate;\n", true),
+            ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nconst [k, j, m] = ['constructor', 'prototype', 'map'];\nfunction patch(o, key, f) { o[key] = f; }\npatch([][k][j], m, decorate);\n", true),
+            ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nconst [k, j, m] = ['constructor', 'prototype', 'map'];\nconst p = [][k][j];\ndelete p[m];\n", true),
+            ("const Render = ({ children }) => { const o = {}; ['a'].forEach((k) => { o[k] = 1; }); return <div>{children}</div>; };", "", "", false),
             ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "export const rows = [0];\n", false),
             // Converting, iterating, awaiting or stringifying an input runs
             // the hooks its caller gave it, the props object's included.
