@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -11,6 +12,7 @@ import { join } from 'node:path';
 import { brotliCompressSync, constants } from 'node:zlib';
 import { expect, test } from 'vitest';
 
+import { UsageFailure } from '../src/build';
 import { runCssAudit } from '../src/css-audit';
 
 import type {
@@ -57,8 +59,9 @@ function snapshot(dir: string) {
   return files;
 }
 
-test('the audit ranks findings by measured compressed savings and writes nothing', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
+/** A project with a full manifest and its built output: two groups of
+ *  components repeating a base block, one wider than the other. */
+function writeProject(root: string) {
   const all = [...MEMBERS.wide, ...MEMBERS.narrow];
   const rules = [
     ...MEMBERS.wide.map((name) => `.animus-${name}{${WIDE}}`),
@@ -128,37 +131,74 @@ test('the audit ranks findings by measured compressed savings and writes nothing
     join(root, 'dist', 'assets', 'index.js'),
     all.map((name) => `"animus-${name}"`).join(';')
   );
-  const before = snapshot(root);
+  return { css, manifest, manifestPath, dist: join(root, 'dist') };
+}
 
-  const report = await runCssAudit({
-    manifest: manifestPath,
-    dist: join(root, 'dist'),
-  });
+test('the audit ranks findings by measured compressed savings and writes nothing', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
+  try {
+    const { css, manifestPath, dist } = writeProject(root);
+    const before = snapshot(root);
 
-  const blocks = report.restructures.findings.filter(
-    (finding) => finding.kind === 'repeated-base-block'
-  );
-  expect(blocks.map((finding) => finding.components)).toEqual([
-    MEMBERS.wide.map((name) => `src/ui.tsx::${name}`),
-    MEMBERS.narrow.map((name) => `src/ui.tsx::${name}`),
-  ]);
-  // Each saving is the shipped CSS recompressed with all but one member's
-  // copy of its block cut.
-  const without = (gone: string[]) =>
-    css.replace(
-      new RegExp(
-        gone.map((name) => `\\.animus-${name}\\{[^}]*\\}`).join('|'),
-        'g'
-      ),
-      ''
+    const report = await runCssAudit({ manifest: manifestPath, dist });
+
+    const blocks = report.restructures.findings.filter(
+      (finding) => finding.kind === 'repeated-base-block'
     );
-  expect(blocks.map((finding) => finding.saving.brotli)).toEqual([
-    brotli(css) - brotli(without(MEMBERS.wide.slice(1))),
-    brotli(css) - brotli(without(MEMBERS.narrow.slice(1))),
-  ]);
-  const ranked = report.restructures.findings.map(
-    (finding) => finding.saving.brotli ?? -Infinity
-  );
-  expect(ranked).toEqual([...ranked].sort((a, b) => b - a));
-  expect(snapshot(root)).toEqual(before);
+    expect(blocks.map((finding) => finding.components)).toEqual([
+      MEMBERS.wide.map((name) => `src/ui.tsx::${name}`),
+      MEMBERS.narrow.map((name) => `src/ui.tsx::${name}`),
+    ]);
+    // Each saving is the shipped CSS recompressed with all but one member's
+    // copy of its block cut.
+    const without = (gone: string[]) =>
+      css.replace(
+        new RegExp(
+          gone.map((name) => `\\.animus-${name}\\{[^}]*\\}`).join('|'),
+          'g'
+        ),
+        ''
+      );
+    expect(blocks.map((finding) => finding.saving.brotli)).toEqual([
+      brotli(css) - brotli(without(MEMBERS.wide.slice(1))),
+      brotli(css) - brotli(without(MEMBERS.narrow.slice(1))),
+    ]);
+    const ranked = report.restructures.findings.map(
+      (finding) => finding.saving.brotli ?? -Infinity
+    );
+    expect(ranked).toEqual([...ranked].sort((a, b) => b - a));
+    expect(snapshot(root)).toEqual(before);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an input the audit cannot read fails as a usage error, never a crash', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
+  try {
+    const { manifest, manifestPath, dist } = writeProject(root);
+    const broken = [
+      {
+        ...manifest,
+        reverse_provenance: undefined,
+        slot_provenance: { usage: null },
+      },
+      { ...manifest, fileFacts: { 'src/ui.tsx': null } },
+      { ...manifest, component_fragments: { 'src/ui.tsx::A': null } },
+      {
+        ...manifest,
+        components: {
+          'src/ui.tsx::A': { binding: 'A', class_name: 'animus-A' },
+        },
+      },
+    ];
+    for (const variant of broken) {
+      writeFileSync(manifestPath, JSON.stringify(variant));
+      await expect(
+        runCssAudit({ manifest: manifestPath, dist })
+      ).rejects.toBeInstanceOf(UsageFailure);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

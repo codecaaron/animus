@@ -1,5 +1,6 @@
 import {
   classStem,
+  isMediaFile,
   outputEvidence,
   removeComponentRules,
   shippedClasses,
@@ -9,7 +10,7 @@ import {
   unbundledComponents,
 } from '@animus-ui/extract/pipeline';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 
 import { UsageFailure } from './build';
 import {
@@ -22,7 +23,6 @@ import {
 
 import type { Sheet, SheetNode, SheetSelector, Sizes } from './css-sheet';
 import type {
-  ExtractFileFacts,
   FullProjectManifest,
   ManifestComponentDescriptor,
   OutputFile,
@@ -43,7 +43,15 @@ export interface Saving {
 
 export type Confidence = 'high' | 'medium' | 'low';
 
-export interface DeliveryReport {
+/** The host a built output looks like it came from. Split stylesheets and
+ *  `removeUnbundledComponents` are options of the Vite plugin only. */
+export type DeliveryHost = 'vite' | 'next' | 'other';
+
+/** The delivery section, or why it was not estimated. */
+export type DeliveryReport = DeliveryEstimate | { unavailable: string };
+
+export interface DeliveryEstimate {
+  host: DeliveryHost;
   /** How the shipped CSS is delivered now: Animus's layers in one file, or
    *  cut into slices. */
   stylesheets: 'single' | 'split';
@@ -58,6 +66,10 @@ export interface DeliveryReport {
     saving: Saving;
   } | null;
   removalKept: string | null;
+  /** Output files the scan could not read as text, left out of the
+   *  removal estimate; a Vite build would keep every component if they
+   *  are part of its output. */
+  unread: string[];
   /** Removal's saving less the split's cost, where the CSS is single now;
    *  removal's saving where it is split already. */
   net: Saving;
@@ -72,8 +84,9 @@ export interface SlotGroup {
   props: number;
   /** Of those, the props no other rule keeps, which closing it closes. */
   only: number;
-  /** What the slot rules of the props it keeps weigh: what closing it
-   *  saves once nothing else keeps them. */
+  /** What closing this rule alone saves: the slot rules of `only`. The
+   *  groups' savings add up, since each prop is `only` in one group at
+   *  most. */
   saving: Saving;
   /** The components it keeps them for, most props first, each with the
    *  sites where the rule applies to it. */
@@ -173,8 +186,28 @@ interface UsageFact {
 
 interface DistFile {
   file: string;
-  bytes: Buffer;
+  text: string;
 }
+
+/** What the scan of the built output read. */
+interface Dist {
+  /** Every file's path, relative to the output directory. */
+  names: string[];
+  /** The files read as text. */
+  files: DistFile[];
+  /** Files whose bytes are no UTF-8 text, other than media, OS metadata
+   *  and compressed copies of files read, which are skipped unread. */
+  unread: string[];
+}
+
+/** The most bytes Node reads into one buffer. */
+const MAX_FILE_BYTES = 2 ** 31 - 1;
+
+/** Files an OS writes beside a folder's own: never build output. */
+const OS_METADATA = /^(?:\.DS_Store|Thumbs\.db|desktop\.ini|\._.*)$/i;
+
+/** A precompressed copy (`app.js.br`) of a file written beside it. */
+const COMPRESSED_COPY = /\.(?:br|gz|zst)$/;
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -183,45 +216,228 @@ function walk(dir: string): string[] {
   });
 }
 
-function readManifest(path: string): FullProjectManifest {
-  let parsed: FullProjectManifest;
-  try {
-    // SAFETY: the sections read below are checked before use; anything
-    // else in the file is read only through them.
-    parsed = JSON.parse(readFileSync(path, 'utf8')) as FullProjectManifest;
-  } catch (error) {
-    throw new UsageFailure(
-      `css audit: cannot read the manifest ${path}: ${String(error)}`
+/** A JSON value, as `JSON.parse` returns it. */
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+type JsonRecord = { [key: string]: JsonValue };
+
+// A JSON value's kind, without `typeof`: a string and an object are each
+// the only JSON values equal to their own conversion.
+const isText = (value: JsonValue | undefined): value is string =>
+  String(value) === value;
+const isRecord = (value: JsonValue | undefined): value is JsonRecord =>
+  Object(value) === value && !Array.isArray(value);
+const isList = (value: JsonValue | undefined): value is JsonValue[] =>
+  Array.isArray(value);
+
+/** `value` where it is a record, else an empty one. */
+const recordOf = (value: JsonValue | undefined): JsonRecord =>
+  isRecord(value) ? value : {};
+
+/** Each value of a record, or `null` where `value` is no record. */
+const recordValues = (value: JsonValue | undefined): JsonValue[] | null =>
+  isRecord(value) ? Object.values(value) : null;
+
+/** A slot opening the audit reads: its rule, as text. */
+const isOpening = (value: JsonValue): boolean =>
+  isRecord(value) && isText(value.rule);
+
+/** Each opening list of a record of them is one. */
+const openingLists = (value: JsonValue | undefined): boolean =>
+  recordValues(value)?.every((list) => isList(list) && list.every(isOpening)) ??
+  false;
+
+/** One usage fact the audit reads: an element with a tag and attributes,
+ *  or a `createElement` call. */
+function isUsageFact(fact: JsonValue): boolean {
+  if (!isRecord(fact)) return false;
+  if (fact.element !== undefined) {
+    const element = fact.element;
+    return (
+      isRecord(element) &&
+      isRecord(element.tag) &&
+      isList(element.attrs) &&
+      element.attrs.every((attr) => isRecord(attr) && isText(attr.name))
     );
   }
-  const missing = (
-    ['components', 'component_fragments', 'fileFacts', 'report'] as const
-  ).filter((section) => (parsed?.[section] ?? null) === null);
-  if (missing.length > 0) {
-    throw new UsageFailure(
-      `css audit: ${path} is not a full manifest (no ${missing.join(', ')}); write one with \`animus build --verbose\``
-    );
-  }
-  return parsed;
+  return fact.createElement === undefined || isRecord(fact.createElement);
 }
 
-function readDist(dir: string): DistFile[] {
-  let files: string[];
+/** The first part of `raw` the audit cannot read, or `null`. */
+function manifestProblem(raw: JsonRecord): string | null {
+  for (const section of [
+    'components',
+    'component_fragments',
+    'fileFacts',
+    'report',
+  ]) {
+    if (!isRecord(raw[section])) return `it has no ${section} section`;
+  }
+  for (const [id, component] of Object.entries(recordOf(raw.components))) {
+    if (!isRecord(component)) return `component ${id} is no object`;
+    for (const key of [
+      'binding',
+      'class_name',
+      'replacement',
+      'terminal',
+      'tag',
+    ]) {
+      if (!isText(component[key])) return `component ${id} has no ${key}`;
+    }
+    const parent = component.extends_from;
+    if (parent !== undefined && parent !== null && !isText(parent)) {
+      return `component ${id}'s extends_from is no id`;
+    }
+  }
+  for (const [id, sheets] of Object.entries(
+    recordOf(raw.component_fragments)
+  )) {
+    if (!(recordValues(sheets)?.every(isText) ?? false)) {
+      return `the fragments of ${id} are no record of CSS texts`;
+    }
+  }
+  for (const [file, facts] of Object.entries(recordOf(raw.fileFacts))) {
+    if (!isRecord(facts)) return `the facts of ${file} are no object`;
+    const usage = facts.usage;
+    if (usage !== undefined && !(isList(usage) && usage.every(isUsageFact))) {
+      return `the usage facts of ${file} are not in the form this audit reads`;
+    }
+  }
+  for (const section of [
+    'reverse_provenance',
+    'dynamic_props',
+    'tag_components',
+    'crossFile',
+    'sheets',
+  ]) {
+    if (raw[section] !== undefined && !isRecord(raw[section])) {
+      return `its ${section} section is no object`;
+    }
+  }
+  if (raw.css !== undefined && !isText(raw.css)) return 'its css is no text';
+  const provenance = raw.slot_provenance;
+  if (provenance !== undefined) {
+    if (
+      !isRecord(provenance) ||
+      !isList(provenance.usage) ||
+      !provenance.usage.every(isOpening) ||
+      !openingLists(provenance.owners) ||
+      !(
+        recordValues(provenance.props)?.every(
+          (keepers) =>
+            isList(keepers) &&
+            keepers.every(
+              (keeper) =>
+                isOpening(keeper) && isRecord(keeper) && isText(keeper.owner)
+            )
+        ) ?? false
+      ) ||
+      (provenance.components !== undefined &&
+        !(recordValues(provenance.components)?.every(openingLists) ?? false))
+    ) {
+      return 'its slot_provenance is not in the form this audit reads';
+    }
+  }
+  return null;
+}
+
+/** A manifest the audit has checked, with its usage facts. */
+interface AuditedManifest {
+  manifest: FullProjectManifest;
+  usage: Record<string, { usage?: UsageFact[] }>;
+}
+
+function readManifest(path: string): AuditedManifest {
+  const remedy =
+    'pass --manifest the manifest.json `animus build --verbose` writes, or one a host captured, from the same @animus-ui version';
+  let raw: JsonValue;
   try {
-    files = walk(dir);
+    // SAFETY: JSON.parse returns a JSON value, which `JsonValue` spells.
+    raw = JSON.parse(readFileSync(path, 'utf8')) as JsonValue;
   } catch (error) {
     throw new UsageFailure(
-      `css audit: cannot read the built output ${dir}: ${String(error)}`
+      `css audit: cannot read the manifest ${path} (${String(error)}); ${remedy}`
     );
   }
-  const read = files.map((path) => ({
-    file: relative(dir, path),
-    bytes: readFileSync(path),
-  }));
-  if (!read.some(({ file }) => file.endsWith('.css'))) {
-    throw new UsageFailure(`css audit: ${dir} holds no .css file`);
+  const problem = isRecord(raw) ? manifestProblem(raw) : 'it is no object';
+  if (problem !== null || !isRecord(raw)) {
+    throw new UsageFailure(
+      `css audit: ${path} is not a full manifest this audit reads: ${problem}; ${remedy}`
+    );
   }
-  return read;
+  raw.reverse_provenance ??= {};
+  raw.dynamic_props ??= {};
+  raw.css ??= '';
+  const report = recordOf(raw.report);
+  if (Number(report.components_forced) !== report.components_forced) {
+    report.components_forced = 0;
+  }
+  return {
+    // SAFETY: `manifestProblem` checked every section and field the audit
+    // reads, and the optional ones it reads are filled in above.
+    manifest: raw as FullProjectManifest & JsonRecord,
+    // SAFETY: each file's usage facts were checked by `isUsageFact`.
+    usage: raw.fileFacts as Record<string, { usage?: UsageFact[] }> &
+      JsonRecord,
+  };
+}
+
+/**
+ * The built output's files: media, OS metadata and precompressed copies
+ * of files beside them skipped before they are read; a file no UTF-8 text
+ * spells set aside as unread.
+ */
+function readDist(dir: string): Dist {
+  const remedy = 'pass --dist the directory the build wrote its output to';
+  let paths: string[];
+  try {
+    paths = walk(dir);
+  } catch (error) {
+    throw new UsageFailure(
+      `css audit: cannot read the built output ${dir} (${String(error)}); ${remedy}`
+    );
+  }
+  const names = paths.map((path) => relative(dir, path));
+  const present = new Set(names);
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const files: DistFile[] = [];
+  const unread: string[] = [];
+  for (const [index, path] of paths.entries()) {
+    const file = names[index]!;
+    if (
+      isMediaFile(file) ||
+      OS_METADATA.test(basename(file)) ||
+      (COMPRESSED_COPY.test(file) &&
+        present.has(file.replace(COMPRESSED_COPY, '')))
+    ) {
+      continue;
+    }
+    let bytes: Buffer;
+    try {
+      if (statSync(path).size > MAX_FILE_BYTES) {
+        throw new Error('over the 2 GiB a file can be read in');
+      }
+      bytes = readFileSync(path);
+    } catch (error) {
+      throw new UsageFailure(
+        `css audit: cannot read ${file} in ${dir} (${String(error)}); ${remedy}`
+      );
+    }
+    try {
+      files.push({ file, text: decoder.decode(bytes) });
+    } catch {
+      unread.push(file);
+    }
+  }
+  if (!files.some(({ file }) => file.endsWith('.css'))) {
+    throw new UsageFailure(`css audit: ${dir} holds no .css file; ${remedy}`);
+  }
+  return { names, files, unread };
 }
 
 // ---------------------------------------------------------- measurement
@@ -314,8 +530,32 @@ class Measured {
 }
 
 /** A declaration's property name. */
-const propertyOf = (declaration: string): string =>
-  declaration.slice(0, declaration.indexOf(':')).trim();
+const propertyOf = (declaration: string): string => {
+  const name = declaration.slice(0, declaration.indexOf(':')).trim();
+  return name.startsWith('--') ? name : name.toLowerCase();
+};
+
+/** The physical sides and sizes, whose logical names differ. */
+const SIDES = new Set(['top', 'right', 'bottom', 'left']);
+const SIZES = /^(?:(?:min|max)-)?(?:width|height|inline-size|block-size)$/;
+
+/**
+ * A property's family: the properties a shorthand sets with it, and their
+ * logical and physical sides, under one name (`padding` for
+ * `padding-top` and `padding-block-start`, `inset` for `top`, `gap` for
+ * `row-gap`, `align` for `place-items`). Coarse on purpose: two
+ * properties of one family may set the same longhand.
+ */
+function familyOf(property: string): string {
+  const name = property.replace(/^-(?:webkit|moz|ms|o)-/, '');
+  if (name.startsWith('--')) return name;
+  if (SIDES.has(name) || name.startsWith('inset')) return 'inset';
+  if (name === 'gap' || name.endsWith('-gap')) return 'gap';
+  if (SIZES.test(name)) return 'size';
+  if (/^(?:place|align|justify)-/.test(name)) return 'align';
+  if (name === 'columns') return 'column';
+  return name.split('-')[0]!;
+}
 
 // --------------------------------------------------------------- sites
 
@@ -334,7 +574,8 @@ interface ComponentSites {
   evidence: 'component-id' | 'binding-name';
 }
 
-function componentSites(manifest: FullProjectManifest): ComponentSites {
+function componentSites(audited: AuditedManifest): ComponentSites {
+  const { manifest } = audited;
   const tables = manifest.tag_components;
   const evidence =
     tables && Object.keys(tables).length > 0 ? 'component-id' : 'binding-name';
@@ -350,10 +591,8 @@ function componentSites(manifest: FullProjectManifest): ComponentSites {
     list.push(site);
     sites.set(id, list);
   };
-  for (const [file, facts] of Object.entries(manifest.fileFacts)) {
-    // SAFETY: `usage` is on the engine's per-file facts wire, which
-    // `ExtractFileFacts` transcribes only in part.
-    const usage = (facts as ExtractFileFacts & { usage?: UsageFact[] }).usage;
+  for (const [file, facts] of Object.entries(audited.usage)) {
+    const usage = facts.usage;
     for (const fact of usage ?? []) {
       const tag = fact.element
         ? (fact.element.tag.ident ?? fact.element.tag.member)
@@ -382,14 +621,44 @@ const coApplies = (site: Site): boolean =>
 
 // ------------------------------------------------------------ delivery
 
+/** The host whose output a dist's file names look like. */
+function hostOf(names: readonly string[]): DeliveryHost {
+  if (
+    names.some(
+      (name) =>
+        name === 'BUILD_ID' ||
+        name === 'build-manifest.json' ||
+        /^(?:.*\/)?(?:_next\/)?static\/chunks\//.test(name)
+    )
+  ) {
+    return 'next';
+  }
+  if (
+    names.includes('.vite/manifest.json') ||
+    (names.some((name) => /^[^/]+\.html$/.test(name)) &&
+      names.some((name) => name.startsWith('assets/')))
+  ) {
+    return 'vite';
+  }
+  return 'other';
+}
+
 async function deliveryReport(
-  manifest: FullProjectManifest,
+  audited: AuditedManifest,
   measured: Measured,
-  dist: DistFile[]
+  dist: Dist
 ): Promise<DeliveryReport> {
+  const { manifest } = audited;
   const sheets = [...measured.files.keys()].filter((file) =>
     /@layer\s+anm-[\w-]+\s*\{/.test(measured.files.get(file)!)
   );
+  if (sheets.length === 0) {
+    return {
+      unavailable:
+        "no CSS file holds an `@layer anm-…` block, as an unlayered or cascade-layer-polyfilled build ships Animus's rules, so the audit cannot tell them from the app's own",
+    };
+  }
+  const host = hostOf(dist.names);
   const single = sheets.length === 1;
   const texts = sheets.map((file) => measured.files.get(file)!);
   // A split cuts Animus's stylesheet into its slices, and the app's own CSS
@@ -398,7 +667,7 @@ async function deliveryReport(
   const slices = single
     ? sheets.flatMap((file) => {
         const css = measured.files.get(file)!;
-        const [start, end] = animusRegion(measured.sheet(file));
+        const [start, end] = animusRegion(measured.sheet(file), manifest);
         const own = css.slice(0, start) + css.slice(end);
         return [
           ...splitStylesheet(css.slice(start, end)).map(
@@ -419,7 +688,10 @@ async function deliveryReport(
     'A stylesheet shared with code outside the build (micro-frontends, module federation) is unsupported with removal on.',
   ];
   const { texts: evidence, unreadable } = outputEvidence(
-    dist.map(({ file, bytes }): OutputFile => ({ fileName: file, bytes })),
+    dist.files.map(({ file, text }): OutputFile => ({
+      fileName: file,
+      code: text,
+    })),
     new Set(sheets)
   );
   let removalEdit: { components: number; edit: Edit } | null = null;
@@ -461,6 +733,7 @@ async function deliveryReport(
     ? subtract(removal?.saving ?? zero(), splitCost)
     : (removal?.saving ?? zero());
   return {
+    host,
     stylesheets: single ? 'single' : 'split',
     sheets,
     splitCost,
@@ -469,19 +742,26 @@ async function deliveryReport(
       unreadable === null
         ? null
         : `${unreadable} holds data the scan cannot read as text, which may name a class`,
+    unread: dist.unread,
     net,
-    verdict: deliveryVerdict(single, splitCost, removal, net),
+    verdict: deliveryVerdict(host, single, splitCost, removal, net),
     preconditions,
   };
 }
 
 /**
  * Where Animus's stylesheet sits in a file that also holds the app's own
- * CSS: from its theme variables, the first top-level `:root` rule declaring
- * a custom property its layers read (else its first `@property` or
- * `@layer anm-…` block), to the end of its last `@layer anm-…` block.
+ * CSS, to the end of its last `@layer anm-…` block. It starts at its theme
+ * variables: of the top-level `:root` rules before its first `@property`
+ * registration (one of its own slot variables) or layer block, the one
+ * declaring the most custom properties the manifest's CSS reads, the
+ * later on a tie. An app's own `:root` declares few of them; without any,
+ * the region starts at that registration or block.
  */
-function animusRegion(sheet: Sheet): [number, number] {
+function animusRegion(
+  sheet: Sheet,
+  manifest: FullProjectManifest
+): [number, number] {
   const top = sheet.rules;
   const layers = top.filter(
     (node) =>
@@ -491,22 +771,38 @@ function animusRegion(sheet: Sheet): [number, number] {
   const first = layers[0]!;
   const end = layers[layers.length - 1]!.end;
   const read = new Set(
-    [...sheet.css.slice(first.start, end).matchAll(/var\(\s*(--[\w-]+)/g)].map(
-      (match) => match[1]!
-    )
+    [...manifest.css.matchAll(/var\(\s*(--[\w-]+)/g)].map((match) => match[1]!)
+  );
+  const slotVariables = Object.values(manifest.dynamic_props).flatMap(
+    (meta) => meta.varName ?? []
   );
   const marker = top.find(
-    (node) => node === first || (node.type === 'at' && node.name === 'property')
-  )!;
-  const variables = top.find(
     (node) =>
-      node.start < marker.start &&
-      node.type === 'style' &&
-      node.selectors.length === 1 &&
-      node.selectors[0]!.text === ':root' &&
-      node.declarations.some((declaration) => read.has(propertyOf(declaration)))
-  );
-  return [(variables ?? marker).start, end];
+      node === first ||
+      (node.type === 'at' &&
+        node.name === 'property' &&
+        slotVariables.some((name) => node.prelude.startsWith(name)))
+  )!;
+  let start = marker.start;
+  let most = 0;
+  for (const node of top) {
+    if (node.start >= marker.start) break;
+    if (
+      node.type !== 'style' ||
+      node.selectors.length !== 1 ||
+      node.selectors[0]!.text !== ':root'
+    ) {
+      continue;
+    }
+    const declared = node.declarations.filter((declaration) =>
+      read.has(propertyOf(declaration))
+    ).length;
+    if (declared > 0 && declared >= most) {
+      most = declared;
+      start = node.start;
+    }
+  }
+  return [start, end];
 }
 
 /** Where a split file goes in link order: the slice most of it is, as
@@ -518,10 +814,25 @@ function sliceRank(css: string): number {
   );
 }
 
+/** The verdict for the Vite plugin, which alone has these options; for
+ *  another host, said as what they would do there. */
 function deliveryVerdict(
+  host: DeliveryHost,
   single: boolean,
   splitCost: Saving,
-  removal: DeliveryReport['removal'],
+  removal: DeliveryEstimate['removal'],
+  net: Saving
+): string {
+  const verdict = viteVerdict(single, splitCost, removal, net);
+  return host === 'vite'
+    ? verdict
+    : `split stylesheets and removeUnbundledComponents are Vite plugin options, and this output looks like ${host === 'next' ? 'a Next build' : 'another host’s'}; on Vite: ${verdict}`;
+}
+
+function viteVerdict(
+  single: boolean,
+  splitCost: Saving,
+  removal: DeliveryEstimate['removal'],
   net: Saving
 ): string {
   const cost = splitCost.brotli ?? 0;
@@ -611,7 +922,7 @@ async function slotReport(
   }
   const [saving, ...savings] = await Promise.all([
     dropProps(Object.keys(provenance.props)),
-    ...[...rules.values()].map(({ props }) => dropProps(props)),
+    ...[...rules.values()].map(({ only }) => dropProps(only)),
   ]);
   const groups = [...rules]
     .map(([rule, { props, only, owners }], index): SlotGroup => ({
@@ -621,7 +932,7 @@ async function slotReport(
       saving: savings[index]!,
       owners: [...owners]
         .map(([owner, held]) => ({
-          component: manifest.components[owner]?.binding ?? owner,
+          component: ownerName(manifest, owner, owners.keys()),
           props: held.props.size,
           sites: [...held.sites].sort().slice(0, SITES_PER_OWNER),
         }))
@@ -659,6 +970,24 @@ async function slotReport(
     usageGaps,
     componentSlots: { slots, components: owners.length, byRule },
   };
+}
+
+/** A component as a report names it: its binding, and its file where
+ *  another of `among` shares the binding. */
+function ownerName(
+  manifest: FullProjectManifest,
+  id: string,
+  among: Iterable<string>
+): string {
+  const component = manifest.components[id];
+  if (component === undefined) return id;
+  const shared = [...among].some(
+    (other) =>
+      other !== id && manifest.components[other]?.binding === component.binding
+  );
+  return shared
+    ? `${component.binding} (${component.file})`
+    : component.binding;
 }
 
 /** Where a slot opening applies: `file:line (detail)`. */
@@ -765,7 +1094,7 @@ function keptOptions(
     const listed = kept
       .map(({ axis, options }) => `${axis}: ${options.join(', ')}`)
       .join('; ');
-    const title = `${component.binding}: ${kept.reduce((n, { options }) => n + options.length, 0)} options with no literal use, kept by ${kept.reduce((n, { dynamic }) => n + dynamic, 0)} dynamic sites (${listed})`;
+    const title = `${component.binding}: ${kept.reduce((n, { options }) => n + options.length, 0)} options no site the audit sees uses literally, kept by ${kept.reduce((n, { dynamic }) => n + dynamic, 0)} dynamic sites (${listed})`;
     const unproven = provenance?.owners[id] ?? [];
     const unseen = unproven.filter(
       ({ rule }) => rule === 'spread' || rule === 'create-element'
@@ -779,6 +1108,19 @@ function keptOptions(
       });
       continue;
     }
+    const through = Object.values(manifest.components).find(
+      (other) =>
+        other.terminal === 'asComponent' && other.tag === component.binding
+    );
+    if (through !== undefined) {
+      refused.push({
+        kind: 'kept-options',
+        title,
+        components: [id],
+        rule: `rendered through ${through.binding} (asComponent), whose sites pass its props`,
+      });
+      continue;
+    }
     if (unseen.length > 0 || used.some((site) => site.attrs === null)) {
       refused.push({
         kind: 'kept-options',
@@ -788,7 +1130,12 @@ function keptOptions(
       });
       continue;
     }
-    const caveats: string[] = [];
+    // The facts record neither a spread at a site nor where a dynamic
+    // value comes from, so a wrapper forwarding its own prop, or a spread
+    // of one, can reach any of these options: never more than low.
+    const caveats: string[] = [
+      'the manifest records no spread at a site and no value forwarded from a parameter, so a spread or a wrapper passing its own prop may reach these options',
+    ];
     const hidden = unproven.filter(
       ({ rule }) => rule !== 'not-module-confined'
     );
@@ -814,8 +1161,8 @@ function keptOptions(
         title,
         components: [id],
         suggestion:
-          'At each dynamic site, narrow the value to literals the engine can enumerate (a ternary of literals, a lookup object), or delete the options the app never reaches.',
-        confidence: confidenceOf(caveats, hidden.length > 0),
+          'Narrow each dynamic value to literals the engine can enumerate (a ternary of literals, a lookup object), following it through any wrapper that forwards it; the engine then prunes the options no site reaches. The saving is what that pruning would remove if none is reached.',
+        confidence: 'low',
         caveats,
       },
       drop: (selector) => selector.classes.some((name) => dropped.has(name)),
@@ -1038,7 +1385,7 @@ function repeatedBaseBlocks(
   const candidates: Candidate[] = [];
   for (const { declarations, members } of groups.values()) {
     if (members.length < 2) continue;
-    const blockProps = new Set(declarations.map(propertyOf));
+    const blockFamilies = new Set(declarations.map(propertyOf).map(familyOf));
     const block = `{${declarations.join(';')}}`;
     const kept: string[] = [];
     const reasons = new Map<string, string[]>();
@@ -1057,10 +1404,13 @@ function repeatedBaseBlocks(
         (setBy.get(component.class_name) ?? []).some(
           (other) =>
             other.rule !== rule &&
-            other.props.some((prop) => blockProps.has(prop))
+            other.props.some((prop) => blockFamilies.has(familyOf(prop)))
         )
       ) {
-        note("sets one of the block's properties in another rule", id);
+        note(
+          "sets a property of the block's families (a shorthand, its longhands, or their logical or physical sides) in another rule",
+          id
+        );
       } else {
         kept.push(id);
       }
@@ -1105,8 +1455,8 @@ function repeatedBaseBlocks(
         title: title(kept),
         components: kept,
         suggestion:
-          'Share it: one layout component whose base is the block, and each member written as `system.styles(rest)…asComponent(Layout)` with the rest of its styles. Each member sets none of the block’s properties anywhere else, so moving them is cascade-safe.',
-        confidence: confidenceOf(caveats, tags.size > 1),
+          'Share it: one layout component whose base is the block, and each member written as `system.styles(rest)…asComponent(Layout)` with the rest of its styles. No other rule of a member sets a property of the block’s families, so the members’ own rules do not compete with the layout’s. A rule from elsewhere that matches these elements can: the layout’s rules land where its id (file::binding) sorts, so check that none sits between.',
+        confidence: tags.size > 1 ? 'low' : 'medium',
         caveats,
       },
       drop: (selector, rule) =>
@@ -1183,13 +1533,14 @@ export interface CssAuditOptions {
 export async function runCssAudit(
   options: CssAuditOptions
 ): Promise<CssAuditReport> {
-  const manifest = readManifest(options.manifest);
+  const audited = readManifest(options.manifest);
+  const { manifest } = audited;
   const dist = readDist(options.dist);
   const measured = new Measured(
     new Map(
-      dist
+      dist.files
         .filter(({ file }) => file.endsWith('.css'))
-        .map(({ file, bytes }) => [file, bytes.toString('utf8')])
+        .map(({ file, text }) => [file, text])
     )
   );
   const total = await measured.sizes([...measured.files.values()], 'brotli');
@@ -1205,7 +1556,16 @@ export async function runCssAudit(
   // A component ships where a rule names its class or one derived from it.
   const stems = new Set([...classes].map(classStem));
   const shipped = (className: string) => stems.has(className);
-  const { sites, evidence } = componentSites(manifest);
+  const components = Object.values(manifest.components);
+  if (
+    components.length > 0 &&
+    !components.some((component) => shipped(component.class_name))
+  ) {
+    throw new UsageFailure(
+      `css audit: none of the manifest's ${components.length} component classes occurs in the CSS under ${options.dist}, so the two come from different builds or settings (shortClassNames, a prefix, other sources); write the manifest with \`animus build --verbose\` from the configuration that built the output`
+    );
+  }
+  const { sites, evidence } = componentSites(audited);
   const refused: Refusal[] = [];
   const candidates = [
     ...keptOptions(manifest, classes, sites, refused),
@@ -1213,7 +1573,7 @@ export async function runCssAudit(
     ...repeatedBaseBlocks(manifest, measured, sites, refused),
   ];
   const [delivery, slots, findings] = await Promise.all([
-    deliveryReport(manifest, measured, dist),
+    deliveryReport(audited, measured, dist),
     slotReport(manifest, measured),
     measureCandidates(candidates, measured, floor),
   ]);
@@ -1254,14 +1614,7 @@ export function formatCssAudit(report: CssAuditReport): string {
     'Savings are measured: each edits the shipped CSS and recompresses each file alone (gzip -9, Brotli q11 lgwin 22); Brotli ranks them.',
     '',
     '1. Delivery',
-    `  Now: ${delivery.stylesheets === 'single' ? 'one stylesheet' : `split, ${delivery.sheets.length} files`} (${delivery.sheets.join(', ')})`,
-    `  Split costs: ${savingText(delivery.splitCost)}`,
-    delivery.removal === null
-      ? `  Removal keeps every component: ${delivery.removalKept}`
-      : `  Removal: ${delivery.removal.components} of ${report.components} components no output file includes, saves ${savingText(delivery.removal.saving)}`,
-    `  Verdict: ${delivery.verdict}`,
-    '  Preconditions:',
-    ...delivery.preconditions.map((line) => `    - ${line}`),
+    ...deliveryLines(delivery, report.components),
     '',
     '2. Slot keepers',
   ];
@@ -1277,7 +1630,7 @@ export function formatCssAudit(report: CssAuditReport): string {
     );
     for (const group of slots.groups) {
       lines.push(
-        `  ${group.rule}: keeps ${group.props} props (${group.only} kept by nothing else), whose slot rules weigh ${savingText(group.saving)}`
+        `  ${group.rule}: keeps ${group.props} props; closing it alone closes ${group.only}, saving ${savingText(group.saving)}`
       );
       for (const owner of group.owners) {
         lines.push(
@@ -1343,6 +1696,27 @@ export function formatCssAudit(report: CssAuditReport): string {
     }
   }
   return `${lines.join('\n')}\n`;
+}
+
+function deliveryLines(delivery: DeliveryReport, components: number): string[] {
+  if ('unavailable' in delivery) {
+    return [`  Not estimated: ${delivery.unavailable}`];
+  }
+  return [
+    `  Now: ${delivery.stylesheets === 'single' ? 'one stylesheet' : `split, ${delivery.sheets.length} files`} (${delivery.sheets.join(', ')}); the output looks like ${delivery.host === 'vite' ? 'a Vite build' : delivery.host === 'next' ? 'a Next build' : 'neither a Vite nor a Next build'}`,
+    `  Split costs: ${savingText(delivery.splitCost)}`,
+    delivery.removal === null
+      ? `  Removal keeps every component: ${delivery.removalKept}`
+      : `  Removal: ${delivery.removal.components} of ${components} components no output file includes, saves ${savingText(delivery.removal.saving)}`,
+    ...(delivery.unread.length > 0
+      ? [
+          `  Not read as text, so left out of the removal estimate: ${delivery.unread.slice(0, 5).join(', ')}${delivery.unread.length > 5 ? `, +${delivery.unread.length - 5} more` : ''}; a Vite build keeps every component if they are part of its output`,
+        ]
+      : []),
+    `  Verdict: ${delivery.verdict}`,
+    '  Preconditions:',
+    ...delivery.preconditions.map((line) => `    - ${line}`),
+  ];
 }
 
 function countBy(values: string[]): string {

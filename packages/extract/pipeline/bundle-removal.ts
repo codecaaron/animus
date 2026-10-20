@@ -15,6 +15,11 @@ export function classStem(name: string): string {
 const MEDIA_FILE =
   /\.(?:png|jpe?g|gif|webp|avif|ico|bmp|tiff?|woff2?|ttf|otf|eot|mp3|mp4|m4a|wav|ogg|oga|webm|flac|mov)$/i;
 
+/** Whether an output file is media, whose bytes no script reads as text. */
+export function isMediaFile(fileName: string): boolean {
+  return MEDIA_FILE.test(fileName);
+}
+
 /** A data URL's media type that is no text: an image other than SVG, a
  *  font, audio or video. */
 const MEDIA_TYPE =
@@ -63,7 +68,7 @@ export function outputEvidence(
   const pending: Array<EvidenceText & { origin: string }> = [];
   for (const file of files) {
     const { fileName } = file;
-    if (skipped.has(fileName) || MEDIA_FILE.test(fileName)) continue;
+    if (skipped.has(fileName) || isMediaFile(fileName)) continue;
     try {
       const text = 'code' in file ? file.code : decoder.decode(file.bytes);
       pending.push({ fileName, origin: fileName, text });

@@ -359,6 +359,7 @@ export type {
 } from './bundle-removal';
 export {
   classStem,
+  isMediaFile,
   noteKept,
   outputEvidence,
   removeComponentRules,

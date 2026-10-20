@@ -77,7 +77,7 @@ type ConfigValue =
   | readonly ConfigValue[]
   | Function;
 
-interface LoadedCliConfig {
+export interface LoadedCliConfig {
   core: Partial<AnimusCoreOptions>;
   cli: CliNamespaceOptions;
 }
@@ -322,10 +322,25 @@ async function loadConfigFile(path: string): Promise<ConfigRecord> {
   }
 }
 
-export async function resolveCliConfig(
-  flags: CliFlags,
+/** Where a project is: its config file, the root every relative input
+ *  resolves against, and its artifact directory. */
+export interface ProjectLocation {
+  configFile: string | null;
+  loaded: LoadedCliConfig;
+  root: string;
+  rootSource: CliRootSource;
+  outDir: string;
+  outDirExplicit: boolean;
+}
+
+/** Finds the config file (`--config`, else the first of
+ *  `CONFIG_FILENAMES` in the root or cwd), the root (`--root`, the file's
+ *  `root`, its directory, or the cwd) and the artifact directory (`--out-dir`,
+ *  `cli.outDir`, or `.animus` in the root). */
+export async function locateProject(
+  flags: Pick<CliFlags, 'root' | 'config' | 'outDir'>,
   cwd: string
-): Promise<ResolvedCliConfig> {
+): Promise<ProjectLocation> {
   const flagRoot = flags.root ? resolve(cwd, flags.root) : null;
 
   let configFile: string | null = null;
@@ -365,6 +380,34 @@ export async function resolveCliConfig(
     rootSource = 'cwd';
     effectiveRoot = cwd;
   }
+  const outDirSetting =
+    flags.outDir ?? loaded.cli.outDir ?? ANIMUS_ARTIFACT_DIR;
+  return {
+    configFile,
+    loaded,
+    root: effectiveRoot,
+    rootSource,
+    outDir: isAbsolute(outDirSetting)
+      ? outDirSetting
+      : resolve(effectiveRoot, outDirSetting),
+    outDirExplicit:
+      flags.outDir !== undefined || loaded.cli.outDir !== undefined,
+  };
+}
+
+export async function resolveCliConfig(
+  flags: CliFlags,
+  cwd: string
+): Promise<ResolvedCliConfig> {
+  const {
+    configFile,
+    loaded,
+    root: effectiveRoot,
+    rootSource,
+    outDir,
+    outDirExplicit,
+  } = await locateProject(flags, cwd);
+  const raw = loaded.core;
 
   const provenance: Record<string, OptionProvenance> = {};
   const pick = <K extends keyof AnimusCoreOptions>(
@@ -418,15 +461,7 @@ export async function resolveCliConfig(
   );
   provenance['mode'] = resolvedMode.provenance;
 
-  const outDirSetting =
-    flags.outDir ?? loaded.cli.outDir ?? ANIMUS_ARTIFACT_DIR;
-  const outDir = isAbsolute(outDirSetting)
-    ? outDirSetting
-    : resolve(effectiveRoot, outDirSetting);
-  provenance['outDir'] =
-    flags.outDir !== undefined || loaded.cli.outDir !== undefined
-      ? 'explicit'
-      : 'driver-default';
+  provenance['outDir'] = outDirExplicit ? 'explicit' : 'driver-default';
 
   const options: AnimusCoreOptions = {
     system,

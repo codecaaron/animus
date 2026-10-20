@@ -60,24 +60,34 @@ animus css audit --root . --dist dist
 ```
 
 A report of what would make the shipped CSS smaller, ranked by measured
-savings. It reads a full manifest (`--manifest`, default
-`<root>/.animus/manifest.json`, which `animus build --verbose` writes) and
-the built output (`--dist`, default `<root>/dist`), and writes nothing.
-Each estimate edits the shipped CSS and recompresses each file on its own
-(gzip level 9, Brotli quality 11 with a 22-bit window); Brotli ranks them.
+savings. It reads a full manifest (`--manifest`, default `manifest.json` in
+the artifact directory `animus build` uses, so `--out-dir`, `cli.outDir`,
+`--config` and `--root` apply as they do there) and the built output
+(`--dist`, default `<root>/dist`), and writes nothing. The manifest must
+come from the build that produced the output: `animus build --verbose`
+with the same settings, or one a host captured. Each estimate edits the
+shipped CSS and recompresses each file on its own (gzip level 9, Brotli
+quality 11 with a 22-bit window); Brotli ranks them.
 
 1. **Delivery:** whether `stylesheets: 'split'` with
-   `removeUnbundledComponents` would cost or save bytes for this app, with
-   the preconditions to check.
+   `removeUnbundledComponents`, options of the Vite plugin only, would cost
+   or save bytes for this app, with the preconditions to check. Output
+   whose Animus CSS carries no `@layer anm-…` block (unlayered or
+   polyfilled) is not estimated.
 2. **Slot keepers:** the system props that keep a runtime slot, grouped by
    the rule that keeps them, with the components and sites that keep them.
 3. **Restructures** saving at least 0.25% of the CSS's Brotli size: unused
    variant options a dynamic site keeps, extensions that only change
    defaults, and base blocks several components repeat. Each has a
    confidence and the cases it refuses; the rest are listed collapsed.
+   Unused options are always low confidence: the manifest records no
+   spread at a site and no value forwarded from a parameter, so a wrapper
+   may still reach them.
 
 The text report goes to stderr; `--json` prints the report as one JSON
-document on stdout. It exits 0 unless its input cannot be read (2).
+document on stdout. It exits 0 unless its input cannot be read: a missing
+or partial manifest, one whose classes the output's CSS never names, or an
+output file it cannot read, each exit 2 with the remedy.
 
 ## `--strict`
 

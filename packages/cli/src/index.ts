@@ -6,13 +6,13 @@ import {
   REPLACEABLE_DEFAULT_EXCLUDE,
   STRUCTURAL_EXCLUDE,
 } from '@animus-ui/extract/pipeline';
-import { ANIMUS_ARTIFACT_DIR } from '@animus-ui/extract/session';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { EnvironmentFailure, err, runBuild, UsageFailure } from './build';
 import {
   inferredRootNotice,
+  locateProject,
   projectResolvedConfig,
   resolveCliConfig,
 } from './config';
@@ -160,8 +160,8 @@ export async function main(
   }
 
   const command = positionals[0];
-  // Each command reads only its own flags: one it does not read is a
-  // mistake, never silently ignored.
+  // `css audit` reads only its own flags, and the build commands none of
+  // the audit's: such a flag is a mistake, never silently ignored.
   const foreign = Object.keys(values).filter((flag) =>
     command === 'css' ? !CSS_AUDIT_FLAGS.has(flag) : AUDIT_ONLY_FLAGS.has(flag)
   );
@@ -239,12 +239,11 @@ export async function main(
   }
 }
 
-/** `animus css audit`: reads, measures and reports; it never writes the
- *  project, and exits 0 unless its input is unreadable. */
 /** The flags `css audit` reads; the build commands read none of the
  *  audit's own. */
 const CSS_AUDIT_FLAGS = new Set([
   'root',
+  'config',
   'out-dir',
   'manifest',
   'dist',
@@ -252,10 +251,14 @@ const CSS_AUDIT_FLAGS = new Set([
 ]);
 const AUDIT_ONLY_FLAGS = new Set(['manifest', 'dist', 'json']);
 
+/** `animus css audit`: reads, measures and reports; it never writes the
+ *  project, and exits 0 unless its input is unreadable. Its paths resolve
+ *  as `animus build`'s do: the manifest is in the artifact directory. */
 async function runCssAuditCommand(
   subcommand: string[],
   values: {
     root?: string;
+    config?: string;
     'out-dir'?: string;
     manifest?: string;
     dist?: string;
@@ -270,9 +273,11 @@ async function runCssAuditCommand(
     );
     return;
   }
-  const root = resolve(values.root ?? process.cwd());
   try {
-    const outDir = resolve(root, values['out-dir'] ?? ANIMUS_ARTIFACT_DIR);
+    const { root, outDir } = await locateProject(
+      { root: values.root, config: values.config, outDir: values['out-dir'] },
+      process.cwd()
+    );
     const report = await runCssAudit({
       manifest: resolve(root, values.manifest ?? join(outDir, MANIFEST_FILE)),
       dist: resolve(root, values.dist ?? 'dist'),
