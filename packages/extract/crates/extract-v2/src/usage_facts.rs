@@ -972,6 +972,9 @@ pub(crate) struct OpaqueTag {
     pub tags: BTreeSet<String>,
     pub imported_args: Vec<String>,
     pub forwards_from: Vec<String>,
+    /// What each prop carries, by the prop it reaches the element through:
+    /// a receiver that hands only some of its props outside delivers those.
+    pub props: Vec<PropReach>,
 }
 
 /// What an element's own attributes and children let an Animus string
@@ -1026,6 +1029,118 @@ pub(crate) enum Polymorphic {
     Open,
 }
 
+/// Which of a component's inputs a value may carry: none, the named props
+/// (`className`, read off the props object), all but the named ones (the
+/// props object itself, or a rest of it, whose members are those props), or
+/// every one by a route whose members are no props (`this.props`,
+/// `arguments`). The walk copies a value at every position it reaches, so
+/// the names are shared until a join grows them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum Inputs<N: Ord + Clone> {
+    #[default]
+    None,
+    Named(std::rc::Rc<BTreeSet<N>>),
+    AllBut(std::rc::Rc<BTreeSet<N>>),
+    Every,
+}
+
+impl<N: Ord + Clone> Inputs<N> {
+    pub(crate) fn all() -> Self {
+        Inputs::AllBut(std::rc::Rc::default())
+    }
+
+    pub(crate) fn named(names: BTreeSet<N>) -> Self {
+        Inputs::Named(std::rc::Rc::new(names))
+    }
+
+    pub(crate) fn all_but(names: BTreeSet<N>) -> Self {
+        Inputs::AllBut(std::rc::Rc::new(names))
+    }
+
+    pub(crate) fn any(&self) -> bool {
+        !matches!(self, Inputs::None)
+    }
+
+    pub(crate) fn contains(&self, name: &N) -> bool {
+        match self {
+            Inputs::None => false,
+            Inputs::Named(named) => named.contains(name),
+            Inputs::AllBut(except) => !except.contains(name),
+            Inputs::Every => true,
+        }
+    }
+
+    /// Adds `other`, saying whether anything was new.
+    pub(crate) fn join(&mut self, other: &Inputs<N>) -> bool {
+        let next = match (&mut *self, other) {
+            (_, Inputs::None) | (Inputs::Every, _) => return false,
+            (Inputs::Named(mine), Inputs::Named(theirs)) => {
+                if theirs.is_subset(mine) {
+                    return false;
+                }
+                std::rc::Rc::make_mut(mine).extend(theirs.iter().cloned());
+                return true;
+            }
+            (Inputs::AllBut(except), Inputs::Named(named)) => {
+                if except.is_disjoint(named) {
+                    return false;
+                }
+                std::rc::Rc::make_mut(except).retain(|name| !named.contains(name));
+                return true;
+            }
+            (Inputs::AllBut(mine), Inputs::AllBut(theirs)) => {
+                if mine.is_subset(theirs) {
+                    return false;
+                }
+                std::rc::Rc::make_mut(mine).retain(|name| theirs.contains(name));
+                return true;
+            }
+            (Inputs::None, other) | (_, other @ Inputs::Every) => other.clone(),
+            (Inputs::Named(named), Inputs::AllBut(except)) => Inputs::all_but(except.difference(named).cloned().collect()),
+        };
+        *self = next;
+        true
+    }
+
+    /// What reading the member `name` off a value carrying these gives: the
+    /// props object's member is that one input.
+    pub(crate) fn member(&self, name: N) -> Inputs<N> {
+        match self {
+            Inputs::AllBut(except) if except.contains(&name) => Inputs::None,
+            Inputs::AllBut(_) => Inputs::named(BTreeSet::from([name])),
+            inputs => inputs.clone(),
+        }
+    }
+
+    pub(crate) fn map<M: Ord + Clone>(&self, name: impl Fn(&N) -> M) -> Inputs<M> {
+        match self {
+            Inputs::None => Inputs::None,
+            Inputs::Named(named) => Inputs::named(named.iter().map(&name).collect()),
+            Inputs::AllBut(except) => Inputs::all_but(except.iter().map(&name).collect()),
+            Inputs::Every => Inputs::Every,
+        }
+    }
+}
+
+/// Which prop of a component element a value reaches it through.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum PropKey {
+    Children,
+    Named(String),
+    /// A spread, which may set any prop.
+    Spread,
+}
+
+/// What one prop of a component element carries (`OpaqueTag::props`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PropReach {
+    pub key: PropKey,
+    pub tags: BTreeSet<String>,
+    pub imported_args: Vec<String>,
+    /// The enclosing top-level component's inputs it carries.
+    pub inputs: Inputs<String>,
+}
+
 /// A use that may hand the module's elements or a component's inputs to
 /// code the analysis cannot see (see `forwarding`): the function it calls,
 /// when the analysis may read it, the component tags it hands on, and the
@@ -1048,6 +1163,8 @@ pub(crate) struct OpaqueCall {
     /// The enclosing top-level binding (and `default` for a default
     /// export) when it hands on that binding's inputs.
     pub forwards_from: Vec<String>,
+    /// Which of those inputs it hands on.
+    pub inputs: Inputs<String>,
 }
 
 /// A top-level `const` that holds elements: their component tags, and the

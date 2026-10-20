@@ -41,7 +41,7 @@ use crate::theme::{
     unresolved_alias, unresolved_alias_spans, writes_token_reference, UnresolvedAlias,
 };
 
-use crate::usage_facts::{is_animus_system_specifier, Keyed, ObjectUse, TagFact, TagOrigin, UsageFact, UsageResidueRecord};
+use crate::usage_facts::{is_animus_system_specifier, Inputs, Keyed, ObjectUse, PropKey, TagFact, TagOrigin, UsageFact, UsageResidueRecord};
 
 type ComponentPropSetMap = FxHashMap<String, FxHashSet<String>>;
 
@@ -7180,11 +7180,13 @@ fn opaque_delivery(
     // A call is read only into a function or class its declaring module
     // declares, unwritten, that forwards nothing outside, or a read method
     // of a held array.
-    let call_opaque = |file: &str, ff: &FileFacts, call: &crate::usage_facts::OpaqueCall, forwarding: &FxHashSet<(String, String)>| {
+    // Which of each component's inputs it hands outside.
+    type Forwards = FxHashMap<(String, String), Inputs<String>>;
+    let call_opaque = |file: &str, ff: &FileFacts, call: &crate::usage_facts::OpaqueCall, forwarding: &Forwards| {
         call.callee.as_deref().is_none_or(|callee| {
             !held_array_method(file, ff, call)
                 && declaration(file, ff, callee).is_none_or(|(declaring, binding, _)| {
-                    forwarding.contains(&(declaring.clone(), binding.clone()))
+                    forwarding.get(&(declaring.clone(), binding.clone())).is_some_and(Inputs::any)
                         || !files.get(&declaring).is_some_and(|declared| declared.ordinary_components.contains(&binding))
                 })
         })
@@ -7492,23 +7494,28 @@ fn opaque_delivery(
     let mut cloning = proven.clone();
     settle(&mut proven, &mut cloning, (0..renders.len()).collect());
     let providers: std::cell::RefCell<FxHashMap<(String, u32, String), bool>> = Default::default();
-    let tag_opaque = |file: &str,
-                      ff: &FileFacts,
-                      tag: &crate::usage_facts::OpaqueTag,
-                      forwarding: &FxHashSet<(String, String)>,
-                      (proven, cloning): (&Wrappers, &Wrappers)| {
+    // Which of an element's props its receiver hands outside: every one
+    // where the receiver is unknown, renders another component in its place
+    // or exposes itself, and only those its component forwards where it is
+    // an ordinary component the analysis reads.
+    let tag_opens = |file: &str,
+                     ff: &FileFacts,
+                     tag: &crate::usage_facts::OpaqueTag,
+                     forwarding: &Forwards,
+                     (proven, cloning): (&Wrappers, &Wrappers)| {
         use crate::usage_facts::{Polymorphic, TagOrigin};
+        let every = |opaque: bool| if opaque { Inputs::Every } else { Inputs::None };
         // An alias element renders each of its tags (`OpaqueTag::also`).
-        let judge = |name: &str, origin: TagOrigin| {
+        let judge = |name: &str, origin: TagOrigin| -> Inputs<String> {
             if matches!(origin, TagOrigin::Nested | TagOrigin::Provided | TagOrigin::Undeclared) {
-                return true;
+                return Inputs::Every;
             }
             let provider = *providers
                 .borrow_mut()
                 .entry((file.to_string(), tag.at, name.to_string()))
                 .or_insert_with(|| names_context_provider(file, ff, name, Some(origin), files, inputs, links, contexts));
             if provider {
-                return false;
+                return Inputs::None;
             }
             // A ref to a class component, or to a React wrapper of one, reads
             // the instance, its props included.
@@ -7523,10 +7530,12 @@ fn opaque_delivery(
             // An ordinary component the element renders with its props: a
             // wrapper whose every render the fixpoint above vetted passes on
             // `as`, `asChild` and spreads only where its own elements judge them.
-            let ordinary_opaque = |key: &(String, String)| {
-                (tag.polymorphic != Polymorphic::No && !cloning.contains(key))
-                    || forwarding.contains(key)
-                    || (tag.exposed && class(&key.0, &key.1))
+            let ordinary_opens = |key: &(String, String)| {
+                if (tag.polymorphic != Polymorphic::No && !cloning.contains(key)) || (tag.exposed && class(&key.0, &key.1)) {
+                    Inputs::Every
+                } else {
+                    forwarding.get(key).cloned().unwrap_or_default()
+                }
             };
             let ids = receiver_ids(file, ff, name);
             if !ids.is_empty() {
@@ -7535,7 +7544,12 @@ fn opaque_delivery(
                     // props, `as` and `asChild` included: one the analysis reads
                     // is judged as that component's element.
                     let targets: Option<Vec<(String, String)>> = ids.iter().map(|id| component_target(id)).collect();
-                    return targets.is_none_or(|targets| targets.iter().any(ordinary_opaque));
+                    let Some(targets) = targets else { return Inputs::Every };
+                    let mut opens = Inputs::None;
+                    for target in &targets {
+                        opens.join(&ordinary_opens(target));
+                    }
+                    return opens;
                 }
                 // An Animus string terminal renders its tag in place, unless the
                 // site's `as` names another, a spread may carry one, or `asChild`
@@ -7546,7 +7560,7 @@ fn opaque_delivery(
                 // pass with it.
                 let site = &tag.site;
                 if site.as_open {
-                    return true;
+                    return Inputs::Every;
                 }
                 if !spreads_proven(file, &site.spreads, proven) {
                     let clones_callers_child = site.as_child.is_none()
@@ -7556,18 +7570,29 @@ fn opaque_delivery(
                         && site.spreads.iter().all(|spread| {
                             matches!(spread, SpreadArg::Props(wrapper) if cloning.contains(&(file.to_string(), wrapper.clone())))
                         });
-                    return !clones_callers_child;
+                    return every(!clones_callers_child);
                 }
-                return match &site.as_child {
+                return every(match &site.as_child {
                     None => false,
                     Some(None) => true,
                     Some(Some(_)) => !site.spreads.is_empty() || !clone_judged(file, ff, tag.at),
-                };
+                });
             }
             // An ordinary component, named directly or as an object's member.
-            ordinary_named(file, ff, name).first().is_none_or(ordinary_opaque)
+            ordinary_named(file, ff, name).first().map_or(Inputs::Every, ordinary_opens)
         };
-        judge(&tag.tag, tag.origin) || tag.also.iter().any(|(name, origin)| judge(name, *origin))
+        let mut opens = judge(&tag.tag, tag.origin);
+        for (name, origin) in &tag.also {
+            opens.join(&judge(name, *origin));
+        }
+        opens
+    };
+    // Whether a receiver that hands `opens` of its props outside hands the
+    // prop `key` there.
+    let hands = |opens: &Inputs<String>, key: &PropKey| match key {
+        PropKey::Children => opens.contains(&"children".to_string()),
+        PropKey::Named(name) => opens.contains(name),
+        PropKey::Spread => opens.any(),
     };
     // The element `const`s an import reaches: a namespace import every one
     // of its module's, a named one the one it names in another module.
@@ -7590,7 +7615,7 @@ fn opaque_delivery(
     // A React wrapper some module hands on or writes through, by any path to
     // it (an import, a `const` alias, an object that holds it), may render
     // anything in its callback's place: it forwards outside.
-    let mut forwarding: FxHashSet<(String, String)> = FxHashSet::default();
+    let mut forwarding: Forwards = FxHashMap::default();
     for (path, ff) in files {
         for escaped in &ff.value_escapes {
             let prefixes = escaped.match_indices('.').map(|(dot, _)| &escaped[..dot]).chain(std::iter::once(escaped.as_str()));
@@ -7605,7 +7630,7 @@ fn opaque_delivery(
                 // A hand-on of a wrapper hands on its callback too.
                 if let Some(callback) = declared.react_wrappers.get(&binding) {
                     pending.extend(callback.iter().map(|callback| (declaring.clone(), callback.clone())));
-                    forwarding.insert((declaring, binding));
+                    forwarding.insert((declaring, binding), Inputs::Every);
                     continue;
                 }
                 let held = declared.aliases.get(&binding).into_iter().chain(declared.object_members.get(&binding).into_iter().flat_map(|members| members.values()));
@@ -7658,37 +7683,46 @@ fn opaque_delivery(
             }
         }
     }
-    let grow = |forwarding: &mut FxHashSet<(String, String)>, key: (String, String), pending: &mut Vec<Site>| {
+    let grow = |forwarding: &mut Forwards, key: (String, String), inputs: &Inputs<String>, pending: &mut Vec<Site>| {
         let mut keys = vec![key];
         while let Some(key) = keys.pop() {
-            if forwarding.contains(&key) {
+            if !forwarding.entry(key.clone()).or_default().join(inputs) {
                 continue;
             }
             pending.extend(readers.get(&key).into_iter().flatten().copied());
             keys.extend(wrappers_of.get(&key).into_iter().flatten().cloned());
-            forwarding.insert(key);
         }
     };
-    let seeded: Vec<(String, String)> = forwarding.iter().cloned().collect();
+    let seeded: Vec<((String, String), Inputs<String>)> = forwarding.drain().collect();
     let mut pending: Vec<Site> = (0..tag_sites.len()).map(Site::Tag).chain((0..call_sites.len()).map(Site::Call)).collect();
-    for key in seeded {
-        forwarding.remove(&key);
-        grow(&mut forwarding, key, &mut pending);
+    for (key, inputs) in seeded {
+        grow(&mut forwarding, key, &inputs, &mut pending);
     }
-    let (mut tag_open, mut call_open) = (vec![false; tag_sites.len()], vec![false; call_sites.len()]);
+    // What each element's receiver hands outside of its props so far, and
+    // the props of a site that does so.
+    let (mut tag_opened, mut call_open) = (vec![Inputs::<String>::None; tag_sites.len()], vec![false; call_sites.len()]);
+    let opened_props = |tag: &'_ crate::usage_facts::OpaqueTag, opens: &Inputs<String>| -> Vec<usize> {
+        tag.props.iter().enumerate().filter(|(_, reach)| hands(opens, &reach.key)).map(|(at, _)| at).collect()
+    };
     let mut followed: FxHashSet<(String, String)> = FxHashSet::default();
     loop {
         // Judge what is pending, until nothing more forwards.
         let mut opened: Vec<Site> = Vec::new();
         while let Some(site) = pending.pop() {
-            let (path, forwards) = match site {
+            let (path, forwards, inputs) = match site {
                 Site::Tag(index) => {
                     let (path, ff, tag) = tag_sites[index];
-                    if tag_open[index] || !tag_opaque(path, ff, tag, &forwarding, (&proven, &cloning)) {
+                    let opens = tag_opens(path, ff, tag, &forwarding, (&proven, &cloning));
+                    if !tag_opened[index].join(&opens) {
                         continue;
                     }
-                    tag_open[index] = true;
-                    (path, &tag.forwards_from)
+                    // The enclosing component hands outside what its opened
+                    // props carry.
+                    let mut inputs = Inputs::None;
+                    for at in opened_props(tag, &tag_opened[index]) {
+                        inputs.join(&tag.props[at].inputs);
+                    }
+                    (path, &tag.forwards_from, inputs)
                 }
                 Site::Call(index) => {
                     let (path, ff, call) = call_sites[index];
@@ -7696,12 +7730,14 @@ fn opaque_delivery(
                         continue;
                     }
                     call_open[index] = true;
-                    (path, &call.forwards_from)
+                    (path, &call.forwards_from, call.inputs.clone())
                 }
             };
             opened.push(site);
-            for name in forwards {
-                grow(&mut forwarding, (path.clone(), name.clone()), &mut pending);
+            if inputs.any() {
+                for name in forwards {
+                    grow(&mut forwarding, (path.clone(), name.clone()), &inputs, &mut pending);
+                }
             }
         }
         // What the newly opaque receivers deliver, followed through imported
@@ -7711,12 +7747,20 @@ fn opaque_delivery(
         let mut delivered: Vec<(String, String)> = Vec::new();
         let mut imports: Vec<(String, String)> = Vec::new();
         for site in opened {
-            let (path, tags, imported) = match site {
-                Site::Tag(index) => (tag_sites[index].0, &tag_sites[index].2.tags, &tag_sites[index].2.imported_args),
-                Site::Call(index) => (call_sites[index].0, &call_sites[index].2.tags, &call_sites[index].2.imported_args),
-            };
-            delivered.extend(tags.iter().map(|tag| (path.clone(), tag.clone())));
-            imports.extend(imported.iter().map(|import| (path.clone(), import.clone())));
+            match site {
+                Site::Tag(index) => {
+                    let (path, _, tag) = tag_sites[index];
+                    for at in opened_props(tag, &tag_opened[index]) {
+                        delivered.extend(tag.props[at].tags.iter().map(|inner| (path.clone(), inner.clone())));
+                        imports.extend(tag.props[at].imported_args.iter().map(|import| (path.clone(), import.clone())));
+                    }
+                }
+                Site::Call(index) => {
+                    let (path, _, call) = call_sites[index];
+                    delivered.extend(call.tags.iter().map(|tag| (path.clone(), tag.clone())));
+                    imports.extend(call.imported_args.iter().map(|import| (path.clone(), import.clone())));
+                }
+            }
         }
         while let Some((file, import)) = imports.pop() {
             if !followed.insert((file.clone(), import.clone())) {
@@ -7752,7 +7796,7 @@ fn opaque_delivery(
     let mut deliver = |file: &String, tag: &String, receiver: &Receiver| {
         tags.push(OpaqueDelivery { file: file.clone(), tag: tag.clone(), receiver: receiver.clone() });
     };
-    let (mut calls, mut receivers) = (call_sites.iter().zip(&call_open).peekable(), tag_sites.iter().zip(&tag_open).peekable());
+    let (mut calls, mut receivers) = (call_sites.iter().zip(&call_open).peekable(), tag_sites.iter().zip(&tag_opened).peekable());
     for path in files.keys() {
         while let Some(((_, _, call), open)) = calls.next_if(|((file, _, _), _)| *file == path) {
             if *open {
@@ -7761,11 +7805,14 @@ fn opaque_delivery(
                 imports.extend(call.imported_args.iter().map(|import| (path.clone(), import.clone(), receiver.clone())));
             }
         }
-        while let Some(((_, _, tag), open)) = receivers.next_if(|((file, _, _), _)| *file == path) {
-            if *open {
+        while let Some(((_, _, tag), opens)) = receivers.next_if(|((file, _, _), _)| *file == path) {
+            let props = opened_props(tag, opens);
+            if !props.is_empty() {
                 let receiver = Receiver::Tag(tag.tag.clone());
-                tag.tags.iter().for_each(|inner| deliver(path, inner, &receiver));
-                imports.extend(tag.imported_args.iter().map(|import| (path.clone(), import.clone(), receiver.clone())));
+                for at in props {
+                    tag.props[at].tags.iter().for_each(|inner| deliver(path, inner, &receiver));
+                    imports.extend(tag.props[at].imported_args.iter().map(|import| (path.clone(), import.clone(), receiver.clone())));
+                }
             }
         }
     }
@@ -14132,10 +14179,15 @@ mod tests {
             ("const Frame = ds.styles({ display: 'grid' }).asElement('section');\nconst Render = ({ children }) => <Foreign><Frame>{children}</Frame></Foreign>;", "", "", true),
             ("const Frame = ds.styles({ display: 'grid' }).asElement('section');\nconst Render = () => { const content = <><Box p={4} /></>; return <Foreign><Frame>{content}</Frame></Foreign>; };", "", "", true),
             ("const Frame = ds.styles({ display: 'grid' }).asElement('section');\nconst Render = ({ children }) => <div><Frame>{children}</Frame></div>;", "", "", false),
-            // A method of an input gets the input as `this`. The component's
-            // inputs are one value to the walk, so it cannot tell the array
-            // from the children beside it: the method gets them all.
-            ("const Render = ({ rows }) => <ul>{rows.map((row) => <li key={row}>{row}</li>)}</ul>;", "rows={d}", "", true),
+            // A method of an input gets that input as `this`, and no other:
+            // the children beside it stay in place. One of the props object
+            // itself, or of a rest of it, gets them all.
+            ("const Render = ({ rows }) => <ul>{rows.map((row) => <li key={row}>{row}</li>)}</ul>;", "rows={d}", "", false),
+            ("const Render = ({ rows, children }) => <ul>{children}{rows.map((row) => <li key={row}>{row}</li>)}</ul>;", "rows={d}", "", false),
+            ("const Render = (props) => { props.decorate(); return <div>{props.children}</div>; };", "decorate={d}", "", true),
+            ("const Render = ({ rows, ...rest }) => { rest.decorate(); return <div>{rest.children}</div>; };", "decorate={d}", "", true),
+            ("const Render = (props) => { const { rows } = props; return <div>{props.children}{rows.map((row) => <li key={row}>{row}</li>)}</div>; };", "rows={d}", "", false),
+            ("const Render = (props) => { const { rows, ...rest } = props; rows.map(() => rest); return <div>{props.children}</div>; };", "rows={d}", "", true),
             // Unknown code that a callee resolves to.
             ("const Render = ({ children, decorate }) => (decorate || pad)(children);", "decorate={d}", "", true),
             ("const Render = ({ children, wide }) => (wide ? decorate : pad)(children);", "wide", "", true),
@@ -14266,9 +14318,12 @@ mod tests {
             // A callback written in place receives what it is called with.
             ("const Render = ({ children }) => [children].map((c) => <Foreign>{c}</Foreign>);", "", "", true),
             ("const Render = ({ children }) => { setTimeout(decorate, 0, children); return null; };", "", "", true),
-            // Converting an input runs whatever hooks its caller gave it.
+            // Converting an input runs whatever hooks its caller gave it, with
+            // that input alone; the props object's, with every one.
             ("const Render = ({ children }) => { console.log(children); return <div>{children}</div>; };", "", "", true),
-            ("const Render = ({ children, items }) => <ul>{items.length > 0 ? children : null}</ul>;", "items={d}", "", true),
+            ("const Render = ({ children, items }) => <ul>{items.length > 0 ? children : null}</ul>;", "items={d}", "", false),
+            ("const Render = (props) => <ul>{props > 0 ? props.children : null}</ul>;", "items={d}", "", true),
+            ("const Render = ({ items, ...rest }) => <ul>{`${rest}`}{rest.children}</ul>;", "", "", true),
             // Every `bind` is unknown code, a method's on its own instance too.
             ("class Render extends Component { constructor(props) { super(props); this.onClick = this.onClick.bind(this); } onClick() {} render() { return <div onClick={this.onClick}>{this.props.children}</div>; } }", "", "", true),
             // Uses the allowlist keeps in place.
@@ -14278,9 +14333,11 @@ mod tests {
             ("const Render = ({ children, items }) => <ul>{items ? children : null}</ul>;", "items={d}", "", false),
             ("import { useMemo } from 'react';\nconst Render = ({ children, a }) => { const v = useMemo(() => ({ a }), [a]); return <div title={v.a}>{children}</div>; };", "a={d}", "", false),
             // React calls a setter's argument with the state when it is a
-            // function, and an input may be one: with one inputs flag the
-            // walk cannot tell the state from the input itself.
-            ("import { useState, useEffect } from 'react';\nconst Render = ({ children, a }) => { const [s, set] = useState(a); useEffect(() => { set(a); }, [a]); return <div title={s}>{children}</div>; };", "a={d}", "", true),
+            // function, and an input may be one: the state holds that input
+            // alone, so the children beside it stay in place; the state that
+            // holds the children hands them on.
+            ("import { useState, useEffect } from 'react';\nconst Render = ({ children, a }) => { const [s, set] = useState(a); useEffect(() => { set(a); }, [a]); return <div title={s}>{children}</div>; };", "a={d}", "", false),
+            ("import { useState, useEffect } from 'react';\nconst Render = ({ children, a }) => { const [s, set] = useState(children); useEffect(() => { set(a); }, [a]); return <div>{s}</div>; };", "a={d}", "", true),
             ("const Render = ({ children, ...rest }) => <div {...rest}>{children}</div>;", "id={d}", "", false),
             ("const Render = (props) => <section {...props} />;", "", "", false),
             // A call on an input carries the input: its result, and the
@@ -14299,8 +14356,8 @@ mod tests {
             ("const Render = ({ children }) => <Foreign>{(() => children)()}</Foreign>;", "", "", true),
             ("class Render extends Component { getKids = () => this.props.children; render() { return <Foreign>{this.getKids()}</Foreign>; } }", "", "", true),
             ("const Render = ({ children }) => { const g = pad.bind(null, children); g(); return null; };", "", "", true),
-            ("const Render = ({ children, load }) => { load.then((v) => pad(v)); return <div>{children}</div>; };", "load={d}", "", true),
-            ("const Render = ({ children, items }) => <ul>{items.map((item) => <li key={item}>{item}</li>)}{children}</ul>;", "items={d}", "", true),
+            ("const Render = ({ children, load }) => { load.then((v) => pad(v)); return <div>{children}</div>; };", "load={d}", "", false),
+            ("const Render = ({ children, items }) => <ul>{items.map((item) => <li key={item}>{item}</li>)}{children}</ul>;", "items={d}", "", false),
             // React hands a state setter's argument back as the state.
             ("import { useState, useEffect } from 'react';\nconst Render = ({ children }) => { const [s, set] = useState(null); useEffect(() => { set(children); }, [children]); return <Foreign>{s}</Foreign>; };", "", "", true),
             // A base class other than React's receives the instance.
@@ -14589,11 +14646,24 @@ const Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const Render = ({ children, onClose }: { children: unknown; onClose: Function; rows: Array<string> }) => <div onClick={() => onClose()}>{children}</div>;", "", "", false),
             ("const M = window.Math;\nM.max = pad;\nconst Render = ({ children }) => <div title={Math.max(children)} />;", "", "", true),
             ("const Render = ({ children }) => <div>{children}</div>;", "", "export * from 'react';\n", true),
-            // Forwarding is decided per component: an input handed to
-            // unknown code (a callback prop called with a prop, `clsx` with
-            // a class name) marks every element the component gets.
-            ("const Render = ({ children, onChange, value }) => <div onClick={() => onChange(value)}>{children}</div>;", "onChange={d}", "", true),
-            ("import clsx from 'clsx';\nconst Render = ({ children, className }) => <div className={clsx('x', className)}>{children}</div>;", "className={d}", "", true),
+            // Forwarding is decided per input: an input handed to unknown
+            // code (a callback prop called with a prop, `clsx` with a class
+            // name) marks the elements that prop carries, not the children
+            // beside it.
+            ("const Inner = ({ label, children }) => <div title={String(label)}>{children}</div>;\nconst Render = ({ children }) => <Inner label={children} />;", "label={d}", "", true),
+            ("const Inner = ({ label, children }) => <div title={String(label)}>{children}</div>;\nconst Render = (props) => <Inner {...props} />;", "", "", true),
+            ("const Inner = ({ label, children }) => <div title={String(label)}>{children}</div>;\nconst Render = ({ children }) => <Inner label='x'>{children}</Inner>;", "", "", false),
+            ("const Render = ({ children: kids }) => <Foreign>{kids}</Foreign>;", "", "", true),
+            ("const Render = (props) => { pad(props.rows); return <div>{props.children}</div>; };", "", "", false),
+            ("const Inner = ({ label, children }) => <div title={String(label)}>{children}</div>;\nconst Render = () => <Inner label='x'><Box p={4} /></Inner>;", "", "", false),
+            ("const Render = ({ children, ...rest }) => { String(rest); return <div>{children}</div>; };", "", "", false),
+            ("const Render = (props) => { const { children, ...rest } = props; String(rest); return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ slots: { icon }, children }) => <div><Foreign>{icon}</Foreign>{children}</div>;", "", "", false),
+            ("const Render = (props) => { const kids = props.children; return <Foreign>{kids}</Foreign>; };", "", "", true),
+            ("import { forwardRef } from 'react';\nconst Render = forwardRef((props, ref) => { pad(ref); return <div ref={ref}>{props.children}</div>; });", "", "", false),
+            ("import { forwardRef } from 'react';\nconst Render = forwardRef((props, ref) => { pad(props); return <div ref={ref}>{props.children}</div>; });", "", "", true),
+            ("const Render = ({ children, onChange, value }) => <div onClick={() => onChange(value)}>{children}</div>;", "onChange={d}", "", false),
+            ("import clsx from 'clsx';\nconst Render = ({ children, className }) => <div className={clsx('x', className)}>{children}</div>;", "className={d}", "", false),
             // Every reference of a module array, its own module's included,
             // reads it in place, or its methods are unknown code; an array a
             // function builds keeps the built-in methods only so.
@@ -14789,7 +14859,8 @@ const Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("Reflect.apply(Object.assign, null, [[].constructor.prototype, { map: decorate }]);\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
             ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "export const rows = [0];\n", false),
             // Converting, iterating, awaiting or stringifying an input runs
-            // the hooks its caller gave it, the props object's included.
+            // the hooks its caller gave it, with that input alone; the props
+            // object's, with every one.
             ("const Render = (props) => { String(props); return null; };", "toString={d}", "", true),
             ("const Render = (props) => { JSON.stringify(props); return null; };", "toJSON={d}", "", true),
             ("const Render = ({ bag }) => { String(bag); return null; };", "bag={{ child: <Box p={4} />, toString: d }}", "", true),
@@ -14797,9 +14868,9 @@ const Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const Render = ({ items }) => <div>{[...items]}</div>;", "items={{ child: <Box p={4} />, [Symbol.iterator]: d }}", "", true),
             ("const Render = (props) => <div title={Object.keys(props).length} />;", "", "", true),
             ("const Render = (props) => { const load = async () => props; load(); return null; };", "then={d}", "", true),
-            ("const Render = ({ items, children }) => { const [first] = items; return <div>{children}</div>; };", "items={d}", "", true),
-            ("const Render = ({ items, children }) => { for (const item of items) {} return <div>{children}</div>; };", "items={d}", "", true),
-            ("const Render = ({ children, a }) => <div title={[a].join()}>{children}</div>;", "a={d}", "", true),
+            ("const Render = ({ items, children }) => { const [first] = items; return <div>{children}</div>; };", "items={d}", "", false),
+            ("const Render = ({ items, children }) => { for (const item of items) {} return <div>{children}</div>; };", "items={d}", "", false),
+            ("const Render = ({ children, a }) => <div title={[a].join()}>{children}</div>;", "a={d}", "", false),
             // A hookable value given to a component runs its hooks there.
             ("const Render = ({ bag }) => <div>{bag.x}</div>;", "bag={{ child: <Box p={4} />, get x() { return pad(this.child); } }}", "", true),
         ] {
@@ -15562,6 +15633,31 @@ export const App = ({ n }) => (
         }
         let out = run("return <Foreign><Unit size=\"sm\" /></Foreign>;");
         assert!(option(&out, "Btn2", "--size-lg"), "{}", out.sheets.variants);
+    }
+
+    /// Contract: a class resolver's `props(…)` call passes its custom props a
+    /// value no analysed site shows, and a component passed as a value is
+    /// rendered by its receiver with props of the receiver's choosing: each
+    /// keeps its slot open, whatever a precision rule narrows around them.
+    #[test]
+    fn a_resolver_call_and_a_value_supplied_component_keep_their_slots() {
+        for (resolver, call) in [
+            ("ds.props({ lineClamp: { property: 'WebkitLineClamp' } }).asClass()", "textClass.props({ clamped, lineClamp: clamped ? lineClamp : undefined })"),
+            ("ds.props({ lineClamp: { property: 'maxWidth' } }).asClass()", "textClass.props({ clamped, lineClamp: clamped ? `${lineClamp}px` : undefined })"),
+        ] {
+            let text = format!(
+                "const textClass = {resolver};\nexport const Text = ({{ lineClamp, clamped, children }}) => <span className={{{call}}}>{{children}}</span>;\n"
+            );
+            let app = "import { Text } from './text';\nexport const App = () => <Text lineClamp={2} clamped>x</Text>;\n";
+            let out = analyze(&[("text.tsx", text.as_str()), ("app.tsx", app)], &test_inputs());
+            let dynamic = out.replacement_configs.get("text.tsx::textClass").and_then(|config| config.custom_dynamic_config.as_ref());
+            assert!(dynamic.is_some_and(|dynamic| dynamic.contains_key("lineClamp")), "{call}");
+        }
+        let kit = "export const Box = ds.system({ space: true }).asElement('div');\n";
+        let anchor = "const Anchor = ({ icon: Icon, iconSize, children }) => <a>{children}<Icon p={iconSize} /></a>;\nexport { Anchor };\n";
+        let app = "import { Box } from './kit';\nimport { Anchor } from './anchor';\nexport const App = () => <><Anchor icon={Box} iconSize={4}>go</Anchor><Box p={8} /></>;\n";
+        let out = analyze(&[("kit.tsx", kit), ("anchor.tsx", anchor), ("app.tsx", app)], &test_inputs());
+        assert!(out.dynamic_props.contains_key("p"), "{:?}", out.dynamic_props.keys().collect::<Vec<_>>());
     }
 
     fn custom_classes<'a>(out: &'a CssOutput, id: &str, prop: &str) -> &'a HashMap<String, String> {

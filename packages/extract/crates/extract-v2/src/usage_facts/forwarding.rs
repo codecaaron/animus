@@ -48,8 +48,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use super::{
-    is_erased_wrapper, jsx_member_path, jsx_member_root, tag_origin, ElementConst, IntrinsicPatch, MemberEffect, OpaqueCall,
-    OpaqueTag, Polymorphic, SiteShape, SpreadArg, TagOrigin,
+    is_erased_wrapper, jsx_member_path, jsx_member_root, tag_origin, ElementConst, Inputs, IntrinsicPatch, MemberEffect,
+    OpaqueCall, OpaqueTag, Polymorphic, PropKey, PropReach, SiteShape, SpreadArg, TagOrigin,
 };
 use crate::chain_walk::{unwrap_type_assertions, ChainDescriptor};
 
@@ -127,7 +127,7 @@ enum InPlace {
 /// elements (`ElementConst`), and whether it may be a hookable object.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Held {
-    inputs: bool,
+    inputs: Inputs<Name>,
     /// The value may be an object this module built whose own properties
     /// hold code that converting, iterating, reading, awaiting or disposing
     /// of it runs, with the object as `this`: a getter, a computed or
@@ -172,7 +172,7 @@ impl Names {
 impl Held {
     /// Whether it carries nothing a receiver could read.
     fn is_empty(&self) -> bool {
-        !self.inputs && !self.has_elements()
+        !self.inputs.any() && !self.has_elements()
     }
 
     fn has_elements(&self) -> bool {
@@ -181,8 +181,7 @@ impl Held {
 
     /// Adds `other`, saying whether anything was new.
     fn join(&mut self, other: &Held) -> bool {
-        let mut grew = (!self.inputs && other.inputs) || (!self.hookable && other.hookable);
-        self.inputs |= other.inputs;
+        let mut grew = self.inputs.join(&other.inputs) || (!self.hookable && other.hookable);
         self.hookable |= other.hookable;
         for tag in &other.tags {
             grew |= self.tags.insert(*tag);
@@ -196,7 +195,7 @@ impl Held {
     /// The elements alone, as a function's result carries them to its
     /// callers, without the inputs of the function they came from.
     fn elements(&self) -> Held {
-        Held { inputs: false, hookable: self.hookable, tags: self.tags.clone(), imports: self.imports.clone() }
+        Held { inputs: Inputs::None, hookable: self.hookable, tags: self.tags.clone(), imports: self.imports.clone() }
     }
 
     fn hooked(&self) -> Held {
@@ -207,10 +206,15 @@ impl Held {
     /// object this module built (`hookable`), or of an input, whose caller
     /// may have put any key on it, the props object React builds included.
     fn runs_hooks(&self) -> bool {
-        self.hookable || self.inputs
+        self.hookable || self.inputs.any()
     }
 
-    const INPUTS: Held = Held { inputs: true, hookable: false, tags: BTreeSet::new(), imports: BTreeSet::new() };
+    const INPUTS: Held = Held { inputs: Inputs::Every, hookable: false, tags: BTreeSet::new(), imports: BTreeSet::new() };
+
+    /// The value's member `name`, when the member is read off it.
+    fn member(&self, name: Name) -> Held {
+        Held { inputs: self.inputs.member(name), ..self.clone() }
+    }
 }
 
 /// What a call does with what its arguments carry.
@@ -464,6 +468,8 @@ struct Module<'s> {
     arrays: Arrays,
     /// Each function's parameter bindings, by its scope.
     params: FxHashMap<ScopeId, Vec<SymbolId>>,
+    /// Each function's parameter bindings with the input each holds.
+    param_inputs: FxHashMap<ScopeId, Vec<(SymbolId, ParamInput)>>,
     /// The function a binding is declared to.
     functions: FxHashMap<SymbolId, ScopeId>,
     /// Bindings a function body declares, and never reassigns, to an array
@@ -549,6 +555,16 @@ struct Receiver {
     site: SiteShape,
     exposed: bool,
     reached: Reached,
+    /// What reaches it through each prop (`PropKey`, its name interned).
+    props: BTreeMap<WalkProp, Held>,
+}
+
+/// `PropKey`, with the prop's name interned by the walk (`Names`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum WalkProp {
+    Children,
+    Named(Name),
+    Spread,
 }
 
 /// What a class's base is.
@@ -712,7 +728,8 @@ impl<'s> Module<'s> {
         let outside_let_goes =
             declarations.outside_let_goes.iter().filter_map(|(at, import)| Some((*at, sources.get(import)?.clone()))).collect();
         let Declarations {
-            params, functions, in_place, reshaped, setters, hook_states, classes, hookable_objects, keyed_stores, rewrites_object, ..
+            params, param_inputs, functions, in_place, reshaped, setters, hook_states, classes, hookable_objects, keyed_stores,
+            rewrites_object, ..
         } = declarations;
         Module {
             scoping,
@@ -722,6 +739,7 @@ impl<'s> Module<'s> {
             chain_spans: chains.iter().map(|chain| chain.span).collect(),
             arrays,
             params,
+            param_inputs,
             bound: functions.values().copied().collect(),
             functions,
             in_place,
@@ -775,9 +793,37 @@ impl<'s> Module<'s> {
     }
 
     /// Holds `value` in every binding `pattern` declares.
+    /// Holds `value` in every binding `pattern` declares; a destructuring of
+    /// the props object gives each binding the prop its static key names.
     fn hold_pattern(&mut self, pattern: &BindingPattern<'_>, value: &Held) {
-        for symbol in bindings(pattern) {
-            self.hold(symbol, value);
+        match pattern {
+            BindingPattern::ObjectPattern(object) if matches!(value.inputs, Inputs::AllBut(_)) => {
+                let mut named = BTreeSet::new();
+                for property in &object.properties {
+                    let held = match (property.computed, property.key.static_name()) {
+                        (false, Some(key)) => {
+                            let name = self.names.id(&key);
+                            named.insert(name);
+                            value.member(name)
+                        }
+                        _ => value.clone(),
+                    };
+                    self.hold_pattern(&property.value, &held);
+                }
+                if let Some(rest) = &object.rest {
+                    let mut held = value.clone();
+                    if let Inputs::AllBut(except) = &mut held.inputs {
+                        std::rc::Rc::make_mut(except).extend(named);
+                    }
+                    self.hold_pattern(&rest.argument, &held);
+                }
+            }
+            BindingPattern::AssignmentPattern(assignment) => self.hold_pattern(&assignment.left, value),
+            pattern => {
+                for symbol in bindings(pattern) {
+                    self.hold(symbol, value);
+                }
+            }
         }
     }
 
@@ -849,6 +895,24 @@ impl<'s> Module<'s> {
         for index in 0..self.params.get(&scope).map_or(0, Vec::len) {
             let symbol = self.params[&scope][index];
             self.hold(symbol, value);
+        }
+    }
+
+    /// A component's parameters hold its inputs, each binding the one it
+    /// names (`ParamInput`), and its `arguments` all of them.
+    fn seed_inputs(&mut self, scope: ScopeId) {
+        if self.arguments.entry(scope).or_default().join(&Held::INPUTS) {
+            self.grew(Key::Arguments(scope));
+        }
+        for index in 0..self.param_inputs.get(&scope).map_or(0, Vec::len) {
+            let (symbol, input) = self.param_inputs[&scope][index].clone();
+            let inputs = match input {
+                ParamInput::Props => Inputs::all(),
+                ParamInput::Every => Inputs::Every,
+                ParamInput::Named(name) => Inputs::named(BTreeSet::from([self.names.id(&name)])),
+                ParamInput::Rest(named) => Inputs::all_but(named.iter().map(|name| self.names.id(name)).collect()),
+            };
+            self.hold(symbol, &Held { inputs, ..Held::default() });
         }
     }
 
@@ -926,26 +990,38 @@ impl<'s> Module<'s> {
             imports.sort_unstable();
             imports
         };
+        let inputs = |held: &Held| held.inputs.map(|name| names.texts[*name as usize].clone());
         let record = |Reached { top, held }: Reached| {
-            let forwards_from = if held.inputs { top.to_vec() } else { Vec::new() };
-            (names.texts(&held.tags), imported(&held), forwards_from)
+            let forwards_from = if held.inputs.any() { top.to_vec() } else { Vec::new() };
+            (names.texts(&held.tags), imported(&held), forwards_from, inputs(&held))
         };
         let calls = self
             .sinks
             .into_iter()
             .filter(|(_, reached)| !reached.held.is_empty())
             .map(|((_, callee, held_array), reached)| {
-                let (tags, imported_args, forwards_from) = record(reached);
-                OpaqueCall { callee, held_array, tags, imported_args, forwards_from }
+                let (tags, imported_args, forwards_from, inputs) = record(reached);
+                OpaqueCall { callee, held_array, tags, imported_args, forwards_from, inputs }
             })
             .collect();
         let tags = self
             .receivers
             .into_iter()
             .filter(|(_, receiver)| !receiver.reached.held.is_empty())
-            .map(|(at, Receiver { tag, origin, also, polymorphic, site, exposed, reached })| {
-                let (tags, imported_args, forwards_from) = record(reached);
-                OpaqueTag { tag, origin, also, polymorphic, site, at, exposed, tags, imported_args, forwards_from }
+            .map(|(at, Receiver { tag, origin, also, polymorphic, site, exposed, reached, props })| {
+                let props = props
+                    .into_iter()
+                    .map(|(key, held)| {
+                        let key = match key {
+                            WalkProp::Children => PropKey::Children,
+                            WalkProp::Named(name) => PropKey::Named(names.texts[name as usize].clone()),
+                            WalkProp::Spread => PropKey::Spread,
+                        };
+                        PropReach { key, tags: names.texts(&held.tags), imported_args: imported(&held), inputs: inputs(&held) }
+                    })
+                    .collect();
+                let (tags, imported_args, forwards_from, _) = record(reached);
+                OpaqueTag { tag, origin, also, polymorphic, site, at, exposed, tags, imported_args, forwards_from, props }
             })
             .collect();
         // The module's own top-level bindings that hold elements, by name.
@@ -994,6 +1070,8 @@ struct Declarations<'r> {
     react: &'r super::ReactImports,
     ancestors: Vec<AstKind<'r>>,
     params: FxHashMap<ScopeId, Vec<SymbolId>>,
+    /// Each function's parameter bindings with the input each holds.
+    param_inputs: FxHashMap<ScopeId, Vec<(SymbolId, ParamInput)>>,
     /// Each function's parameter count and whether it has a rest
     /// parameter, by scope.
     arity: FxHashMap<ScopeId, (usize, bool)>,
@@ -1065,6 +1143,7 @@ impl<'r> Declarations<'r> {
             react,
             ancestors: Vec::new(),
             params: FxHashMap::default(),
+            param_inputs: FxHashMap::default(),
             arity: FxHashMap::default(),
             uses_arguments: FxHashSet::default(),
             functions: FxHashMap::default(),
@@ -1148,6 +1227,7 @@ impl<'r> Declarations<'r> {
 
     fn declare_params(&mut self, scope: ScopeId, params: &oxc::ast::ast::FormalParameters<'_>) {
         self.params.insert(scope, params.iter_bindings().flat_map(bindings).collect());
+        self.param_inputs.insert(scope, param_inputs(params));
         self.arity.insert(scope, (params.items.len(), params.rest.is_some()));
     }
 
@@ -2544,6 +2624,21 @@ impl<'a> Walk<'_, '_, 'a> {
     }
 
     /// A read or an iteration of the value: it runs hooks of a hookable one.
+    /// A read of the member `name` (at `span`, the ancestor `at`) off the
+    /// value: the props object's member is that one prop, unless the member
+    /// is called, which gives the call the whole object as `this`.
+    fn member_read(&mut self, at: usize, span: Span, name: Option<&str>, value: &Held) -> Place {
+        let place = Self::read_through(value);
+        let called = matches!(self.ancestors.get(at.wrapping_sub(1)), Some(AstKind::CallExpression(call)) if call.callee.span() == span)
+            || matches!(self.ancestors.get(at.wrapping_sub(1)), Some(AstKind::TaggedTemplateExpression(_)));
+        match (place, name) {
+            (Place::Carry, Some(name)) if matches!(value.inputs, Inputs::AllBut(_)) && !called => {
+                Place::Becomes(value.member(self.module.names.id(name)))
+            }
+            (place, _) => place,
+        }
+    }
+
     fn read_through(value: &Held) -> Place {
         if value.hookable {
             Place::Handed
@@ -2605,8 +2700,16 @@ impl<'a> Walk<'_, '_, 'a> {
             AstKind::JSXSpreadAttribute(_) => Self::read_through(value),
             AstKind::AwaitExpression(_) | AstKind::SpreadElement(_) | AstKind::JSXSpreadChild(_) => Self::iterated(value),
             // A member read: a getter of a hookable value runs.
-            AstKind::StaticMemberExpression(member) if member.object.span() == current => Self::read_through(value),
-            AstKind::ComputedMemberExpression(member) if member.object.span() == current => Self::read_through(value),
+            AstKind::StaticMemberExpression(member) if member.object.span() == current => {
+                self.member_read(at, member.span, Some(member.property.name.as_str()), value)
+            }
+            AstKind::ComputedMemberExpression(member) if member.object.span() == current => {
+                let name = match &member.expression {
+                    Expression::StringLiteral(name) => Some(name.value.as_str()),
+                    _ => None,
+                };
+                self.member_read(at, member.span, name, value)
+            }
             AstKind::PrivateFieldExpression(member) if member.object.span() == current => Self::read_through(value),
             // The value is a computed key.
             AstKind::ComputedMemberExpression(_) => Self::converted(value),
@@ -2864,8 +2967,20 @@ impl<'a> Walk<'_, '_, 'a> {
         }
         // The element's own climb reads what its receiver gets
         // (`visit_jsx_element`).
+        // The prop the value reaches the element through.
+        let key = match through {
+            Some(AstKind::JSXAttribute(attribute)) => match &attribute.name {
+                oxc::ast::ast::JSXAttributeName::Identifier(name) => WalkProp::Named(self.module.names.id(&name.name)),
+                oxc::ast::ast::JSXAttributeName::NamespacedName(name) => {
+                    WalkProp::Named(self.module.names.id(&format!("{}:{}", name.namespace.name, name.name.name)))
+                }
+            },
+            Some(AstKind::JSXSpreadAttribute(_)) => WalkProp::Spread,
+            _ => WalkProp::Children,
+        };
         if let Some(receiver) = self.module.receivers.get_mut(&element.span.start) {
-            if receiver.reached.held.join(value) {
+            let whole = receiver.reached.held.join(value);
+            if receiver.props.entry(key).or_default().join(value) || whole {
                 self.module.grew(Key::Receiver(element.span.start));
             }
             return Place::Kept(InPlace::Received);
@@ -2919,7 +3034,8 @@ impl<'a> Walk<'_, '_, 'a> {
             Some(tags) if !tags.is_empty() => (tags[0].0.clone(), tags[0].1, tags[1..].to_vec()),
             _ => (tag, origin, Vec::new()),
         };
-        self.module.receivers.insert(element.span.start, Receiver { tag, origin, also, polymorphic, site, exposed, reached });
+        let props = BTreeMap::from([(key, value.clone())]);
+        self.module.receivers.insert(element.span.start, Receiver { tag, origin, also, polymorphic, site, exposed, reached, props });
         self.module.grew(Key::Receiver(element.span.start));
         Place::Kept(InPlace::Received)
     }
@@ -3078,7 +3194,7 @@ impl<'a> Walk<'_, '_, 'a> {
             Callee::Converts { callbacks } => !(*callbacks && position == Some(1)),
             _ => false,
         };
-        if converts && value.inputs && !self.react_callee(&call.callee) {
+        if converts && value.inputs.any() && !self.react_callee(&call.callee) {
             return Place::Handed;
         }
         // `cloneElement` with props that may set a `ref` gives the element a
@@ -3202,7 +3318,7 @@ impl<'a> Walk<'_, '_, 'a> {
         // A declared function's parameters are its inputs.
         if let Some(scope) = scope.filter(|_| self.declared_root()) {
             self.module.roots.insert(scope);
-            self.module.taint(scope, &Held::INPUTS);
+            self.module.seed_inputs(scope);
         }
         self.depth += 1;
     }
@@ -3630,6 +3746,63 @@ fn top_level_names(statement: &Statement<'_>) -> Vec<String> {
 }
 
 /// The bindings a pattern declares.
+/// Which input a function's parameter binding holds: its first parameter
+/// is the props object (`Props`), so a binding its destructuring names by a
+/// static key holds that prop and a rest all but the keys named before it;
+/// a second is the `ref` a forwarding component gets; any other binding
+/// holds every input by a route whose members are no props.
+#[derive(Debug, Clone)]
+enum ParamInput {
+    Props,
+    Every,
+    Named(String),
+    Rest(Vec<String>),
+}
+
+/// The bindings of a function's parameters, each with the input it holds
+/// (`ParamInput`).
+fn param_inputs(params: &oxc::ast::ast::FormalParameters<'_>) -> Vec<(SymbolId, ParamInput)> {
+    fn first(pattern: &BindingPattern<'_>, into: &mut Vec<(SymbolId, ParamInput)>) {
+        match pattern {
+            BindingPattern::ObjectPattern(object) => {
+                let mut named = Vec::new();
+                for property in &object.properties {
+                    let input = match (property.computed, property.key.static_name()) {
+                        (false, Some(key)) => {
+                            named.push(key.to_string());
+                            ParamInput::Named(key.to_string())
+                        }
+                        _ => ParamInput::Every,
+                    };
+                    into.extend(bindings(&property.value).into_iter().map(|symbol| (symbol, input.clone())));
+                }
+                if let Some(rest) = &object.rest {
+                    into.extend(bindings(&rest.argument).into_iter().map(|symbol| (symbol, ParamInput::Rest(named.clone()))));
+                }
+            }
+            BindingPattern::AssignmentPattern(assignment) => first(&assignment.left, into),
+            BindingPattern::BindingIdentifier(_) => into.extend(bindings(pattern).into_iter().map(|symbol| (symbol, ParamInput::Props))),
+            pattern => into.extend(bindings(pattern).into_iter().map(|symbol| (symbol, ParamInput::Every))),
+        }
+    }
+    let mut inputs = Vec::new();
+    for (index, parameter) in params.items.iter().enumerate() {
+        let input = match index {
+            0 => {
+                first(&parameter.pattern, &mut inputs);
+                continue;
+            }
+            1 => ParamInput::Named("ref".to_string()),
+            _ => ParamInput::Every,
+        };
+        inputs.extend(bindings(&parameter.pattern).into_iter().map(|symbol| (symbol, input.clone())));
+    }
+    if let Some(rest) = &params.rest {
+        inputs.extend(bindings(&rest.rest.argument).into_iter().map(|symbol| (symbol, ParamInput::Every)));
+    }
+    inputs
+}
+
 fn bindings(pattern: &BindingPattern<'_>) -> Vec<SymbolId> {
     let mut bound = Vec::new();
     super::bound_symbols(pattern, &mut bound);
