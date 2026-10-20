@@ -22,7 +22,7 @@ use crate::css::{
     resolve_custom_prop_classes, resolve_utility_classes, slot_property_registrations, wrap_layer, BreakpointMap, ComponentCss, ComposeFamilyRef, CompoundConditionMap,
     CssFragmentStore, CssSheets, UtilityInput, VariantCss,
 };
-use crate::slot_provenance::{escape, SlotKeeper, SlotOpening, SlotProvenance};
+use crate::slot_provenance::{escape, keep_component_slot, SlotKeeper, SlotOpening, SlotProvenance};
 use crate::declarations::{bind_component_declarations, check_surface_overlap, DeclarationBinding, DeclarationScales};
 use crate::dynamic_meta::{share_slots, DynamicPropMeta};
 use crate::evaluator::{Admission, EvalError, TransformAdmission, TransformEvaluator};
@@ -9226,6 +9226,9 @@ fn run_with_system_floor(
     let mut all_custom_inputs: Vec<(String, UtilityInput)> = Vec::new();
     let unsealed = UnsealedBindings::default();
     let mut all_custom_dynamic_usages: Vec<DynamicPropUsage> = Vec::new();
+    // What keeps each component slot, where provenance asks for it.
+    let mut component_slot_reasons: Option<FxHashMap<(String, String), Vec<SlotOpening>>> =
+        inputs.slot_provenance.then(FxHashMap::default);
     let mut all_usage_results: Vec<UsageScanResult> = Vec::new();
     let mut forwards: Vec<Forward> = Vec::new();
     let mut usage_residue: Vec<UsageResidueRecord> = Vec::new();
@@ -9566,6 +9569,11 @@ fn run_with_system_floor(
                     }
                 }
             }
+            for usage in &custom_scan.dynamic_usages {
+                keep_component_slot(&mut component_slot_reasons, &usage.binding, &usage.prop_name, || {
+                    SlotOpening::rule("runtime-value").in_file(path)
+                });
+            }
             all_custom_dynamic_usages.extend(custom_scan.dynamic_usages.iter().cloned());
         }
 
@@ -9895,6 +9903,7 @@ fn run_with_system_floor(
             }
         }));
         for prop_name in custom_configs.iter().flat_map(|cc| cc.keys()) {
+            keep_component_slot(&mut component_slot_reasons, component_id, prop_name, || SlotOpening::rule("unproven-owner"));
             all_custom_dynamic_usages.push(DynamicPropUsage {
                 prop_name: prop_name.clone(),
                 binding: component_id.clone(),
@@ -9994,6 +10003,7 @@ fn run_with_system_floor(
         }
         for usage in &injection.custom_dynamic {
             for component_id in ids_by_binding.get(&usage.binding).into_iter().flatten() {
+                keep_component_slot(&mut component_slot_reasons, component_id, &usage.prop_name, || SlotOpening::rule("static-css"));
                 all_custom_dynamic_usages.push(DynamicPropUsage {
                     prop_name: usage.prop_name.clone(),
                     binding: component_id.clone(),
@@ -10256,25 +10266,26 @@ fn run_with_system_floor(
 
     // Each kept slot's keepers, and each unproven one's reasons: what the
     // proof recorded as it decided.
-    let slot_provenance = keepers.map(|mut keepers| {
+    // Every reason an unproven owner is.
+    let owner_reasons = |id: &str| {
+        let mut reasons: Vec<SlotOpening> =
+            escape_reasons.as_ref().and_then(|reasons| reasons.get(id)).cloned().unwrap_or_default();
+        if forced_ids.contains(id) {
+            reasons.push(SlotOpening::rule("static-css"));
+        }
+        reasons.extend(rejected.get(id).into_iter().flatten().cloned());
+        reasons
+    };
+    let mut slot_provenance = keepers.map(|mut keepers| {
         keepers.retain(|prop, _| dynamic_prop_names.contains(prop));
         let mut owners: BTreeMap<String, Vec<SlotOpening>> = BTreeMap::new();
         for keeper in keepers.values_mut().flatten().filter(|keeper| keeper.opening.rule == "unproven-owner") {
-            owners.entry(keeper.owner.clone()).or_insert_with(|| {
-                let id = keeper.owner.as_str();
-                let mut reasons: Vec<SlotOpening> =
-                    escape_reasons.as_ref().and_then(|reasons| reasons.get(id)).cloned().unwrap_or_default();
-                if forced_ids.contains(id) {
-                    reasons.push(SlotOpening::rule("static-css"));
-                }
-                reasons.extend(rejected.get(id).into_iter().flatten().cloned());
-                reasons
-            });
+            owners.entry(keeper.owner.clone()).or_insert_with(|| owner_reasons(&keeper.owner));
         }
         for list in keepers.values_mut() {
             list.sort_by(|a, b| a.owner.cmp(&b.owner));
         }
-        SlotProvenance { usage: usage_gaps, owners, props: keepers }
+        SlotProvenance { usage: usage_gaps, owners, props: keepers, components: BTreeMap::new() }
     });
 
     let typed_system_props = utility_classes.typed_props().clone();
@@ -10438,6 +10449,11 @@ fn run_with_system_floor(
                 })
             };
             if !(covers(confined) && callback_admitted()) {
+                keep_component_slot(&mut component_slot_reasons, component_id, prop_name, || match confined {
+                    None => SlotOpening::rule("unproven-owner"),
+                    Some(_) if !covers(confined) => SlotOpening::rule("unclassed-value"),
+                    Some(_) => SlotOpening::rule("callback-reads-outside"),
+                });
                 custom_dynamic_by_id
                     .entry(component_id.to_string())
                     .or_default()
@@ -10480,6 +10496,24 @@ fn run_with_system_floor(
     deliver_to_parents(&mut custom_dynamic_by_id);
     if let Some(dynamic) = production_custom_dynamic.as_mut() {
         deliver_to_parents(dynamic);
+    }
+    // Each kept component slot's keepers; a parent's slot an extension's
+    // callback reads is kept for it.
+    if let (Some(provenance), Some(mut reasons)) = (slot_provenance.as_mut(), component_slot_reasons.take()) {
+        for (component_id, props) in &custom_dynamic_by_id {
+            let Some(configs) = evaluated.get(component_id).and_then(|(_, _, _, _, _, configs, _)| configs.as_ref()) else {
+                continue;
+            };
+            for prop in props.iter().filter(|prop| configs.contains_key(*prop)) {
+                let keeping = reasons
+                    .remove(&(component_id.clone(), prop.clone()))
+                    .unwrap_or_else(|| vec![SlotOpening::rule("extension-callback")]);
+                if keeping.iter().any(|opening| opening.rule == "unproven-owner") {
+                    provenance.owners.entry(component_id.clone()).or_insert_with(|| owner_reasons(component_id));
+                }
+                provenance.components.entry(component_id.clone()).or_default().insert(prop.clone(), keeping);
+            }
+        }
     }
     let mut per_component_custom_dynamic: FxHashMap<String, HashMap<String, DynamicPropMeta>> =
         FxHashMap::default();
@@ -13958,8 +13992,9 @@ mod tests {
         }
     }
 
-    /// Contract: every system slot the floor keeps names each owner that
-    /// keeps it, and the rule or site that keeps that owner open.
+    /// Contract: every slot the floor keeps, a system prop's or a
+    /// component's, names what keeps it: each owner, and the rule or site
+    /// that keeps that owner open.
     #[test]
     fn each_kept_slot_names_what_keeps_it_open() {
         let source = "export const Box = ds.system({ space: true }).asElement('div');\n\
@@ -14017,6 +14052,19 @@ mod tests {
         );
         let gaps: Vec<&str> = cloned.usage.iter().map(|gap| gap.rule).collect();
         assert!(gaps.contains(&"uncertain-identity") && gaps.contains(&"unlisted-clone"), "{gaps:?}");
+        // A component slot names what keeps it: a runtime value in the file
+        // that writes it, or its component's escape, whose reasons the
+        // owner lists.
+        let tone = provenance_of(
+            "import { Foreign } from 'foreign';\n\
+             const Card = ds.props({ tone: { property: 'color' } }).asElement('div');\n\
+             const Tag = ds.props({ tone: { property: 'color' } }).asElement('span');\n\
+             export const App = ({ c }) => <><Card tone={c} /><Foreign><Tag /></Foreign></>;\n",
+            inputs,
+        );
+        assert_eq!(tone.components["a.tsx::Card"]["tone"], [SlotOpening::rule("runtime-value").in_file("a.tsx")]);
+        assert_eq!(tone.components["a.tsx::Tag"]["tone"], [SlotOpening::rule("unproven-owner")]);
+        assert!(rules(&tone, "a.tsx::Tag").contains(&"opaque-delivery"), "{:?}", tone.owners);
     }
 
     fn inputs_with_provenance() -> CssInputs {

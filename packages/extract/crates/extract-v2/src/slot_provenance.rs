@@ -1,4 +1,5 @@
-//! What keeps each system slot open: the record verbose output prints, and
+//! What keeps each slot open, a system prop's or a component's: the record
+//! verbose output prints, and
 //! what a narrower proof is measured against. The proof records each reason
 //! where it decides it; this module only holds and locates them.
 
@@ -57,6 +58,9 @@ pub struct SlotProvenance {
     pub owners: BTreeMap<String, Vec<SlotOpening>>,
     /// Each kept system slot, by prop: every owner that keeps it.
     pub props: BTreeMap<String, Vec<SlotKeeper>>,
+    /// Each kept component slot (a custom prop's), by component and prop:
+    /// everything that keeps it.
+    pub components: BTreeMap<String, BTreeMap<String, Vec<SlotOpening>>>,
 }
 
 impl SlotProvenance {
@@ -66,12 +70,30 @@ impl SlotProvenance {
             .usage
             .iter_mut()
             .chain(self.owners.values_mut().flatten())
-            .chain(self.props.values_mut().flatten().map(|keeper| &mut keeper.opening));
+            .chain(self.props.values_mut().flatten().map(|keeper| &mut keeper.opening))
+            .chain(self.components.values_mut().flat_map(|props| props.values_mut()).flatten());
         let mut lines: FxHashMap<String, Option<crate::facts::LineStarts>> = FxHashMap::default();
         for opening in openings {
             let (Some(file), Some(at)) = (&opening.file, opening.at) else { continue };
             let starts = lines.entry(file.clone()).or_insert_with(|| source(file).map(crate::facts::LineStarts::of));
             opening.line = starts.as_ref().map(|starts| starts.line(at as usize));
+        }
+    }
+}
+
+/// Records, where provenance asks, that `opening` keeps the slot of
+/// component `id`'s custom prop `prop`.
+pub(crate) fn keep_component_slot(
+    reasons: &mut Option<FxHashMap<(String, String), Vec<SlotOpening>>>,
+    id: &str,
+    prop: &str,
+    opening: impl FnOnce() -> SlotOpening,
+) {
+    if let Some(reasons) = reasons {
+        let opening = opening();
+        let known = reasons.entry((id.to_string(), prop.to_string())).or_default();
+        if !known.contains(&opening) {
+            known.push(opening);
         }
     }
 }
