@@ -249,6 +249,34 @@ describe('system load under a prefix', () => {
     expect(system.contextualProperties).toEqual(['--acme-tone']);
   });
 
+  it('a prefix keeps numeric declaration values', () => {
+    const clamp = (color: string) =>
+      JSON.stringify({
+        clamp: {
+          kind: 'declarations',
+          members: ['WebkitLineClamp', 'color'],
+          values: { one: { WebkitLineClamp: 1, color } },
+        },
+      });
+    for (const prefixContextualVars of [false, true]) {
+      const system = loadSystemConfig(
+        () => ({
+          loadSystemModule: () => ({
+            ...SYSTEM,
+            declarationScalesJson: clamp('var(--color-red)'),
+          }),
+        }),
+        {
+          systemPath: 'ds.ts',
+          rootDir: '/',
+          prefix: 'acme',
+          prefixContextualVars,
+        }
+      );
+      expect(system.declarationScalesJson).toBe(clamp('var(--acme-color-red)'));
+    }
+  });
+
   it('reports a final name that would collide, and nothing otherwise', () => {
     const conflicts = (system: ReturnType<typeof load>) =>
       systemLoadDiagnostics(system)

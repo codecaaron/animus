@@ -252,7 +252,19 @@ function renameTokenValues(
 interface DeclarationScaleWire {
   kind: string;
   members: string[];
-  values: Record<string, Record<string, string>>;
+  values: Record<string, Record<string, string | number>>;
+}
+
+/** A record value renamed as the CSS it writes. A value the rename leaves
+ *  alone keeps its own form, so a number (`WebkitLineClamp: 1`), which
+ *  names no property, stays a number. */
+function renameValue(
+  value: string | number,
+  rename: (value: string) => string
+): string | number {
+  const css = String(value);
+  const renamed = rename(css);
+  return renamed === css ? value : renamed;
 }
 
 /** Renames inside every declaration-scale record value. */
@@ -276,7 +288,7 @@ function renameDeclarationRecords(
               Object.fromEntries(
                 Object.entries(record).map(([property, value]) => [
                   property,
-                  rename(value),
+                  renameValue(value, rename),
                 ])
               ),
             ])
