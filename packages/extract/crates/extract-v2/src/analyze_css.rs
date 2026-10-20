@@ -17959,18 +17959,24 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     #[test]
     fn a_member_object_assign_adds_to_a_family_renders_its_binding() {
         let render = ("d.tsx", "import { R } from './r';\nexport const D = () => <R size=\"sm\" busy />;\n");
-        for (extras, app) in [
-            ("{ Extra: R }", "export const App = () => <Page.Extra size=\"lg\" active />;\n"),
-            ("{ Meta }", "export const App = () => <Page.Meta><R size=\"lg\" active /></Page.Meta>;\n"),
+        let followed = (vec!["sm", "lg"], vec!["active", "busy"]);
+        // A key the sources repeat holds what the last one assigns.
+        let every = (vec!["sm", "md", "lg"], vec!["active", "busy"]);
+        for (extras, app, expected) in [
+            ("{ Extra: R }", "export const App = () => <Page.Extra size=\"lg\" active />;\n", &followed),
+            ("{ Meta }", "export const App = () => <Page.Meta><R size=\"lg\" active /></Page.Meta>;\n", &followed),
+            ("{ Extra: Other }, { Extra: R }", "export const App = () => <Page.Extra size=\"lg\" active />;\n", &every),
+            ("{ Extra: Other, Extra: R }", "export const App = () => <Page.Extra size=\"lg\" active />;\n", &every),
         ] {
             let family = format!(
                 "{RECIPE}const Plain = ds.styles({{ display: 'flex' }}).asElement('div');\n\
+                 const Other = ds.styles({{ display: 'grid' }}).asElement('span');\n\
                  function Meta({{ children }}) {{ return <section>{{children}}</section>; }}\n\
                  export const Page = Object.assign(compose({{ Root: Plain }}), {extras});\n"
             );
             let app = format!("import {{ Page, R }} from './r';\n{app}");
             let kept = kept_options(&[("r.tsx", family.as_str()), render, ("app.tsx", app.as_str())]);
-            assert_eq!(kept, (vec!["sm", "lg"], vec!["active", "busy"]), "{extras}");
+            assert_eq!(&kept, expected, "{extras}");
         }
     }
 

@@ -228,12 +228,16 @@ fn collect_compose_from_expression(
     let found = families.len();
     extract_compose_family(compose, family_binding, families);
     let Some(family) = families.get(found) else { return };
+    // A key the sources repeat holds what the last one assigns: one each.
+    let mut keys = std::collections::BTreeSet::new();
     let keeps_slots = !family.open
         && call.arguments.iter().skip(1).all(|source| match source.as_expression().map(crate::chain_walk::unwrap_type_assertions) {
             Some(Expression::ObjectExpression(object)) => object.properties.iter().all(|property| match property {
                 ObjectPropertyKind::ObjectProperty(property) => {
                     !property.computed
-                        && eval_property_key(&property.key).is_some_and(|key| key != "__proto__" && family.slots.iter().all(|(slot, _)| *slot != key))
+                        && eval_property_key(&property.key).is_some_and(|key| {
+                            key != "__proto__" && family.slots.iter().all(|(slot, _)| *slot != key) && keys.insert(key)
+                        })
                         && sources.inert(&property.value)
                 }
                 ObjectPropertyKind::SpreadProperty(_) => false,
