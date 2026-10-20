@@ -1141,8 +1141,11 @@ pub(crate) fn collect_enriched_usage(
         declaring: oxc::ast::ast::VariableDeclarationKind::Var,
     };
     collector.visit_program(program);
-    let aliases = origins.map(|scoping| LocalAliases::of(program, scoping)).unwrap_or_default();
-    let usage = aliases.rewrite(collector.finish());
+    let usage = collector.finish();
+    // Only a tag bound inside a function may name an alias.
+    let nested_tag = usage.iter().any(|fact| matches!(fact, UsageFact::Element { origin: Some(TagOrigin::Nested), .. }));
+    let aliases = origins.filter(|_| nested_tag).map(|scoping| LocalAliases::of(program, scoping)).unwrap_or_default();
+    let usage = aliases.rewrite(usage);
     let react_imports = origins.map(|scoping| ReactImports::of(program, scoping));
     // Without scopes a direct `eval` cannot be ruled out.
     let direct_eval = origins.is_none_or(|scoping| scoping.root_unresolved_references().contains_key("eval"));
@@ -8887,8 +8890,9 @@ pub(crate) struct LocalAliases {
     /// Each alias element's opening, by where it starts: the tags it may
     /// render, each with where its root is bound.
     pub elements: FxHashMap<u32, Vec<(String, TagOrigin)>>,
-    /// The aliases' initializers, whose references are followed.
-    pub inits: Vec<(u32, u32)>,
+    /// Where the aliases' leaves start, in order: the references an alias
+    /// carries to its elements, which hand nothing on.
+    pub leaves: Vec<u32>,
 }
 
 /// What an alias's initializer may be.
@@ -8902,24 +8906,47 @@ impl LocalAliases {
         let mut scan = AliasScan {
             scoping,
             aliases: FxHashMap::default(),
-            leaves: FxHashSet::default(),
-            tag: None,
-            uses: Vec::new(),
-            other: FxHashSet::default(),
+            leaf_references: FxHashSet::default(),
+            openings: FxHashMap::default(),
+            closings: FxHashSet::default(),
         };
         scan.visit_program(program);
-        let AliasScan { aliases, uses, mut other, .. } = scan;
-        // An alias of a local that is no `const` alias is none. One of an
-        // alias handed on still renders that alias's candidates, which escape
-        // through it.
+        let AliasScan { aliases, leaf_references, openings, closings, .. } = scan;
+        if aliases.is_empty() {
+            return Self::default();
+        }
+        // An alias with a reference that is neither a JSX tag nor another
+        // alias's leaf is none, and so is one of a local that is no alias.
+        let mut other: FxHashSet<SymbolId> = FxHashSet::default();
+        let mut uses = Vec::new();
         for (symbol, (leaves, _)) in &aliases {
             if leaves.iter().any(|leaf| matches!(leaf, AliasLeaf::Alias(inner) if !aliases.contains_key(inner))) {
                 other.insert(*symbol);
             }
+            for reference in scoping.get_resolved_reference_ids(*symbol) {
+                match openings.get(reference) {
+                    Some(at) => uses.push((*symbol, *at)),
+                    None if closings.contains(reference) || leaf_references.contains(reference) => {}
+                    None => {
+                        other.insert(*symbol);
+                    }
+                }
+            }
+        }
+        // An alias handed on hands on every alias it names.
+        let mut pending: Vec<SymbolId> = other.iter().copied().collect();
+        while let Some(symbol) = pending.pop() {
+            for leaf in aliases.get(&symbol).map(|(leaves, _)| leaves.as_slice()).unwrap_or_default() {
+                if let AliasLeaf::Alias(inner) = leaf {
+                    if aliases.contains_key(inner) && other.insert(*inner) {
+                        pending.push(*inner);
+                    }
+                }
+            }
         }
         fn expand(
             symbol: SymbolId,
-            aliases: &FxHashMap<SymbolId, (Vec<AliasLeaf>, (u32, u32))>,
+            aliases: &FxHashMap<SymbolId, (Vec<AliasLeaf>, Vec<u32>)>,
             seen: &mut FxHashSet<SymbolId>,
             into: &mut Vec<(String, TagOrigin)>,
         ) {
@@ -8938,13 +8965,13 @@ impl LocalAliases {
             }
         }
         let mut found = LocalAliases::default();
-        for (symbol, (_, init)) in &aliases {
+        for (symbol, (_, spans)) in &aliases {
             if !other.contains(symbol) {
-                found.inits.push(*init);
+                found.leaves.extend(spans);
             }
         }
         for (symbol, at) in uses {
-            if other.contains(&symbol) || !aliases.contains_key(&symbol) {
+            if other.contains(&symbol) {
                 continue;
             }
             let mut tags = Vec::new();
@@ -8953,7 +8980,7 @@ impl LocalAliases {
                 found.elements.insert(at, tags);
             }
         }
-        found.inits.sort_unstable();
+        found.leaves.sort_unstable();
         found
     }
 
@@ -8984,26 +9011,22 @@ impl LocalAliases {
         out
     }
 
-    /// Whether the reference at `span` is in an alias's initializer.
+    /// Whether the reference at `span` is an alias's leaf.
     pub(crate) fn followed(&self, span: oxc::span::Span) -> bool {
-        let at = self.inits.partition_point(|(start, _)| *start <= span.start);
-        at > 0 && span.end <= self.inits[at - 1].1
+        self.leaves.binary_search(&span.start).is_ok()
     }
 }
 
 struct AliasScan<'s> {
     scoping: &'s Scoping,
-    /// Each candidate alias: its initializer's leaves and span.
-    aliases: FxHashMap<SymbolId, (Vec<AliasLeaf>, (u32, u32))>,
-    /// Where the candidates' leaves are, whose references are theirs.
-    leaves: FxHashSet<u32>,
-    /// The JSX element name being visited, with its opening element's start
-    /// (`None` for a closing one's).
-    tag: Option<(u32, Option<u32>)>,
-    /// Each JSX opening tag naming a local binding, with that binding.
-    uses: Vec<(SymbolId, u32)>,
-    /// The local bindings some reference uses otherwise.
-    other: FxHashSet<SymbolId>,
+    /// Each candidate alias: its initializer's leaves and where they start.
+    aliases: FxHashMap<SymbolId, (Vec<AliasLeaf>, Vec<u32>)>,
+    /// The candidates' leaf references, which are theirs.
+    leaf_references: FxHashSet<oxc::semantic::ReferenceId>,
+    /// Each JSX opening tag's name reference, with the element's start.
+    openings: FxHashMap<oxc::semantic::ReferenceId, u32>,
+    /// Each JSX closing tag's name reference.
+    closings: FxHashSet<oxc::semantic::ReferenceId>,
 }
 
 impl<'a> AliasScan<'_> {
@@ -9011,24 +9034,32 @@ impl<'a> AliasScan<'_> {
     /// static members, or other local `const`s, through conditional and
     /// logical choices; false for anything else. An element of a leaf is
     /// judged as that tag written in place.
-    fn leaves(&self, init: &Expression<'a>, into: &mut Vec<AliasLeaf>, spans: &mut Vec<u32>) -> bool {
+    fn leaves(
+        &self,
+        init: &Expression<'a>,
+        into: &mut Vec<AliasLeaf>,
+        spans: &mut Vec<u32>,
+        references: &mut Vec<oxc::semantic::ReferenceId>,
+    ) -> bool {
         let root_scope = self.scoping.root_scope_id();
         let bound = |id: &IdentifierReference<'_>| id.reference_id.get().and_then(|id| self.scoping.get_reference(id).symbol_id());
         let origin = |symbol: SymbolId| if self.scoping.symbol_flags(symbol).is_import() { TagOrigin::Import } else { TagOrigin::TopLevel };
         match crate::chain_walk::unwrap_type_assertions(init) {
             Expression::ConditionalExpression(conditional) => {
-                self.leaves(&conditional.consequent, into, spans) && self.leaves(&conditional.alternate, into, spans)
+                self.leaves(&conditional.consequent, into, spans, references)
+                    && self.leaves(&conditional.alternate, into, spans, references)
             }
             Expression::LogicalExpression(logical) => match logical.operator {
-                oxc::syntax::operator::LogicalOperator::And => self.leaves(&logical.right, into, spans),
-                _ => self.leaves(&logical.left, into, spans) && self.leaves(&logical.right, into, spans),
+                oxc::syntax::operator::LogicalOperator::And => self.leaves(&logical.right, into, spans, references),
+                _ => self.leaves(&logical.left, into, spans, references) && self.leaves(&logical.right, into, spans, references),
             },
             Expression::Identifier(id) => {
-                let Some(symbol) = bound(id) else { return false };
+                let (Some(symbol), Some(reference)) = (bound(id), id.reference_id.get()) else { return false };
                 spans.push(id.span.start);
                 if self.scoping.symbol_scope_id(symbol) == root_scope {
                     into.push(AliasLeaf::Tag(id.name.to_string(), origin(symbol)));
                 } else {
+                    references.push(reference);
                     into.push(AliasLeaf::Alias(symbol));
                 }
                 true
@@ -9056,10 +9087,10 @@ impl<'a> Visit<'a> for AliasScan<'_> {
                 let Some(symbol) = id.symbol_id.get().filter(|symbol| self.scoping.symbol_scope_id(*symbol) != self.scoping.root_scope_id()) else {
                     continue;
                 };
-                let (mut leaves, mut spans) = (Vec::new(), Vec::new());
-                if self.leaves(init, &mut leaves, &mut spans) {
-                    self.leaves.extend(spans);
-                    self.aliases.insert(symbol, (leaves, (init.span().start, init.span().end)));
+                let (mut leaves, mut spans, mut references) = (Vec::new(), Vec::new(), Vec::new());
+                if self.leaves(init, &mut leaves, &mut spans, &mut references) {
+                    self.leaf_references.extend(references);
+                    self.aliases.insert(symbol, (leaves, spans));
                 }
             }
         }
@@ -9067,36 +9098,24 @@ impl<'a> Visit<'a> for AliasScan<'_> {
     }
 
     fn visit_jsx_opening_element(&mut self, opening: &oxc::ast::ast::JSXOpeningElement<'a>) {
-        if let JSXElementName::IdentifierReference(name) = &opening.name {
-            self.tag = Some((name.span.start, Some(opening.span.start)));
+        if let Some(reference) = jsx_name_reference(&opening.name) {
+            self.openings.insert(reference, opening.span.start);
         }
         oxc::ast_visit::walk::walk_jsx_opening_element(self, opening);
     }
 
     fn visit_jsx_closing_element(&mut self, closing: &oxc::ast::ast::JSXClosingElement<'a>) {
-        if let JSXElementName::IdentifierReference(name) = &closing.name {
-            self.tag = Some((name.span.start, None));
+        if let Some(reference) = jsx_name_reference(&closing.name) {
+            self.closings.insert(reference);
         }
         oxc::ast_visit::walk::walk_jsx_closing_element(self, closing);
     }
+}
 
-    fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
-        let Some(symbol) = id.reference_id.get().and_then(|reference| self.scoping.get_reference(reference).symbol_id()) else {
-            return;
-        };
-        if self.scoping.symbol_scope_id(symbol) == self.scoping.root_scope_id() || self.leaves.contains(&id.span.start) {
-            return;
-        }
-        match self.tag {
-            // The element's own name: an opening tag renders it.
-            Some((at, opening)) if at == id.span.start => {
-                if let Some(opening) = opening {
-                    self.uses.push((symbol, opening));
-                }
-            }
-            _ => {
-                self.other.insert(symbol);
-            }
-        }
+/// The reference a JSX element's plain name makes (`Unit` in `<Unit>`).
+fn jsx_name_reference(name: &JSXElementName<'_>) -> Option<oxc::semantic::ReferenceId> {
+    match name {
+        JSXElementName::IdentifierReference(name) => name.reference_id.get(),
+        _ => None,
     }
 }
