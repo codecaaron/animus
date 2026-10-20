@@ -2,7 +2,7 @@
  *  rewrite shifts, and source paths are re-relativized from the compiler's
  *  output directory to the packet's. */
 
-import { dirname, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import { toPosix } from './types-resolve';
 
@@ -19,6 +19,9 @@ interface RawSourceMap {
   sources: string[];
   mappings: string;
 }
+
+/** A scheme such as `https:` or `file:`; a Windows drive letter is a path. */
+const URL_LIKE = /^[a-z][a-z0-9+.-]+:/i;
 
 const BASE64 =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -110,10 +113,17 @@ export function relocateDeclarationMap(
   const map = JSON.parse(mapText) as RawSourceMap;
   const fromDir = dirname(fromFile);
   const toDir = dirname(toFile);
-  map.sources = map.sources.map((source) =>
-    toPosix(relative(toDir, resolve(fromDir, map.sourceRoot ?? '', source)))
-  );
-  delete map.sourceRoot;
+  // A URL root or source names no file here; only file paths move.
+  if (map.sourceRoot === undefined || !URL_LIKE.test(map.sourceRoot)) {
+    map.sources = map.sources.map((source) =>
+      URL_LIKE.test(source) || isAbsolute(source)
+        ? source
+        : toPosix(
+            relative(toDir, resolve(fromDir, map.sourceRoot ?? '', source))
+          )
+    );
+    delete map.sourceRoot;
+  }
   if (edits.length === 0) return JSON.stringify(map);
 
   const before = lineStarts(original);

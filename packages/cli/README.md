@@ -105,36 +105,47 @@ declaration (`export declare const ds: SealedSystemInstance<…>` from
 `@animus-ui/system`), and replaces every structurally identical registry
 subtree elsewhere with an alias in an isolated helper module,
 `__animus_registry__.d.ts`, which reads the type back from that
-declaration. Two subtrees match only when their structure, modifiers and
-literals are equal and every name in them resolves to the same declaration
-(the same packet file, or the same physical package directory); printed
-text and assignability are never the test. A subtree the matcher cannot
-resolve stays as emitted. On the benchmark's 1,000-component app the
+declaration. Two subtrees match only when their structure, modifiers, literals and key
+kinds are equal and every name in them resolves to the same declaration:
+the same packet file, or the same physical package directory seen in the
+same module mode (an ESM and a CommonJS view never match). Printed text and
+assignability are never the test. A subtree the matcher cannot resolve
+stays as emitted, and so does every file whose aliases would bring an
+augmentation into a public entry that does not already load it (each such
+file is listed as a warning). On the benchmark's 1,000-component app the
 declarations shrink from 94.6 MB to 2.1 MB.
 
-The packet is written to a staging directory beside `--out` and promoted
-only when every check passes; on any failure `--out` is left exactly as it
+One run owns `--out` at a time, through a `.<out>.lock` file beside it. The
+packet is written to a staging directory beside `--out` and promoted only
+when every check passes and the declaration output still has the
+fingerprint it was built from; on any failure `--out` is left exactly as it
 was and the command exits non-zero. The checks:
 
 1. Every packet file type-checks with `skipLibCheck: false` under the
    `--project` compiler options, and each alias is the same type as a
-   literal it replaced.
+   literal it replaced, once per directory and module flavor.
 2. The probe files in `--probes` are checked twice, against the compiler's
-   declarations and against the packet, each reached through the
-   package's own `exports` `types` routing. Both must report the same
-   diagnostics at the same sites, neither may load package source or the
-   other route's files, and every `types` target into `--out` must exist.
+   declarations and against the packet. Each run sees a copy of the package
+   whose `--out` is that route's declarations, and imports the package by
+   name, so tsc resolves it through the package's real `exports`. Both
+   must report the same diagnostics at the same sites, and neither may
+   load a package file outside its route.
 
-`--out` is replaced only when it is missing or holds the
-`__animus_packet__.json` manifest a previous run wrote. `--anchor
+The command refuses an `exports` entry whose first matching condition
+selects a file outside `--out` before its `types` condition reaches the
+packet, a subpath whose `import` and `require` routes select different
+packet files (the probes check one), and a `types` target the packet does
+not contain. `--out` is replaced only when it is missing or holds the
+`__animus_packet__.json` manifest a previous run wrote, checked again just
+before the swap. `--anchor
 <module>#<export>` adds a system declared outside the packet, such as a UI
 package's components built on another package's `ds`
 (`--anchor @acme/styles#ds`). Declaration maps follow the rewrite. With
 `--json` the report is one JSON document on stdout; otherwise a summary
 goes to stderr. Exit codes: 0 promoted; 1 a check failed or the
 declarations could not be read; 2 a usage error (a missing directory, an
-`--out` the command did not write, no `types` routing into `--out`); 3 no
-TypeScript.
+`--out` the command did not write or another run owns, a refused `exports`
+route); 3 no TypeScript.
 
 The packet is a type contract only: extraction never reads it, and a
 TypeScript annotation never decides what CSS ships.
@@ -171,6 +182,10 @@ one failing chain, so an old packet can never stand for a new success.
     "emitDeclarationOnly": true,
     "declarationMap": true,
     "noEmitOnError": true,
+    // Inherited build state would let a rebuild skip emitting into the
+    // freshly removed output directory.
+    "incremental": false,
+    "composite": false,
     "outDir": "./.types-raw",
     "rootDir": "./src",
   },
@@ -197,7 +212,8 @@ one failing chain, so an old packet can never stand for a new success.
   ```
 
   The command warns about an entry that does not reach a module
-  augmentation in the packet.
+  augmentation in the packet, and leaves a file as emitted when an entry
+  that reaches it would gain an augmentation from an alias.
 
 - **Fail closed.** `rm -rf .types-raw` and `noEmitOnError` mean a failed
   compile leaves nothing to alias, `&&` stops the chain there, and the
@@ -211,9 +227,10 @@ one failing chain, so an old packet can never stand for a new success.
   mistakes (a wrong variant, an unknown breakpoint), with no
   `@ts-expect-error`. Include one use that depends on the augmentation, so
   a lost augmentation edge changes a diagnostic.
-- **Ignore the intermediates:** `.types-raw/`, `types/`, and the
-  `.types.staging-*`, `.types.check-*` and `.types.retired-*` directories
-  a run leaves only if it is killed (the next run removes them).
+- **Ignore the intermediates:** `.types-raw/`, `types/`, `.types.lock`,
+  and the `.types.staging-*`, `.types.check-*` and `.types.retired-*`
+  directories a run leaves only if it is killed (the next run removes
+  them).
 
 What can still go stale: a consumer check that bypasses the build, a
 stopped watch, an editor holding unsaved builder edits, or a cache restoring

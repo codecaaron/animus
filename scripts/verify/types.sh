@@ -12,6 +12,11 @@ set -euo pipefail
 # (packages/_typescript-5.9 installs it), and pins exact public types: a type
 # that widens, erases or overflows (TS2590) fails here.
 # Needs a fresh `vp run build:ts`.
+#
+# Packet contracts: packages/cli/published compiles a fixture against the
+# built system declarations and checks that `animus types alias` produces a
+# packet that type-checks as the ordinary declarations do, and never
+# promotes after a failed producer.
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
@@ -24,6 +29,7 @@ bun check -p packages/system/__tests__/tsconfig.test-d.json
 
 require_fresh_package_dist system
 require_fresh_package_dist test-ds
+require_fresh_package_dist extract
 
 TS59=packages/_typescript-5.9/node_modules/typescript/bin/tsc
 if [ ! -f "$TS59" ]; then
@@ -101,4 +107,8 @@ for i in "${!pids[@]}"; do
     status=1
   fi
 done
+if ! bunx vp test run packages/cli/published; then
+  echo "ERROR: the types alias packet contracts fail (packages/cli/published)" >&2
+  status=1
+fi
 exit "$status"

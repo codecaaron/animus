@@ -17,7 +17,11 @@ import {
   resolveCliConfig,
 } from './config';
 import { formatCssAudit, runCssAudit } from './css-audit';
-import { formatTypesAliasReport, runTypesAlias } from './types-packet';
+import {
+  formatTypesAliasReport,
+  PromotionIncompleteError,
+  runTypesAlias,
+} from './types-packet';
 import { runWatch } from './watch';
 import { MANIFEST_FILE } from './writer';
 
@@ -385,7 +389,9 @@ async function runTypesAliasCommand(
     process.exitCode = EXIT_OK;
   } catch (error) {
     console.error(`[animus] ${String(readThrownMessage(error) ?? error)}`);
-    console.error(`[animus] ${outDir} was not changed.`);
+    if (!(error instanceof PromotionIncompleteError)) {
+      console.error(`[animus] ${outDir} was not changed.`);
+    }
     process.exitCode = exitCodeFor(error);
   }
 }

@@ -1,9 +1,10 @@
 /** Module resolution for `animus types alias`: what a specifier names, seen
  *  from a declaration file's place in the packet. One owner, so the matcher,
- *  the anchor lookup, the import graph and the probe routing agree. */
+ *  the anchor lookup, the import graph and the route checks agree. */
 
 import {
   bareSpecifierPackageName,
+  findPackageRoot,
   isPathWithinRoot,
 } from '@animus-ui/extract/pipeline';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
@@ -23,6 +24,8 @@ export function isRelativeSpecifier(specifier: string): boolean {
   );
 }
 
+export const DECLARATION_FILE = /\.d\.(m|c)?ts$/;
+
 // ---------------------------------------------------------------------------
 // package.json
 
@@ -34,6 +37,7 @@ type ExportsEntry =
 
 export interface PackageManifest {
   name?: string;
+  type?: string;
   types?: string;
   typings?: string;
   exports?: ExportsEntry;
@@ -61,62 +65,107 @@ function isConditionMap(
   return entry instanceof Object && !Array.isArray(entry);
 }
 
-/** The conditions an ESM consumer's declaration lookup matches, as tsc
- *  applies them: the first matching key of each object, in its order. */
-const TYPES_CONDITIONS = new Set(['types', 'import', 'module', 'default']);
+/** How a declaration file's imports resolve: an ESM file matches the
+ *  `import` condition, a CommonJS one `require`. */
+export type ModuleMode = 'import' | 'require';
 
-function typesTarget(entry: ExportsEntry, underTypes: boolean): string | null {
-  if (isPath(entry))
-    return underTypes || /\.d\.(m|c)?ts$/.test(entry) ? entry : null;
+const MODE_CONDITIONS = {
+  import: new Set(['types', 'import', 'module', 'default']),
+  require: new Set(['types', 'require', 'default']),
+} satisfies Record<ModuleMode, ReadonlySet<string>>;
+
+/** The target the first matching condition selects, as tsc reads `exports`:
+ *  in each object's key order, with no fallback past a match. */
+function conditionTarget(entry: ExportsEntry, mode: ModuleMode): string | null {
+  if (isPath(entry)) return entry;
   if (Array.isArray(entry)) {
     for (const item of entry) {
-      const target = typesTarget(item, underTypes);
+      const target = conditionTarget(item, mode);
       if (target !== null) return target;
     }
     return null;
   }
   if (!isConditionMap(entry)) return null;
   for (const [condition, value] of Object.entries(entry)) {
-    if (!TYPES_CONDITIONS.has(condition)) continue;
-    const target = typesTarget(value, underTypes || condition === 'types');
-    if (target !== null) return target;
+    if (MODE_CONDITIONS[mode].has(condition))
+      return conditionTarget(value, mode);
   }
   return null;
 }
 
-export interface TypesRoute {
-  /** `.` or `./sub`, `*` for a pattern. */
-  subpath: string;
-  /** The declaration target, relative to the package, `*` for a pattern. */
-  target: string;
+/** Every target any `types` condition names, matched or not. */
+function typesConditionTargets(entry: ExportsEntry, out: string[]): void {
+  if (Array.isArray(entry)) {
+    for (const item of entry) typesConditionTargets(item, out);
+    return;
+  }
+  if (!isConditionMap(entry)) return;
+  for (const [condition, value] of Object.entries(entry)) {
+    if (condition === 'types' && isPath(value)) out.push(value);
+    else typesConditionTargets(value, out);
+  }
 }
 
-/** The declaration file each public subpath resolves to: `exports` when the
- *  package has it, else `types` / `typings`. */
-export function packageTypesRoutes(manifest: PackageManifest): TypesRoute[] {
+export interface PackageRoute {
+  /** `.` or `./sub`, `*` for a pattern. */
+  subpath: string;
+  /** What each mode selects, relative to the package, `*` for a pattern. */
+  targets: Record<ModuleMode, string | null>;
+  /** Every `types` condition's target, whether or not a mode selects it. */
+  typesTargets: string[];
+}
+
+/** Each public subpath: `exports` when the package has it, else `types` /
+ *  `typings` for the root. `gated` says whether the package's files are
+ *  reachable only through these routes. */
+export interface PackageRoutes {
+  routes: PackageRoute[];
+  gated: boolean;
+}
+
+export function packageRoutes(manifest: PackageManifest): PackageRoutes {
   const exportsField = manifest.exports;
   if (exportsField === undefined) {
-    const field = manifest.types ?? manifest.typings;
-    return field === undefined ? [] : [{ subpath: '.', target: field }];
+    const field = manifest.types ?? manifest.typings ?? null;
+    return {
+      routes: [
+        {
+          subpath: '.',
+          targets: { import: field, require: field },
+          typesTargets: field === null ? [] : [field],
+        },
+      ],
+      gated: false,
+    };
   }
   const subpaths =
     isConditionMap(exportsField) &&
     Object.keys(exportsField).some((key) => key.startsWith('.'))
       ? Object.entries(exportsField).filter(([key]) => key.startsWith('.'))
       : [['.', exportsField] as const];
-  const routes: TypesRoute[] = [];
-  for (const [subpath, entry] of subpaths) {
-    const target = typesTarget(entry, false);
-    if (target !== null) routes.push({ subpath, target });
-  }
-  return routes;
+  return {
+    routes: subpaths.map(([subpath, entry]) => {
+      const typesTargets: string[] = [];
+      typesConditionTargets(entry, typesTargets);
+      return {
+        subpath,
+        targets: {
+          import: conditionTarget(entry, 'import'),
+          require: conditionTarget(entry, 'require'),
+        },
+        typesTargets,
+      };
+    }),
+    gated: true,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Identities
 
-/** The files a relative module target can name, in TypeScript's order. */
-function declarationCandidates(target: string): string[] {
+/** The files a module target can name, in TypeScript's order: a script
+ *  target stands for its sibling declaration. */
+export function declarationCandidates(target: string): string[] {
   const stems: Array<[string, string[]]> = [];
   const jsExtension = /\.(m|c)?jsx?$/.exec(target);
   if (jsExtension !== null) {
@@ -124,7 +173,7 @@ function declarationCandidates(target: string): string[] {
     const flavor = jsExtension[1] ?? '';
     stems.push([stem, [`.d.${flavor}ts`, `.${flavor}ts`, '.tsx']]);
   }
-  if (/\.d\.(m|c)?ts$/.test(target)) stems.push([target, ['']]);
+  if (DECLARATION_FILE.test(target)) stems.push([target, ['']]);
   stems.push([target, ['.d.ts', '.ts', '.tsx', '.d.mts', '.d.cts']]);
   stems.push([`${target}/index`, ['.d.ts', '.ts', '.tsx']]);
   return stems.flatMap(([stem, extensions]) =>
@@ -142,13 +191,15 @@ export interface PackageLocation {
  *  inside the packet are checked against its file list.
  *
  *  A relative target's identity is its file; a bare specifier's is its
- *  package directory and the matching `@types` directory, with the subpath:
- *  two files see the same declarations only when both resolve identically. */
+ *  package directory and the matching `@types` directory, with the subpath
+ *  and the importing file's module mode: an ESM and a CommonJS view of one
+ *  package may be different declarations, so they never match. */
 export class ModuleIdentities {
   #identities = new Map<string, string | null>();
   #found = new Map<string, string | null>();
   #real = new Map<string, string>();
-  #names = new Map<string, string | null>();
+  #manifests = new Map<string, PackageManifest | null>();
+  #modes = new Map<string, ModuleMode>();
 
   constructor(
     /** Absolute final location of the packet root. */
@@ -160,8 +211,9 @@ export class ModuleIdentities {
   /** The identity of `specifier` imported from `fromFile`, or null when it
    *  does not resolve: a reference through it never matches. */
   identify(specifier: string, fromFile: string): string | null {
+    const mode = this.modeOf(fromFile);
     const fromDir = dirname(fromFile);
-    const key = `${fromDir}\0${specifier}`;
+    const key = `${fromDir}\0${mode}\0${specifier}`;
     const cached = this.#identities.get(key);
     if (cached !== undefined) return cached;
     let identity: string | null;
@@ -169,10 +221,47 @@ export class ModuleIdentities {
       const file = this.resolveFile(resolve(fromDir, specifier));
       identity = file === null ? null : this.#fileIdentity(file);
     } else {
-      identity = this.#packageIdentity(specifier, fromDir);
+      identity = this.#packageIdentity(specifier, fromDir, mode);
     }
     this.#identities.set(key, identity);
     return identity;
+  }
+
+  /** The declaration file `specifier` names from `fromFile`: what the import
+   *  graph follows. */
+  resolveImport(specifier: string, fromFile: string): string | null {
+    return isRelativeSpecifier(specifier)
+      ? this.resolveFile(resolve(dirname(fromFile), specifier))
+      : this.resolvePackageEntry(
+          specifier,
+          dirname(fromFile),
+          this.modeOf(fromFile)
+        );
+  }
+
+  /** `.d.mts` is ESM and `.d.cts` CommonJS; any other file takes its
+   *  package's `type`. */
+  modeOf(file: string): ModuleMode {
+    if (/\.d\.mts$|\.mts$/.test(file)) return 'import';
+    if (/\.d\.cts$|\.cts$/.test(file)) return 'require';
+    // Memoized by directory: every file there shares its package.
+    const dir = dirname(file);
+    let mode = this.#modes.get(dir);
+    if (mode === undefined) {
+      const root = findPackageRoot(file);
+      mode = this.manifest(root)?.type === 'module' ? 'import' : 'require';
+      this.#modes.set(dir, mode);
+    }
+    return mode;
+  }
+
+  manifest(dir: string): PackageManifest | null {
+    let manifest = this.#manifests.get(dir);
+    if (manifest === undefined) {
+      manifest = readPackageManifest(dir);
+      this.#manifests.set(dir, manifest);
+    }
+    return manifest;
   }
 
   /** The packet-relative path `identity` names, if it is a packet file. */
@@ -182,8 +271,8 @@ export class ModuleIdentities {
       : null;
   }
 
-  /** The declaration file a relative target names: a packet path's place in
-   *  the packet, or an existing file elsewhere. */
+  /** The declaration file a target names: a packet path's place in the
+   *  packet, or an existing file elsewhere. */
   resolveFile(target: string): string | null {
     const inPacket = isPathWithinRoot(this.packetRoot, target);
     for (const candidate of declarationCandidates(target)) {
@@ -198,21 +287,25 @@ export class ModuleIdentities {
     return null;
   }
 
-  /** The declaration file a bare specifier names from `fromDir`, through its
-   *  package's `types` routing. */
-  resolvePackageEntry(specifier: string, fromDir: string): string | null {
+  /** The declaration file a bare specifier names from `fromDir`, through the
+   *  route its package gives `mode`. */
+  resolvePackageEntry(
+    specifier: string,
+    fromDir: string,
+    mode: ModuleMode
+  ): string | null {
     const location = this.locatePackage(specifier, fromDir);
-    const manifest =
-      location === null ? null : readPackageManifest(location.dir);
+    const manifest = location === null ? null : this.manifest(location.dir);
     if (location === null || manifest === null) return null;
     const subpath = `.${specifier.slice(location.name.length)}`;
-    const route = packageTypesRoutes(manifest).find(
+    const route = packageRoutes(manifest).routes.find(
       (candidate) => candidate.subpath === subpath
     );
-    const target = route?.target ?? (subpath === '.' ? 'index.d.ts' : null);
+    const target =
+      route?.targets[mode] ?? (subpath === '.' ? 'index.d.ts' : null);
     return target === null || target.includes('*')
       ? null
-      : resolve(location.dir, target);
+      : this.resolveFile(resolve(location.dir, target));
   }
 
   /** The package directory a bare specifier names from `fromDir`, with the
@@ -222,14 +315,10 @@ export class ModuleIdentities {
       fromDir,
       join('node_modules', bareSpecifierPackageName(specifier))
     );
-    if (dir === null) return null;
-    let name = this.#names.get(dir);
-    if (name === undefined) {
-      const declared = readPackageManifest(dir)?.name;
-      name = declared === undefined || !isPath(declared) ? null : declared;
-      this.#names.set(dir, name);
-    }
-    return name === null ? null : { dir, name };
+    const declared = dir === null ? undefined : this.manifest(dir)?.name;
+    return dir === null || declared === undefined || !isPath(declared)
+      ? null
+      : { dir, name: declared };
   }
 
   #fileIdentity(file: string): string {
@@ -238,7 +327,11 @@ export class ModuleIdentities {
       : `file:${this.#realpath(file)}`;
   }
 
-  #packageIdentity(specifier: string, fromDir: string): string | null {
+  #packageIdentity(
+    specifier: string,
+    fromDir: string,
+    mode: ModuleMode
+  ): string | null {
     if (specifier.startsWith('node:')) return `builtin:${specifier}`;
     const name = bareSpecifierPackageName(specifier);
     const runtime = this.#findUp(fromDir, join('node_modules', name));
@@ -252,7 +345,7 @@ export class ModuleIdentities {
       )
     );
     if (runtime === null && types === null) return null;
-    return `package:${runtime ?? ''}|${types ?? ''}|${specifier.slice(name.length)}`;
+    return `package:${runtime ?? ''}|${types ?? ''}|${specifier.slice(name.length)}|${mode}`;
   }
 
   /** The real path of the nearest `entry` above `fromDir`, memoized per

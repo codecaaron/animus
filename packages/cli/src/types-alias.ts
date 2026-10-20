@@ -390,8 +390,9 @@ function literal(context: SerializeContext, node: TSLiteral): boolean {
   }
 }
 
-/** A property name: `a`, `'a'` and `['a']` are one property, as are `1`
- *  and `'1'`; a computed reference keys on what it resolves to. */
+/** A property name: `a`, `'a'` and `['a']` are one property. `1` and `'1'`
+ *  name one property but give different `keyof` types, so the token keeps
+ *  the key's kind. A computed reference keys on what it resolves to. */
 function propertyKey(
   context: SerializeContext,
   key: PropertyKey,
@@ -401,10 +402,14 @@ function propertyKey(
     if ('bigint' in key || 'regex' in key) return false;
     const { value } = key;
     if (value === null || value === true || value === false) return false;
-    return emit(context, `key:${String(value)}`);
+    return value === String(value)
+      ? emit(context, `key:string:${value}`)
+      : emit(context, `key:number:${String(value)}`);
   }
   if (!computed) {
-    return key.type === 'Identifier' ? emit(context, `key:${key.name}`) : false;
+    return key.type === 'Identifier'
+      ? emit(context, `key:string:${key.name}`)
+      : false;
   }
   if (key.type === 'Identifier') {
     return emit(context, 'key:computed') && reference(context, key.name);
@@ -858,6 +863,8 @@ export interface AnchorSet {
   refusals: AnchorRefusal[];
   /** Per packet file, the anchor statements its aliases must not rewrite. */
   anchorSpans: Map<string, Array<readonly [number, number]>>;
+  /** The declaration file each anchor's helper import loads. */
+  anchorFiles: Map<RegistryAlias, string>;
 }
 
 /** The helper module's import of a packet anchor: `src/ds.d.ts` → `./src/ds.js`. */
@@ -874,12 +881,18 @@ export function collectAnchors(
   identities: ModuleIdentities
 ): AnchorSet {
   const taken = new Set<string>();
-  const set: AnchorSet = { aliases: [], refusals: [], anchorSpans: new Map() };
+  const set: AnchorSet = {
+    aliases: [],
+    refusals: [],
+    anchorSpans: new Map(),
+    anchorFiles: new Map(),
+  };
   const add = (
     parsed: ParsedDeclaration,
     specifier: string,
     exportName: string,
-    found: SystemDeclaration
+    found: SystemDeclaration,
+    loads: string
   ): void => {
     const recorded = registryAliases(
       parsed.scope,
@@ -888,8 +901,10 @@ export function collectAnchors(
       found.registries,
       taken
     );
-    if (Array.isArray(recorded)) set.aliases.push(...recorded);
-    else
+    if (Array.isArray(recorded)) {
+      set.aliases.push(...recorded);
+      for (const alias of recorded) set.anchorFiles.set(alias, loads);
+    } else
       set.refusals.push({
         file: parsed.rel,
         anchorExport: exportName,
@@ -901,7 +916,13 @@ export function collectAnchors(
       const spans = set.anchorSpans.get(parsed.rel) ?? [];
       spans.push([found.start, found.end]);
       set.anchorSpans.set(parsed.rel, spans);
-      add(parsed, packetAnchorSpecifier(parsed.rel), found.exportName, found);
+      add(
+        parsed,
+        packetAnchorSpecifier(parsed.rel),
+        found.exportName,
+        found,
+        join(identities.packetRoot, parsed.rel)
+      );
     }
   }
   for (const request of requests) {
@@ -913,21 +934,23 @@ export function collectAnchors(
         `--anchor ${request} is not <package specifier>#<export>`
       );
     }
+    // Resolved as the helper module, which imports it, resolves it.
     const entry = identities.resolvePackageEntry(
       specifier,
-      identities.packetRoot
+      identities.packetRoot,
+      identities.modeOf(join(identities.packetRoot, ALIAS_HELPER_FILE))
     );
     const located =
       entry === null
         ? null
         : locateExportedSystem(entry, exportName, identities, 0);
-    if (located === null) {
+    if (entry === null || located === null) {
       throw new UsageFailure(
         `--anchor ${request}: no \`export declare const\` of an @animus-ui/system ` +
           `system reaches ${entry ?? specifier} under that name`
       );
     }
-    add(located.parsed, specifier, exportName, located.found);
+    add(located.parsed, specifier, exportName, located.found, entry);
   }
   return set;
 }
@@ -987,8 +1010,12 @@ function locateExportedSystem(
 export interface DeclarationScan {
   /** Outermost subtrees identical to an alias's registry, in order. */
   replacements: AliasReplacement[];
-  /** The packet files this declaration imports, as emitted. */
+  /** The declaration files this one imports, as emitted: packet files at
+   *  their place in the packet, others where they are. */
   imports: Set<string>;
+  /** The file's own import statements, which a registry naming one of its
+   *  bindings needs beside it to resolve. */
+  importStatements: string;
   /** Whether it holds a `declare module '…'` or `declare global` block. */
   augments: boolean;
 }
@@ -1014,12 +1041,11 @@ export function scanDeclaration(
   const scan: DeclarationScan = {
     replacements: [],
     imports: new Set(),
+    importStatements: '',
     augments: false,
   };
   const edge = (specifier: string): void => {
-    const target = scope.identities.packetFile(
-      scope.identities.identify(specifier, scope.file)
-    );
+    const target = scope.identities.resolveImport(specifier, scope.file);
     if (target !== null) scan.imports.add(target);
   };
   for (const statement of parsed.program.body) {
@@ -1029,11 +1055,15 @@ export function scanDeclaration(
       (statement.type === 'ExportNamedDeclaration' && statement.source !== null)
     ) {
       if (statement.source !== null) edge(statement.source.value);
+      if (statement.type === 'ImportDeclaration') {
+        scan.importStatements += `${parsed.text.slice(statement.start, statement.end)}\n`;
+      }
     } else if (
       statement.type === 'TSImportEqualsDeclaration' &&
       statement.moduleReference.type === 'TSExternalModuleReference'
     ) {
       edge(statement.moduleReference.expression.value);
+      scan.importStatements += `${parsed.text.slice(statement.start, statement.end)}\n`;
     } else if (
       statement.type === 'TSModuleDeclaration' &&
       (statement.kind === 'global' || statement.id.type === 'Literal')
@@ -1136,15 +1166,16 @@ export interface RewrittenDeclaration {
 }
 
 export function rewriteDeclaration(
-  parsed: ParsedDeclaration,
+  rel: string,
+  original: string,
   replacements: readonly AliasReplacement[]
 ): RewrittenDeclaration {
   let text = '';
   let cursor = 0;
   const edits: TextEdit[] = [];
   for (const replacement of replacements) {
-    const replacementText = helperReference(parsed.rel, replacement.alias);
-    text += parsed.text.slice(cursor, replacement.start) + replacementText;
+    const replacementText = helperReference(rel, replacement.alias);
+    text += original.slice(cursor, replacement.start) + replacementText;
     edits.push({
       start: replacement.start,
       end: replacement.end,
@@ -1152,7 +1183,7 @@ export function rewriteDeclaration(
     });
     cursor = replacement.end;
   }
-  return { text: text + parsed.text.slice(cursor), edits };
+  return { text: text + original.slice(cursor), edits };
 }
 
 /** The helper module: each alias is read from its anchor's public registry
