@@ -13985,6 +13985,11 @@ mod tests {
             ("import { Children, cloneElement } from 'react';\nclass Inner extends Component { render() { return <div>{this.props.children}</div>; } }\nconst Wrap = ({ children }) => <div>{Children.map(children, (c) => cloneElement(c, { ref: pad }))}</div>;\nconst Render = ({ children }) => <Wrap><Inner>{children}</Inner></Wrap>;", "", "", true),
             ("import { Children, cloneElement } from 'react';\nclass Inner extends Component { render() { return <div>{this.props.children}</div>; } }\nconst Wrap = ({ children, extra }) => <div>{Children.map(children, (c) => cloneElement(c, extra))}</div>;\nconst Render = ({ children, extra }) => <Wrap extra={extra}><Inner>{children}</Inner></Wrap>;", "extra={d}", "", true),
             ("import { Children, cloneElement } from 'react';\nclass Inner extends Component { render() { return <div>{this.props.children}</div>; } }\nconst Wrap = ({ children }) => <div>{Children.map(children, (c) => cloneElement(c, { className: 'x' }))}</div>;\nconst Render = ({ children }) => <Wrap><Inner>{children}</Inner></Wrap>;", "", "", false),
+            // `cloneElement` that may set `as`, `asChild` or `is` gives the
+            // element another target.
+            ("import { cloneElement } from 'react';\nconst Render = ({ children }) => <div>{cloneElement(children, { as: Foreign })}</div>;", "", "", true),
+            ("import { Children, cloneElement } from 'react';\nconst Render = ({ children }) => <div>{Children.map(children, (c) => cloneElement(c, { asChild: true }))}</div>;", "", "", true),
+            ("import { cloneElement } from 'react';\nconst Render = ({ children }) => <div>{cloneElement(children, { is: 'x-y' })}</div>;", "", "", true),
             // A component's result, a fragment and an array are rendered as at
             // an element, where a hookable value runs its hooks.
             ("const Render = ({ children }) => ({ children, [Symbol.iterator]: decorate });", "", "", true),

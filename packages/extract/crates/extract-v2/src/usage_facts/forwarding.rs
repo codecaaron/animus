@@ -2528,12 +2528,13 @@ impl<'a> Walk<'_, '_, 'a> {
             return Place::Handed;
         }
         // `cloneElement` with props that may set a `ref` gives the element a
-        // new receiver: whoever the ref reaches reads its props.
+        // new receiver: whoever the ref reaches reads its props. One that may
+        // set `as`, `asChild` or `is` gives it another target.
         if position == Some(0) && self.clones(call) {
             let plain = call.arguments.get(1).is_none_or(|props| {
                 matches!(props.as_expression().map(unwrap_type_assertions), Some(Expression::ObjectExpression(object))
                     if object.properties.iter().all(|property| matches!(property, ObjectPropertyKind::ObjectProperty(property)
-                        if !property.computed && property.key.static_name().is_some_and(|name| name != "ref"))))
+                        if !property.computed && property.key.static_name().is_some_and(|name| !matches!(name.as_ref(), "ref" | "as" | "asChild" | "is")))))
             });
             if !plain {
                 return Place::Handed;
