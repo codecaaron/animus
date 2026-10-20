@@ -910,6 +910,8 @@ pub(crate) struct EnrichedUsage {
     pub escapes: BTreeSet<String>,
     /// See `FileFacts::terminal_escapes`.
     pub terminal_escapes: BTreeSet<String>,
+    /// See `FileFacts::facade_reads`.
+    pub facade_reads: BTreeSet<(String, String)>,
     /// See `FileFacts::spread_wrappers`.
     pub spread_wrappers: BTreeMap<String, SpreadWrapper>,
     /// See `FileFacts::ordinary_components`.
@@ -1235,7 +1237,7 @@ pub(crate) fn collect_enriched_usage(
     chains: &[&ChainDescriptor],
     exports: &[ExportFact],
     compose: &[ComposeFamilyInfo],
-    object_members: &BTreeMap<String, BTreeMap<String, String>>,
+    facades: &BTreeMap<String, Vec<crate::facts::FacadeEntry>>,
     assigned_target_calls: &BTreeSet<(u32, u32)>,
     calls_eval: bool,
 ) -> EnrichedUsage {
@@ -1330,7 +1332,7 @@ pub(crate) fn collect_enriched_usage(
         .zip(react_imports.as_ref())
         .map(|(scoping, react)| ordinary_components(program, scoping, react, &BTreeSet::new(), direct_eval))
         .unwrap_or_default();
-    let (escapes, terminal_escapes) = match &scoping {
+    let (escapes, terminal_escapes, facade_reads) = match &scoping {
         Some(scoping) if may_escape => {
             let mut scan = EscapeScan {
                 admissible: &admissible,
@@ -1342,7 +1344,7 @@ pub(crate) fn collect_enriched_usage(
                     .filter(|family| family.addressable())
                     .flat_map(|family| family.slot_values.iter().copied())
                     .collect(),
-                object_members,
+                reads: facades.iter().map(|(object, entries)| (object.clone(), crate::facts::FollowedReads::of(entries))).collect(),
                 holders: BTreeSet::new(),
                 assigned_target_calls,
                 react: &react,
@@ -1352,12 +1354,16 @@ pub(crate) fn collect_enriched_usage(
                 escapes: BTreeSet::new(),
                 terminal: BTreeSet::new(),
                 elsewhere: BTreeSet::new(),
+                followed: std::cell::RefCell::new(BTreeSet::new()),
                 ancestors: Vec::new(),
                 aliases: &aliases,
             };
-            scan.holders = object_members
+            scan.holders = scan
+                .reads
                 .iter()
-                .filter(|(_, members)| members.values().any(|value| scan.is_candidate(value)))
+                .filter(|(_, reads)| {
+                    reads.members.values().map(|(binding, _)| binding).chain(&reads.copies).any(|value| scan.is_candidate(value))
+                })
                 .map(|(object, _)| object.clone())
                 .collect();
             if direct_eval {
@@ -1372,9 +1378,9 @@ pub(crate) fn collect_enriched_usage(
                 scan.visit_program(program);
             }
             let terminal = scan.terminal.difference(&scan.elsewhere).cloned().collect();
-            (scan.escapes, terminal)
+            (scan.escapes, terminal, scan.followed.into_inner())
         }
-        _ => (BTreeSet::new(), BTreeSet::new()),
+        _ => (BTreeSet::new(), BTreeSet::new(), BTreeSet::new()),
     };
     let OrdinaryComponents { names: ordinary_components, react_wrappers, import_aliases } = origins
         .zip(react_imports.as_ref())
@@ -1401,6 +1407,7 @@ pub(crate) fn collect_enriched_usage(
         confined,
         escapes,
         terminal_escapes,
+        facade_reads,
         spread_wrappers,
         ordinary_components,
         react_wrappers,
@@ -5319,21 +5326,22 @@ impl<'a> Visit<'a> for WrapperScan<'a, '_> {
 /// reference that is not a JSX tag, an extracted `.extend()` base, a
 /// `createElement` first argument, a named export, the target of a top-level
 /// `const X = R` or `const X = Object.assign(R, …)`, a member of a
-/// `compose()` call, or a member of a top-level `const` object that
-/// `object_members` holds, whose member table follows it. Such a component
-/// can render anywhere with any props: any other object member and an alias
-/// declared inside a function are escapes, since usage follows neither. A
-/// member read records its dotted path (`Card.Body`).
+/// `compose()` call, or a read a top-level `const` object literal holds once
+/// built (`FollowedReads`: `Root: R`, `Actions: Actions.Root`, `...Family`),
+/// whose member table follows it. Such a component can render anywhere with
+/// any props: any other object member and an alias declared inside a
+/// function are escapes, since usage follows neither. A member read records
+/// its dotted path (`Card.Body`).
 struct EscapeScan<'a, 's> {
     scoping: &'s Scoping,
     chains: &'s [&'s ChainDescriptor],
     /// See `ComposeFamilyInfo::slot_values`, for every family of the
     /// module's facts that usage follows (`ComposeFamilyInfo::addressable`).
     slot_values: FxHashSet<(u32, u32)>,
-    /// See `FileFacts::object_members`.
-    object_members: &'s BTreeMap<String, BTreeMap<String, String>>,
-    /// The objects among `object_members` that hold a candidate: one hands
-    /// it over where it escapes, whatever its name's case.
+    /// What each of the module's facades reads once built (`FileFacts::facades`).
+    reads: BTreeMap<String, crate::facts::FollowedReads>,
+    /// The objects among `reads` that hold a candidate: one hands it over
+    /// where it escapes, whatever its name's case.
     holders: BTreeSet<String>,
     /// See `FileFacts::assigned_target_calls`.
     assigned_target_calls: &'s BTreeSet<(u32, u32)>,
@@ -5351,6 +5359,8 @@ struct EscapeScan<'a, 's> {
     /// terminal's target, and those some other reference makes.
     terminal: BTreeSet<String>,
     elsewhere: BTreeSet<String>,
+    /// See `FileFacts::facade_reads`.
+    followed: std::cell::RefCell<BTreeSet<(String, String)>>,
     ancestors: Vec<AstKind<'a>>,
     /// See `LocalAliases`: what an alias's initializer reads, its elements
     /// render.
@@ -5479,8 +5489,8 @@ impl EscapeScan<'_, '_> {
     /// The dotted path under which a reference escapes, or `None` when usage
     /// tracking follows it.
     fn escape_path(&self, name: &str, span: oxc::span::Span) -> Option<String> {
-        let (chains, slot_values, object_members, assigned_target_calls, react) =
-            (self.chains, &self.slot_values, self.object_members, self.assigned_target_calls, self.react);
+        let (chains, slot_values, assigned_target_calls, react) =
+            (self.chains, &self.slot_values, self.assigned_target_calls, self.react);
         use oxc::span::GetSpan;
         let mut path = name.to_string();
         let mut current = span;
@@ -5534,22 +5544,49 @@ impl EscapeScan<'_, '_> {
                         .then_some(path);
                 }
                 // A slot of a compose() family usage follows renders through its
-                // member tags, and so is a member of a top-level `const` object
-                // that `object_members` holds: the object's member table follows
-                // it, and what the object's uses do to it. Any other object
-                // member is not followed, nor is a slot of a compose() call
-                // whose family usage cannot follow.
+                // member tags, and so is a read a top-level `const` object holds
+                // once built (`Root: R`, `Actions: Actions.Root`): the object's
+                // member table follows it, and what the object's uses do to it.
+                // Any other object member is not followed, nor is a slot of a
+                // compose() call whose family usage cannot follow.
                 AstKind::ObjectProperty(property) if property.value.span() == current => {
                     let value = property.value.span();
-                    let held = path == name
-                        && !property.computed
-                        && property.key.static_name().is_some_and(|key| match rest.next() {
-                            Some(AstKind::ObjectExpression(object)) => holder_const(object.span, &mut rest)
-                                .and_then(|holder| object_members.get(&holder)?.get(key.as_ref()))
-                                .is_some_and(|member| member == name),
-                            _ => false,
-                        });
-                    return (!slot_values.contains(&(value.start, value.end)) && !held).then_some(path);
+                    if slot_values.contains(&(value.start, value.end)) {
+                        return None;
+                    }
+                    let holder = match (property.key.static_name().filter(|_| !property.computed), rest.next()) {
+                        (Some(key), Some(AstKind::ObjectExpression(object))) => holder_const(object.span, &mut rest)
+                            .filter(|holder| self.reads.get(holder).is_some_and(|reads| reads.holds(&key, &path))),
+                        _ => None,
+                    };
+                    return match holder {
+                        Some(holder) => {
+                            if path != name {
+                                self.followed.borrow_mut().insert((holder, path));
+                            }
+                            None
+                        }
+                        None => Some(path),
+                    };
+                }
+                // So is an object such an object copies (`...Family`): the
+                // engine reads its members into the object's table, and hands
+                // it over unread where it names no family or facade.
+                AstKind::SpreadElement(spread) if spread.argument.span() == current && path == name => {
+                    let holder = match rest.next() {
+                        Some(AstKind::ObjectExpression(object)) if !self.admissible.contains(name) => {
+                            holder_const(object.span, &mut rest)
+                                .filter(|holder| self.reads.get(holder).is_some_and(|reads| reads.copies.contains(name)))
+                        }
+                        _ => None,
+                    };
+                    return match holder {
+                        Some(holder) => {
+                            self.followed.borrow_mut().insert((holder, path));
+                            None
+                        }
+                        None => Some(path),
+                    };
                 }
                 _ => return Some(path),
             }

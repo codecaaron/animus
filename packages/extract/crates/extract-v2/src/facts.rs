@@ -614,6 +614,13 @@ pub struct FileFacts {
     /// sites' props, and hands the binding to nothing that may write it.
     #[serde(skip)]
     pub(crate) terminal_escapes: BTreeSet<String>,
+    /// The references usage would otherwise record in `value_escapes` that
+    /// it follows as a read a facade literal holds (`...Family`,
+    /// `Actions.Root`), each with its facade: the engine still hands one
+    /// over where its member tables cannot prove the read
+    /// (`ObjectMembers::unfollowed_reads`).
+    #[serde(skip)]
+    pub(crate) facade_reads: BTreeSet<(String, String)>,
     /// Module-scope function components whose renders stand in for the
     /// components they spread their props into.
     #[serde(skip)]
@@ -1428,6 +1435,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         confined_components: BTreeSet::new(),
         value_escapes: BTreeSet::new(),
         terminal_escapes: BTreeSet::new(),
+        facade_reads: BTreeSet::new(),
         spread_wrappers: BTreeMap::new(),
         module_loads: lowered.loads.iter().filter_map(|load| load.module_load(source)).collect(),
         runtime_imports: lowered.loads.iter().filter_map(|load| load.runtime_import(source)).collect(),
@@ -1549,6 +1557,48 @@ fn collect_const_initializers(
     };
     facts.targets = facts.targets.iter().map(|(name, target)| (name.clone(), canonical(target))).collect();
     facts
+}
+
+/// What a facade's writes leave reading another binding once it is built:
+/// each key's last read (`Root: R`, `Actions: Actions.Root`), dropped by a
+/// later write of the key or a spread that may replace it, and each binding
+/// a spread copies (`...Family`). A write that may set any member drops
+/// both, since the member tables then record nothing of the object.
+#[derive(Default)]
+pub(crate) struct FollowedReads {
+    pub members: BTreeMap<String, (String, Option<String>)>,
+    pub copies: BTreeSet<String>,
+}
+
+impl FollowedReads {
+    pub(crate) fn of(entries: &[FacadeEntry]) -> Self {
+        let mut reads = Self::default();
+        for entry in entries {
+            match entry {
+                FacadeEntry::Member { key, binding, member } => {
+                    reads.members.insert(key.clone(), (binding.clone(), member.clone()));
+                }
+                FacadeEntry::Other(key) | FacadeEntry::Written { key, .. } | FacadeEntry::Code(Some(key)) => {
+                    reads.members.remove(key);
+                }
+                FacadeEntry::Copy(name) => {
+                    reads.members.clear();
+                    reads.copies.insert(name.clone());
+                }
+                FacadeEntry::Unknown | FacadeEntry::Code(None) => reads = Self::default(),
+            }
+        }
+        reads
+    }
+
+    /// Whether `value` (`R`, or `Actions.Root` read from `Actions`) is the
+    /// read the object's last write of `key` holds.
+    pub(crate) fn holds(&self, key: &str, value: &str) -> bool {
+        self.members.get(key).is_some_and(|(binding, member)| match member {
+            Some(member) => value.strip_prefix(binding.as_str()).and_then(|rest| rest.strip_prefix('.')) == Some(member.as_str()),
+            None => value == binding,
+        })
+    }
 }
 
 /// An object literal's members that name an identifier: source order, so a
@@ -2091,6 +2141,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         confined: confined_components,
         escapes: value_escapes,
         terminal_escapes,
+        facade_reads,
         spread_wrappers,
         ordinary_components,
         react_wrappers,
@@ -2122,7 +2173,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         &descriptors,
         &structural.exports,
         &structural.compose,
-        &structural.object_members,
+        &structural.facades,
         &structural.assigned_target_calls,
         calls_eval,
     );
@@ -2166,6 +2217,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         confined_components,
         value_escapes,
         terminal_escapes,
+        facade_reads,
         spread_wrappers,
         ordinary_components,
         react_wrappers,

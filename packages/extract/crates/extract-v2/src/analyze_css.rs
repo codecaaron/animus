@@ -6098,7 +6098,8 @@ fn bounded_prop_tags(
     forwards: &[Forward],
     ordinary_members: &FxHashMap<(String, String), (String, String)>,
     delivered_tags: &[OpaqueDelivery],
-    object_members: &mut crate::family_members::ObjectMembers<'_>) -> FxHashSet<(String, u32)> {
+    object_members: &mut crate::family_members::ObjectMembers<'_>,
+    value_escapes: &ValueEscapes) -> FxHashSet<(String, u32)> {
     let open: FxHashSet<&String> = results.iter().flat_map(|result| result.open_components.keys()).collect();
     let open_except: Vec<&(String, std::collections::BTreeSet<String>)> =
         results.iter().flat_map(|result| &result.open_except).collect();
@@ -6257,7 +6258,7 @@ fn bounded_prop_tags(
                     }
                     let holder = (path.clone(), holder.clone());
                     for (other, off) in files {
-                        let escapes = off.value_escapes.iter().any(|escaped| {
+                        let escapes = value_escapes.of(other, off).any(|escaped| {
                             object_members.facade_at(other, escaped).as_ref() == Some(&holder)
                         });
                         let copies = off.facades.values().flatten().any(|entry| {
@@ -7111,6 +7112,16 @@ fn reexported_modules(
     false
 }
 
+/// Each file's `value_escapes`, with the reads its facade literals hold
+/// that the member tables cannot prove (`ObjectMembers::unfollowed_reads`).
+struct ValueEscapes(FxHashMap<String, Vec<String>>);
+
+impl ValueEscapes {
+    fn of<'a>(&'a self, path: &str, ff: &'a FileFacts) -> impl Iterator<Item = &'a String> {
+        ff.value_escapes.iter().chain(self.0.get(path).into_iter().flatten())
+    }
+}
+
 /// What calls and component elements can hand to code outside the
 /// analysis, which may clone runtime props or other options into an element
 /// it receives: the components whose elements reach such code (directly,
@@ -7139,6 +7150,7 @@ fn opaque_delivery(
     renders_in_place: impl Fn(&str) -> bool,
     component_target: impl Fn(&str) -> Option<(String, String)>,
     contexts: &crate::flow::ValueEffects,
+    value_escapes: &ValueEscapes,
 ) -> (Vec<(String, usize)>, Vec<OpaqueDelivery>) {
     // The declaration `name` (`lib.enhance` for a namespace import's
     // member) names from `file`, or `None` outside the analysis. The facts
@@ -7355,7 +7367,7 @@ fn opaque_delivery(
             reexported_modules(module, files, inputs, links, reached, |_| false);
         };
         for (path, ff) in files {
-            for escaped in &ff.value_escapes {
+            for escaped in value_escapes.of(path, ff) {
                 let prefixes = escaped.match_indices('.').map(|(dot, _)| &escaped[..dot]).chain(std::iter::once(escaped.as_str()));
                 for prefix in prefixes {
                     match declaration(path, ff, prefix) {
@@ -7439,7 +7451,7 @@ fn opaque_delivery(
                 UsageFact::Element { tag: TagFact::Member(tag), .. } | UsageFact::CreateElement { member: Some(tag), .. } => Some(tag),
                 _ => None,
             });
-            let reads: Vec<&String> = ff.value_escapes.iter().chain(member_tags).collect();
+            let reads: Vec<&String> = value_escapes.of(path, ff).chain(member_tags).collect();
             let read_as_namespace = |local: &str| reads.iter().any(|read| read.split('.').next() == Some(local) && read.contains('.'));
             let mut locals: Vec<&str> = Vec::new();
             for import in &ff.imports {
@@ -7710,7 +7722,7 @@ fn opaque_delivery(
     // An `.asComponent()` terminal renders its target and writes nothing in it.
     let mut seeded: Vec<(String, String)> = Vec::new();
     for (path, ff) in files {
-        for escaped in ff.value_escapes.difference(&ff.terminal_escapes) {
+        for escaped in value_escapes.of(path, ff).filter(|escaped| !ff.terminal_escapes.contains(*escaped)) {
             let prefixes = escaped.match_indices('.').map(|(dot, _)| &escaped[..dot]).chain(std::iter::once(escaped.as_str()));
             let mut pending: Vec<(String, String)> =
                 prefixes.filter_map(|prefix| declaration(path, ff, prefix)).map(|(declaring, binding, _)| (declaring, binding)).collect();
@@ -9781,6 +9793,14 @@ fn run_with_system_floor(
     };
     let mut object_members =
         crate::family_members::ObjectMembers::new(files, inputs, links, &family_index, &declared_component, &evaluated_ids);
+    let value_escapes = ValueEscapes(
+        files
+            .iter()
+            .filter(|(_, ff)| !ff.facade_reads.is_empty())
+            .map(|(path, _)| (path.clone(), object_members.unfollowed_reads(path)))
+            .filter(|(_, unfollowed)| !unfollowed.is_empty())
+            .collect(),
+    );
     // A member tag written through a facade or alias whose member is stable
     // resolves like a family member tag.
     // A member tag an unresolved import may give several families resolves
@@ -10425,7 +10445,7 @@ fn run_with_system_floor(
             .iter()
             .filter(|export| export.exported == "default" && export.source.is_none())
             .filter_map(|export| export.local.as_ref());
-        for name in ff.value_escapes.iter().chain(default_specifiers) {
+        for name in value_escapes.of(path, ff).chain(default_specifiers) {
             names.push(name);
             // A class resolver has no component members, so a path through
             // one (`resolver.attrs`, `resolver.attrs.call`) is the resolver
@@ -10552,7 +10572,7 @@ fn run_with_system_floor(
     // or path a module hands on or changes, and each object along it.
     let mut changed_ids: FxHashSet<String> = FxHashSet::default();
     for (path, ff) in files {
-        for used in ff.value_escapes.iter().chain(ff.changing_uses(path, &evaluated_ids).map(|(name, _)| name)) {
+        for used in value_escapes.of(path, ff).chain(ff.changing_uses(path, &evaluated_ids).map(|(name, _)| name)) {
             let prefixes = used.match_indices('.').map(|(dot, _)| &used[..dot]).chain(std::iter::once(used.as_str()));
             for prefix in prefixes {
                 changed_ids.extend(resolve_declared_identity(path, prefix, files, inputs, links, &evaluated_ids));
@@ -10633,7 +10653,8 @@ fn run_with_system_floor(
             let (declaring, binding, _) = resolve_declaration(file, ff, &descriptor.tag, files, inputs, links)?;
             ordinary_declaration(&declaring, &binding, files, inputs, links)
         },
-        object_members.changes(),);
+        object_members.changes(),
+        &value_escapes,);
     for (id, at) in delivered_ids {
         escape(&mut escaped_ids, escape_reasons.as_mut(), [id], || delivered_tags[at].opening());
     }
@@ -10915,7 +10936,8 @@ fn run_with_system_floor(
                 &forwards,
                 &ordinary_members,
                 &delivered_tags,
-                &mut object_members,)
+                &mut object_members,
+                &value_escapes,)
         }
         false => FxHashSet::default(),
     };
@@ -15670,7 +15692,7 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             // a render names it.
             ("Root", "consume(Field);\n", true),
             ("Root", "function mirror(family) { family.Root.render = (props) => consume(props.children); }\nmirror(Field);\n", true),
-            ("Root", "export const Copy = { ...Field };\n", true),
+            ("Root", "export const Copy = { ...Field };\nconsume(Copy);\n", true),
             ("Root", "const Held = Field.Root;\nconsume(Held);\n", true),
             ("Field.Root", "Field.Root = Other;\n", true),
         ] {
@@ -15685,6 +15707,40 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
                       consume(Field);\n\
                       export const App = () => <Root><Box p={2} /></Root>;\n";
         assert!(analyze(&[("a.tsx", source)], &test_inputs()).dynamic_props.contains_key("p"));
+    }
+
+    /// Contract: a facade literal's member read of another facade
+    /// (`Actions: Kit.Root`) and its copy of a family (`...Fam`) hand
+    /// nothing off where the member tables prove each read of the facade
+    /// is a component the analysis extracts; any read they cannot prove
+    /// (a namespace, a non-component, a source that may change) still
+    /// hands over what every read of that facade names.
+    #[test]
+    fn a_facade_reads_what_it_copies() {
+        let keeps_p = |nav: &str, tag: &str| {
+            let kit = "import { Other } from 'outside';\n\
+                       const Band = ds.system({ space: true }).asElement('div');\n\
+                       const Root = ds.system({ space: true }).asElement('div');\n\
+                       const Plain = (props) => <div {...props} />;\n\
+                       export const Fam = compose({ Root: Band }, { shared: {}, name: 'Fam' });\n\
+                       export const Kit = { Root, Plain };\n";
+            let nav = format!("import {{ consume, more, Other }} from 'outside';\nimport * as ns from './kit';\nimport {{ Fam, Kit }} from './kit';\n{nav}");
+            let app = format!("import {{ Fam, Kit }} from './kit';\nimport {{ Nav }} from './nav';\nexport const App = () => <{tag} p={{2}} />;\n");
+            analyze(&[("kit.tsx", kit), ("nav.tsx", &nav), ("app.tsx", &app)], &test_inputs()).dynamic_props.contains_key("p")
+        };
+        for (nav, tag, keeps) in [
+            ("export const Nav = { ...Fam, Extra: Kit.Root };", "Nav.Root", false),
+            ("export const Nav = { ...Fam, Extra: Kit.Root };", "Nav.Extra", false),
+            ("export const Nav = { ...Fam, Extra: Kit.Root };\nconsume(Nav);", "Fam.Root", true),
+            ("export const Nav = { ...Fam, Extra: Kit.Root };\nconsume(Nav);", "Kit.Root", true),
+            ("export const Nav = { ...Fam, ...more };", "Fam.Root", true),
+            ("export const Nav = { ...Fam, [Other]: Kit.Root };", "Fam.Root", true),
+            ("export const Nav = { ...Fam, Plain: Kit.Plain };", "Fam.Root", true),
+            ("export const Nav = { Root: Kit.Root, Box: ns.Kit };", "Kit.Root", true),
+            ("export const Nav = { ...Fam };\nFam.Root = Other;", "Fam.Root", true),
+        ] {
+            assert_eq!(keeps_p(nav, tag), keeps, "{nav} <{tag}>");
+        }
     }
 
     #[test]
