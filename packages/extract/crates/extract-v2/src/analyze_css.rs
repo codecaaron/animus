@@ -10381,8 +10381,11 @@ fn run_with_system_floor(
             for prefix in prefixes {
                 changed_ids.extend(resolve_declared_identity(path, prefix, files, inputs, links, &evaluated_ids));
                 changed_ids.extend(member_path_ids(path, ff, prefix, false, files, inputs, links, &evaluated_ids));
-                // A facade hands on or changes what it holds.
-                changed_ids.extend(object_members.escaped_components(path, prefix));
+                // A facade hands on or changes what it holds; one a member
+                // of is reached through hands on only that member.
+                if prefix.len() == used.len() {
+                    changed_ids.extend(object_members.escaped_components(path, prefix));
+                }
             }
         }
     }
@@ -14571,6 +14574,13 @@ mod tests {
             ("const Section = ({ as: Tag = 'section', ...props }) => <Tag {...props} />;\nconst Frame = ds.styles({ display: 'grid' }).asComponent(Section);\nconst Render = ({ children }) => <Frame as={Foreign}>{children}</Frame>;", "", "", true),
             ("const Frame = ds.styles({ display: 'grid' }).asComponent(Foreign);\nconst Render = ({ children }) => <Frame>{children}</Frame>;", "", "", true),
             ("const Section = (props) => <section {...props} />;\nconst Frame = ds.styles({ display: 'grid' }).asComponent(Section);\nFrame.render = pad;\nconst Render = ({ children }) => <Frame>{children}</Frame>;", "", "", true),
+            // A family member handed on is that member, not its family; one
+            // written through changes what holds it too.
+            ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst B = ds.styles({ display: 'flex' }).asElement('div');\nconst Fam = compose({ Root: A, Foot: B }, { shared: {}, name: 'Fam' });\npad(Fam.Foot);\nconst Render = ({ children }) => <Fam.Root>{children}</Fam.Root>;", "", "", false),
+            ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst B = ds.styles({ display: 'flex' }).asElement('div');\nconst Fam = compose({ Root: A, Foot: B }, { shared: {}, name: 'Fam' });\npad(Fam);\nconst Render = ({ children }) => <Fam.Root>{children}</Fam.Root>;", "", "", true),
+            ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst B = ds.styles({ display: 'flex' }).asElement('div');\nconst Fam = compose({ Root: A, Foot: B }, { shared: {}, name: 'Fam' });\nFam.Root.render = pad;\nconst Render = ({ children }) => <Fam.Root>{children}</Fam.Root>;", "", "", true),
+            ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst Kit = { Root: A };\nKit.Root.render = pad;\nconst Render = ({ children }) => <Kit.Root>{children}</Kit.Root>;", "", "", true),
+            ("const A = ds.styles({ display: 'grid' }).asElement('section');\nconst Kit = { Root: A };\npad(Kit.Root);\nconst Render = ({ children }) => <A>{children}</A>;", "", "", true),
             // `cloneElement` that may set `as`, `asChild` or `is` gives the
             // element another target.
             ("import { cloneElement } from 'react';\nconst Render = ({ children }) => <div>{cloneElement(children, { as: Foreign })}</div>;", "", "", true),
