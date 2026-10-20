@@ -21,7 +21,9 @@
 //! cannot follow, leaves no usage proven (`FileFacts::patches_intrinsics`).
 //! Code outside the analysis is assumed not to redirect them: the trust
 //! every static analyser places in the platform and the framework it
-//! targets.
+//! targets. Analysed code that runs a string (an indirect `eval`,
+//! `Function`, a called `constructor`) is not outside it, and leaves no
+//! usage proven either.
 //!
 //! An input's caller may have put any key on it, the props object React
 //! builds included (`toString={…}`, or a spread of what its own caller
@@ -247,8 +249,11 @@ const ARRAY_CALLBACK_METHODS: [(&str, usize); 12] = [
 /// nothing.
 const ARRAY_WRITE_METHODS: [&str; 4] = ["push", "unshift", "splice", "fill"];
 
-/// Own property names a conversion, `await` or JSON runs as code.
-const HOOK_KEYS: [&str; 6] = ["toString", "valueOf", "toLocaleString", "toJSON", "then", "__proto__"];
+/// Own property names a conversion, `await`, JSON or React runs as code:
+/// React iterates `'@@iterator'`, renders an object whose `$$typeof` marks
+/// an element by calling its `type`, and calls a lazy's `_init`.
+const HOOK_KEYS: [&str; 9] =
+    ["toString", "valueOf", "toLocaleString", "toJSON", "then", "__proto__", "@@iterator", "$$typeof", "_init"];
 
 /// Globals whose prototype an analysed write could change for every value.
 const INTRINSICS: [&str; 14] = [
@@ -995,7 +1000,17 @@ impl<'r> Declarations<'r> {
             }
             _ => false,
         };
-        if prototype && self.reshapes(span) {
+        // `eval` and `Function` read off the global object, or any
+        // `constructor` called (a function's is `Function`), run strings.
+        let global = matches!(unwrap_type_assertions(object), Expression::Identifier(id) if GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.symbol(id).is_none());
+        let called = matches!(self.ancestors.last(), Some(AstKind::CallExpression(call)) if call.callee.span() == span)
+            || matches!(self.ancestors.last(), Some(AstKind::NewExpression(call)) if call.callee.span() == span);
+        let runs_strings = match name {
+            Some("eval" | "Function") => global,
+            Some("constructor") => called,
+            _ => false,
+        };
+        if runs_strings || (prototype && self.reshapes(span)) {
             self.patches_intrinsics = true;
         }
         if matches!(super::member_effect(span, self.ancestors.iter().rev()), Some(MemberEffect::Assigned | MemberEffect::Deleted)) {
@@ -1016,13 +1031,14 @@ impl<'r> Declarations<'r> {
         }
     }
 
-    /// Whether `object` is `this`, a binding the module declares (not an
-    /// import), or a literal: an object the module owns rather than one it
+    /// Whether `object` is `this` in a class's instance member, a binding the
+    /// module declares (not an import), or a literal: an object the module owns rather than one it
     /// reached.
     fn owned(&self, object: &Expression<'_>) -> bool {
         match unwrap_type_assertions(object) {
-            Expression::ThisExpression(_)
-            | Expression::ObjectExpression(_)
+            // Elsewhere `this` is whatever the caller gives.
+            Expression::ThisExpression(_) => matches!(self.this_class(), Some((_, false))),
+            Expression::ObjectExpression(_)
             | Expression::ArrayExpression(_)
             | Expression::FunctionExpression(_)
             | Expression::ArrowFunctionExpression(_)
@@ -1215,11 +1231,14 @@ fn current_call<'e, 'a>(expression: Option<&'e Expression<'a>>) -> Option<&'e Ca
     }
 }
 
-/// Whether `class` or one of its members has a decorator.
+/// Whether `class`, one of its members or a parameter of one of its
+/// methods (the constructor's included) has a decorator.
 fn decorated(class: &Class<'_>) -> bool {
     !class.decorators.is_empty()
         || class.body.body.iter().any(|element| match element {
-            oxc::ast::ast::ClassElement::MethodDefinition(method) => !method.decorators.is_empty(),
+            oxc::ast::ast::ClassElement::MethodDefinition(method) => {
+                !method.decorators.is_empty() || method.value.params.items.iter().any(|parameter| !parameter.decorators.is_empty())
+            }
             oxc::ast::ast::ClassElement::PropertyDefinition(property) => !property.decorators.is_empty(),
             oxc::ast::ast::ClassElement::AccessorProperty(property) => !property.decorators.is_empty(),
             _ => false,
@@ -1369,6 +1388,13 @@ impl<'a> Visit<'a> for Declarations<'a> {
 
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
         let callee = unwrap_type_assertions(&call.callee).as_member_expression();
+        // `__defineGetter__`, `__defineSetter__` and their kin write into the
+        // object they are called on.
+        if let Some(member) = callee.filter(|member| {
+            member.static_property_name().is_some_and(|name| name.len() > 4 && name.starts_with("__") && name.ends_with("__"))
+        }) {
+            self.written_into(member.object(), true);
+        }
         if let Some((Expression::Identifier(object), Some(name))) = callee.map(|member| (member.object(), member.static_property_name())) {
             if self.symbol(object).is_none() {
                 let reflects = matches!(object.name.as_str(), "Object" | "Reflect") && name == "getPrototypeOf";
@@ -1428,8 +1454,19 @@ impl<'a> Visit<'a> for Declarations<'a> {
         if id.name == "arguments" && self.symbol(id).is_none() {
             self.uses_arguments.extend(own_function(&self.ancestors));
         }
-        if self.redirects(id) {
+        // Indirect `eval` and `Function` run strings the analysis cannot read.
+        let runs_strings = matches!(id.name.as_str(), "eval" | "Function") && self.symbol(id).is_none();
+        if runs_strings || self.redirects(id) {
             self.patches_intrinsics = true;
+        }
+    }
+
+    /// `new.target` in a class is the class itself, as `this.constructor` is.
+    fn visit_new_target(&mut self, _target: &oxc::ast::ast::NewTarget) {
+        if let Some((class, _)) = self.this_class() {
+            if let Some(facts) = self.classes.get_mut(&class) {
+                facts.this_escapes = true;
+            }
         }
     }
 
@@ -1573,10 +1610,22 @@ impl<'a> Walk<'_, '_, 'a> {
         self.module.sink(at, callee, None, &self.top, value);
     }
 
-    /// Adds `value`'s elements to what the statement's bindings hold.
-    fn top_join(&mut self, value: &Held) {
+    /// Adds `value`'s elements to what the statement's bindings hold, from
+    /// the position at `at`.
+    fn top_join(&mut self, at: u32, value: &Held) {
+        self.declared_hooks(at, value);
         for name in self.top.iter() {
             self.module.top_join(name, value);
+        }
+    }
+
+    /// A hookable value a top-level binding holds reaches whoever reads the
+    /// binding, in any module, where the hook bit does not follow: it is
+    /// handed outside where it is declared. (A store that makes a binding
+    /// hookable reads a member of it, which hands what it holds already.)
+    fn declared_hooks(&mut self, at: u32, value: &Held) {
+        if value.hookable && !value.is_empty() {
+            self.sink(at, None, value);
         }
     }
 
@@ -1836,13 +1885,13 @@ impl<'a> Walk<'_, '_, 'a> {
         };
         if let Some(render) = method {
             self.module.give_back(scope, value);
-            self.top_join(value);
+            self.top_join(current.start, value);
             return Some(if render { InPlace::Rendered } else { InPlace::Returned });
         }
         if self.module.roots.contains(&scope) {
             // React renders a component's result; a top-level helper's goes
             // to its callers, by name.
-            self.top_join(value);
+            self.top_join(current.start, value);
             return Some(InPlace::Rendered);
         }
         // A function bound to a local: its call sites carry the result.
@@ -1983,6 +2032,7 @@ impl<'a> Walk<'_, '_, 'a> {
             | AstKind::TryStatement(_)
             | AstKind::CatchClause(_) => Place::Kept(InPlace::Discarded),
             AstKind::ExportDefaultDeclaration(_) => {
+                self.declared_hooks(current.start, value);
                 self.module.top_join("default", value);
                 Place::Kept(InPlace::Exported)
             }
@@ -2014,7 +2064,7 @@ impl<'a> Walk<'_, '_, 'a> {
                 }
                 self.module.hold_pattern(&declarator.id, value);
                 if self.depth == 0 {
-                    self.top_join(value);
+                    self.top_join(current.start, value);
                 }
                 Place::Kept(InPlace::Bound)
             }
@@ -2384,7 +2434,9 @@ fn react_function(name: &str) -> Callee {
         "useOptimistic" | "useDebugValue" => Callee::PassThrough { calls: &[1] },
         "useActionState" | "useFormState" => Callee::PassThrough { calls: &[0] },
         // A component it gets renders with the props.
-        "createElement" | "memo" | "forwardRef" | "lazy" => Callee::PassThrough { calls: &[0] },
+        "createElement" | "forwardRef" | "lazy" => Callee::PassThrough { calls: &[0] },
+        // `memo` calls its comparison too.
+        "memo" => Callee::PassThrough { calls: &[0, 1] },
         // These call what they get with nothing of the caller's, or call
         // nothing.
         "useState" | "useRef" | "useContext" | "useMemo" | "useCallback" | "useEffect" | "useLayoutEffect"
@@ -2461,7 +2513,10 @@ impl<'a> Visit<'a> for Walk<'_, '_, 'a> {
     }
 
     fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
-        // An element's tag name is no value it reads.
+        // An element's tag name is no value it reads: React renders the
+        // component it names. What a context tag gives on (its value, to a
+        // `Consumer`'s function) reaches code only through the element, and a
+        // `Consumer` is no ordinary tag, so the element hands it outside.
         let tag = match self.ancestors.last() {
             Some(AstKind::JSXOpeningElement(opening)) => opening.name.span() == id.span,
             Some(AstKind::JSXClosingElement(_) | AstKind::JSXMemberExpression(_)) => true,

@@ -13580,6 +13580,41 @@ mod tests {
             ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nconst [k, j, m] = ['constructor', 'prototype', 'map'];\nfunction patch(o, key, f) { o[key] = f; }\npatch([][k][j], m, decorate);\n", true),
             ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "import { decorate } from 'outside';\nexport const rows = [0];\nconst [k, j, m] = ['constructor', 'prototype', 'map'];\nconst p = [][k][j];\ndelete p[m];\n", true),
             ("const Render = ({ children }) => { const o = {}; ['a'].forEach((k) => { o[k] = 1; }); return <div>{children}</div>; };", "", "", false),
+            // React runs code through `'@@iterator'`, a forged element's
+            // `type` and a lazy's `_init`.
+            ("const Render = ({ children }) => { const o = { '@@iterator': pad, c: <Box p={4} /> }; return <div>{o}{children}</div>; };", "", "", true),
+            ("const Render = ({ items }) => <div>{items}</div>;", "items={{ '@@iterator': pad, c: <Box p={4} /> }}", "", true),
+            ("import { Children } from 'react';\nconst Render = ({ items }) => <div>{Children.toArray(items)}</div>;", "items={{ '@@iterator': pad, c: <Box p={4} /> }}", "", true),
+            ("const Render = () => <div>{{ $$typeof: Symbol.for('react.transitional.element'), type: pad, props: { c: <Box p={4} /> }, key: null }}</div>;", "", "", true),
+            ("const Render = () => { const o = {}; o.$$typeof = Symbol.for('react.transitional.element'); o.type = pad; o.props = { c: <Box p={4} /> }; return <div>{o}</div>; };", "", "", true),
+            ("const Render = () => <div>{{ $$typeof: Symbol.for('react.lazy'), _payload: <Box p={4} />, _init: pad }}</div>;", "", "", true),
+            ("const Render = () => { const o = { _payload: <Box p={4} /> }; o._init = pad; return <div>{o}</div>; };", "", "", true),
+            // A hookable top-level binding is handed where it is declared:
+            // its hooks reach whoever reads it, in any module.
+            ("import { bag } from './other';\nconst Render = ({ children }) => <div>{bag}{children}</div>;", "", "import { Box } from './a';\nimport { pad } from 'outside';\nexport const bag = { c: <Box p={4} />, [Symbol.iterator]: pad };\n", true),
+            ("import { make } from './other';\nconst Render = () => <div>{make()}</div>;", "", "import { Box } from './a';\nimport { pad } from 'outside';\nexport const make = () => ({ c: <Box p={4} />, [Symbol.iterator]: pad });\n", true),
+            ("import { bag } from './other';\nconst Render = ({ children }) => <div>{bag}{children}</div>;", "", "import { Box } from './a';\nimport { pad } from 'outside';\nexport const bag = { c: <Box p={4} /> };\nbag[Symbol.iterator] = pad;\n", true),
+            ("import { make } from './other';\nconst Render = ({ children }) => <div>{make(children)}</div>;", "", "import { pad } from 'outside';\nexport function make(c) { return { c, [Symbol.iterator]: pad }; }\n", true),
+            // A call of a `__name__` member writes into its receiver.
+            ("Array.prototype.__defineGetter__('map', () => pad);\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
+            ("console.__defineGetter__('log', () => pad);\nconst Render = () => { console.log(<Box p={4} />); return null; };", "", "", true),
+            ("Object.prototype.__defineSetter__('x', pad);\nconst Render = ({ children }) => { const o = {}; o.x = children; return null; };", "", "", true),
+            ("import ReactDOM from 'react-dom';\nReactDOM.__defineGetter__('createPortal', () => pad);\nconst Render = ({ children }) => ReactDOM.createPortal(children, document.body);", "", "", true),
+            // `this` outside a class member is whatever the caller gives.
+            ("function patch() { this.map = pad; }\npatch.call([].constructor.prototype);\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
+            ("function patch(k) { this[k] = pad; }\npatch.call([].constructor.prototype, 'map');\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
+            ("const o = { patch() { this.map = pad; } };\nReflect.apply(o.patch, [].constructor.prototype, []);\nconst Render = ({ children }) => <div>{[0].map(() => children)}</div>;", "", "", true),
+            // `new.target` in a class is the class.
+            ("class Render extends Component { constructor(p) { super(p); const P = new.target.prototype; P.wrap = pad; } wrap(c) { return <div>{c}</div>; } render() { return this.wrap(this.props.children); } }", "", "", true),
+            // A parameter decorator gets the class or its prototype.
+            ("class Render extends Component { constructor(@pad p) { super(p); } wrap(c) { return <div>{c}</div>; } render() { return this.wrap(this.props.children); } }", "", "", true),
+            ("class Render extends Component { wrap(@pad c) { return <div>{c}</div>; } render() { return this.wrap(this.props.children); } }", "", "", true),
+            // Analysed code that runs a string the analysis cannot read.
+            ("const run = eval;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("(0, eval)('1');\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("new Function('return 1');\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const F = globalThis.Function;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("[].constructor.constructor('return 1')();\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("import { rows } from './other';\nconst Render = () => <div>{rows.map(() => <Box p={4} />)}</div>;", "", "export const rows = [0];\n", false),
             // Converting, iterating, awaiting or stringifying an input runs
             // the hooks its caller gave it, the props object's included.
