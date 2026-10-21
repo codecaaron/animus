@@ -43,6 +43,8 @@ pub(crate) struct Lowered {
     pub(crate) trusts_promise: bool,
     /// See `StringCode::replaces_promise`.
     pub(crate) replaces_promise: bool,
+    /// See `StringCode::global_let_goes`.
+    pub(crate) global_let_goes: Vec<String>,
     /// How the module lets a loader escape, if it does.
     pub(crate) loader_escape: Option<&'static str>,
 }
@@ -71,6 +73,7 @@ impl Lowered {
             direct_eval: strings.direct_eval,
             trusts_promise: strings.trusts_promise,
             replaces_promise: strings.replaces_promise,
+            global_let_goes: strings.global_let_goes,
             loader_escape,
         }
     }

@@ -574,6 +574,9 @@ pub struct FileFacts {
     /// See `StringCode::replaces_promise`.
     #[serde(skip)]
     pub(crate) replaces_promise: bool,
+    /// See `StringCode::global_let_goes`.
+    #[serde(skip)]
+    pub(crate) global_let_goes: Vec<String>,
     /// How the module lets a loader escape (`reads module.require`), which
     /// can load any module and change what it exports.
     #[serde(skip)]
@@ -1429,6 +1432,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         dynamic_code: lowered.dynamic_code,
         trusts_promise: lowered.trusts_promise,
         replaces_promise: lowered.replaces_promise,
+        global_let_goes: lowered.global_let_goes.clone(),
         loader_escape: lowered.loader_escape,
         member_parent_extensions: Vec::new(),
         member_rooted_chains: Vec::new(),

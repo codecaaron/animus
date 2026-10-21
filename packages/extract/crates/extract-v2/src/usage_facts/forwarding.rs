@@ -284,10 +284,13 @@ const ARRAY_CALLBACK_METHODS: [(&str, usize); 12] = [
     ("flatMap", 2), ("forEach", 2), ("map", 2), ("some", 2), ("reduce", 3), ("reduceRight", 3),
 ];
 
-/// The built-in methods that write into the receiver they are called on,
-/// a prototype included; `__defineGetter__` and its kin are writes of
-/// their own (`written_into`).
-const RECEIVER_WRITERS: [&str; 9] = ["push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin"];
+/// The platform's constructors, unbound: `instanceof` one runs no code of
+/// the module's (`consumption`, `string_code`).
+pub(super) const NATIVE_CONSTRUCTORS: [&str; 33] = [
+    "Object", "Function", "Array", "String", "Number", "Boolean", "Symbol", "BigInt", "Date", "RegExp", "Map", "Set", "WeakMap", "WeakSet",
+    "WeakRef", "Promise", "ArrayBuffer", "DataView", "Uint8Array", "Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError",
+    "EvalError", "URIError", "AggregateError", "Node", "Element", "HTMLElement", "SVGElement", "Event", "Window",
+];
 
 /// The array methods that store what they get in the array, and call
 /// nothing.
@@ -352,7 +355,7 @@ fn trusted_global(name: &str) -> bool {
 
 /// The names of the global object: a trusted global is a member of it.
 /// `top`, `parent` and `frames` name it too when the page is in no frame.
-const GLOBAL_OBJECTS: [&str; 7] = ["globalThis", "window", "self", "global", "top", "parent", "frames"];
+pub(super) const GLOBAL_OBJECTS: [&str; 7] = ["globalThis", "window", "self", "global", "top", "parent", "frames"];
 
 /// What one module's walk records.
 #[derive(Default)]
@@ -1397,8 +1400,9 @@ impl<'r> Declarations<'r> {
     }
 
     /// Where the value at `span`, a child of the last ancestor, goes: only
-    /// consumed (read by an operator, a test, a template no tag gets, a
-    /// member read or a read-only built-in, also through `??` or `||`), into
+    /// consumed (read by an operator, `instanceof` only of a platform
+    /// constructor, a test, a template no tag gets, a member read or a
+    /// read-only built-in, also through `??` or `||`), into
     /// an unexported const or a parameter of a function the module binds,
     /// whose uses decide, or let go.
     fn consumption(&self, span: Span, skip: usize) -> Consumption {
@@ -1411,11 +1415,18 @@ impl<'r> Declarations<'r> {
                 Some(AstKind::LogicalExpression(logical)) if matches!(logical.operator, LogicalOperator::Coalesce | LogicalOperator::Or) => logical.span,
                 // A member of a prototype read is no prototype: one named for
                 // it is a prototype use of its own.
-                Some(AstKind::StaticMemberExpression(member)) if member.object.span() == at => {
-                    return Self::read_unless_written(member.span, Some(member.property.name.as_str()), up);
-                }
-                Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == at => {
-                    return Self::read_unless_written(member.span, member.static_property_name().map(|name| name.as_str()), up);
+                Some(AstKind::StaticMemberExpression(member)) if member.object.span() == at => return Self::read_unless_written(member.span, up),
+                Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == at => return Self::read_unless_written(member.span, up),
+                // `instanceof` runs the right side's `Symbol.hasInstance`,
+                // which gets the value: only the platform's own is no code
+                // of the module's.
+                Some(AstKind::BinaryExpression(binary))
+                    if binary.operator == BinaryOperator::Instanceof
+                        && !(binary.left.span() == at
+                            && matches!(unwrap_type_assertions(&binary.right), Expression::Identifier(id)
+                                if NATIVE_CONSTRUCTORS.contains(&id.name.as_str()) && self.symbol(id).is_none())) =>
+                {
+                    return Consumption::LetGo;
                 }
                 // A loop's other expressions, and a statement's, are discarded.
                 Some(
@@ -1467,13 +1478,12 @@ impl<'r> Declarations<'r> {
         }
     }
 
-    /// The member `name` (`None` when computed) at `span` of a value that
-    /// may be a prototype: read or called, it consumes the value, unless it
-    /// is written or a method that writes into its receiver is called.
-    fn read_unless_written<'b>(span: Span, name: Option<&str>, up: impl Iterator<Item = &'b AstKind<'b>>) -> Consumption {
+    /// The member at `span` of a value that may be a prototype: read, it
+    /// consumes the value; written, or called with the value as its
+    /// receiver, which any method may return or write into, it lets it go.
+    fn read_unless_written<'b>(span: Span, up: impl Iterator<Item = &'b AstKind<'b>>) -> Consumption {
         match super::member_effect(span, up) {
             None => Consumption::Consumed,
-            Some(MemberEffect::Method) if name.is_some_and(|name| !RECEIVER_WRITERS.contains(&name)) => Consumption::Consumed,
             Some(_) => Consumption::LetGo,
         }
     }
@@ -1546,7 +1556,7 @@ impl<'r> Declarations<'r> {
     }
 
     /// Whether the intrinsic prototype at `span`, a child of the last
-    /// ancestor, is used other than to read or call a member of it, as
+    /// ancestor, is used other than to read a member of it, as
     /// `read_unless_written` judges, or to compare it strictly.
     fn reshapes(&self, span: Span) -> bool {
         let mut up = self.ancestors.iter().rev();
@@ -1557,10 +1567,10 @@ impl<'r> Declarations<'r> {
                 false
             }
             (current, Some(AstKind::StaticMemberExpression(member))) if member.object.span() == current => {
-                matches!(Self::read_unless_written(member.span, Some(member.property.name.as_str()), up), Consumption::LetGo)
+                matches!(Self::read_unless_written(member.span, up), Consumption::LetGo)
             }
             (current, Some(AstKind::ComputedMemberExpression(member))) if member.object.span() == current => {
-                matches!(Self::read_unless_written(member.span, member.static_property_name().map(|name| name.as_str()), up), Consumption::LetGo)
+                matches!(Self::read_unless_written(member.span, up), Consumption::LetGo)
             }
             _ => true,
         }

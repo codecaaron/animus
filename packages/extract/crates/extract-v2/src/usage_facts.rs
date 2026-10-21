@@ -262,6 +262,16 @@ pub(crate) fn symbol_of(scoping: &Scoping, ident: &IdentifierReference<'_>) -> O
     ident.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id())
 }
 
+/// The text of a string, or of a template with no substitution, as
+/// `literal_string` and `cooked_text` read them.
+pub(crate) fn static_string<'a>(expression: &Expression<'a>) -> Option<&'a str> {
+    match expression {
+        Expression::StringLiteral(string) => crate::eval::literal_string(string),
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => template.quasis.first().and_then(crate::eval::cooked_text),
+        _ => None,
+    }
+}
+
 /// Whether `ident` reads one of `symbols`.
 pub(crate) fn reads_symbol(scoping: &Scoping, ident: &IdentifierReference<'_>, symbols: &FxHashSet<SymbolId>) -> bool {
     symbol_of(scoping, ident).is_some_and(|symbol| symbols.contains(&symbol))
@@ -2607,19 +2617,20 @@ fn style_object_use(
 /// How a module runs code from a string, which can load any module: it
 /// reads the unbound `eval` or `Function` as a value, so any call, alias or
 /// `Reflect.construct` of it counts, or reads either as a member of the
-/// unbound global object (`globalThis.eval`, `window.Function`). A type
-/// query, and the bare name as a `typeof` operand or the right side of
-/// `instanceof`, run nothing. Not followed: a computed member
-/// (`globalThis['ev' + 'al']`) and an alias of the global object.
+/// global object, by name or by a key the walk reads (`window['eval']`, a
+/// `const` declared to the name). A type query, and the bare name as a
+/// `typeof` operand or the right side of `instanceof`, run nothing. A call
+/// of a member of the global object by a key the walk cannot read may call
+/// either (`UNREAD_GLOBAL_CALL`).
 ///
 /// It calls `eval` directly, reading and writing any binding by name, only
 /// where a call's callee is the unbound `eval` itself (`eval(…)`,
 /// `(eval)(…)`); any other call of it runs in the global scope. A browser
-/// timer (`setTimeout`, `setInterval`, unbound or off the global object)
-/// runs a first argument that is a string as code: a timer read as a value,
-/// or called with a first argument not provably a function, counts, as its
-/// bare name under `typeof` or `instanceof` does not. A function or arrow
-/// written there is one, and so is a
+/// timer (`setTimeout`, `setInterval`, unbound or a member of the global
+/// object) runs a first argument that is a string as code: a timer read as
+/// a value, or called with a first argument not provably a function,
+/// counts, as its bare name under `typeof` or `instanceof` does not. A
+/// function or arrow written there is one, and so is a
 /// binding never reassigned that is declared to one, or that is a
 /// parameter of a function with no other name every use of which calls it
 /// with a function in its place (an export is a use, and a function no use
@@ -2628,6 +2639,12 @@ fn style_object_use(
 /// proof then trusts (`trusts_promise`). A module that reads `arguments`,
 /// which may change a parameter or call an executor as `callee`, proves no
 /// parameter and trusts no executor.
+///
+/// The global object is any of its names unbound (`globalThis`, `window`,
+/// `self`, `global`, `top`, `parent`, `frames`), a member of it by one of
+/// them or by a key the walk cannot read (`window.self`, `top[k]`), a
+/// `window`, `globalThis` or `defaultView` member of anything, or a binding
+/// the module ever gives one, declared, destructured or assigned.
 pub(crate) struct StringCode {
     pub(crate) reads: Option<&'static str>,
     pub(crate) direct_eval: bool,
@@ -2639,43 +2656,64 @@ pub(crate) struct StringCode {
     /// Whether the module may replace the global `Promise`: it writes the
     /// unbound name, declares it at its top (a script's global), names
     /// `Promise` as a string, a template or a property key, writes a member
-    /// named `Promise`, or gives the global object a key it computes or to
-    /// `Object` or `Reflect`. The global object is any of its names unbound
-    /// (`globalThis`, `window`, `self`, `global`, `top`, `parent`,
-    /// `frames`), a chain of them (`window.self`), a `window`, `globalThis`
-    /// or `defaultView` member of anything, or a binding the module ever
-    /// gives one, declared, destructured or assigned. Not followed: a key
-    /// built at run time from text that never names `Promise` (`'Prom' +
-    /// 'ise'`, data), written into the global object reached any other way
-    /// (stored in an object, passed, returned).
+    /// named `Promise`, writes into the global object by a key the walk
+    /// cannot read, or lets the global object go but into a call rooted at
+    /// an import (`global_let_goes`): handed to a function the module binds,
+    /// `Object` or `Reflect`, returned or stored. A read of it the code only
+    /// inspects (`typeof window[name]`) lets nothing go. Not followed: a key
+    /// built at run time from text that never names `Promise`, written
+    /// through a value the global object reached no other way.
     pub(crate) replaces_promise: bool,
+    /// The imports each call the global object is let go to is rooted at,
+    /// as written: one the analysis reads may replace `Promise` there
+    /// (`analyze_css::distrust_promise`).
+    pub(crate) global_let_goes: Vec<String>,
 }
 
 /// Why a timer may run a string.
 pub(crate) const STRING_TIMER: &str = "lets a timer run what may be a string";
 
+/// Why a call of a member of the global object may run a string.
+const UNREAD_GLOBAL_CALL: &str = "calls a member of the global object by a key it cannot read";
+
 /// How `program` runs code from strings: see `StringCode`.
-pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::semantic::Scoping) -> StringCode {
-    use oxc::ast::ast::{BinaryExpression, CallExpression, Expression, FormalParameters, IdentifierReference, StaticMemberExpression, UnaryExpression};
+pub(crate) fn string_code<'a>(program: &oxc::ast::ast::Program<'a>, scoping: &oxc::semantic::Scoping) -> StringCode {
+    use oxc::ast::ast::{
+        BinaryExpression, CallExpression, ComputedMemberExpression, Expression, FormalParameters, IdentifierReference, StaticMemberExpression,
+        UnaryExpression,
+    };
     use oxc::ast_visit::Visit;
     use oxc::semantic::SymbolId;
-    use oxc::syntax::operator::{BinaryOperator, UnaryOperator};
+    use oxc::syntax::operator::{BinaryOperator, LogicalOperator, UnaryOperator};
     const RUNNERS: [&str; 2] = ["eval", "Function"];
     const TIMERS: [&str; 2] = ["setTimeout", "setInterval"];
-    const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "self", "global"];
-    /// The names the global object is reached by, itself and as a member of
-    /// one of them.
-    const GLOBAL_NAMES: [&str; 7] = ["globalThis", "window", "self", "global", "top", "parent", "frames"];
+    // The names the global object is reached by, itself and as a member of
+    // one of them.
+    use forwarding::GLOBAL_OBJECTS as GLOBAL_NAMES;
     /// Members that hold the global object, of anything.
     const GLOBAL_MEMBERS: [&str; 3] = ["window", "globalThis", "defaultView"];
     /// What may hold the global object: itself, or a binding, which holds it
     /// where the module gives it one.
+    #[derive(Clone, Copy)]
     enum GlobalRoot {
         Global,
         Binding(SymbolId),
     }
-    struct Reads<'s> {
+    /// What a use of the global object does: applied at once to the global
+    /// object, and once the walk is done to a binding that holds it.
+    enum Effect<'a> {
+        /// Reads a runner or a timer (`StringCode::reads`).
+        Reads(&'static str),
+        /// Calls a timer with this first argument.
+        Timer(Argument),
+        /// May replace `Promise`.
+        Replaces,
+        /// Lets it go to a call rooted at this import.
+        LetGo(&'a str),
+    }
+    struct Reads<'s, 'a> {
         scoping: &'s oxc::semantic::Scoping,
+        ancestors: Vec<AstKind<'a>>,
         found: Option<&'static str>,
         direct_eval: bool,
         /// Each timer call's first argument.
@@ -2697,13 +2735,18 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
         arguments: bool,
         /// See `StringCode::replaces_promise`.
         replaces_promise: bool,
-        /// The bindings given a key the code computes or to `Object` or
-        /// `Reflect`, as the global object would be.
-        global_uses: FxHashSet<SymbolId>,
+        /// See `StringCode::global_let_goes`.
+        global_let_goes: Vec<&'a str>,
+        /// Each import binding's source.
+        imports: FxHashMap<SymbolId, &'a str>,
+        /// Bindings declared to a string, never reassigned, with it.
+        strings: FxHashMap<SymbolId, &'a str>,
         /// The bindings the module gives the global object.
         global_aliases: FxHashSet<SymbolId>,
         /// (from, to): what `from` holds, `to` is given.
         alias_flows: Vec<(SymbolId, SymbolId)>,
+        /// What each use of a binding would do were it the global object.
+        binding_effects: Vec<(SymbolId, Effect<'a>)>,
     }
     /// An argument as a timer's first would read it.
     enum Argument {
@@ -2736,7 +2779,14 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
             _ => None,
         })
     }
-    impl Reads<'_> {
+    fn reason(name: &str) -> &'static str {
+        match name {
+            "eval" => "reads eval",
+            "Function" => "reads Function",
+            _ => STRING_TIMER,
+        }
+    }
+    impl<'a> Reads<'_, 'a> {
         fn unbound(&self, id: &IdentifierReference<'_>) -> bool {
             symbol_of(self.scoping, id).is_none()
         }
@@ -2745,17 +2795,6 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
         fn bare_runner(&self, expr: &Expression<'_>) -> bool {
             matches!(expr.get_inner_expression(), Expression::Identifier(id)
                 if (RUNNERS.contains(&id.name.as_str()) || TIMERS.contains(&id.name.as_str())) && self.unbound(id))
-        }
-        fn record(&mut self, name: &str) {
-            self.found.get_or_insert(match name {
-                "eval" => "reads eval",
-                "Function" => "reads Function",
-                _ => STRING_TIMER,
-            });
-        }
-        fn global_object(&self, expression: &Expression<'_>) -> bool {
-            matches!(expression.get_inner_expression(), Expression::Identifier(object)
-                if GLOBAL_OBJECTS.contains(&object.name.as_str()) && self.unbound(object))
         }
         fn argument(&self, argument: &oxc::ast::ast::Argument<'_>) -> Argument {
             match argument.as_expression().map(Expression::get_inner_expression) {
@@ -2772,9 +2811,15 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
                 self.parameters.extend(plain_parameters(params).map(|(at, parameter)| (parameter, (symbol, at))));
             }
         }
-        /// Whether `expression` may be the global object
-        /// (`StringCode::replaces_promise`).
-        fn global_root(&self, expression: &Expression<'_>) -> Option<GlobalRoot> {
+        /// The key of `member` the walk reads: written, or a `const`'s.
+        fn key(&self, member: &ComputedMemberExpression<'a>) -> Option<&'a str> {
+            member.static_property_name().map(|name| name.as_str()).or_else(|| match member.expression.get_inner_expression() {
+                Expression::Identifier(id) => symbol_of(self.scoping, id).and_then(|symbol| self.strings.get(&symbol).copied()),
+                _ => None,
+            })
+        }
+        /// Whether `expression` may be the global object.
+        fn global_root(&self, expression: &Expression<'a>) -> Option<GlobalRoot> {
             match expression.get_inner_expression() {
                 Expression::Identifier(id) => match symbol_of(self.scoping, id) {
                     None => GLOBAL_NAMES.contains(&id.name.as_str()).then_some(GlobalRoot::Global),
@@ -2782,30 +2827,183 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
                 },
                 Expression::StaticMemberExpression(member) if GLOBAL_MEMBERS.contains(&member.property.name.as_str()) => Some(GlobalRoot::Global),
                 Expression::StaticMemberExpression(member) if GLOBAL_NAMES.contains(&member.property.name.as_str()) => self.global_root(&member.object),
-                Expression::ComputedMemberExpression(member)
-                    if member.static_property_name().is_some_and(|name| GLOBAL_NAMES.contains(&name.as_str())) =>
-                {
+                Expression::ComputedMemberExpression(member) if self.key(member).is_none_or(|key| GLOBAL_NAMES.contains(&key)) => {
                     self.global_root(&member.object)
                 }
                 _ => None,
             }
         }
-        /// Records `expression` given what the global object may be given.
-        fn global_use(&mut self, expression: &Expression<'_>) {
-            match self.global_root(expression) {
-                Some(GlobalRoot::Global) => self.replaces_promise = true,
-                Some(GlobalRoot::Binding(symbol)) => {
-                    self.global_uses.insert(symbol);
-                }
-                None => {}
-            }
-        }
         /// Records `bound`, each given `value`.
-        fn given(&mut self, bound: &[SymbolId], value: &Expression<'_>) {
+        fn given(&mut self, bound: &[SymbolId], value: &Expression<'a>) {
             match self.global_root(value) {
                 Some(GlobalRoot::Global) => self.global_aliases.extend(bound),
                 Some(GlobalRoot::Binding(from)) => self.alias_flows.extend(bound.iter().map(|to| (from, *to))),
                 None => {}
+            }
+        }
+        fn apply(&mut self, root: GlobalRoot, effect: Effect<'a>) {
+            match (root, effect) {
+                (GlobalRoot::Binding(symbol), effect) => self.binding_effects.push((symbol, effect)),
+                (GlobalRoot::Global, Effect::Reads(why)) => {
+                    self.found.get_or_insert(why);
+                }
+                (GlobalRoot::Global, Effect::Timer(first)) => self.timers.push(first),
+                (GlobalRoot::Global, Effect::Replaces) => self.replaces_promise = true,
+                (GlobalRoot::Global, Effect::LetGo(source)) => self.global_let_goes.push(source),
+            }
+        }
+        /// What the use at `span` of what `root` may be the global object
+        /// does. Its members by its names, and by a key the walk cannot read,
+        /// may be it too: a call of one by such a key may call a runner, and
+        /// a write by one may replace `Promise`. A member by any other name
+        /// is judged by name. Inspected, it lets nothing go; given to a
+        /// binding, `given` follows it; anywhere else it is let go.
+        fn global_use(&self, span: Span, mut root: GlobalRoot) -> Option<(GlobalRoot, Effect<'a>)> {
+            let mut up = self.ancestors.iter().rev();
+            let mut current = span;
+            let mut unread = false;
+            loop {
+                let effect = member_effect(current, up.clone());
+                let before = up.clone();
+                let (at, parent) = peel_wrappers(current, &mut up);
+                current = match parent? {
+                    AstKind::StaticMemberExpression(member) if member.object.span() == at => {
+                        let name = member.property.name.as_str();
+                        if GLOBAL_MEMBERS.contains(&name) {
+                            root = GlobalRoot::Global;
+                        } else if !GLOBAL_NAMES.contains(&name) {
+                            return self.named_use(member.span, name, up).map(|effect| (root, effect));
+                        }
+                        unread = false;
+                        member.span
+                    }
+                    AstKind::ComputedMemberExpression(member) if member.object.span() == at => match self.key(member) {
+                        Some(name) if !GLOBAL_NAMES.contains(&name) => return self.named_use(member.span, name, up).map(|effect| (root, effect)),
+                        key => {
+                            unread = key.is_none();
+                            member.span
+                        }
+                    },
+                    AstKind::NewExpression(new) if new.callee.span() == at => return unread.then_some((root, Effect::Reads(UNREAD_GLOBAL_CALL))),
+                    _ if effect.is_some() => {
+                        return match effect? {
+                            MemberEffect::Method => unread.then_some((root, Effect::Reads(UNREAD_GLOBAL_CALL))),
+                            MemberEffect::Assigned | MemberEffect::Deleted => unread.then_some((root, Effect::Replaces)),
+                        };
+                    }
+                    // What a choice or a sequence gives on is let go with it.
+                    AstKind::LogicalExpression(logical) if logical.operator == LogicalOperator::And && logical.left.span() == at => return None,
+                    AstKind::LogicalExpression(logical) => logical.span,
+                    AstKind::ConditionalExpression(conditional) if conditional.test.span() == at => return None,
+                    AstKind::ConditionalExpression(conditional) => conditional.span,
+                    AstKind::SequenceExpression(sequence) if sequence.expressions.last().is_some_and(|last| last.span() == at) => sequence.span,
+                    AstKind::AwaitExpression(waited) => waited.span,
+                    // `instanceof` hands it to the right side's
+                    // `Symbol.hasInstance`, unless that is a platform
+                    // constructor's.
+                    AstKind::BinaryExpression(binary)
+                        if binary.operator == BinaryOperator::Instanceof
+                            && !(binary.left.span() == at
+                                && matches!(binary.right.get_inner_expression(), Expression::Identifier(id)
+                                    if forwarding::NATIVE_CONSTRUCTORS.contains(&id.name.as_str()) && self.unbound(id))) =>
+                    {
+                        return Some((root, Effect::Replaces));
+                    }
+                    AstKind::UnaryExpression(_)
+                    | AstKind::BinaryExpression(_)
+                    | AstKind::SequenceExpression(_)
+                    | AstKind::ExpressionStatement(_)
+                    | AstKind::IfStatement(_)
+                    | AstKind::WhileStatement(_)
+                    | AstKind::DoWhileStatement(_)
+                    | AstKind::ForStatement(_)
+                    | AstKind::SwitchStatement(_) => return None,
+                    AstKind::TemplateLiteral(_) if !matches!(up.next(), Some(AstKind::TaggedTemplateExpression(_))) => return None,
+                    AstKind::VariableDeclarator(declarator) if declarator.init.as_ref().is_some_and(|init| init.span() == at) => return None,
+                    AstKind::AssignmentExpression(assignment)
+                        if assignment.right.span() == at
+                            && matches!(assignment.left, oxc::ast::ast::AssignmentTarget::AssignmentTargetIdentifier(_)) =>
+                    {
+                        return None;
+                    }
+                    _ => return Some((root, self.let_go(at, before))),
+                };
+            }
+        }
+        /// What the member `name` at `span` of the global object does: a
+        /// runner read, or a timer called with its first argument or read
+        /// any other way.
+        fn named_use<'b>(&self, span: Span, name: &str, mut up: impl Iterator<Item = &'b AstKind<'a>>) -> Option<Effect<'a>>
+        where
+            'a: 'b,
+        {
+            if RUNNERS.contains(&name) {
+                return Some(Effect::Reads(reason(name)));
+            }
+            if !TIMERS.contains(&name) {
+                return None;
+            }
+            Some(match peel_wrappers(span, &mut up) {
+                (at, Some(AstKind::CallExpression(call))) if call.callee.span() == at => {
+                    Effect::Timer(call.arguments.first().map_or(Argument::Other, |argument| self.argument(argument)))
+                }
+                _ => Effect::Reads(STRING_TIMER),
+            })
+        }
+        /// Where the global object let go at `span` goes: into a call rooted
+        /// at an import through what is written inline as an argument (a
+        /// property's value of an object literal, or the result of a
+        /// function or arrow), or anywhere else.
+        fn let_go<'b>(&self, span: Span, mut up: impl Iterator<Item = &'b AstKind<'a>>) -> Effect<'a>
+        where
+            'a: 'b,
+        {
+            let mut current = span;
+            loop {
+                current = match peel_wrappers(current, &mut up).1 {
+                    Some(AstKind::CallExpression(call)) if call.callee.span() != current => {
+                        return self.import_root(&call.callee).map_or(Effect::Replaces, Effect::LetGo);
+                    }
+                    Some(AstKind::NewExpression(new)) if new.callee.span() != current => {
+                        return self.import_root(&new.callee).map_or(Effect::Replaces, Effect::LetGo);
+                    }
+                    Some(AstKind::ObjectProperty(_)) => match up.next() {
+                        Some(object) => object.span(),
+                        None => return Effect::Replaces,
+                    },
+                    Some(AstKind::SpreadElement(spread)) => spread.span,
+                    // An arrow's expression body is its result.
+                    Some(AstKind::ArrowFunctionExpression(arrow)) => arrow.span,
+                    // A return is its function's result.
+                    Some(AstKind::ReturnStatement(_)) => loop {
+                        match up.next() {
+                            Some(AstKind::ArrowFunctionExpression(arrow)) => break arrow.span,
+                            Some(AstKind::Function(function)) => break function.span,
+                            Some(_) => {}
+                            None => return Effect::Replaces,
+                        }
+                    },
+                    _ => return Effect::Replaces,
+                };
+            }
+        }
+        /// The import `callee` is rooted at, as written.
+        fn import_root(&self, callee: &Expression<'a>) -> Option<&'a str> {
+            let mut root = callee;
+            loop {
+                root = match root.get_inner_expression() {
+                    Expression::StaticMemberExpression(member) => &member.object,
+                    Expression::ComputedMemberExpression(member) => &member.object,
+                    Expression::CallExpression(call) => &call.callee,
+                    Expression::Identifier(id) => return symbol_of(self.scoping, id).and_then(|symbol| self.imports.get(&symbol).copied()),
+                    _ => return None,
+                };
+            }
+        }
+        /// Judges the use at `span` of what `root` may be the global object.
+        fn judge(&mut self, span: Span, root: GlobalRoot) {
+            if let Some((root, effect)) = self.global_use(span, root) {
+                self.apply(root, effect);
             }
         }
         /// Whether every timer gets a function, the `seeds` among them: a
@@ -2840,47 +3038,51 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
             self.timers.iter().all(|first| first.is_function(&functions))
         }
     }
-    impl<'a> Visit<'a> for Reads<'_> {
+    impl<'a> Visit<'a> for Reads<'_, 'a> {
+        fn enter_node(&mut self, kind: AstKind<'a>) {
+            self.ancestors.push(kind);
+        }
+        fn leave_node(&mut self, _kind: AstKind<'a>) {
+            self.ancestors.pop();
+        }
         fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
             let value = id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).is_value());
             let name = id.name.as_str();
-            if value && (RUNNERS.contains(&name) || TIMERS.contains(&name)) && self.unbound(id) {
-                self.record(name);
+            let symbol = symbol_of(self.scoping, id);
+            if value && (RUNNERS.contains(&name) || TIMERS.contains(&name)) && symbol.is_none() {
+                self.found.get_or_insert(reason(name));
             }
-            if name == "Promise" && self.unbound(id) && id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).is_write()) {
+            if name == "Promise" && symbol.is_none() && id.reference_id.get().is_some_and(|id| self.scoping.get_reference(id).is_write()) {
                 self.replaces_promise = true;
             }
             self.arguments |= name == "arguments";
+            if value {
+                match symbol {
+                    // Only a variable, a parameter or a reassigned name is
+                    // ever given the global object (`given`).
+                    Some(symbol) if self.scoping.symbol_flags(symbol).is_variable() || self.scoping.symbol_is_mutated(symbol) => {
+                        self.judge(id.span, GlobalRoot::Binding(symbol));
+                    }
+                    Some(_) => {}
+                    None if GLOBAL_NAMES.contains(&name) => self.judge(id.span, GlobalRoot::Global),
+                    None => {}
+                }
+            }
         }
         fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
             if matches!(call.callee.get_inner_expression(), Expression::Identifier(id) if id.name == "eval" && self.unbound(id)) {
                 self.direct_eval = true;
             }
             // A timer called by name runs its first argument; read any other
-            // way, it may run a string.
-            let timer = match call.callee.get_inner_expression() {
-                Expression::Identifier(id) => TIMERS.contains(&id.name.as_str()) && self.unbound(id),
-                Expression::StaticMemberExpression(member) => {
-                    TIMERS.contains(&member.property.name.as_str()) && self.global_object(&member.object)
-                }
-                _ => false,
-            };
-            if timer {
+            // way, it may run a string. A member of the global object is
+            // judged by name (`global_use`).
+            if matches!(call.callee.get_inner_expression(), Expression::Identifier(id) if TIMERS.contains(&id.name.as_str()) && self.unbound(id)) {
                 let first = call.arguments.first().map_or(Argument::Other, |argument| self.argument(argument));
                 self.timers.push(first);
                 for argument in &call.arguments {
                     self.visit_argument(argument);
                 }
                 return;
-            }
-            // `Object` and `Reflect` write into the global object by keys
-            // the code may compute.
-            if matches!(call.callee.get_inner_expression(), Expression::StaticMemberExpression(member)
-                if matches!(&member.object, Expression::Identifier(object) if matches!(object.name.as_str(), "Object" | "Reflect") && self.unbound(object)))
-            {
-                for argument in call.arguments.iter().filter_map(|argument| argument.as_expression()) {
-                    self.global_use(argument);
-                }
             }
             if let Expression::Identifier(id) = &call.callee {
                 if let Some(symbol) = symbol_of(self.scoping, id) {
@@ -2905,6 +3107,14 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
                 self.executors.extend(plain_parameters(params).filter(|(at, _)| *at < 2).map(|(_, symbol)| symbol));
             }
             oxc::ast_visit::walk::walk_new_expression(self, new);
+        }
+        fn visit_import_declaration(&mut self, import: &oxc::ast::ast::ImportDeclaration<'a>) {
+            for specifier in import.specifiers.iter().flatten() {
+                if let Some(symbol) = specifier.local().symbol_id.get() {
+                    self.imports.insert(symbol, import.source.value.as_str());
+                }
+            }
+            oxc::ast_visit::walk::walk_import_declaration(self, import);
         }
         fn visit_export_declaration(&mut self, export: &oxc::ast::ast::ExportDeclaration<'a>) {
             match &export.declaration {
@@ -2937,8 +3147,13 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
         }
         fn visit_variable_declarator(&mut self, declarator: &oxc::ast::ast::VariableDeclarator<'a>) {
             if let (oxc::ast::ast::BindingPattern::BindingIdentifier(id), Some(init)) = (&declarator.id, &declarator.init) {
-                if let (Some(symbol), Some((params, unnamed))) = (id.symbol_id.get(), function_params(init)) {
-                    self.function(symbol, unnamed.then_some(params));
+                if let Some(symbol) = id.symbol_id.get() {
+                    if let Some((params, unnamed)) = function_params(init) {
+                        self.function(symbol, unnamed.then_some(params));
+                    }
+                    if let Some(string) = static_string(init.get_inner_expression()).filter(|_| !self.scoping.symbol_is_mutated(symbol)) {
+                        self.strings.insert(symbol, string);
+                    }
                 }
             }
             if let Some(init) = declarator.init.as_ref().filter(|init| self.global_root(init).is_some()) {
@@ -2949,17 +3164,11 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
             oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
         }
         fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
-            let name = member.property.name.as_str();
-            if (RUNNERS.contains(&name) || TIMERS.contains(&name)) && self.global_object(&member.object) {
-                self.record(name);
+            // A member that holds the global object, of what is none itself.
+            if GLOBAL_MEMBERS.contains(&member.property.name.as_str()) && self.global_root(&member.object).is_none() {
+                self.judge(member.span, GlobalRoot::Global);
             }
             oxc::ast_visit::walk::walk_static_member_expression(self, member);
-        }
-        fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
-            if member.static_property_name().is_none() {
-                self.global_use(&member.object);
-            }
-            oxc::ast_visit::walk::walk_computed_member_expression(self, member);
         }
         fn visit_assignment_expression(&mut self, assignment: &oxc::ast::ast::AssignmentExpression<'a>) {
             if let oxc::ast::ast::AssignmentTarget::AssignmentTargetIdentifier(id) = &assignment.left {
@@ -3002,6 +3211,7 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
     }
     let mut reads = Reads {
         scoping,
+        ancestors: Vec::new(),
         found: None,
         direct_eval: false,
         timers: Vec::new(),
@@ -3012,16 +3222,24 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
         exported: FxHashSet::default(),
         arguments: false,
         replaces_promise: false,
-        global_uses: FxHashSet::default(),
+        global_let_goes: Vec::new(),
+        imports: FxHashMap::default(),
+        strings: FxHashMap::default(),
         global_aliases: FxHashSet::default(),
         alias_flows: Vec::new(),
+        binding_effects: Vec::new(),
     };
     reads.visit_program(program);
+    // What a use of a binding that holds the global object does, it does.
     if !reads.global_aliases.is_empty() {
         while let Some(&(_, to)) = reads.alias_flows.iter().find(|(from, to)| reads.global_aliases.contains(from) && !reads.global_aliases.contains(to)) {
             reads.global_aliases.insert(to);
         }
-        reads.replaces_promise |= reads.global_uses.iter().any(|symbol| reads.global_aliases.contains(symbol));
+        for (symbol, effect) in std::mem::take(&mut reads.binding_effects) {
+            if reads.global_aliases.contains(&symbol) {
+                reads.apply(GlobalRoot::Global, effect);
+            }
+        }
     }
     reads.replaces_promise |= scoping.get_root_binding("Promise".into()).is_some_and(|symbol| {
         let flags = scoping.symbol_flags(symbol);
@@ -3041,7 +3259,8 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
             reads.found = Some(STRING_TIMER);
         }
     }
-    StringCode { reads: reads.found, direct_eval: reads.direct_eval, trusts_promise, replaces_promise: reads.replaces_promise }
+    let global_let_goes = reads.global_let_goes.iter().collect::<std::collections::BTreeSet<_>>().into_iter().map(|source| source.to_string()).collect();
+    StringCode { reads: reads.found, direct_eval: reads.direct_eval, trusts_promise, replaces_promise: reads.replaces_promise, global_let_goes }
 }
 
 /// How a module lets a loader escape, which can load any module. The

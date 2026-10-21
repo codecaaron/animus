@@ -366,13 +366,13 @@ fn number(value: f64) -> Result<StaticValue, BailError> {
 /// A string literal's text as JavaScript holds it. One with a lone surrogate
 /// has none: oxc writes its value encoded (`\u{FFFD}` and the code unit in
 /// hex), which no static text may stand for.
-pub(crate) fn literal_string<'a>(literal: &'a oxc::ast::ast::StringLiteral<'_>) -> Option<&'a str> {
+pub(crate) fn literal_string<'a>(literal: &oxc::ast::ast::StringLiteral<'a>) -> Option<&'a str> {
     (!literal.lone_surrogates).then(|| literal.value.as_str())
 }
 
 /// A template element's cooked text, as `literal_string` reads a string's:
 /// none for one with a lone surrogate, or with an invalid escape.
-pub(crate) fn cooked_text<'a>(quasi: &'a oxc::ast::ast::TemplateElement<'_>) -> Option<&'a str> {
+pub(crate) fn cooked_text<'a>(quasi: &oxc::ast::ast::TemplateElement<'a>) -> Option<&'a str> {
     if quasi.lone_surrogates {
         return None;
     }

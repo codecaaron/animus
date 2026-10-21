@@ -6468,9 +6468,14 @@ fn names_context_provider(
 }
 
 /// A timer proven through a `Promise` executor (`StringCode::trusts_promise`)
-/// may run a string once any module may replace the global `Promise`.
-pub(crate) fn distrust_promise(files: &mut BTreeMap<String, FileFacts>) {
-    if files.values().any(|ff| ff.replaces_promise) {
+/// may run a string once any module may replace the global `Promise`: one
+/// that does itself, or lets the global object go to a call rooted at an
+/// import of code the analysis reads.
+pub(crate) fn distrust_promise(files: &mut BTreeMap<String, FileFacts>, inputs: &CssInputs) {
+    let replaced = files.iter().any(|(file, ff)| {
+        ff.replaces_promise || ff.global_let_goes.iter().any(|source| import_reads_code(file, source, files, inputs))
+    });
+    if replaced {
         for ff in files.values_mut().filter(|ff| ff.trusts_promise) {
             ff.dynamic_code.get_or_insert(crate::usage_facts::STRING_TIMER);
         }
@@ -12481,7 +12486,7 @@ mod tests {
             );
             order.push(path.to_string());
         }
-        distrust_promise(&mut files);
+        distrust_promise(&mut files, inputs);
         let links = crate::link::ProjectLinks::link(&files, inputs);
         judge_object_handoffs(&mut files, inputs, &links);
         run_with_system_floor(&files, &order, inputs, "animus", total_system_floor)
@@ -14924,9 +14929,18 @@ const Render = ({ children }) => { document.body.onclick = t; return <div>{child
             ("const Render = ({ children }) => { const k = document.body.id; while (({})[k]) break; do {} while (({})[k]); for (; ({})[k]; ) break; return <div>{children}</div>; };", "", "", false),
             ("const Render = ({ children }) => { if (({})[document.body.id][document.body.id]) {} return <div>{children}</div>; };", "", "", false),
             ("const Render = ({ children }) => { ({})[document.body.id].p = 12; return <div>{children}</div>; };", "", "", true),
-            ("const Render = ({ children }) => { const label = ({})[document.body.id].toLowerCase(); return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { const label = ({})[document.body.id].toLowerCase(); return <div>{children}</div>; };", "", "", true),
             ("const Render = ({ children }) => { ([])[document.body.id].push(pad); return <div>{children}</div>; };", "", "", true),
-            ("const Render = ({ children }) => { const label = ({})[document.body.id]['toLowerCase'](); return <div>{children}</div>; };", "", "", false),
+            ("const Render = ({ children }) => { const label = ({})[document.body.id]['toLowerCase'](); return <div>{children}</div>; };", "", "", true),
+            // Any method called on it may return it or write into it, and
+            // `instanceof` hands it to the right side's `Symbol.hasInstance`
+            // unless that is a platform constructor's.
+            ("const Render = ({ children }) => { const P = ({})[document.body.id].valueOf(); P.p = 12; return <div>{children}</div>; };", "", "", true),
+            ("function inspect(o) { const P = o.valueOf(); P.p = 12; }\nconst Render = ({ children }) => { inspect(({})[document.body.id]); return <div>{children}</div>; };", "", "", true),
+            ("const C = { [Symbol.hasInstance](o) { o.p = 12; return true; } };\nconst Render = ({ children }) => { if (({})[document.body.id] instanceof C) {} return <div>{children}</div>; };", "", "", true),
+            ("const C = { [Symbol.hasInstance](o) { o.p = 12; return true; } };\nfunction check(o) { return o instanceof C; }\nconst Render = ({ children }) => { check(({})[document.body.id]); return <div>{children}</div>; };", "", "", true),
+            ("const Render = ({ children }) => { if (({})[document.body.id] instanceof Array) {} return <div>{children}</div>; };", "", "", false),
+            ("const Array = { [Symbol.hasInstance](o) { o.p = 12; return true; } };\nconst Render = ({ children }) => { if (({})[document.body.id] instanceof Array) {} return <div>{children}</div>; };", "", "", true),
             ("const n = Array.prototype.push(1) + 1;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("function read(o) { if (o === undefined || Array.isArray(o) || !(o instanceof Object)) return; for (const [k] of Object.entries(o)) {} }\nread(({})[document.body.id]);\nconst Render = ({ children }) => <div>{children}</div>;", "", "", false),
             ("const k = document.body.id;\nconst n = Object.keys(({})[k]).length + Object.values(({})[k]).length + Object.entries(({})[k]).length;\nconst t = [Array.isArray(({})[k]), String(({})[k]), Number(({})[k]), Boolean(({})[k])];\nconst Render = ({ children }) => <div>{children}</div>;", "", "", false),
@@ -18945,6 +18959,39 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         ] {
             assert_eq!(&kept_options(&[("r.tsx", RECIPE), ("app.tsx", app), ("evil.tsx", evil)]), want, "{evil}");
         }
+        // A timer or a runner read off any name of the global object, by a
+        // key the walk reads, or through a binding that holds it, runs a
+        // string; a call of its member by a key the walk cannot read may.
+        // A module that reads `arguments` proves no timer.
+        let runs_string = |source: &str| {
+            let counter = ParseCounter::new(0);
+            let mut files: BTreeMap<String, FileFacts> = [("evil.tsx", source)]
+                .into_iter()
+                .map(|(path, source)| (path.to_string(), extract_file_facts_with_prefix(&OwnedAst::parse(path.to_string(), source.to_string(), &counter), "animus")))
+                .collect();
+            distrust_promise(&mut files, &test_inputs());
+            files["evil.tsx"].dynamic_code.is_some()
+        };
+        for (evil, runs) in [
+            ("export const run = (s) => window['setTimeout'](s, 0);\n", true),
+            ("export const run = (s) => top.setTimeout(s, 0);\n", true),
+            ("export const run = (s) => window.self.setTimeout(s, 0);\n", true),
+            ("export const run = (s) => parent.frames.setInterval(s, 0);\n", true),
+            ("const key = 'setTimeout';\nexport const run = (s) => window[key](s, 0);\n", true),
+            ("export const run = (s, key) => window[key](s, 0);\n", true),
+            ("export const run = (s) => window['eval'](s);\n", true),
+            ("export const run = (s) => new globalThis['Function'](s)();\n", true),
+            ("const w = window;\nexport const run = (s) => w.setTimeout(s, 0);\n", true),
+            ("export const run = (doc, s) => doc.defaultView.setTimeout(s, 0);\n", true),
+            ("function later(fn) { arguments[0] = globalThis.code; setTimeout(fn, 0); }\nlater(() => {});\n", true),
+            ("export const wait = () => new Promise(function (cb) { arguments[0] = globalThis.code; setTimeout(cb, 0); });\n", true),
+            ("export const run = () => window['setTimeout'](() => {}, 0);\n", false),
+            ("export const run = () => top.setTimeout(() => {}, 0);\n", false),
+            ("export const has = (name) => typeof window[name] !== 'undefined';\n", false),
+            ("const key = 'scrollTo';\nexport const home = () => window[key](0, 0);\n", false),
+        ] {
+            assert_eq!(runs_string(evil), runs, "{evil}");
+        }
         // So does any module that may replace the global `Promise`: the timer
         // that trusts it may run a string.
         let wait = "export const wait = () => new Promise((resolve) => setTimeout(resolve, 0));\n";
@@ -18954,7 +19001,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 .into_iter()
                 .map(|(path, source)| (path.to_string(), extract_file_facts_with_prefix(&OwnedAst::parse(path.to_string(), source.to_string(), &counter), "animus")))
                 .collect();
-            distrust_promise(&mut files);
+            distrust_promise(&mut files, &test_inputs());
             files["wait.tsx"].dynamic_code.is_some()
         };
         for (patch, replaces) in [
@@ -18976,7 +19023,22 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("export const swap = (target, value) => { target['Promise'] = value; };\n", true),
             ("export const swap = (target, value) => { target[`Promise`] = value; };\n", true),
             ("export const swap = (name, value) => Object.defineProperty(globalThis, name, { value });\n", true),
-            ("export const scroller = () => window;\n", false),
+            ("export const scroller = () => window;\n", true),
+            // The global object let go anywhere but into a call rooted at
+            // an import of code outside the analysis may meet a write by a
+            // key the walk cannot read.
+            ("function replace(target) { target['Prom' + 'ise'] = class { constructor(run) { run(globalThis.code); } }; }\nreplace(window);\n", true),
+            ("export const box = { w: window };\n", true),
+            ("const box = {};\nbox.w = window;\n", true),
+            ("const w = window;\nexport const get = () => w;\n", true),
+            ("Object['assign'](window, { ['Prom' + 'ise']: class { constructor(run) { run(globalThis.code); } } });\n", true),
+            ("Reflect.set(window, 'Prom' + 'ise', class { constructor(run) { run(globalThis.code); } });\n", true),
+            ("import { wait } from './wait';\nwait(window);\n", true),
+            ("import { createRouter } from '@tanstack/react-router';\nexport const router = createRouter({ getElement: () => window });\n", false),
+            ("export const has = (name) => typeof window[name] !== 'undefined';\n", false),
+            ("const key = 'title';\nwindow[key] = 'x';\n", false),
+            ("const C = { [Symbol.hasInstance](target) { target['Prom' + 'ise'] = class { constructor(run) { run(globalThis.code); } }; return true; } };\nwindow instanceof C;\n", true),
+            ("export const framed = () => window instanceof Window;\n", false),
         ] {
             assert_eq!(timer_runs_string(patch), replaces, "{patch}");
             if replaces {

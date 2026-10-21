@@ -1248,7 +1248,7 @@ impl ExtractEngine {
                 (ast.path.clone(), facts::structural_facts(ast, lowered, objects))
             })
             .collect();
-        analyze_css::distrust_promise(&mut structural_by_file);
+        analyze_css::distrust_promise(&mut structural_by_file, &self.opts.css_inputs);
         clock.mark("lowering");
         let links = ProjectLinks::of_records(&lowered_by_file, |lowered| &*lowered.record, &self.opts.css_inputs);
         // A hand-off to a function that does more than read is a use like
@@ -3126,6 +3126,27 @@ export const App = () => <Box tone="red" />;
                 "const Make = Function;\nawait Make(\"return import('./tokens.js')\")().then((m) => { m.pad.padding = 9; });",
                 "{ ...pad }",
             ),
+            // A timer runs a string however the code names it.
+            (
+                "a computed timer member loads the module",
+                "window['setTimeout'](\"import('./tokens.js').then((m) => { m.pad.padding = 9; })\", 0);",
+                "{ ...pad }",
+            ),
+            (
+                "top's timer loads the module",
+                "top.setTimeout(\"import('./tokens.js').then((m) => { m.pad.padding = 9; })\", 0);",
+                "{ ...pad }",
+            ),
+            (
+                "a timer off a chain of the global object's names loads the module",
+                "window.self.setTimeout(\"import('./tokens.js').then((m) => { m.pad.padding = 9; })\", 0);",
+                "{ ...pad }",
+            ),
+            (
+                "a Promise replaced through a parameter hands its timer a string",
+                "function replace(target) { target['Prom' + 'ise'] = class { constructor(run) { run(\"import('./tokens.js').then((m) => { m.pad.padding = 9; })\"); } }; }\nreplace(window);\nnew Promise((cb) => setTimeout(cb, 0));",
+                "{ ...pad }",
+            ),
             // `typeof` and `instanceof` run what their member's object runs.
             (
                 "a typeof operand's object loads the module",
@@ -3169,6 +3190,22 @@ export const App = () => <Box tone="red" />;
             let out: serde_json::Value = serde_json::from_str(&engine.analyze_full(files.to_string(), None).unwrap()).unwrap();
             assert!(!out["css"].as_str().unwrap_or_default().contains("padding"), "{row}: {}", out["css"]);
         }
+        // A read of the global object the code only inspects replaces
+        // nothing, so the timer its executor proves stays proven.
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let files = serde_json::json!([
+            { "path": "tokens.js", "source": "export const pad = { padding: 4 };\n" },
+            {
+                "path": "inspect.js",
+                "source": "export const has = (name) => typeof window[name] !== 'undefined';\nexport const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\n",
+            },
+            {
+                "path": "reader.tsx",
+                "source": "import './inspect.js';\nimport { pad } from './tokens.js';\nexport const C = ds.styles({ ...pad }).asElement('div');\nexport const App = () => <C />;\n",
+            },
+        ]);
+        let out: serde_json::Value = serde_json::from_str(&engine.analyze_full(files.to_string(), None).unwrap()).unwrap();
+        assert!(out["css"].as_str().unwrap_or_default().contains("padding"), "an inspected global read: {}", out["css"]);
         // A concise arrow returns the member it evaluates too: a write
         // through the call's result changes it.
         let member_returns = [
