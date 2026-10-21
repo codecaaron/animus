@@ -3160,8 +3160,9 @@ pub(crate) fn returned_function(name: &str, depth: usize) -> String {
 /// function expression), how each parameter treats its object: see
 /// `ParamReading`. So too for the function a call of one returns as its only
 /// result (`() => (parts) => parts`), keyed `name()`, at most four calls
-/// deep. A destructuring, rest, default or other pattern counts as unsafe,
-/// and so does every parameter of a function something reassigns.
+/// deep. Every parameter of a function whose parameter list has a default,
+/// a destructuring or a rest counts as unsafe, and so does every parameter
+/// of a function something reassigns.
 pub(crate) fn function_param_readings(
     program: &Program<'_>,
     scoping: &Scoping,
@@ -3241,11 +3242,17 @@ pub(crate) fn function_param_readings(
             reading.push(ParamReading::Unsafe);
         }
         // A function that reads its own `arguments` object reaches every
-        // argument past its parameters.
+        // argument past its parameters. A parameter list that is not plain
+        // names runs code before the body, which may do so without naming
+        // a parameter (`ignored = arguments[0].x = 1`): every parameter of
+        // such a function is unsafe.
         let reassigned = scoping
             .get_root_binding(name.as_str().into())
             .is_some_and(|symbol| scoping.get_resolved_references(symbol).any(oxc::semantic::Reference::is_write));
-        if reassigned || function.body.is_some_and(|body| !function.arrow && reads_own_arguments(body, scoping)) {
+        if reassigned
+            || !simple_params(formal)
+            || function.body.is_some_and(|body| !function.arrow && reads_own_arguments(body, scoping))
+        {
             reading.iter_mut().for_each(|param| *param = ParamReading::Unsafe);
             unsafe_functions.insert(key.clone());
         }

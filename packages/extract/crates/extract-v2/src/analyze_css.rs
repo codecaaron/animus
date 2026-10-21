@@ -20161,6 +20161,13 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             ("function touch(o) { const q = o; q.Box = () => null; }\ntouch(Fam);\n".to_string(), Some("touch")),
             ("function run(o) { o.Box(); }\nrun(Fam);\n".to_string(), Some("run")),
             ("function touch(o) { arguments[0].Box = () => null; }\ntouch(Fam);\n".to_string(), Some("touch")),
+            // A default runs before the body, and `arguments` reaches the
+            // object without naming the parameter.
+            ("function touch(o, ignored = (arguments[0].Box = () => null)) {}\ntouch(Fam);\n".to_string(), Some("touch")),
+            (
+                "function same(o, ignored = (arguments[0].Box = () => null)) { return o; }\nexport const held = same(Fam);\n".to_string(),
+                Some("same"),
+            ),
             ("function same(o) { return o; }\nsame(Fam).Box = () => null;\n".to_string(), Some("same")),
             (
                 "function pass(o) { write(o); }\nfunction write(o) { o.Box = () => null; }\npass(Fam);\n".to_string(),
