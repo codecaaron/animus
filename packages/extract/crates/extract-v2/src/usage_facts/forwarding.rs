@@ -780,7 +780,7 @@ impl<'s> Module<'s> {
             .untraced_stores
             .iter()
             .filter_map(|(key, stores)| {
-                stores.iter().filter(|(_, binding)| may_hold_prototype(*binding)).map(|(at, _)| *at).min().map(|at| (at, key.clone()))
+                stores.iter().filter(|(_, binding)| binding.is_none_or(&may_hold_prototype)).map(|(at, _)| *at).min().map(|at| (at, key.clone()))
             })
             .collect();
         untraced_stores.sort_unstable();
@@ -1210,10 +1210,11 @@ struct Declarations<'r> {
     primitive_functions: FxHashSet<SymbolId>,
     /// See `FileFacts::keyed_stores`.
     keyed_stores: Vec<(u32, String)>,
-    /// Static-key stores into a binding, or a static chain off one, by key:
-    /// each store's start and binding, `FileFacts::untraced_stores` unless
-    /// the binding holds what the module built.
-    untraced_stores: FxHashMap<String, Vec<(u32, SymbolId)>>,
+    /// Static-key stores into a binding, a static chain off one or a
+    /// global, by key: each store's start and, for a direct store into a
+    /// binding, the binding, `FileFacts::untraced_stores` unless it holds
+    /// what the module built.
+    untraced_stores: FxHashMap<String, Vec<(u32, Option<SymbolId>)>>,
     /// Where a computed read's value goes into a const (`Consumption`): the
     /// read's start, and the const.
     bound_reads: Vec<(u32, SymbolId)>,
@@ -1652,27 +1653,37 @@ impl<'r> Declarations<'r> {
             // may be a prototype every props object inherits counts where a
             // render reads that key.
             if let (Some(name), false, Some(MemberEffect::Assigned)) = (name, computed, effect) {
-                if !self.unshared(object) {
-                    if self.maybe_prototype(object) {
-                        self.keyed_stores.push((span.start, name.to_string()));
-                    } else if let Some(binding) = self.store_root(object) {
-                        match self.untraced_stores.get_mut(name) {
-                            Some(stores) => stores.push((span.start, binding)),
-                            None => {
-                                self.untraced_stores.insert(name.to_string(), vec![(span.start, binding)]);
-                            }
-                        }
-                    }
+                self.store_key(span.start, object, name);
+            }
+        }
+    }
+
+    /// Records a store by the static `key`, at `at`, into `object`: into one
+    /// that may be a prototype, a keyed store; into a binding, a static
+    /// chain off one or a global, an untraced store (`store_root`).
+    fn store_key(&mut self, at: u32, object: &Expression<'_>, key: &str) {
+        if !self.unshared(object) && self.maybe_prototype(object) {
+            self.keyed_stores.push((at, key.to_string()));
+        } else if let Some(binding) = self.store_root(object) {
+            match self.untraced_stores.get_mut(key) {
+                Some(stores) => stores.push((at, binding)),
+                None => {
+                    self.untraced_stores.insert(key.to_string(), vec![(at, binding)]);
                 }
             }
         }
     }
 
-    /// The binding a static chain starts from (`box` in `box.v`).
-    fn store_root(&self, object: &Expression<'_>) -> Option<SymbolId> {
+    /// What decides whether a store into `object` may be one onto a
+    /// prototype: the binding, for a direct store into one (`box.v`), whose
+    /// own value it judges; nothing (`None`), for a store through a member
+    /// (`box.inner.v`, whose value no freshness of `box` proves) or into a
+    /// global, which an alias of the global object may have given any
+    /// value.
+    fn store_root(&self, object: &Expression<'_>) -> Option<Option<SymbolId>> {
         match unwrap_type_assertions(object) {
-            Expression::Identifier(id) => self.symbol(id),
-            Expression::StaticMemberExpression(member) => self.store_root(&member.object),
+            Expression::Identifier(id) => Some(self.symbol(id)),
+            Expression::StaticMemberExpression(_) => Some(None),
             _ => None,
         }
     }
@@ -2622,14 +2633,14 @@ impl<'a> Visit<'a> for Declarations<'a> {
                             if (object.name.as_str(), name) == ("Object", "assign")
                                 && call.arguments.iter().skip(1).all(|source| source.as_expression().is_some_and(|source| self.no_trusted_callable(source))) =>
                         {
-                            if !self.unshared(target) && self.maybe_prototype(target) {
-                                for source in call.arguments.iter().skip(1).filter_map(|argument| argument.as_expression()) {
-                                    if let Expression::ObjectExpression(literal) = unwrap_type_assertions(source) {
-                                        let keys = literal.properties.iter().filter_map(|property| match property {
-                                            ObjectPropertyKind::ObjectProperty(property) => property.key.static_name(),
-                                            ObjectPropertyKind::SpreadProperty(_) => None,
-                                        });
-                                        self.keyed_stores.extend(keys.map(|key| (call.span.start, key.to_string())));
+                            for source in call.arguments.iter().skip(1).filter_map(|argument| argument.as_expression()) {
+                                if let Expression::ObjectExpression(literal) = unwrap_type_assertions(source) {
+                                    for property in &literal.properties {
+                                        if let ObjectPropertyKind::ObjectProperty(property) = property {
+                                            if let Some(key) = property.key.static_name() {
+                                                self.store_key(call.span.start, target, &key);
+                                            }
+                                        }
                                     }
                                 }
                             }

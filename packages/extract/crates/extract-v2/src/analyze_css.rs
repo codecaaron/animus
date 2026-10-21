@@ -15515,16 +15515,26 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             ("import { patch } from './b';\ndocument.onclick = () => {};\npatch(Object);\n", "export function patch(root) {\n  root['prototype']['size'] = 'lg';\n  root['prototype']['loading'] = true;\n}\n", true),
             // A store by an option's name through a binding whose value the
             // analysis does not follow (a call result, a parameter, an
-            // import, a `let`) may be one onto the prototype; one into what
-            // the module built, React's refs included, or a global, is not.
+            // import, a `let`, a global, or a member of anything, whose value
+            // no freshness of its holder proves) may be one onto the
+            // prototype, by assignment or `Object.assign`; one directly into
+            // what the module built, React's refs included, is not.
             ("import { protoOf } from 'outside';\nconst proto = protoOf();\nproto.size = 'lg';\nproto.loading = true;\n", "", true),
             ("export function set(target) {\n  target.size = 'lg';\n  target.loading = true;\n}\n", "", true),
             ("import { protoOf } from 'outside';\nlet box = {};\nbox = protoOf();\nbox.size = 'lg';\n", "", true),
             ("import { protoOf } from 'outside';\nconst holder = protoOf();\nholder.inner.loading = true;\n", "", true),
-            ("someGlobal.size = 'lg';\n", "", false),
+            ("someGlobal.size = 'lg';\n", "", true),
             ("import { theme } from 'outside';\ntheme.loading = true;\n", "", true),
             ("import { protoOf } from 'outside';\nconst useRef = protoOf;\nconst ref = useRef();\nref.loading = true;\n", "", true),
             ("import { useRef } from 'react';\nimport { protoOf } from 'outside';\nexport const Probe = () => { let ref = useRef(null); ref = protoOf(); ref.loading = true; return null; };\n", "", true),
+            ("import { createRef } from 'react';\nimport { protoOf } from 'outside';\nconst ref = createRef();\nref.current = protoOf();\nref.current.size = 'lg';\nref.current.loading = true;\n", "", true),
+            ("import { useRef } from 'react';\nimport { protoOf } from 'outside';\nexport const Probe = () => { const ref = useRef(protoOf()); ref.current.size = 'lg'; ref.current.loading = true; return null; };\n", "", true),
+            ("import { protoOf } from 'outside';\nconst box = { inner: protoOf() };\nbox.inner.size = 'lg';\nbox.inner.loading = true;\n", "", true),
+            ("import { protoOf } from 'outside';\nfunction holder() {}\nholder.inner = protoOf();\nholder.inner.size = 'lg';\nholder.inner.loading = true;\n", "", true),
+            ("import { protoOf } from 'outside';\nconst p = protoOf();\nObject.assign(p, { size: 'lg', loading: true });\n", "", true),
+            ("import { protoOf } from 'outside';\nconst { inner: p } = protoOf();\nObject.assign(p, { size: 'lg', loading: true });\n", "", true),
+            ("import { protoOf } from 'outside';\nconst w = document.defaultView;\nw.p = protoOf();\np.size = 'lg';\np.loading = true;\n", "", true),
+            ("const box = {};\nObject.assign(box, { size: 'lg', loading: true });\n", "", false),
             ("const box = {};\nbox.size = 'lg';\nbox.loading = true;\n", "", false),
             ("import { useRef } from 'react';\nexport const Probe = () => { const ref = useRef({}); ref.loading = true; return null; };\n", "", false),
             ("import { createRef } from 'react';\nconst ref = createRef();\nref.size = 'lg';\n", "", false),
