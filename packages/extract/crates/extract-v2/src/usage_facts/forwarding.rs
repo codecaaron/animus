@@ -284,6 +284,11 @@ const ARRAY_CALLBACK_METHODS: [(&str, usize); 12] = [
     ("flatMap", 2), ("forEach", 2), ("map", 2), ("some", 2), ("reduce", 3), ("reduceRight", 3),
 ];
 
+/// The built-in methods that write into the receiver they are called on,
+/// a prototype included; `__defineGetter__` and its kin are writes of
+/// their own (`written_into`).
+const RECEIVER_WRITERS: [&str; 9] = ["push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin"];
+
 /// The array methods that store what they get in the array, and call
 /// nothing.
 const ARRAY_WRITE_METHODS: [&str; 4] = ["push", "unshift", "splice", "fill"];
@@ -689,6 +694,7 @@ impl<'s> Module<'s> {
         let react_imports = sources.iter().filter(|(_, source)| REACT_MODULES.contains(&source.as_str())).map(|(symbol, _)| *symbol).collect();
         let mut declarations = Declarations::new(scoping, &react, react_imports, &slot_renders);
         declarations.visit_program(program);
+        declarations.settle_bound_reads();
         let uses = declarations.decided_uses();
         let arrays = Arrays::of(scoping, &declarations, &uses, &sources, &namespaces, exported);
         // A class nothing outside can reshape: unexported (`exported` names
@@ -1188,6 +1194,13 @@ struct Declarations<'r> {
     primitive_functions: FxHashSet<SymbolId>,
     /// See `FileFacts::keyed_stores`.
     keyed_stores: Vec<(u32, String)>,
+    /// Where a computed read's value goes into a const (`Consumption`): the
+    /// read's start, and the const.
+    bound_reads: Vec<(u32, SymbolId)>,
+    /// Each const a use of which initializes another: (used, initialized).
+    const_flows: Vec<(SymbolId, SymbolId)>,
+    /// The consts a use of which may let the value go.
+    escaping_consts: FxHashSet<SymbolId>,
     /// See `FileFacts::rewrites_object`.
     rewrites_object: bool,
     /// The bindings importing from React's modules, written or not.
@@ -1263,6 +1276,9 @@ impl<'r> Declarations<'r> {
             primitive_consts: FxHashSet::default(),
             primitive_functions: FxHashSet::default(),
             keyed_stores: Vec::new(),
+            bound_reads: Vec::new(),
+            const_flows: Vec::new(),
+            escaping_consts: FxHashSet::default(),
             rewrites_object: false,
             react_imports,
             uses: vec![0; scoping.symbols_len()],
@@ -1338,22 +1354,109 @@ impl<'r> Declarations<'r> {
         }
     }
 
-    /// Whether the member at `span` is what a logical assignment (`||=`,
-    /// `&&=`, `??=`) writes, and its result, the member's value when it does
-    /// not write, is used.
-    fn logical_result_used(&self, span: Span) -> bool {
-        let mut up = self.ancestors.iter().rev();
-        match super::peel_wrappers(span, &mut up) {
-            (current, Some(AstKind::AssignmentExpression(assignment))) if assignment.left.span() == current && assignment.operator.is_logical() => {
-                !matches!(super::peel_wrappers(assignment.span, &mut up).1, Some(AstKind::ExpressionStatement(_)))
+    /// The logical assignment (`||=`, `&&=`, `??=`) that writes the member
+    /// at `span`, and gives what the member held where it does not write:
+    /// its span, and how many ancestors up it is.
+    fn logical_assignment(&self, span: Span) -> Option<(Span, usize)> {
+        let mut current = span;
+        for (depth, kind) in self.ancestors.iter().rev().enumerate() {
+            match kind {
+                kind if is_erased_wrapper(kind) => current = kind.span(),
+                AstKind::AssignmentExpression(assignment) if assignment.left.span() == current && assignment.operator.is_logical() => {
+                    return Some((assignment.span, depth + 1));
+                }
+                _ => return None,
             }
-            _ => false,
+        }
+        None
+    }
+
+    /// Where the value at `span`, a child of the last ancestor, goes: only
+    /// consumed (read by an operator, a test, a template no tag gets or a
+    /// member read, also through `??` or `||`), into an unexported const
+    /// whose uses decide, or let go.
+    fn consumption(&self, span: Span, skip: usize) -> Consumption {
+        use oxc::syntax::operator::LogicalOperator;
+        let mut up = self.ancestors.iter().rev().skip(skip);
+        let mut current = span;
+        loop {
+            let (at, parent) = super::peel_wrappers(current, &mut up);
+            current = match parent {
+                Some(AstKind::LogicalExpression(logical)) if matches!(logical.operator, LogicalOperator::Coalesce | LogicalOperator::Or) => logical.span,
+                // A member of a prototype read is no prototype: one named for
+                // it is a prototype use of its own.
+                Some(AstKind::StaticMemberExpression(member)) if member.object.span() == at => {
+                    return Self::read_unless_written(member.span, Some(member.property.name.as_str()), up);
+                }
+                Some(AstKind::ComputedMemberExpression(member)) if member.object.span() == at => {
+                    return Self::read_unless_written(member.span, member.static_property_name().map(|name| name.as_str()), up);
+                }
+                // A loop's other expressions, and a statement's, are discarded.
+                Some(
+                    AstKind::ExpressionStatement(_)
+                    | AstKind::BinaryExpression(_)
+                    | AstKind::IfStatement(_)
+                    | AstKind::WhileStatement(_)
+                    | AstKind::DoWhileStatement(_)
+                    | AstKind::ForStatement(_),
+                ) => return Consumption::Consumed,
+                Some(AstKind::UnaryExpression(unary))
+                    if matches!(
+                        unary.operator,
+                        UnaryOperator::Typeof | UnaryOperator::LogicalNot | UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus | UnaryOperator::BitwiseNot
+                    ) =>
+                {
+                    return Consumption::Consumed;
+                }
+                Some(AstKind::ConditionalExpression(conditional)) if conditional.test.span() == at => return Consumption::Consumed,
+                Some(AstKind::TemplateLiteral(_)) if !matches!(up.next(), Some(AstKind::TaggedTemplateExpression(_))) => {
+                    return Consumption::Consumed;
+                }
+                Some(AstKind::VariableDeclarator(declarator)) => {
+                    let exported = matches!((up.next(), up.next()), (Some(AstKind::VariableDeclaration(_)), Some(AstKind::ExportDeclaration(_))));
+                    return match &declarator.id {
+                        BindingPattern::BindingIdentifier(id) if !exported => id
+                            .symbol_id
+                            .get()
+                            .filter(|symbol| self.scoping.symbol_flags(*symbol).is_const_variable())
+                            .map_or(Consumption::LetGo, Consumption::Bound),
+                        _ => Consumption::LetGo,
+                    };
+                }
+                _ => return Consumption::LetGo,
+            };
+        }
+    }
+
+    /// The member `name` (`None` when computed) at `span` of a value that
+    /// may be a prototype: read or called, it consumes the value, unless it
+    /// is written or a method that writes into its receiver is called.
+    fn read_unless_written<'b>(span: Span, name: Option<&str>, up: impl Iterator<Item = &'b AstKind<'b>>) -> Consumption {
+        match super::member_effect(span, up) {
+            None => Consumption::Consumed,
+            Some(MemberEffect::Method) if name.is_some_and(|name| !RECEIVER_WRITERS.contains(&name)) => Consumption::Consumed,
+            Some(_) => Consumption::LetGo,
+        }
+    }
+
+    /// Records a prototype use at each computed read whose const a use may
+    /// let go: one any use lets go, or that initializes such a const.
+    fn settle_bound_reads(&mut self) {
+        if self.bound_reads.is_empty() {
+            return;
+        }
+        let mut escaping = std::mem::take(&mut self.escaping_consts);
+        while let Some(&(used, _)) = self.const_flows.iter().find(|(used, initialized)| escaping.contains(initialized) && !escaping.contains(used)) {
+            escaping.insert(used);
+        }
+        if let Some(at) = self.bound_reads.iter().find(|(_, binding)| escaping.contains(binding)).map(|(at, _)| *at) {
+            self.patch(at, "prototype-use");
         }
     }
 
     /// Whether the intrinsic prototype at `span`, a child of the last
-    /// ancestor, is used other than to read a member of it, unwritten, or
-    /// to compare it strictly.
+    /// ancestor, is used other than to read or call a member of it, as
+    /// `read_unless_written` judges, or to compare it strictly.
     fn reshapes(&self, span: Span) -> bool {
         let mut up = self.ancestors.iter().rev();
         match super::peel_wrappers(span, &mut up) {
@@ -1363,10 +1466,10 @@ impl<'r> Declarations<'r> {
                 false
             }
             (current, Some(AstKind::StaticMemberExpression(member))) if member.object.span() == current => {
-                matches!(super::member_effect(member.span, up), Some(MemberEffect::Assigned | MemberEffect::Deleted))
+                matches!(Self::read_unless_written(member.span, Some(member.property.name.as_str()), up), Consumption::LetGo)
             }
             (current, Some(AstKind::ComputedMemberExpression(member))) if member.object.span() == current => {
-                matches!(super::member_effect(member.span, up), Some(MemberEffect::Assigned | MemberEffect::Deleted))
+                matches!(Self::read_unless_written(member.span, member.static_property_name().map(|name| name.as_str()), up), Consumption::LetGo)
             }
             _ => true,
         }
@@ -1386,9 +1489,6 @@ impl<'r> Declarations<'r> {
         let prototype = match name {
             Some("prototype") => self.intrinsic(object),
             Some("__proto__") => true,
-            // A key the code computes may be `__proto__`, read, as a logical
-            // assignment reads what it gives.
-            None => !written || self.logical_result_used(span),
             Some("getPrototypeOf" | "setPrototypeOf") => {
                 !self.module_binding(object) && !matches!(self.ancestors.last(), Some(AstKind::CallExpression(call)) if call.callee.span() == span)
             }
@@ -1409,6 +1509,14 @@ impl<'r> Declarations<'r> {
         };
         if unseen {
             self.patch(span.start, if reflection && !called { "writer-let-go" } else { "string-code" });
+        } else if let (None, Some((at, skip))) = (name, if written { self.logical_assignment(span) } else { Some((span, 0)) }) {
+            // A key the code computes may be `__proto__`, read, and a logical
+            // assignment reads what it gives.
+            match self.consumption(at, skip) {
+                Consumption::Consumed => {}
+                Consumption::Bound(binding) => self.bound_reads.push((span.start, binding)),
+                Consumption::LetGo => self.patch(span.start, "prototype-use"),
+            }
         } else if prototype && self.reshapes(span) {
             self.patch(span.start, "prototype-use");
         } else if self.prototype_let_go(span, object, name) {
@@ -1982,6 +2090,13 @@ impl<'r> Declarations<'r> {
 
 }
 
+/// Where a value goes (`Declarations::consumption`).
+enum Consumption {
+    Consumed,
+    Bound(SymbolId),
+    LetGo,
+}
+
 /// What an object literal's properties can run.
 struct LiteralShape {
     /// Data properties only, with no prototype it sets: a store of a
@@ -2462,6 +2577,15 @@ impl<'a> Visit<'a> for Declarations<'a> {
         // A type reference (`onClose: Function`) runs and hands on nothing.
         if !id.reference_id.get().is_some_and(|reference| self.scoping.get_reference(reference).is_value()) {
             return;
+        }
+        if let Some(symbol) = symbol.filter(|symbol| self.scoping.symbol_flags(*symbol).is_const_variable()) {
+            match self.consumption(id.span, 0) {
+                Consumption::Consumed => {}
+                Consumption::Bound(other) => self.const_flows.push((symbol, other)),
+                Consumption::LetGo => {
+                    self.escaping_consts.insert(symbol);
+                }
+            }
         }
         // Indirect `eval` and `Function` run strings the analysis cannot read.
         let runs_strings = matches!(id.name.as_str(), "eval" | "Function") && symbol.is_none();
