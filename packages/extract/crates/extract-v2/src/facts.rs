@@ -614,20 +614,13 @@ pub struct FileFacts {
     /// sites' props, and hands the binding to nothing that may write it.
     #[serde(skip)]
     pub(crate) terminal_escapes: BTreeSet<String>,
-    /// The references usage would otherwise record in `value_escapes` that
-    /// it follows as a read a facade literal holds (`...Family`,
-    /// `Actions.Root`), each with its facade: the engine still hands one
-    /// over where its member tables cannot prove the read
-    /// (`ObjectMembers::unfollowed_reads`).
+    /// The `value_escapes` whose every escaping reference has a proof the
+    /// engine may find that it hands nothing over (a read a facade literal
+    /// holds, a hand-off to a function that only replaces the component's
+    /// render with one that renders the same props), with those proofs: the
+    /// engine drops an escape only where it finds each.
     #[serde(skip)]
-    pub(crate) facade_reads: BTreeSet<(String, String)>,
-    /// The references usage would otherwise record in `value_escapes` that
-    /// hand a component as the first argument to a module-scope function,
-    /// each with that function's local name: the engine still hands one
-    /// over unless the function's reading of the parameter is
-    /// `ParamReading::RendersThrough`.
-    #[serde(skip)]
-    pub(crate) escape_handoffs: BTreeSet<(String, String)>,
+    pub(crate) deferred_escapes: BTreeMap<String, BTreeSet<crate::usage_facts::Deferral>>,
     /// Module-scope function components whose renders stand in for the
     /// components they spread their props into.
     #[serde(skip)]
@@ -1442,8 +1435,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         confined_components: BTreeSet::new(),
         value_escapes: BTreeSet::new(),
         terminal_escapes: BTreeSet::new(),
-        facade_reads: BTreeSet::new(),
-        escape_handoffs: BTreeSet::new(),
+        deferred_escapes: BTreeMap::new(),
         spread_wrappers: BTreeMap::new(),
         module_loads: lowered.loads.iter().filter_map(|load| load.module_load(source)).collect(),
         runtime_imports: lowered.loads.iter().filter_map(|load| load.runtime_import(source)).collect(),
@@ -2149,8 +2141,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         confined: confined_components,
         escapes: value_escapes,
         terminal_escapes,
-        facade_reads,
-        escape_handoffs,
+        deferred_escapes,
         spread_wrappers,
         ordinary_components,
         react_wrappers,
@@ -2226,8 +2217,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         confined_components,
         value_escapes,
         terminal_escapes,
-        facade_reads,
-        escape_handoffs,
+        deferred_escapes,
         spread_wrappers,
         ordinary_components,
         react_wrappers,

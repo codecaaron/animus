@@ -7122,16 +7122,14 @@ fn reexported_modules(
     false
 }
 
-/// Each file's `value_escapes`, with the reads its facade literals hold
-/// that the member tables cannot prove (`ObjectMembers::unfollowed_reads`)
-/// and the hand-offs of a component to a function that does more with it
-/// than replace its render with one that renders the same props
-/// (`FileFacts::escape_handoffs`).
-struct ValueEscapes(FxHashMap<String, Vec<String>>);
+/// Each file's `value_escapes`, less those whose every proof
+/// (`FileFacts::deferred_escapes`) the engine finds.
+struct ValueEscapes(FxHashMap<String, FxHashSet<String>>);
 
 impl ValueEscapes {
     fn of<'a>(&'a self, path: &str, ff: &'a FileFacts) -> impl Iterator<Item = &'a String> {
-        ff.value_escapes.iter().chain(self.0.get(path).into_iter().flatten())
+        let cleared = self.0.get(path);
+        ff.value_escapes.iter().filter(move |escaped| !cleared.is_some_and(|cleared| cleared.contains(*escaped)))
     }
 }
 
@@ -9812,23 +9810,22 @@ fn run_with_system_floor(
                 == Some(&crate::usage_facts::ParamReading::RendersThrough)
         })
     };
-    let value_escapes = ValueEscapes(
-        files
-            .iter()
-            .map(|(path, ff)| {
-                let mut escaped =
-                    if ff.facade_reads.is_empty() { Vec::new() } else { object_members.unfollowed_reads(path) };
-                escaped.extend(
-                    ff.escape_handoffs
-                        .iter()
-                        .filter(|(callee, _)| !renders_through(path, callee))
-                        .map(|(_, handed)| handed.clone()),
-                );
-                (path.clone(), escaped)
-            })
-            .filter(|(_, escaped)| !escaped.is_empty())
-            .collect(),
-    );
+    let mut cleared: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
+    for (path, ff) in files {
+        let mut facades: FxHashMap<&str, bool> = FxHashMap::default();
+        for (escaped, deferrals) in &ff.deferred_escapes {
+            let proven = deferrals.iter().all(|deferral| match deferral {
+                crate::usage_facts::Deferral::FacadeRead(holder) => *facades
+                    .entry(holder)
+                    .or_insert_with(|| object_members.facade_proven(path, holder)),
+                crate::usage_facts::Deferral::Handoff(callee) => renders_through(path, callee),
+            });
+            if proven {
+                cleared.entry(path.clone()).or_default().insert(escaped.clone());
+            }
+        }
+    }
+    let value_escapes = ValueEscapes(cleared);
     // A member tag written through a facade or alias whose member is stable
     // resolves like a family member tag.
     // A member tag an unresolved import may give several families resolves

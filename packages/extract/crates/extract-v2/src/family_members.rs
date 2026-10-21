@@ -571,33 +571,20 @@ impl<'f> ObjectMembers<'f> {
         self.member(file, name).as_ref().and_then(Member::component).cloned().into_iter().collect()
     }
 
-    /// The references `module`'s escape scan follows as reads a facade
-    /// literal holds (`FileFacts::facade_reads`) that the member tables
-    /// cannot prove: each escapes, as a value handed on does. A facade's
-    /// reads are proven when every copy and member read it holds once built
-    /// (`FollowedReads`) names a family or facade whose table is closed and
-    /// holds only components the analysis extracts. One read that is not
-    /// leaves the facade's table without what the others read, so none of
-    /// them is.
-    pub(crate) fn unfollowed_reads(&mut self, module: &str) -> Vec<String> {
+    /// Whether every read the facade literal `holder` of `module` holds once
+    /// built (`FollowedReads`), each copy and member read, names a family or
+    /// facade whose table is closed and holds only components the analysis
+    /// extracts: then the escape scan's reads of it (`Deferral::FacadeRead`)
+    /// hand nothing over. One read that is not leaves the facade's table
+    /// without what the others read, so none of them is proven.
+    pub(crate) fn facade_proven(&mut self, module: &str, holder: &str) -> bool {
         let files = self.files;
-        let Some(ff) = files.get(module) else { return Vec::new() };
-        let mut unfollowed = Vec::new();
-        let mut proven: FxHashMap<&str, bool> = FxHashMap::default();
-        for (holder, read) in &ff.facade_reads {
-            let proven = *proven.entry(holder.as_str()).or_insert_with(|| {
-                let Some(entries) = ff.facades.get(holder) else { return false };
-                let reads = crate::facts::FollowedReads::of(entries);
-                let own = Object::Facade(module.to_string(), holder.clone());
-                let members = reads.members.values().filter_map(|(source, member)| Some((source, Some(member.as_deref()?))));
-                let copies = reads.copies.iter().map(|copied| (copied, None));
-                members.chain(copies).all(|(source, member)| self.proven_read(module, &own, source, member))
-            });
-            if !proven {
-                unfollowed.push(read.clone());
-            }
-        }
-        unfollowed
+        let Some(entries) = files.get(module).and_then(|ff| ff.facades.get(holder)) else { return false };
+        let reads = crate::facts::FollowedReads::of(entries);
+        let own = Object::Facade(module.to_string(), holder.to_string());
+        let members = reads.members.values().filter_map(|(source, member)| Some((source, Some(member.as_deref()?))));
+        let copies = reads.copies.iter().map(|copied| (copied, None));
+        members.chain(copies).all(|(source, member)| self.proven_read(module, &own, source, member))
     }
 
     /// Whether `member` of what `source` names in `module`, or every member

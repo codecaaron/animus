@@ -911,10 +911,8 @@ pub(crate) struct EnrichedUsage {
     pub escapes: BTreeSet<String>,
     /// See `FileFacts::terminal_escapes`.
     pub terminal_escapes: BTreeSet<String>,
-    /// See `FileFacts::facade_reads`.
-    pub facade_reads: BTreeSet<(String, String)>,
-    /// See `FileFacts::escape_handoffs`.
-    pub escape_handoffs: BTreeSet<(String, String)>,
+    /// See `FileFacts::deferred_escapes`.
+    pub deferred_escapes: BTreeMap<String, BTreeSet<Deferral>>,
     /// See `FileFacts::spread_wrappers`.
     pub spread_wrappers: BTreeMap<String, SpreadWrapper>,
     /// See `FileFacts::ordinary_components`.
@@ -1335,7 +1333,7 @@ pub(crate) fn collect_enriched_usage(
         .zip(react_imports.as_ref())
         .map(|(scoping, react)| ordinary_components(program, scoping, react, &BTreeSet::new(), direct_eval))
         .unwrap_or_default();
-    let (escapes, terminal_escapes, facade_reads, escape_handoffs) = match &scoping {
+    let (escapes, terminal_escapes, deferred_escapes) = match &scoping {
         Some(scoping) if may_escape => {
             let mut scan = EscapeScan {
                 admissible: &admissible,
@@ -1357,8 +1355,8 @@ pub(crate) fn collect_enriched_usage(
                 escapes: BTreeSet::new(),
                 terminal: BTreeSet::new(),
                 elsewhere: BTreeSet::new(),
-                followed: std::cell::RefCell::new(BTreeSet::new()),
-                handoffs: BTreeSet::new(),
+                deferrals: BTreeMap::new(),
+                undeferred: BTreeSet::new(),
                 ancestors: Vec::new(),
                 aliases: &aliases,
             };
@@ -1382,16 +1380,15 @@ pub(crate) fn collect_enriched_usage(
                 scan.visit_program(program);
             }
             let terminal = scan.terminal.difference(&scan.elsewhere).cloned().collect();
-            (scan.escapes, terminal, scan.followed.into_inner(), scan.handoffs)
+            let undeferred = scan.undeferred;
+            let deferred = scan.deferrals.into_iter().filter(|(path, _)| !undeferred.contains(path)).collect();
+            (scan.escapes, terminal, deferred)
         }
-        _ => (BTreeSet::new(), BTreeSet::new(), BTreeSet::new(), BTreeSet::new()),
+        _ => (BTreeSet::new(), BTreeSet::new(), BTreeMap::new()),
     };
-    // A hand-off the engine has yet to judge may change what it hands.
-    let unjudged: BTreeSet<String> =
-        escapes.iter().cloned().chain(escape_handoffs.iter().map(|(_, path)| path.clone())).collect();
     let OrdinaryComponents { names: ordinary_components, react_wrappers, import_aliases } = origins
         .zip(react_imports.as_ref())
-        .map(|(scoping, react)| ordinary_components(program, scoping, react, &unjudged, direct_eval))
+        .map(|(scoping, react)| ordinary_components(program, scoping, react, &escapes, direct_eval))
         .unwrap_or_default();
     let spread_wrappers = match &scoping {
         Some(scoping)
@@ -1414,8 +1411,7 @@ pub(crate) fn collect_enriched_usage(
         confined,
         escapes,
         terminal_escapes,
-        facade_reads,
-        escape_handoffs,
+        deferred_escapes,
         spread_wrappers,
         ordinary_components,
         react_wrappers,
@@ -3276,17 +3272,23 @@ pub(crate) fn function_param_readings(
     };
     scan.visit_program(program);
     let mut readings = scan.finish();
-    // A parameter whose object has its `render` replaced by a wrapper that
-    // calls the old one with the same props.
+    // A first parameter whose object has its `render` replaced by a wrapper
+    // that calls the old one with the same props: the escape scan defers
+    // only a component handed as a first argument (`Deferral::Handoff`).
     for (_, key, function) in &functions {
-        let Some(body) = function.body.filter(|_| !unsafe_functions.contains(key)) else { continue };
-        let Some(reading) = readings.get_mut(key) else { continue };
-        for (index, param) in function.params.items.iter().enumerate() {
-            let BindingPattern::BindingIdentifier(id) = &param.pattern else { continue };
-            let Some(symbol) = id.symbol_id.get() else { continue };
-            if reading.get(index) == Some(&ParamReading::Unsafe) && renders_through::renders_through(body, symbol, scoping) {
-                reading[index] = ParamReading::RendersThrough;
-            }
+        if unsafe_functions.contains(key) {
+            continue;
+        }
+        let (Some(body), Some(param)) = (function.body, function.params.items.first()) else { continue };
+        let (BindingPattern::BindingIdentifier(id), Some(first)) =
+            (&param.pattern, readings.get_mut(key).and_then(|reading| reading.first_mut()))
+        else {
+            continue;
+        };
+        if *first == ParamReading::Unsafe
+            && id.symbol_id.get().is_some_and(|symbol| renders_through::renders_through(body, symbol, scoping))
+        {
+            *first = ParamReading::RendersThrough;
         }
     }
     readings
@@ -3326,11 +3328,17 @@ impl<'b, 'a> FunctionParts<'b, 'a> {
     /// The function this one returns as its only result: a concise body,
     /// or a body that is one `return`.
     fn returned(&self) -> Option<Self> {
+        self.result().and_then(Self::of_expression)
+    }
+
+    /// The function's result: its concise body, or a body that is one
+    /// `return`.
+    fn result(&self) -> Option<&'b Expression<'a>> {
         if let Some(result) = self.concise {
-            return Self::of_expression(result);
+            return Some(result);
         }
         let [Statement::ReturnStatement(statement)] = self.body?.statements.as_slice() else { return None };
-        Self::of_expression(statement.argument.as_ref()?)
+        statement.argument.as_ref()
     }
 }
 
@@ -5389,10 +5397,11 @@ struct EscapeScan<'a, 's> {
     /// terminal's target, and those some other reference makes.
     terminal: BTreeSet<String>,
     elsewhere: BTreeSet<String>,
-    /// See `FileFacts::facade_reads`.
-    followed: std::cell::RefCell<BTreeSet<(String, String)>>,
-    /// See `FileFacts::escape_handoffs`.
-    handoffs: BTreeSet<(String, String)>,
+    /// Each escape some reference makes with a proof the engine may find
+    /// that it does not (`Deferral`), and the escapes some reference makes
+    /// without one.
+    deferrals: BTreeMap<String, BTreeSet<Deferral>>,
+    undeferred: BTreeSet<String>,
     ancestors: Vec<AstKind<'a>>,
     /// See `LocalAliases`: what an alias's initializer reads, its elements
     /// render.
@@ -5402,6 +5411,34 @@ struct EscapeScan<'a, 's> {
     /// React's wrappers and `const` aliases among them, whatever their
     /// names' case: what a write or hand-on of one changes, it renders.
     react_bindings: BTreeSet<String>,
+}
+
+/// A proof the engine may find that a reference does not hand its value
+/// over (`FileFacts::deferred_escapes`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Deferral {
+    /// A read the facade literal it names holds once built (`...Family`,
+    /// `Actions.Root`): proven where every read that facade holds names a
+    /// family or facade whose closed table holds only extracted components
+    /// (`ObjectMembers::facade_proven`).
+    FacadeRead(String),
+    /// A component passed as the first argument to the module-scope
+    /// function it names: proven where that function's reading of the
+    /// parameter is `ParamReading::RendersThrough`.
+    Handoff(String),
+}
+
+/// How one reference escapes: the path it hands over, and the proof the
+/// engine may find that it does not, where there is one.
+struct Escape {
+    path: String,
+    deferral: Option<Deferral>,
+}
+
+impl Escape {
+    fn plain(path: String) -> Self {
+        Self { path, deferral: None }
+    }
 }
 
 impl EscapeScan<'_, '_> {
@@ -5438,47 +5475,26 @@ impl<'a> Visit<'a> for EscapeScan<'a, '_> {
         if !self.is_candidate(name) || self.aliases.followed(ident.span) {
             return;
         }
-        let path = self.escape_path(name, ident.span);
-        if let Some(path) = path {
-            // A component handed as the first argument to a module-scope
-            // function is the engine's to judge by that function's reading.
-            if path == name && !self.namespaces.contains(name) {
-                if let Some(callee) = self.handoff_callee(ident.span) {
-                    self.elsewhere.insert(path.clone());
-                    self.handoffs.insert((callee, path));
-                    return;
-                }
-            }
-            if path == name && self.terminal_target(name, ident.span) {
-                self.terminal.insert(path.clone());
-            } else {
+        let Some(Escape { path, deferral }) = self.escape_path(name, ident.span) else { return };
+        match deferral {
+            Some(deferral) => {
+                self.deferrals.entry(path.clone()).or_default().insert(deferral);
                 self.elsewhere.insert(path.clone());
             }
-            self.escapes.insert(path);
+            None if path == name && self.terminal_target(name, ident.span) => {
+                self.terminal.insert(path.clone());
+                self.undeferred.insert(path.clone());
+            }
+            None => {
+                self.elsewhere.insert(path.clone());
+                self.undeferred.insert(path.clone());
+            }
         }
+        self.escapes.insert(path);
     }
 }
 
 impl EscapeScan<'_, '_> {
-    /// The module-scope binding a call names as its callee, where the value
-    /// at `span` is that call's first argument, erased wrappers aside.
-    fn handoff_callee(&self, span: Span) -> Option<String> {
-        let mut current = span;
-        for parent in self.ancestors.iter().rev() {
-            match parent {
-                kind if is_erased_wrapper(kind) => current = kind.span(),
-                AstKind::CallExpression(call) if call.arguments.first().map(GetSpan::span) == Some(current) => {
-                    let Expression::Identifier(callee) = &call.callee else { return None };
-                    let symbol = self.scoping.get_reference(callee.reference_id.get()?).symbol_id()?;
-                    return (self.scoping.symbol_scope_id(symbol) == self.scoping.root_scope_id())
-                        .then(|| callee.name.to_string());
-                }
-                _ => return None,
-            }
-        }
-        None
-    }
-
     /// Whether `call` is React's `forwardRef` or `memo`, nested or not, of
     /// the initializer of a top-level `const`, given its ancestors from the
     /// innermost out.
@@ -5548,7 +5564,7 @@ impl EscapeScan<'_, '_> {
 
     /// The dotted path under which a reference escapes, or `None` when usage
     /// tracking follows it.
-    fn escape_path(&self, name: &str, span: oxc::span::Span) -> Option<String> {
+    fn escape_path(&self, name: &str, span: oxc::span::Span) -> Option<Escape> {
         let (chains, slot_values, assigned_target_calls, react) =
             (self.chains, &self.slot_values, self.assigned_target_calls, self.react);
         use oxc::span::GetSpan;
@@ -5592,7 +5608,22 @@ impl EscapeScan<'_, '_> {
                     }
                     // So is the target of an `Object.assign` call the facts read as
                     // a top-level `const`'s initializer.
-                    return (!assigned_target_calls.contains(&(call.span.start, call.span.end))).then_some(path);
+                    if assigned_target_calls.contains(&(call.span.start, call.span.end)) {
+                        return None;
+                    }
+                    // A component handed to a module-scope function nothing
+                    // writes is the engine's to judge by that function's reading.
+                    let handoff = match crate::chain_walk::unwrap_type_assertions(&call.callee) {
+                        Expression::Identifier(callee)
+                            if path == name
+                                && !self.namespaces.contains(name)
+                                && fixed_callee(self.scoping, callee.reference_id.get()) =>
+                        {
+                            Some(Deferral::Handoff(callee.name.to_string()))
+                        }
+                        _ => None,
+                    };
+                    return Some(Escape { path, deferral: handoff });
                 }
                 // `const B = R` at the top level is followed: `<B>` renders as `R`.
                 // A destructuring declarator reads members, which nothing follows.
@@ -5601,7 +5632,7 @@ impl EscapeScan<'_, '_> {
                         && matches!(declarator.id, oxc::ast::ast::BindingPattern::BindingIdentifier(_)) =>
                 {
                     return (!initializes_top_level_const(current, std::iter::once(parent).chain(rest)))
-                        .then_some(path);
+                        .then(|| Escape::plain(path));
                 }
                 // A slot of a compose() family usage follows renders through its
                 // member tags, and so is a read a top-level `const` object holds
@@ -5620,13 +5651,10 @@ impl EscapeScan<'_, '_> {
                         _ => None,
                     };
                     return match holder {
-                        Some(holder) => {
-                            if path != name {
-                                self.followed.borrow_mut().insert((holder, path));
-                            }
-                            None
-                        }
-                        None => Some(path),
+                        // The object's member table follows a binding it holds.
+                        Some(_) if path == name => None,
+                        Some(holder) => Some(Escape { path, deferral: Some(Deferral::FacadeRead(holder)) }),
+                        None => Some(Escape::plain(path)),
                     };
                 }
                 // So is an object such an object copies (`...Family`): the
@@ -5640,18 +5668,12 @@ impl EscapeScan<'_, '_> {
                         }
                         _ => None,
                     };
-                    return match holder {
-                        Some(holder) => {
-                            self.followed.borrow_mut().insert((holder, path));
-                            None
-                        }
-                        None => Some(path),
-                    };
+                    return Some(Escape { path, deferral: holder.map(Deferral::FacadeRead) });
                 }
-                _ => return Some(path),
+                _ => return Some(Escape::plain(path)),
             }
         }
-        Some(path)
+        Some(Escape::plain(path))
     }
 }
 
