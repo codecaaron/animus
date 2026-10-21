@@ -802,8 +802,9 @@ const UNREAD_PACKAGE_REACH: &str = "animus.load.unread-package-reach";
 const MISSING_MODULE_REACH: &str = "animus.load.missing-module-reach";
 const WIDE_MODULE_LOAD_LIMIT: usize = 20;
 /// A warning, once per production analysis: tags usage cannot match to an
-/// Animus component stop whole-component removal, so every extracted
-/// component stays. It counts them by kind and names a few.
+/// Animus component stop whole-component removal. It names the components no
+/// analysed code renders, which therefore stay, or says there are none; it
+/// counts the tags by kind and names a few.
 const IDENTITY_UNCERTAIN: &str = "animus.usage.identity-uncertain";
 /// `info`: each such tag, once per file and tag, with what it is; a host
 /// prints it only in its verbose log.
@@ -3655,11 +3656,7 @@ pub(crate) fn report_unread_openings(
             None => groups.push(OpeningGroup { code, cost, causes: vec![cause] }),
         }
     }
-    let capped = |items: &[String], separator: &str| {
-        let more = items.len().saturating_sub(OPENING_COST_NAMED);
-        let named = items.iter().take(OPENING_COST_NAMED).cloned().collect::<Vec<_>>().join(separator);
-        if more > 0 { format!("{named} and {more} more") } else { named }
-    };
+    let capped = |items: &[String], separator: &str| capped_list(items, separator);
     let found = groups.into_iter().map(|OpeningGroup { code, cost, causes }| {
         let named = capped(&cost, ", ");
         let lost = format!(
@@ -3943,6 +3940,13 @@ pub fn run(
 
 /// bare binding → the component ids that define it, in `sorted_ids` order.
 type IdsByBinding = FxHashMap<String, Vec<String>>;
+
+/// The first `OPENING_COST_NAMED` of `items`, and how many more.
+fn capped_list<S: AsRef<str>>(items: &[S], separator: &str) -> String {
+    let more = items.len().saturating_sub(OPENING_COST_NAMED);
+    let named = items.iter().take(OPENING_COST_NAMED).map(AsRef::as_ref).collect::<Vec<_>>().join(separator);
+    if more > 0 { format!("{named} and {more} more") } else { named }
+}
 
 /// For report text and the residue record only — never as a map key.
 fn binding_of(component_id: &str) -> &str {
@@ -5897,11 +5901,12 @@ fn count_of(n: usize, noun: &str) -> String {
     format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
 }
 
-/// One warning for the analysis, which counts the tags by kind and names a
-/// few, then one `info` record per file and tag, at its first site, which a
-/// host prints only in its verbose log.
+/// One record for the analysis, which names the components `held_back`
+/// keeps and counts the tags by kind, then one `info` record per file and
+/// tag, at its first site, which a host prints only in its verbose log.
 fn identity_uncertainty_diagnostics(
     sites: &[(&String, UncertainIdentity)],
+    held_back: &[&str],
     files: &BTreeMap<String, FileFacts>,
     inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
@@ -6000,8 +6005,7 @@ fn identity_uncertainty_diagnostics(
             "warn",
             format!(
                 "{spelling} {reason}; extraction counts a tag it cannot match to an Animus \
-                 component as unknown, so every extracted component is kept and none is \
-                 removed as unused"
+                 component as unknown, which keeps whole-component removal off"
             ),
             Some(IDENTITY_UNCERTAIN_TAG),
         );
@@ -6036,15 +6040,23 @@ fn identity_uncertainty_diagnostics(
         Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
         _ => examples.join(""),
     };
+    // What the tags cost: the components no analysed code renders, which
+    // removal would take, or none.
+    let cost = match held_back {
+        [] => " at no cost, as every extracted component is rendered or handed on".to_string(),
+        held => {
+            let kept = if held.len() == 1 { "is" } else { "are" };
+            format!(", so {} no analysed code renders {kept} kept ({})", count_of(held.len(), "component"), capped_list(held, ", "))
+        }
+    };
     let summary = diagnostic(
         "usage",
         "whole-component removal",
         "warn",
         format!(
-            "off for this build: {} in {} cannot be matched to an Animus component ({}), for \
-             example {examples}. Extraction counts such a tag as unknown, so no extracted \
-             component is removed as unused. ANIMUS_DEBUG=1, or the host's verbose option, \
-             lists each tag with its file and line",
+            "off for this build{cost}: {} in {} cannot be matched to an Animus component ({}), \
+             for example {examples}. ANIMUS_DEBUG=1, or the host's verbose option, lists each \
+             tag with its file and line",
             count_of(records.len(), "tag"),
             count_of(file_count, "file"),
             counts.join(", "),
@@ -8477,11 +8489,10 @@ fn expand_forced_scan(scan: UsageScanResult, ids_by_binding: &IdsByBinding) -> U
 fn collect_reachable_active_prop_names<'a>(
     components: impl IntoIterator<Item = (&'a str, Option<&'a FxHashSet<String>>)>,
     reachable_ids: &FxHashSet<String>,
-    identity_uncertain: bool,
 ) -> FxHashSet<String> {
     components
         .into_iter()
-        .filter(|(component_id, _)| identity_uncertain || reachable_ids.contains(*component_id))
+        .filter(|(component_id, _)| reachable_ids.contains(*component_id))
         .filter_map(|(_, active_props)| active_props)
         .flat_map(|props| props.iter().cloned())
         .collect()
@@ -10484,10 +10495,9 @@ fn run_with_system_floor(
         all_usage_results.push(usage_result);
     }
     let identity_uncertain = !uncertain_identities.is_empty();
-    // Development keeps every component anyway.
-    if !inputs.dev_mode {
-        diagnostics.extend(identity_uncertainty_diagnostics(&uncertain_identities, files, inputs, links, &mut object_members));
-    }
+    // The identity-uncertainty records go here, once the ledger says what
+    // removal would take.
+    let identity_records_at = diagnostics.len();
 
     // A component a reference hands somewhere usage tracking does not follow
     // can render there with any props, so every option it declares stays.
@@ -11016,11 +11026,13 @@ fn run_with_system_floor(
             identity_policy.include(parent_id.clone());
         }
     }
-    // A component handed to code usage does not follow renders there with any
-    // props, so it is as reachable as one an analysed use renders.
+    // What analysed code renders, hands on or forces. A component handed to
+    // code usage does not follow renders there with any props, so it is as
+    // reachable as one an analysed use renders.
+    let proven: FxHashSet<String> = identity_policy.rendered_ids.into_iter().chain(escaped_ids.iter().cloned()).collect();
     let reachable_ids = match identity_uncertain {
         true => evaluated_ids.clone(),
-        false => identity_policy.rendered_ids.into_iter().chain(escaped_ids.iter().cloned()).collect(),
+        false => proven.clone(),
     };
     let active_system_prop_names = collect_reachable_active_prop_names(
         sorted_ids.iter().filter_map(|component_id| {
@@ -11031,7 +11043,6 @@ fn run_with_system_floor(
                 })
         }),
         &reachable_ids,
-        identity_uncertain,
     );
     // Where the analysis sees every source in production, no direct `eval`
     // can read a binding by name, and every tag it cannot match is one that
@@ -11840,6 +11851,7 @@ fn run_with_system_floor(
 
     // The wrapper merges the target's class at runtime, so the target's CSS
     // must survive even though it never appears as a JSX tag itself.
+    let mut wrapper_targets: Vec<String> = Vec::new();
     for component_id in &sorted_ids {
         let Some((file_path, chain_idx)) = chain_lookup.get(component_id.as_str()) else {
             continue;
@@ -11871,6 +11883,7 @@ fn run_with_system_floor(
                     }
                 }
             }
+            wrapper_targets.push(id.clone());
             usage_ledger.rendered_components.insert(id);
         }
     }
@@ -11893,7 +11906,33 @@ fn run_with_system_floor(
     for (id, css) in &reconciled_components {
         copies.entry((css.class_name.as_str(), identity_of[id.as_str()])).or_default().push(id.as_str());
     }
-    crate::reconcile::pool_shared_usage(&mut usage_ledger, copies.into_values(), &parent_ids);
+    let copy_groups: Vec<Vec<&str>> = copies.into_values().collect();
+    crate::reconcile::pool_shared_usage(&mut usage_ledger, copy_groups.iter().cloned(), &parent_ids);
+    // Development keeps every component anyway. What removal would take were
+    // it on: what the ledger keeps from the uses and `proven` rather than from
+    // every component, with each wrapper's target, each copy of a kept
+    // definition and each parent, as reconciliation keeps them.
+    if !inputs.dev_mode && identity_uncertain {
+        let mut kept: FxHashSet<&str> = all_usage_results
+            .iter()
+            .flat_map(|result| &result.rendered_components)
+            .chain(&proven)
+            .chain(&wrapper_targets)
+            .map(String::as_str)
+            .collect();
+        for group in &copy_groups {
+            if group.iter().any(|id| kept.contains(id)) {
+                kept.extend(group.iter().copied());
+            }
+        }
+        let held_back: Vec<&str> = sorted_ids
+            .iter()
+            .filter(|id| evaluated.contains_key(*id) && !kept.contains(id.as_str()) && !parent_ids.contains(*id))
+            .map(|id| binding_of(id))
+            .collect();
+        let records = identity_uncertainty_diagnostics(&uncertain_identities, &held_back, files, inputs, links, &mut object_members);
+        diagnostics.splice(identity_records_at..identity_records_at, records);
+    }
 
     // A probe whose host opens a file analysis never reads (spec §2.2 A8)
     // is reported once per importer and specifier: a case variant, a skipped
@@ -19545,14 +19584,14 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         assert!(warnings[0].2.starts_with("this call can load 21 components"), "{warnings:#?}");
     }
 
-    /// Tags usage cannot match to an Animus component give a production
-    /// analysis one warning, which counts them by kind, and an `info` record
-    /// per file and tag telling an ordinary component from an import
-    /// extraction does not analyse; development keeps every component and
-    /// reports nothing.
+    /// Contract: the warning that whole-component removal is off states what
+    /// it costs: it names a component no analysed code renders (`Q`), or says
+    /// it costs nothing where there is none. Either way it counts the tags
+    /// usage cannot match by kind, with an `info` record per file and tag.
+    /// Development keeps every component and reports nothing.
     #[test]
-    fn identity_uncertain_tags_warn_once_and_record_what_they_are() {
-        let entries = [
+    fn identity_uncertain_tags_state_what_removal_keeps() {
+        let base = [
             ("src/r.tsx", RECIPE),
             ("src/card.tsx", "export function Card() { return null; }\n"),
             (
@@ -19561,10 +19600,11 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                  export const App = () => <><R size=\"sm\" /><Card /><Link /><Card /></>;\n",
             ),
         ];
-        let reported = |dev_mode: bool| {
+        let q = ("src/q.tsx", "export const Q = ds.styles({ margin: '1px' }).asElement('span');\n");
+        let reported = |entries: &[(&str, &str)], dev_mode: bool| {
             let mut inputs = test_inputs();
             inputs.dev_mode = dev_mode;
-            analyze(&entries, &inputs)
+            analyze(entries, &inputs)
                 .diagnostics
                 .into_iter()
                 .filter(|d| matches!(d.code.as_deref(), Some(IDENTITY_UNCERTAIN | IDENTITY_UNCERTAIN_TAG)))
@@ -19574,25 +19614,24 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
                 })
                 .collect::<Vec<_>>()
         };
-        let production = reported(false);
-        assert_eq!(production.len(), 3, "{production:#?}");
-        assert_eq!(production[0].0, "warn");
-        assert!(
-            production[0].2.starts_with(
-                "off for this build: 2 tags in 1 file cannot be matched to an Animus component \
-                 (1 ordinary component, 1 import from a module extraction does not analyse), for \
-                 example <Card> in src/app.tsx and <Link> in src/app.tsx."
-            ),
-            "{production:#?}"
-        );
-        assert_eq!(
-            production[1..],
-            [
-                ("info".to_string(), "<Card>".to_string(), "<Card> is an ordinary component declared in src/card.tsx".to_string()),
-                ("info".to_string(), "<Link>".to_string(), "<Link> is imported from 'router', which extraction does not analyse".to_string()),
-            ]
-        );
-        assert_eq!(reported(true), vec![]);
+        let tags = ": 2 tags in 1 file cannot be matched to an Animus component (1 ordinary component, 1 import \
+                    from a module extraction does not analyse), for example <Card> in src/app.tsx and <Link> in \
+                    src/app.tsx.";
+        let records = [
+            ("info".to_string(), "<Card>".to_string(), "<Card> is an ordinary component declared in src/card.tsx".to_string()),
+            ("info".to_string(), "<Link>".to_string(), "<Link> is imported from 'router', which extraction does not analyse".to_string()),
+        ];
+        for (entries, cost) in [
+            (base.to_vec(), "off for this build at no cost, as every extracted component is rendered or handed on"),
+            ([base.as_slice(), &[q]].concat(), "off for this build, so 1 component no analysed code renders is kept (Q)"),
+        ] {
+            let production = reported(&entries, false);
+            assert_eq!(production.len(), 3, "{production:#?}");
+            assert_eq!(production[0].0, "warn", "{production:#?}");
+            assert!(production[0].2.starts_with(&format!("{cost}{tags}")), "{production:#?}");
+            assert_eq!(production[1..], records);
+            assert_eq!(reported(&entries, true), vec![]);
+        }
     }
 
     /// Contract: short names emit utility rules in the same order as
