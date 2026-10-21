@@ -15547,6 +15547,10 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             ("import { protoOf } from 'outside';\nconst w = document.defaultView;\nw.p = protoOf();\nfor (const key of ['size', 'loading']) p[key] = 'lg';\n", "", true),
             ("const key = 'title';\nsomeGlobal[key] = 'x';\n", "", false),
             ("function p() {}\ndeclare namespace p { const size: string; }\np.size = 'lg';\np.loading = true;\n", "", false),
+            // A variable sharing a function's or a class's name holds its
+            // own value, whatever the erased declaration says.
+            ("import { protoOf } from 'outside';\ndeclare function p(): void;\nvar p = protoOf();\np.size = 'lg';\np.loading = true;\n", "", true),
+            ("import { protoOf } from 'outside';\ndeclare class p {}\nvar p = protoOf();\np.size = 'lg';\np.loading = true;\n", "", true),
             ("const box = {};\nconst size = 'size';\nbox[size] = 'lg';\n", "", false),
             ("const box = {};\nObject.assign(box, { size: 'lg', loading: true });\n", "", false),
             ("const box = {};\nbox.size = 'lg';\nbox.loading = true;\n", "", false),
@@ -15559,6 +15563,29 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             let out = analyze(&[("a.tsx", &format!("{patch}{kit}")), ("b.tsx", other)], &test_inputs());
             let kept = (out.sheets.variants.contains("--size-lg"), out.sheets.states.contains("color: blue"));
             assert_eq!(kept, (keeps, keeps), "{patch}{other}");
+        }
+        // A number key writes its `String(n)` (`p[0x10]` writes `16`); one
+        // whose text the walk cannot prove may write any key.
+        let numbered = |prop: &str| {
+            format!(
+                "const Btn = ds.styles({{ display: 'inline' }}).variant({{ prop: '{prop}', defaultVariant: 'md', variants: {{ md: {{ gap: '2px' }}, lg: {{ gap: '3px' }} }} }}).asElement('button');\n\
+                 export const App = () => <Btn />;\n"
+            )
+        };
+        for (prop, store, keeps) in [
+            ("16", "p[0x10] = 'lg';", true),
+            ("1000", "p[1_000] = 'lg';", true),
+            ("1", "p[1.0] = 'lg';", true),
+            ("100", "p[1e2] = 'lg';", true),
+            ("16", "p[16] = 'lg';", true),
+            ("1e+21", "p[1e21] = 'lg';", true),
+            ("1e+21", "Object.assign(p, { 1e21: 'lg' });", true),
+            ("1e+21", "const q = protoOf();\nq[1e21] = 'lg';", true),
+            ("16", "Reflect.set(p, 0x10, 'lg');", true),
+            ("16", "p[0x11] = 'lg';", false),
+        ] {
+            let source = format!("import {{ protoOf }} from 'outside';\nconst w = document.defaultView;\nw.p = protoOf();\n{store}\n{}", numbered(prop));
+            assert_eq!(analyze(&[("a.tsx", &source)], &test_inputs()).sheets.variants.contains("3px"), keeps, "{store}");
         }
     }
 

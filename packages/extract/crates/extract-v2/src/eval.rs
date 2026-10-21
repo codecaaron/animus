@@ -1213,6 +1213,12 @@ fn eval_static_template(
     Some(StaticValue::String(text))
 }
 
+/// The property name a number key writes, JavaScript's `String(n)`, where
+/// `js_number_text` proves it (`0x10` writes `16`).
+pub(crate) fn js_number_key(value: f64) -> Option<String> {
+    js_number_text(&json_number(value)?)
+}
+
 /// `number` as JavaScript's `String(n)` writes it, where its own text
 /// provably is that: an integer within ±2^53, or a finite fraction printed
 /// without an exponent that reads back as the same value.

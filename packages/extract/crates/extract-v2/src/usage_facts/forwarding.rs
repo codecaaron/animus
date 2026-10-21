@@ -44,6 +44,7 @@ use oxc::semantic::{ScopeId, Scoping, SymbolFlags, SymbolId};
 use oxc::span::{GetSpan, Span};
 use oxc::syntax::operator::{BinaryOperator, UnaryOperator};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -52,6 +53,7 @@ use super::{
     OpaqueCall, OpaqueTag, Polymorphic, PropKey, PropReach, SiteShape, SpreadArg, TagOrigin,
 };
 use crate::chain_walk::{unwrap_type_assertions, ChainDescriptor};
+use crate::eval::js_number_key;
 
 /// The positions that keep a value where React renders it, or with code
 /// the analysis reads, each with why. A position not listed hands the
@@ -746,10 +748,10 @@ impl<'s> Module<'s> {
         });
         // A binding may hold a prototype unless it holds what the module
         // built: a function or class declaration names itself only while
-        // nothing reassigns it.
+        // nothing reassigns it (`declares_itself`).
         let may_hold_prototype = |symbol: SymbolId| {
-            !declarations.literal_bindings.contains(&symbol)
-                && (!scoping.symbol_flags(symbol).intersects(SymbolFlags::Function | SymbolFlags::Class) || scoping.symbol_is_mutated(symbol))
+            let flags = scoping.symbol_flags(symbol);
+            !declarations.literal_bindings.contains(&symbol) && (!declares_itself(flags, SymbolFlags::Function | SymbolFlags::Class) || scoping.symbol_is_mutated(symbol))
         };
         // A built-in's name written into a binding that may hold a prototype.
         let redirected = declarations.built_in_writes.iter().filter(|(symbol, _)| may_hold_prototype(**symbol)).map(|(_, at)| *at).min();
@@ -1049,7 +1051,7 @@ impl<'s> Module<'s> {
         }
         let scope = self.functions.get(&symbol).copied();
         if self.at_root(symbol) {
-            let declared = scope.is_some() || self.scoping.symbol_flags(symbol).intersects(SymbolFlags::Function);
+            let declared = scope.is_some() || declares_itself(self.scoping.symbol_flags(symbol), SymbolFlags::Function);
             return declared.then(|| (Some(id.name.to_string()), scope));
         }
         scope.map(|scope| (None, Some(scope)))
@@ -1214,7 +1216,7 @@ struct Declarations<'r> {
     /// global: each store's key, start and, for a direct store into a
     /// binding, the binding, `FileFacts::untraced_stores` unless it holds
     /// what the module built.
-    untraced_stores: Vec<(std::borrow::Cow<'r, str>, u32, Option<SymbolId>)>,
+    untraced_stores: Vec<(Cow<'r, str>, u32, Option<SymbolId>)>,
     /// Where a computed read's value goes into a const (`Consumption`): the
     /// read's start, and the const.
     bound_reads: Vec<(u32, SymbolId)>,
@@ -1605,7 +1607,8 @@ impl<'r> Declarations<'r> {
     /// bracketed key, whatever it names, it may set any built-in's method.
     /// A store's key is `name`, or the string a `const` the key reads
     /// (`held`) is declared to.
-    fn member(&mut self, span: Span, object: &Expression<'_>, name: Option<&'r str>, computed: bool, held: Option<&IdentifierReference<'_>>) {
+    fn member(&mut self, span: Span, object: &Expression<'_>, key: Option<Cow<'r, str>>, computed: bool, held: Option<&IdentifierReference<'_>>) {
+        let name = key.as_deref();
         let effect = super::member_effect(span, self.ancestors.iter().rev());
         let written = matches!(effect, Some(MemberEffect::Assigned | MemberEffect::Deleted));
         let prototype = match name {
@@ -1659,8 +1662,8 @@ impl<'r> Declarations<'r> {
             // it may be any.
             if let Some(MemberEffect::Assigned) = effect {
                 let held = held.and_then(|id| self.symbol(id)).and_then(|symbol| self.string_consts.get(&symbol).copied());
-                match name.or(held) {
-                    Some(key) => self.store_key(span.start, object, key.into()),
+                match key.or_else(|| held.map(Cow::Borrowed)) {
+                    Some(key) => self.store_key(span.start, object, key),
                     None if self.platform(object) => self.patch(span.start, "unread-key-store"),
                     None => {}
                 }
@@ -1671,7 +1674,7 @@ impl<'r> Declarations<'r> {
     /// Records a store by the static `key`, at `at`, into `object`: into one
     /// that may be a prototype, a keyed store; into a binding, a static
     /// chain off one or a global, an untraced store (`store_root`).
-    fn store_key(&mut self, at: u32, object: &Expression<'_>, key: std::borrow::Cow<'r, str>) {
+    fn store_key(&mut self, at: u32, object: &Expression<'_>, key: Cow<'r, str>) {
         if !self.unshared(object) && self.maybe_prototype(object) {
             self.keyed_stores.push((at, key.into_owned()));
         } else if let Some(binding) = self.store_root(object) {
@@ -2244,6 +2247,22 @@ impl<'r> Declarations<'r> {
 
 }
 
+/// Whether a symbol with `flags` names a declaration of one of `kinds`
+/// itself: no variable or parameter, whose own value decides, shares its
+/// name (`declare function p(): void; var p = …`).
+fn declares_itself(flags: SymbolFlags, kinds: SymbolFlags) -> bool {
+    flags.intersects(kinds) && !flags.intersects(SymbolFlags::Variable)
+}
+
+/// The name a property `key` writes: a number's `String(n)` where
+/// `js_number_key` proves it.
+fn property_key<'a>(key: &oxc::ast::ast::PropertyKey<'a>) -> Option<Cow<'a, str>> {
+    match key {
+        oxc::ast::ast::PropertyKey::NumericLiteral(number) => js_number_key(number.value).map(Cow::Owned),
+        key => key.static_name(),
+    }
+}
+
 /// Where a value goes (`Declarations::consumption`).
 enum Consumption {
     Consumed,
@@ -2594,16 +2613,26 @@ impl<'a> Visit<'a> for Declarations<'a> {
     }
 
     fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
-        self.member(member.span, &member.object, Some(member.property.name.as_str()), false, None);
+        self.member(member.span, &member.object, Some(Cow::Borrowed(member.property.name.as_str())), false, None);
         oxc::ast_visit::walk::walk_static_member_expression(self, member);
     }
 
     fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
         // A number key names an index: never `__proto__`, a built-in's
-        // method or a hook, so it is judged as a static key.
+        // method or a hook, so it is judged as a static key, by the name it
+        // writes. One whose `String(n)` the walk cannot prove is computed.
         let (name, computed) = match &member.expression {
-            Expression::NumericLiteral(number) => (number.raw.as_ref().map(|raw| raw.as_str()), false),
-            _ => (member.static_property_name().map(|name| name.as_str()), true),
+            Expression::NumericLiteral(number) => match number.raw.as_ref().map(|raw| raw.as_str()) {
+                // A plain decimal index is its own text.
+                Some(raw) if raw.len() < 16 && raw.bytes().all(|byte| byte.is_ascii_digit()) && (raw == "0" || !raw.starts_with('0')) => {
+                    (Some(Cow::Borrowed(raw)), false)
+                }
+                _ => match js_number_key(number.value) {
+                    Some(name) => (Some(Cow::Owned(name)), false),
+                    None => (None, true),
+                },
+            },
+            _ => (member.static_property_name().map(|name| Cow::Borrowed(name.as_str())), true),
         };
         let held = match &member.expression {
             Expression::Identifier(id) => Some(&**id),
@@ -2646,8 +2675,11 @@ impl<'a> Visit<'a> for Declarations<'a> {
                                 if let Expression::ObjectExpression(literal) = unwrap_type_assertions(source) {
                                     for property in &literal.properties {
                                         if let ObjectPropertyKind::ObjectProperty(property) = property {
-                                            if let Some(key) = property.key.static_name() {
-                                                self.store_key(call.span.start, target, key);
+                                            // A number key writes its `String(n)`; one the
+                                            // walk cannot prove may write any key.
+                                            match property_key(&property.key) {
+                                                Some(key) => self.store_key(call.span.start, target, key),
+                                                None => self.written_into(target, true),
                                             }
                                         }
                                     }
@@ -3247,8 +3279,7 @@ impl<'a> Walk<'_, '_, 'a> {
                     Some(scope) if !module.at_root(symbol) => Callee::Local(*scope),
                     Some(_) => Callee::Named(id.name.to_string()),
                     // A class or function declaration the module writes at its top.
-                    None if module.at_root(symbol)
-                        && module.scoping.symbol_flags(symbol).intersects(SymbolFlags::Function | SymbolFlags::Class) =>
+                    None if module.at_root(symbol) && declares_itself(module.scoping.symbol_flags(symbol), SymbolFlags::Function | SymbolFlags::Class) =>
                     {
                         Callee::Named(id.name.to_string())
                     }
