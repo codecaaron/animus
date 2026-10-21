@@ -420,9 +420,11 @@ pub struct FileFacts {
     /// Raw JSX/createElement usage facts, component-agnostic; cross-file
     /// filtering happens later.
     pub usage: Vec<UsageFact>,
-    /// Usage facts enriched with same-file and imported statics; `usage`
-    /// above stays the raw syntax classification.
-    #[serde(skip)]
+    /// Usage facts enriched with same-file and imported statics, which the
+    /// analysis reads (`usage_for_analysis`); `usage` above stays the raw
+    /// syntax classification. The manifest carries them as `proven`
+    /// (`serialize_proven`).
+    #[serde(rename = "proven", serialize_with = "crate::usage_facts::serialize_proven", skip_serializing_if = "Option::is_none")]
     pub(crate) usage_enriched: Option<Vec<UsageFact>>,
     /// Each attribute whose value is a parameter a literal-union type
     /// annotation declares: what would close its slot were annotations
@@ -1438,7 +1440,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         chains: Vec::new(),
         statics: BTreeMap::new(),
         usage: Vec::new(),
-        usage_enriched: None,
+        usage_enriched: Some(Vec::new()),
         declared_hints: Vec::new(),
         bindings: Arc::clone(&lowered.bindings),
         module_record: Arc::clone(&lowered.record),

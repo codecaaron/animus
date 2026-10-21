@@ -75,6 +75,24 @@ pub struct AttrFact {
     /// Byte offset of the attribute, or of the spread that writes it.
     #[serde(skip)]
     pub at: u32,
+    /// For a runtime value, the prop of the enclosing component it passes
+    /// on unchanged: one of the component's own parameters read as written
+    /// (`size` destructured from its props, or `props.size`), which its
+    /// callers write (`component_parameters`). Enriched collection only.
+    #[serde(skip)]
+    pub forwarded: Option<ForwardedProp>,
+}
+
+/// A component's own prop an attribute passes on (`AttrFact::forwarded`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ForwardedProp {
+    /// The component's binding, as declared.
+    pub component: String,
+    pub prop: String,
+    /// The literal its destructuring defaults the prop to, which a caller
+    /// that leaves the prop out passes on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<Value>,
 }
 
 impl AttrFact {
@@ -227,6 +245,66 @@ pub enum UsageFact {
         #[serde(skip)]
         call: String,
     },
+}
+
+/// The manifest's `proven` view of enriched usage
+/// (`FileFacts::usage_enriched`): each element's tag, its attributes and
+/// the spread that can replace those before it, and each `createElement`
+/// call's first argument. An attribute lists every value it can write that
+/// is known, and is `proven` only where the analysis's pruning trusts those
+/// to be all it writes (`AttrFact::proven_values`): a value evaluated
+/// through statics that may name a changed object is listed, not proven.
+pub(crate) fn serialize_proven<S: serde::Serializer>(
+    usage: &Option<Vec<UsageFact>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    enum ProvenFact<'u> {
+        Element {
+            tag: &'u TagFact,
+            attrs: Vec<ProvenAttr<'u>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            spread: Option<usize>,
+        },
+        CreateElement { ident: &'u Option<String>, member: &'u Option<String> },
+    }
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ProvenAttr<'u> {
+        name: &'u str,
+        values: Vec<&'u Value>,
+        proven: bool,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        skip: bool,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        optional: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dynamic_span: Option<&'u UsageSpan>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        forwarded: Option<&'u ForwardedProp>,
+    }
+    let facts = usage.iter().flatten().filter_map(|fact| match fact {
+        UsageFact::Element { tag, attrs, spread, .. } => Some(ProvenFact::Element {
+            tag,
+            attrs: attrs
+                .iter()
+                .map(|attr| ProvenAttr {
+                    name: &attr.name,
+                    values: attr.class_values().collect(),
+                    proven: attr.proven_values().is_some(),
+                    skip: attr.skip,
+                    optional: attr.optional,
+                    dynamic_span: attr.dynamic_span.as_ref(),
+                    forwarded: attr.forwarded.as_ref(),
+                })
+                .collect(),
+            spread: *spread,
+        }),
+        UsageFact::CreateElement { ident, member, .. } => Some(ProvenFact::CreateElement { ident, member }),
+        UsageFact::DefaultProps { .. } | UsageFact::CloneUnknown { .. } => None,
+    });
+    serializer.collect_seq(facts)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -445,24 +523,31 @@ impl<'b, 'a> ComponentFunction<'b, 'a> {
     }
 
     /// An arrow or function expression, or one passed to `forwardRef` or
-    /// `memo` (as `React.forwardRef` too), through type-only wrappers.
+    /// `memo` (as `React.forwardRef` too), through type-only wrappers. The
+    /// wrappers are read by name: a reader that adds what a component
+    /// passes on may over-reach, never one that proves less is passed.
     fn of_expression(expr: &'b Expression<'a>) -> Option<Self> {
+        Self::through(expr, &|callee| {
+            let wrapper = match callee {
+                Expression::Identifier(id) => id.name.as_str(),
+                Expression::StaticMemberExpression(member) => member.property.name.as_str(),
+                _ => return false,
+            };
+            matches!(wrapper, "forwardRef" | "memo")
+        })
+    }
+
+    /// As `of_expression`, a call counting as a wrapper only where `wraps`
+    /// accepts its callee.
+    fn through(expr: &'b Expression<'a>, wraps: &dyn Fn(&Expression<'a>) -> bool) -> Option<Self> {
         match crate::chain_walk::unwrap_type_assertions(expr) {
             Expression::ArrowFunctionExpression(arrow) => Some(Self {
                 props: arrow.params.items.first(),
                 body: ComponentBody::Arrow(&arrow.body),
             }),
             Expression::FunctionExpression(function) => Self::of_function(function),
-            Expression::CallExpression(call) => {
-                let wrapper = match &call.callee {
-                    Expression::Identifier(id) => id.name.as_str(),
-                    Expression::StaticMemberExpression(member) => member.property.name.as_str(),
-                    _ => return None,
-                };
-                if !matches!(wrapper, "forwardRef" | "memo") {
-                    return None;
-                }
-                Self::of_expression(call.arguments.first()?.as_expression()?)
+            Expression::CallExpression(call) if wraps(&call.callee) => {
+                Self::through(call.arguments.first()?.as_expression()?, wraps)
             }
             _ => None,
         }
@@ -1308,6 +1393,7 @@ pub(crate) fn collect_enriched_usage(
         enrich: true,
         declared_params,
         declared_hints: Vec::new(),
+        params: origins.map(|scoping| component_parameters(program, scoping)).unwrap_or_default(),
         react: react.clone(),
         clones: Some(CloneScan {
             scoping: scoping.as_ref(),
@@ -6471,6 +6557,10 @@ struct FactCollector<'a, 's> {
     declared_params: FxHashMap<SymbolId, DeclaredUnion>,
     /// Each attribute whose value is such a parameter (`DeclaredHint`).
     declared_hints: Vec<DeclaredHint>,
+    /// Enriched collection only: each component parameter binding that holds
+    /// one of its props, and each that holds its props object
+    /// (`component_parameters`).
+    params: ComponentParams,
     /// Enriched collection only: each rest parameter a `createElement`
     /// props object may spread, with the keys it can never carry.
     rests: FxHashMap<SymbolId, BTreeSet<String>>,
@@ -6536,6 +6626,7 @@ impl<'a> FactCollector<'a, '_> {
                         literal: true,
                         optional: true,
                         at: spread_attribute.span.start,
+                        forwarded: None,
                     })),
                     None => spread = Some(attrs.len()),
                 }
@@ -6559,6 +6650,7 @@ impl<'a> FactCollector<'a, '_> {
                     };
                 let mut literal = static_value.is_some();
                 let mut enumerable_values = Vec::new();
+                let mut forwarded = None;
                 if dynamic && self.enrich {
                     if let Some(expression) = attribute_expression(&attr.value) {
                         let expression = crate::chain_walk::unwrap_type_assertions(expression);
@@ -6654,6 +6746,7 @@ impl<'a> FactCollector<'a, '_> {
                             None => {}
                         }
                         if dynamic {
+                            forwarded = self.forwarded_prop(expression);
                             if let Some(declared) = self.declared_union(expression) {
                                 self.declared_hints.push(DeclaredHint {
                                     at: attr.span.start,
@@ -6691,6 +6784,7 @@ impl<'a> FactCollector<'a, '_> {
                     conditions,
                     optional: false,
                     at: attr.span.start,
+                    forwarded,
                 });
             }
         }
@@ -6762,6 +6856,7 @@ fn children_attribute(written: &[&JSXChild<'_>]) -> Option<AttrFact> {
             conditions: Some(BTreeSet::from([BASE_CONDITION.to_string()])),
             optional: false,
             at,
+            forwarded: None,
         },
         None => AttrFact {
             name: "children".to_string(),
@@ -6776,6 +6871,7 @@ fn children_attribute(written: &[&JSXChild<'_>]) -> Option<AttrFact> {
             conditions: None,
             optional: false,
             at,
+            forwarded: None,
         },
     })
 }
@@ -6988,6 +7084,23 @@ impl FactCollector<'_, '_> {
         })
     }
 
+    /// The prop of the enclosing component `expression` reads as written:
+    /// a parameter binding destructured from its props, or a member of its
+    /// props object.
+    fn forwarded_prop(&self, expression: &Expression<'_>) -> Option<ForwardedProp> {
+        let scoping = self.origins?;
+        let symbol = |ident: &IdentifierReference<'_>| scoping.get_reference(ident.reference_id.get()?).symbol_id();
+        match crate::chain_walk::unwrap_type_assertions(expression) {
+            Expression::Identifier(ident) => self.params.props.get(&symbol(ident)?).cloned(),
+            Expression::StaticMemberExpression(member) => {
+                let Expression::Identifier(object) = &member.object else { return None };
+                let component = self.params.objects.get(&symbol(object)?)?;
+                Some(ForwardedProp { component: component.clone(), prop: member.property.name.to_string(), default: None })
+            }
+            _ => None,
+        }
+    }
+
     /// The literal union a parameter `expression` names is declared with,
     /// which proves nothing of its value.
     fn declared_union(&self, expression: &Expression<'_>) -> Option<&DeclaredUnion> {
@@ -7060,6 +7173,195 @@ impl FactCollector<'_, '_> {
         }
         Some(values)
     }
+}
+
+/// Each component's own parameter bindings that pass a prop on unchanged:
+/// the bindings its props destructure (`({ size })`), and the binding of
+/// its props object (`(props)`). A component is a top-level function named
+/// as one (an uppercase first letter), declared or bound to a variable,
+/// plain or inside React's own `memo` or `forwardRef`, whose binding
+/// nothing writes. A binding something writes is left out, and so is a
+/// props object the body uses other than to read a member or spread it
+/// (`props.size = …`, `Object.assign(props, …)`, `props.f()`, `const p =
+/// props`); a module that names `arguments` or `eval` unbound, which may
+/// change any of them, passes on none.
+#[derive(Default)]
+struct ComponentParams {
+    props: FxHashMap<SymbolId, ForwardedProp>,
+    objects: FxHashMap<SymbolId, String>,
+}
+
+fn component_parameters(program: &Program<'_>, scoping: &Scoping) -> ComponentParams {
+    use oxc::ast::ast::{BindingIdentifier, BindingPattern, Declaration, ExportDefaultDeclarationKind};
+    let mut params = ComponentParams::default();
+    let unresolved = scoping.root_unresolved_references();
+    if unresolved.contains_key("arguments") || unresolved.contains_key("eval") {
+        return params;
+    }
+    let unwritten =
+        |id: &BindingIdentifier<'_>| id.symbol_id.get().filter(|symbol| !crate::identity::reassigned(scoping, *symbol));
+    let mut component = |id: &BindingIdentifier<'_>, function: Option<ComponentFunction<'_, '_>>| {
+        let Some(first) = function.and_then(|function| function.props.map(|first| (first, function.body))) else {
+            return;
+        };
+        let (first, body) = first;
+        if unwritten(id).is_none() {
+            return;
+        }
+        let name = id.name.to_string();
+        match &first.pattern {
+            BindingPattern::BindingIdentifier(object) => {
+                let Some(symbol) = unwritten(object) else { return };
+                let mut uses = PropsUses { scoping, object: symbol, read: FxHashSet::default(), opaque: false };
+                body.visit(&mut uses);
+                let all_read = scoping.get_resolved_reference_ids(symbol).iter().all(|reference| {
+                    uses.read.contains(reference) || !scoping.get_reference(*reference).is_value()
+                });
+                if !uses.opaque && all_read {
+                    params.objects.insert(symbol, name);
+                }
+            }
+            BindingPattern::ObjectPattern(object) => {
+                for property in object.properties.iter().filter(|property| !property.computed) {
+                    let Some(key) = eval_property_key(&property.key) else { continue };
+                    // A default the walk cannot read may pass any value.
+                    let (id, default) = match &property.value {
+                        BindingPattern::BindingIdentifier(id) => (id, None),
+                        BindingPattern::AssignmentPattern(assignment) => match (&assignment.left, literal_value(&assignment.right)) {
+                            (BindingPattern::BindingIdentifier(id), Some(value)) => (id, Some(value)),
+                            _ => continue,
+                        },
+                        _ => continue,
+                    };
+                    if let Some(symbol) = unwritten(id) {
+                        params.props.insert(symbol, ForwardedProp { component: name.clone(), prop: key, default });
+                    }
+                }
+            }
+            _ => {}
+        }
+    };
+    let named = |id: &BindingIdentifier<'_>| id.name.starts_with(|c: char| c.is_ascii_uppercase());
+    // React's wrappers, read once a declarator may call one.
+    let mut react: Option<ReactNames> = None;
+    for statement in &program.body {
+        let declaration = match statement {
+            Statement::ExportDeclaration(export) => Some(&export.declaration),
+            Statement::ExportDefaultDeclaration(export) => {
+                if let ExportDefaultDeclarationKind::FunctionDeclaration(function) = &export.declaration {
+                    if let Some(id) = function.id.as_ref().filter(|id| named(id)) {
+                        component(id, ComponentFunction::of_function(function));
+                    }
+                }
+                continue;
+            }
+            statement => statement.as_declaration(),
+        };
+        match declaration {
+            Some(Declaration::FunctionDeclaration(function)) => {
+                if let Some(id) = function.id.as_ref().filter(|id| named(id)) {
+                    component(id, ComponentFunction::of_function(function));
+                }
+            }
+            Some(Declaration::VariableDeclaration(variables)) => {
+                for declarator in &variables.declarations {
+                    let (BindingPattern::BindingIdentifier(id), Some(init)) = (&declarator.id, &declarator.init) else { continue };
+                    if !named(id) {
+                        continue;
+                    }
+                    let react = react.get_or_insert_with(|| ReactNames::wrappers(program, scoping));
+                    component(id, ComponentFunction::through(init, &|callee| react.export(callee).is_some()));
+                }
+            }
+            _ => {}
+        }
+    }
+    /// How a component body uses its props object `object`: the references
+    /// that read one of its members or spread it, and whether the body may
+    /// change it some other way (`opaque`).
+    struct PropsUses<'s> {
+        scoping: &'s Scoping,
+        object: SymbolId,
+        read: FxHashSet<oxc::semantic::ReferenceId>,
+        opaque: bool,
+    }
+    /// The object a member chain starts from (`props` of `props.style.color`).
+    fn root<'e, 'a>(mut expression: &'e Expression<'a>) -> &'e Expression<'a> {
+        while let Some(member) = expression.get_inner_expression().as_member_expression() {
+            expression = member.object();
+        }
+        expression.get_inner_expression()
+    }
+    impl PropsUses<'_> {
+        fn names_object(&self, expression: &Expression<'_>) -> Option<oxc::semantic::ReferenceId> {
+            match expression.get_inner_expression() {
+                Expression::Identifier(id) if symbol_of(self.scoping, id) == Some(self.object) => id.reference_id.get(),
+                _ => None,
+            }
+        }
+
+        /// Whether `expression` is a member of the props object, however
+        /// deep (`props.size`, `props.style.color`, `props?.size`).
+        fn member_of_object(&self, expression: &Expression<'_>) -> bool {
+            let member = match expression.get_inner_expression() {
+                Expression::ChainExpression(chain) => chain.expression.as_member_expression(),
+                expression => expression.as_member_expression(),
+            };
+            member.is_some_and(|member| self.names_object(root(member.object())).is_some())
+        }
+
+        /// Records `expression` as a read of the props object, where it
+        /// names it: a member's object, or a spread's argument.
+        fn read(&mut self, expression: &Expression<'_>) -> bool {
+            let reference = self.names_object(expression);
+            self.read.extend(reference);
+            reference.is_some()
+        }
+    }
+    impl<'a> Visit<'a> for PropsUses<'_> {
+        fn visit_static_member_expression(&mut self, member: &oxc::ast::ast::StaticMemberExpression<'a>) {
+            if !self.read(&member.object) {
+                oxc::ast_visit::walk::walk_static_member_expression(self, member);
+            }
+        }
+        fn visit_spread_element(&mut self, spread: &oxc::ast::ast::SpreadElement<'a>) {
+            if !self.read(&spread.argument) {
+                oxc::ast_visit::walk::walk_spread_element(self, spread);
+            }
+        }
+        fn visit_jsx_spread_attribute(&mut self, spread: &oxc::ast::ast::JSXSpreadAttribute<'a>) {
+            if !self.read(&spread.argument) {
+                oxc::ast_visit::walk::walk_jsx_spread_attribute(self, spread);
+            }
+        }
+        // A write to a member, a member called with the object as `this`,
+        // and a deleted member may change it.
+        fn visit_simple_assignment_target(&mut self, target: &oxc::ast::ast::SimpleAssignmentTarget<'a>) {
+            if target.as_member_expression().is_some_and(|member| self.names_object(root(member.object())).is_some()) {
+                self.opaque = true;
+            }
+            oxc::ast_visit::walk::walk_simple_assignment_target(self, target);
+        }
+        fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
+            if self.member_of_object(&call.callee) {
+                self.opaque = true;
+            }
+            oxc::ast_visit::walk::walk_call_expression(self, call);
+        }
+        fn visit_tagged_template_expression(&mut self, tagged: &oxc::ast::ast::TaggedTemplateExpression<'a>) {
+            if self.member_of_object(&tagged.tag) {
+                self.opaque = true;
+            }
+            oxc::ast_visit::walk::walk_tagged_template_expression(self, tagged);
+        }
+        fn visit_unary_expression(&mut self, unary: &oxc::ast::ast::UnaryExpression<'a>) {
+            if unary.operator == oxc::syntax::operator::UnaryOperator::Delete && self.member_of_object(&unary.argument) {
+                self.opaque = true;
+            }
+            oxc::ast_visit::walk::walk_unary_expression(self, unary);
+        }
+    }
+    params
 }
 
 /// Each parameter binding whose type annotation reads, without a type
@@ -8147,6 +8449,7 @@ pub(crate) struct ReactNames {
 
 const REACT_RUNTIMES: [&str; 3] = ["react", "preact", "preact/compat"];
 const ELEMENT_FUNCTIONS: [&str; 2] = ["createElement", "cloneElement"];
+const WRAPPER_FUNCTIONS: [&str; 2] = ["memo", "forwardRef"];
 /// Each automatic runtime and the exports compiled JSX names.
 pub(crate) const AUTOMATIC_RUNTIMES: [(&str, &[&str]); 2] = [
     ("react/jsx-runtime", &["jsx", "jsxs", "Fragment"]),
@@ -8240,16 +8543,37 @@ impl ReactNames {
     }
 
     pub(crate) fn from_imports(program: &Program<'_>, scoping: &Scoping) -> Self {
+        Self::importing(program, scoping, &ELEMENT_FUNCTIONS, &AUTOMATIC_RUNTIMES, true)
+    }
+
+    /// React's `memo` and `forwardRef`, read as `from_imports` reads the
+    /// element functions, but only through an import of a runtime: an
+    /// unbound `memo`, `forwardRef` or `React` is whatever the page's
+    /// globals hold.
+    fn wrappers(program: &Program<'_>, scoping: &Scoping) -> Self {
+        Self::importing(program, scoping, &WRAPPER_FUNCTIONS, &[], false)
+    }
+
+    /// The `classic` exports of a recognised runtime and each `automatic`
+    /// runtime's own, as imported, and with `unbound`, the globals that name
+    /// the `classic` ones and an unbound `React`.
+    fn importing(
+        program: &Program<'_>,
+        scoping: &Scoping,
+        classic: &'static [&'static str],
+        automatic: &[(&str, &'static [&'static str])],
+        unbound: bool,
+    ) -> Self {
         let mut names = Self { functions: FxHashMap::default(), namespaces: FxHashMap::default() };
         for stmt in &program.body {
             let Statement::ImportDeclaration(import) = stmt else {
                 continue;
             };
             let Some(source) = import.source.value.as_str() else { continue };
-            let automatic = AUTOMATIC_RUNTIMES.iter().find(|(runtime, _)| *runtime == source).map(|(_, f)| *f);
+            let automatic = automatic.iter().find(|(runtime, _)| *runtime == source).map(|(_, f)| *f);
             let exported: &'static [&'static str] = match automatic {
                 Some(exports) => exports,
-                None if REACT_RUNTIMES.contains(&source) => &ELEMENT_FUNCTIONS,
+                None if REACT_RUNTIMES.contains(&source) => classic,
                 None => continue,
             };
             for specifier in import.specifiers.iter().flatten() {
@@ -8279,13 +8603,13 @@ impl ReactNames {
         }
         names.functions.retain(|local, _| bound.get(local.as_str()) == Some(&1));
         names.namespaces.retain(|local, _| bound.get(local.as_str()) == Some(&1));
-        for function in ELEMENT_FUNCTIONS {
+        for function in classic.iter().filter(|_| unbound) {
             if !bound.contains_key(function) {
                 names.functions.insert(function.to_string(), function);
             }
         }
-        if !bound.contains_key("React") {
-            names.namespaces.insert("React".to_string(), &ELEMENT_FUNCTIONS);
+        if unbound && !bound.contains_key("React") {
+            names.namespaces.insert("React".to_string(), classic);
         }
         let untrusted = rewritable_namespaces(program, &names.namespaces);
         names.namespaces.retain(|local, _| !untrusted.contains(local));
@@ -8351,6 +8675,7 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         origins: None,
         declared_params: FxHashMap::default(),
         declared_hints: Vec::new(),
+        params: ComponentParams::default(),
         provided: FxHashSet::default(),
         rests: FxHashMap::default(),
         declaring: oxc::ast::ast::VariableDeclarationKind::Var,

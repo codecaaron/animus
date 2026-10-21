@@ -180,6 +180,11 @@ export interface ProjectManifest {
    *  Present only where the host publishes the prop-order file, or verbose
    *  output asks for slot provenance, and a tag resolves. */
   tag_components?: Record<string, Record<string, string>>;
+  /** File → each plain tag written there as JSX that names one top-level
+   *  declaration, by its own binding or an import the module graph
+   *  resolves → that declaration, `file::binding`. Present only where
+   *  verbose output asks for slot provenance, and a tag resolves. */
+  tag_declarations?: Record<string, Record<string, string>>;
   timing: ManifestTiming;
 }
 

@@ -6,6 +6,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -97,5 +98,36 @@ describe('revalidate detects a changed artifact set', () => {
     if (!freshness.fresh) {
       expect(freshness.changed).toContain(COMMIT_FILE);
     }
+  });
+});
+
+/** Contract: Oracle accepts unchanged source against the manifest the
+ *  current engine writes. The manifest's `usage` stays the raw syntax Oracle
+ *  checks source against (a `const` read as written), and what the analysis
+ *  proves of it travels beside it as `proven`. */
+describe("the engine's own manifest", () => {
+  it('corresponds to the unchanged source it was built from', () => {
+    const extractor = createRequire(import.meta.url)('@animus-ui/extract');
+    const source =
+      'const GAP = 24;\nexport const App = () => <Box p={GAP} />;\n';
+    const root = mkdtempSync(join(tmpdir(), 'places-engine-src-'));
+    writeFileSync(join(root, 'app.tsx'), source);
+    const engine = new extractor.ExtractEngine({});
+    engine.prepare(JSON.stringify([{ path: 'app.tsx', source }]));
+    engine.analyzePrepared();
+    const built = JSON.parse(engine.fullManifestJson());
+
+    const dir = scratchArtifacts();
+    const manifestPath = join(dir, MANIFEST_FILE);
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.fileFacts['app.tsx'] = built.fileFacts['app.tsx'];
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const structure = loadSnapshot(dir, { sourceRoot: root }).structureOf(
+      'app.tsx'
+    );
+    expect(structure).toMatchObject({ ok: true });
+    rmSync(root, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
   });
 });

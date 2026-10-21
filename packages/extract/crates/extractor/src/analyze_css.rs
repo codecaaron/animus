@@ -1019,6 +1019,12 @@ pub struct CssOutput {
     /// built only for a host that publishes the prop-order file, and where
     /// slot provenance is asked for, which `animus css audit` reads it with.
     pub tag_components: BTreeMap<String, BTreeMap<String, String>>,
+    /// File → each plain tag written there as JSX that names one top-level
+    /// declaration, by its own binding or an import the module graph
+    /// resolves → that declaration, `file::binding`; built only where slot
+    /// provenance is asked for, for `animus css audit` to match a forwarded
+    /// prop's callers by identity.
+    pub tag_declarations: BTreeMap<String, BTreeMap<String, String>>,
     /// Each `systemPropNames` list runtime configs reference, by key, as its
     /// source in the system-props module (`PropNameLists`).
     pub prop_name_lists: BTreeMap<String, String>,
@@ -10802,6 +10808,40 @@ fn run_with_system_floor(
             (!tags.is_empty()).then(|| (path.clone(), tags))
         })
         .collect();
+    // As `tag_components`, for any declaration a plain tag renders: the
+    // file's own top-level binding, or the one an import resolves to
+    // through the module graph.
+    let tag_declarations: BTreeMap<String, BTreeMap<String, String>> = files
+        .iter()
+        .filter(|_| inputs.slot_provenance)
+        .filter_map(|(path, ff)| {
+            let mut origins: BTreeMap<&str, Option<TagOrigin>> = BTreeMap::new();
+            for fact in ff.usage_for_analysis() {
+                if let UsageFact::Element { tag: TagFact::Ident(tag), origin, written_as_call: false, .. } = fact {
+                    if !tag.starts_with(|first: char| first.is_ascii_uppercase()) {
+                        continue;
+                    }
+                    let bound = origin.filter(|origin| matches!(origin, TagOrigin::Import | TagOrigin::TopLevel));
+                    let entry = origins.entry(tag.as_str()).or_insert(bound);
+                    if *entry != bound {
+                        *entry = None;
+                    }
+                }
+            }
+            let tags: BTreeMap<String, String> = origins
+                .into_iter()
+                .filter_map(|(tag, origin)| {
+                    // A namespace import, rendered whole, names no declaration.
+                    if origin? == TagOrigin::Import && !ff.imports.iter().any(|import| import.local == tag) {
+                        return None;
+                    }
+                    let (file, binding) = callee_declaration(path, tag, files, inputs, links)?;
+                    Some((tag.to_string(), format!("{file}::{binding}")))
+                })
+                .collect();
+            (!tags.is_empty()).then(|| (path.clone(), tags))
+        })
+        .collect();
     let (delivered_ids, delivered_tags) = opaque_delivery(
         files,
         inputs,
@@ -12595,6 +12635,7 @@ fn run_with_system_floor(
         font_preloads: font_preloads.list,
         runtime_tables,
         tag_components,
+        tag_declarations,
         prop_name_lists: prop_name_lists.into_sources(),
         superseded_by,
         slot_provenance,

@@ -75,6 +75,9 @@ struct AnalyzeResult<'a> {
     /// where slot provenance is asked for.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     tag_components: &'a std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    /// Present only where slot provenance is asked for.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    tag_declarations: &'a std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     /// Present only where a runtime config references a shared list.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     prop_name_lists: &'a std::collections::BTreeMap<String, String>,
@@ -1731,6 +1734,7 @@ impl ExtractEngine {
             font_preloads: &css.font_preloads,
             runtime_tables: &css.runtime_tables,
             tag_components: &css.tag_components,
+            tag_declarations: &css.tag_declarations,
             prop_name_lists: &css.prop_name_lists,
             superseded_by: &css.superseded_by,
             slot_provenance: css.slot_provenance.as_ref(),
@@ -2405,15 +2409,22 @@ mod tests {
         );
     }
 
+    /// Contract: the manifest's `usage` stays the raw syntax, which Oracle
+    /// checks source against, and `proven` beside it proves a value only
+    /// where the pruning analysis does (`AttrFact::proven_values`): a
+    /// `const` as its value and a conditional of literals as its
+    /// alternatives, but never a value evaluated through an object
+    /// something changes.
     #[test]
-    fn analyze_file_facts_preserve_raw_identifier_and_conditional_usage() {
+    fn manifest_proven_is_what_pruning_proves() {
         let mut engine = ExtractEngine::new(None).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(
             &engine
                 .analyze_full(
                     serde_json::json!([{
                         "path": "raw.tsx",
-                        "source": "const GAP = 24; export const App = ({ open }) => <Box p={GAP} display={open ? 'block' : 'none'} />;"
+                        "source": "const GAP = 24; const options = { size: 'sm' }; options.size = 'lg';\n\
+                                   export const App = ({ open, n }) => <Box p={GAP} display={open ? 'block' : 'none'} m={n} size={options.size} />;"
                     }])
                     .to_string(),
                     None,
@@ -2421,21 +2432,77 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
+        let facts = &manifest["fileFacts"]["raw.tsx"];
+        let attr = |list: &str, name: &str| {
+            facts[list][0]["element"]["attrs"].as_array().unwrap().iter().find(|attr| attr["name"] == name).unwrap().clone()
+        };
 
-        let attrs = manifest["fileFacts"]["raw.tsx"]["usage"][0]["element"]["attrs"]
-            .as_array()
-            .unwrap();
-        let identifier = attrs.iter().find(|attr| attr["name"] == "p").unwrap();
-        assert!(identifier["staticValue"].is_null());
-        assert!(identifier.get("enumerableValues").is_none());
-        assert_eq!(identifier["dynamic"], true);
-        assert_eq!(identifier["dynamicKind"], "identifier");
+        assert_eq!(attr("usage", "p")["dynamic"], true, "raw usage reads a const as written");
+        assert_eq!(attr("proven", "p"), serde_json::json!({ "name": "p", "values": [24], "proven": true }));
+        assert_eq!(attr("proven", "display")["values"], serde_json::json!(["block", "none"]));
+        assert_eq!(attr("proven", "display")["proven"], true);
 
-        let conditional = attrs.iter().find(|attr| attr["name"] == "display").unwrap();
-        assert!(conditional["staticValue"].is_null());
-        assert!(conditional.get("enumerableValues").is_none());
-        assert_eq!(conditional["dynamic"], true);
-        assert_eq!(conditional["dynamicKind"], "conditional");
+        let runtime = attr("proven", "m");
+        assert_eq!(runtime["proven"], false);
+        assert_eq!(runtime["values"], serde_json::json!([]));
+        // Evaluated as 'sm', written as 'lg': listed, never proven.
+        assert_eq!(attr("proven", "size")["proven"], false);
+    }
+
+    /// Contract: the manifest names the component's own prop a runtime
+    /// value passes on unchanged, destructured or read off its props
+    /// object, so a reader can tell a forward, which its callers write,
+    /// from a value the site computes; and names none where the value may
+    /// be another: a props object something writes, a `memo` no import of
+    /// React names (a module's own, or an unbound `React`'s), or a falsy prop
+    /// replaced (`size || undefined`).
+    #[test]
+    fn manifest_proven_names_only_an_unchanged_forward() {
+        let mut engine = ExtractEngine::new(None).unwrap();
+        let source = "import { memo } from 'react';\n\
+                      export const Button = ({ size }) => <Box p={size} />;\n\
+                      export function Tag(props) { return <Box m={props.tone} />; }\n\
+                      export const plain = ({ n }) => <Box p={n} />;\n\
+                      export const Pill = memo(({ size = 'md' }) => <Box p={size} />);\n\
+                      export const Or = ({ size }) => <Box p={size || undefined} />;\n\
+                      export const Coalesce = ({ size }) => <Box p={size ?? undefined} />;\n\
+                      export function Written(props) { props.size = 'lg'; return <Box p={props.size} />; }\n\
+                      export function Assigned(props) { Object.assign(props, { size: 'lg' }); return <Box p={props.size} />; }\n";
+        let local = "function memo(fn) { return () => fn({ size: 'lg' }); }\n\
+                     export const Wrap = memo(({ size }) => <Box p={size} />);\n";
+        let global = "globalThis.React = { memo: (fn) => () => fn({ size: 'lg' }) };\n\
+                      export const Wrap = React.memo(({ size }) => <Box p={size} />);\n";
+        let manifest: serde_json::Value = serde_json::from_str(
+            &engine
+                .analyze_full(
+                    serde_json::json!([
+                        { "path": "a.tsx", "source": source },
+                        { "path": "b.tsx", "source": local },
+                        { "path": "c.tsx", "source": global }
+                    ])
+                    .to_string(),
+                    None,
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let attr = |file: &str, element: usize| manifest["fileFacts"][file]["proven"][element]["element"]["attrs"][0].clone();
+        assert_eq!(attr("a.tsx", 0)["forwarded"], serde_json::json!({ "component": "Button", "prop": "size" }));
+        assert_eq!(attr("a.tsx", 1)["forwarded"], serde_json::json!({ "component": "Tag", "prop": "tone" }));
+        assert!(attr("a.tsx", 2).get("forwarded").is_none(), "a function not named as a component forwards nothing");
+        // Through React's `memo`, with the literal a caller that leaves it out passes.
+        assert_eq!(attr("a.tsx", 3)["forwarded"], serde_json::json!({ "component": "Pill", "prop": "size", "default": "md" }));
+        for (element, why) in [
+            (4, "`|| undefined` replaces a falsy option"),
+            (5, "`?? undefined` replaces null"),
+            (6, "a write to the props object"),
+            (7, "the props object handed to a call"),
+        ] {
+            assert!(attr("a.tsx", element).get("forwarded").is_none(), "{why} forwards nothing");
+        }
+        assert!(attr("b.tsx", 0).get("forwarded").is_none(), "a module's own `memo` forwards nothing");
+        assert!(attr("c.tsx", 0).get("forwarded").is_none(), "an unbound `React`'s `memo` forwards nothing");
+        assert!(manifest["fileFacts"]["a.tsx"]["usage"][0]["element"]["attrs"][0].get("forwarded").is_none(), "raw usage names no forward");
     }
 
     #[test]
