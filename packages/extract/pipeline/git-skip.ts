@@ -1,6 +1,6 @@
 import { execFileSync } from 'child_process';
 import { existsSync, realpathSync } from 'fs';
-import { basename, dirname, extname, join, resolve, sep } from 'path';
+import { basename, dirname, extname, join, relative, resolve, sep } from 'path';
 
 import { matchesAnyPattern } from './core-options';
 import { specifierCandidates } from './native-resolution';
@@ -201,8 +201,12 @@ export class GitSkip {
    *  open: past the round bound, or for the loads the host cannot list, as
    *  `describeLoad` names them, and whether it lists any load. */
   private open: FailedOpen | null = null;
-  /** Each path the walk kept out, root-relative: a directory once. */
+  /** Each path the walk kept out as git ignores it, root-relative: a
+   *  directory once. */
   private skipped = new Set<string>();
+  /** Checkouts of their own the walk entered, `analyzeIgnored` naming a
+   *  path in each, and whose other paths it kept out. */
+  private enteredCheckouts = new Set<string>();
   /** The repository's top and exclude file, where a repository holds the
    *  root. */
   private repository: { top: string; exclude: string } | null = null;
@@ -245,6 +249,7 @@ export class GitSkip {
     this.rootDir = rootDir;
     this.open = null;
     this.skipped = new Set();
+    this.enteredCheckouts = new Set();
     this.pulled = new Set(pulled);
     this.walked = null;
     this.ignored = this.everything ? null : readGitIgnored(rootDir);
@@ -323,16 +328,28 @@ export class GitSkip {
     if (this.pulled.has(key) || this.awaited.has(key)) return false;
     const skipped =
       (this.ignored?.(key) ?? false) ||
-      this.inCheckout(full) ||
+      this.checkoutOf(full) !== null ||
       this.ignoredSinceWalk(key);
     return skipped && !this.keptAnyway(full, rel, key);
   }
 
-  /** `skips`, for the walk: a path it keeps out counts in `summary`. */
+  /** `skips`, for the walk: a path it keeps out counts in `summary`, as a
+   *  path git ignores, or under the checkout of its own it lies in. */
   walkSkips(full: string, rel: string): boolean {
     const skipped = this.skips(full, rel);
-    if (skipped) this.skipped.add(posixKey(rel));
-    return skipped;
+    if (!skipped) return false;
+    const key = posixKey(rel);
+    const checkout = this.checkoutOf(full);
+    if (
+      checkout !== null &&
+      !(this.ignored?.(key) ?? false) &&
+      !this.ignoredSinceWalk(key)
+    ) {
+      this.enteredCheckouts.add(posixKey(relative(this.rootDir, checkout)));
+    } else {
+      this.skipped.add(key);
+    }
+    return true;
   }
 
   /** Whether the walk leaves out a directory it reached: a checkout of its
@@ -354,18 +371,18 @@ export class GitSkip {
     return checkout;
   }
 
-  /** Whether `full` lies in a directory below the root that is a checkout
-   *  of its own. */
-  private inCheckout(full: string): boolean {
-    if (!isPathWithinRoot(this.rootDir, full)) return false;
+  /** The directory below the root, a checkout of its own, that `full`
+   *  lies in; null where none holds it. */
+  private checkoutOf(full: string): string | null {
+    if (!isPathWithinRoot(this.rootDir, full)) return null;
     for (
       let dir = dirname(full);
       dir.length > this.rootDir.length;
       dir = dirname(dir)
     ) {
-      if (this.isCheckout(dir)) return true;
+      if (this.isCheckout(dir)) return dir;
     }
-    return false;
+    return null;
   }
 
   /** Whether git ignores a path created after its listing: asked once per
@@ -427,21 +444,24 @@ export class GitSkip {
             `every file git ignores`;
     }
     if (!this.authority) return null;
-    const checkouts = new Set(this.skippedCheckouts);
+    const checkouts = new Set([
+      ...this.skippedCheckouts,
+      ...this.enteredCheckouts,
+    ]);
     const paths = [...this.skipped].filter(
       (path) => !this.pulled.has(path) && !checkouts.has(path)
     );
     const parts = [
-      ...(this.ignored === null
+      ...(this.ignored === null || (paths.length === 0 && checkouts.size > 0)
         ? []
         : [
             paths.length === 0
               ? 'no path git ignores, since the walk met none'
               : `${paths.length} ${paths.length === 1 ? 'path' : 'paths'} git ignores (${topLevel(paths)})`,
           ]),
-      ...(this.skippedCheckouts.length === 0
+      ...(checkouts.size === 0
         ? []
-        : [`checkouts of their own (${this.skippedCheckouts.join(', ')})`]),
+        : [`checkouts of their own (${[...checkouts].sort().join(', ')})`]),
     ];
     if (parts.length === 0) return null;
     const pulled = this.pulledFiles();

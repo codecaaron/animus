@@ -90,7 +90,21 @@ export function describeLoad(load: ListedLoad, line: number | null): string {
       : args.quasis.map(quote).join(' + … + ');
     call = `${load.kind === 'require' ? 'require' : 'import'}(${specifier})`;
   } else {
-    call = `require.context(${quote(args.dir)}${args.recursive === null ? '' : `, ${args.recursive}`}${args.regExp === null ? '' : `, /${args.regExp.source}/${args.regExp.flags}`})`;
+    const regex = (literal: RegexLiteral) =>
+      `/${literal.source}/${literal.flags}`;
+    if (load.kind === 'webpackContext') {
+      // `import.meta.webpackContext(dir, { recursive, regExp, include, exclude, mode })`.
+      const options = [
+        args.recursive === null ? null : `recursive: ${args.recursive}`,
+        args.regExp === null ? null : `regExp: ${regex(args.regExp)}`,
+        args.include === null ? null : `include: ${regex(args.include)}`,
+        args.exclude === null ? null : `exclude: ${regex(args.exclude)}`,
+        args.mode === null ? null : `mode: ${quote(args.mode)}`,
+      ].filter((option) => option !== null);
+      call = `import.meta.webpackContext(${quote(args.dir)}${options.length === 0 ? '' : `, { ${options.join(', ')} }`})`;
+    } else {
+      call = `require.context(${quote(args.dir)}${args.recursive === null ? '' : `, ${args.recursive}`}${args.regExp === null ? '' : `, ${regex(args.regExp)}`}${args.mode === null ? '' : `, ${quote(args.mode)}`})`;
+    }
   }
   return `${at} ${call}`;
 }
