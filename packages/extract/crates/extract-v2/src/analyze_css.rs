@@ -10773,19 +10773,28 @@ fn run_with_system_floor(
     // A store onto an object that may be a prototype every props object
     // inherits changes what a render reads by its key: a prop's name, or
     // one React or the runtime reads.
+    // The names of the variants and states any component declares.
+    let option_names: FxHashSet<&str> = evaluated
+        .values()
+        .flat_map(|(css, ..)| css.variants.iter().map(|variant| variant.prop.as_str()).chain(css.states.iter().map(|(state, _)| state.as_str())))
+        .collect();
     let prop_named = |key: &str| {
         matches!(key, "children" | "key" | "ref" | "className" | "style" | "as" | "asChild")
             || inputs.config.contains_key(key)
             || inputs.selector_aliases.contains_key(key)
             || inputs.condition_aliases.contains_key(key)
-            || evaluated.values().any(|(css, _, _, _, _, custom, _)| {
-                css.variants.iter().any(|variant| variant.prop == key)
-                    || css.states.iter().any(|(state, _)| state == key)
-                    || custom.as_ref().is_some_and(|custom| custom.contains_key(key))
-            })
+            || option_names.contains(key)
+            || evaluated.values().any(|(.., custom, _)| custom.as_ref().is_some_and(|custom| custom.contains_key(key)))
     };
     patch_gaps.extend(files.iter().filter_map(|(file, ff)| {
         let (at, _) = ff.keyed_stores.iter().find(|(_, key)| prop_named(key))?;
+        Some(SlotOpening { at: Some(*at), ..SlotOpening::rule("patches-intrinsics").in_file(file).detail("prop-key-store") })
+    }));
+    // A store by a variant's or a state's name into a binding whose value
+    // the analysis does not follow may be a store onto the prototype props
+    // inherit.
+    patch_gaps.extend(files.iter().filter_map(|(file, ff)| {
+        let (at, _) = ff.untraced_stores.iter().find(|(_, key)| option_names.contains(key.as_str()))?;
         Some(SlotOpening { at: Some(*at), ..SlotOpening::rule("patches-intrinsics").in_file(file).detail("prop-key-store") })
     }));
     // A patch the analysis cannot follow may change the props a render
@@ -15504,6 +15513,23 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             ("import * as R from 'react';\nconst d = R.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentDispatcher;\nd.current = { useState: () => ['lg'] };\n", "", true),
             ("", "Object.prototype.size = 'lg';\n", true),
             ("import { patch } from './b';\ndocument.onclick = () => {};\npatch(Object);\n", "export function patch(root) {\n  root['prototype']['size'] = 'lg';\n  root['prototype']['loading'] = true;\n}\n", true),
+            // A store by an option's name through a binding whose value the
+            // analysis does not follow (a call result, a parameter, an
+            // import, a `let`) may be one onto the prototype; one into what
+            // the module built, React's refs included, or a global, is not.
+            ("import { protoOf } from 'outside';\nconst proto = protoOf();\nproto.size = 'lg';\nproto.loading = true;\n", "", true),
+            ("export function set(target) {\n  target.size = 'lg';\n  target.loading = true;\n}\n", "", true),
+            ("import { protoOf } from 'outside';\nlet box = {};\nbox = protoOf();\nbox.size = 'lg';\n", "", true),
+            ("import { protoOf } from 'outside';\nconst holder = protoOf();\nholder.inner.loading = true;\n", "", true),
+            ("someGlobal.size = 'lg';\n", "", false),
+            ("import { theme } from 'outside';\ntheme.loading = true;\n", "", true),
+            ("import { protoOf } from 'outside';\nconst useRef = protoOf;\nconst ref = useRef();\nref.loading = true;\n", "", true),
+            ("import { useRef } from 'react';\nimport { protoOf } from 'outside';\nexport const Probe = () => { let ref = useRef(null); ref = protoOf(); ref.loading = true; return null; };\n", "", true),
+            ("const box = {};\nbox.size = 'lg';\nbox.loading = true;\n", "", false),
+            ("import { useRef } from 'react';\nexport const Probe = () => { const ref = useRef({}); ref.loading = true; return null; };\n", "", false),
+            ("import { createRef } from 'react';\nconst ref = createRef();\nref.size = 'lg';\n", "", false),
+            ("import { protoOf } from 'outside';\nconst proto = protoOf();\nproto.title = 'x';\n", "", false),
+            ("function Tagged() {}\nTagged.size = 'lg';\n", "", false),
             ("document.onclick = () => {};\n", "", true),
         ] {
             let out = analyze(&[("a.tsx", &format!("{patch}{kit}")), ("b.tsx", other)], &test_inputs());

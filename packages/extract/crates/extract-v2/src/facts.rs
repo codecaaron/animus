@@ -729,6 +729,11 @@ pub struct FileFacts {
     /// render reads that key by name.
     #[serde(skip)]
     pub(crate) keyed_stores: Vec<(u32, String)>,
+    /// Stores by a static key into a binding whose value the analysis does
+    /// not follow (a parameter, a call result, an import), with the key:
+    /// each leaves no usage proven where it names a variant or a state.
+    #[serde(skip)]
+    pub(crate) untraced_stores: Vec<(u32, String)>,
     /// The module writes into the global `Object` or lets it go as a value,
     /// so `Object.assign` may not be the built-in: no family built through
     /// it is followed anywhere.
@@ -1473,6 +1478,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         patches_intrinsics: None,
         outside_let_goes: Vec::new(),
         keyed_stores: Vec::new(),
+        untraced_stores: Vec::new(),
         rewrites_object: false,
         child_cloners: BTreeMap::new(),
         opaque_tags: Vec::new(),
@@ -2171,6 +2177,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         patches_intrinsics,
         outside_let_goes,
         keyed_stores,
+        untraced_stores,
         rewrites_object,
         child_cloners,
         builder_import_references,
@@ -2247,6 +2254,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         patches_intrinsics,
         outside_let_goes,
         keyed_stores,
+        untraced_stores,
         rewrites_object,
         child_cloners,
         unbound_create_system_calls: unbound_create_system_calls(ast),

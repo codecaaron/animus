@@ -957,6 +957,8 @@ pub(crate) struct EnrichedUsage {
     pub outside_let_goes: Vec<(u32, String)>,
     /// See `FileFacts::keyed_stores`.
     pub keyed_stores: Vec<(u32, String)>,
+    /// See `FileFacts::untraced_stores`.
+    pub untraced_stores: Vec<(u32, String)>,
     /// See `FileFacts::rewrites_object`.
     pub rewrites_object: bool,
     /// See `FileFacts::child_cloners`.
@@ -1439,6 +1441,7 @@ pub(crate) fn collect_enriched_usage(
         patches_intrinsics: records.patches_intrinsics,
         outside_let_goes: records.outside_let_goes,
         keyed_stores: records.keyed_stores,
+        untraced_stores: records.untraced_stores,
         rewrites_object: records.rewrites_object,
         child_cloners: records.child_cloners,
         builder_import_references,

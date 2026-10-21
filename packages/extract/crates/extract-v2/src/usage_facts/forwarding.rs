@@ -375,6 +375,8 @@ pub(super) struct Records {
     pub outside_let_goes: Vec<(u32, String)>,
     /// See `FileFacts::keyed_stores`.
     pub keyed_stores: Vec<(u32, String)>,
+    /// See `FileFacts::untraced_stores`.
+    pub untraced_stores: Vec<(u32, String)>,
     /// See `FileFacts::rewrites_object`.
     pub rewrites_object: bool,
     /// See `FileFacts::child_cloners`.
@@ -567,6 +569,8 @@ struct Module<'s> {
     outside_let_goes: Vec<(u32, String)>,
     /// See `FileFacts::keyed_stores`.
     keyed_stores: Vec<(u32, String)>,
+    /// See `FileFacts::untraced_stores`.
+    untraced_stores: Vec<(u32, String)>,
     /// See `FileFacts::rewrites_object`.
     rewrites_object: bool,
     /// The module's top-level class bindings, declared or `const X = class`.
@@ -740,19 +744,15 @@ impl<'s> Module<'s> {
             Statement::ExportAllDeclaration(export) if REACT_MODULES.contains(&export.source.value.as_str()) => Some(export.span.start),
             _ => None,
         });
+        // A binding may hold a prototype unless it holds what the module
+        // built: a function or class declaration names itself only while
+        // nothing reassigns it.
+        let may_hold_prototype = |symbol: SymbolId| {
+            !declarations.literal_bindings.contains(&symbol)
+                && (!scoping.symbol_flags(symbol).intersects(SymbolFlags::Function | SymbolFlags::Class) || scoping.symbol_is_mutated(symbol))
+        };
         // A built-in's name written into a binding that may hold a prototype.
-        let redirected = declarations
-            .built_in_writes
-            .iter()
-            .filter(|(symbol, _)| {
-                // A function or class declaration names itself only while
-                // nothing reassigns it.
-                !declarations.literal_bindings.contains(symbol)
-                    && (!scoping.symbol_flags(**symbol).intersects(SymbolFlags::Function | SymbolFlags::Class)
-                        || scoping.symbol_is_mutated(**symbol))
-            })
-            .map(|(_, at)| *at)
-            .min();
+        let redirected = declarations.built_in_writes.iter().filter(|(symbol, _)| may_hold_prototype(**symbol)).map(|(_, at)| *at).min();
         // A let-go to an import with no source the analysis may follow
         // (`import lib = require(…)`) may reach code it reads.
         let unsourced = declarations.outside_let_goes.iter().find(|(_, import)| !sources.contains_key(import)).map(|(at, _)| *at);
@@ -775,6 +775,15 @@ impl<'s> Module<'s> {
             .collect();
         let outside_let_goes =
             declarations.outside_let_goes.iter().filter_map(|(at, import)| Some((*at, sources.get(import)?.clone()))).collect();
+        // Each key's first store into a binding that may hold a prototype.
+        let mut untraced_stores: Vec<(u32, String)> = declarations
+            .untraced_stores
+            .iter()
+            .filter_map(|(key, stores)| {
+                stores.iter().filter(|(_, binding)| may_hold_prototype(*binding)).map(|(at, _)| *at).min().map(|at| (at, key.clone()))
+            })
+            .collect();
+        untraced_stores.sort_unstable();
         let Declarations {
             params, param_inputs, functions, in_place, reshaped, reshaped_beyond_clones, setters, hook_states, classes, hookable_objects, keyed_stores,
             rewrites_object, ..
@@ -820,6 +829,7 @@ impl<'s> Module<'s> {
             patches_intrinsics,
             outside_let_goes,
             keyed_stores,
+            untraced_stores,
             rewrites_object,
             class_names,
         }
@@ -1117,6 +1127,7 @@ impl<'s> Module<'s> {
             patches_intrinsics: self.patches_intrinsics,
             outside_let_goes: self.outside_let_goes,
             keyed_stores: self.keyed_stores,
+            untraced_stores: self.untraced_stores,
             rewrites_object: self.rewrites_object,
             child_cloners: self.child_cloners,
         }
@@ -1177,8 +1188,9 @@ struct Declarations<'r> {
     /// Bindings some code stores into by any other name: an array among
     /// them may hold hooks.
     named_stores: FxHashSet<SymbolId>,
-    /// Bindings declared to a literal, a function, a class or an array a
-    /// built-in builds (`fresh_array`), never reassigned, and reduce
+    /// Bindings declared to a literal, a function, a class, an array a
+    /// built-in builds (`fresh_array`) or React's `useRef` or `createRef`,
+    /// never reassigned, and reduce
     /// accumulators that only ever hold their literal (`accumulator`): none
     /// holds a built-in's prototype.
     literal_bindings: FxHashSet<SymbolId>,
@@ -1198,6 +1210,10 @@ struct Declarations<'r> {
     primitive_functions: FxHashSet<SymbolId>,
     /// See `FileFacts::keyed_stores`.
     keyed_stores: Vec<(u32, String)>,
+    /// Static-key stores into a binding, or a static chain off one, by key:
+    /// each store's start and binding, `FileFacts::untraced_stores` unless
+    /// the binding holds what the module built.
+    untraced_stores: FxHashMap<String, Vec<(u32, SymbolId)>>,
     /// Where a computed read's value goes into a const (`Consumption`): the
     /// read's start, and the const.
     bound_reads: Vec<(u32, SymbolId)>,
@@ -1290,6 +1306,7 @@ impl<'r> Declarations<'r> {
             primitive_consts: FxHashSet::default(),
             primitive_functions: FxHashSet::default(),
             keyed_stores: Vec::new(),
+            untraced_stores: FxHashMap::default(),
             bound_reads: Vec::new(),
             const_flows: Vec::new(),
             bound_arguments: Vec::new(),
@@ -1635,10 +1652,28 @@ impl<'r> Declarations<'r> {
             // may be a prototype every props object inherits counts where a
             // render reads that key.
             if let (Some(name), false, Some(MemberEffect::Assigned)) = (name, computed, effect) {
-                if !self.unshared(object) && self.maybe_prototype(object) {
-                    self.keyed_stores.push((span.start, name.to_string()));
+                if !self.unshared(object) {
+                    if self.maybe_prototype(object) {
+                        self.keyed_stores.push((span.start, name.to_string()));
+                    } else if let Some(binding) = self.store_root(object) {
+                        match self.untraced_stores.get_mut(name) {
+                            Some(stores) => stores.push((span.start, binding)),
+                            None => {
+                                self.untraced_stores.insert(name.to_string(), vec![(span.start, binding)]);
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /// The binding a static chain starts from (`box` in `box.v`).
+    fn store_root(&self, object: &Expression<'_>) -> Option<SymbolId> {
+        match unwrap_type_assertions(object) {
+            Expression::Identifier(id) => self.symbol(id),
+            Expression::StaticMemberExpression(member) => self.store_root(&member.object),
+            _ => None,
         }
     }
 
@@ -1660,9 +1695,10 @@ impl<'r> Declarations<'r> {
 
     /// Whether `object` may be a prototype by how the module reaches it: by
     /// a computed key, a prototype, constructor or `__proto__` link, or off
-    /// anything but a binding. A binding, or a static chain off one, holds
-    /// a prototype only where the module lets one go as a value
-    /// (`prototype_let_go`), which leaves no usage proven already.
+    /// anything but a binding. A binding, or a static chain off one, may
+    /// hold one the module let go as a value (`prototype_let_go`, which
+    /// leaves no usage proven already) or one it did not trace: a store
+    /// into it is an untraced store (`FileFacts::untraced_stores`).
     fn maybe_prototype(&self, object: &Expression<'_>) -> bool {
         match unwrap_type_assertions(object) {
             Expression::Identifier(_) => false,
@@ -2753,9 +2789,11 @@ impl<'a> Visit<'a> for Declarations<'a> {
                         self.class_bindings.insert(symbol, class.span.start);
                     }
                     let constant = !self.scoping.symbol_is_mutated(symbol);
+                    // React's `useRef` and `createRef` give a fresh `{ current }`.
                     let literal = matches!(init, Expression::ObjectExpression(_) | Expression::ClassExpression(_))
                         || function_scope(init).is_some()
-                        || self.fresh_array(init);
+                        || self.fresh_array(init)
+                        || matches!(init, Expression::CallExpression(call) if self.react.calls(self.scoping, &call.callee, &["useRef", "createRef"]));
                     if constant && literal {
                         self.literal_bindings.insert(symbol);
                     }
