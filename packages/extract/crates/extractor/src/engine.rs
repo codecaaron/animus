@@ -1595,7 +1595,7 @@ impl ExtractEngine {
         analyze_css::ProbeScope::admit(&self.facts, &self.opts.css_inputs);
         crate::pure_builders::resolve(&mut self.facts, &links, &self.opts.css_inputs);
         clock.mark("pureBuilders");
-        let mut css = analyze_css::run(
+        let (mut css, css_read) = analyze_css::run_reading(
             &self.facts,
             &self.order,
             &self.opts.css_inputs,
@@ -1618,8 +1618,9 @@ impl ExtractEngine {
         let manifest = self.manifest_json(false);
         clock.mark("serialize");
         // The parse and the analysis's own tables, the per-file statics
-        // most of all, are freed on a pool thread while the host reads the
-        // manifest; the engine keeps its facts and sources. At most one
+        // most of all, and CSS resolution's own, are freed on a pool thread
+        // while the host reads the manifest; the engine keeps its facts and
+        // sources. At most one
         // analysis's are pending there: while one is, a busy pool would hold
         // every later one too, so those are freed here.
         let read = (
@@ -1636,6 +1637,7 @@ impl ExtractEngine {
             imports_by_file,
             style_modules,
             changes,
+            css_read,
         );
         if TEARDOWN_PENDING.swap(true, std::sync::atomic::Ordering::AcqRel) {
             drop(read);

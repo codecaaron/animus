@@ -4008,6 +4008,17 @@ pub fn run(
     inputs: &CssInputs,
     class_prefix: &str,
 ) -> CssOutput {
+    run_reading(files, order, inputs, class_prefix).0
+}
+
+/// `run`, with what only the run read, its usage scans, lookups and links,
+/// for the engine to free with the analysis's own tables.
+pub(crate) fn run_reading(
+    files: &BTreeMap<String, FileFacts>,
+    order: &[String],
+    inputs: &CssInputs,
+    class_prefix: &str,
+) -> (CssOutput, Box<dyn Send>) {
     let _probes = ProbeScope::within(files, inputs);
     run_with_system_floor(files, order, inputs, class_prefix, true)
 }
@@ -8955,14 +8966,15 @@ fn run_with_system_floor(
     inputs: &CssInputs,
     class_prefix: &str,
     total_system_floor: bool,
-) -> CssOutput {
+) -> (CssOutput, Box<dyn Send>) {
     if let Ok(mut memo) = inputs.identity_memo.lock() {
         memo.clear();
     }
     if let Ok(mut memo) = inputs.import_memo.lock() {
         memo.clear();
     }
-    let links = &crate::link::ProjectLinks::link(files, inputs);
+    let owned_links = crate::link::ProjectLinks::link(files, inputs);
+    let links = &owned_links;
     let breakpoints = extract_breakpoints(&inputs.theme);
     let bp_keys: FxHashSet<String> = breakpoints.breakpoints.keys().cloned().collect();
     let mut admission = TransformAdmission::new();
@@ -12646,8 +12658,9 @@ fn run_with_system_floor(
         children.sort();
     }
     locate_at_declarations(&mut diagnostics, files);
+    drop(object_members);
 
-    CssOutput {
+    let output = CssOutput {
         css,
         sheets,
         fragments,
@@ -12676,7 +12689,8 @@ fn run_with_system_floor(
         prop_name_lists: prop_name_lists.into_sources(),
         superseded_by,
         slot_provenance,
-    }
+    };
+    (output, Box::new((all_usage_results, global_lookup, usage_sources, owned_links)))
 }
 
 #[cfg(test)]
@@ -12731,7 +12745,7 @@ mod tests {
         distrust_promise(&mut files, inputs);
         let links = crate::link::ProjectLinks::link(&files, inputs);
         judge_object_handoffs(&mut files, inputs, &links);
-        run_with_system_floor(&files, &order, inputs, "animus", total_system_floor)
+        run_with_system_floor(&files, &order, inputs, "animus", total_system_floor).0
     }
 
     fn test_inputs() -> CssInputs {
