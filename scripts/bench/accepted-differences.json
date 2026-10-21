@@ -82,5 +82,12 @@
     "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
     "candidate": "4853ea9cf08a1f3ac73051150c6b82097a98b6e0ac45e94bf0fa2a2ef8e5e1fe",
     "reason": "Beside the differences above, only the whole-component removal warning's wording differs: it names its check, the 4 components the analysed source never renders (Alert, Badge, GroupItem, MetricGrid), counted from the source's renders, not from what a bundle includes. CSS (270,340 bytes), the 204 components and the 73 diagnostics are those of the candidate this entry follows (3588e782…)."
+  },
+  {
+    "row": "analysis:showcase",
+    "fixture": "showcase-analysis",
+    "baseline": "d013caa0011dc9acaf81fd5f2ca25e7929953e4b149fe00a107cbf892e7ffbfa",
+    "candidate": "74463f189d0a32de5c62d385b4254e5dba67d2602f0ae1b8faacbb6b487d0ae8",
+    "reason": "Beside the differences above, only the manifest's fileFacts differ: 68 files gain `proven`, the per-element record of what the pruning analysis proves of each attribute (its known values, proven only where its proof holds, and the last spread that can replace it), with a forward named where an attribute passes on its component's own prop unchanged. With `proven` removed the manifest is identical to the candidate this entry follows (4853ea9c…): CSS (270,340 bytes), the 204 components and the 73 diagnostics are unchanged."
   }
 ]
