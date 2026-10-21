@@ -79,7 +79,7 @@ suite('kit publication', () => {
   // SAFETY: the host's native binary exists (the probe above), so this is the
   // engine the CLI's build reads.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const engine = require('../index-v2.js');
+  const engine = require('../extractor.js');
 
   // Each case runs `npm pack --dry-run` (about a second each on a dev
   // machine, more under a parallel verify), so the default 5 s is too short.

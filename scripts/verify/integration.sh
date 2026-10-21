@@ -3,7 +3,7 @@ set -euo pipefail
 
 # verify:integration — full pipeline E2E tests in packages/_integration/__tests__.
 # Preconditions: fresh v2 NAPI binary + fresh @animus-ui/extract dist + fresh @animus-ui/system dist.
-# Integration drives the v2 ExtractEngine (extract/index-v2.js) via run-pipeline.ts,
+# Integration drives the v2 ExtractEngine (extract/extractor.js) via run-pipeline.ts,
 # imports @animus-ui/extract/pipeline, AND resolves @animus-ui/system through dist.
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

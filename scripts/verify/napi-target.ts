@@ -6,8 +6,8 @@ export interface HostTargetInput {
   libc?: HostLibc;
 }
 
-export const V2_BINARY_PREFIX = 'animus-extract-v2';
-export const V2_CRATE_DIR = 'packages/extract/crates/extract-v2';
+export const V2_BINARY_PREFIX = 'animus-extractor';
+export const V2_CRATE_DIR = 'packages/extract/crates/extractor';
 
 export class UnsupportedHostError extends Error {
   constructor(input: HostTargetInput) {

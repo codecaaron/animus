@@ -30,7 +30,7 @@ import type { JsonValue } from '../pipeline/tsconfig-paths';
 /** The native engine, whose own parse reads a system file's membership. */
 const ENGINE = {
   systemMembership: (inputsJson: string): string =>
-    createRequire(import.meta.url)('../index-v2.js').systemMembership(
+    createRequire(import.meta.url)('../extractor.js').systemMembership(
       inputsJson
     ),
 };

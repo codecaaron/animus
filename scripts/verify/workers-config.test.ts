@@ -141,7 +141,7 @@ fi
 
 function expectedValidationCommands(): string[] {
   return [
-    "-e const m=require('./packages/extract/crates/extract-v2/animus-extract-v2.linux-x64-gnu.node'); if (!Object.keys(m).length) throw new Error('V2 NAPI exports missing')",
+    "-e const m=require('./packages/extract/crates/extractor/animus-extractor.linux-x64-gnu.node'); if (!Object.keys(m).length) throw new Error('V2 NAPI exports missing')",
     'vp run build:ts',
     ...workerTargets.map(
       (target) => `vp run ${workerOwners[target]}#verify:build`
@@ -173,7 +173,7 @@ describe('Workers deployment topology', () => {
     // The extract-v2 build script reads the channel out of rust-toolchain.toml
     // and refuses any other release, so a mismatched CI pin builds nothing.
     const [extractChannel, loaderChannel] = [
-      'packages/extract/crates/extract-v2/rust-toolchain.toml',
+      'packages/extract/crates/extractor/rust-toolchain.toml',
       'packages/extract/crates/system-loader/rust-toolchain.toml',
     ].map((path) => source(path).match(/^\s*channel\s*=\s*"([^"]+)"/m)?.[1]);
     // Only version-pinned refs are compared: @stable jobs install whatever the
@@ -320,7 +320,7 @@ describe('Workers cold-build reproducibility', () => {
         'tree',
         '--locked',
         '--manifest-path',
-        resolve(ROOT, 'packages/extract/crates/extract-v2/Cargo.toml'),
+        resolve(ROOT, 'packages/extract/crates/extractor/Cargo.toml'),
         '-e',
         'features',
         '-i',

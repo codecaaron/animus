@@ -114,7 +114,7 @@ jobs:
             fi
             bun install
             (
-              cd packages/extract/crates/extract-v2
+              cd packages/extract/crates/extractor
               unset RUSTUP_TOOLCHAIN
               bunx @napi-rs/cli build --platform --no-js --release --target x86_64-unknown-linux-gnu
             )

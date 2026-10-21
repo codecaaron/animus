@@ -1,6 +1,6 @@
 /**
  * The cascade layer order, outermost first: its one definition. The engine
- * reads it from `crates/extract-v2/src/layer_order.json`, which
+ * reads it from `crates/extractor/src/layer_order.json`, which
  * `scripts/layer-order.ts --write` writes from here.
  */
 export const ANIMUS_LAYERS = [

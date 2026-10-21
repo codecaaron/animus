@@ -1,5 +1,5 @@
 [package]
-name = "animus-extract-v2"
+name = "animus-extractor"
 version = "0.0.1"
 edition = "2021"
 # MSRV driven by the oxc umbrella (N-2/12-week policy upstream).

@@ -10,5 +10,5 @@ unset RUSTUP_TOOLCHAIN
 cd "$ROOT/packages/extract/crates/system-loader"
 cargo test --lib
 
-cd "$ROOT/packages/extract/crates/extract-v2"
+cd "$ROOT/packages/extract/crates/extractor"
 exec cargo test --lib

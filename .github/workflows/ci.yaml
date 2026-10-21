@@ -46,7 +46,7 @@ jobs:
         run: |
           if grep -rn "require('@animus-ui/extract')" packages/_integration/__tests__/; then
             echo "ERROR: require('@animus-ui/extract') in _integration tests violates the NAPI loading contract."
-            echo "Use require('../../extract/index-v2.js') instead. See packages/_integration/CLAUDE.md."
+            echo "Use require('../../extract/extractor.js') instead. See packages/_integration/CLAUDE.md."
             exit 1
           fi
 
@@ -62,7 +62,7 @@ jobs:
         with:
           workspaces: |
             packages/extract/crates/system-loader
-            packages/extract/crates/extract-v2
+            packages/extract/crates/extractor
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -87,7 +87,7 @@ jobs:
         with:
           workspaces: |
             packages/extract/crates/system-loader
-            packages/extract/crates/extract-v2
+            packages/extract/crates/extractor
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -110,7 +110,7 @@ jobs:
         with:
           workspaces: |
             packages/extract/crates/system-loader
-            packages/extract/crates/extract-v2
+            packages/extract/crates/extractor
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -150,7 +150,7 @@ jobs:
         with:
           workspaces: |
             packages/extract/crates/system-loader
-            packages/extract/crates/extract-v2
+            packages/extract/crates/extractor
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -159,7 +159,7 @@ jobs:
       - run: bun install
 
       - name: Build v2 NAPI binary
-        working-directory: packages/extract/crates/extract-v2
+        working-directory: packages/extract/crates/extractor
         run: |
           unset RUSTUP_TOOLCHAIN
           bunx @napi-rs/cli build --platform --no-js --release --target ${{ matrix.target }}
@@ -168,7 +168,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: napi-v2-${{ matrix.target }}
-          path: packages/extract/crates/extract-v2/*.node
+          path: packages/extract/crates/extractor/*.node
           if-no-files-found: error
 
   # ─── Full pipeline verification ─────────────────────────
@@ -192,19 +192,19 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
-          path: packages/extract/crates/extract-v2/
+          path: packages/extract/crates/extractor/
 
       - run: bun install
 
       - name: Verify v2 NAPI binary (repo root context)
         run: |
-          ls -la packages/extract/crates/extract-v2/*.node
-          bun -e "const m = require('./packages/extract/index-v2.js'); if (typeof m.ExtractEngine !== 'function') { throw new Error('ExtractEngine missing — v2 NAPI load failed'); } console.log('v2 NAPI exports:', Object.keys(m));"
+          ls -la packages/extract/crates/extractor/*.node
+          bun -e "const m = require('./packages/extract/extractor.js'); if (typeof m.ExtractEngine !== 'function') { throw new Error('ExtractEngine missing — v2 NAPI load failed'); } console.log('v2 NAPI exports:', Object.keys(m));"
 
       - name: Verify v2 NAPI binary (_integration context)
         working-directory: packages/_integration/__tests__
         run: |
-          bun -e "const m = require('../../extract/index-v2.js'); if (typeof m.ExtractEngine !== 'function') { throw new Error('ExtractEngine not a function — NAPI loading contract violated'); } console.log('OK: ExtractEngine is a function from _integration context');"
+          bun -e "const m = require('../../extract/extractor.js'); if (typeof m.ExtractEngine !== 'function') { throw new Error('ExtractEngine not a function — NAPI loading contract violated'); } console.log('OK: ExtractEngine is a function from _integration context');"
 
       - name: Build TS
         run: bunx vp run build:ts
@@ -263,7 +263,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
-          path: packages/extract/crates/extract-v2/
+          path: packages/extract/crates/extractor/
 
       - run: bun install
 
@@ -307,7 +307,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
-          path: packages/extract/crates/extract-v2/
+          path: packages/extract/crates/extractor/
 
       - run: bun install
 
@@ -358,7 +358,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
-          path: packages/extract/crates/extract-v2/
+          path: packages/extract/crates/extractor/
 
       - run: bun install
 
@@ -390,7 +390,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
-          path: packages/extract/crates/extract-v2/
+          path: packages/extract/crates/extractor/
 
       - run: bun install
 
@@ -438,7 +438,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
-          path: packages/extract/crates/extract-v2/
+          path: packages/extract/crates/extractor/
 
       - run: bun install
 
@@ -494,7 +494,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
-          path: packages/extract/crates/extract-v2/
+          path: packages/extract/crates/extractor/
 
       - if: env.ROWS != ''
         run: bun install
@@ -560,7 +560,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
-          path: packages/extract/crates/extract-v2/
+          path: packages/extract/crates/extractor/
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -660,19 +660,19 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: napi-v2-aarch64-apple-darwin
-          path: packages/extract/crates/extract-v2/
+          path: packages/extract/crates/extractor/
 
       - name: Download linux-x64 v2 binary
         uses: actions/download-artifact@v8
         with:
           name: napi-v2-x86_64-unknown-linux-gnu
-          path: packages/extract/crates/extract-v2/
+          path: packages/extract/crates/extractor/
 
       - name: Download linux-arm64 v2 binary
         uses: actions/download-artifact@v8
         with:
           name: napi-v2-aarch64-unknown-linux-gnu
-          path: packages/extract/crates/extract-v2/
+          path: packages/extract/crates/extractor/
 
       # ── Pack and verify one immutable release bundle ──
       - name: Pack immutable release bundle

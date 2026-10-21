@@ -5,7 +5,7 @@ import { expect, test } from 'vitest';
 
 const TABLE = join(
   import.meta.dirname,
-  '../crates/extract-v2/src/property_table.json'
+  '../crates/extractor/src/property_table.json'
 );
 
 // The extractor's copy of the single-length properties, which the strict

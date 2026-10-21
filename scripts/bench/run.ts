@@ -485,9 +485,9 @@ function summarize(result: RowResult, budget: Budget) {
 /** Where the candidate checkout's timed binding came from: its commit and
  *  the bytes of the native binary that was packed. */
 function checkoutProvenance(root: string) {
-  const dir = join(root, 'packages/extract/crates/extract-v2');
+  const dir = join(root, 'packages/extract/crates/extractor');
   const binary = readdirSync(dir).find((name) =>
-    name.startsWith(`animus-extract-v2.${platform()}-${arch()}`)
+    name.startsWith(`animus-extractor.${platform()}-${arch()}`)
   );
   return {
     checkout: root,

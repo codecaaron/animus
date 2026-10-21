@@ -13,7 +13,7 @@ suite('the built-in extension policy', () => {
    *  discovery alike, shows here in review. */
   it('is the system loader’s order', () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const native = require('../index-v2.js');
+    const native = require('../extractor.js');
     expect(JSON.parse(native.builtInExtensionPolicy())).toEqual({
       ...builtInExtensionPolicy(),
       resolverVersion: undefined,

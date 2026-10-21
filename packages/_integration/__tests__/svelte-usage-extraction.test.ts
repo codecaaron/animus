@@ -78,7 +78,7 @@ describe('isolated native Svelte usage projection', () => {
 
   test('barrel hops: same-name AND renamed re-exports prune through the real index and engine', async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const nativeEngine: NativeFactExtractor = require('../../extract/index-v2.js');
+    const nativeEngine: NativeFactExtractor = require('../../extract/extractor.js');
     const extractFacts = (filesJson: string) =>
       nativeEngine.extractFacts(filesJson);
 

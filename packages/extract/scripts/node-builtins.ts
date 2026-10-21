@@ -21,7 +21,7 @@ const ROOT = join(import.meta.dirname, '../../..');
 
 const BUILTINS_FILE = join(
   ROOT,
-  'packages/extract/crates/extract-v2/src/node_builtins.json'
+  'packages/extract/crates/extractor/src/node_builtins.json'
 );
 
 const NODE_MAJOR = 24;

@@ -42,7 +42,7 @@ export const SURFACE_SCHEMA_SHA256 = sha256(
 
 export type BaselineMode = 'production' | 'development';
 
-/** The committed baseline document, written as `baselines/v2/<mode>.json`.
+/** The committed baseline document, written as `baselines/extractor/<mode>.json`.
  *  A `type`, not an `interface`, so it stays assignable to the JSON domain. */
 export type BaselineEnvelope = {
   version: typeof BASELINE_VERSION;

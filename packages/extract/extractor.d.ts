@@ -1,7 +1,7 @@
 /**
  * Type surface for the `@animus-ui/extract/engine-v2` subpath.
  *
- * The runtime entry (`index-v2.js`) is a hand-written CJS loader that assigns
+ * The runtime entry (`extractor.js`) is a hand-written CJS loader that assigns
  * the whole napi binary to `module.exports` (`module.exports = loadNative()`)
  * so it can fail loud with an actionable message when the binary is absent
  * (extraction-diagnostics §V2 boundary error reporting). Because that whole-
@@ -10,7 +10,7 @@
  * (`unknown`). Declaring the napi functions/class as named value exports would
  * make `attw` report every one as missing at runtime ("Named exports").
  *
- * The napi-generated declarations at `crates/extract-v2/index.d.ts` describe
+ * The napi-generated declarations at `crates/extractor/index.d.ts` describe
  * the real shape; they are re-exposed as *type-only* members so consumers can
  * still name the engine's types. The subpath is consumed via CJS `require`
  * (see vite-plugin's `requireEngine`), which returns the full binding object.
@@ -20,7 +20,7 @@
  * `.d.ts` as JS); TypeScript sibling-declaration substitution supplies these
  * types from the `.js` entry instead.
  */
-import type * as ExtractV2 from './crates/extract-v2/index';
+import type * as ExtractV2 from './crates/extractor/index';
 
 declare namespace engineV2 {
   export type ExtractEngine = ExtractV2.ExtractEngine;

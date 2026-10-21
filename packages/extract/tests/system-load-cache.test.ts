@@ -24,7 +24,7 @@ import { REPO_ROOT } from './engine-prerequisites';
 
 import type { EngineApi, V2ExtractEngine } from '../pipeline/engine-adapter';
 
-const NATIVE = join(__dirname, '../index-v2.js');
+const NATIVE = join(__dirname, '../extractor.js');
 
 function nativeApi(): EngineApi {
   let engine: V2ExtractEngine | null = null;

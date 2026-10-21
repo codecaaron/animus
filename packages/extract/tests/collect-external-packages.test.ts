@@ -38,7 +38,7 @@ import { systemInstanceMismatches } from '../pipeline/system-instances';
 
 import type { JsonValue } from '../pipeline/tsconfig-paths';
 
-const native = require('../index-v2.js');
+const native = require('../extractor.js');
 
 /** The native table's kit source roots, as a session with no host
  *  conditions and the built-in order reads them. */

@@ -28,7 +28,7 @@ SH_BIN="${SH_BIN:-sh}"
 RUSTC_BIN="${RUSTC_BIN:-rustc}"
 BUN_BIN="${BUN_BIN:-bun}"
 
-toolchain_file="packages/extract/crates/extract-v2/rust-toolchain.toml"
+toolchain_file="packages/extract/crates/extractor/rust-toolchain.toml"
 rust_channel="$(
   sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' "$toolchain_file" | head -n 1
 )"
@@ -70,7 +70,7 @@ if ! command -v "$CARGO_BIN" >/dev/null 2>&1; then
 fi
 
 rust_version="$(
-  cd packages/extract/crates/extract-v2
+  cd packages/extract/crates/extractor
   "$RUSTC_BIN" --version
 )"
 rust_release="$(

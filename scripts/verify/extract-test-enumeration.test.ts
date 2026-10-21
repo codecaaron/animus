@@ -62,10 +62,12 @@ function hasTarget(command: string, target: string): boolean {
   return command.split(/\s+/).includes(target);
 }
 
-/** `index-v2` is the package's own engine loader and the root export
+/** `extractor.js` is the package's own engine loader and the root export
  *  re-exports it; a test mentioning either is engine-bound. */
 function loadsNativeEngine(source: string): boolean {
-  return source.includes('index-v2') || source.includes("'@animus-ui/extract'");
+  return (
+    source.includes('extractor.js') || source.includes("'@animus-ui/extract'")
+  );
 }
 
 describe('extract test enumeration', () => {

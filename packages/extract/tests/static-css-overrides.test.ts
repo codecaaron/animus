@@ -8,7 +8,7 @@ import type { V2ExtractEngine } from '../pipeline/engine-adapter';
 import type { ProjectManifest } from '../pipeline/manifest-schema';
 
 const ROOT = join(__dirname, '../../..');
-const NATIVE = join(__dirname, '../index-v2.js');
+const NATIVE = join(__dirname, '../extractor.js');
 const FIXTURE = readFileSync(
   join(__dirname, 'fixtures/reconciliation.tsx'),
   'utf-8'

@@ -15,7 +15,7 @@ unset RUSTUP_TOOLCHAIN
 # examples/, and benches/ — a blanket allow there would bypass a src/-only
 # scan. rust-policy recurses and prunes target/ itself.
 bun "$ROOT/scripts/verify/rust-policy.ts" source \
-  "$ROOT/packages/extract/crates/extract-v2" \
+  "$ROOT/packages/extract/crates/extractor" \
   "$ROOT/packages/extract/crates/system-loader"
 
 # Lint-posture parity guard: the two crates are separate Cargo workspaces
@@ -24,11 +24,11 @@ bun "$ROOT/scripts/verify/rust-policy.ts" source \
 # Without this, adding or downgrading a lint in one crate leaves the other on
 # the old posture and CI still reports green.
 bun "$ROOT/scripts/verify/rust-policy.ts" lints \
-  "$ROOT/packages/extract/crates/extract-v2/Cargo.toml" \
+  "$ROOT/packages/extract/crates/extractor/Cargo.toml" \
   "$ROOT/packages/extract/crates/system-loader/Cargo.toml"
 
 cd "$ROOT/packages/extract/crates/system-loader"
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-cd "$ROOT/packages/extract/crates/extract-v2"
+cd "$ROOT/packages/extract/crates/extractor"
 exec cargo clippy --workspace --all-targets --all-features -- -D warnings

@@ -20,7 +20,7 @@ const ROOT = join(import.meta.dirname, '../../..');
 
 const PROPERTY_TABLE_FILE = join(
   ROOT,
-  'packages/extract/crates/extract-v2/src/property_table.json'
+  'packages/extract/crates/extractor/src/property_table.json'
 );
 
 /** The table as `property_table.json` holds it. */

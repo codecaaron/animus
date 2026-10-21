@@ -41,7 +41,7 @@ const PRUNE_DIRS = new Set([
 // the extract-v2 typings, which `napi build` generates.
 const EXCLUDE_PREFIXES = [
   'packages/_parity/corpus',
-  'packages/extract/crates/extract-v2/index.d.ts',
+  'packages/extract/crates/extractor/index.d.ts',
 ];
 
 // `.d.ts` matches (it ends in .ts), so generated typings need a path exclusion.

@@ -22,20 +22,20 @@
   },
   "files": [
     "dist",
-    "index-v2.js",
-    "index-v2.d.ts",
+    "extractor.js",
+    "extractor.d.ts",
     "oxlint.d.ts",
     "oxlint.d.mts",
-    "crates/extract-v2/*.node",
-    "crates/extract-v2/index.d.ts"
+    "crates/extractor/*.node",
+    "crates/extractor/index.d.ts"
   ],
-  "main": "index-v2.js",
-  "types": "index-v2.d.ts",
+  "main": "extractor.js",
+  "types": "extractor.d.ts",
   "exports": {
     ".": {
-      "import": "./index-v2.js",
-      "require": "./index-v2.js",
-      "default": "./index-v2.js"
+      "import": "./extractor.js",
+      "require": "./extractor.js",
+      "default": "./extractor.js"
     },
     "./pipeline": {
       "types": "./dist/pipeline/index.d.ts",
@@ -63,8 +63,8 @@
     "build": "bun run build:v2 && bun run build:ts",
     "build:ts": "tsdown && tsc -p tsconfig.build.json",
     "compile": "bun check -p tsconfig.build.json && bun check -p tsconfig.json",
-    "build:v2": "cd crates/extract-v2 && bunx napi build --platform --no-js --release",
-    "build:v2:debug": "cd crates/extract-v2 && bunx napi build --platform --no-js"
+    "build:v2": "cd crates/extractor && bunx napi build --platform --no-js --release",
+    "build:v2:debug": "cd crates/extractor && bunx napi build --platform --no-js"
   },
   "dependencies": {
     "@animus-ui/properties": "workspace:*",

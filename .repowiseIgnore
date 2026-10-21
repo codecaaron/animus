@@ -2,7 +2,7 @@
 legacy/
 
 # NAPI-RS generated bindings.
-packages/extract/crates/extract-v2/index.d.ts
+packages/extract/crates/extractor/index.d.ts
 
 # Framework-generated declarations.
 e2e/*/next-env.d.ts

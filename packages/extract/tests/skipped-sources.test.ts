@@ -18,7 +18,7 @@ import { getSharedCss, setEngineApiOverride } from '../session/singleton';
 import type { V2ExtractEngine } from '../pipeline/engine-adapter';
 import type { HostLoadExpander, ListedLoad } from '../pipeline/host-expansions';
 
-const NATIVE = join(__dirname, '../index-v2.js');
+const NATIVE = join(__dirname, '../extractor.js');
 
 const theme = createTheme().build();
 const ds = createSystem().addGroup('space', space).build().seal();

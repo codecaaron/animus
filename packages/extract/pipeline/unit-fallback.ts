@@ -2,7 +2,7 @@ import { isUnitlessProperty } from '@animus-ui/properties';
 
 /** A digit run after one of these continues a word (`#b1b1b7`, `ss01`,
  *  `U+0025`), so it is not a bare number. The extractor predicts this pass
- *  with `unit_fallback_rewrites` in `crates/extract-v2/src/css.rs`; keep both
+ *  with `unit_fallback_rewrites` in `crates/extractor/src/css.rs`; keep both
  *  in step. */
 const WORD_CHAR = /[A-Za-z0-9_#+-]/;
 

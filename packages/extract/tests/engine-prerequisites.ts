@@ -1,4 +1,4 @@
-/** Mirrors `loadNative()` in index-v2.js: the same host-native resolution, so
+/** Mirrors `loadNative()` in extractor.js: the same host-native resolution, so
  *  a foreign-target artifact never counts as present. The candidate and
  *  required-dist lists are owned here — a restated copy in a consuming suite
  *  skips green instead of failing when a target triple moves. */
@@ -21,12 +21,12 @@ export interface EnginePrerequisites {
 function hostNativeBinaryExists(): boolean {
   const { platform, arch } = process;
   const candidates = [
-    `animus-extract-v2.${platform}-${arch}.node`,
-    `animus-extract-v2.${platform}-${arch}-gnu.node`,
-    `animus-extract-v2.${platform}-${arch}-msvc.node`,
+    `animus-extractor.${platform}-${arch}.node`,
+    `animus-extractor.${platform}-${arch}-gnu.node`,
+    `animus-extractor.${platform}-${arch}-msvc.node`,
   ];
   return candidates.some((name) =>
-    existsSync(join(EXTRACT_ROOT, 'crates/extract-v2', name))
+    existsSync(join(EXTRACT_ROOT, 'crates/extractor', name))
   );
 }
 
@@ -40,7 +40,7 @@ export function probeEnginePrerequisites(): EnginePrerequisites {
   if (!hostNativeBinaryExists()) {
     return {
       ok: false,
-      reason: `v2 NAPI native binary not found for ${process.platform}-${process.arch} under packages/extract/crates/extract-v2/. Run: ${BUILD_NAPI}`,
+      reason: `v2 NAPI native binary not found for ${process.platform}-${process.arch} under packages/extract/crates/extractor/. Run: ${BUILD_NAPI}`,
     };
   }
 

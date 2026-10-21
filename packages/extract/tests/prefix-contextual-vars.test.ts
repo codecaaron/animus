@@ -10,7 +10,7 @@ import { nativeFunctions } from './native-functions';
 
 import type { V2ExtractEngine } from '../pipeline/engine-adapter';
 
-const NATIVE = join(__dirname, '../index-v2.js');
+const NATIVE = join(__dirname, '../extractor.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeApi(): any {

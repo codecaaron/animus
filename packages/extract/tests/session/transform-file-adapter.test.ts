@@ -136,7 +136,7 @@ describe('the one engine-handle store', () => {
    *  never answered by another engine. It is not cached: a later use loads
    *  again. */
   test('a native load failure is an EnvironmentFailure', () => {
-    const missing = new Error('dlopen: animus-extract-v2.node not found');
+    const missing = new Error('dlopen: animus-extractor.node not found');
     setEngineFactoryLoaderForTests(() => {
       throw missing;
     });

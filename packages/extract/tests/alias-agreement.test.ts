@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 
-const native = createRequire(import.meta.url)('../index-v2.js');
+const native = createRequire(import.meta.url)('../extractor.js');
 
 import {
   AliasAgreementCache,

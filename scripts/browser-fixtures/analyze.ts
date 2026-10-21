@@ -40,7 +40,7 @@ export function analyzeFixture({
   const engineApi = createV2EngineApi({
     label: 'browser-fixtures',
     loadNativeEngine: () =>
-      require(resolve(ROOT, 'packages', 'extract', 'index-v2.js')),
+      require(resolve(ROOT, 'packages', 'extract', 'extractor.js')),
     store: {
       getEngine: () => engine,
       setEngine: (next) => {

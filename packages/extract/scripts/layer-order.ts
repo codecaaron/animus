@@ -16,7 +16,7 @@ const ROOT = join(import.meta.dirname, '../../..');
 
 const LAYER_FILE = join(
   ROOT,
-  'packages/extract/crates/extract-v2/src/layer_order.json'
+  'packages/extract/crates/extractor/src/layer_order.json'
 );
 
 if (process.argv.includes('--write')) {

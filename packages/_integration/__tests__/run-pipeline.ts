@@ -28,7 +28,7 @@ export type KeyframesBlocks = {
 
 // Direct file path, never a package specifier: `createRequire` resolution can
 // pick the `types` condition and load a `.d.ts`, leaving exports undefined.
-const native = require('../../extract/index-v2.js');
+const native = require('../../extract/extractor.js');
 
 let engine: V2ExtractEngine | null = null;
 let sentSources: Map<string, string> | null = null;

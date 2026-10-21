@@ -11,7 +11,7 @@ Mach-O stripping fix needed on macOS 27.
 
 ```
 crates/
-  extract-v2/         — the extraction engine (napi cdylib `animus-extract-v2`)
+  extractor/          — the extraction engine (napi cdylib `animus-extractor`)
     src/lib.rs        — NAPI entry points (ExtractEngine class + free functions)
     src/engine.rs     — stateful ExtractEngine (parse-once, retained facts)
     src/pipeline.rs   — multi-file universe analysis + manifest generation
@@ -19,7 +19,7 @@ crates/
     src/{eval,evaluator,theme,transforms}.rs — static eval + theme/token resolution
     src/{css,analyze_css,assemble,emit}.rs   — @layer CSS generation + source emission
     src/{jsx_scan,facts,usage_facts,dynamic_meta}.rs — usage scanning + fact extraction
-  system-loader/      — shared SystemInstance loader crate, linked by extract-v2
+  system-loader/      — shared SystemInstance loader crate, linked by extractor
     src/lib.rs        — load/evaluate a system module (rquickjs), keyframes extraction
 ```
 
@@ -27,10 +27,10 @@ The `.cargo/config.toml` at the package root supplies the napi cdylib linker
 flags for BOTH crates (cargo walks up from the invocation dir); neither crate
 has its own `.cargo`. Do not delete it.
 
-## NAPI Surface (`crates/extract-v2`, generated types at `crates/extract-v2/index.d.ts`)
+## NAPI Surface (`crates/extractor`, generated types at `crates/extractor/index.d.ts`)
 
-Loaded via the hand-written `index-v2.js` loader (fail-loud on missing binary).
-`index-v2.js` is the package root entry (the transitional `./engine-v2` alias was removed with the receipt-union cleanup).
+Loaded via the hand-written `extractor.js` loader (fail-loud on missing binary).
+`extractor.js` is the package root entry (the transitional `./engine-v2` alias was removed with the receipt-union cleanup).
 Builds use `--no-js`: generate native declarations without an unused JavaScript
 wrapper or its loader-only metadata exports.
 
@@ -94,14 +94,14 @@ bun run build:v2:debug        # debug NAPI
 
 ## Cache & Artifacts
 
-| Artifact          | Location                                                                | Notes                                                |
-| ----------------- | ----------------------------------------------------------------------- | ---------------------------------------------------- |
-| Cargo build cache | `crates/extract-v2/target/`, `crates/system-loader/target/`             | Managed by cargo. Safe to delete, rebuilds in 30-60s |
-| NAPI binary       | `crates/extract-v2/*.node` (e.g. `animus-extract-v2.darwin-arm64.node`) | The native addon loaded by `index-v2.js`             |
+| Artifact          | Location                                                              | Notes                                                |
+| ----------------- | --------------------------------------------------------------------- | ---------------------------------------------------- |
+| Cargo build cache | `crates/extractor/target/`, `crates/system-loader/target/`            | Managed by cargo. Safe to delete, rebuilds in 30-60s |
+| NAPI binary       | `crates/extractor/*.node` (e.g. `animus-extractor.darwin-arm64.node`) | The native addon loaded by `extractor.js`            |
 
 ## Pipeline Phases
 
-`crates/extract-v2/src/pipeline.rs` orchestrates multi-file extraction:
+`crates/extractor/src/pipeline.rs` orchestrates multi-file extraction:
 
 1. **Parse + Walk** — find `.asElement()`/`.asComponent()`/`.asClass()` terminals, walk backward
 2. **Resolve Bindings** — cross-file binding map (where each export originates)
@@ -119,7 +119,7 @@ bun run build:v2:debug        # debug NAPI
 
 ## Known Failure Modes
 
-- **Stale `.node` binary after signature change:** adding/removing/reordering NAPI parameters silently accepts wrong arity or crashes. Fix: `rm crates/extract-v2/*.node && vp run build:extract-v2`.
+- **Stale `.node` binary after signature change:** adding/removing/reordering NAPI parameters silently accepts wrong arity or crashes. Fix: `rm crates/extractor/*.node && vp run build:extract-v2`.
 - **OXC version:** consumed via the `oxc` umbrella crate (pinned `0.155`), not individual `oxc_*` crates.
 - **Per-property bail diagnostics:** check `[skip]` markers in extraction errors for what was skipped.
 

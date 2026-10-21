@@ -16,7 +16,7 @@ const ROOT = join(import.meta.dirname, '../../..');
 
 export const KEYWORD_FILE = join(
   ROOT,
-  'packages/extract/crates/extract-v2/src/css_keywords.json'
+  'packages/extract/crates/extractor/src/css_keywords.json'
 );
 
 export interface CssKeywords {

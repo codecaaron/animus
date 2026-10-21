@@ -58,7 +58,7 @@ function parseNativeEngineModule(
   ) {
     throw new TypeError('v2 NAPI module is missing ExtractEngine');
   }
-  // SAFETY: the value comes from the repository-owned index-v2.js bridge, and
+  // SAFETY: the value comes from the repository-owned extractor.js bridge, and
   // the function-tag check above fails loud before construction.
   return candidate as NativeModule;
 }
@@ -66,7 +66,7 @@ function parseNativeEngineModule(
 function loadEngine(name: string): EngineApi {
   if (name === 'v2') {
     const native = parseNativeEngineModule(
-      require_(join(ROOT, 'packages/extract/index-v2.js'))
+      require_(join(ROOT, 'packages/extract/extractor.js'))
     );
     let instance: V2ExtractEngine | null = null;
     let sentSources: Map<string, string> | null = null;

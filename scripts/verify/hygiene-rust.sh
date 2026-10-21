@@ -15,7 +15,7 @@ require_cargo_machete
 # runs, so an ignore entry cannot silence a genuinely-unused dependency. The two
 # crates are independent (there is no Cargo workspace), so each is
 # checked from its own manifest with --no-deps.
-for crate in system-loader extract-v2; do
+for crate in system-loader extractor; do
   (cd "$ROOT/packages/extract/crates/$crate" \
     && cargo metadata --no-deps --format-version 1) \
     | bun "$ROOT/scripts/verify/rust-policy.ts" metadata
@@ -24,5 +24,5 @@ done
 cd "$ROOT/packages/extract/crates/system-loader"
 cargo machete
 
-cd "$ROOT/packages/extract/crates/extract-v2"
+cd "$ROOT/packages/extract/crates/extractor"
 exec cargo machete

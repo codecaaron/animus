@@ -22,7 +22,7 @@ import { gatherProbeEvidence } from '../pipeline/probe-evidence';
 import { analysisContextJson } from '../pipeline/run-analysis';
 import { ingestSourceEntries } from '../pipeline/source-ingestion';
 
-const v2 = require('../index-v2.js');
+const v2 = require('../extractor.js');
 
 describe('v2 system loader NAPI boundary', () => {
   const root = join(__dirname, '../../..');

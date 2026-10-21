@@ -57,11 +57,11 @@ require_fresh_napi_v2() {
   # Fail closed: an input find cannot read leaves freshness unknown.
   local newest_input find_status=0
   newest_input=$(find \
-    packages/extract/crates/extract-v2/src \
-    packages/extract/crates/extract-v2/build.rs \
-    packages/extract/crates/extract-v2/Cargo.toml \
-    packages/extract/crates/extract-v2/Cargo.lock \
-    packages/extract/crates/extract-v2/rust-toolchain.toml \
+    packages/extract/crates/extractor/src \
+    packages/extract/crates/extractor/build.rs \
+    packages/extract/crates/extractor/Cargo.toml \
+    packages/extract/crates/extractor/Cargo.lock \
+    packages/extract/crates/extractor/rust-toolchain.toml \
     packages/extract/crates/system-loader/src \
     packages/extract/crates/system-loader/Cargo.toml \
     packages/extract/crates/system-loader/Cargo.lock \

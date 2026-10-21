@@ -33,13 +33,13 @@ real Vite build instead.
 
 ## NAPI Loading Contract
 
-Since retire-extract-v1, v2 is the only engine and `index-v2.js` is the package
+Since retire-extract-v1, v2 is the only engine and `extractor.js` is the package
 root entry. Test files reach the engine **through `__tests__/run-pipeline.ts`**;
 the one `require()` into the native binary lives there and MUST use the **direct
 file path** to the v2 loader:
 
 ```ts
-const native = require('../../extract/index-v2.js');
+const native = require('../../extract/extractor.js');
 ```
 
 `require('@animus-ui/extract')` (package resolution via `createRequire`) is
