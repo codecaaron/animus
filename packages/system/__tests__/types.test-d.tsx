@@ -17,7 +17,12 @@ import sharedQuarter, {
   sharedNamed,
 } from './transform-callbacks';
 
-import type { KeyframeRef, LibraryBundle, VocabularyOf } from '../src';
+import type {
+  KeyframeRef,
+  LibraryBundle,
+  VariantKeyOf,
+  VocabularyOf,
+} from '../src';
 import type {
   AnyBrandedComponent,
   SharedConfig,
@@ -2004,6 +2009,17 @@ function BooleanVariants() {
 }
 
 void BooleanVariants;
+
+// ---------------------------------------------------------------------------
+// Contract: a variant option key is a VariantKeyOf of its key domain, even
+// generically, so a helper can return or forward the key it was given.
+// ---------------------------------------------------------------------------
+
+function optionKey<K extends string>(key: K): VariantKeyOf<K> {
+  return key;
+}
+
+void optionKey;
 
 // ---------------------------------------------------------------------------
 // Contract: a strict theme scale takes, in a style block, a calc() that

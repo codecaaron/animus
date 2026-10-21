@@ -96,6 +96,7 @@ export interface AliasReplacement {
  *  of what it names (null: an import that does not resolve). */
 class FileScope {
   readonly bindings = new Map<string, string | null>();
+  #systemModule: string | null | undefined;
 
   constructor(
     /** The file's final absolute location. */
@@ -138,6 +139,22 @@ class FileScope {
         this.#declare(statement);
       }
     }
+  }
+
+  /** The identity of @animus-ui/system as this file resolves it, or null
+   *  where it resolves another package or none. */
+  get systemModule(): string | null {
+    if (this.#systemModule === undefined) {
+      const system = this.identities.locatePackage(
+        SYSTEM_PACKAGE,
+        dirname(this.file)
+      );
+      this.#systemModule =
+        system === null || system.name !== SYSTEM_PACKAGE
+          ? null
+          : this.identities.identify(SYSTEM_PACKAGE, this.file);
+    }
+    return this.#systemModule;
   }
 
   #local(name: string): void {
@@ -204,6 +221,51 @@ function isDeclaration(
       return true;
     default:
       return false;
+  }
+}
+
+/** `declare global` or `declare module 'x'`: a block that changes another
+ *  scope and binds nothing in the file. */
+function isAugmentation(
+  statement: Program['body'][number]
+): statement is Extract<Declaration, { type: 'TSModuleDeclaration' }> {
+  return (
+    statement.type === 'TSModuleDeclaration' &&
+    (statement.kind === 'global' || statement.id.type === 'Literal')
+  );
+}
+
+type ExportStatement = Extract<
+  Program['body'][number],
+  { type: 'ExportNamedDeclaration' }
+>;
+
+/** Each exported `const` of `body` with a declared type. */
+function* annotatedConsts(body: Program['body']): Generator<{
+  statement: ExportStatement;
+  name: string;
+  declared: TSType;
+  declarators: number;
+}> {
+  for (const statement of body) {
+    if (
+      statement.type !== 'ExportNamedDeclaration' ||
+      statement.declaration?.type !== 'VariableDeclaration'
+    ) {
+      continue;
+    }
+    const { declarations } = statement.declaration;
+    for (const declarator of declarations) {
+      if (declarator.id.type !== 'Identifier') continue;
+      const declared = declarator.id.typeAnnotation?.typeAnnotation;
+      if (declared === undefined) continue;
+      yield {
+        statement,
+        name: declarator.id.name,
+        declared,
+        declarators: declarations.length,
+      };
+    }
   }
 }
 
@@ -778,56 +840,55 @@ function findSystemDeclarations(
   parsed: ParsedDeclaration
 ): SystemDeclaration[] {
   const found: SystemDeclaration[] = [];
-  for (const statement of parsed.program.body) {
-    if (
-      statement.type !== 'ExportNamedDeclaration' ||
-      statement.declaration?.type !== 'VariableDeclaration'
-    ) {
-      continue;
-    }
-    for (const declarator of statement.declaration.declarations) {
-      if (declarator.id.type !== 'Identifier') continue;
-      const annotated = declarator.id.typeAnnotation?.typeAnnotation;
-      if (annotated === undefined) continue;
-      const registries = systemTypeArguments(annotated, parsed.scope);
-      if (registries !== null) {
-        found.push({
-          exportName: declarator.id.name,
-          registries,
-          start: statement.start,
-          end: statement.end,
-        });
-      }
+  for (const { statement, name, declared } of annotatedConsts(
+    parsed.program.body
+  )) {
+    const registries = systemTypeReference(
+      declared,
+      parsed.scope,
+      SYSTEM_TYPES
+    )?.typeArguments;
+    if (registries !== null && registries !== undefined) {
+      found.push({
+        exportName: name,
+        registries,
+        start: statement.start,
+        end: statement.end,
+      });
     }
   }
   return found;
 }
 
-/** A system type's registry arguments, when `node` names SystemInstance or
- *  SealedSystemInstance of the installed @animus-ui/system by identity. */
-function systemTypeArguments(
+/** The name and type arguments of `node` when it names one of `names` from
+ *  the installed @animus-ui/system, by identity. */
+function systemTypeReference(
   node: TSType,
-  scope: FileScope
-): readonly TSType[] | null {
-  const { identities, file } = scope;
-  const system = identities.locatePackage(SYSTEM_PACKAGE, dirname(file));
-  if (system === null || system.name !== SYSTEM_PACKAGE) return null;
-  const systemModule = identities.identify(SYSTEM_PACKAGE, file);
+  scope: FileScope,
+  names: ReadonlySet<string>
+): { name: string; typeArguments: readonly TSType[] | null } | null {
   if (node.type === 'TSImportType') {
     return node.options === null &&
       node.qualifier?.type === 'Identifier' &&
-      SYSTEM_TYPES.has(node.qualifier.name) &&
-      identities.identify(node.source.value, file) === systemModule
-      ? (node.typeArguments?.params ?? null)
+      names.has(node.qualifier.name) &&
+      scope.systemModule !== null &&
+      scope.identities.identify(node.source.value, scope.file) ===
+        scope.systemModule
+      ? {
+          name: node.qualifier.name,
+          typeArguments: node.typeArguments?.params ?? null,
+        }
       : null;
   }
   if (node.type === 'TSTypeReference' && node.typeName.type === 'Identifier') {
     const bound = scope.bindings.get(node.typeName.name);
     if (bound === null || bound === undefined) return null;
     const split = bound.lastIndexOf('#');
-    return SYSTEM_TYPES.has(bound.slice(split + 1)) &&
-      bound.slice(0, split) === systemModule
-      ? (node.typeArguments?.params ?? null)
+    const name = bound.slice(split + 1);
+    return names.has(name) &&
+      scope.systemModule !== null &&
+      bound.slice(0, split) === scope.systemModule
+      ? { name, typeArguments: node.typeArguments?.params ?? null }
       : null;
   }
   return null;
@@ -1058,6 +1119,22 @@ function isChildList(child: WalkChild): child is ReadonlyArray<Node | null> {
   return Array.isArray(child);
 }
 
+/** Visits each node `node` holds. */
+function eachChild(node: Node, visit: (child: Node) => void): void {
+  // SAFETY: visitorKeys lists exactly the fields of each node type that
+  // hold child nodes or arrays of them.
+  const fields = node as Node & { readonly [key: string]: WalkChild };
+  for (const key of visitorKeys[node.type] ?? []) {
+    const child = fields[key];
+    if (child === null || child === undefined) continue;
+    if (isChildList(child)) {
+      for (const item of child) if (item !== null) visit(item);
+    } else {
+      visit(child);
+    }
+  }
+}
+
 const TRIPLE_SLASH =
   /^\/\s*<reference\s+(path|types|lib)\s*=\s*["']([^"']+)["']/;
 const MODULE_SYNTAX = new Set([
@@ -1109,10 +1186,7 @@ export function scanDeclaration(
     ) {
       edge(statement.moduleReference.expression.value);
       scan.importStatements += `${parsed.text.slice(statement.start, statement.end)}\n`;
-    } else if (
-      statement.type === 'TSModuleDeclaration' &&
-      (statement.kind === 'global' || statement.id.type === 'Literal')
-    ) {
+    } else if (isAugmentation(statement)) {
       scan.augments = true;
       if (
         statement.id.type === 'Literal' &&
@@ -1194,22 +1268,117 @@ export function scanDeclaration(
     }
     visitChildren(node);
   };
-  const visitChildren = (node: Node): void => {
-    // SAFETY: visitorKeys lists exactly the fields of each node type that
-    // hold child nodes or arrays of them.
-    const fields = node as Node & { readonly [key: string]: WalkChild };
-    for (const key of visitorKeys[node.type] ?? []) {
-      const child = fields[key];
-      if (child === null || child === undefined) continue;
-      if (isChildList(child)) {
-        for (const item of child) if (item !== null) visit(item);
-      } else {
-        visit(child);
-      }
-    }
-  };
+  const visitChildren = (node: Node): void => eachChild(node, visit);
   visit(parsed.program);
   return scan;
+}
+
+// ---------------------------------------------------------------------------
+// Component names
+
+const COMPONENT_TYPES = new Set(['AnimusComponent', 'AnimusWrappedComponent']);
+
+/** A component declaration whose type becomes a local alias, `XComponent`,
+ *  the name a hover and an error show in place of the expanded type. */
+export interface ComponentName {
+  /** The declared type's span: it moves into the alias. */
+  start: number;
+  end: number;
+  /** The statement's end, where the alias is declared. */
+  after: number;
+  name: string;
+}
+
+export interface DeclarationNames {
+  components: ComponentName[];
+  /** Where `export {};` goes, so the aliases stay local; null when the file
+   *  already has it or declares no component alias. */
+  closeAt: number | null;
+}
+
+/** A file whose components keep their emitted types. */
+export const NO_NAMES: DeclarationNames = { components: [], closeAt: null };
+
+function isEmptyExport(statement: Program['body'][number]): boolean {
+  return (
+    statement.type === 'ExportNamedDeclaration' &&
+    statement.declaration === null &&
+    statement.specifiers.length === 0 &&
+    statement.source === null
+  );
+}
+
+/** Every identifier's decoded name in `program`. */
+function identifierNames(program: Program): Set<string> {
+  const names = new Set<string>();
+  const visit = (node: Node): void => {
+    if (node.type === 'Identifier') names.add(node.name);
+    eachChild(node, visit);
+  };
+  visit(program);
+  return names;
+}
+
+/** The names a declaration file's components take. A module declaration
+ *  file exports even what it leaves unexported unless it says `export {}`,
+ *  so a file that relies on that names nothing; one with `export =` too. A
+ *  name the file's text mentions anywhere is not taken: it may mean
+ *  something else in scope, a global or an ambient declaration. */
+export function nameComponents(parsed: ParsedDeclaration): DeclarationNames {
+  const body = parsed.program.body;
+  if (body.some((statement) => statement.type === 'TSExportAssignment')) {
+    return NO_NAMES;
+  }
+  const closed = body.some(isEmptyExport);
+  if (
+    !closed &&
+    body.some(
+      (statement) => isDeclaration(statement) && !isAugmentation(statement)
+    )
+  ) {
+    return NO_NAMES;
+  }
+
+  // An escaped identifier (`Box\u0043omponent`) is the name it decodes to:
+  // the AST holds each identifier decoded, the text each comment and string.
+  let identifiers: Set<string> | null = null;
+  const mentioned = (name: string): boolean => {
+    identifiers ??= identifierNames(parsed.program);
+    return (
+      identifiers.has(name) ||
+      new RegExp(`(?<![\\w$])${name.replaceAll('$', '\\$')}(?![\\w$])`).test(
+        parsed.text
+      )
+    );
+  };
+  const added = new Set<string>();
+  const components: ComponentName[] = [];
+  for (const { statement, name, declared, declarators } of annotatedConsts(
+    body
+  )) {
+    if (declarators !== 1) continue;
+    const kind = systemTypeReference(declared, parsed.scope, COMPONENT_TYPES);
+    const alias = `${name}Component`;
+    if (kind === null || added.has(alias) || mentioned(alias)) continue;
+    added.add(alias);
+    components.push({
+      start: declared.start,
+      end: declared.end,
+      after: statement.end,
+      name: alias,
+    });
+  }
+
+  const mapComment = parsed.comments.find((comment) =>
+    comment.value.startsWith('# sourceMappingURL=')
+  );
+  return {
+    components,
+    closeAt:
+      closed || components.length === 0
+        ? null
+        : (mapComment?.start ?? parsed.text.length),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1230,25 +1399,79 @@ export interface RewrittenDeclaration {
   edits: TextEdit[];
 }
 
+interface Change {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/** `original` from `start` to `end` with `changes` (sorted, disjoint, all
+ *  inside it) applied. */
+function splice(
+  original: string,
+  start: number,
+  end: number,
+  changes: readonly Change[]
+): RewrittenDeclaration {
+  let text = '';
+  let cursor = start;
+  const edits: TextEdit[] = [];
+  for (const change of changes) {
+    text += original.slice(cursor, change.start) + change.text;
+    edits.push({
+      start: change.start,
+      end: change.end,
+      length: change.text.length,
+    });
+    cursor = change.end;
+  }
+  return { text: text + original.slice(cursor, end), edits };
+}
+
 export function rewriteDeclaration(
   rel: string,
   original: string,
-  replacements: readonly AliasReplacement[]
+  replacements: readonly AliasReplacement[],
+  names: DeclarationNames
 ): RewrittenDeclaration {
-  let text = '';
-  let cursor = 0;
-  const edits: TextEdit[] = [];
-  for (const replacement of replacements) {
-    const replacementText = helperReference(rel, replacement.alias);
-    text += original.slice(cursor, replacement.start) + replacementText;
-    edits.push({
-      start: replacement.start,
-      end: replacement.end,
-      length: replacementText.length,
-    });
-    cursor = replacement.end;
+  const aliased: Change[] = replacements.map((replacement) => ({
+    start: replacement.start,
+    end: replacement.end,
+    text: helperReference(rel, replacement.alias),
+  }));
+  /** `original` between `start` and `end`, with the aliases inside it. */
+  const span = (start: number, end: number): string =>
+    splice(
+      original,
+      start,
+      end,
+      aliased.filter((change) => change.start >= start && change.end <= end)
+    ).text;
+  const changes = aliased.filter(
+    (change) =>
+      !names.components.some(
+        (name) => change.start >= name.start && change.end <= name.end
+      )
+  );
+  for (const component of names.components) {
+    changes.push(
+      { start: component.start, end: component.end, text: component.name },
+      {
+        start: component.after,
+        end: component.after,
+        text: `\ntype ${component.name} = ${span(component.start, component.end)};`,
+      }
+    );
   }
-  return { text: text + original.slice(cursor), edits };
+  if (names.closeAt !== null) {
+    changes.push({
+      start: names.closeAt,
+      end: names.closeAt,
+      text: 'export {};\n',
+    });
+  }
+  changes.sort((a, b) => a.start - b.start);
+  return splice(original, 0, original.length, changes);
 }
 
 /** The helper module: each alias is read from its anchor's public registry

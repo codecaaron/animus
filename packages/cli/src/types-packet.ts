@@ -58,6 +58,8 @@ import {
   helperModule,
   helperReference,
   mayDeclareSystem,
+  nameComponents,
+  NO_NAMES,
   parseDeclaration,
   probeSpecifiers,
   rewriteDeclaration,
@@ -76,6 +78,7 @@ import {
 import type {
   SkippedAnchor,
   AnchorSet,
+  DeclarationNames,
   DeclarationScan,
   ParsedDeclaration,
   RegistryAlias,
@@ -113,6 +116,8 @@ export interface TypesAliasReport {
   outputBytes: number;
   aliases: AliasCount[];
   skipped: SkippedAnchor[];
+  /** Components whose declared type is a local `XComponent` alias. */
+  names: { components: number };
   probes: { files: number; diagnostics: number };
   /** Files left as emitted, augmentation gaps, and a cleanup failure after
    *  the packet was promoted. */
@@ -557,6 +562,7 @@ interface StagedPacket {
   inputDigest: string;
   aliases: AliasCount[];
   skipped: SkippedAnchor[];
+  names: TypesAliasReport['names'];
   witnesses: Witness[];
   warnings: string[];
 }
@@ -690,10 +696,12 @@ function stagePacket(
   }
   const anchors = collectAnchors(parsed.values(), options.anchors, identities);
   const scans = new Map<string, DeclarationScan>();
+  const names = new Map<string, DeclarationNames>();
   for (const [rel, text] of texts) {
     const declaration =
       parsed.get(rel) ?? parseDeclaration(rel, text, identities);
     parsed.delete(rel);
+    names.set(rel, nameComponents(declaration));
     scans.set(
       join(options.outDir, rel),
       scanDeclaration(
@@ -731,6 +739,7 @@ function stagePacket(
     anchors.aliases.map((alias) => [alias, 0])
   );
   const witnesses = new Map<string, Witness>();
+  const nameCounts = { components: 0 };
   const maps = new Set(
     declarations.map((rel) => `${rel}.map`).filter((map) => all.includes(map))
   );
@@ -740,6 +749,8 @@ function stagePacket(
     if (scan === undefined) continue;
     let replacements =
       attributedAnchorEdge === undefined ? scan.replacements : [];
+    // A file left as emitted takes no names either.
+    let named = names.get(rel) ?? NO_NAMES;
     if (scan.localOccurrences > 0) {
       warnings.push(
         `${rel}: ${scan.localOccurrences} registry occurrence(s) left as emitted: they name a declaration of the file itself`
@@ -750,6 +761,7 @@ function stagePacket(
         `${rel} left as emitted: an import there carries attributes or a resolution-mode`
       );
       replacements = [];
+      named = NO_NAMES;
     }
     if (replacements.length > 0) {
       const missing = [...required].find((augmentation) =>
@@ -763,6 +775,7 @@ function stagePacket(
             `${isPathWithinRoot(options.outDir, missing) ? toPosix(relative(options.outDir, missing)) : missing}, which its aliases would bring in`
         );
         replacements = [];
+        named = NO_NAMES;
       }
     }
     for (const replacement of replacements) {
@@ -785,7 +798,8 @@ function stagePacket(
         });
       }
     }
-    const rewritten = rewriteDeclaration(rel, text, replacements);
+    nameCounts.components += named.components.length;
+    const rewritten = rewriteDeclaration(rel, text, replacements, named);
     write(rel, rewritten.text);
     const map = `${rel}.map`;
     if (maps.has(map)) {
@@ -826,6 +840,7 @@ function stagePacket(
       replacements: counts.get(alias) ?? 0,
     })),
     skipped: anchors.skipped,
+    names: nameCounts,
     witnesses: [...witnesses.values()],
     warnings: routes.gated
       ? [
@@ -1322,6 +1337,7 @@ export async function runTypesAlias(
       outputBytes: packet.outputBytes,
       aliases: packet.aliases,
       skipped: packet.skipped,
+      names: packet.names,
       probes,
       warnings:
         cleanup === null ? packet.warnings : [...packet.warnings, cleanup],
@@ -1356,6 +1372,9 @@ export function formatTypesAliasReport(
     lines.push(
       `[animus]   ${alias.name} (${alias.anchor}): ${alias.replacements} replacements`
     );
+  }
+  if (report.names.components > 0) {
+    lines.push(`[animus]   names: ${report.names.components} component types`);
   }
   for (const skip of report.skipped) {
     lines.push(

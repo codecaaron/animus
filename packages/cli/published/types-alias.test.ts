@@ -91,18 +91,41 @@ export const Button = ds
   'src/Box.ts': `import { ds } from './ds';
 
 export const Box = ds.styles({}).system({ space: true, color: true }).asElement('div');
+
+// A global record whose name a component alias would take: the file
+// mentions it, so the alias must not shadow it.
+declare global {
+  interface BoxComponent {
+    sentinel: 'global';
+  }
+}
+export declare const metadata: BoxComponent;
+`,
+  // The same record, its name spelled with an escape the text never shows.
+  'src/Panel.ts': `import type { AnimusComponent } from '@animus-ui/system';
+
+declare global {
+  interface Panel\\u0043omponent {
+    sentinel: 'global';
+  }
+}
+export declare const Panel: AnimusComponent<'div', {}, {}, {}, {}, {}, {}, {}>;
+export declare const panelMetadata: Panel\\u0043omponent;
 `,
   // The augmentation edge tsc does not keep on its own.
   'src/index.ts': `export type {} from './ds';
-export { Box } from './Box';
+export { Box, metadata } from './Box';
 export { Button } from './Button';
+export { Panel, panelMetadata } from './Panel';
 `,
-  'probes/use.tsx': `import { Box, Button } from 'alias-fixture';
+  'probes/use.tsx': `import { Box, Button, metadata, panelMetadata } from 'alias-fixture';
 
 export const accepted = <><Button tone="calm" /><Box p={{ _: 'sm', md: 'lg' }} color="ink" /></>;
 export const wrongTone = <Button tone="loud" />;
 export const wrongBreakpoint = <Box p={{ _: 'sm', xxl: 'lg' }} />;
 export const wrongColor = <Box color="sky" />;
+export const sentinel: 'global' = metadata.sentinel;
+export const escaped: 'global' = panelMetadata.sentinel;
 `,
 };
 
@@ -208,10 +231,13 @@ describe('animus types alias', () => {
       expect(emitDeclarations()).toBe(0);
       const report = await runTypesAlias(aliasOptions());
 
-      // Not vacuous: the packet differs from the ordinary declarations.
+      // Not vacuous: the packet differs from the ordinary declarations, in
+      // its registries and its component names. Box's and Panel's files
+      // mention a global record each would name, so both keep their types.
       expect(
         report.aliases.reduce((sum, alias) => sum + alias.replacements, 0)
       ).toBeGreaterThan(0);
+      expect(report.names).toEqual({ components: 1 });
       const expected = [
         'probes/use.tsx(4,34) TS2769',
         'probes/use.tsx(5,51) TS2769',

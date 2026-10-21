@@ -138,6 +138,16 @@ declaration of its own file. When an import with attributes or a
 that run. On the benchmark's 1,000-component app the
 declarations shrink from 94.6 MB to 2.1 MB.
 
+Each component declaration (`AnimusComponent` or `AnimusWrappedComponent`
+from `@animus-ui/system`, by identity) also takes a local alias,
+`export declare const Button: ButtonComponent`, so a hover shows the name
+instead of the expanded type; completion, errors and go-to-definition are
+unchanged. The aliases add no export (a file gains `export {}` where it
+lacks one). A file that relies on implicit exports is left as emitted, and
+so is a component whose alias name the file mentions anywhere, as an
+identifier (however its characters are escaped) or in its text: the name
+may already mean something there, such as a global.
+
 One run owns `--out` at a time, through a `.<out>.lock` file beside it. A
 lock is never taken over: a run killed before it released its lock leaves
 it behind, and the next run refuses (exit 2) and names it; delete it once
@@ -169,14 +179,22 @@ before the swap. `--anchor
 <module>#<export>` adds a system declared outside the packet, such as a UI
 package's components built on another package's `ds`
 (`--anchor @acme/styles#ds`). Declaration maps follow the rewrite. With
-`--json` the report is one JSON document on stdout; otherwise a summary
-goes to stderr. Its `skipped` list names system declarations whose
-registries were not aliased, such as an empty sealed system, and its
-`warnings` list names files left as emitted and entries that miss an
-augmentation; neither changes the exit code. Exit codes: 0 promoted; 1 a check failed or the
-declarations could not be read; 2 a usage error (a missing directory, an
-`--out` the command did not write or another run owns, a refused `exports`
-route); 3 no TypeScript.
+`--json` every exit prints one JSON document on stdout: its `outcome`
+(`promoted`, `failed`, `refused` or `no-typescript`), its `exitCode`, its
+`reasons` (each line the text mode prints, `[animus]` left off), and on
+promotion the report. With `--help` or `--version` the document's
+outcome is `help` or `version` (the version in its `version` field), and
+the usage text stays on stderr. Two exits fall outside this: a run killed
+by a signal (SIGTERM during a check) prints nothing, and the launcher
+exits 4 with prose alone when the installed package cannot be loaded. A
+failure's lines go to stderr in both modes, and without `--json` the
+promotion summary does too. The report's `skipped` list names system
+declarations whose registries were not aliased, such as an empty sealed
+system, and its `warnings` list names files left as emitted and entries
+that miss an augmentation; neither changes the exit code. Exit codes: 0
+promoted; 1 a check failed or the declarations could not be read; 2 a
+usage error (a missing directory, an `--out` the command did not write or
+another run owns, a refused `exports` route); 3 no TypeScript.
 
 The packet is a type contract only: extraction never reads it, and a
 TypeScript annotation never decides what CSS ships.

@@ -25,6 +25,8 @@ import {
 import { runWatch } from './watch';
 import { MANIFEST_FILE } from './writer';
 
+import type { TypesAliasReport } from './types-packet';
+
 export { renderFontPreloads } from '@animus-ui/extract/pipeline';
 export type { FontPreload } from '@animus-ui/extract/pipeline';
 
@@ -142,6 +144,52 @@ function reportUsageError(reason: string): void {
   process.exitCode = EXIT_USAGE;
 }
 
+const CLI_OPTIONS = {
+  system: { type: 'string' },
+  root: { type: 'string' },
+  config: { type: 'string' },
+  'out-dir': { type: 'string' },
+  exclude: { type: 'string', multiple: true },
+  condition: { type: 'string', multiple: true },
+  mode: { type: 'string' },
+  targets: { type: 'string' },
+  strict: { type: 'boolean' },
+  verbose: { type: 'boolean' },
+  trace: { type: 'boolean' },
+  kit: { type: 'boolean' },
+  'fail-on-degraded': { type: 'boolean' },
+  'print-config': { type: 'boolean' },
+  manifest: { type: 'string' },
+  dist: { type: 'string' },
+  json: { type: 'boolean' },
+  out: { type: 'string' },
+  project: { type: 'string' },
+  probes: { type: 'string' },
+  anchor: { type: 'string', multiple: true },
+  tsc: { type: 'string' },
+  help: { type: 'boolean' },
+  version: { type: 'boolean' },
+} as const;
+
+/** The command `argv` names, read past each string option's value, for
+ *  arguments that did not parse. */
+function commandOf(argv: readonly string[]): string | undefined {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--') return argv[index + 1];
+    if (arg.startsWith('--')) {
+      const name = arg.slice(2);
+      const takesValue = Object.entries(CLI_OPTIONS).some(
+        ([option, config]) => option === name && config.type === 'string'
+      );
+      if (takesValue) index += 1;
+      continue;
+    }
+    if (!arg.startsWith('-')) return arg;
+  }
+  return undefined;
+}
+
 /** `version` is the installed package's, which `bin/animus.mjs` reads from
  *  its package.json and passes in. */
 export async function main(
@@ -153,41 +201,23 @@ export async function main(
     parsed = parseArgs({
       args: argv,
       allowPositionals: true,
-      options: {
-        system: { type: 'string' },
-        root: { type: 'string' },
-        config: { type: 'string' },
-        'out-dir': { type: 'string' },
-        exclude: { type: 'string', multiple: true },
-        condition: { type: 'string', multiple: true },
-        mode: { type: 'string' },
-        targets: { type: 'string' },
-        strict: { type: 'boolean' },
-        verbose: { type: 'boolean' },
-        trace: { type: 'boolean' },
-        kit: { type: 'boolean' },
-        'fail-on-degraded': { type: 'boolean' },
-        'print-config': { type: 'boolean' },
-        manifest: { type: 'string' },
-        dist: { type: 'string' },
-        json: { type: 'boolean' },
-        out: { type: 'string' },
-        project: { type: 'string' },
-        probes: { type: 'string' },
-        anchor: { type: 'string', multiple: true },
-        tsc: { type: 'string' },
-        help: { type: 'boolean' },
-        version: { type: 'boolean' },
-      },
+      options: CLI_OPTIONS,
     });
   } catch (error) {
-    reportUsageError(String(readThrownMessage(error)));
+    const reason = String(readThrownMessage(error));
+    reportUsageError(reason);
+    // The arguments did not parse: `types` and `--json` are read from them.
+    if (commandOf(argv) === 'types' && argv.includes('--json')) {
+      printTypesAliasOutcome(EXIT_USAGE, [reason]);
+    }
     return;
   }
 
   const { values, positionals } = parsed;
+  const typesJson = positionals[0] === 'types' && values.json === true;
   if (values.version) {
-    console.log(version ?? 'unknown');
+    if (typesJson) printTypesAliasInfo('version', version ?? 'unknown');
+    else console.log(version ?? 'unknown');
     process.exitCode = EXIT_OK;
     return;
   }
@@ -195,6 +225,7 @@ export async function main(
     console.error(USAGE);
     process.exitCode =
       positionals.length === 0 && !values.help ? EXIT_USAGE : EXIT_OK;
+    if (typesJson) printTypesAliasInfo('help');
     return;
   }
 
@@ -206,9 +237,11 @@ export async function main(
   const ownFlags = subcommand?.flags ?? BUILD_FLAGS;
   const foreign = Object.keys(values).filter((flag) => !ownFlags.has(flag));
   if (foreign.length > 0) {
-    reportUsageError(
-      `--${foreign[0]} is not an option of '${subcommand?.label ?? command}'`
-    );
+    const reason = `--${foreign[0]} is not an option of '${subcommand?.label ?? command}'`;
+    reportUsageError(reason);
+    if (command === 'types' && values.json) {
+      printTypesAliasOutcome(EXIT_USAGE, [reason]);
+    }
     return;
   }
   if (command === 'css') {
@@ -366,8 +399,59 @@ async function runCssAuditCommand(
   }
 }
 
+/** What `types alias --json` reports of an exit: promoted, a refused
+ *  usage, no TypeScript, or else a failed check or unreadable
+ *  declarations. */
+function typesAliasOutcome(exitCode: number): string {
+  switch (exitCode) {
+    case EXIT_OK:
+      return 'promoted';
+    case EXIT_USAGE:
+      return 'refused';
+    case EXIT_ENVIRONMENT:
+      return 'no-typescript';
+    default:
+      return 'failed';
+  }
+}
+
+/** The one JSON document `types alias --json` prints on stdout at an exit:
+ *  its outcome, exit code and reasons, and on promotion the report. */
+function printTypesAliasOutcome(
+  exitCode: number,
+  reasons: string[],
+  report?: TypesAliasReport
+): void {
+  const outcome = typesAliasOutcome(exitCode);
+  console.log(
+    JSON.stringify({ outcome, exitCode, reasons, ...report }, null, 2)
+  );
+}
+
+/** The document `types --json` prints for `--help` or `--version`. */
+interface TypesAliasInfo {
+  outcome: 'help' | 'version';
+  exitCode: number;
+  reasons: string[];
+  version?: string;
+}
+
+/** `--help` or `--version` beside `types --json`: a document saying so, with
+ *  the version, on stdout; the usage text stays on stderr. */
+function printTypesAliasInfo(
+  outcome: TypesAliasInfo['outcome'],
+  version?: string
+): void {
+  const document: TypesAliasInfo = { outcome, exitCode: EXIT_OK, reasons: [] };
+  if (version !== undefined) document.version = version;
+  console.log(JSON.stringify(document, null, 2));
+}
+
 /** `animus types alias <declDir>`: paths resolve against the working
- *  directory, as a package build script passes them. */
+ *  directory, as a package build script passes them. With `--json`, every
+ *  exit prints one JSON document on stdout: its outcome, exit code and
+ *  reasons, the lines the text mode prints, and on promotion the report;
+ *  the text still goes to stderr. */
 async function runTypesAliasCommand(
   subcommand: string[],
   values: {
@@ -379,8 +463,20 @@ async function runTypesAliasCommand(
     json?: boolean;
   }
 ): Promise<void> {
+  const exit = (
+    exitCode: number,
+    reasons: string[],
+    report?: TypesAliasReport
+  ): void => {
+    process.exitCode = exitCode;
+    if (values.json) printTypesAliasOutcome(exitCode, reasons, report);
+  };
+  const refuse = (reason: string): void => {
+    reportUsageError(reason);
+    exit(EXIT_USAGE, [reason]);
+  };
   if (subcommand[0] !== 'alias' || subcommand.length !== 2) {
-    reportUsageError(
+    refuse(
       subcommand[0] === 'alias'
         ? "'types alias' takes one declaration directory"
         : "'types' needs a subcommand: alias <declDir>"
@@ -388,7 +484,7 @@ async function runTypesAliasCommand(
     return;
   }
   if (values.out === undefined || values.probes === undefined) {
-    reportUsageError("'types alias' needs --out <dir> and --probes <dir>");
+    refuse("'types alias' needs --out <dir> and --probes <dir>");
     return;
   }
   const cwd = process.cwd();
@@ -402,14 +498,18 @@ async function runTypesAliasCommand(
       anchors: values.anchor ?? [],
       tsc: values.tsc === undefined ? undefined : resolve(cwd, values.tsc),
     });
-    if (values.json) console.log(JSON.stringify(report, null, 2));
-    else process.stderr.write(formatTypesAliasReport(report, outDir));
-    process.exitCode = EXIT_OK;
+    if (!values.json) {
+      process.stderr.write(formatTypesAliasReport(report, outDir));
+    }
+    exit(EXIT_OK, [], report);
   } catch (error) {
-    console.error(`[animus] ${String(readThrownMessage(error) ?? error)}`);
+    const message = String(readThrownMessage(error) ?? error);
+    console.error(`[animus] ${message}`);
+    const reasons = message.split('\n');
     if (!(error instanceof PromotionIncompleteError)) {
       console.error(`[animus] ${outDir} was not changed.`);
+      reasons.push(`${outDir} was not changed.`);
     }
-    process.exitCode = exitCodeFor(error);
+    exit(exitCodeFor(error), reasons);
   }
 }
