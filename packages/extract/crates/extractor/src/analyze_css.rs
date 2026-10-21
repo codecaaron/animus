@@ -674,13 +674,13 @@ impl CssDiagnostic {
         self
     }
 
-    /// Turns a byte offset into `source`, the diagnostic's file, into a
-    /// 1-based line and a column counted in characters.
-    pub fn locate(&mut self, source: &str) {
-        let Some(offset) = self.offset.take() else { return };
-        let Some(before) = source.get(..(offset as usize).min(source.len())) else { return };
-        let line = before.matches('\n').count() + 1;
-        let column = before.rsplit('\n').next().map_or(0, |text| text.chars().count()) + 1;
+    /// Turns a byte offset into the diagnostic's file into a 1-based line
+    /// and a column counted in characters.
+    pub(crate) fn locate(&mut self, lines: &mut crate::facts::SourceLines<'_>) {
+        let Some(offset) = self.offset else { return };
+        let Some((source, starts)) = lines.of(&self.file) else { return };
+        self.offset = None;
+        let Some((line, column)) = starts.line_column(source, offset as usize) else { return };
         self.line = u32::try_from(line).ok();
         self.column = u32::try_from(column).ok();
     }

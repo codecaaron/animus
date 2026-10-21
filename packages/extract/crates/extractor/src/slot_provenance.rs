@@ -65,18 +65,16 @@ pub struct SlotProvenance {
 
 impl SlotProvenance {
     /// Reads each opening's line from its file's source.
-    pub fn locate<'a>(&mut self, source: impl Fn(&str) -> Option<&'a str>) {
+    pub(crate) fn locate(&mut self, lines: &mut crate::facts::SourceLines<'_>) {
         let openings = self
             .usage
             .iter_mut()
             .chain(self.owners.values_mut().flatten())
             .chain(self.props.values_mut().flatten().map(|keeper| &mut keeper.opening))
             .chain(self.components.values_mut().flat_map(|props| props.values_mut()).flatten());
-        let mut lines: FxHashMap<String, Option<crate::facts::LineStarts>> = FxHashMap::default();
         for opening in openings {
             let (Some(file), Some(at)) = (&opening.file, opening.at) else { continue };
-            let starts = lines.entry(file.clone()).or_insert_with(|| source(file).map(crate::facts::LineStarts::of));
-            opening.line = starts.as_ref().map(|starts| starts.line(at as usize));
+            opening.line = lines.of(file).map(|(_, starts)| starts.line(at as usize));
         }
     }
 }

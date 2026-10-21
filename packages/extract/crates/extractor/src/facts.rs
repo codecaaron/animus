@@ -958,6 +958,35 @@ impl LineStarts {
     pub(crate) fn line(&self, offset: usize) -> usize {
         self.0.partition_point(|&start| start <= offset)
     }
+
+    /// The 1-based line and column, counted in characters, of a byte
+    /// offset into `source`, the text these are the line starts of; none at
+    /// an offset inside a character.
+    pub(crate) fn line_column(&self, source: &str, offset: usize) -> Option<(usize, usize)> {
+        let offset = offset.min(source.len());
+        let line = self.line(offset);
+        let column = source.get(self.0[line - 1]..offset)?.chars().count() + 1;
+        Some((line, column))
+    }
+}
+
+/// The engine's sources, each with its line starts, found when a file is
+/// first asked about.
+pub(crate) struct SourceLines<'s> {
+    sources: &'s BTreeMap<String, String>,
+    starts: rustc_hash::FxHashMap<&'s str, LineStarts>,
+}
+
+impl<'s> SourceLines<'s> {
+    pub(crate) fn new(sources: &'s BTreeMap<String, String>) -> Self {
+        Self { sources, starts: rustc_hash::FxHashMap::default() }
+    }
+
+    /// `file`'s source and line starts, where the analysis holds it.
+    pub(crate) fn of(&mut self, file: &str) -> Option<(&'s str, &LineStarts)> {
+        let (file, source) = self.sources.get_key_value(file)?;
+        Some((source, self.starts.entry(file).or_insert_with(|| LineStarts::of(source))))
+    }
 }
 
 /// 1-based line and column of a byte offset.

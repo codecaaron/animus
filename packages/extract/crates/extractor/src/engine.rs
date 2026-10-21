@@ -1583,16 +1583,15 @@ impl ExtractEngine {
         );
         clock.mark("cssResolution");
         // Only the engine holds the sources a diagnostic's line and column
-        // are read from.
+        // are read from; each file's line starts are found once.
+        let mut lines = facts::SourceLines::new(&self.sources);
         for diagnostic in &mut css.diagnostics {
-            if let Some(source) = self.sources.get(&diagnostic.file) {
-                diagnostic.locate(source);
-            }
+            diagnostic.locate(&mut lines);
             name_compiled_kit_fix(diagnostic, &compiled_declarations, output_dirs);
         }
         analyze_css::report_unread_openings(&mut css.diagnostics, &self.facts, &self.opts.css_inputs);
         if let Some(provenance) = &mut css.slot_provenance {
-            provenance.locate(|file| self.sources.get(file).map(String::as_str));
+            provenance.locate(&mut lines);
         }
         self.css = Some(css);
         clock.mark("post");
