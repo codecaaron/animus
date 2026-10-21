@@ -1458,17 +1458,28 @@ thread_local! {
 pub(crate) struct ProbeScope(Option<Probes>);
 
 impl ProbeScope {
-    pub(crate) fn enter<'p>(inputs: &CssInputs, paths: impl IntoIterator<Item = &'p str>) -> Self {
-        let mut paths: Vec<String> = paths.into_iter().map(str::to_string).collect();
-        // A map's keys come in byte order.
-        paths.sort_unstable();
-        let probes = Probes { inputs: address(inputs), paths, maps: Vec::new(), outcomes: FxHashMap::default() };
-        Self(PROBES.replace(Some(probes)))
+    /// The open scope, admitting `files`; else a scope of `files`' keys.
+    pub(crate) fn within<T>(files: &BTreeMap<String, T>, inputs: &CssInputs) -> Option<Self> {
+        if Self::try_admit(files, inputs) {
+            return None;
+        }
+        let probes = Probes {
+            inputs: address(inputs),
+            paths: files.keys().cloned().collect(),
+            maps: vec![(address(files), files.len())],
+            outcomes: FxHashMap::default(),
+        };
+        Some(Self(PROBES.replace(Some(probes))))
     }
 
-    /// Lets the open scope answer for `files`, when its keys are the
-    /// analysed paths and `inputs` the scope's.
-    pub(crate) fn admit<T>(files: &BTreeMap<String, T>, inputs: &CssInputs) -> bool {
+    /// Lets the open scope answer for `files`, whose keys are the analysed
+    /// paths and whose inputs are the scope's.
+    pub(crate) fn admit<T>(files: &BTreeMap<String, T>, inputs: &CssInputs) {
+        let admitted = Self::try_admit(files, inputs);
+        debug_assert!(admitted, "a map admitted to the open probe scope is keyed by its paths");
+    }
+
+    fn try_admit<T>(files: &BTreeMap<String, T>, inputs: &CssInputs) -> bool {
         PROBES.with_borrow_mut(|probes| match probes {
             Some(probes) if probes.inputs == address(inputs) && files.keys().eq(probes.paths.iter()) => {
                 probes.maps.push((address(files), files.len()));
@@ -1476,16 +1487,6 @@ impl ProbeScope {
             }
             _ => false,
         })
-    }
-
-    /// The open scope, admitting `files`; else a scope of its own.
-    fn within<T>(files: &BTreeMap<String, T>, inputs: &CssInputs) -> Option<Self> {
-        if Self::admit(files, inputs) {
-            return None;
-        }
-        let scope = Self::enter(inputs, files.keys().map(String::as_str));
-        Self::admit(files, inputs);
-        Some(scope)
     }
 }
 

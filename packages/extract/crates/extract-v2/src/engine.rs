@@ -408,8 +408,7 @@ struct Prepared {
     identity: String,
     synthesized: BTreeMap<String, std::collections::BTreeSet<String>>,
     store: ast_store::AstStore,
-    lowered: Vec<crate::link::Lowered>,
-    objects: Vec<facts::ObjectFacts>,
+    modules: Vec<(crate::link::Lowered, facts::ObjectFacts)>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1132,13 +1131,12 @@ impl ExtractEngine {
             },
         );
         let (modules, listed): (Vec<_>, Vec<_>) = modules.into_iter().unzip();
-        let (lowered, objects): (Vec<_>, Vec<_>) = modules.into_iter().unzip();
         clock.mark("prepareParse");
         let mut bases = std::collections::BTreeSet::new();
         let mut loads = Vec::new();
         let mut packages = std::collections::BTreeSet::new();
         let analysed: BTreeMap<String, ()> = store.iter().map(|ast| (ast.path.clone(), ())).collect();
-        for ((ast, lowered), listed) in store.iter().zip(&lowered).zip(listed) {
+        for ((ast, (lowered, _)), listed) in store.iter().zip(&modules).zip(listed) {
             let all = &lowered.loads;
             loads.extend(listed.into_iter().map(|load| ListedLoad { importer: ast.path.clone(), load }));
             // A package a runtime load, a re-export or a namespace import
@@ -1164,7 +1162,7 @@ impl ExtractEngine {
                 }
             }
         }
-        self.prepared = Some(Prepared { identity: identity.clone(), synthesized, store, lowered, objects });
+        self.prepared = Some(Prepared { identity: identity.clone(), synthesized, store, modules });
         clock.mark("prepareProbes");
         self.timings = clock.phases;
         serde_json::to_string(
@@ -1180,7 +1178,7 @@ impl ExtractEngine {
     #[napi]
     pub fn analyze_prepared(&mut self, probe_evidence_json: Option<String>) -> napi::Result<String> {
         let mut clock = PhaseClock::start();
-        let Prepared { identity, mut synthesized, store, lowered, objects } = self
+        let Prepared { identity, mut synthesized, store, modules } = self
             .prepared
             .take()
             .ok_or_else(|| napi::Error::from_reason("analyzePrepared needs a prepare first, once per analysis"))?;
@@ -1231,9 +1229,6 @@ impl ExtractEngine {
         clock.mark("input");
         self.parse_count = store.parse_count();
         clock.mark("parse");
-        // One analysed path set, and inputs that hold still from here: each
-        // base is probed once for every map keyed by exactly these paths.
-        let _probes = analyze_css::ProbeScope::enter(&self.opts.css_inputs, store.iter().map(|ast| ast.path.as_str()));
 
         use crate::usage_facts::{collect_export_facts, collect_import_facts};
         let mut statics_by_file: std::collections::BTreeMap<
@@ -1246,20 +1241,19 @@ impl ExtractEngine {
         > = std::collections::BTreeMap::new();
         let mut imports_by_file: ModuleFacts = std::collections::BTreeMap::new();
         let mut style_modules: BTreeMap<String, StyleModule> = BTreeMap::new();
-        // Each file's Lower output, before anything reads across files.
-        let mut lowered_by_file: BTreeMap<String, crate::link::Lowered> =
-            store.iter().map(|ast| ast.path.clone()).zip(lowered).collect();
-        // What each module's parse and semantic build give alone, the object
-        // facts the member tables follow among them, read before any static
-        // value is evaluated; fact extraction completes them.
-        let mut structural_by_file: BTreeMap<String, facts::FileFacts> = store
-            .iter()
-            .zip(objects)
-            .map(|(ast, objects)| {
-                (ast.path.clone(), facts::structural_facts(ast, &lowered_by_file[&ast.path], objects))
-            })
-            .collect();
-        analyze_css::ProbeScope::admit(&lowered_by_file, &self.opts.css_inputs);
+        // Each file's Lower output, before anything reads across files, and
+        // what its parse and semantic build give alone, the object facts the
+        // member tables follow among them, read before any static value is
+        // evaluated; fact extraction completes them.
+        let mut lowered_by_file: BTreeMap<String, crate::link::Lowered> = BTreeMap::new();
+        let mut structural_by_file: BTreeMap<String, facts::FileFacts> = BTreeMap::new();
+        for (ast, (lowered, objects)) in store.iter().zip(modules) {
+            structural_by_file.insert(ast.path.clone(), facts::structural_facts(ast, &lowered, objects));
+            lowered_by_file.insert(ast.path.clone(), lowered);
+        }
+        // One analysed path set, and inputs that hold still from here: each
+        // base is probed once for every map keyed by exactly these paths.
+        let _probes = analyze_css::ProbeScope::within(&lowered_by_file, &self.opts.css_inputs);
         analyze_css::ProbeScope::admit(&structural_by_file, &self.opts.css_inputs);
         analyze_css::distrust_promise(&mut structural_by_file, &self.opts.css_inputs);
         clock.mark("lowering");
@@ -1293,6 +1287,7 @@ impl ExtractEngine {
             complete_statics_by_file.insert(ast.path.clone(), complete_statics);
             imports_by_file.insert(ast.path.clone(), (imports, exports));
         }
+        analyze_css::ProbeScope::admit(&statics_by_file, &self.opts.css_inputs);
 
         // Names some module exports an object static under, by name alone:
         // a module that imports none of them and declares no object static
@@ -1447,7 +1442,6 @@ impl ExtractEngine {
         // in a kit's compiled output: the file declaring it.
         let mut compiled_declarations: rustc_hash::FxHashMap<(String, String), String> =
             rustc_hash::FxHashMap::default();
-        analyze_css::ProbeScope::admit(&statics_by_file, &self.opts.css_inputs);
         for (path, (imports, exports)) in &imports_by_file {
             let mut extra = rustc_hash::FxHashMap::default();
             let mut usage_extra = rustc_hash::FxHashMap::default();
