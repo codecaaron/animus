@@ -68,6 +68,21 @@ function label(
   return `${version ? `${host}@${version}` : host} ${how}`;
 }
 
+/** Vite's `resolve.conditions` as it resolves with them: its
+ *  `development|production` entry stands for the build's mode. */
+export function viteConditions(
+  conditions: readonly string[],
+  production: boolean
+): string[] {
+  return conditions.map((condition) =>
+    condition === 'development|production'
+      ? production
+        ? 'production'
+        : 'development'
+      : condition
+  );
+}
+
 /** Vite's `resolve.extensions`, which `configResolved` holds with its
  *  defaults applied. A TypeScript importer's `./x.js` names `x.ts` too.
  *  Only the default order is captured, as a real build resolves it. A

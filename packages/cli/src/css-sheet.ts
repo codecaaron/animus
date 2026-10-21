@@ -213,6 +213,22 @@ export function parseSheet(css: string): Sheet {
   };
 }
 
+/** Adds to `into` each class the selectors of `nodes`' style rules name,
+ *  nested ones too, of the rules `keep` admits. */
+export function addSelectedClasses(
+  nodes: readonly SheetNode[],
+  into: Set<string>,
+  keep: (rule: Extract<SheetNode, { type: 'style' }>) => boolean = () => true
+): Set<string> {
+  eachStyleRule(nodes, (rule) => {
+    if (!keep(rule)) return;
+    for (const selector of rule.selectors) {
+      for (const name of selector.classes) into.add(name);
+    }
+  });
+  return into;
+}
+
 /** Calls `visit` with every style rule of `nodes`, nested ones too. */
 export function eachStyleRule(
   nodes: readonly SheetNode[],
@@ -264,12 +280,14 @@ export function withoutSelectors(
   drop: (
     selector: SheetSelector,
     rule: Extract<SheetNode, { type: 'style' }>
-  ) => boolean
+  ) => boolean,
+  dropAt: (rule: Extract<SheetNode, { type: 'at' }>) => boolean = () => false
 ): string | null {
   const { css } = sheet;
   const cuts: Array<[number, number]> = [];
   // Whether `node` goes whole; otherwise its own cuts are recorded.
   const goes = (node: SheetNode): boolean => {
+    if (node.type === 'at' && dropAt(node)) return true;
     const gone = node.children.filter(goes);
     const emptied = gone.length === node.children.length;
     if (node.type === 'at') {

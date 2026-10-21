@@ -8,7 +8,6 @@ import {
 } from '@animus-ui/extract/pipeline';
 import {
   ANIMUS_ARTIFACT_DIR,
-  cliCacheDir,
   collectSessionAssets,
   engineApi,
   ExtractionSession,
@@ -18,8 +17,9 @@ import {
   getSharedFontPreloads,
   getSharedSystemProps,
   propOrderPath,
+  sessionsRootDir,
 } from '@animus-ui/extract/session';
-import { existsSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, rmdirSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join, relative, resolve } from 'path';
 
 import { installShutdownSignals } from './signals';
@@ -103,8 +103,11 @@ export function createCliSession(config: ResolvedCliConfig): ExtractionSession {
 
   session.driverLabel = 'animus';
   session.rootDir = root;
-  // Animus's own tree whatever --out-dir names, which may be served.
-  session.systemLoadCacheDir = cliCacheDir(root);
+  session.conditions = config.conditions;
+  // The system-load cache stays at its default, the nearest node_modules's
+  // cache: never the artifact directory, which may be served (its records
+  // name the machine's paths), nor the root, which --out-dir moves out of.
+
   // Every cycle republishes the whole assets set, so a superseded copy
   // would ship in a tree a fresh build of the same source never produces.
   session.staleAssetPruning = 'every-cycle';
@@ -270,6 +273,13 @@ export async function runBuild(
 
   await runPreflight(config);
 
+  // The sessions' tree under the root, which a build leaves empty: one this
+  // run creates goes with it.
+  const tree = join(config.root, ANIMUS_ARTIFACT_DIR);
+  const created = [tree, sessionsRootDir(config.root)].filter(
+    (dir) => !existsSync(dir)
+  );
+
   const release = flags.propOrderOnly ? () => {} : acquireLock(outDir);
   // The command writes the file whatever the configuration says.
   const run: ResolvedCliConfig = flags.propOrderOnly
@@ -341,5 +351,12 @@ export async function runBuild(
   } finally {
     removeShutdownSignals();
     releaseClaims();
+    for (const dir of created.reverse()) {
+      try {
+        rmdirSync(dir);
+      } catch {
+        // Not empty: it holds this run's output or a file another run wrote.
+      }
+    }
   }
 }

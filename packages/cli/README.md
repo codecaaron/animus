@@ -65,9 +65,16 @@ the artifact directory `animus build` uses, so `--out-dir`, `cli.outDir`,
 `--config` and `--root` apply as they do there) and the built output
 (`--dist`, default `<root>/dist`), and writes nothing. The manifest must
 come from the build that produced the output: `animus build --verbose`
-with the same settings, or one a host captured. Each estimate edits the
-shipped CSS and recompresses each file on its own (gzip level 9, Brotli
-quality 11 with a 22-bit window); Brotli ranks them.
+with the same settings, or one a host captured. A manifest whose CSS
+selects none of the shipped classes, or whose CSS lacks a class a rule of
+Animus's layers in the shipped CSS selects, fails with exit 2. The check
+compares class names only: a manifest from a build that differs only in a
+declaration's value or in a global rule that selects no class is not
+caught. Pass the bundler's export conditions to `animus build` with
+`--condition` (or `cli.conditions`), as Vite's `resolve.conditions`, so it
+reads the files the bundler does. Each estimate edits the shipped CSS and
+recompresses each file on its own (gzip level 9, Brotli quality 11 with a
+22-bit window); Brotli ranks them.
 
 1. **Delivery:** whether `stylesheets: 'split'` with
    `removeUnbundledComponents`, options of the Vite plugin only, would cost

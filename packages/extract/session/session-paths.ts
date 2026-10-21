@@ -74,11 +74,6 @@ export function propOrderPath(rootDir: string): string {
   return join(rootDir, ANIMUS_ARTIFACT_DIR, PROP_ORDER_ARTIFACT);
 }
 
-/** The CLI's cache folder: Animus's own tree, beside the sessions. */
-export function cliCacheDir(rootDir: string): string {
-  return join(rootDir, ANIMUS_ARTIFACT_DIR, 'cache');
-}
-
 export function sessionsRootDir(rootDir: string): string {
   return join(rootDir, ANIMUS_ARTIFACT_DIR, 'sessions');
 }

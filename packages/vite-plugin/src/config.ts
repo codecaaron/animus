@@ -5,6 +5,7 @@ import {
   outputExclusions,
   resolveMode,
   viteAssetClassification,
+  viteConditions,
   viteExtensionPolicy,
   viteHostExpander,
   viteOutputTargets,
@@ -78,13 +79,9 @@ export function applyResolvedConfig(
   );
   ctx.cacheDir = shipped ? undefined : cacheDir;
   ctx.configFiles = config.configFile ? [config.configFile] : [];
-  // Vite substitutes the mode for its `development|production` condition.
-  ctx.resolveConditions = config.resolve.conditions.map((condition) =>
-    condition === 'development|production'
-      ? config.isProduction
-        ? 'production'
-        : 'development'
-      : condition
+  ctx.resolveConditions = viteConditions(
+    config.resolve.conditions,
+    config.isProduction
   );
   // Vite's extension order, with its defaults applied.
   ctx.extensionPolicy = viteExtensionPolicy(config.resolve.extensions);

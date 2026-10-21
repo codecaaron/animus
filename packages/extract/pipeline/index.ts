@@ -236,6 +236,7 @@ export {
   extensionPolicyJson,
   rollupExtensionPolicy,
   turbopackExtensionPolicy,
+  viteConditions,
   viteExtensionPolicy,
   webpackExtensionPolicy,
 } from './host-extensions';

@@ -64,6 +64,10 @@ Options:
                       REPLACES the defaults (${REPLACEABLE_DEFAULT_EXCLUDE.join(', ')});
                       exclude: [] in the config file means none.
                       ${STRUCTURAL_EXCLUDE.join(', ')} are always excluded
+  --condition <name>  Export condition the app's bundler resolves packages
+                      with (repeatable, in its order; config: cli.conditions),
+                      as Vite's resolve.conditions, so the build reads the
+                      files the bundler does
   --mode <m>          'development' | 'production' (default: production)
   --targets <query>   Browserslist query for CSS lowering
   --strict            Fail on inputs that could not be read or resolved,
@@ -155,6 +159,7 @@ export async function main(
         config: { type: 'string' },
         'out-dir': { type: 'string' },
         exclude: { type: 'string', multiple: true },
+        condition: { type: 'string', multiple: true },
         mode: { type: 'string' },
         targets: { type: 'string' },
         strict: { type: 'boolean' },
@@ -242,6 +247,7 @@ export async function main(
     mode: values.mode,
     targets: values.targets,
     exclude: values.exclude,
+    conditions: values.condition,
   };
 
   const cwd = process.cwd();
@@ -303,6 +309,7 @@ const BUILD_FLAGS = new Set([
   'config',
   'out-dir',
   'exclude',
+  'condition',
   'mode',
   'targets',
   'strict',

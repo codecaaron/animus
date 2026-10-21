@@ -14,6 +14,7 @@ import { basename, join, relative } from 'node:path';
 
 import { UsageFailure } from './build';
 import {
+  addSelectedClasses,
   brotliSize,
   eachStyleRule,
   gzipSize,
@@ -30,11 +31,13 @@ import type {
 } from '@animus-ui/extract/pipeline';
 
 type StyleRule = Extract<SheetNode, { type: 'style' }>;
+type AtRule = Extract<SheetNode, { type: 'at' }>;
 
 /** Bytes a change saves, each file compressed on its own; negative where
  *  it costs bytes. A compressed size is `null` where it was not measured:
  *  gzip where the raw saving stays under the floor, Brotli where the gzip
- *  saving does or the finding ranks too low to measure. */
+ *  saving does or the finding ranks too low to measure. A finding without
+ *  a Brotli measurement ranks below the floor. */
 export interface Saving {
   raw: number;
   gzip: number | null;
@@ -60,10 +63,12 @@ export interface DeliveryEstimate {
   /** What a split costs over one file: positive is bytes added. */
   splitCost: Saving;
   /** What `removeUnbundledComponents` would remove from the (split) CSS
-   *  now; `null` where removal must keep every component. */
+   *  now, and the ids of the components it removes; `null` where removal
+   *  must keep every component. */
   removal: {
     components: number;
     saving: Saving;
+    removed: string[];
   } | null;
   removalKept: string | null;
   /** Output files the scan could not read as text, left out of the
@@ -73,6 +78,9 @@ export interface DeliveryEstimate {
   /** Removal's saving less the split's cost, where the CSS is single now;
    *  removal's saving where it is split already. */
   net: Saving;
+  /** Whether the verdict turns removal on: it would remove a component,
+   *  and on single CSS its saving outweighs the split's cost. */
+  removalRecommended: boolean;
   verdict: string;
   preconditions: string[];
 }
@@ -123,6 +131,9 @@ export interface Restructure {
   caveats: string[];
   saving: Saving;
   belowFloor: boolean;
+  /** Every component it changes is one `removeUnbundledComponents` would
+   *  remove, so the delivery estimate already counts its saving. */
+  removedByDelivery: boolean;
 }
 
 export interface Refusal {
@@ -135,7 +146,9 @@ export interface Refusal {
 export interface CssAuditReport {
   manifest: string;
   dist: string;
-  css: { files: number; sizes: Sizes };
+  /** Animus's CSS: the files holding an `@layer anm-…` block, or every CSS
+   *  file where none does. */
+  css: { files: number; sizes: Sizes; others: string[] };
   components: number;
   delivery: DeliveryReport;
   /** `null` where the manifest carries no slot provenance (a build without
@@ -171,10 +184,12 @@ const SITES_PER_OWNER = 2;
 
 // ---------------------------------------------------------------- input
 
+type Literal = string | number | boolean | null;
+
 interface UsageAttr {
   name: string;
-  staticValue?: string | number | boolean | null;
-  enumerableValues?: Array<string | number | boolean | null>;
+  staticValue?: Literal;
+  enumerableValues?: Literal[];
   dynamic: boolean;
   skip: boolean;
 }
@@ -234,6 +249,25 @@ const isRecord = (value: JsonValue | undefined): value is JsonRecord =>
   Object(value) === value && !Array.isArray(value);
 const isList = (value: JsonValue | undefined): value is JsonValue[] =>
   Array.isArray(value);
+const isFlag = (value: JsonValue | undefined): value is boolean =>
+  value === true || value === false;
+/** A string, number, boolean or null: what a literal attribute value is. */
+const isLiteral = (value: JsonValue | undefined): value is Literal =>
+  value === null || isText(value) || isFlag(value) || Number(value) === value;
+/** Absent, or a list of literals. */
+const literalList = (value: JsonValue | undefined): boolean =>
+  value === undefined || (isList(value) && value.every(isLiteral));
+
+/** The value `record` holds under `key` itself, never one it inherits
+ *  (a prop or tag named `constructor`). */
+function ownEntry<Value>(
+  record: Readonly<Record<string, Value>> | undefined,
+  key: string
+): Value | undefined {
+  return record !== undefined && Object.hasOwn(record, key)
+    ? record[key]
+    : undefined;
+}
 
 /** `value` where it is a record, else an empty one. */
 const recordOf = (value: JsonValue | undefined): JsonRecord =>
@@ -262,7 +296,12 @@ function isUsageFact(fact: JsonValue): boolean {
       isRecord(element) &&
       isRecord(element.tag) &&
       isList(element.attrs) &&
-      element.attrs.every((attr) => isRecord(attr) && isText(attr.name))
+      element.attrs.every(
+        (attr) =>
+          isRecord(attr) &&
+          isText(attr.name) &&
+          literalList(attr.enumerableValues)
+      )
     );
   }
   return fact.createElement === undefined || isRecord(fact.createElement);
@@ -320,6 +359,12 @@ function manifestProblem(raw: JsonRecord): string | null {
     }
   }
   if (raw.css !== undefined && !isText(raw.css)) return 'its css is no text';
+  if (
+    raw.sheets !== undefined &&
+    !(recordValues(raw.sheets)?.every(isText) ?? false)
+  ) {
+    return 'its sheets are no record of CSS texts';
+  }
   const provenance = raw.slot_provenance;
   if (provenance !== undefined) {
     if (
@@ -516,11 +561,15 @@ class Measured {
     return subtract(a, b);
   }
 
-  /** The edit that drops the selectors `drop` picks from every file. */
-  without(drop: (selector: SheetSelector, rule: StyleRule) => boolean): Edit {
+  /** The edit that drops the selectors `drop` picks, and the at-rules
+   *  `dropAt` picks, from every file. */
+  without(
+    drop: (selector: SheetSelector, rule: StyleRule) => boolean,
+    dropAt?: (rule: AtRule) => boolean
+  ): Edit {
     const edit: Edit = { before: [], after: [] };
     for (const [file, css] of this.files) {
-      const edited = withoutSelectors(this.sheet(file), drop);
+      const edited = withoutSelectors(this.sheet(file), drop, dropAt);
       if (edited === null) continue;
       edit.before.push(css);
       edit.after.push(edited);
@@ -600,8 +649,8 @@ function componentSites(audited: AuditedManifest): ComponentSites {
       if (!tag || /^[a-z][^.]*$/.test(tag)) continue;
       const attrs = fact.element?.attrs ?? null;
       const resolved =
-        tables?.[file]?.[tag] ??
-        manifest.crossFile?.memberBindings?.[file]?.[tag];
+        ownEntry(ownEntry(tables, file), tag) ??
+        ownEntry(ownEntry(manifest.crossFile?.memberBindings, file), tag);
       if (resolved !== undefined) {
         add(resolved, { file, attrs, byName: false });
         continue;
@@ -621,8 +670,17 @@ const coApplies = (site: Site): boolean =>
 
 // ------------------------------------------------------------ delivery
 
-/** The host whose output a dist's file names look like. */
-function hostOf(names: readonly string[]): DeliveryHost {
+/** A block of one of Animus's layers: what marks a file as its output. */
+const ANIMUS_LAYER_BLOCK = /@layer\s+anm-[\w-]+\s*\{/;
+
+/** The entry script Vite writes into a page it builds, or a split
+ *  stylesheet link the Vite plugin writes, whatever `build.assetsDir`. */
+const VITE_PAGE =
+  /<script\b[^>]*\btype="module"[^>]*\bcrossorigin\b|\bdata-animus-stylesheet\b/;
+
+/** The host whose output a dist looks like, by its file names and pages. */
+function hostOf(dist: Dist): DeliveryHost {
+  const { names } = dist;
   if (
     names.some(
       (name) =>
@@ -633,32 +691,32 @@ function hostOf(names: readonly string[]): DeliveryHost {
   ) {
     return 'next';
   }
+  const pages = dist.files.filter(({ file }) => /^[^/]+\.html$/.test(file));
   if (
     names.includes('.vite/manifest.json') ||
-    (names.some((name) => /^[^/]+\.html$/.test(name)) &&
-      names.some((name) => name.startsWith('assets/')))
+    pages.some(({ text }) => VITE_PAGE.test(text)) ||
+    (pages.length > 0 && names.some((name) => name.startsWith('assets/')))
   ) {
     return 'vite';
   }
   return 'other';
 }
 
+/** `sheets` are the files holding Animus's layers (`animusSheets`). */
 async function deliveryReport(
   audited: AuditedManifest,
   measured: Measured,
-  dist: Dist
+  dist: Dist,
+  sheets: readonly string[]
 ): Promise<DeliveryReport> {
   const { manifest } = audited;
-  const sheets = [...measured.files.keys()].filter((file) =>
-    /@layer\s+anm-[\w-]+\s*\{/.test(measured.files.get(file)!)
-  );
   if (sheets.length === 0) {
     return {
       unavailable:
         "no CSS file holds an `@layer anm-…` block, as an unlayered or cascade-layer-polyfilled build ships Animus's rules, so the audit cannot tell them from the app's own",
     };
   }
-  const host = hostOf(dist.names);
+  const host = hostOf(dist);
   const single = sheets.length === 1;
   const texts = sheets.map((file) => measured.files.get(file)!);
   // A split cuts Animus's stylesheet into its slices, and the app's own CSS
@@ -694,7 +752,11 @@ async function deliveryReport(
     })),
     new Set(sheets)
   );
-  let removalEdit: { components: number; edit: Edit } | null = null;
+  let removalEdit: {
+    components: number;
+    removed: string[];
+    edit: Edit;
+  } | null = null;
   if (unreadable === null) {
     const components = manifest.components;
     const removed = unbundledComponents(
@@ -717,6 +779,9 @@ async function deliveryReport(
     }
     removalEdit = {
       components: [...classes].filter((name) => went.has(name)).length,
+      removed: [...removed]
+        .filter(([, name]) => went.has(name))
+        .map(([id]) => id),
       edit,
     };
   }
@@ -727,15 +792,23 @@ async function deliveryReport(
   ]);
   const removal =
     removalEdit && removalSaving
-      ? { components: removalEdit.components, saving: removalSaving }
+      ? {
+          components: removalEdit.components,
+          saving: removalSaving,
+          removed: removalEdit.removed,
+        }
       : null;
   const net = single
     ? subtract(removal?.saving ?? zero(), splitCost)
     : (removal?.saving ?? zero());
+  const removalRecommended =
+    removal !== null &&
+    removal.components > 0 &&
+    (!single || (net.brotli ?? 0) > 0);
   return {
     host,
     stylesheets: single ? 'single' : 'split',
-    sheets,
+    sheets: [...sheets],
     splitCost,
     removal,
     removalKept:
@@ -744,7 +817,15 @@ async function deliveryReport(
         : `${unreadable} holds data the scan cannot read as text, which may name a class`,
     unread: dist.unread,
     net,
-    verdict: deliveryVerdict(host, single, splitCost, removal, net),
+    removalRecommended,
+    verdict: deliveryVerdict(
+      host,
+      single,
+      splitCost,
+      removal,
+      net,
+      removalRecommended
+    ),
     preconditions,
   };
 }
@@ -755,8 +836,9 @@ async function deliveryReport(
  * variables: of the top-level `:root` rules before its first `@property`
  * registration (one of its own slot variables) or layer block, the one
  * declaring the most custom properties the manifest's CSS reads, the
- * later on a tie. An app's own `:root` declares few of them; without any,
- * the region starts at that registration or block.
+ * later on a tie, with the `@property` registrations right before it. An
+ * app's own `:root` declares few of them; without any, the region starts at
+ * that registration or block.
  */
 function animusRegion(
   sheet: Sheet,
@@ -802,6 +884,15 @@ function animusRegion(
       start = node.start;
     }
   }
+  // Animus registers its typed custom properties just before its theme
+  // variables: the `@property` rules right before the start are its own.
+  let index = top.findIndex((node) => node.start === start);
+  while (index > 0) {
+    const previous = top[index - 1]!;
+    if (previous.type !== 'at' || previous.name !== 'property') break;
+    index -= 1;
+    start = previous.start;
+  }
   return [start, end];
 }
 
@@ -821,9 +912,10 @@ function deliveryVerdict(
   single: boolean,
   splitCost: Saving,
   removal: DeliveryEstimate['removal'],
-  net: Saving
+  net: Saving,
+  recommended: boolean
 ): string {
-  const verdict = viteVerdict(single, splitCost, removal, net);
+  const verdict = viteVerdict(single, splitCost, removal, net, recommended);
   return host === 'vite'
     ? verdict
     : `split stylesheets and removeUnbundledComponents are Vite plugin options, and this output looks like ${host === 'next' ? 'a Next build' : 'another host’s'}; on Vite: ${verdict}`;
@@ -833,7 +925,8 @@ function viteVerdict(
   single: boolean,
   splitCost: Saving,
   removal: DeliveryEstimate['removal'],
-  net: Saving
+  net: Saving,
+  recommended: boolean
 ): string {
   const cost = splitCost.brotli ?? 0;
   const removalBrotli = removal?.saving.brotli ?? 0;
@@ -849,7 +942,7 @@ function viteVerdict(
   }
   if (single) {
     const saved = net.brotli ?? 0;
-    return saved > 0
+    return recommended
       ? `turn on stylesheets: 'split' and removeUnbundledComponents: removing ${removal.components} components saves ${bytes(removalBrotli)} Brotli, the split costs ${bytes(cost)}, ${bytes(saved)} saved`
       : `keep one stylesheet: removal would save ${bytes(removalBrotli)} Brotli (${removal.components} components), the split costs ${bytes(cost)}, ${bytes(-saved)} more`;
   }
@@ -864,24 +957,27 @@ async function slotReport(
 ): Promise<SlotReport | null> {
   const provenance = manifest.slot_provenance;
   if (!provenance) return null;
+  const ownerName = componentNames(manifest);
   // A slot's rules name its class, or the class with a suffix after a `-`
-  // (`{slot}-md`, `{slot}--keep-md`).
-  const dropProps = (props: Iterable<string>): Promise<Saving> => {
-    const classes = new Set(
-      [...props].flatMap(
-        (prop) => manifest.dynamic_props[prop]?.slotClass ?? []
-      )
+  // (`{slot}-md`, `{slot}--keep-md`); its variable is registered the same
+  // way (`@property {var}`, `@property {var}-md`), for the slot alone.
+  const named = (names: ReadonlySet<string>, name: string): boolean =>
+    names.has(name) ||
+    [...name.matchAll(/-/g)].some(({ index }) =>
+      names.has(name.slice(0, index))
     );
+  const dropProps = (props: Iterable<string>): Promise<Saving> => {
+    const slots = [...props].flatMap(
+      (prop) => ownEntry(manifest.dynamic_props, prop) ?? []
+    );
+    const classes = new Set(slots.flatMap((slot) => slot.slotClass ?? []));
+    const variables = new Set(slots.flatMap((slot) => slot.varName ?? []));
     if (classes.size === 0) return Promise.resolve(zero());
     return measured.saving(
-      measured.without((selector) =>
-        selector.classes.some(
-          (name) =>
-            classes.has(name) ||
-            [...name.matchAll(/-/g)].some(({ index }) =>
-              classes.has(name.slice(0, index))
-            )
-        )
+      measured.without(
+        (selector) => selector.classes.some((name) => named(classes, name)),
+        (rule) =>
+          rule.name === 'property' && named(variables, rule.prelude.trim())
       ),
       'brotli'
     );
@@ -932,7 +1028,7 @@ async function slotReport(
       saving: savings[index]!,
       owners: [...owners]
         .map(([owner, held]) => ({
-          component: ownerName(manifest, owner, owners.keys()),
+          component: ownerName(owner),
           props: held.props.size,
           sites: [...held.sites].sort().slice(0, SITES_PER_OWNER),
         }))
@@ -972,22 +1068,21 @@ async function slotReport(
   };
 }
 
-/** A component as a report names it: its binding, and its file where
- *  another of `among` shares the binding. */
-function ownerName(
-  manifest: FullProjectManifest,
-  id: string,
-  among: Iterable<string>
-): string {
-  const component = manifest.components[id];
-  if (component === undefined) return id;
-  const shared = [...among].some(
-    (other) =>
-      other !== id && manifest.components[other]?.binding === component.binding
-  );
-  return shared
-    ? `${component.binding} (${component.file})`
-    : component.binding;
+/** Each component as the report names it, in every section alike: its
+ *  binding, and its file where another component of the manifest shares
+ *  the binding. */
+function componentNames(manifest: FullProjectManifest): (id: string) => string {
+  const counts = new Map<string, number>();
+  for (const { binding } of Object.values(manifest.components)) {
+    counts.set(binding, (counts.get(binding) ?? 0) + 1);
+  }
+  return (id) => {
+    const component = manifest.components[id];
+    if (component === undefined) return id;
+    return (counts.get(component.binding) ?? 0) > 1
+      ? `${component.binding} (${component.file})`
+      : component.binding;
+  };
 }
 
 /** Where a slot opening applies: `file:line (detail)`. */
@@ -997,8 +1092,11 @@ const placeOf = (opening: SlotOpening): string =>
 // --------------------------------------------------------- restructures
 
 interface Candidate {
-  finding: Omit<Restructure, 'saving' | 'belowFloor'>;
+  finding: Omit<Restructure, 'saving' | 'belowFloor' | 'removedByDelivery'>;
   drop: (selector: SheetSelector, rule: StyleRule) => boolean;
+  /** Whether the audit cannot prove the saving reachable: ranked below the
+   *  floor whatever it measures. */
+  unproven?: boolean;
 }
 
 /** The JSON object or array that opens at `at` in `text`, as text. */
@@ -1039,24 +1137,64 @@ function variantsOf(
   } catch {
     return axes;
   }
-  const listed = manifest.crossFile?.variantOptions?.[component.binding] ?? {};
+  const listed =
+    ownEntry(manifest.crossFile?.variantOptions, component.binding) ?? {};
   for (const [axis, config] of Object.entries(variants)) {
     axes.set(axis, {
-      options: config.options ?? listed[axis] ?? [],
+      options: config.options ?? ownEntry(listed, axis) ?? [],
       default: config.default ?? null,
     });
   }
   return axes;
 }
 
+/**
+ * The literals `name` receives at `sites`: written strings, numbers and
+ * booleans, the values a conditional of literals enumerates, and `omitted`
+ * where a site leaves the prop out; with how many sites pass a value the
+ * audit cannot read.
+ */
+interface SiteLiterals {
+  values: Set<string>;
+  /** Sites passing a value no literal spells. */
+  dynamic: number;
+}
+
+function literalsOf(
+  name: string,
+  sites: readonly Site[],
+  omitted: Literal
+): SiteLiterals {
+  const values = new Set<string>();
+  let dynamic = 0;
+  const add = (value: Literal) => {
+    if (value !== null) values.add(String(value));
+  };
+  for (const site of sites) {
+    const attr = site.attrs?.findLast((written) => written.name === name);
+    if (site.attrs === null) dynamic += 1;
+    else if (attr === undefined || attr.skip) add(omitted);
+    else if (isLiteral(attr.staticValue ?? null) && attr.staticValue != null) {
+      add(attr.staticValue);
+    } else {
+      for (const value of attr.enumerableValues ?? []) add(value);
+      // A breakpoint object, or any value no literal spells, may pass any
+      // option.
+      if (attr.dynamic || attr.staticValue != null) dynamic += 1;
+    }
+  }
+  return { values, dynamic };
+}
+
 function keptOptions(
   manifest: FullProjectManifest,
   classes: ReadonlySet<string>,
-  sites: Map<string, Site[]>,
+  { sites }: ComponentSites,
   refused: Refusal[]
 ): Candidate[] {
   const candidates: Candidate[] = [];
   const provenance = manifest.slot_provenance;
+  const name = componentNames(manifest);
   for (const [id, component] of Object.entries(manifest.components)) {
     const used = sites.get(id) ?? [];
     const axes = variantsOf(manifest, component);
@@ -1064,39 +1202,28 @@ function keptOptions(
     const kept: Array<{ axis: string; options: string[]; dynamic: number }> =
       [];
     for (const [axis, config] of axes) {
-      const literal = new Set<string>();
-      let dynamic = 0;
-      for (const site of used) {
-        const attr = site.attrs?.find(({ name }) => name === axis);
-        if (site.attrs === null) dynamic += 1;
-        else if (attr === undefined || attr.skip) {
-          if (config.default !== null) literal.add(config.default);
-        } else if (
-          attr.staticValue !== null &&
-          attr.staticValue !== undefined
-        ) {
-          literal.add(String(attr.staticValue));
-        } else if (attr.enumerableValues?.length) {
-          for (const value of attr.enumerableValues) literal.add(String(value));
-          if (attr.dynamic) dynamic += 1;
-        } else if (attr.dynamic) dynamic += 1;
-      }
-      if (dynamic === 0) continue;
-      const options = config.options.filter(
+      // Only an option that ships and is no default can be saved.
+      const shipped = config.options.filter(
         (option) =>
-          !literal.has(option) &&
           option !== config.default &&
           classes.has(`${component.class_name}--${axis}-${option}`)
       );
+      if (shipped.length === 0) continue;
+      const { values, dynamic } = literalsOf(axis, used, config.default);
+      // Every site literal: the engine prunes what none writes itself.
+      if (dynamic === 0) continue;
+      const options = shipped.filter((option) => !values.has(option));
       if (options.length > 0) kept.push({ axis, options, dynamic });
     }
     if (kept.length === 0) continue;
     const listed = kept
       .map(({ axis, options }) => `${axis}: ${options.join(', ')}`)
       .join('; ');
-    const title = `${component.binding}: ${kept.reduce((n, { options }) => n + options.length, 0)} options no site the audit sees uses literally, kept by ${kept.reduce((n, { dynamic }) => n + dynamic, 0)} dynamic sites (${listed})`;
-    const unproven = provenance?.owners[id] ?? [];
-    const unseen = unproven.filter(
+    const count = kept.reduce((n, { options }) => n + options.length, 0);
+    const dynamic = kept.reduce((n, axis) => n + axis.dynamic, 0);
+    const title = `${name(id)}: ${count} options no site the audit sees writes literally (${listed})`;
+    const owners = provenance?.owners[id] ?? [];
+    const unseen = owners.filter(
       ({ rule }) => rule === 'spread' || rule === 'create-element'
     );
     if (component.terminal === 'asClass') {
@@ -1130,15 +1257,10 @@ function keptOptions(
       });
       continue;
     }
-    // The facts record neither a spread at a site nor where a dynamic
-    // value comes from, so a wrapper forwarding its own prop, or a spread
-    // of one, can reach any of these options: never more than low.
     const caveats: string[] = [
-      'the manifest records no spread at a site and no value forwarded from a parameter, so a spread or a wrapper passing its own prop may reach these options',
+      `kept by ${dynamic} dynamic sites; the audit cannot prove which values they pass, so this stays below the floor`,
     ];
-    const hidden = unproven.filter(
-      ({ rule }) => rule !== 'not-module-confined'
-    );
+    const hidden = owners.filter(({ rule }) => rule !== 'not-module-confined');
     if (hidden.length > 0) {
       caveats.push(
         `rendered where the audit cannot see its props (${[...new Set(hidden.map(({ rule }) => rule))].join(', ')})`
@@ -1161,11 +1283,13 @@ function keptOptions(
         title,
         components: [id],
         suggestion:
-          'Narrow each dynamic value to literals the engine can enumerate (a ternary of literals, a lookup object), following it through any wrapper that forwards it; the engine then prunes the options no site reaches. The saving is what that pruning would remove if none is reached.',
+          'If the dynamic values can only be some of these options, narrow them to literals the engine can enumerate (a ternary of literals, a lookup object), following them through any wrapper that forwards them; the engine then prunes the options no site reaches. The saving is what that pruning would remove if none is reached.',
         confidence: 'low',
         caveats,
       },
-      drop: (selector) => selector.classes.some((name) => dropped.has(name)),
+      drop: (selector) =>
+        selector.classes.some((className) => dropped.has(className)),
+      unproven: true,
     });
   }
   return candidates;
@@ -1219,6 +1343,7 @@ function defaultsOnlyExtensions(
   refused: Refusal[]
 ): Candidate[] {
   const candidates: Candidate[] = [];
+  const name = componentNames(manifest);
   const keys = new Map<string, Set<string>>();
   const keysOf = (id: string): Set<string> => {
     let known = keys.get(id);
@@ -1259,8 +1384,8 @@ function defaultsOnlyExtensions(
       .map(([axis]) => `${axis}="${leafAxes.get(axis)?.default}"`);
     const title =
       changed.length > 0
-        ? `${leaf.binding} is ${parent.binding} with ${changed.join(', ')}`
-        : `${leaf.binding} is a copy of ${parent.binding} under its own class`;
+        ? `${name(id)} is ${name(parentId)} with ${changed.join(', ')}`
+        : `${name(id)} is a copy of ${name(parentId)} under its own class`;
     const target = others(id, leaf.class_name);
     const children = manifest.reverse_provenance[id] ?? [];
     const refuse = (rule: string) =>
@@ -1307,7 +1432,7 @@ function defaultsOnlyExtensions(
     if (used.some((site) => site.byName)) {
       caveats.push('sites matched by binding name');
     }
-    const name = leaf.class_name;
+    const className = leaf.class_name;
     candidates.push({
       finding: {
         kind: 'defaults-only-extension',
@@ -1321,7 +1446,7 @@ function defaultsOnlyExtensions(
         caveats,
       },
       drop: (selector) =>
-        selector.classes.some((needed) => classStem(needed) === name),
+        selector.classes.some((needed) => classStem(needed) === className),
     });
   }
   return candidates;
@@ -1383,6 +1508,7 @@ function repeatedBaseBlocks(
     });
   }
   const candidates: Candidate[] = [];
+  const name = componentNames(manifest);
   for (const { declarations, members } of groups.values()) {
     if (members.length < 2) continue;
     const blockFamilies = new Set(declarations.map(propertyOf).map(familyOf));
@@ -1415,8 +1541,7 @@ function repeatedBaseBlocks(
         kept.push(id);
       }
     }
-    const names = (ids: string[]) =>
-      ids.map((id) => manifest.components[id]!.binding);
+    const names = (ids: string[]) => ids.map(name);
     const title = (ids: string[]) =>
       `${ids.length} components repeat the base block ${truncate(block, 90)} (${truncate(names(ids).join(', '), 120)})`;
     for (const [reason, ids] of reasons) {
@@ -1498,18 +1623,26 @@ async function measureCandidates(
       const { kind } = candidate.finding;
       const count = perKind.get(kind) ?? 0;
       let final = saving;
-      if ((saving.gzip ?? 0) >= floor && count < BROTLI_PER_KIND) {
+      if (
+        !candidate.unproven &&
+        (saving.gzip ?? 0) >= floor &&
+        count < BROTLI_PER_KIND
+      ) {
         perKind.set(kind, count + 1);
         final = await measured.saving(
           measured.without(candidate.drop),
           'brotli'
         );
       }
-      const deepest = final.brotli ?? final.gzip ?? final.raw;
+      // Ranked on Brotli alone: one not measured stays below the floor.
       return {
         ...candidate.finding,
         saving: final,
-        belowFloor: deepest < floor,
+        belowFloor:
+          candidate.unproven === true ||
+          final.brotli === null ||
+          final.brotli < floor,
+        removedByDelivery: false,
       };
     })
   );
@@ -1519,6 +1652,37 @@ async function measureCandidates(
       (b.saving.gzip ?? -Infinity) - (a.saving.gzip ?? -Infinity) ||
       b.saving.raw - a.saving.raw
   );
+}
+
+/**
+ * The findings with the delivery estimate's overlap marked, where its
+ * verdict turns removal on: one whose every component removal removes saves
+ * nothing once it is on, and the delivery saving already counts its CSS,
+ * so it leaves the ranking; one that shares some components says so.
+ */
+function withoutRemoved(
+  findings: Restructure[],
+  delivery: DeliveryReport
+): Restructure[] {
+  if ('unavailable' in delivery || delivery.removal === null) return findings;
+  const removed = new Set(
+    delivery.removalRecommended ? delivery.removal.removed : []
+  );
+  if (removed.size === 0) return findings;
+  return findings.map((finding) => {
+    const gone = finding.components.filter((id) => removed.has(id));
+    if (gone.length === 0) return finding;
+    if (gone.length === finding.components.length) {
+      return { ...finding, removedByDelivery: true, belowFloor: true };
+    }
+    return {
+      ...finding,
+      caveats: [
+        ...finding.caveats,
+        `removeUnbundledComponents removes ${gone.length} of its ${finding.components.length} components, whose share of this saving the delivery estimate also counts`,
+      ],
+    };
+  });
 }
 
 // --------------------------------------------------------------- audit
@@ -1543,46 +1707,81 @@ export async function runCssAudit(
         .map(({ file, text }) => [file, text])
     )
   );
-  const total = await measured.sizes([...measured.files.values()], 'brotli');
+  // The totals and the floor are Animus's CSS alone: another stylesheet
+  // the app ships (an editor's, a library's) changes with none of these.
+  const layered = [...measured.files.keys()].filter((file) =>
+    ANIMUS_LAYER_BLOCK.test(measured.files.get(file)!)
+  );
+  const counted = layered.length > 0 ? layered : [...measured.files.keys()];
+  const total = await measured.sizes(
+    counted.map((file) => measured.files.get(file)!),
+    'brotli'
+  );
   const floor = Math.round(total.brotli! * FLOOR_SHARE);
   const classes = new Set<string>();
+  // The classes rules of Animus's layers select, for the mismatch check.
+  const layerClasses = new Set<string>();
+  const inLayer = (rule: StyleRule) =>
+    rule.context.some((at) => /^@layer anm-/.test(at));
   for (const file of measured.files.keys()) {
-    eachStyleRule(measured.sheet(file).rules, (rule) => {
-      for (const selector of rule.selectors) {
-        for (const name of selector.classes) classes.add(name);
-      }
-    });
+    const { rules } = measured.sheet(file);
+    addSelectedClasses(rules, classes);
+    addSelectedClasses(rules, layerClasses, inLayer);
   }
   // A component ships where a rule names its class or one derived from it.
   const stems = new Set([...classes].map(classStem));
   const shipped = (className: string) => stems.has(className);
-  const components = Object.values(manifest.components);
-  if (
-    components.length > 0 &&
-    !components.some((component) => shipped(component.class_name))
-  ) {
+  const emitted = new Set<string>();
+  for (const css of [manifest.css, ...Object.values(manifest.sheets ?? {})]) {
+    addSelectedClasses(parseSheet(css).rules, emitted);
+  }
+  // The classes the manifest names for components and their utilities: its
+  // css holds those sheets, and never the global one, whose classes (a
+  // color-mode scope) any naming setting shares.
+  const owned = addSelectedClasses(parseSheet(manifest.css).rules, new Set());
+  // Some such class ships: a component may ship only shared utilities, but
+  // none at all means other naming settings.
+  if (owned.size > 0 && ![...owned].some((name) => classes.has(name))) {
     throw new UsageFailure(
-      `css audit: none of the manifest's ${components.length} component classes occurs in the CSS under ${options.dist}, so the two come from different builds or settings (shortClassNames, a prefix, other sources); write the manifest with \`animus build --verbose\` from the configuration that built the output`
+      `css audit: none of the ${owned.size} component and utility classes the manifest's CSS selects occurs in the CSS under ${options.dist}, so the two come from different builds or settings (shortClassNames, a prefix, other sources); write the manifest with \`animus build --verbose\` from the configuration that built the output`
     );
   }
-  const { sites, evidence } = componentSites(audited);
+  // Every class a rule of Animus's layers selects in the shipped CSS is one
+  // the manifest's CSS selects: a build that read a source differently (a
+  // transform it could not resolve, other sources) names that component's
+  // class from another fingerprint. Class names are what this compares: a
+  // build that differs only in a declaration's value, or in a global rule
+  // that selects no class, passes.
+  const foreign = [...layerClasses].filter((name) => !emitted.has(name));
+  if (foreign.length > 0) {
+    const named = foreign.sort();
+    throw new UsageFailure(
+      `css audit: the CSS under ${options.dist} selects ${named.length} classes in Animus's layers that the manifest's CSS does not (${named.slice(0, 5).join(', ')}${named.length > 5 ? `, +${named.length - 5} more` : ''}), so the manifest describes another build: one that read a source differently (an import the host resolves and \`animus build\` cannot, such as one through the bundler's resolve conditions (pass them with --condition) or aliases, which its warnings name) or used other settings; write the manifest from the configuration that built the output. (The check compares class names only, so a manifest whose build differs from the output only in declarations or classless global rules is not caught.)`
+    );
+  }
+  const located = componentSites(audited);
+  const { sites, evidence } = located;
   const refused: Refusal[] = [];
   const candidates = [
-    ...keptOptions(manifest, classes, sites, refused),
+    ...keptOptions(manifest, classes, located, refused),
     ...defaultsOnlyExtensions(manifest, sites, shipped, refused),
     ...repeatedBaseBlocks(manifest, measured, sites, refused),
   ];
-  const [delivery, slots, findings] = await Promise.all([
-    deliveryReport(audited, measured, dist),
+  const [delivery, slots, measuredFindings] = await Promise.all([
+    deliveryReport(audited, measured, dist, layered),
     slotReport(manifest, measured),
     measureCandidates(candidates, measured, floor),
   ]);
+  const findings = withoutRemoved(measuredFindings, delivery);
   return {
     manifest: options.manifest,
     dist: options.dist,
     css: {
-      files: measured.files.size,
+      files: counted.length,
       sizes: { raw: total.raw, gzip: total.gzip!, brotli: total.brotli! },
+      others: [...measured.files.keys()].filter(
+        (file) => !counted.includes(file)
+      ),
     },
     components: Object.keys(manifest.components).length,
     delivery,
@@ -1604,14 +1803,19 @@ const subtract = (a: Saving, b: Saving): Saving => ({
 const bytes = (n: number): string => `${n.toLocaleString('en-US')} B`;
 
 const savingText = (saving: Saving): string =>
-  `br ${saving.brotli ?? 'n/a'} · gz ${saving.gzip ?? 'n/a'} · raw ${saving.raw}`;
+  `br ${saving.brotli ?? 'not measured'} · gz ${saving.gzip ?? 'not measured'} · raw ${saving.raw}`;
 
 export function formatCssAudit(report: CssAuditReport): string {
   const { css, delivery, slots, restructures } = report;
   const lines: string[] = [
     `animus css audit: ${report.dist}`,
-    `CSS ${css.files} files: raw ${bytes(css.sizes.raw)}, gzip ${bytes(css.sizes.gzip)}, Brotli ${bytes(css.sizes.brotli)}; ${report.components} components`,
-    'Savings are measured: each edits the shipped CSS and recompresses each file alone (gzip -9, Brotli q11 lgwin 22); Brotli ranks them.',
+    `Animus CSS ${css.files} files: raw ${bytes(css.sizes.raw)}, gzip ${bytes(css.sizes.gzip)}, Brotli ${bytes(css.sizes.brotli)}; ${report.components} components`,
+    ...(css.others.length > 0
+      ? [
+          `Other CSS, left out of the totals and the floor: ${css.others.slice(0, 5).join(', ')}${css.others.length > 5 ? `, +${css.others.length - 5} more` : ''}`,
+        ]
+      : []),
+    `Savings are measured: each edits the shipped CSS and recompresses each file alone (gzip -9, Brotli q11 lgwin 22); Brotli ranks them, measured for at most ${BROTLI_PER_KIND} findings of each kind whose gzip saving reaches the floor; a finding it does not measure stays below the floor.`,
     '',
     '1. Delivery',
     ...deliveryLines(delivery, report.components),
@@ -1655,7 +1859,12 @@ export function formatCssAudit(report: CssAuditReport): string {
     }
   }
   const above = restructures.findings.filter((finding) => !finding.belowFloor);
-  const below = restructures.findings.filter((finding) => finding.belowFloor);
+  const below = restructures.findings.filter(
+    (finding) => finding.belowFloor && !finding.removedByDelivery
+  );
+  const removed = restructures.findings.filter(
+    (finding) => finding.removedByDelivery
+  );
   lines.push(
     '',
     `3. Restructures (floor ${bytes(restructures.floor)} Brotli, 0.25% of the CSS; sites matched by ${restructures.siteEvidence === 'component-id' ? 'component id' : 'binding name'})`
@@ -1681,6 +1890,14 @@ export function formatCssAudit(report: CssAuditReport): string {
         `    ${savingText(finding.saving)}  [${finding.kind}] ${finding.confidence}: ${truncate(finding.title, 140)}`
       );
     }
+  }
+  if (removed.length > 0) {
+    lines.push(
+      `  Left out: ${removed.length} findings on components removeUnbundledComponents removes, which the delivery verdict turns on and whose saving counts their CSS; e.g. ${removed
+        .slice(0, BELOW_SHOWN)
+        .map(({ title }) => truncate(title, 60))
+        .join('; ')}`
+    );
   }
   if (restructures.refused.length > 0) {
     lines.push(`  Refused: ${restructures.refused.length}`);

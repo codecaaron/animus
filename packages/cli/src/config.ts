@@ -5,6 +5,7 @@ import {
   createExcludeMatcher,
   DIAGNOSTIC_LEVELS,
   resolveMode,
+  viteConditions,
 } from '@animus-ui/extract/pipeline';
 import { ANIMUS_ARTIFACT_DIR } from '@animus-ui/extract/session';
 import { existsSync, readFileSync } from 'fs';
@@ -31,6 +32,10 @@ export const CONFIG_FILENAMES = [
 export interface CliNamespaceOptions {
   /** Artifact output directory, relative to the root. @default '.animus' */
   outDir?: string;
+  /** The export conditions the app's bundler resolves packages with, in
+   *  its order (Vite's `resolve.conditions`), so the build reads the files
+   *  the bundler does. @default [] */
+  conditions?: string[];
 }
 
 export interface CliFlags {
@@ -43,6 +48,7 @@ export interface CliFlags {
   mode?: string;
   targets?: string;
   exclude?: string[];
+  conditions?: string[];
 }
 
 export type CliRootSource = 'flag' | 'config-file' | 'config-dir' | 'cwd';
@@ -56,6 +62,8 @@ export interface ResolvedCliConfig {
   options: AnimusCoreOptions;
   /** Absolute artifact output directory. */
   outDir: string;
+  /** See `CliNamespaceOptions.conditions`. */
+  conditions: readonly string[];
   excludePatterns: readonly string[];
   mode: AnimusMode;
   provenance: Record<string, OptionProvenance>;
@@ -222,6 +230,12 @@ function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
         `${JSON.stringify(cli.outDir)}.`
     );
   }
+  if (cli.conditions !== undefined && !isConfigStringArray(cli.conditions)) {
+    throw new AnimusConfigError(
+      `Invalid value for "cli.conditions" — expected an array of condition names, got ` +
+        `${JSON.stringify(cli.conditions)}.`
+    );
+  }
   return {
     core: {
       system: isConfigString(raw.system) ? raw.system : undefined,
@@ -280,6 +294,7 @@ function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
     },
     cli: {
       outDir: cli.outDir,
+      conditions: cli.conditions,
     },
   };
 }
@@ -462,6 +477,15 @@ export async function resolveCliConfig(
   provenance['mode'] = resolvedMode.provenance;
 
   provenance['outDir'] = outDirExplicit ? 'explicit' : 'driver-default';
+  // Read as Vite reads them: its `development|production` entry is the mode.
+  const conditions = viteConditions(
+    flags.conditions !== undefined && flags.conditions.length > 0
+      ? flags.conditions
+      : (loaded.cli.conditions ?? []),
+    resolvedMode.mode === 'production'
+  );
+  provenance['conditions'] =
+    conditions.length > 0 ? 'explicit' : 'driver-default';
 
   const options: AnimusCoreOptions = {
     system,
@@ -495,6 +519,7 @@ export async function resolveCliConfig(
     configFile,
     options,
     outDir,
+    conditions,
     excludePatterns,
     mode: resolvedMode.mode,
     provenance,
@@ -521,6 +546,7 @@ export function projectResolvedConfig(config: ResolvedCliConfig) {
     root: config.root,
     configFile: config.configFile,
     outDir: config.outDir,
+    conditions: config.conditions,
     mode: config.mode,
     system: config.options.system,
     strict: config.options.strict ?? false,
