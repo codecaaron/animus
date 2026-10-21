@@ -7,6 +7,7 @@
 //! import or re-export through it names its export without proving that the
 //! export exists, and an `export *` of it is an opening, never an absence.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -184,6 +185,9 @@ pub struct ModuleTable<B> {
     /// namespace export entry of each: what a search of those lists in
     /// order finds, without searching them per lookup.
     names: Vec<ExportIndex>,
+    /// Each module's exports resolved so far, by name: an answer reads only
+    /// the records and their name indexes, which never change.
+    resolved: RefCell<Vec<FxHashMap<String, ExportLookup<B>>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -221,7 +225,8 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
             }
         }
         let names = modules.iter().map(ExportIndex::of).collect();
-        Self { modules, dependents, names }
+        let resolved = RefCell::new(vec![FxHashMap::default(); modules.len()]);
+        Self { modules, dependents, names, resolved }
     }
 
     pub fn record(&self, module: ModuleIndex) -> &ModuleRecord<B> {
@@ -249,9 +254,18 @@ impl<B: Clone + Eq + Ord> ModuleTable<B> {
             })
     }
 
-    /// ResolveExport for export `name` of `module`.
+    /// ResolveExport for export `name` of `module`, resolved once.
     pub fn resolve_export(&self, module: ModuleIndex, name: &str) -> ExportLookup<B> {
-        self.resolve(module, name, &mut FxHashSet::default(), &mut Vec::new())
+        if let Some(lookup) = self.resolved.borrow()[module].get(name) {
+            debug_assert!(
+                *lookup == self.resolve(module, name, &mut FxHashSet::default(), &mut Vec::new()),
+                "the kept resolution of {name:?} in module {module} is the table's"
+            );
+            return lookup.clone();
+        }
+        let lookup = self.resolve(module, name, &mut FxHashSet::default(), &mut Vec::new());
+        self.resolved.borrow_mut()[module].insert(name.to_string(), lookup.clone());
+        lookup
     }
 
     /// ResolveExport for export `name` of `module`, with the name each route
