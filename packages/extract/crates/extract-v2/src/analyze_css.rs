@@ -14858,6 +14858,23 @@ const Render = ({ children }) => { document.body.onclick = t; return <div>{child
             ("const k = 'proto' + 'type';\nconst P = Object[k];\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const P = Object.prototype.valueOf();\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const P = ({}).__proto__.valueOf();\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            // A computed read whose key the walk cannot name may be
+            // `o.__proto__`: let go, by a declaration, an assignment, an
+            // object literal, another binding or a call, it may put a
+            // prototype where a store reaches it. A number or a literal key
+            // names no prototype.
+            ("const P = ({})[document.body.id];\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const P = ({})[document.body.id] ?? {};\nconst Q = P;\nQ.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const box = { v: ({})[document.body.id] };\nbox.v.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("let P;\nfunction run() { P.p = 12; }\nP = ({})[document.body.id];\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("function set(o) { o.p = 12; }\nset(({})[document.body.id]);\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("function b(o) { o.p = 12; }\nfunction a(o) { b(o); }\na(({})[document.body.id]);\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
+            ("const rows = [{}];\nconst Q = rows[0];\nQ.p = 12;\nconst S = ({})['a'];\nS.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", false),
+            // So does one in another module, whichever side reads and writes.
+            ("import { P } from './other';\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "export const P = ({})[document.body.id];\n", true),
+            ("import { set } from './other';\nset(({})[document.body.id]);\nconst Render = ({ children }) => <div>{children}</div>;", "", "export function set(o) { o.p = 12; }\n", true),
+            ("import { pick } from './other';\nconst P = pick({}, document.body.id);\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "export const pick = (o, k) => o[k];\n", true),
+            ("import { first } from './other';\nconst Q = first([{}]);\nQ.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "export const first = (rows) => rows[0];\n", false),
             ("const P = globalThis.Object.getPrototypeOf({});\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const P = Object.getPrototypeOf.call(null, {});\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
             ("const P = Object.getPrototypeOf.bind(null)({});\nP.p = 12;\nconst Render = ({ children }) => <div>{children}</div>;", "", "", true),
