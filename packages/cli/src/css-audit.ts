@@ -135,6 +135,16 @@ export interface Restructure {
   /** Every component it changes is one `removeUnbundledComponents` would
    *  remove, so the delivery estimate already counts its saving. */
   removedByDelivery: boolean;
+  /** Present where a site passing a value no literal spells holds the
+   *  finding back: it ranks below the floor whatever it measures. */
+  unproven?: Unproven;
+}
+
+/** What holds a kept-option finding back: each site that passes a value no
+ *  literal spells, `file:line` (`file@byte` where its source cannot be
+ *  read, `file (createElement)` for a call). */
+export interface Unproven {
+  dynamicSites: string[];
 }
 
 export interface Refusal {
@@ -142,6 +152,8 @@ export interface Refusal {
   title: string;
   components: string[];
   rule: string;
+  /** As `Restructure.unproven`. */
+  unproven?: Unproven;
 }
 
 export interface CssAuditReport {
@@ -1164,9 +1176,6 @@ const placeOf = (opening: SlotOpening): string =>
 interface Candidate {
   finding: Omit<Restructure, 'saving' | 'belowFloor' | 'removedByDelivery'>;
   drop: (selector: SheetSelector, rule: StyleRule) => boolean;
-  /** Whether the audit cannot prove the saving reachable: ranked below the
-   *  floor whatever it measures. */
-  unproven?: boolean;
 }
 
 /** The JSON object or array that opens at `at` in `text`, as text. */
@@ -1308,6 +1317,7 @@ function keptOptions(
       if (!bySite.has(dynamic.site)) bySite.set(dynamic.site, dynamic);
     }
     const where = [...bySite.values()].map(locate);
+    const unproven: Unproven = { dynamicSites: where };
     const keptBy = `kept by ${where.length} dynamic ${where.length === 1 ? 'site' : 'sites'}`;
     const title = `${name(id)}: ${count} options unproven, ${keptBy} (${where.slice(0, 3).join(', ')}${where.length > 3 ? `, +${where.length - 3} more` : ''}), which no site the audit sees writes literally (${listed})`;
     const owners = provenance?.owners[id] ?? [];
@@ -1319,6 +1329,7 @@ function keptOptions(
         kind: 'kept-options',
         title,
         components: [id],
+        unproven,
         rule: 'a class resolver: its uses are calls the audit does not read',
       });
       continue;
@@ -1332,6 +1343,7 @@ function keptOptions(
         kind: 'kept-options',
         title,
         components: [id],
+        unproven,
         rule: `rendered through ${through.binding} (asComponent), whose sites pass its props`,
       });
       continue;
@@ -1341,6 +1353,7 @@ function keptOptions(
         kind: 'kept-options',
         title,
         components: [id],
+        unproven,
         rule: 'a site spreads props or calls createElement, so it may pass any option',
       });
       continue;
@@ -1374,10 +1387,10 @@ function keptOptions(
           'If the dynamic values can only be some of these options, narrow them to literals the engine can enumerate (a ternary of literals, a lookup object), following them through any wrapper that forwards them; the engine then prunes the options no site reaches. The saving is what that pruning would remove if none is reached.',
         confidence: 'low',
         caveats,
+        unproven,
       },
       drop: (selector) =>
         selector.classes.some((className) => dropped.has(className)),
-      unproven: true,
     });
   }
   return candidates;
@@ -1711,11 +1724,8 @@ async function measureCandidates(
       const { kind } = candidate.finding;
       const count = perKind.get(kind) ?? 0;
       let final = saving;
-      if (
-        !candidate.unproven &&
-        (saving.gzip ?? 0) >= floor &&
-        count < BROTLI_PER_KIND
-      ) {
+      const unproven = candidate.finding.unproven !== undefined;
+      if (!unproven && (saving.gzip ?? 0) >= floor && count < BROTLI_PER_KIND) {
         perKind.set(kind, count + 1);
         final = await measured.saving(
           measured.without(candidate.drop),
@@ -1726,10 +1736,7 @@ async function measureCandidates(
       return {
         ...candidate.finding,
         saving: final,
-        belowFloor:
-          candidate.unproven === true ||
-          final.brotli === null ||
-          final.brotli < floor,
+        belowFloor: unproven || final.brotli === null || final.brotli < floor,
         removedByDelivery: false,
       };
     })

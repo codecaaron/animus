@@ -496,6 +496,8 @@ test('a kept option with a dynamic site is never ranked', async () => {
     expect(kept?.title).toContain('(size: sm)');
     expect(kept?.belowFloor).toBe(true);
     expect(kept?.caveats[0]).toContain('kept by 1 dynamic site;');
+    // The JSON says so too, with every site, not only its caveat's text.
+    expect(kept?.unproven).toEqual({ dynamicSites: ['src/app.tsx:2'] });
     // A static value that is no literal (a `style` object), however it
     // converts, is a value no literal spells.
     write([

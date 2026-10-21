@@ -100,9 +100,12 @@ recompresses each file on its own (gzip level 9, Brotli quality 11 with a
    may still reach them.
 
 The text report goes to stderr; `--json` prints the report as one JSON
-document on stdout. It exits 0 unless its input cannot be read: a missing
-or partial manifest, one whose classes the output's CSS never names, or an
-output file it cannot read, each exit 2 with the remedy.
+document on stdout. A kept-option finding held back by a site that passes a
+value no literal spells carries `unproven.dynamicSites` there, each site as
+`file:line`, and always ranks below the floor. It exits 0 unless its input
+cannot be read: a missing or partial manifest, one whose classes the
+output's CSS never names, or an output file it cannot read, each exit 2
+with the remedy.
 
 ## `animus types alias`
 
