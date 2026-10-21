@@ -215,11 +215,7 @@ impl BindingTable {
             let import = scope.is_none().then(|| imports.get(name)).flatten();
             let kind = import.map_or(BindingKind::Declared, |import| BindingKind::Import(import.clone()));
             let span = scoping.symbol_span(symbol);
-            // A symbol's flags union its merged declarations; it is a value
-            // when any one of them is a runtime value declaration.
-            let runtime = |flags: oxc::semantic::SymbolFlags| flags.is_value() && !flags.is_ambient();
-            let value = runtime(scoping.symbol_flags(symbol))
-                || scoping.symbol_redeclarations(symbol).iter().any(|declaration| runtime(declaration.flags));
+            let value = runtime_value(scoping, symbol);
             bindings.push(Binding { name: name.to_string(), span: (span.start, span.end), scope, kind, value });
         }
         let module_names: FxHashMap<String, LocalId> = scope_names
@@ -379,6 +375,14 @@ fn default_export(
         }
     }
     None
+}
+
+/// Whether `symbol` is a runtime value: a symbol's flags union its merged
+/// declarations, and it is one when any one of them is a runtime value
+/// declaration rather than an ambient one.
+pub(crate) fn runtime_value(scoping: &Scoping, symbol: SymbolId) -> bool {
+    let runtime = |flags: oxc::semantic::SymbolFlags| flags.is_value() && !flags.is_ambient();
+    runtime(scoping.symbol_flags(symbol)) || scoping.symbol_redeclarations(symbol).iter().any(|declaration| runtime(declaration.flags))
 }
 
 #[cfg(test)]

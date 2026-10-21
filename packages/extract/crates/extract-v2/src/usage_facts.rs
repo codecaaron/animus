@@ -257,9 +257,19 @@ pub(crate) fn animus_named_imports(module: &ModuleRecord<'_>, scoping: &Scoping,
         .collect()
 }
 
-/// The binding `ident` refers to, or `None` for a global.
+/// The binding `reference` reads, or `None` for a global. A name only an
+/// ambient declaration binds (`declare class p`) is erased: it reads the
+/// global.
+pub(crate) fn binding_of(scoping: &Scoping, reference: oxc::semantic::ReferenceId) -> Option<SymbolId> {
+    scoping
+        .get_reference(reference)
+        .symbol_id()
+        .filter(|symbol| !scoping.symbol_flags(*symbol).is_ambient() || crate::identity::runtime_value(scoping, *symbol))
+}
+
+/// The binding `ident` refers to, or `None` for a global (`binding_of`).
 pub(crate) fn symbol_of(scoping: &Scoping, ident: &IdentifierReference<'_>) -> Option<SymbolId> {
-    ident.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id())
+    ident.reference_id.get().and_then(|id| binding_of(scoping, id))
 }
 
 /// The text of a string, or of a template with no substitution, as
@@ -2040,7 +2050,7 @@ fn binds_anywhere(scoping: &Scoping, name: &str) -> bool {
 /// Whether a call's callee, by its reference, is a module-scope binding
 /// nothing writes: the function the engine resolves by its name.
 fn fixed_callee(scoping: &Scoping, reference: Option<oxc::semantic::ReferenceId>) -> bool {
-    let Some(symbol) = reference.and_then(|id| scoping.get_reference(id).symbol_id()) else {
+    let Some(symbol) = reference.and_then(|id| binding_of(scoping, id)) else {
         return false;
     };
     scoping.symbol_scope_id(symbol) == scoping.root_scope_id()
@@ -3364,8 +3374,7 @@ pub(crate) fn loader_escape(program: &oxc::ast::ast::Program<'_>, scoping: &oxc:
     impl Uses<'_> {
         /// Bound by nothing, or only by an ambient declaration.
         fn unbound(&self, id: &IdentifierReference<'_>) -> bool {
-            let symbol = |id| self.scoping.get_reference(id).symbol_id();
-            id.reference_id.get().is_some_and(|id| symbol(id).is_none_or(|symbol| self.scoping.symbol_flags(symbol).is_ambient()))
+            id.reference_id.get().is_some_and(|id| binding_of(self.scoping, id).is_none())
         }
         fn names_builtin(&self, id: &IdentifierReference<'_>) -> bool {
             id.reference_id
@@ -7130,14 +7139,7 @@ impl<'a, 's> Visit<'a> for FactCollector<'a, 's> {
     }
 
     fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
-        let key = match &member.expression {
-            Expression::StringLiteral(key) => Some(key.value.as_str()),
-            Expression::TemplateLiteral(key) if key.expressions.is_empty() => {
-                key.quasis.first().and_then(|quasi| quasi.value.cooked.as_ref()).map(|cooked| cooked.as_str())
-            }
-            _ => None,
-        };
-        if key == Some("defaultProps") {
+        if static_string(&member.expression) == Some("defaultProps") {
             self.record_default_props(&member.object, member.span.start);
         }
         oxc::ast_visit::walk::walk_computed_member_expression(self, member);
@@ -9200,14 +9202,7 @@ pub(crate) fn builder_references(program: &Program<'_>) -> Vec<(Span, String)> {
             oxc::ast_visit::walk::walk_static_member_expression(self, member);
         }
         fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
-            let key = match &member.expression {
-                Expression::StringLiteral(key) => Some(key.value.as_str()),
-                Expression::TemplateLiteral(key) if key.expressions.is_empty() => {
-                    key.quasis.first().and_then(|quasi| quasi.value.cooked.as_ref()).map(|cooked| cooked.as_str())
-                }
-                _ => None,
-            };
-            if let Some(key) = key.filter(|key| BUILDER_METHODS.contains(key)) {
+            if let Some(key) = static_string(&member.expression).filter(|key| BUILDER_METHODS.contains(key)) {
                 self.0.push((member.expression.span(), key.to_string()));
             }
             oxc::ast_visit::walk::walk_computed_member_expression(self, member);
@@ -9276,10 +9271,7 @@ pub(crate) fn unbound_create_system_calls(program: &Program<'_>) -> Vec<Span> {
     impl<'a> Visit<'a> for UnboundCalls<'_> {
         fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
             if let Expression::Identifier(ident) = &call.callee {
-                let unbound = ident
-                    .reference_id
-                    .get()
-                    .is_some_and(|id| self.scoping.get_reference(id).symbol_id().is_none());
+                let unbound = ident.reference_id.get().is_some_and(|id| binding_of(self.scoping, id).is_none());
                 if ident.name == "createSystem" && unbound {
                     self.spans.push(ident.span);
                 }

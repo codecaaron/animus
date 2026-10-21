@@ -776,13 +776,11 @@ impl<'s> Module<'s> {
         let outside_let_goes =
             declarations.outside_let_goes.iter().filter_map(|(at, import)| Some((*at, sources.get(import)?.clone()))).collect();
         // Each key's first store into a binding that may hold a prototype.
-        let mut untraced_stores: Vec<(u32, String)> = declarations
-            .untraced_stores
-            .iter()
-            .filter_map(|(key, stores)| {
-                stores.iter().filter(|(_, binding)| binding.is_none_or(&may_hold_prototype)).map(|(at, _)| *at).min().map(|at| (at, key.clone()))
-            })
-            .collect();
+        let mut first: FxHashMap<&str, u32> = FxHashMap::default();
+        for (key, at, _) in declarations.untraced_stores.iter().filter(|(_, _, binding)| binding.is_none_or(&may_hold_prototype)) {
+            first.entry(key.as_ref()).and_modify(|first| *first = (*first).min(*at)).or_insert(*at);
+        }
+        let mut untraced_stores: Vec<(u32, String)> = first.into_iter().map(|(key, at)| (at, key.to_string())).collect();
         untraced_stores.sort_unstable();
         let Declarations {
             params, param_inputs, functions, in_place, reshaped, reshaped_beyond_clones, setters, hook_states, classes, hookable_objects, keyed_stores,
@@ -1204,6 +1202,8 @@ struct Declarations<'r> {
     outside_let_goes: Vec<(u32, SymbolId)>,
     /// `const`s declared to a provably primitive value (`primitive`).
     primitive_consts: FxHashSet<SymbolId>,
+    /// Bindings declared to a string, never reassigned, with it.
+    string_consts: FxHashMap<SymbolId, &'r str>,
     /// Functions bound to a name, never reassigned, whose every return is
     /// provably primitive by `primitive`'s forms other than such a call:
     /// each is added once the walk leaves its body.
@@ -1211,10 +1211,10 @@ struct Declarations<'r> {
     /// See `FileFacts::keyed_stores`.
     keyed_stores: Vec<(u32, String)>,
     /// Static-key stores into a binding, a static chain off one or a
-    /// global, by key: each store's start and, for a direct store into a
+    /// global: each store's key, start and, for a direct store into a
     /// binding, the binding, `FileFacts::untraced_stores` unless it holds
     /// what the module built.
-    untraced_stores: FxHashMap<String, Vec<(u32, Option<SymbolId>)>>,
+    untraced_stores: Vec<(std::borrow::Cow<'r, str>, u32, Option<SymbolId>)>,
     /// Where a computed read's value goes into a const (`Consumption`): the
     /// read's start, and the const.
     bound_reads: Vec<(u32, SymbolId)>,
@@ -1305,9 +1305,10 @@ impl<'r> Declarations<'r> {
             patches_intrinsics: None,
             outside_let_goes: Vec::new(),
             primitive_consts: FxHashSet::default(),
+            string_consts: FxHashMap::default(),
             primitive_functions: FxHashSet::default(),
             keyed_stores: Vec::new(),
-            untraced_stores: FxHashMap::default(),
+            untraced_stores: Vec::new(),
             bound_reads: Vec::new(),
             const_flows: Vec::new(),
             bound_arguments: Vec::new(),
@@ -1602,7 +1603,9 @@ impl<'r> Declarations<'r> {
     /// by any use but a member's read, and `getPrototypeOf` let go as a
     /// value reaches prototypes. A write is judged by `written_into`: by a
     /// bracketed key, whatever it names, it may set any built-in's method.
-    fn member(&mut self, span: Span, object: &Expression<'_>, name: Option<&str>, computed: bool) {
+    /// A store's key is `name`, or the string a `const` the key reads
+    /// (`held`) is declared to.
+    fn member(&mut self, span: Span, object: &Expression<'_>, name: Option<&'r str>, computed: bool, held: Option<&IdentifierReference<'_>>) {
         let effect = super::member_effect(span, self.ancestors.iter().rev());
         let written = matches!(effect, Some(MemberEffect::Assigned | MemberEffect::Deleted));
         let prototype = match name {
@@ -1649,11 +1652,18 @@ impl<'r> Declarations<'r> {
             if !self.stores_no_trusted_callable(span) || (computed && !self.unshared(object)) {
                 self.written_into(object, computed || name.is_some_and(stored_name));
             }
-            // Whatever it stores, a store by a static key into an object that
-            // may be a prototype every props object inherits counts where a
-            // render reads that key.
-            if let (Some(name), false, Some(MemberEffect::Assigned)) = (name, computed, effect) {
-                self.store_key(span.start, object, name);
+            // Whatever it stores, a store by a key the walk reads into an
+            // object that may be a prototype every props object inherits
+            // counts where a render reads that key. By any other key into a
+            // global or a static chain off one, which `written_into` leaves,
+            // it may be any.
+            if let Some(MemberEffect::Assigned) = effect {
+                let held = held.and_then(|id| self.symbol(id)).and_then(|symbol| self.string_consts.get(&symbol).copied());
+                match name.or(held) {
+                    Some(key) => self.store_key(span.start, object, key.into()),
+                    None if self.platform(object) => self.patch(span.start, "unread-key-store"),
+                    None => {}
+                }
             }
         }
     }
@@ -1661,16 +1671,11 @@ impl<'r> Declarations<'r> {
     /// Records a store by the static `key`, at `at`, into `object`: into one
     /// that may be a prototype, a keyed store; into a binding, a static
     /// chain off one or a global, an untraced store (`store_root`).
-    fn store_key(&mut self, at: u32, object: &Expression<'_>, key: &str) {
+    fn store_key(&mut self, at: u32, object: &Expression<'_>, key: std::borrow::Cow<'r, str>) {
         if !self.unshared(object) && self.maybe_prototype(object) {
-            self.keyed_stores.push((at, key.to_string()));
+            self.keyed_stores.push((at, key.into_owned()));
         } else if let Some(binding) = self.store_root(object) {
-            match self.untraced_stores.get_mut(key) {
-                Some(stores) => stores.push((at, binding)),
-                None => {
-                    self.untraced_stores.insert(key.to_string(), vec![(at, binding)]);
-                }
-            }
+            self.untraced_stores.push((key, at, binding));
         }
     }
 
@@ -2589,7 +2594,7 @@ impl<'a> Visit<'a> for Declarations<'a> {
     }
 
     fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
-        self.member(member.span, &member.object, Some(member.property.name.as_str()), false);
+        self.member(member.span, &member.object, Some(member.property.name.as_str()), false, None);
         oxc::ast_visit::walk::walk_static_member_expression(self, member);
     }
 
@@ -2600,7 +2605,11 @@ impl<'a> Visit<'a> for Declarations<'a> {
             Expression::NumericLiteral(number) => (number.raw.as_ref().map(|raw| raw.as_str()), false),
             _ => (member.static_property_name().map(|name| name.as_str()), true),
         };
-        self.member(member.span, &member.object, name, computed);
+        let held = match &member.expression {
+            Expression::Identifier(id) => Some(&**id),
+            _ => None,
+        };
+        self.member(member.span, &member.object, name, computed, held);
         oxc::ast_visit::walk::walk_computed_member_expression(self, member);
     }
 
@@ -2638,7 +2647,7 @@ impl<'a> Visit<'a> for Declarations<'a> {
                                     for property in &literal.properties {
                                         if let ObjectPropertyKind::ObjectProperty(property) = property {
                                             if let Some(key) = property.key.static_name() {
-                                                self.store_key(call.span.start, target, &key);
+                                                self.store_key(call.span.start, target, key);
                                             }
                                         }
                                     }
@@ -2810,6 +2819,9 @@ impl<'a> Visit<'a> for Declarations<'a> {
                     }
                     if constant && self.primitive(init) {
                         self.primitive_consts.insert(symbol);
+                    }
+                    if let Some(string) = super::static_string(init).filter(|_| constant) {
+                        self.string_consts.insert(symbol, string);
                     }
                     match init {
                         Expression::ArrayExpression(_) if constant && self.depth == 0 => {
@@ -4351,11 +4363,11 @@ impl<'a> Visit<'a> for Walk<'_, '_, 'a> {
         if tag {
             return;
         }
-        let Some(reference) = id.reference_id.get().map(|reference| self.module.scoping.get_reference(reference)) else { return };
-        if !reference.is_read() {
+        let Some(reference) = id.reference_id.get() else { return };
+        if !self.module.scoping.get_reference(reference).is_read() {
             return;
         }
-        let value = match reference.symbol_id() {
+        let value = match super::binding_of(self.module.scoping, reference) {
             // A function bound to a local carries what it returns to whoever
             // calls it.
             Some(symbol) => {

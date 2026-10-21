@@ -15534,6 +15534,20 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             ("import { protoOf } from 'outside';\nconst p = protoOf();\nObject.assign(p, { size: 'lg', loading: true });\n", "", true),
             ("import { protoOf } from 'outside';\nconst { inner: p } = protoOf();\nObject.assign(p, { size: 'lg', loading: true });\n", "", true),
             ("import { protoOf } from 'outside';\nconst w = document.defaultView;\nw.p = protoOf();\np.size = 'lg';\np.loading = true;\n", "", true),
+            // An ambient declaration is erased: its name is the global's. A
+            // key the walk reads, a `const`'s included, is judged as a
+            // static one; any other, into a global, may be an option's name.
+            ("import { protoOf } from 'outside';\ndeclare class p { static size: string; static loading: boolean; }\nconst w: any = document.defaultView;\nw.p = protoOf();\np.size = 'lg';\np.loading = true;\n", "", true),
+            ("import { protoOf } from 'outside';\ndeclare function p(): void;\nconst w: any = document.defaultView;\nw.p = protoOf();\np.size = 'lg';\np.loading = true;\n", "", true),
+            ("import { protoOf } from 'outside';\ndeclare class p {}\nconst w: any = document.defaultView;\nw.p = protoOf();\nObject.assign(p, { size: 'lg', loading: true });\n", "", true),
+            ("import { protoOf } from 'outside';\ndeclare class p {}\nconst w: any = document.defaultView;\nw.p = protoOf();\nReflect.set(p, 'size', 'lg');\nReflect.set(p, 'loading', true);\n", "", true),
+            ("import { protoOf } from 'outside';\nconst w = document.defaultView;\nw.p = protoOf();\np['size'] = 'lg';\np['loading'] = true;\n", "", true),
+            ("import { protoOf } from 'outside';\nconst w = document.defaultView;\nw.p = protoOf();\nconst size = 'size';\nconst loading = `loading`;\np[size] = 'lg';\np[loading] = true;\n", "", true),
+            ("import { protoOf } from 'outside';\nconst w = document.defaultView;\nw.p = protoOf();\ndocument.defaultView.p['size'] = 'lg';\ndocument.defaultView.p['loading'] = true;\n", "", true),
+            ("import { protoOf } from 'outside';\nconst w = document.defaultView;\nw.p = protoOf();\nfor (const key of ['size', 'loading']) p[key] = 'lg';\n", "", true),
+            ("const key = 'title';\nsomeGlobal[key] = 'x';\n", "", false),
+            ("function p() {}\ndeclare namespace p { const size: string; }\np.size = 'lg';\np.loading = true;\n", "", false),
+            ("const box = {};\nconst size = 'size';\nbox[size] = 'lg';\n", "", false),
             ("const box = {};\nObject.assign(box, { size: 'lg', loading: true });\n", "", false),
             ("const box = {};\nbox.size = 'lg';\nbox.loading = true;\n", "", false),
             ("import { useRef } from 'react';\nexport const Probe = () => { const ref = useRef({}); ref.loading = true; return null; };\n", "", false),
