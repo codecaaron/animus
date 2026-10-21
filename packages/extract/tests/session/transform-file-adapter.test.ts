@@ -8,6 +8,7 @@ import {
   sessionKey,
   setEngineFactoryLoaderForTests,
 } from '../../session/singleton';
+import { nativeFunctions } from '../native-functions';
 import { resetAnimusGlobals } from './session-fixtures';
 
 import type { V2ExtractEngine } from '../../pipeline';
@@ -22,11 +23,18 @@ function nativeTransformingWith(
   transformFile: V2ExtractEngine['transformFile']
 ) {
   return {
+    ...nativeFunctions(),
     ExtractEngine: class {
       prepare(): string {
         return '{}';
       }
       analyzePrepared(): string {
+        return '{}';
+      }
+      fullManifestJson(): string {
+        return '{}';
+      }
+      analysisTimings(): string {
         return '{}';
       }
       transformFile(path: string): string {

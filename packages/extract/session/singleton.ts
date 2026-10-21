@@ -7,6 +7,7 @@ import { requireNativeEngine } from '../pipeline/native-resolution';
 
 import type { PackageReadRecord } from '../pipeline/alias-agreement';
 import type { AnimusCoreOptions } from '../pipeline/core-options';
+import type { NativeEngineModule } from '../pipeline/engine-adapter';
 import type {
   EngineApi,
   FontPreload,
@@ -342,20 +343,19 @@ export class EnvironmentFailure extends Error {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let loadEngineFactory: () => any = requireEngine;
+let loadEngineFactory: () => NativeEngineModule = requireEngine;
 
 /** Test seam: the loader of the native factory; null restores the real one. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function setEngineFactoryLoaderForTests(load: (() => any) | null): void {
+export function setEngineFactoryLoaderForTests(
+  load: (() => NativeEngineModule) | null
+): void {
   loadEngineFactory = load ?? requireEngine;
 }
 
 /** The native factory, loaded once for every build in the process. A load
  *  failure is an EnvironmentFailure, and is not cached: the next use tries
  *  the load again. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function engineFactory(): any {
+export function engineFactory(): NativeEngineModule {
   const registry = sessionRegistry();
   if (registry.factory === null) {
     try {
@@ -601,9 +601,9 @@ interface SessionRegistry {
   readonly sessions: Map<string, SessionState>;
   /** The one engine-handle store: each key's engine API. */
   readonly engines: Map<string, () => EngineApi>;
-  /** The native factory, once loaded. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  factory: any;
+  /** The native factory, once loaded: possibly another package copy's,
+   *  since every copy joins this registry. */
+  factory: NativeEngineModule | null;
 }
 
 // SAFETY: the symbol is this module's own, and every copy of this module,
