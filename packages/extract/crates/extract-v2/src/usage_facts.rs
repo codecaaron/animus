@@ -2639,13 +2639,15 @@ pub(crate) struct StringCode {
     /// Whether the module may replace the global `Promise`: it writes the
     /// unbound name, declares it at its top (a script's global), names
     /// `Promise` as a string, a template or a property key, writes a member
-    /// named `Promise`, or gives the global object (the unbound
-    /// `globalThis`, `window`, `self` or `global`, or a `window`,
-    /// `globalThis` or `defaultView` member) a key it computes or to
-    /// `Object` or `Reflect`.
-    /// Not followed: a key built at run time from text that never names
-    /// `Promise` (`'Prom' + 'ise'`, data), written into the global object
-    /// reached any other way (stored, passed, returned).
+    /// named `Promise`, or gives the global object a key it computes or to
+    /// `Object` or `Reflect`. The global object is any of its names unbound
+    /// (`globalThis`, `window`, `self`, `global`, `top`, `parent`,
+    /// `frames`), a chain of them (`window.self`), a `window`, `globalThis`
+    /// or `defaultView` member of anything, or a binding the module ever
+    /// gives one, declared, destructured or assigned. Not followed: a key
+    /// built at run time from text that never names `Promise` (`'Prom' +
+    /// 'ise'`, data), written into the global object reached any other way
+    /// (stored in an object, passed, returned).
     pub(crate) replaces_promise: bool,
 }
 
@@ -2661,8 +2663,17 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
     const RUNNERS: [&str; 2] = ["eval", "Function"];
     const TIMERS: [&str; 2] = ["setTimeout", "setInterval"];
     const GLOBAL_OBJECTS: [&str; 4] = ["globalThis", "window", "self", "global"];
-    /// Members that may hold the global object.
+    /// The names the global object is reached by, itself and as a member of
+    /// one of them.
+    const GLOBAL_NAMES: [&str; 7] = ["globalThis", "window", "self", "global", "top", "parent", "frames"];
+    /// Members that hold the global object, of anything.
     const GLOBAL_MEMBERS: [&str; 3] = ["window", "globalThis", "defaultView"];
+    /// What may hold the global object: itself, or a binding, which holds it
+    /// where the module gives it one.
+    enum GlobalRoot {
+        Global,
+        Binding(SymbolId),
+    }
     struct Reads<'s> {
         scoping: &'s oxc::semantic::Scoping,
         found: Option<&'static str>,
@@ -2686,6 +2697,13 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
         arguments: bool,
         /// See `StringCode::replaces_promise`.
         replaces_promise: bool,
+        /// The bindings given a key the code computes or to `Object` or
+        /// `Reflect`, as the global object would be.
+        global_uses: FxHashSet<SymbolId>,
+        /// The bindings the module gives the global object.
+        global_aliases: FxHashSet<SymbolId>,
+        /// (from, to): what `from` holds, `to` is given.
+        alias_flows: Vec<(SymbolId, SymbolId)>,
     }
     /// An argument as a timer's first would read it.
     enum Argument {
@@ -2754,13 +2772,40 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
                 self.parameters.extend(plain_parameters(params).map(|(at, parameter)| (parameter, (symbol, at))));
             }
         }
-        /// Whether `expression` may be the global object: the unbound
-        /// global object, or a member named for it.
-        fn global_like(&self, expression: &Expression<'_>) -> bool {
+        /// Whether `expression` may be the global object
+        /// (`StringCode::replaces_promise`).
+        fn global_root(&self, expression: &Expression<'_>) -> Option<GlobalRoot> {
             match expression.get_inner_expression() {
-                Expression::Identifier(id) => GLOBAL_OBJECTS.contains(&id.name.as_str()) && self.unbound(id),
-                Expression::StaticMemberExpression(member) => GLOBAL_MEMBERS.contains(&member.property.name.as_str()),
-                _ => false,
+                Expression::Identifier(id) => match symbol_of(self.scoping, id) {
+                    None => GLOBAL_NAMES.contains(&id.name.as_str()).then_some(GlobalRoot::Global),
+                    Some(symbol) => Some(GlobalRoot::Binding(symbol)),
+                },
+                Expression::StaticMemberExpression(member) if GLOBAL_MEMBERS.contains(&member.property.name.as_str()) => Some(GlobalRoot::Global),
+                Expression::StaticMemberExpression(member) if GLOBAL_NAMES.contains(&member.property.name.as_str()) => self.global_root(&member.object),
+                Expression::ComputedMemberExpression(member)
+                    if member.static_property_name().is_some_and(|name| GLOBAL_NAMES.contains(&name.as_str())) =>
+                {
+                    self.global_root(&member.object)
+                }
+                _ => None,
+            }
+        }
+        /// Records `expression` given what the global object may be given.
+        fn global_use(&mut self, expression: &Expression<'_>) {
+            match self.global_root(expression) {
+                Some(GlobalRoot::Global) => self.replaces_promise = true,
+                Some(GlobalRoot::Binding(symbol)) => {
+                    self.global_uses.insert(symbol);
+                }
+                None => {}
+            }
+        }
+        /// Records `bound`, each given `value`.
+        fn given(&mut self, bound: &[SymbolId], value: &Expression<'_>) {
+            match self.global_root(value) {
+                Some(GlobalRoot::Global) => self.global_aliases.extend(bound),
+                Some(GlobalRoot::Binding(from)) => self.alias_flows.extend(bound.iter().map(|to| (from, *to))),
+                None => {}
             }
         }
         /// Whether every timer gets a function, the `seeds` among them: a
@@ -2833,7 +2878,9 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
             if matches!(call.callee.get_inner_expression(), Expression::StaticMemberExpression(member)
                 if matches!(&member.object, Expression::Identifier(object) if matches!(object.name.as_str(), "Object" | "Reflect") && self.unbound(object)))
             {
-                self.replaces_promise |= call.arguments.iter().any(|argument| argument.as_expression().is_some_and(|argument| self.global_like(argument)));
+                for argument in call.arguments.iter().filter_map(|argument| argument.as_expression()) {
+                    self.global_use(argument);
+                }
             }
             if let Expression::Identifier(id) = &call.callee {
                 if let Some(symbol) = symbol_of(self.scoping, id) {
@@ -2894,6 +2941,11 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
                     self.function(symbol, unnamed.then_some(params));
                 }
             }
+            if let Some(init) = declarator.init.as_ref().filter(|init| self.global_root(init).is_some()) {
+                let mut bound = Vec::new();
+                bound_symbols(&declarator.id, &mut bound);
+                self.given(&bound, init);
+            }
             oxc::ast_visit::walk::walk_variable_declarator(self, declarator);
         }
         fn visit_static_member_expression(&mut self, member: &StaticMemberExpression<'a>) {
@@ -2904,8 +2956,18 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
             oxc::ast_visit::walk::walk_static_member_expression(self, member);
         }
         fn visit_computed_member_expression(&mut self, member: &oxc::ast::ast::ComputedMemberExpression<'a>) {
-            self.replaces_promise |= member.static_property_name().is_none() && self.global_like(&member.object);
+            if member.static_property_name().is_none() {
+                self.global_use(&member.object);
+            }
             oxc::ast_visit::walk::walk_computed_member_expression(self, member);
+        }
+        fn visit_assignment_expression(&mut self, assignment: &oxc::ast::ast::AssignmentExpression<'a>) {
+            if let oxc::ast::ast::AssignmentTarget::AssignmentTargetIdentifier(id) = &assignment.left {
+                if let Some(symbol) = symbol_of(self.scoping, id) {
+                    self.given(&[symbol], &assignment.right);
+                }
+            }
+            oxc::ast_visit::walk::walk_assignment_expression(self, assignment);
         }
         fn visit_simple_assignment_target(&mut self, target: &oxc::ast::ast::SimpleAssignmentTarget<'a>) {
             if let oxc::ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) = target {
@@ -2950,8 +3012,17 @@ pub(crate) fn string_code(program: &oxc::ast::ast::Program<'_>, scoping: &oxc::s
         exported: FxHashSet::default(),
         arguments: false,
         replaces_promise: false,
+        global_uses: FxHashSet::default(),
+        global_aliases: FxHashSet::default(),
+        alias_flows: Vec::new(),
     };
     reads.visit_program(program);
+    if !reads.global_aliases.is_empty() {
+        while let Some(&(_, to)) = reads.alias_flows.iter().find(|(from, to)| reads.global_aliases.contains(from) && !reads.global_aliases.contains(to)) {
+            reads.global_aliases.insert(to);
+        }
+        reads.replaces_promise |= reads.global_uses.iter().any(|symbol| reads.global_aliases.contains(symbol));
+    }
     reads.replaces_promise |= scoping.get_root_binding("Promise".into()).is_some_and(|symbol| {
         let flags = scoping.symbol_flags(symbol);
         flags.intersects(oxc::semantic::SymbolFlags::Value) && !flags.intersects(oxc::semantic::SymbolFlags::Import)

@@ -1338,6 +1338,19 @@ impl<'r> Declarations<'r> {
         }
     }
 
+    /// Whether the member at `span` is what a logical assignment (`||=`,
+    /// `&&=`, `??=`) writes, and its result, the member's value when it does
+    /// not write, is used.
+    fn logical_result_used(&self, span: Span) -> bool {
+        let mut up = self.ancestors.iter().rev();
+        match super::peel_wrappers(span, &mut up) {
+            (current, Some(AstKind::AssignmentExpression(assignment))) if assignment.left.span() == current && assignment.operator.is_logical() => {
+                !matches!(super::peel_wrappers(assignment.span, &mut up).1, Some(AstKind::ExpressionStatement(_)))
+            }
+            _ => false,
+        }
+    }
+
     /// Whether the intrinsic prototype at `span`, a child of the last
     /// ancestor, is used other than to read a member of it, unwritten, or
     /// to compare it strictly.
@@ -1373,8 +1386,9 @@ impl<'r> Declarations<'r> {
         let prototype = match name {
             Some("prototype") => self.intrinsic(object),
             Some("__proto__") => true,
-            // A key the code computes may be `__proto__`, read.
-            None => !written,
+            // A key the code computes may be `__proto__`, read, as a logical
+            // assignment reads what it gives.
+            None => !written || self.logical_result_used(span),
             Some("getPrototypeOf" | "setPrototypeOf") => {
                 !self.module_binding(object) && !matches!(self.ancestors.last(), Some(AstKind::CallExpression(call)) if call.callee.span() == span)
             }
@@ -2835,16 +2849,20 @@ impl<'a> Walk<'_, '_, 'a> {
         }
     }
 
-    /// Whether `expression` is an element of a host type written there: JSX
-    /// named by one, or `createElement` of one.
+    /// Whether `expression` is an element of a host type written there, and
+    /// no custom element's: JSX named by one, with no `is` attribute or
+    /// spread that may hold one, or `createElement` of one with no config or
+    /// a `plain_config`.
     fn host_element(&self, expression: &Expression<'_>) -> bool {
         match unwrap_type_assertions(expression) {
             Expression::JSXElement(element) => {
                 matches!(&element.opening_element.name, JSXElementName::Identifier(name) if !name.name.contains('-'))
+                    && !names_attribute(&element.opening_element, &["is"])
             }
             Expression::CallExpression(call) => {
                 self.creates_element(call)
                     && call.arguments.first().and_then(|argument| argument.as_expression()).is_some_and(|kind| self.caller_type(kind) == Some(false))
+                    && plain_config(call)
             }
             _ => false,
         }
@@ -3053,9 +3071,13 @@ impl<'a> Walk<'_, '_, 'a> {
                 continue;
             };
             // A clone of any element but a host one written in place (of the
-            // caller's type, or held in a binding) gets what the clone adds
-            // there, which no site judges.
-            if position == 0 && self.clones(call) && Some(expression.span()) != current && !self.host_element(expression) {
+            // caller's type, or held in a binding), or one its config may give
+            // `is`, gets what the clone adds there, which no site judges.
+            if position == 0
+                && self.clones(call)
+                && Some(expression.span()) != current
+                && !(self.host_element(expression) && plain_config(call))
+            {
                 if value.has_elements() {
                     self.sink(call.span.start, None, &value.elements());
                 }
@@ -3578,14 +3600,6 @@ impl<'a> Walk<'_, '_, 'a> {
             return Place::Carry;
         }
         let origin = root.map_or(TagOrigin::Nested, |root| tag_origin(self.module.scoping, root));
-        let named_attribute = |names: &[&str]| {
-            opening.attributes.iter().any(|attribute| match attribute {
-                oxc::ast::ast::JSXAttributeItem::SpreadAttribute(_) => true,
-                oxc::ast::ast::JSXAttributeItem::Attribute(attribute) => {
-                    matches!(&attribute.name, oxc::ast::ast::JSXAttributeName::Identifier(name) if names.contains(&name.name.as_str()))
-                }
-            })
-        };
         // An `as` of a static string renders that host element in place,
         // unless it names a custom element; `is` makes any element one.
         let polymorphic = opening
@@ -3609,7 +3623,7 @@ impl<'a> Walk<'_, '_, 'a> {
             .max()
             .unwrap_or(Polymorphic::No);
         let site = self.site_shape(element);
-        let exposed = named_attribute(&["ref"]);
+        let exposed = names_attribute(opening, &["ref"]);
         let reached = Reached { top: Rc::clone(&self.top), held: value.clone() };
         // An alias element renders each of its tags.
         let (tag, origin, also) = match self.module.aliases.get(&element.span.start) {
@@ -3803,9 +3817,7 @@ impl<'a> Walk<'_, '_, 'a> {
         // set `as`, `asChild` or `is` gives it another target.
         if position == Some(0) && self.clones(call) {
             let literal = call.arguments.get(1).is_none_or(|props| {
-                matches!(props.as_expression().map(unwrap_type_assertions), Some(Expression::ObjectExpression(object))
-                    if object.properties.iter().all(|property| matches!(property, ObjectPropertyKind::ObjectProperty(property)
-                        if !property.computed && property.key.static_name().is_some_and(|name| plain_key(&name)))))
+                matches!(props.as_expression().map(unwrap_type_assertions), Some(Expression::ObjectExpression(object)) if plain_object(object))
             });
             let callers = call.arguments.len() <= 2
                 && call.arguments.get(1).is_none_or(|props| props.as_expression().is_some_and(|props| self.clone_props(props)));
@@ -4451,6 +4463,35 @@ fn param_inputs(params: &oxc::ast::ast::FormalParameters<'_>) -> Vec<(SymbolId, 
         inputs.extend(bindings(&rest.rest.argument).into_iter().map(|symbol| (symbol, ParamInput::Every)));
     }
     inputs
+}
+
+/// Whether the config `call` gives an element, its second argument, is
+/// absent, `null`, or a `plain_object`.
+fn plain_config(call: &CallExpression<'_>) -> bool {
+    call.arguments.get(1).is_none_or(|config| match config.as_expression().map(unwrap_type_assertions) {
+        Some(Expression::NullLiteral(_)) => true,
+        Some(Expression::ObjectExpression(object)) => plain_object(object),
+        _ => false,
+    })
+}
+
+/// Whether `object` sets only plain props (`plain_key`), by keys it names.
+fn plain_object(object: &oxc::ast::ast::ObjectExpression<'_>) -> bool {
+    object.properties.iter().all(|property| {
+        matches!(property, ObjectPropertyKind::ObjectProperty(property)
+            if !property.computed && property.key.static_name().is_some_and(|name| plain_key(&name)))
+    })
+}
+
+/// Whether `opening` may set an attribute among `names`: by name, or by a
+/// spread.
+fn names_attribute(opening: &oxc::ast::ast::JSXOpeningElement<'_>, names: &[&str]) -> bool {
+    opening.attributes.iter().any(|attribute| match attribute {
+        oxc::ast::ast::JSXAttributeItem::SpreadAttribute(_) => true,
+        oxc::ast::ast::JSXAttributeItem::Attribute(attribute) => {
+            matches!(&attribute.name, oxc::ast::ast::JSXAttributeName::Identifier(name) if names.contains(&name.name.as_str()))
+        }
+    })
 }
 
 /// Whether a config's key `name` sets a plain prop: not a `ref`, which
