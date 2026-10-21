@@ -15343,6 +15343,52 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
         }
     }
 
+    /// Contract: a TypeScript wrapper around a literal reads as the literal.
+    /// Parentheses, `as`, `satisfies`, `!` and `<T>x` erase at compile time,
+    /// so the value a render writes through them selects the option, or
+    /// fills the system slot, the bare literal would. A value the runtime
+    /// prints otherwise than Rust does reads as dynamic.
+    #[test]
+    fn a_typescript_wrapper_around_a_literal_reads_as_the_literal() {
+        let kit = |options: &str| {
+            format!(
+                "import {{ createElement }} from 'react';\n\
+                 export const Box = ds.system({{ space: true }}).asElement('div');\n\
+                 export const Btn = ds.styles({{ display: 'inline' }}).variant({{ prop: 'size', defaultVariant: 'md', variants: {{ {options} }} }}).asElement('button');\n"
+            )
+        };
+        let sizes = "sm: { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }";
+        let tsx = [("(8)", "('lg')"), ("8 as const", "'lg' as const"), ("8 satisfies number", "'lg' satisfies string"), ("8!", "'lg'!"), ("8", "`lg`")];
+        for (p, size) in tsx {
+            for (file, app) in [
+                ("a.tsx", format!("export const App = () => <><Box p={{{p}}} /><Btn size={{{size}}} /></>;\n")),
+                ("a.tsx", format!("export const App = () => [createElement(Box, {{ p: {p} }}), createElement(Btn, {{ size: {size} }})];\n")),
+                ("a.ts", format!("export const App = () => [createElement(Box, {{ p: <const>{p} }}), createElement(Btn, {{ size: <const>{size} }})];\n")),
+            ] {
+                let out = analyze(&[(file, &format!("{}{app}", kit(sizes)))], &test_inputs());
+                assert!(!out.dynamic_props.contains_key("p"), "p static: {app}");
+                assert!(out.sheets.variants.contains("--size-lg") && !out.sheets.variants.contains("--size-sm"), "lg only: {app}");
+            }
+        }
+        for (options, size, kept, pruned) in [
+            ("ab: { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", r"`a\u0062`", "--size-ab", Some("--size-lg")),
+            ("'1': { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", "1 as const", "--size-1", Some("--size-lg")),
+            ("'1.5': { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", "1.5 satisfies number", r"--size-1\.5", Some("--size-lg")),
+            // Where Rust's text may differ from `String(n)` (`1e-6` for
+            // 0.000001, 0 for an infinite 1e400), the value reads as dynamic
+            // and every option stays.
+            ("'1e-6': { gap: '4px' }, '0.000001': { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", "0.000001", r"--size-0\.000001", None),
+            ("Infinity: { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", "1e400", "--size-Infinity", None),
+        ] {
+            let app = format!("export const App = () => <Btn size={{{size}}} />;\n");
+            let out = analyze(&[("a.tsx", &format!("{}{app}", kit(options)))], &test_inputs());
+            assert!(out.sheets.variants.contains(kept), "{kept} kept: {app}");
+            if let Some(pruned) = pruned {
+                assert!(!out.sheets.variants.contains(pruned), "{pruned} pruned: {app}");
+            }
+        }
+    }
+
     fn inputs_with_provenance() -> CssInputs {
         let mut inputs = test_inputs();
         inputs.slot_provenance = true;

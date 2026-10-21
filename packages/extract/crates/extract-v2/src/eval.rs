@@ -1188,7 +1188,7 @@ fn eval_static_template(
 /// `number` as JavaScript's `String(n)` writes it, where its own text
 /// provably is that: an integer within ±2^53, or a finite fraction printed
 /// without an exponent that reads back as the same value.
-fn js_number_text(number: &serde_json::Number) -> Option<String> {
+pub(crate) fn js_number_text(number: &serde_json::Number) -> Option<String> {
     const SAFE: u64 = 1 << 53;
     if let Some(integer) = number.as_i64() {
         return (integer.unsigned_abs() <= SAFE).then(|| integer.to_string());
