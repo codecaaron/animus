@@ -15367,22 +15367,26 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             ] {
                 let out = analyze(&[(file, &format!("{}{app}", kit(sizes)))], &test_inputs());
                 assert!(!out.dynamic_props.contains_key("p"), "p static: {app}");
+                assert!(out.system_prop_map.get("p").is_some_and(|values| values.contains_key("8")), "p=8 mapped: {app}");
+                assert!(out.css.contains("padding: 0.5rem;"), "p=8 emitted: {app}");
                 assert!(out.sheets.variants.contains("--size-lg") && !out.sheets.variants.contains("--size-sm"), "lg only: {app}");
             }
         }
         for (options, size, kept, pruned) in [
-            ("ab: { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", r"`a\u0062`", "--size-ab", Some("--size-lg")),
-            ("'1': { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", "1 as const", "--size-1", Some("--size-lg")),
-            ("'1.5': { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", "1.5 satisfies number", r"--size-1\.5", Some("--size-lg")),
+            ("ab: { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", r"`a\u0062`", &["--size-ab"][..], Some("--size-lg")),
+            ("'1': { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", "1 as const", &["--size-1"], Some("--size-lg")),
+            ("'1.5': { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", "1.5 satisfies number", &[r"--size-1\.5"], Some("--size-lg")),
             // Where Rust's text may differ from `String(n)` (`1e-6` for
             // 0.000001, 0 for an infinite 1e400), the value reads as dynamic
             // and every option stays.
-            ("'1e-6': { gap: '4px' }, '0.000001': { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", "0.000001", r"--size-0\.000001", None),
-            ("Infinity: { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", "1e400", "--size-Infinity", None),
+            ("'1e-6': { gap: '4px' }, '0.000001': { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", "0.000001", &[r"--size-0\.000001", "--size-1e-6", "--size-md", "--size-lg"], None),
+            ("Infinity: { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", "1e400", &["--size-Infinity", "--size-md", "--size-lg"], None),
         ] {
             let app = format!("export const App = () => <Btn size={{{size}}} />;\n");
             let out = analyze(&[("a.tsx", &format!("{}{app}", kit(options)))], &test_inputs());
-            assert!(out.sheets.variants.contains(kept), "{kept} kept: {app}");
+            for kept in kept {
+                assert!(out.sheets.variants.contains(kept), "{kept} kept: {app}");
+            }
             if let Some(pruned) = pruned {
                 assert!(!out.sheets.variants.contains(pruned), "{pruned} pruned: {app}");
             }
