@@ -11,7 +11,7 @@ mod value_eval;
 pub use compose::{scan_compose_calls, ComposeFamilyInfo};
 pub use system_props::scan_jsx;
 pub use usage::{
-    scan_jsx_usage, ComponentUsageConfig, OpenSite, StateUsage, UsageScanResult, VariantUsage, WrittenProp,
+    scan_jsx_usage, ComponentUsageConfig, OpenSite, StateUsage, UsageScanResult, VariantUsage, VariantValue, WrittenProp,
 };
 
 pub(crate) use usage::{
@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(result.variant_usages.len(), 1);
         assert_eq!(result.variant_usages[0].component_binding, "Button");
         assert_eq!(result.variant_usages[0].variant_prop, "variant");
-        assert_eq!(result.variant_usages[0].value, "stroke");
+        assert_eq!(result.variant_usages[0].value, VariantValue::Literal("stroke".to_string()));
     }
 
     #[test]
@@ -458,7 +458,7 @@ mod tests {
             button_config_variant(),
         );
         assert_eq!(result.variant_usages.len(), 1);
-        assert_eq!(result.variant_usages[0].value, "__dynamic__");
+        assert_eq!(result.variant_usages[0].value, VariantValue::Dynamic);
     }
 
     #[test]
@@ -475,7 +475,7 @@ mod tests {
         assert_eq!(result.variant_usages.len(), 1);
         assert_eq!(result.variant_usages[0].component_binding, "Button");
         assert_eq!(result.variant_usages[0].variant_prop, "variant");
-        assert_eq!(result.variant_usages[0].value, "__default__");
+        assert_eq!(result.variant_usages[0].value, VariantValue::Default);
     }
 
     #[test]
@@ -533,7 +533,7 @@ mod tests {
         assert_eq!(result.system_prop_usages[0].value, 8);
 
         assert_eq!(result.variant_usages.len(), 1);
-        assert_eq!(result.variant_usages[0].value, "stroke");
+        assert_eq!(result.variant_usages[0].value, VariantValue::Literal("stroke".to_string()));
 
         assert!(result.rendered_components.contains("Button"));
     }

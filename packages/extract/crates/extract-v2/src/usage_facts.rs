@@ -26,7 +26,7 @@ use crate::jsx_scan::{
     eval_static_expression, make_json_number,
     is_component_like_identifier, jsx_member_path, ComponentUsageConfig, ComposeFamilyInfo, CustomPropScanResult,
     DynamicExpressionKind, DynamicPropUsage, PropValueResult, StateUsage, SystemPropUsage, record_written,
-    OpenSite, UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage, WrittenProp,
+    OpenSite, UsageResidueSite, UsageScanResult, UsageSpan, VariantUsage, VariantValue, WrittenProp,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -55,8 +55,9 @@ pub struct AttrFact {
     pub dynamic_span: Option<UsageSpan>,
     /// True when the attribute is skipped entirely (empty expressions).
     pub skip: bool,
-    /// Variant classification: a literal string or `"__dynamic__"`.
-    pub variant_class: String,
+    /// Variant classification: an option by its name, or a value the scan
+    /// cannot read.
+    pub variant_class: VariantValue,
     /// Every value the attribute can write is known without statics that
     /// may name a changed object: `static_value`, or, without one, each of
     /// `enumerable_values`. See `proven_values`.
@@ -176,7 +177,7 @@ pub enum UsageFact {
         /// The props the second argument settles with their variant
         /// classification; `None` when it can deliver unknown props.
         #[serde(skip)]
-        props: Option<Vec<(String, String)>>,
+        props: Option<Vec<(String, VariantValue)>>,
         /// The literal values among those props, as a JSX attribute's
         /// static value reads them.
         #[serde(skip)]
@@ -217,7 +218,7 @@ pub enum UsageFact {
         /// The overrides with their variant classification; `None` when
         /// they can deliver props usage cannot list.
         #[serde(skip)]
-        props: Option<Vec<(String, String)>>,
+        props: Option<Vec<(String, VariantValue)>>,
         /// The call's line and its spelling, for the warning when the
         /// overrides cannot be listed.
         #[serde(skip)]
@@ -5715,7 +5716,7 @@ struct CloneScan<'a, 's> {
 /// and the overrides, line and spelling either fact needs.
 struct PendingClone {
     symbol: Option<SymbolId>,
-    props: Option<Vec<(String, String)>>,
+    props: Option<Vec<(String, VariantValue)>>,
     line: usize,
     call: String,
     at: u32,
@@ -5745,8 +5746,8 @@ impl<'a> FactCollector<'a, '_> {
                 match self.enrich.then(|| listed_spread(&spread_attribute.argument, self.origins)).flatten() {
                     Some(entries) => attrs.extend(entries.into_iter().map(|(name, value)| AttrFact {
                         variant_class: match &value {
-                            Value::String(class) => class.clone(),
-                            _ => "__dynamic__".to_string(),
+                            Value::String(class) => VariantValue::Literal(class.clone()),
+                            _ => VariantValue::Dynamic,
                         },
                         conditions: (!value.is_object()).then(|| BTreeSet::from([BASE_CONDITION.to_string()])),
                         name,
@@ -5964,7 +5965,7 @@ fn children_attribute(written: &[&JSXChild<'_>]) -> Option<AttrFact> {
     Some(match literal {
         Some(value) => AttrFact {
             name: "children".to_string(),
-            variant_class: value.clone(),
+            variant_class: VariantValue::Literal(value.clone()),
             static_value: Some(Value::String(value)),
             enumerable_values: Vec::new(),
             dynamic: false,
@@ -5978,7 +5979,7 @@ fn children_attribute(written: &[&JSXChild<'_>]) -> Option<AttrFact> {
         },
         None => AttrFact {
             name: "children".to_string(),
-            variant_class: "__dynamic__".to_string(),
+            variant_class: VariantValue::Dynamic,
             static_value: None,
             enumerable_values: Vec::new(),
             dynamic: true,
@@ -6615,7 +6616,7 @@ fn element_tag(name: &JSXElementName<'_>) -> Option<Option<TagFact>> {
 }
 
 /// The element's own fact carries its origin.
-fn clone_of(tag: TagFact, props: Option<Vec<(String, String)>>, at: u32) -> Option<UsageFact> {
+fn clone_of(tag: TagFact, props: Option<Vec<(String, VariantValue)>>, at: u32) -> Option<UsageFact> {
     let (ident, member) = match tag {
         TagFact::Ident(name) => (Some(name), None),
         TagFact::Member(path) => (None, Some(path)),
@@ -6635,7 +6636,7 @@ fn clone_of(tag: TagFact, props: Option<Vec<(String, String)>>, at: u32) -> Opti
 
 /// A clone without overrides adds nothing.
 fn unknown_clone(
-    props: Option<Vec<(String, String)>>,
+    props: Option<Vec<(String, VariantValue)>>,
     line: usize,
     call: String,
 ) -> Option<UsageFact> {
@@ -7832,7 +7833,7 @@ pub struct WrapperProxies {
     pub settled: FxHashMap<String, FxHashSet<String>>,
     /// Forwarding element span → attribute → the variant values a named
     /// prop passes on across the wrapper's renders (`passed_values`).
-    pub passed: FxHashMap<(u32, u32), FxHashMap<String, Vec<String>>>,
+    pub passed: FxHashMap<(u32, u32), FxHashMap<String, Vec<VariantValue>>>,
 }
 
 /// A lookup key a render records under, with the props that never reach
@@ -7854,15 +7855,16 @@ impl WrapperProxies {
 }
 
 /// The variant values the prop `key` takes across `wrapper`'s renders in
-/// `facts`: what each render writes, `__dynamic__` where a spread at the
-/// render can deliver it, and `default` (or the target's own, `__default__`)
-/// where a render leaves it out.
+/// `facts`: what each render writes, `Dynamic` where a spread at the render
+/// can deliver it, and `default` (or the target's own, `Default`) where a
+/// render leaves it out.
 pub(crate) fn passed_values(
     facts: &[UsageFact],
     wrapper: &str,
     key: &str,
     default: Option<&str>,
-) -> Vec<String> {
+) -> Vec<VariantValue> {
+    let absent = default.map_or(VariantValue::Default, |default| VariantValue::Literal(default.to_string()));
     let mut values = BTreeSet::new();
     for fact in facts {
         let UsageFact::Element { tag: TagFact::Ident(tag), attrs, spread, .. } = fact else {
@@ -7873,17 +7875,17 @@ pub(crate) fn passed_values(
         }
         let mut settled = false;
         for (index, attr) in attrs.iter().enumerate().filter(|(_, attr)| attr.name == key) {
-            values.insert(attr.variant_class.as_str());
+            values.insert(&attr.variant_class);
             settled |= attr.settles(index, *spread);
         }
         if !settled {
             values.insert(match spread {
-                Some(_) => "__dynamic__",
-                None => default.unwrap_or("__default__"),
+                Some(_) => &VariantValue::Dynamic,
+                None => &absent,
             });
         }
     }
-    values.into_iter().map(str::to_string).collect()
+    values.into_iter().cloned().collect()
 }
 
 /// Custom-prop scan over collected facts.
@@ -8020,13 +8022,13 @@ fn record_unwritten_options(
     if open_props && written.is_empty() && !fully_open.insert(binding.to_string()) {
         return;
     }
-    let absent = if open_props { "__dynamic__" } else { "__default__" };
+    let absent = if open_props { VariantValue::Dynamic } else { VariantValue::Default };
     for variant_prop in config.variants.keys() {
         if !written.contains(variant_prop.as_str()) {
             result.variant_usages.push(VariantUsage {
                 component_binding: binding.to_string(),
                 variant_prop: variant_prop.clone(),
-                value: absent.to_string(),
+                value: absent.clone(),
             });
         }
     }
@@ -8285,7 +8287,7 @@ pub fn filter_usage_scan(
                             result.variant_usages.push(VariantUsage {
                                 component_binding: binding.to_string(),
                                 variant_prop: key.clone(),
-                                value: "__default__".to_string(),
+                                value: VariantValue::Default,
                             });
                         }
                     }
@@ -9017,7 +9019,7 @@ mod tests {
         );
     }
 
-    fn option_usages(source: &str) -> (Vec<(String, String)>, Vec<String>) {
+    fn option_usages(source: &str) -> (Vec<(String, VariantValue)>, Vec<String>) {
         let skel = configs(&[("Skel", &[("shape", &["line", "block"])], &["loading"])]);
         assert_paths_agree(source, &props(&[]), &skel, &FxHashMap::default());
         let ast = parse(source);
@@ -9043,33 +9045,34 @@ mod tests {
 
     #[test]
     fn spread_keeps_the_options_it_can_reach() {
-        let pair = |prop: &str, value: &str| (prop.to_string(), value.to_string());
+        let pair = |prop: &str, value: VariantValue| (prop.to_string(), value);
+        let line = || VariantValue::Literal("line".to_string());
         let wrapper = "const W = (p) => <Skel {...p} />;";
         assert_eq!(
             option_usages(wrapper),
-            (vec![pair("shape", "__dynamic__")], vec!["loading".to_string()])
+            (vec![pair("shape", VariantValue::Dynamic)], vec!["loading".to_string()])
         );
 
         let settled_after = "const W = (p) => <Skel {...p} shape=\"line\" loading={false} />;";
         assert_eq!(
             option_usages(settled_after),
-            (vec![pair("shape", "line")], vec!["loading".to_string()])
+            (vec![pair("shape", line())], vec!["loading".to_string()])
         );
 
         let overridable_before = "const W = (p) => <Skel shape=\"line\" {...p} />;";
         assert_eq!(
             option_usages(overridable_before),
             (
-                vec![pair("shape", "__dynamic__"), pair("shape", "line")],
+                vec![pair("shape", line()), pair("shape", VariantValue::Dynamic)],
                 vec!["loading".to_string()]
             )
         );
 
         let no_spread = "const A = () => <Skel shape=\"line\" />;";
-        assert_eq!(option_usages(no_spread), (vec![pair("shape", "line")], vec![]));
+        assert_eq!(option_usages(no_spread), (vec![pair("shape", line())], vec![]));
 
-        let open = (vec![pair("shape", "__dynamic__")], vec!["loading".to_string()]);
-        let defaults = (vec![pair("shape", "__default__")], vec![]);
+        let open = (vec![pair("shape", VariantValue::Dynamic)], vec!["loading".to_string()]);
+        let defaults = (vec![pair("shape", VariantValue::Default)], vec![]);
         assert_eq!(option_usages("const e = createElement(Skel, props);"), open);
         // A spread after a listed key can override it, as in JSX.
         assert_eq!(
@@ -9080,7 +9083,7 @@ mod tests {
         assert_eq!(option_usages("const e = createElement(Skel, null);"), defaults);
         assert_eq!(
             option_usages("const e = createElement(Skel, { shape: 'line', loading: true });"),
-            (vec![pair("shape", "line")], vec!["loading".to_string()])
+            (vec![pair("shape", line())], vec!["loading".to_string()])
         );
 
         // Repeated open renders of one component record its options once.

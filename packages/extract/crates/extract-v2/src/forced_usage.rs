@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::analyze_css::CssDiagnostic;
 use crate::jsx_scan::{
     ComponentUsageConfig, DynamicPropUsage, StateUsage, SystemPropUsage, UsageScanResult,
-    VariantUsage,
+    VariantUsage, VariantValue,
 };
 use crate::reconcile::{EliminatedDetail, UsageLedger};
 
@@ -232,7 +232,7 @@ pub fn build_forced_injection(
                                     out.scan.variant_usages.push(VariantUsage {
                                         component_binding: name.clone(),
                                         variant_prop: prop.clone(),
-                                        value: option.clone(),
+                                        value: VariantValue::Literal(option.clone()),
                                     });
                                 }
                                 record_forced_variant(&mut out, name, prop, option, observed);
@@ -338,7 +338,7 @@ pub fn build_forced_injection(
     out
 }
 
-/// Wildcard variant forcing: the ledger's `"__dynamic__"` expansion covers
+/// Wildcard variant forcing: the ledger's `VariantValue::Dynamic` expansion covers
 /// every declared option; counts and details resolve the concrete options.
 fn force_variant_prop_all(
     out: &mut ForcedInjection,
@@ -353,7 +353,7 @@ fn force_variant_prop_all(
         out.scan.variant_usages.push(VariantUsage {
             component_binding: binding.to_string(),
             variant_prop: prop.to_string(),
-            value: "__dynamic__".to_string(),
+            value: VariantValue::Dynamic,
         });
     }
     let mut sorted: Vec<&String> = options.iter().collect();
@@ -503,7 +503,7 @@ mod tests {
             r#"{"components":{"Button":{"variants":{"variant":["ghost"]}}}}"#,
         );
         assert_eq!(injection.scan.variant_usages.len(), 1);
-        assert_eq!(injection.scan.variant_usages[0].value, "ghost");
+        assert_eq!(injection.scan.variant_usages[0].value, VariantValue::Literal("ghost".to_string()));
         assert!(injection.scan.rendered_components.contains("Button"));
         assert_eq!(injection.report.variants_forced, 1);
         assert_eq!(injection.report.components_forced, 1);
@@ -518,7 +518,7 @@ mod tests {
     fn wildcard_variants_use_dynamic_expansion_and_count_all_options() {
         let injection = build(r#"{"components":{"Button":{"variants":"*"}}}"#);
         assert_eq!(injection.scan.variant_usages.len(), 1);
-        assert_eq!(injection.scan.variant_usages[0].value, "__dynamic__");
+        assert_eq!(injection.scan.variant_usages[0].value, VariantValue::Dynamic);
         assert_eq!(injection.report.variants_forced, 3);
     }
 

@@ -4,7 +4,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::css::ComponentCss;
-use crate::jsx_scan::{UsageScanResult, VariantUsage};
+use crate::jsx_scan::{UsageScanResult, VariantUsage, VariantValue};
 
 pub type VariantConfigMap =
     FxHashMap<String, FxHashMap<String, (FxHashSet<String>, Option<String>)>>;
@@ -89,8 +89,8 @@ pub fn build_ledger(
                 .entry(variant_prop.clone())
                 .or_default();
 
-            match value.as_str() {
-                "__dynamic__" => {
+            match value {
+                VariantValue::Dynamic => {
                     if let Some(prop_config) = variant_configs
                         .get(component_binding)
                         .and_then(|vc| vc.get(variant_prop))
@@ -100,7 +100,7 @@ pub fn build_ledger(
                         }
                     }
                 }
-                "__default__" => {
+                VariantValue::Default => {
                     if let Some(default) = variant_configs
                         .get(component_binding)
                         .and_then(|vc| vc.get(variant_prop))
@@ -109,8 +109,8 @@ pub fn build_ledger(
                         used_set.insert(default.clone());
                     }
                 }
-                literal => {
-                    used_set.insert(literal.to_string());
+                VariantValue::Literal(literal) => {
+                    used_set.insert(literal.clone());
                 }
             }
         }
@@ -365,7 +365,7 @@ pub fn identify_prospective_eliminations(
 mod tests {
     use super::*;
     use crate::css::{ComponentCss, VariantCss};
-    use crate::jsx_scan::{UsageScanResult, VariantUsage};
+    use crate::jsx_scan::{UsageScanResult, VariantUsage, VariantValue};
     use crate::theme::ResolvedStyles;
     use rustc_hash::FxHashSet;
 
@@ -548,7 +548,7 @@ mod tests {
             variant_usages: vec![VariantUsage {
                 component_binding: "src/Button.tsx::Button".to_string(),
                 variant_prop: "variant".to_string(),
-                value: "__default__".to_string(),
+                value: VariantValue::Default,
             }],
             state_usages: vec![],
             rendered_components: {
@@ -602,7 +602,7 @@ mod tests {
             variant_usages: vec![VariantUsage {
                 component_binding: "src/Button.tsx::Button".to_string(),
                 variant_prop: "variant".to_string(),
-                value: "__dynamic__".to_string(),
+                value: VariantValue::Dynamic,
             }],
             state_usages: vec![],
             rendered_components: {

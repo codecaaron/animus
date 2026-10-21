@@ -10728,7 +10728,7 @@ fn run_with_system_floor(
             opened_usage.variant_usages.extend(variant.options.iter().map(|(option, _)| crate::jsx_scan::VariantUsage {
                 component_binding: component_id.clone(),
                 variant_prop: variant.prop.clone(),
-                value: option.clone(),
+                value: crate::jsx_scan::VariantValue::Literal(option.clone()),
             }));
         }
         opened_usage.state_usages.extend(component_css.states.iter().map(|(state, _)| crate::jsx_scan::StateUsage {
@@ -15315,6 +15315,31 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             let out = analyze(&[("a.tsx", &format!("{patch}{kit}")), ("b.tsx", other)], &test_inputs());
             let kept = (out.sheets.variants.contains("--size-lg"), out.sheets.states.contains("color: blue"));
             assert_eq!(kept, (keeps, keeps), "{patch}{other}");
+        }
+    }
+
+    /// Contract: an option's own name never reads as a usage marker. An
+    /// option named `__default__` or `__dynamic__` is that option wherever a
+    /// render or a kept-every-option rule names it, never the configured
+    /// default or every option.
+    #[test]
+    fn an_options_own_name_never_reads_as_a_usage_marker() {
+        let kit = |options: &str, default: &str| {
+            format!("const Btn = ds.styles({{ display: 'inline' }}).variant({{ prop: 'size', {default}variants: {{ {options} }} }}).asElement('button');\n")
+        };
+        for (patch, options, default, render, kept, pruned) in [
+            ("Object.prototype.size = '__default__';\n", "md: { gap: '2px' }, __default__: { gap: '9px' }", "defaultVariant: 'md', ", "<><Btn /><Btn size=\"md\" /></>", "--size-__default__", None),
+            ("Object.prototype.size = '__dynamic__';\n", "md: { gap: '2px' }, __dynamic__: { gap: '9px' }", "", "<><Btn /><Btn size=\"md\" /></>", "--size-__dynamic__", None),
+            ("", "md: { gap: '2px' }, __default__: { gap: '9px' }, lg: { gap: '3px' }", "defaultVariant: 'md', ", "<Btn size=\"__default__\" />", "--size-__default__", Some("--size-lg")),
+            ("", "md: { gap: '2px' }, __dynamic__: { gap: '9px' }, lg: { gap: '3px' }", "defaultVariant: 'md', ", "<Btn size=\"__dynamic__\" />", "--size-__dynamic__", Some("--size-lg")),
+            ("", "sm: { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' }", "defaultVariant: 'md', ", "<Btn size=\"sm\" />", "--size-sm", Some("--size-lg")),
+        ] {
+            let source = format!("{patch}{}export const App = () => {render};\n", kit(options, default));
+            let out = analyze(&[("a.tsx", &source)], &test_inputs());
+            assert!(out.sheets.variants.contains(kept), "{kept} kept: {source}");
+            if let Some(pruned) = pruned {
+                assert!(!out.sheets.variants.contains(pruned), "{pruned} pruned: {source}");
+            }
         }
     }
 

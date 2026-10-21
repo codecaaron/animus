@@ -22,13 +22,32 @@ pub struct ComponentUsageConfig {
     pub states: FxHashSet<String>,
 }
 
+/// What a render writes to a variant prop: an option by its name, nothing
+/// (the configured default), or a value the scan cannot read (any option).
+/// An option's own name is always a `Literal`, so no name reads as either
+/// marker; serialized, the markers keep their strings.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum VariantValue {
+    Literal(String),
+    Default,
+    Dynamic,
+}
+
+impl serde::Serialize for VariantValue {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(match self {
+            VariantValue::Literal(option) => option,
+            VariantValue::Default => "__default__",
+            VariantValue::Dynamic => "__dynamic__",
+        })
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VariantUsage {
     pub component_binding: String,
     pub variant_prop: String,
-    /// A literal string, `"__dynamic__"` for a non-static value, or
-    /// `"__default__"` when the prop is absent.
-    pub value: String,
+    pub value: VariantValue,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -280,13 +299,13 @@ impl<'a> UsageScanner<'a, '_> {
 
         let repeat_open = spread && written.is_empty() && !self.fully_open.insert(binding.clone());
         if let Some(config) = self.component_configs.get(tag).filter(|_| !repeat_open) {
-            let absent = if spread { "__dynamic__" } else { "__default__" };
+            let absent = if spread { VariantValue::Dynamic } else { VariantValue::Default };
             for variant_prop in config.variants.keys() {
                 if !written.contains(variant_prop.as_str()) {
                     self.result.variant_usages.push(VariantUsage {
                         component_binding: binding.clone(),
                         variant_prop: variant_prop.clone(),
-                        value: absent.to_string(),
+                        value: absent.clone(),
                     });
                 }
             }
@@ -390,7 +409,7 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
                                     self.result.variant_usages.push(VariantUsage {
                                         component_binding: binding.clone(),
                                         variant_prop: variant_prop.clone(),
-                                        value: "__dynamic__".to_string(),
+                                        value: VariantValue::Dynamic,
                                     });
                                 }
                                 for state_name in &config.states {
@@ -425,7 +444,7 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
                                         self.result.variant_usages.push(VariantUsage {
                                             component_binding: binding.clone(),
                                             variant_prop: variant_prop.clone(),
-                                            value: "__default__".to_string(),
+                                            value: VariantValue::Default,
                                         });
                                     }
                                 }
@@ -445,7 +464,7 @@ impl<'a, 'b> Visit<'a> for UsageScanner<'a, 'b> {
 /// variant classification. No argument, `null` or `undefined` settles
 /// nothing; `None` means the argument can deliver unknown props (an
 /// expression, a spread, or a computed key).
-pub(crate) fn create_element_props(argument: Option<&Argument<'_>>) -> Option<Vec<(String, String)>> {
+pub(crate) fn create_element_props(argument: Option<&Argument<'_>>) -> Option<Vec<(String, VariantValue)>> {
     let Some(argument) = argument else {
         return Some(Vec::new());
     };
@@ -466,8 +485,8 @@ pub(crate) fn create_element_props(argument: Option<&Argument<'_>>) -> Option<Ve
                 }
                 let key = p.key.static_name().filter(|_| !p.computed)?;
                 let class = match &p.value {
-                    Expression::StringLiteral(lit) => lit.value.to_string(),
-                    _ => "__dynamic__".to_string(),
+                    Expression::StringLiteral(lit) => VariantValue::Literal(lit.value.to_string()),
+                    _ => VariantValue::Dynamic,
                 };
                 Some((key.to_string(), class))
             })
@@ -537,25 +556,23 @@ pub(crate) fn create_element_literals(
 
 /// Classify a present JSX attribute value for variant tracking: a string
 /// literal yields its string, a boolean the key it names (`'true'` or
-/// `'false'`), every other form `"__dynamic__"`.
-pub(crate) fn classify_jsx_attribute_as_variant_value(value: &Option<JSXAttributeValue>) -> String {
+/// `'false'`), every other form `Dynamic`.
+pub(crate) fn classify_jsx_attribute_as_variant_value(value: &Option<JSXAttributeValue>) -> VariantValue {
     match value {
         // `<Column fit />` writes `true`.
-        None => "true".to_string(),
+        None => VariantValue::Literal("true".to_string()),
 
-        Some(JSXAttributeValue::StringLiteral(lit)) => lit.value.to_string(),
+        Some(JSXAttributeValue::StringLiteral(lit)) => VariantValue::Literal(lit.value.to_string()),
 
         Some(JSXAttributeValue::ExpressionContainer(container)) => {
             match &container.expression {
-                JSXExpression::StringLiteral(lit) => lit.value.to_string(),
-                JSXExpression::BooleanLiteral(lit) => lit.value.to_string(),
-                _ => "__dynamic__".to_string(),
+                JSXExpression::StringLiteral(lit) => VariantValue::Literal(lit.value.to_string()),
+                JSXExpression::BooleanLiteral(lit) => VariantValue::Literal(lit.value.to_string()),
+                _ => VariantValue::Dynamic,
             }
         }
 
-        Some(JSXAttributeValue::Element(_)) | Some(JSXAttributeValue::Fragment(_)) => {
-            "__dynamic__".to_string()
-        }
+        Some(JSXAttributeValue::Element(_)) | Some(JSXAttributeValue::Fragment(_)) => VariantValue::Dynamic,
     }
 }
 
