@@ -6175,10 +6175,17 @@ fn bounded_prop_tags(
             return false;
         }
         // A module loaded at runtime hands its exports to code usage cannot
-        // follow: the declaring module, or one that re-exports from it.
+        // follow: the declaring module, or one that re-exports from it. So
+        // does a namespace of either let go as a value.
         for (path, ff) in files {
             for load in &ff.module_loads {
                 if loaded_modules(path, load, files, inputs).into_iter().any(|loaded| reexports_from(loaded, module)) {
+                    return false;
+                }
+            }
+            for (namespace, source) in &ff.namespace_imports {
+                let let_go = ff.value_escapes.iter().any(|escaped| escaped == namespace);
+                if let_go && resolve_import_source(path, source, files, inputs).is_some_and(|found| reexports_from(&found, module)) {
                     return false;
                 }
             }
@@ -16642,7 +16649,8 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
         // The function module's additions, the app, any further files and the
         // slots left.
         type Case<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)], &'a [&'a str]);
-        let cases: [Case; 25] = [
+        let wrap = [("wrap.tsx", "export const Wrap = ({ as: Tag = 'span', ...rest }) => <Tag {...rest} />;\n")];
+        let cases: [Case; 30] = [
             ("", "() => <><Outer /><Parts.Root><div /></Parts.Root><Box p={8} /></>", &[], &[]),
             ("", "() => <><Outer as=\"span\" /><Parts.Root as=\"section\" /><Box p={8} /></>", &[], &[]),
             ("", "({ X }) => <><Outer as={X} /><Box p={8} /></>", &[], &["p"]),
@@ -16674,6 +16682,14 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             // A type-only namespace export is erased: it exports nothing.
             ("", "() => <><Outer /><Parts.Root /><H /><Box p={8} /></>;\nimport { H } from './h';\nimport('./barrel').then(consume)", &h_type_only, &[]),
             ("", "() => <><Outer /><Parts.Root /><H /><Box p={8} /></>;\nimport { H } from './h';\nimport('./barrel').then(consume)", &h_type_export, &[]),
+            // A namespace of the function's module, or of one that re-exports
+            // it, let go as a value: code outside may render any member with
+            // any `as`.
+            ("", "() => <><Outer /><Parts.Root /><Box p={8} /></>;\nimport * as ns from './el';\nconsume(ns)", &[], &["p"]),
+            ("", "() => <><Outer /><Parts.Root /><Box p={8} /></>;\nimport * as ns from './barrel';\nconsume(ns)", &barrel("export { El, Parts } from './el';\n"), &["p"]),
+            ("", "() => <><Outer /><Parts.Root /><Box p={8} /></>;\nimport * as ns from './el';\nconsume(ns.Parts)", &[], &["p"]),
+            ("", "() => <><Outer /><Parts.Root /><Wrap as=\"a\" /><Box p={8} /></>;\nimport { Wrap } from './wrap'", &wrap, &[]),
+            ("", "() => <><Outer /><Parts.Root /><Wrap as=\"a\" /><Box p={8} /></>;\nimport { Wrap } from './wrap';\nimport * as ns from './wrap';\nconsume(ns)", &wrap, &["p"]),
             // A default export, however spelled.
             ("export { El as default };\n", both, &[], &["p"]),
             ("", both, &barrel("export { El as default } from './el';\n"), &["p"]),
