@@ -10682,27 +10682,65 @@ fn run_with_system_floor(
             SlotOpening::rule("unproven-wrapper").in_file(&module).detail(wrapper.as_str())
         });
     }
+    // What a module patches leaves no usage proven (`usage_gaps` below). A
+    // trusted global handed to code the analysis reads may be redirected
+    // there; code outside can read it anyway.
+    let mut patch_gaps: Vec<SlotOpening> = files
+        .iter()
+        .filter_map(|(file, ff)| {
+            let (at, rule) = ff.patches_intrinsics.map(|patch| (patch.at, patch.rule)).or_else(|| {
+                let (at, _) = ff.outside_let_goes.iter().find(|(_, source)| import_reads_code(file, source, files, inputs))?;
+                Some((*at, "trusted-let-go"))
+            })?;
+            Some(SlotOpening { at: Some(at), ..SlotOpening::rule("patches-intrinsics").in_file(file).detail(rule) })
+        })
+        .collect();
+    // A store onto an object that may be a prototype every props object
+    // inherits changes what a render reads by its key: a prop's name, or
+    // one React or the runtime reads.
+    let prop_named = |key: &str| {
+        matches!(key, "children" | "key" | "ref" | "className" | "style" | "as" | "asChild")
+            || inputs.config.contains_key(key)
+            || inputs.selector_aliases.contains_key(key)
+            || inputs.condition_aliases.contains_key(key)
+            || evaluated.values().any(|(css, _, _, _, _, custom, _)| {
+                css.variants.iter().any(|variant| variant.prop == key)
+                    || css.states.iter().any(|(state, _)| state == key)
+                    || custom.as_ref().is_some_and(|custom| custom.contains_key(key))
+            })
+    };
+    patch_gaps.extend(files.iter().filter_map(|(file, ff)| {
+        let (at, _) = ff.keyed_stores.iter().find(|(_, key)| prop_named(key))?;
+        Some(SlotOpening { at: Some(*at), ..SlotOpening::rule("patches-intrinsics").in_file(file).detail("prop-key-store") })
+    }));
+    // A patch the analysis cannot follow may change the props a render
+    // reads: a key every props object inherits, however the code reached
+    // the prototype, or React or a built-in the runtime calls, redirected.
+    // No component is out of its reach, so each keeps every option.
+    let props_patched = !patch_gaps.is_empty();
+    let opened_ids: Vec<&String> = if props_patched { evaluated.keys().collect() } else { escaped_ids.iter().collect() };
     let mut opened_usage = UsageScanResult::default();
-    for component_id in &escaped_ids {
-        let Some((component_css, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
-        else {
+    for component_id in opened_ids {
+        let Some((component_css, ..)) = evaluated.get(component_id) else {
             continue;
         };
         for variant in &component_css.variants {
-            opened_usage.variant_usages.extend(variant.options.iter().map(|(option, _)| {
-                crate::jsx_scan::VariantUsage {
-                    component_binding: component_id.clone(),
-                    variant_prop: variant.prop.clone(),
-                    value: option.clone(),
-                }
+            opened_usage.variant_usages.extend(variant.options.iter().map(|(option, _)| crate::jsx_scan::VariantUsage {
+                component_binding: component_id.clone(),
+                variant_prop: variant.prop.clone(),
+                value: option.clone(),
             }));
         }
-        opened_usage.state_usages.extend(component_css.states.iter().map(|(state, _)| {
-            crate::jsx_scan::StateUsage {
-                component_binding: component_id.clone(),
-                state_name: state.clone(),
-            }
+        opened_usage.state_usages.extend(component_css.states.iter().map(|(state, _)| crate::jsx_scan::StateUsage {
+            component_binding: component_id.clone(),
+            state_name: state.clone(),
         }));
+    }
+    for component_id in &escaped_ids {
+        let Some((_, _, _, _, _, custom_configs, _)) = evaluated.get(component_id)
+        else {
+            continue;
+        };
         for prop_name in custom_configs.iter().flat_map(|cc| cc.keys()) {
             keep_component_slot(&mut component_slot_reasons, component_id, prop_name, || SlotOpening::rule("unproven-owner"));
             all_custom_dynamic_usages.push(DynamicPropUsage {
@@ -10885,33 +10923,7 @@ fn run_with_system_floor(
     // gap exists, and provenance lists them all.
     let mut usage_gaps = analysis_gaps(files, inputs, inputs.slot_provenance);
     usage_gaps.extend(files.iter().filter(|(_, ff)| ff.direct_eval).map(|(file, _)| SlotOpening::rule("direct-eval").in_file(file)));
-    usage_gaps.extend(files.iter().filter_map(|(file, ff)| {
-        // A trusted global handed to code the analysis reads may be
-        // redirected there; code outside can read it anyway.
-        let (at, rule) = ff.patches_intrinsics.map(|patch| (patch.at, patch.rule)).or_else(|| {
-            let (at, _) = ff.outside_let_goes.iter().find(|(_, source)| import_reads_code(file, source, files, inputs))?;
-            Some((*at, "trusted-let-go"))
-        })?;
-        Some(SlotOpening { at: Some(at), ..SlotOpening::rule("patches-intrinsics").in_file(file).detail(rule) })
-    }));
-    // A store onto an object that may be a prototype every props object
-    // inherits changes what a render reads by its key: a prop's name, or
-    // one React or the runtime reads.
-    let prop_named = |key: &str| {
-        matches!(key, "children" | "key" | "ref" | "className" | "style" | "as" | "asChild")
-            || inputs.config.contains_key(key)
-            || inputs.selector_aliases.contains_key(key)
-            || inputs.condition_aliases.contains_key(key)
-            || evaluated.values().any(|(css, _, _, _, _, custom, _)| {
-                css.variants.iter().any(|variant| variant.prop == key)
-                    || css.states.iter().any(|(state, _)| state == key)
-                    || custom.as_ref().is_some_and(|custom| custom.contains_key(key))
-            })
-    };
-    usage_gaps.extend(files.iter().filter_map(|(file, ff)| {
-        let (at, _) = ff.keyed_stores.iter().find(|(_, key)| prop_named(key))?;
-        Some(SlotOpening { at: Some(*at), ..SlotOpening::rule("patches-intrinsics").in_file(file).detail("prop-key-store") })
-    }));
+    usage_gaps.extend(patch_gaps);
     {
         let mut unsettled = unsettled_identities(
             &uncertain_identities,
@@ -15279,6 +15291,33 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
         assert_eq!((gap.detail.as_deref(), gap.file.as_deref(), gap.at), (Some("unowned-write"), Some("a.tsx"), Some(64)));
     }
 
+    /// Contract: a patch the analysis cannot follow keeps every variant and
+    /// state option, of every component: an inherited key, however the code
+    /// reached the prototype, or React or a built-in the runtime calls,
+    /// redirected, selects options no render names.
+    #[test]
+    fn a_patch_the_analysis_cannot_follow_keeps_every_variant_and_state_option() {
+        let kit = "const Btn = ds.styles({ display: 'inline' }).variant({ prop: 'size', defaultVariant: 'md', variants: { sm: { gap: '1px' }, md: { gap: '2px' }, lg: { gap: '3px' } } }).states({ active: { color: 'red' }, loading: { color: 'blue' } }).asElement('button');\n\
+                   export const App = () => <Btn active />;\n";
+        for (patch, other, keeps) in [
+            ("", "", false),
+            ("Object.prototype.size = 'lg';\n", "", true),
+            ("const value = {};\nvalue.__proto__.size = 'lg';\n", "", true),
+            ("Object.defineProperty(Object.prototype, 'size', { value: 'lg' });\n", "", true),
+            ("globalThis['Object']['prototype']['size'] = 'lg';\nglobalThis['Object']['prototype']['loading'] = true;\n", "", true),
+            ("document.defaultView.Object.prototype['size'] = 'lg';\n", "", true),
+            ("const w = document.defaultView;\nw.Math = { max: () => 0 };\n", "", true),
+            ("import * as R from 'react';\nconst d = R.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentDispatcher;\nd.current = { useState: () => ['lg'] };\n", "", true),
+            ("", "Object.prototype.size = 'lg';\n", true),
+            ("import { patch } from './b';\ndocument.onclick = () => {};\npatch(Object);\n", "export function patch(root) {\n  root['prototype']['size'] = 'lg';\n  root['prototype']['loading'] = true;\n}\n", true),
+            ("document.onclick = () => {};\n", "", true),
+        ] {
+            let out = analyze(&[("a.tsx", &format!("{patch}{kit}")), ("b.tsx", other)], &test_inputs());
+            let kept = (out.sheets.variants.contains("--size-lg"), out.sheets.states.contains("color: blue"));
+            assert_eq!(kept, (keeps, keeps), "{patch}{other}");
+        }
+    }
+
     fn inputs_with_provenance() -> CssInputs {
         let mut inputs = test_inputs();
         inputs.slot_provenance = true;
@@ -18138,7 +18177,7 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
         // keys no slot has leaves every slot as `compose` made it.
         for page in [
             "const useFrame = () => null;\nexport const Page = Object.assign(compose({ Root: R }), { useFrame });\n",
-            "export const Page: Fam = Object.assign(compose({ Root: R }, { name: 'Page' }), { useFrame: () => null, 'size': 1 }, {});\n",
+            "export const Page: Fam = Object.assign(compose({ Root: R }, { name: 'Page' }), { useFrame: () => null, 'title': 1 }, {});\n",
             // A source value that cannot run with the family as `this`: a
             // literal, an arrow, a `const` of one or of an Animus component,
             // or a function that reads no `this` of its own.
@@ -18175,6 +18214,8 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
             "import Object = require('./shim');\nexport const Page = Object.assign(compose({ Root: R }), { useFrame: () => null });\n",
             "export default function Object() {}\nexport const Page = Object.assign(compose({ Root: R }), { useFrame: () => null });\n",
             "{ var Object = shim; }\nexport const Page = Object.assign(compose({ Root: R }), { useFrame: () => null });\n",
+            // A key a render reads, stored where a prototype may be.
+            "export const Page: Fam = Object.assign(compose({ Root: R }, { name: 'Page' }), { useFrame: () => null, 'size': 1 }, {});\n",
             // `Object.assign` rewritten, here or in any analysed module.
             "Object.assign = (t) => t;\nexport const Page = Object.assign(compose({ Root: R }), { useFrame: () => null });\n",
             "const make = () => compose({ Root: R });\nexport const Page = make();\n",
