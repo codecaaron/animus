@@ -370,6 +370,10 @@ impl FlowBuilder {
         for change in self.changes {
             effects.add(change);
         }
+        // Closing only adds changes; the openings and exports are fixed when
+        // `effects` is built, so whether an opening reaches all of an object
+        // is asked once per object.
+        let mut wholly_opened: rustc_hash::FxHashMap<&ObjectId, bool> = rustc_hash::FxHashMap::default();
         loop {
             let mut grew = false;
             for flow in &self.flows {
@@ -392,13 +396,16 @@ impl FlowBuilder {
                 };
                 for (below, kind, cause) in reaching {
                     for (object, at) in &flow.to {
+                        if *wholly_opened.entry(object).or_insert_with(|| effects.wholly_opened(object)) {
+                            continue;
+                        }
                         let mut path = at.clone();
                         path.extend(below.iter().cloned());
                         path.truncate(PATH_DEPTH);
                         // An exposure of only part of the object, or of a
                         // member apart from this one, leaves room for the
                         // change the flow carries.
-                        if !effects.exposed_at(object, &path, kind) {
+                        if !effects.changed_at(object, &path, kind) {
                             let order = effects.recorded;
                             effects.recorded += 1;
                             let cause = format!("{}{cause}", flow.prefix);
@@ -446,38 +453,26 @@ impl ValueEffects {
         self.changes.push(change);
     }
 
-    /// Whether a change of the object itself, or an opening that reaches
-    /// all of it, is already recorded.
-    fn wholly_exposed(&self, object: &ObjectId) -> bool {
-        let changed = self
-            .changed
-            .get(object)
-            .into_iter()
-            .flatten()
-            .any(|&index| self.changes[index].path.is_empty());
-        changed
-            || self.closure.openings.iter().any(|opening| match opening.exposure.as_atoms() {
-                None => true,
-                Some(atoms) => atoms.iter().any(|atom| match atom {
-                    RegionAtom::Path(target, at) => target == object && at.is_empty(),
-                    atom => self.reaches(&Region::of(atom.clone()), object, &[], false),
-                }),
-            })
+    /// Whether an opening that reaches all of the object is recorded: one
+    /// that reaches its slots from above them.
+    fn wholly_opened(&self, object: &ObjectId) -> bool {
+        let exports = self.exports.get(object);
+        self.closure.openings.iter().any(|opening| reaches(&opening.exposure, object, exports, &[], true))
     }
 
-    /// Whether a change of the object at `at` or above that says as much as
-    /// one of `kind` there, or an opening that reaches all of it, is already
-    /// recorded. Only a computed key of the recorded change stands for any
-    /// key, and an escape, which a reader may drop where only a primitive
-    /// sits, says less than any other change.
-    fn exposed_at(&self, object: &ObjectId, at: &[String], kind: ChangeKind) -> bool {
-        self.wholly_exposed(object)
-            || self.changed.get(object).into_iter().flatten().any(|&index| {
-                let change = &self.changes[index];
-                change.path.len() <= at.len()
+    /// Whether a change of the object itself, or one at `at` or above that
+    /// says as much as one of `kind` there, is already recorded. Only a
+    /// computed key of the recorded change stands for any key, and an
+    /// escape, which a reader may drop where only a primitive sits, says
+    /// less than any other change.
+    fn changed_at(&self, object: &ObjectId, at: &[String], kind: ChangeKind) -> bool {
+        self.changed.get(object).into_iter().flatten().any(|&index| {
+            let change = &self.changes[index];
+            change.path.is_empty()
+                || (change.path.len() <= at.len()
                     && change.path.iter().zip(at).all(|(a, b)| a == b || a == ANY_MEMBER)
-                    && (change.kind != ChangeKind::Escape || kind == ChangeKind::Escape)
-            })
+                    && (change.kind != ChangeKind::Escape || kind == ChangeKind::Escape))
+        })
     }
 
     /// Each change or opening that reaches the object at `at`, in order,
@@ -549,44 +544,43 @@ impl ValueEffects {
             .map(|&index| &self.changes[index])
             .filter(|change| counts(change))
             .map(Exposure::Changed);
+        let exports = self.exports.get(object);
+        // A region of part of the object reaches some slot when it is the
+        // whole object or one member: the slot of any member.
+        let any_slot = if any_member { vec![ANY_MEMBER.to_string()] } else { Vec::new() };
+        let opening_path = if any_member { &any_slot[..] } else { path };
         let opened = self
             .closure
             .openings
             .iter()
-            .filter(|opening| match any_member {
-                // A region of part of the object reaches a slot when it is
-                // the whole object or one member.
-                true => match opening.exposure.as_atoms() {
-                    None => true,
-                    Some(atoms) => atoms.iter().any(|atom| match atom {
-                        RegionAtom::Path(target, at) => target == object && at.len() <= 1,
-                        atom => self.reaches(&Region::of(atom.clone()), object, &[], false),
-                    }),
-                },
-                false => self.reaches(&opening.exposure, object, path, slot),
-            })
+            .filter(|opening| reaches(&opening.exposure, object, exports, opening_path, slot))
             .map(Exposure::Opened);
         let mut exposed: Vec<Exposure<'_>> = changed.chain(opened).collect();
         exposed.sort_by_key(Exposure::order);
         if exposed.is_empty() { Coverage::Disjoint } else { Coverage::Exposed(exposed) }
     }
+}
 
-    /// Whether an opening's region reaches the object at the path: for a
-    /// slot, a region of part of the object reaches it only at or above
-    /// the slot.
-    fn reaches(&self, region: &Region, object: &ObjectId, path: &[String], slot: bool) -> bool {
-        let Some(atoms) = region.as_atoms() else { return true };
-        let exports = self.exports.get(object);
-        atoms.iter().any(|atom| match atom {
-            RegionAtom::Object(target) => target == object,
-            RegionAtom::Path(target, at) if slot => target == object && prefix_of(at, path),
-            RegionAtom::Path(target, at) => target == object && at.iter().zip(path).all(|(a, b)| same_key(a, b)),
-            RegionAtom::ScopeRegion(module) => object.module == *module,
-            RegionAtom::ExportsOf(module) => exports.is_some_and(|names| names.iter().any(|(m, _)| m == module)),
-            RegionAtom::ExportedAs(name) => exports.is_some_and(|names| names.iter().any(|(_, n)| n == name)),
-            RegionAtom::AllExports => exports.is_some(),
-        })
-    }
+/// Whether an opening's region reaches the object at the path: for a slot,
+/// a region of part of the object reaches it only at or above the slot.
+/// `exports` are the names the object is exported under.
+fn reaches(
+    region: &Region,
+    object: &ObjectId,
+    exports: Option<&BTreeSet<(String, String)>>,
+    path: &[String],
+    slot: bool,
+) -> bool {
+    let Some(atoms) = region.as_atoms() else { return true };
+    atoms.iter().any(|atom| match atom {
+        RegionAtom::Object(target) => target == object,
+        RegionAtom::Path(target, at) if slot => target == object && prefix_of(at, path),
+        RegionAtom::Path(target, at) => target == object && at.iter().zip(path).all(|(a, b)| same_key(a, b)),
+        RegionAtom::ScopeRegion(module) => object.module == *module,
+        RegionAtom::ExportsOf(module) => exports.is_some_and(|names| names.iter().any(|(m, _)| m == module)),
+        RegionAtom::ExportedAs(name) => exports.is_some_and(|names| names.iter().any(|(_, n)| n == name)),
+        RegionAtom::AllExports => exports.is_some(),
+    })
 }
 
 #[cfg(test)]
