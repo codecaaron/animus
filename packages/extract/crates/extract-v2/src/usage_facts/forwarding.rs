@@ -1199,6 +1199,16 @@ struct Declarations<'r> {
     bound_reads: Vec<(u32, SymbolId)>,
     /// Each const a use of which initializes another: (used, initialized).
     const_flows: Vec<(SymbolId, SymbolId)>,
+    /// Where a computed read's value goes to a function the module binds:
+    /// the read's start, the function's binding and the argument's position.
+    bound_arguments: Vec<(u32, SymbolId, usize)>,
+    /// Each const or parameter a use of which is such an argument: (used,
+    /// function, position).
+    argument_flows: Vec<(SymbolId, SymbolId, usize)>,
+    /// Each function's plain parameters, by position.
+    positional_params: FxHashMap<ScopeId, Vec<Option<SymbolId>>>,
+    /// The bindings `positional_params` names.
+    plain_params: FxHashSet<SymbolId>,
     /// The consts a use of which may let the value go.
     escaping_consts: FxHashSet<SymbolId>,
     /// See `FileFacts::rewrites_object`.
@@ -1278,6 +1288,10 @@ impl<'r> Declarations<'r> {
             keyed_stores: Vec::new(),
             bound_reads: Vec::new(),
             const_flows: Vec::new(),
+            bound_arguments: Vec::new(),
+            argument_flows: Vec::new(),
+            positional_params: FxHashMap::default(),
+            plain_params: FxHashSet::default(),
             escaping_consts: FxHashSet::default(),
             rewrites_object: false,
             react_imports,
@@ -1343,6 +1357,16 @@ impl<'r> Declarations<'r> {
         self.params.insert(scope, params.iter_bindings().flat_map(bindings).collect());
         self.param_inputs.insert(scope, param_inputs(params));
         self.arity.insert(scope, (params.items.len(), params.rest.is_some()));
+        let positional: Vec<Option<SymbolId>> = params
+            .items
+            .iter()
+            .map(|parameter| match &parameter.pattern {
+                BindingPattern::BindingIdentifier(id) => id.symbol_id.get(),
+                _ => None,
+            })
+            .collect();
+        self.plain_params.extend(positional.iter().flatten());
+        self.positional_params.insert(scope, positional);
     }
 
     /// Counts a JSX tag's reference to its binding.
@@ -1372,8 +1396,9 @@ impl<'r> Declarations<'r> {
     }
 
     /// Where the value at `span`, a child of the last ancestor, goes: only
-    /// consumed (read by an operator, a test, a template no tag gets or a
-    /// member read, also through `??` or `||`), into an unexported const
+    /// consumed (read by an operator, a test, a template no tag gets, a
+    /// member read or a read-only built-in, also through `??` or `||`), into
+    /// an unexported const or a parameter of a function the module binds,
     /// whose uses decide, or let go.
     fn consumption(&self, span: Span, skip: usize) -> Consumption {
         use oxc::syntax::operator::LogicalOperator;
@@ -1409,6 +1434,19 @@ impl<'r> Declarations<'r> {
                     return Consumption::Consumed;
                 }
                 Some(AstKind::ConditionalExpression(conditional)) if conditional.test.span() == at => return Consumption::Consumed,
+                // A built-in that only reads what it gets, or a function the
+                // module binds, whose parameter's uses decide.
+                Some(AstKind::CallExpression(call)) => {
+                    let Some(position) = call.arguments.iter().position(|argument| argument.span() == at) else { return Consumption::LetGo };
+                    if self.read_only_built_in(&call.callee) {
+                        return Consumption::Consumed;
+                    }
+                    let spread = call.arguments.iter().take(position).any(|argument| argument.is_spread());
+                    return match unwrap_type_assertions(&call.callee) {
+                        Expression::Identifier(callee) if !spread => self.symbol(callee).map_or(Consumption::LetGo, |function| Consumption::Argument(function, position)),
+                        _ => Consumption::LetGo,
+                    };
+                }
                 Some(AstKind::TemplateLiteral(_)) if !matches!(up.next(), Some(AstKind::TaggedTemplateExpression(_))) => {
                     return Consumption::Consumed;
                 }
@@ -1439,15 +1477,67 @@ impl<'r> Declarations<'r> {
         }
     }
 
-    /// Records a prototype use at each computed read whose const a use may
-    /// let go: one any use lets go, or that initializes such a const.
+    /// Whether `callee` is an unbound built-in that only reads what it gets:
+    /// `Object.keys`, `values` and `entries`, `Array.isArray`, `String`,
+    /// `Number` or `Boolean`. A module that redirects one leaves no usage
+    /// proven itself (`patch`).
+    fn read_only_built_in(&self, callee: &Expression<'_>) -> bool {
+        match unwrap_type_assertions(callee) {
+            Expression::Identifier(id) => matches!(id.name.as_str(), "String" | "Number" | "Boolean") && self.symbol(id).is_none(),
+            Expression::StaticMemberExpression(member) => match unwrap_type_assertions(&member.object) {
+                Expression::Identifier(object) if self.symbol(object).is_none() => {
+                    matches!((object.name.as_str(), member.property.name.as_str()), ("Object", "keys" | "values" | "entries") | ("Array", "isArray"))
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// The plain parameter at `position` of the function `function` binds,
+    /// while nothing reassigns it and it reads no `arguments`.
+    fn parameter(&self, function: SymbolId, position: usize) -> Option<SymbolId> {
+        let scope = *self.functions.get(&function)?;
+        if self.scoping.symbol_is_mutated(function) || self.uses_arguments.contains(&scope) {
+            return None;
+        }
+        *self.positional_params.get(&scope)?.get(position)?
+    }
+
+    /// Records a prototype use at each computed read whose const or
+    /// parameter a use may let go: one any use lets go, or that reaches
+    /// such a binding.
     fn settle_bound_reads(&mut self) {
+        for (at, function, position) in std::mem::take(&mut self.bound_arguments) {
+            match self.parameter(function, position) {
+                Some(parameter) => self.bound_reads.push((at, parameter)),
+                None => self.patch(at, "prototype-use"),
+            }
+        }
         if self.bound_reads.is_empty() {
             return;
         }
         let mut escaping = std::mem::take(&mut self.escaping_consts);
-        while let Some(&(used, _)) = self.const_flows.iter().find(|(used, initialized)| escaping.contains(initialized) && !escaping.contains(used)) {
-            escaping.insert(used);
+        for (used, function, position) in std::mem::take(&mut self.argument_flows) {
+            match self.parameter(function, position) {
+                Some(parameter) => self.const_flows.push((used, parameter)),
+                None => {
+                    escaping.insert(used);
+                }
+            }
+        }
+        // What flows into each binding escapes with it.
+        let mut into: FxHashMap<SymbolId, Vec<SymbolId>> = FxHashMap::default();
+        for (used, initialized) in &self.const_flows {
+            into.entry(*initialized).or_default().push(*used);
+        }
+        let mut pending: Vec<SymbolId> = escaping.iter().copied().collect();
+        while let Some(binding) = pending.pop() {
+            for used in into.get(&binding).into_iter().flatten() {
+                if escaping.insert(*used) {
+                    pending.push(*used);
+                }
+            }
         }
         if let Some(at) = self.bound_reads.iter().find(|(_, binding)| escaping.contains(binding)).map(|(at, _)| *at) {
             self.patch(at, "prototype-use");
@@ -1515,6 +1605,7 @@ impl<'r> Declarations<'r> {
             match self.consumption(at, skip) {
                 Consumption::Consumed => {}
                 Consumption::Bound(binding) => self.bound_reads.push((span.start, binding)),
+                Consumption::Argument(function, position) => self.bound_arguments.push((span.start, function, position)),
                 Consumption::LetGo => self.patch(span.start, "prototype-use"),
             }
         } else if prototype && self.reshapes(span) {
@@ -2094,6 +2185,8 @@ impl<'r> Declarations<'r> {
 enum Consumption {
     Consumed,
     Bound(SymbolId),
+    /// An argument of a call of the binding, at the position.
+    Argument(SymbolId, usize),
     LetGo,
 }
 
@@ -2578,10 +2671,11 @@ impl<'a> Visit<'a> for Declarations<'a> {
         if !id.reference_id.get().is_some_and(|reference| self.scoping.get_reference(reference).is_value()) {
             return;
         }
-        if let Some(symbol) = symbol.filter(|symbol| self.scoping.symbol_flags(*symbol).is_const_variable()) {
+        if let Some(symbol) = symbol.filter(|symbol| self.scoping.symbol_flags(*symbol).is_const_variable() || self.plain_params.contains(symbol)) {
             match self.consumption(id.span, 0) {
                 Consumption::Consumed => {}
                 Consumption::Bound(other) => self.const_flows.push((symbol, other)),
+                Consumption::Argument(function, position) => self.argument_flows.push((symbol, function, position)),
                 Consumption::LetGo => {
                     self.escaping_consts.insert(symbol);
                 }
