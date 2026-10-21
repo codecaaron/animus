@@ -905,39 +905,43 @@ fn mark_lost_values(
     skips: &[SkippedProperty],
     captures: &[CapturedTransform],
 ) {
+    let mut marks: Vec<(Option<&str>, &str, UnevaluatedKind, String)> = Vec::new();
     for capture in captures {
         let parent = capture.key.strip_suffix(".transform");
-        mark_lost_value(
-            value,
-            parent,
-            "transform",
-            UnevaluatedKind::CapturedTransform,
-            format!("an inline function in const '{}'", source.name),
-        );
+        marks.push((parent, "transform", UnevaluatedKind::CapturedTransform, format!("an inline function in const '{}'", source.name)));
     }
     for skip in skips {
         let absent = skip.key == "transform"
             && transform_value_at(source.obj, skip.parent.as_deref())
                 .is_some_and(|expr| is_absent_value(expr, source.undefined_bound));
         if !absent {
-            mark_lost_value(
-                value,
-                skip.parent.as_deref(),
-                &skip.key,
-                skip.kind,
-                format!("{} in const '{}'", skip.reason, source.name),
-            );
+            marks.push((skip.parent.as_deref(), &skip.key, skip.kind, format!("{} in const '{}'", skip.reason, source.name)));
         }
+    }
+    // Each object's lost keys, in order: a const may hold thousands of keys
+    // and lose many of them, and each object is indexed once for all of its
+    // own. Objects apart commute: a lost value is never an object, so one
+    // that replaces another's holder erases it whichever comes first.
+    let mut held: Vec<(Option<&str>, Vec<LostKey<'_>>)> = Vec::new();
+    let mut held_at: FxHashMap<Option<&str>, usize> = FxHashMap::default();
+    for (parent, key, kind, clause) in marks {
+        let at = *held_at.entry(parent).or_insert_with(|| {
+            held.push((parent, Vec::new()));
+            held.len() - 1
+        });
+        held[at].1.push((key, kind, clause));
+    }
+    for (parent, keys) in held {
+        mark_lost_keys(value, parent, keys);
     }
 }
 
-fn mark_lost_value(
-    value: &mut StaticValue,
-    parent: Option<&str>,
-    key: &str,
-    kind: UnevaluatedKind,
-    clause: String,
-) {
+/// A key a const lost, how, and the clause that says so.
+type LostKey<'a> = (&'a str, UnevaluatedKind, String);
+
+/// As `insert` of each key into the object at `parent`, `get_mut` by
+/// `get_mut`: in place where it has the key, else last.
+fn mark_lost_keys(value: &mut StaticValue, parent: Option<&str>, keys: Vec<LostKey<'_>>) {
     let mut current = value;
     for segment in parent.into_iter().flat_map(|path| path.split('.')) {
         match current.get_mut(segment) {
@@ -945,7 +949,21 @@ fn mark_lost_value(
             None => return,
         }
     }
-    current.insert(key, StaticValue::Unevaluated(Unevaluated { kind, clause }));
+    let Some(entries) = current.entries_mut() else { return };
+    let mut positions: FxHashMap<String, usize> = FxHashMap::default();
+    for (at, (name, _)) in entries.iter().enumerate() {
+        positions.entry(name.clone()).or_insert(at);
+    }
+    for (key, kind, clause) in keys {
+        let lost = StaticValue::Unevaluated(Unevaluated { kind, clause });
+        match positions.get(key) {
+            Some(&at) => entries[at].1 = lost,
+            None => {
+                positions.insert(key.to_string(), entries.len());
+                entries.push((key.to_string(), lost));
+            }
+        }
+    }
 }
 
 /// A static binding some use may change before a style reads it: every

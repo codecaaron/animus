@@ -97,9 +97,24 @@ fn record_shared_properties(obj: &Map<String, Value>, ordered: &CascadeEntries<'
             (*key, properties, resets, entry_conditions(value, ctx))
         })
         .collect();
-    let authored = |key: &str| obj.keys().position(|k| k == key);
+    let authored: rustc_hash::FxHashMap<&str, usize> =
+        obj.keys().enumerate().map(|(at, key)| (key.as_str(), at)).collect();
+    let authored = |key: &str| authored.get(key).copied();
+    // Only writes that reset a property in common share one: each write's
+    // later partners among those, in the order a pass over every pair
+    // meets them.
+    let mut resetting: rustc_hash::FxHashMap<&str, Vec<usize>> = rustc_hash::FxHashMap::default();
+    for (at, (_, _, resets, _)) in writes.iter().enumerate() {
+        for property in resets {
+            resetting.entry(property).or_default().push(at);
+        }
+    }
     for (index, (earlier, earlier_properties, earlier_resets, earlier_conditions)) in writes.iter().enumerate() {
-        for (later, later_properties, later_resets, later_conditions) in &writes[index + 1..] {
+        let mut partners: Vec<usize> =
+            earlier_resets.iter().flat_map(|property| &resetting[property]).copied().filter(|&at| at > index).collect();
+        partners.sort_unstable();
+        partners.dedup();
+        for (later, later_properties, later_resets, later_conditions) in partners.into_iter().map(|at| &writes[at]) {
             if earlier_conditions.is_disjoint(later_conditions) {
                 continue;
             }
