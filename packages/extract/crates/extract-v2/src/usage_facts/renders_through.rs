@@ -19,7 +19,9 @@
 //!
 //! The wrapper's other arguments may be anything that cannot reach the
 //! props: the props parameter appears once, and the wrapper holds no
-//! `arguments` or `this`. Nothing in the function reads `arguments` or
+//! `arguments` or `this`. Its parameters are plain names, and it is an arrow
+//! or a function expression whose own name nothing references, so nothing
+//! can hand the wrapper itself on to be called with other props. Nothing in the function reads `arguments` or
 //! `this` either, or uses the parameter, an alias or the old render in any
 //! other way: storing, returning, passing on, spreading, a computed read, a
 //! write of another member, or a call of the old render elsewhere.
@@ -34,7 +36,7 @@ use oxc::semantic::{Scoping, SymbolId};
 use oxc::span::Span;
 use rustc_hash::FxHashSet;
 
-use super::{peel_wrappers, reads_symbol, symbol_of, FunctionParts};
+use super::{peel_wrappers, reads_symbol, simple_params, symbol_of, FunctionParts};
 use crate::chain_walk::unwrap_type_assertions;
 
 /// Whether the function whose body is `body` replaces the `render` of the
@@ -84,6 +86,14 @@ pub(super) fn renders_through(body: &FunctionBody<'_>, param: SymbolId, scoping:
     }
     let (Some(saved), Some(wrapper)) = (saved, wrapper) else { return false };
     let Some(call) = forwarding_call(wrapper, saved, scoping) else { return false };
+    // A function expression's own name hands the wrapper to whatever it
+    // reaches.
+    if let Expression::FunctionExpression(func) = unwrap_type_assertions(wrapper) {
+        let named = func.id.as_ref().and_then(|id| id.symbol_id.get());
+        if named.is_some_and(|symbol| !scoping.get_resolved_reference_ids(symbol).is_empty()) {
+            return false;
+        }
+    }
     let mut scan = Scan {
         scoping,
         owners: &owners,
@@ -122,7 +132,7 @@ fn render_of(expr: &Expression<'_>, owners: &FxHashSet<SymbolId>, scoping: &Scop
 fn forwarding_call(wrapper: &Expression<'_>, saved: SymbolId, scoping: &Scoping) -> Option<Span> {
     let function = FunctionParts::of_expression(wrapper)?;
     let params = function.params;
-    if params.rest.is_some() || params.items.len() > 2 {
+    if !simple_params(params) || params.items.len() > 2 {
         return None;
     }
     let mut symbols = params.items.iter().map(|param| match &param.pattern {

@@ -15742,29 +15742,40 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
     /// hands over what every read of that facade names.
     #[test]
     fn a_facade_reads_what_it_copies() {
-        let keeps_p = |nav: &str, tag: &str| {
+        // Band's slot is `p` and Root's `display`, so each row shows whose
+        // escape it pins.
+        let mut inputs = test_inputs();
+        inputs.group_registry.insert("layout".into(), vec!["display".into()]);
+        let keeps = |nav: &str, tag: &str, prop: &str| {
             let kit = "import { Other } from 'outside';\n\
                        const Band = ds.system({ space: true }).asElement('div');\n\
-                       const Root = ds.system({ space: true }).asElement('div');\n\
+                       const Root = ds.system({ layout: true }).asElement('div');\n\
                        const Plain = (props) => <div {...props} />;\n\
                        export const Fam = compose({ Root: Band }, { shared: {}, name: 'Fam' });\n\
                        export const Kit = { Root, Plain };\n";
             let nav = format!("import {{ consume, more, Other }} from 'outside';\nimport * as ns from './kit';\nimport {{ Fam, Kit }} from './kit';\n{nav}");
-            let app = format!("import {{ Fam, Kit }} from './kit';\nimport {{ Nav }} from './nav';\nexport const App = () => <{tag} p={{2}} />;\n");
-            analyze(&[("kit.tsx", kit), ("nav.tsx", &nav), ("app.tsx", &app)], &test_inputs()).dynamic_props.contains_key("p")
+            let value = if prop == "p" { "{2}" } else { "\"grid\"" };
+            let app = format!("import {{ Fam, Kit }} from './kit';\nimport {{ Nav }} from './nav';\nexport const App = () => <{tag} {prop}={value} />;\n");
+            analyze(&[("kit.tsx", kit), ("nav.tsx", &nav), ("app.tsx", &app)], &inputs).dynamic_props.contains_key(prop)
         };
-        for (nav, tag, keeps) in [
-            ("export const Nav = { ...Fam, Extra: Kit.Root };", "Nav.Root", false),
-            ("export const Nav = { ...Fam, Extra: Kit.Root };", "Nav.Extra", false),
-            ("export const Nav = { ...Fam, Extra: Kit.Root };\nconsume(Nav);", "Fam.Root", true),
-            ("export const Nav = { ...Fam, Extra: Kit.Root };\nconsume(Nav);", "Kit.Root", true),
-            ("export const Nav = { ...Fam, ...more };", "Fam.Root", true),
-            ("export const Nav = { ...Fam, [Other]: Kit.Root };", "Fam.Root", true),
-            ("export const Nav = { ...Fam, Plain: Kit.Plain };", "Fam.Root", true),
-            ("export const Nav = { Root: Kit.Root, Box: ns.Kit };", "Kit.Root", true),
-            ("export const Nav = { ...Fam };\nFam.Root = Other;", "Fam.Root", true),
+        for (nav, tag, prop, kept) in [
+            ("export const Nav = { ...Fam, Extra: Kit.Root };", "Nav.Root", "p", false),
+            ("export const Nav = { ...Fam, Extra: Kit.Root };", "Nav.Extra", "display", false),
+            ("export const Nav = { ...Fam, Extra: Kit.Root };\nconsume(Nav);", "Fam.Root", "p", true),
+            ("export const Nav = { ...Fam, Extra: Kit.Root };\nconsume(Nav);", "Kit.Root", "display", true),
+            ("export const Nav = { ...Fam, ...more };", "Fam.Root", "p", true),
+            ("export const Nav = { ...Fam, [Other]: Kit.Root };", "Fam.Root", "p", true),
+            ("export const Nav = { ...Fam, Plain: Kit.Plain };", "Fam.Root", "p", true),
+            ("export const Nav = { Root: Kit.Root, Box: ns.Kit };", "Kit.Root", "display", true),
+            ("export const Nav = { ...Fam };\nFam.Root = Other;", "Fam.Root", "p", true),
+            // The facade's own code runs with it as `this`: a getter or a
+            // method may hand a member it holds anywhere.
+            ("export const Nav = { Root: Kit.Root, get leak() { consume(this.Root); return 1; } };\nvoid Nav.leak;", "Kit.Root", "display", true),
+            ("export const Nav = { Root: Kit.Root, leak() { consume(this.Root); } };\nNav.leak();", "Kit.Root", "display", true),
+            ("export const Nav = Object.assign({}, { Root: Kit.Root, leak() { consume(this.Root); } });\nNav.leak();", "Kit.Root", "display", true),
+            ("const Parts = { Root: Kit.Root, leak() { consume(this.Root); } };\nexport const Nav = { ...Parts };\nNav.leak();", "Kit.Root", "display", true),
         ] {
-            assert_eq!(keeps_p(nav, tag), keeps, "{nav} <{tag}>");
+            assert_eq!(keeps(nav, tag, prop), kept, "{nav} <{tag} {prop}>");
         }
     }
 
@@ -15815,6 +15826,29 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
         ];
         for (body, call, keeps) in rows {
             assert_eq!(keeps_p(&body, call), keeps, "{body}\n{call}");
+        }
+        // Parameters run before the body: a default may replace the render
+        // the body then saves, or hand the component on.
+        let kit = |mirror: &str| {
+            format!("import {{ consume, register }} from 'outside';\nexport const Box = ds.system({{ space: true }}).asElement('div');\n{mirror}\nmirror(Box);\n")
+        };
+        let keeps_kit = |mirror: &str| {
+            let kit = kit(mirror);
+            let app = "import { Box } from './kit';\nexport const App = () => <Box p={2} />;\n";
+            analyze(&[("kit.tsx", &kit), ("app.tsx", app)], &test_inputs()).dynamic_props.contains_key("p")
+        };
+        let body = "const render = owner.render;\nowner.render = (props, ref) => render(props, ref);";
+        assert!(!keeps_kit(&format!("function mirror(owner) {{\n{body}\n}}")), "the helper in the kit proves");
+        for mirror in [
+            format!("function mirror(owner, original = owner.render, unused = (owner.render = (props, ref) => original({{ ...props, p: 4 }}, ref))) {{\n{body}\n}}"),
+            format!("function mirror(owner, unused = register(owner)) {{\n{body}\n}}"),
+            format!("function mirror(owner, ...rest) {{\n{body}\n}}"),
+            format!("function mirror(owner, {{ only }} = {{}}) {{\n{body}\n}}"),
+            // A named wrapper hands itself to whatever reaches its name.
+            "function mirror(owner) {\nconst render = owner.render;\nowner.render = function Wrapped(props, ref) { return render(props, register(Wrapped)); };\n}".to_string(),
+            "function mirror(owner) {\nconst render = owner.render;\nowner.render = function Wrapped(props, ref) { return render(props, (consume(Wrapped), ref)); };\n}".to_string(),
+        ] {
+            assert!(keeps_kit(&mirror), "{mirror}");
         }
         // A helper the analysis does not read keeps the hand-off.
         let kit = "import { mirror } from 'outside';\nexport const Box = ds.system({ space: true }).asElement('div');\nmirror(Box);\n";

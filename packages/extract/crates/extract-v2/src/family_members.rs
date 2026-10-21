@@ -580,6 +580,15 @@ impl<'f> ObjectMembers<'f> {
     pub(crate) fn facade_proven(&mut self, module: &str, holder: &str) -> bool {
         let files = self.files;
         let Some(entries) = files.get(module).and_then(|ff| ff.facades.get(holder)) else { return false };
+        // The facade itself holds plain data: members and copies only. A
+        // method, accessor or function value runs with it as `this` and can
+        // hand a member anywhere; a value no binding names (a call's) may be
+        // such a function; a computed key, an expression's spread or a
+        // later write may set any member.
+        let plain = entries.iter().all(|entry| matches!(entry, FacadeEntry::Member { .. } | FacadeEntry::Copy(_)));
+        if !plain || !self.facade_stable(module, holder) {
+            return false;
+        }
         let reads = crate::facts::FollowedReads::of(entries);
         let own = Object::Facade(module.to_string(), holder.to_string());
         let members = reads.members.values().filter_map(|(source, member)| Some((source, Some(member.as_deref()?))));

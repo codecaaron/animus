@@ -3274,9 +3274,11 @@ pub(crate) fn function_param_readings(
     let mut readings = scan.finish();
     // A first parameter whose object has its `render` replaced by a wrapper
     // that calls the old one with the same props: the escape scan defers
-    // only a component handed as a first argument (`Deferral::Handoff`).
+    // only a component handed as a first argument (`Deferral::Handoff`). The
+    // proof reads the body alone, so every parameter is a plain name: a
+    // default, a destructuring or a rest runs before the body.
     for (_, key, function) in &functions {
-        if unsafe_functions.contains(key) {
+        if unsafe_functions.contains(key) || !simple_params(function.params) {
             continue;
         }
         let (Some(body), Some(param)) = (function.body, function.params.items.first()) else { continue };
@@ -3292,6 +3294,15 @@ pub(crate) fn function_param_readings(
         }
     }
     readings
+}
+
+/// Whether every parameter is a plain name, with no default, destructuring
+/// or rest: nothing runs before the body.
+fn simple_params(params: &oxc::ast::ast::FormalParameters<'_>) -> bool {
+    params.rest.is_none()
+        && params.items.iter().all(|param| {
+            matches!(param.pattern, oxc::ast::ast::BindingPattern::BindingIdentifier(_)) && param.initializer.is_none()
+        })
 }
 
 /// A function's parameters, body and span, written as a declaration or an
