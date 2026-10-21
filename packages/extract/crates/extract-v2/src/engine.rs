@@ -403,12 +403,13 @@ impl PhaseClock {
 }
 
 /// A `prepare`'s files: their identity and synthesized components, their
-/// parse, and each module's Lower output in store order.
+/// parse, and each module's Lower output and object facts in store order.
 struct Prepared {
     identity: String,
     synthesized: BTreeMap<String, std::collections::BTreeSet<String>>,
     store: ast_store::AstStore,
     lowered: Vec<crate::link::Lowered>,
+    objects: Vec<facts::ObjectFacts>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1119,11 +1120,19 @@ impl ExtractEngine {
         let entries = canonical_entries(&file_entries_json)?;
         let identity = input_identity(&entries, &self.opts.css_inputs);
         let synthesized = synthesized_of(&entries);
-        let (store, lowered): (_, Vec<_>) = ast_store::AstStore::build_with(
+        // Each module's Lower output and object facts read its parse and
+        // semantic build alone, never another file, an option, the evidence
+        // or the file system, so the parse workers build them.
+        let (store, modules): (_, Vec<_>) = ast_store::AstStore::build_with(
             entries.into_iter().map(|e| ast_store::FileEntry { path: e.path, source: e.source }).collect(),
-            crate::link::Lowered::of_listed,
+            |ast| {
+                let (lowered, listed) = crate::link::Lowered::of_listed(ast);
+                let objects = facts::object_facts(ast.program(), &lowered);
+                ((lowered, objects), listed)
+            },
         );
-        let (lowered, listed): (Vec<_>, Vec<_>) = lowered.into_iter().unzip();
+        let (modules, listed): (Vec<_>, Vec<_>) = modules.into_iter().unzip();
+        let (lowered, objects): (Vec<_>, Vec<_>) = modules.into_iter().unzip();
         clock.mark("prepareParse");
         let mut bases = std::collections::BTreeSet::new();
         let mut loads = Vec::new();
@@ -1155,7 +1164,7 @@ impl ExtractEngine {
                 }
             }
         }
-        self.prepared = Some(Prepared { identity: identity.clone(), synthesized, store, lowered });
+        self.prepared = Some(Prepared { identity: identity.clone(), synthesized, store, lowered, objects });
         clock.mark("prepareProbes");
         self.timings = clock.phases;
         serde_json::to_string(
@@ -1171,7 +1180,7 @@ impl ExtractEngine {
     #[napi]
     pub fn analyze_prepared(&mut self, probe_evidence_json: Option<String>) -> napi::Result<String> {
         let mut clock = PhaseClock::start();
-        let Prepared { identity, mut synthesized, store, lowered } = self
+        let Prepared { identity, mut synthesized, store, lowered, objects } = self
             .prepared
             .take()
             .ok_or_else(|| napi::Error::from_reason("analyzePrepared needs a prepare first, once per analysis"))?;
@@ -1245,10 +1254,9 @@ impl ExtractEngine {
         // value is evaluated; fact extraction completes them.
         let mut structural_by_file: BTreeMap<String, facts::FileFacts> = store
             .iter()
-            .map(|ast| {
-                let lowered = &lowered_by_file[&ast.path];
-                let objects = facts::object_facts(ast.program(), lowered);
-                (ast.path.clone(), facts::structural_facts(ast, lowered, objects))
+            .zip(objects)
+            .map(|(ast, objects)| {
+                (ast.path.clone(), facts::structural_facts(ast, &lowered_by_file[&ast.path], objects))
             })
             .collect();
         analyze_css::ProbeScope::admit(&lowered_by_file, &self.opts.css_inputs);
