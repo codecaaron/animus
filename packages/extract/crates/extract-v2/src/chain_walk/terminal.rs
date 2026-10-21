@@ -40,7 +40,11 @@ pub(super) fn extract_forward(call: &CallExpression<'_>) -> Result<Option<Forwar
                     .elements
                     .iter()
                     .map(|element| match element.as_expression().map(unwrap_type_assertions) {
-                        Some(Expression::StringLiteral(name)) => Ok(name.value.to_string()),
+                        // The runtime matches a name exactly, and one with a
+                        // lone surrogate has no static text (`eval::literal_string`).
+                        Some(Expression::StringLiteral(name)) => crate::eval::literal_string(name)
+                            .map(str::to_string)
+                            .ok_or_else(|| "name a string with a lone surrogate, which has no static text".to_string()),
                         _ => Err(unread()),
                     })
                     .collect::<Result<_, _>>()?,
@@ -61,9 +65,10 @@ pub(super) fn extract_terminal_arg(call: &CallExpression<'_>, terminal: &Termina
                 .and_then(|arg| arg.as_expression())
                 .map(unwrap_type_assertions)
             {
-                Some(Expression::StringLiteral(lit)) => {
-                    TerminalArg::Resolved(lit.value.to_string())
-                }
+                Some(Expression::StringLiteral(lit)) => match crate::eval::literal_string(lit) {
+                    Some(tag) => TerminalArg::Resolved(tag.to_string()),
+                    None => TerminalArg::Unresolvable("tag is a string with a lone surrogate, which has no static text".to_string()),
+                },
                 _ => TerminalArg::Resolved(String::new()),
             }
         }

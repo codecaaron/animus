@@ -15495,6 +15495,19 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
                 assert!(out.sheets.variants.contains(kept), "{kept} kept: {app}");
             }
         }
+        // A forwarded name or a tag with a lone surrogate leaves the chain
+        // unextracted: written encoded, `\uD800` would forward the prop
+        // `\uFFFDd800`, which the authored list does not.
+        for source in [
+            "const Target = (props) => <span style={{ color: props['\\uFFFDd800'] === 'lg' ? 'red' : 'blue' }} />;\n\
+             const Btn = ds.styles({ display: 'inline' }).variant({ prop: '\\uFFFDd800', defaultVariant: 'md', variants: { md: { color: 'blue' }, lg: { color: 'red' } } }).asComponent(Target, { forward: ['\\uD800'] });\n\
+             export const App = () => <Btn {...{ '\\uFFFDd800': 'lg' }} />;\n",
+            "const Tag = ds.styles({ display: 'inline' }).asElement('\\uD800');\nexport const App = () => <Tag />;\n",
+        ] {
+            let out = analyze(&[("a.tsx", source)], &test_inputs());
+            assert!(out.components.is_empty(), "unextracted: {source}");
+            assert!(out.diagnostics.iter().any(|d| d.kind == "bail" && d.message.contains("lone surrogate")), "{:?}", out.diagnostics);
+        }
         let out = analyze(&[("a.tsx", &format!("{kit}export const App = () => <Flag {{...{{ size: true }}}} />;\n"))], &test_inputs());
         assert!(out.sheets.variants.contains("--size-true") && !out.sheets.variants.contains("--size-false") && !out.sheets.variants.contains("--size-lg"), "{}", out.sheets.variants);
         for (app, kept) in [

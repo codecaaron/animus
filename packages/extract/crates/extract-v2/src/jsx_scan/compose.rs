@@ -406,7 +406,7 @@ fn extract_name_option(opts: &oxc::ast::ast::ObjectExpression) -> Option<String>
             if let Some(key) = eval_property_key(&prop.key) {
                 if key == "name" {
                     if let Expression::StringLiteral(s) = &prop.value {
-                        return Some(s.value.to_string());
+                        return crate::eval::literal_string(s).map(str::to_string);
                     }
                     return None;
                 }
