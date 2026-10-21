@@ -1597,6 +1597,25 @@ impl ExtractEngine {
         clock.mark("post");
         let manifest = self.manifest_json(false);
         clock.mark("serialize");
+        // The parse and the analysis's own tables, the per-file statics
+        // most of all, are freed on a pool thread while the host reads the
+        // manifest; the engine keeps its facts and sources.
+        let read = (
+            store,
+            links,
+            read_links,
+            explicit,
+            statics_by_file,
+            complete_statics_by_file,
+            enriched_by_file,
+            usage_enriched_by_file,
+            unsettled_by_file,
+            unsettled_imports_by_file,
+            imports_by_file,
+            style_modules,
+            changes,
+        );
+        rayon::spawn(move || drop(read));
         self.timings = clock.phases;
         manifest
     }
