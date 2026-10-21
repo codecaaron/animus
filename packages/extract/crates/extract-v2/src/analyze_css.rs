@@ -6465,17 +6465,7 @@ pub(crate) fn judge_object_handoffs(
 ) {
     let unsafe_handoffs: Vec<(String, String, crate::usage_facts::ObjectUse)> = {
         let files = &*files;
-        let declared = |file: &str, name: &str| -> Option<(String, String)> {
-            let ff = files.get(file)?;
-            match ff.imports.iter().find(|import| import.local == name) {
-                Some(import) => {
-                    let target = resolve_import_source(file, &import.source, files, inputs)?;
-                    let (module, binding) = links.declared(&target, &import.imported)?;
-                    Some(binding_name(links, files, module, binding))
-                }
-                None => Some((file.to_string(), name.to_string())),
-            }
-        };
+        let declared = |file: &str, name: &str| callee_declaration(file, name, files, inputs, links);
         let mut readings_of =
             |file: &str| files.get(file).map(|ff| std::sync::Arc::clone(&ff.param_readings)).unwrap_or_default();
         let mut found = Vec::new();
@@ -6502,6 +6492,26 @@ pub(crate) fn judge_object_handoffs(
                 }
             }
         }
+    }
+}
+
+/// The declaring module and local name of the binding `name` a module
+/// calls: an import's, through any barrel, or the module's own.
+fn callee_declaration(
+    file: &str,
+    name: &str,
+    files: &BTreeMap<String, FileFacts>,
+    inputs: &CssInputs,
+    links: &crate::link::ProjectLinks,
+) -> Option<(String, String)> {
+    let ff = files.get(file)?;
+    match ff.imports.iter().find(|import| import.local == name) {
+        Some(import) => {
+            let target = resolve_import_source(file, &import.source, files, inputs)?;
+            let (module, binding) = links.declared(&target, &import.imported)?;
+            Some(binding_name(links, files, module, binding))
+        }
+        None => Some((file.to_string(), name.to_string())),
     }
 }
 
@@ -7113,7 +7123,10 @@ fn reexported_modules(
 }
 
 /// Each file's `value_escapes`, with the reads its facade literals hold
-/// that the member tables cannot prove (`ObjectMembers::unfollowed_reads`).
+/// that the member tables cannot prove (`ObjectMembers::unfollowed_reads`)
+/// and the hand-offs of a component to a function that does more with it
+/// than replace its render with one that renders the same props
+/// (`FileFacts::escape_handoffs`).
 struct ValueEscapes(FxHashMap<String, Vec<String>>);
 
 impl ValueEscapes {
@@ -9793,12 +9806,27 @@ fn run_with_system_floor(
     };
     let mut object_members =
         crate::family_members::ObjectMembers::new(files, inputs, links, &family_index, &declared_component, &evaluated_ids);
+    let renders_through = |file: &str, callee: &str| {
+        callee_declaration(file, callee, files, inputs, links).is_some_and(|(declaring, function)| {
+            files.get(&declaring).and_then(|ff| ff.param_readings.get(&function)).and_then(|params| params.first())
+                == Some(&crate::usage_facts::ParamReading::RendersThrough)
+        })
+    };
     let value_escapes = ValueEscapes(
         files
             .iter()
-            .filter(|(_, ff)| !ff.facade_reads.is_empty())
-            .map(|(path, _)| (path.clone(), object_members.unfollowed_reads(path)))
-            .filter(|(_, unfollowed)| !unfollowed.is_empty())
+            .map(|(path, ff)| {
+                let mut escaped =
+                    if ff.facade_reads.is_empty() { Vec::new() } else { object_members.unfollowed_reads(path) };
+                escaped.extend(
+                    ff.escape_handoffs
+                        .iter()
+                        .filter(|(callee, _)| !renders_through(path, callee))
+                        .map(|(_, handed)| handed.clone()),
+                );
+                (path.clone(), escaped)
+            })
+            .filter(|(_, escaped)| !escaped.is_empty())
             .collect(),
     );
     // A member tag written through a facade or alias whose member is stable
@@ -15741,6 +15769,60 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
         ] {
             assert_eq!(keeps_p(nav, tag), keeps, "{nav} <{tag}>");
         }
+    }
+
+    /// Contract: a component handed to a function whose only use of it is
+    /// replacing its `render` with a wrapper that calls the old render with
+    /// the same props keeps its usage proven; any other use of that
+    /// parameter, of the old render or of the props hands the component on.
+    #[test]
+    fn a_render_replaced_with_the_same_props_keeps_usage() {
+        let keeps_p = |body: &str, call: &str| {
+            let mirror = format!(
+                "import {{ useRef, registry, deliver, Other }} from 'outside';\nexport function mirror(owner, only) {{\n{body}\n}}\n"
+            );
+            let kit = format!(
+                "import {{ mirror }} from './mirror';\nimport {{ consume }} from 'outside';\nexport const Box = ds.system({{ space: true }}).asElement('div');\n{call}\n"
+            );
+            let app = "import { Box } from './kit';\nexport const App = () => <Box p={2} />;\n";
+            analyze(&[("mirror.tsx", &mirror), ("kit.tsx", &kit), ("app.tsx", app)], &test_inputs())
+                .dynamic_props
+                .contains_key("p")
+        };
+        let helper = |wrapper: &str| {
+            format!(
+                "const target = owner as any;\nconst render = target.render;\nif (typeof render !== 'function') {{ if (typeof document !== 'undefined') console.warn('x'); return; }}\ntarget.render = {wrapper};"
+            )
+        };
+        let mirrored = helper("function AuthoredName(props, ref) { return render(props, useRef(ref, only)); }");
+        let with = |extra: &str| format!("{mirrored}\n{extra}");
+        let rows: Vec<(String, &str, bool)> = vec![
+            (mirrored.clone(), "mirror(Box);", false),
+            (helper("(props, ref) => render(props, useRef(ref))"), "mirror(Box, 'x');", false),
+            (mirrored.clone(), "consume(Box);", true),
+            (mirrored.clone(), "consume(1, Box);", true),
+            // Another use of the props, the old render or the parameter.
+            (helper("(props, ref) => render({ ...props, size: 'lg' }, ref)"), "mirror(Box);", true),
+            (helper("function (props, ref) { props.size = 'lg'; return render(props, ref); }"), "mirror(Box);", true),
+            (helper("(props, ref) => render(props, deliver(props.children))"), "mirror(Box);", true),
+            (helper("(props, ref) => render(props, useRef(ref, target))"), "mirror(Box);", true),
+            (helper("function (props, ref) { return render(props, this); }"), "mirror(Box);", true),
+            (helper("function (props) { return render(props, arguments[1]); }"), "mirror(Box);", true),
+            (helper("Other.render"), "mirror(Box);", true),
+            (with("registry.set(owner);"), "mirror(Box);", true),
+            (with("return owner;"), "mirror(Box);", true),
+            (with("render({ size: 'lg' });"), "mirror(Box);", true),
+            (with("target.render = (props) => render(props);"), "mirror(Box);", true),
+            (mirrored.replace("const target", "let target"), "mirror(Box);", true),
+            (with("mirror = Other;"), "mirror(Box);", true),
+        ];
+        for (body, call, keeps) in rows {
+            assert_eq!(keeps_p(&body, call), keeps, "{body}\n{call}");
+        }
+        // A helper the analysis does not read keeps the hand-off.
+        let kit = "import { mirror } from 'outside';\nexport const Box = ds.system({ space: true }).asElement('div');\nmirror(Box);\n";
+        let app = "import { Box } from './kit';\nexport const App = () => <Box p={2} />;\n";
+        assert!(analyze(&[("kit.tsx", kit), ("app.tsx", app)], &test_inputs()).dynamic_props.contains_key("p"));
     }
 
     #[test]

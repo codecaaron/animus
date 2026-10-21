@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 mod forwarding;
+mod renders_through;
 
 use crate::chain_walk::{ChainDescriptor, TerminalKind};
 use crate::static_value::StaticValue;
@@ -912,6 +913,8 @@ pub(crate) struct EnrichedUsage {
     pub terminal_escapes: BTreeSet<String>,
     /// See `FileFacts::facade_reads`.
     pub facade_reads: BTreeSet<(String, String)>,
+    /// See `FileFacts::escape_handoffs`.
+    pub escape_handoffs: BTreeSet<(String, String)>,
     /// See `FileFacts::spread_wrappers`.
     pub spread_wrappers: BTreeMap<String, SpreadWrapper>,
     /// See `FileFacts::ordinary_components`.
@@ -1332,7 +1335,7 @@ pub(crate) fn collect_enriched_usage(
         .zip(react_imports.as_ref())
         .map(|(scoping, react)| ordinary_components(program, scoping, react, &BTreeSet::new(), direct_eval))
         .unwrap_or_default();
-    let (escapes, terminal_escapes, facade_reads) = match &scoping {
+    let (escapes, terminal_escapes, facade_reads, escape_handoffs) = match &scoping {
         Some(scoping) if may_escape => {
             let mut scan = EscapeScan {
                 admissible: &admissible,
@@ -1355,6 +1358,7 @@ pub(crate) fn collect_enriched_usage(
                 terminal: BTreeSet::new(),
                 elsewhere: BTreeSet::new(),
                 followed: std::cell::RefCell::new(BTreeSet::new()),
+                handoffs: BTreeSet::new(),
                 ancestors: Vec::new(),
                 aliases: &aliases,
             };
@@ -1378,13 +1382,16 @@ pub(crate) fn collect_enriched_usage(
                 scan.visit_program(program);
             }
             let terminal = scan.terminal.difference(&scan.elsewhere).cloned().collect();
-            (scan.escapes, terminal, scan.followed.into_inner())
+            (scan.escapes, terminal, scan.followed.into_inner(), scan.handoffs)
         }
-        _ => (BTreeSet::new(), BTreeSet::new(), BTreeSet::new()),
+        _ => (BTreeSet::new(), BTreeSet::new(), BTreeSet::new(), BTreeSet::new()),
     };
+    // A hand-off the engine has yet to judge may change what it hands.
+    let unjudged: BTreeSet<String> =
+        escapes.iter().cloned().chain(escape_handoffs.iter().map(|(_, path)| path.clone())).collect();
     let OrdinaryComponents { names: ordinary_components, react_wrappers, import_aliases } = origins
         .zip(react_imports.as_ref())
-        .map(|(scoping, react)| ordinary_components(program, scoping, react, &escapes, direct_eval))
+        .map(|(scoping, react)| ordinary_components(program, scoping, react, &unjudged, direct_eval))
         .unwrap_or_default();
     let spread_wrappers = match &scoping {
         Some(scoping)
@@ -1408,6 +1415,7 @@ pub(crate) fn collect_enriched_usage(
         escapes,
         terminal_escapes,
         facade_reads,
+        escape_handoffs,
         spread_wrappers,
         ordinary_components,
         react_wrappers,
@@ -3119,6 +3127,10 @@ pub(crate) enum ParamReading {
     /// the function returns at each path given, which must return it in
     /// turn.
     Alias { returned: Vec<Vec<String>>, through: Vec<(Pass, Vec<String>)> },
+    /// Its `render` replaced with a wrapper that calls the old one with the
+    /// same props, and nothing else (see `renders_through`): rendering the
+    /// object renders what it did before.
+    RendersThrough,
     /// A use that may change the object or hand it to code not followed.
     Unsafe,
 }
@@ -3204,6 +3216,9 @@ pub(crate) fn function_param_readings(
     }
     let mut readings: BTreeMap<String, Vec<ParamReading>> = BTreeMap::new();
     let mut params: FxHashMap<SymbolId, (String, usize)> = FxHashMap::default();
+    // The functions that may do anything with every argument: reassigned,
+    // or reading their own `arguments`.
+    let mut unsafe_functions: FxHashSet<String> = FxHashSet::default();
     let mut spans: FxHashMap<String, Span> = FxHashMap::default();
     for (name, key, function) in &functions {
         let formal = function.params;
@@ -3236,6 +3251,7 @@ pub(crate) fn function_param_readings(
             .is_some_and(|symbol| scoping.get_resolved_references(symbol).any(oxc::semantic::Reference::is_write));
         if reassigned || function.body.is_some_and(|body| !function.arrow && reads_own_arguments(body, scoping)) {
             reading.iter_mut().for_each(|param| *param = ParamReading::Unsafe);
+            unsafe_functions.insert(key.clone());
         }
         spans.insert(key.clone(), function.span);
         readings.insert(key.clone(), reading);
@@ -3259,7 +3275,21 @@ pub(crate) fn function_param_readings(
         global_object: !binds_anywhere(scoping, "Object"),
     };
     scan.visit_program(program);
-    scan.finish()
+    let mut readings = scan.finish();
+    // A parameter whose object has its `render` replaced by a wrapper that
+    // calls the old one with the same props.
+    for (_, key, function) in &functions {
+        let Some(body) = function.body.filter(|_| !unsafe_functions.contains(key)) else { continue };
+        let Some(reading) = readings.get_mut(key) else { continue };
+        for (index, param) in function.params.items.iter().enumerate() {
+            let BindingPattern::BindingIdentifier(id) = &param.pattern else { continue };
+            let Some(symbol) = id.symbol_id.get() else { continue };
+            if reading.get(index) == Some(&ParamReading::Unsafe) && renders_through::renders_through(body, symbol, scoping) {
+                reading[index] = ParamReading::RendersThrough;
+            }
+        }
+    }
+    readings
 }
 
 /// A function's parameters, body and span, written as a declaration or an
@@ -5361,6 +5391,8 @@ struct EscapeScan<'a, 's> {
     elsewhere: BTreeSet<String>,
     /// See `FileFacts::facade_reads`.
     followed: std::cell::RefCell<BTreeSet<(String, String)>>,
+    /// See `FileFacts::escape_handoffs`.
+    handoffs: BTreeSet<(String, String)>,
     ancestors: Vec<AstKind<'a>>,
     /// See `LocalAliases`: what an alias's initializer reads, its elements
     /// render.
@@ -5408,6 +5440,15 @@ impl<'a> Visit<'a> for EscapeScan<'a, '_> {
         }
         let path = self.escape_path(name, ident.span);
         if let Some(path) = path {
+            // A component handed as the first argument to a module-scope
+            // function is the engine's to judge by that function's reading.
+            if path == name && !self.namespaces.contains(name) {
+                if let Some(callee) = self.handoff_callee(ident.span) {
+                    self.elsewhere.insert(path.clone());
+                    self.handoffs.insert((callee, path));
+                    return;
+                }
+            }
             if path == name && self.terminal_target(name, ident.span) {
                 self.terminal.insert(path.clone());
             } else {
@@ -5419,6 +5460,25 @@ impl<'a> Visit<'a> for EscapeScan<'a, '_> {
 }
 
 impl EscapeScan<'_, '_> {
+    /// The module-scope binding a call names as its callee, where the value
+    /// at `span` is that call's first argument, erased wrappers aside.
+    fn handoff_callee(&self, span: Span) -> Option<String> {
+        let mut current = span;
+        for parent in self.ancestors.iter().rev() {
+            match parent {
+                kind if is_erased_wrapper(kind) => current = kind.span(),
+                AstKind::CallExpression(call) if call.arguments.first().map(GetSpan::span) == Some(current) => {
+                    let Expression::Identifier(callee) = &call.callee else { return None };
+                    let symbol = self.scoping.get_reference(callee.reference_id.get()?).symbol_id()?;
+                    return (self.scoping.symbol_scope_id(symbol) == self.scoping.root_scope_id())
+                        .then(|| callee.name.to_string());
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// Whether `call` is React's `forwardRef` or `memo`, nested or not, of
     /// the initializer of a top-level `const`, given its ancestors from the
     /// innermost out.

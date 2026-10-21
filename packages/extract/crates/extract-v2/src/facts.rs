@@ -621,6 +621,13 @@ pub struct FileFacts {
     /// (`ObjectMembers::unfollowed_reads`).
     #[serde(skip)]
     pub(crate) facade_reads: BTreeSet<(String, String)>,
+    /// The references usage would otherwise record in `value_escapes` that
+    /// hand a component as the first argument to a module-scope function,
+    /// each with that function's local name: the engine still hands one
+    /// over unless the function's reading of the parameter is
+    /// `ParamReading::RendersThrough`.
+    #[serde(skip)]
+    pub(crate) escape_handoffs: BTreeSet<(String, String)>,
     /// Module-scope function components whose renders stand in for the
     /// components they spread their props into.
     #[serde(skip)]
@@ -1436,6 +1443,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         value_escapes: BTreeSet::new(),
         terminal_escapes: BTreeSet::new(),
         facade_reads: BTreeSet::new(),
+        escape_handoffs: BTreeSet::new(),
         spread_wrappers: BTreeMap::new(),
         module_loads: lowered.loads.iter().filter_map(|load| load.module_load(source)).collect(),
         runtime_imports: lowered.loads.iter().filter_map(|load| load.runtime_import(source)).collect(),
@@ -2142,6 +2150,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         escapes: value_escapes,
         terminal_escapes,
         facade_reads,
+        escape_handoffs,
         spread_wrappers,
         ordinary_components,
         react_wrappers,
@@ -2218,6 +2227,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
         value_escapes,
         terminal_escapes,
         facade_reads,
+        escape_handoffs,
         spread_wrappers,
         ordinary_components,
         react_wrappers,
