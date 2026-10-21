@@ -1383,28 +1383,30 @@ pub(crate) fn collect_enriched_usage(
                 aliases: &aliases,
                 value_aliases: BTreeSet::new(),
             };
-            // An alias of an alias names the same value.
+            // An alias of a candidate names the same value, and an object
+            // holding one holds it, so each can make the other a candidate.
             let declared = declared_aliases(program);
             loop {
-                let grew: Vec<String> = declared
+                let known = (scan.value_aliases.len(), scan.holders.len());
+                let holders: Vec<String> = scan
+                    .reads
+                    .iter()
+                    .filter(|(_, reads)| {
+                        reads.members.values().map(|(binding, _)| binding).chain(&reads.copies).any(|value| scan.is_candidate(value))
+                    })
+                    .map(|(object, _)| object.clone())
+                    .collect();
+                scan.holders.extend(holders);
+                let aliases: Vec<String> = declared
                     .iter()
                     .filter(|(alias, value)| !scan.is_candidate(alias) && scan.is_candidate(value))
                     .map(|(alias, _)| alias.clone())
                     .collect();
-                let known = scan.value_aliases.len();
-                scan.value_aliases.extend(grew);
-                if scan.value_aliases.len() == known {
+                scan.value_aliases.extend(aliases);
+                if (scan.value_aliases.len(), scan.holders.len()) == known {
                     break;
                 }
             }
-            scan.holders = scan
-                .reads
-                .iter()
-                .filter(|(_, reads)| {
-                    reads.members.values().map(|(binding, _)| binding).chain(&reads.copies).any(|value| scan.is_candidate(value))
-                })
-                .map(|(object, _)| object.clone())
-                .collect();
             if direct_eval {
                 // Direct eval can hand any binding anywhere.
                 let every: Vec<String> = scoping

@@ -562,13 +562,52 @@ impl<'f> ObjectMembers<'f> {
         Some(entry)
     }
 
-    /// The components an escaping `name` hands over: every member of the
-    /// object it names, or the one member it reads.
+    /// The components an escaping `name` hands over: every component the
+    /// object it names holds, or the one member it reads, followed through
+    /// members that hold objects (`outer.inner.Root`).
     pub(crate) fn escaped_components(&mut self, file: &str, name: &str) -> Vec<String> {
-        if let Some(object) = self.object_at(file, name) {
-            return self.table(&object).members.values().filter_map(Member::component).cloned().collect();
+        let mut prefix = name;
+        let mut rest = Vec::new();
+        let mut object = loop {
+            if let Some(object) = self.object_at(file, prefix) {
+                break object;
+            }
+            let Some((shorter, segment)) = prefix.rsplit_once('.') else { return Vec::new() };
+            rest.push(segment);
+            prefix = shorter;
+        };
+        while let Some(segment) = rest.pop() {
+            match self.table(&object).members.get(segment) {
+                Some(Member::Bound { module, binding }) => match self.local_object(module, binding) {
+                    Some(inner) => object = inner,
+                    None => return Vec::new(),
+                },
+                Some(member) if rest.is_empty() => return member.component().cloned().into_iter().collect(),
+                _ => return Vec::new(),
+            }
         }
-        self.member(file, name).as_ref().and_then(Member::component).cloned().into_iter().collect()
+        self.held_components(object)
+    }
+
+    /// Every component `object` holds, through members that hold other
+    /// objects (`{ inner: box }`) too.
+    fn held_components(&mut self, object: Object) -> Vec<String> {
+        let mut held = Vec::new();
+        let mut seen = FxHashSet::default();
+        let mut pending = vec![object];
+        while let Some(object) = pending.pop() {
+            if !seen.insert(object.clone()) {
+                continue;
+            }
+            for member in self.table(&object).members.values() {
+                match member {
+                    Member::Stable(component) | Member::Unstable(component, _) => held.push(component.clone()),
+                    Member::Bound { module, binding } => pending.extend(self.local_object(module, binding)),
+                    Member::Other => {}
+                }
+            }
+        }
+        held
     }
 
     /// Whether every read the facade literal `holder` of `module` holds once
@@ -1072,7 +1111,8 @@ pub(crate) fn held_namespace(
 
 /// The module a local binding of `file` holds as a namespace: a namespace
 /// import, or a named import of a namespace another module exports, as the
-/// module table resolves it.
+/// module table resolves it, directly or through top-level `const` aliases
+/// (`const r = ui`).
 pub(crate) fn local_namespace(
     file: &str,
     ff: &FileFacts,
@@ -1081,6 +1121,15 @@ pub(crate) fn local_namespace(
     inputs: &CssInputs,
     links: &crate::link::ProjectLinks,
 ) -> Option<String> {
+    let mut local = local;
+    let mut seen = BTreeSet::new();
+    while let Some(target) = ff.aliases.get(local) {
+        // A cycle of aliases holds nothing.
+        if !seen.insert(local) {
+            return None;
+        }
+        local = target;
+    }
     if ff.namespace_imports.contains_key(local) {
         return held_namespace(file, ff, local, files, inputs);
     }

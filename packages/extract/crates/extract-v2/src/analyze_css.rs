@@ -19635,23 +19635,70 @@ export const App = () => <Box nstr={10} num={10} tok={8} fnv={3} mix={{ _: 2, sm
     }
 
     /// Contract: a component a local binding of any name holds is handed on
-    /// wherever that binding is: `const r = R` passed to `createElement`
-    /// through `apply` or `Reflect.apply`, or to a package's renderer, keeps
-    /// R, which nothing else renders, as the `Alias` spelling does.
+    /// wherever that binding is: `const r = R`, or `const r = box` of an
+    /// object holding R, passed to `createElement` through `apply` or
+    /// `Reflect.apply`, or to a package's renderer, keeps R, which nothing
+    /// else renders, as the `Alias` spelling does.
     #[test]
     fn a_component_an_alias_of_any_name_hands_on_stays() {
         let inputs = test_inputs();
         let r = "const R = ds.styles({ color: 'red' }).asElement('div');\n";
+        let apply = "import * as React from 'react';\nexport default function Page() { return React.createElement.apply(null, [r]); }\n";
+        let held = "import * as React from 'react';\nexport default function Page() { return React.createElement.apply(null, [r.Root]); }\n";
         for (alias, call) in [
-            ("r", "import * as React from 'react';\nexport default function Page() { return React.createElement.apply(null, [r]); }\n"),
-            ("r", "import { createElement } from 'react';\nexport default function Page() { return Reflect.apply(createElement, null, [r]); }\n"),
-            ("r", "import { renderLater } from 'lib';\nexport default function Page() { return renderLater(r); }\n"),
-            ("Alias", "import * as React from 'react';\nexport default function Page() { return React.createElement.apply(null, [Alias]); }\n"),
+            ("const r = R;\n", apply),
+            ("const r = R;\n", "import { createElement } from 'react';\nexport default function Page() { return Reflect.apply(createElement, null, [r]); }\n"),
+            ("const r = R;\n", "import { renderLater } from 'lib';\nexport default function Page() { return renderLater(r); }\n"),
+            ("const Alias = R;\n", "import * as React from 'react';\nexport default function Page() { return React.createElement.apply(null, [Alias]); }\n"),
+            ("const box = { Root: R };\nconst r = box;\n", held),
+            ("const box = { Root: R };\nconst s = box;\nconst r = s;\n", held),
+            ("const box = { Root: R };\nconst r = box;\n", "import { renderLater } from 'lib';\nexport default function Page() { return renderLater(r.Root); }\n"),
         ] {
-            let source = format!("{r}const {alias} = R;\n{call}");
+            let source = format!("{r}{alias}{call}");
             let out = analyze(&[("app/page.tsx", source.as_str())], &inputs);
             assert_eq!(out.reconciliation["components_eliminated"], 0, "{source}");
             assert!(out.css.contains("red"), "{source}\n{}", out.css);
+        }
+    }
+
+    /// Contract: an escaping object hands on every component it holds,
+    /// through members that hold other objects too: `outer` of
+    /// `{ inner: box }`, or `outer.inner.Root`, keeps the R `box` holds,
+    /// which nothing else renders.
+    #[test]
+    fn an_escaping_object_hands_on_what_its_objects_hold() {
+        let inputs = test_inputs();
+        let objects = "const R = ds.styles({ color: 'red' }).asElement('div');\n\
+                       const box = { Root: R };\nconst outer = { inner: box };\n";
+        for page in [
+            "import { renderLater } from 'lib';\nexport default function Page() { return renderLater(outer); }\n",
+            "import { renderLater } from 'lib';\nconst r = outer;\nexport default function Page() { return renderLater(r); }\n",
+            "import * as React from 'react';\nexport default function Page() { return React.createElement.apply(null, [outer.inner.Root]); }\n",
+            "import * as React from 'react';\nconst r = outer;\nexport default function Page() { return React.createElement.apply(null, [r.inner.Root]); }\n",
+        ] {
+            let source = format!("{objects}{page}");
+            let out = analyze(&[("app/page.tsx", source.as_str())], &inputs);
+            assert_eq!(out.reconciliation["components_eliminated"], 0, "{source}");
+            assert!(out.css.contains("red"), "{source}\n{}", out.css);
+        }
+    }
+
+    /// Contract: a top-level `const` alias of a namespace import, of any
+    /// name, hands on the components its members name as the namespace
+    /// does: `r.R` given to `createElement` keeps R, which nothing else
+    /// renders, as `ui.R` does.
+    #[test]
+    fn a_namespace_alias_hands_on_its_members() {
+        let inputs = test_inputs();
+        let ui = "export const R = ds.styles({ color: 'red' }).asElement('div');\n";
+        for (alias, member) in [("", "ui.R"), ("const r = ui;\n", "r.R"), ("const Alias = ui;\nconst r = Alias;\n", "r.R")] {
+            let page = format!(
+                "import * as React from 'react';\nimport * as ui from './ui';\n{alias}\
+                 export default function Page() {{ return React.createElement.apply(null, [{member}]); }}\n"
+            );
+            let out = analyze(&[("ui.tsx", ui), ("page.tsx", page.as_str())], &inputs);
+            assert_eq!(out.reconciliation["components_eliminated"], 0, "{page}");
+            assert!(out.css.contains("red"), "{page}\n{}", out.css);
         }
     }
 
