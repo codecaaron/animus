@@ -1222,6 +1222,9 @@ impl ExtractEngine {
         clock.mark("input");
         self.parse_count = store.parse_count();
         clock.mark("parse");
+        // One analysed path set, and inputs that hold still from here: each
+        // base is probed once for every map keyed by exactly these paths.
+        let _probes = analyze_css::ProbeScope::enter(&self.opts.css_inputs, store.iter().map(|ast| ast.path.as_str()));
 
         use crate::usage_facts::{collect_export_facts, collect_import_facts};
         let mut statics_by_file: std::collections::BTreeMap<
@@ -1248,6 +1251,8 @@ impl ExtractEngine {
                 (ast.path.clone(), facts::structural_facts(ast, lowered, objects))
             })
             .collect();
+        analyze_css::ProbeScope::admit(&lowered_by_file, &self.opts.css_inputs);
+        analyze_css::ProbeScope::admit(&structural_by_file, &self.opts.css_inputs);
         analyze_css::distrust_promise(&mut structural_by_file, &self.opts.css_inputs);
         clock.mark("lowering");
         let links = ProjectLinks::of_records(&lowered_by_file, |lowered| &*lowered.record, &self.opts.css_inputs);
@@ -1263,6 +1268,7 @@ impl ExtractEngine {
                 (path.clone(), crate::link::OwnedModuleRecord { star_exports: Vec::new(), ..(*lowered.record).clone() })
             })
             .collect();
+        analyze_css::ProbeScope::admit(&explicit, &self.opts.css_inputs);
         let read_links = ProjectLinks::of_records(&explicit, |record| record, &self.opts.css_inputs);
         clock.mark("links");
         for ast in store.iter() {
@@ -1433,6 +1439,7 @@ impl ExtractEngine {
         // in a kit's compiled output: the file declaring it.
         let mut compiled_declarations: rustc_hash::FxHashMap<(String, String), String> =
             rustc_hash::FxHashMap::default();
+        analyze_css::ProbeScope::admit(&statics_by_file, &self.opts.css_inputs);
         for (path, (imports, exports)) in &imports_by_file {
             let mut extra = rustc_hash::FxHashMap::default();
             let mut usage_extra = rustc_hash::FxHashMap::default();
@@ -1563,6 +1570,7 @@ impl ExtractEngine {
         // Facts own every resolved reference; release the modules' scopings.
         drop(references);
         clock.mark("fileFacts");
+        analyze_css::ProbeScope::admit(&self.facts, &self.opts.css_inputs);
         crate::pure_builders::resolve(&mut self.facts, &links, &self.opts.css_inputs);
         clock.mark("pureBuilders");
         let mut css = analyze_css::run(

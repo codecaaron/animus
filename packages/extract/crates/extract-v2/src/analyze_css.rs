@@ -1432,47 +1432,80 @@ thread_local! {
         const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
-/// The probes made for one `run`, by base. A probe reads only the analysed
-/// set's keys and the inputs (aliases, extensions, evidence, system modules),
-/// which `run` holds borrowed and unchanged throughout, so its outcome holds
-/// for the run; another set or inputs (by address) is probed afresh. What a
-/// probe records, `resolve_import_source` records on every call as before.
-struct RunProbes {
-    /// The addresses of the run's files and inputs.
-    run: (usize, usize),
+/// The probes made over one analysed path set, by base. A probe reads only
+/// the set's keys and the inputs (extensions, evidence, system modules),
+/// which hold still while the scope is open, so its outcome holds for every
+/// map with exactly those keys. A map is admitted by address once its keys
+/// are checked; it stays alive and keyed alike while it is probed, and its
+/// length is checked again at each probe. What a probe records,
+/// `resolve_import_source` records on every call as before.
+struct Probes {
+    /// The address of the inputs the scope's probes read.
+    inputs: usize,
+    /// The analysed paths, in order.
+    paths: Vec<String>,
+    /// The admitted maps, by address and length.
+    maps: Vec<(usize, usize)>,
     outcomes: FxHashMap<String, ProbeOutcome>,
 }
 
 thread_local! {
-    static RUN_PROBES: std::cell::RefCell<Option<RunProbes>> = const { std::cell::RefCell::new(None) };
+    static PROBES: std::cell::RefCell<Option<Probes>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Keeps `run`'s probes for `files` and `inputs` until dropped, restoring
-/// any outer run's.
-struct RunProbesGuard(Option<RunProbes>);
+/// The probes of one analysed path set over `inputs` until dropped,
+/// restoring any outer scope's.
+pub(crate) struct ProbeScope(Option<Probes>);
 
-impl RunProbesGuard {
-    fn enter<T>(files: &BTreeMap<String, T>, inputs: &CssInputs) -> Self {
-        let probes = RunProbes { run: run_of(files, inputs), outcomes: FxHashMap::default() };
-        Self(RUN_PROBES.replace(Some(probes)))
+impl ProbeScope {
+    pub(crate) fn enter<'p>(inputs: &CssInputs, paths: impl IntoIterator<Item = &'p str>) -> Self {
+        let mut paths: Vec<String> = paths.into_iter().map(str::to_string).collect();
+        // A map's keys come in byte order.
+        paths.sort_unstable();
+        let probes = Probes { inputs: address(inputs), paths, maps: Vec::new(), outcomes: FxHashMap::default() };
+        Self(PROBES.replace(Some(probes)))
+    }
+
+    /// Lets the open scope answer for `files`, when its keys are the
+    /// analysed paths and `inputs` the scope's.
+    pub(crate) fn admit<T>(files: &BTreeMap<String, T>, inputs: &CssInputs) -> bool {
+        PROBES.with_borrow_mut(|probes| match probes {
+            Some(probes) if probes.inputs == address(inputs) && files.keys().eq(probes.paths.iter()) => {
+                probes.maps.push((address(files), files.len()));
+                true
+            }
+            _ => false,
+        })
+    }
+
+    /// The open scope, admitting `files`; else a scope of its own.
+    fn within<T>(files: &BTreeMap<String, T>, inputs: &CssInputs) -> Option<Self> {
+        if Self::admit(files, inputs) {
+            return None;
+        }
+        let scope = Self::enter(inputs, files.keys().map(String::as_str));
+        Self::admit(files, inputs);
+        Some(scope)
     }
 }
 
-impl Drop for RunProbesGuard {
+impl Drop for ProbeScope {
     fn drop(&mut self) {
-        RUN_PROBES.set(self.0.take());
+        PROBES.set(self.0.take());
     }
 }
 
-fn run_of<T>(files: &BTreeMap<String, T>, inputs: &CssInputs) -> (usize, usize) {
-    (std::ptr::from_ref(files).addr(), std::ptr::from_ref(inputs).addr())
+fn address<T>(value: &T) -> usize {
+    std::ptr::from_ref(value).addr()
 }
 
 /// The analyzed file `base` names, through the host's extension order.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> ProbeOutcome {
-    // The uncached probe never reads the run's probes, so the borrow holds.
-    RUN_PROBES.with_borrow_mut(|probes| match probes {
-        Some(probes) if probes.run == run_of(files, inputs) => {
+    // The uncached probe never reads the scope, so the borrow holds.
+    PROBES.with_borrow_mut(|probes| match probes {
+        Some(probes)
+            if probes.inputs == address(inputs) && probes.maps.contains(&(address(files), files.len())) =>
+        {
             if let Some(outcome) = probes.outcomes.get(base) {
                 return outcome.clone();
             }
@@ -3931,7 +3964,7 @@ pub fn run(
     inputs: &CssInputs,
     class_prefix: &str,
 ) -> CssOutput {
-    let _probes = RunProbesGuard::enter(files, inputs);
+    let _probes = ProbeScope::within(files, inputs);
     run_with_system_floor(files, order, inputs, class_prefix, true)
 }
 
