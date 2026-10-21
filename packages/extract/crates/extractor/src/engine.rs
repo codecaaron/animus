@@ -11,6 +11,10 @@ use animus_system_loader::module_table::{ExportLookup, ImportName, ModuleIndex, 
 
 const SYSTEM_PROPS_MODULE_ID: &str = "virtual:animus/system-props";
 
+/// Whether a finished analysis's tables are being freed on a pool thread,
+/// in any engine: `analyze_prepared` hands at most one there.
+static TEARDOWN_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn derive_compose_context_import(runtime_import: &str) -> String {
     if runtime_import.starts_with('@') {
         let parts: Vec<&str> = runtime_import.splitn(3, '/').collect();
@@ -1599,7 +1603,9 @@ impl ExtractEngine {
         clock.mark("serialize");
         // The parse and the analysis's own tables, the per-file statics
         // most of all, are freed on a pool thread while the host reads the
-        // manifest; the engine keeps its facts and sources.
+        // manifest; the engine keeps its facts and sources. At most one
+        // analysis's are pending there: while one is, a busy pool would hold
+        // every later one too, so those are freed here.
         let read = (
             store,
             links,
@@ -1615,7 +1621,14 @@ impl ExtractEngine {
             style_modules,
             changes,
         );
-        rayon::spawn(move || drop(read));
+        if TEARDOWN_PENDING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            drop(read);
+        } else {
+            rayon::spawn(move || {
+                drop(read);
+                TEARDOWN_PENDING.store(false, std::sync::atomic::Ordering::Release);
+            });
+        }
         self.timings = clock.phases;
         manifest
     }
