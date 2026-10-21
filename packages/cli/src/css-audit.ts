@@ -194,6 +194,10 @@ const MIN_SHARED_DECLARATIONS = 3;
 /** Findings under the floor the text names. */
 const BELOW_SHOWN = 3;
 
+/** Unproven findings the text names, and dynamic sites per finding. */
+const UNPROVEN_SHOWN = 10;
+const SITES_SHOWN = 3;
+
 /** Owners listed per slot group, and sites per owner. */
 const OWNERS_SHOWN = 5;
 const SITES_PER_OWNER = 2;
@@ -1318,8 +1322,7 @@ function keptOptions(
     }
     const where = [...bySite.values()].map(locate);
     const unproven: Unproven = { dynamicSites: where };
-    const keptBy = `kept by ${where.length} dynamic ${where.length === 1 ? 'site' : 'sites'}`;
-    const title = `${name(id)}: ${count} options unproven, ${keptBy} (${where.slice(0, 3).join(', ')}${where.length > 3 ? `, +${where.length - 3} more` : ''}), which no site the audit sees writes literally (${listed})`;
+    const title = `${name(id)}: ${count} ${count === 1 ? 'option' : 'options'} unproven (${listed})`;
     const owners = provenance?.owners[id] ?? [];
     const unseen = owners.filter(
       ({ rule }) => rule === 'spread' || rule === 'create-element'
@@ -1359,7 +1362,7 @@ function keptOptions(
       continue;
     }
     const caveats: string[] = [
-      `${keptBy}; the audit cannot prove which values ${where.length === 1 ? 'it passes' : 'they pass'}, so this stays below the floor`,
+      `${keptByCount(where.length)}; the audit cannot prove which values ${where.length === 1 ? 'it passes' : 'they pass'}, so this stays below the floor`,
     ];
     const hidden = owners.filter(({ rule }) => rule !== 'not-module-confined');
     if (hidden.length > 0) {
@@ -1644,11 +1647,11 @@ function repeatedBaseBlocks(
     }
     const names = (ids: string[]) => ids.map(name);
     const title = (ids: string[]) =>
-      `${ids.length} components repeat the base block ${truncate(block, 90)} (${truncate(names(ids).join(', '), 120)})`;
+      `${ids.length} components repeat the base block ${truncate(block, 90)} (${names(ids).join(', ')})`;
     for (const [reason, ids] of reasons) {
       refused.push({
         kind: 'repeated-base-block',
-        title: `${truncate(names(ids).join(', '), 120)}, of ${members.length} components repeating the base block ${truncate(block, 90)}`,
+        title: `${names(ids).join(', ')}, of ${members.length} components repeating the base block ${truncate(block, 90)}`,
         components: ids,
         rule: reason,
       });
@@ -2026,9 +2029,13 @@ export function formatCssAudit(report: CssAuditReport): string {
     }
   }
   const above = restructures.findings.filter((finding) => !finding.belowFloor);
-  const below = restructures.findings.filter(
+  // A finding a dynamic site holds back saves nothing the audit can
+  // promise: it is listed as kept, never in a saving or a total.
+  const listed = restructures.findings.filter(
     (finding) => finding.belowFloor && !finding.removedByDelivery
   );
+  const below = listed.filter((finding) => finding.unproven === undefined);
+  const unproven = listed.filter((finding) => finding.unproven !== undefined);
   const removed = restructures.findings.filter(
     (finding) => finding.removedByDelivery
   );
@@ -2054,16 +2061,29 @@ export function formatCssAudit(report: CssAuditReport): string {
     );
     for (const finding of below.slice(0, BELOW_SHOWN)) {
       lines.push(
-        `    ${savingText(finding.saving)}  [${finding.kind}] ${finding.confidence}: ${truncate(finding.title, 140)}`
+        `    ${savingText(finding.saving)}  [${finding.kind}] ${finding.confidence}: ${finding.title}`
       );
+    }
+  }
+  if (unproven.length > 0) {
+    lines.push(
+      `  Kept (unproven): ${unproven.length} findings, whose options a dynamic site may pass, so the audit counts no saving for them:`
+    );
+    for (const finding of unproven.slice(0, UNPROVEN_SHOWN)) {
+      lines.push(
+        `    [${finding.kind}] ${finding.confidence}: ${titleText(finding)}`
+      );
+    }
+    if (unproven.length > UNPROVEN_SHOWN) {
+      lines.push(`    +${unproven.length - UNPROVEN_SHOWN} more`);
     }
   }
   if (removed.length > 0) {
     lines.push(
       `  Left out: ${removed.length} findings on components removeUnbundledComponents removes, which the delivery verdict turns on and whose saving counts their CSS; e.g. ${removed
         .slice(0, BELOW_SHOWN)
-        .map(({ title }) => truncate(title, 60))
-        .join('; ')}`
+        .map(({ title }) => title)
+        .join(' | ')}`
     );
   }
   if (restructures.refused.length > 0) {
@@ -2074,12 +2094,33 @@ export function formatCssAudit(report: CssAuditReport): string {
       byRule.set(key, [...(byRule.get(key) ?? []), refusal]);
     }
     for (const [rule, list] of byRule) {
-      lines.push(
-        `    ${rule} (${list.length}), e.g. ${truncate(list[0]!.title, 140)}`
-      );
+      lines.push(`    ${rule} (${list.length}), e.g. ${titleText(list[0]!)}`);
     }
   }
   return `${lines.join('\n')}\n`;
+}
+
+const keptByCount = (sites: number): string =>
+  `kept by ${sites} dynamic ${sites === 1 ? 'site' : 'sites'}`;
+
+/** A finding's title, and the dynamic sites that keep its options where
+ *  any do, the first few named: a `file:line` in the file before it as its
+ *  line alone, a long path by its last segments. */
+function titleText({ title, unproven }: Restructure | Refusal): string {
+  if (unproven === undefined) return title;
+  const { dynamicSites } = unproven;
+  let previous: string | null = null;
+  const named = dynamicSites.slice(0, SITES_SHOWN).map((site) => {
+    const line = /^(.+)(:\d+)$/.exec(site);
+    if (line !== null && line[1] === previous) return line[2];
+    previous = line?.[1] ?? null;
+    const segments = site.split('/');
+    return site.length > 40 && segments.length > 3
+      ? `…/${segments.slice(-3).join('/')}`
+      : site;
+  });
+  const more = dynamicSites.length - named.length;
+  return `${title}, ${keptByCount(dynamicSites.length)}: ${named.join(', ')}${more > 0 ? `, +${more} more` : ''}`;
 }
 
 function deliveryLines(delivery: DeliveryReport, components: number): string[] {

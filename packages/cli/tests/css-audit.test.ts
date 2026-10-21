@@ -16,6 +16,7 @@ import { UsageFailure } from '../src/build';
 import { formatCssAudit, runCssAudit } from '../src/css-audit';
 import { EXIT_USAGE, exitCodeFor } from '../src/index';
 
+import type { CssAuditReport } from '../src/css-audit';
 import type {
   FullProjectManifest,
   ManifestComponentDescriptor,
@@ -419,7 +420,7 @@ test('unlayered output is audited with a warning, never refused or silently trus
  *  value its component's parameters reach), the audit cannot prove which
  *  options it passes, so the finding stays below the floor; where every site
  *  is literal there is no finding, since the engine prunes what none writes. */
-test('a kept option with a dynamic site is never ranked', async () => {
+test('a kept option with a dynamic site is never ranked, and no saving total counts it', async () => {
   const root = mkdtempSync(join(tmpdir(), 'animus-css-audit-'));
   try {
     const { manifest, manifestPath, dist } = writeProject(root);
@@ -478,26 +479,47 @@ test('a kept option with a dynamic site is never ranked', async () => {
       writeFileSync(join(dist, 'assets', 'index.css'), css);
       writeFileSync(join(dist, 'assets', 'index.js'), '"animus-Chip"');
     };
-    const chipFinding = async () =>
-      (
-        await runCssAudit({ manifest: manifestPath, dist, root })
-      ).restructures.findings.find(
+    let report: CssAuditReport | undefined;
+    const chipFinding = async () => {
+      report = await runCssAudit({ manifest: manifestPath, dist, root });
+      return report.restructures.findings.find(
         (finding) => finding.components[0] === 'src/ui.tsx::Chip'
       );
+    };
 
     // One site writes `lg`, one passes a value no literal spells (a
     // wrapper's own prop, a reassigned or destructured one, a nested
     // component's): `sm` is listed, never ranked.
     write([[literal('lg')], [dynamic]]);
     const kept = await chipFinding();
-    expect(kept?.title).toContain(
-      'unproven, kept by 1 dynamic site (src/app.tsx:2)'
-    );
-    expect(kept?.title).toContain('(size: sm)');
+    expect(kept?.title).toBe('Chip: 1 option unproven (size: sm)');
     expect(kept?.belowFloor).toBe(true);
     expect(kept?.caveats[0]).toContain('kept by 1 dynamic site;');
     // The JSON says so too, with every site, not only its caveat's text.
     expect(kept?.unproven).toEqual({ dynamicSites: ['src/app.tsx:2'] });
+    // The text names it as kept, with its site, and no total or saving
+    // counts its bytes: only a measured finding's do.
+    const { unproven: _, ...measured } = kept!;
+    const text = formatCssAudit({
+      ...report!,
+      restructures: {
+        ...report!.restructures,
+        findings: [
+          ...report!.restructures.findings,
+          {
+            ...measured,
+            title: 'measured',
+            saving: { raw: 7, gzip: null, brotli: null },
+          },
+        ],
+      },
+    });
+    expect(text).toContain('Below the floor: 1 findings, 7 B raw together');
+    const named = text.split('\n').filter((line) => line.includes('Chip:'));
+    expect(named).toEqual([
+      expect.stringContaining('kept by 1 dynamic site: src/app.tsx:2'),
+    ]);
+    expect(named[0]).not.toMatch(/\b(br|gz|raw) \d/);
     // A static value that is no literal (a `style` object), however it
     // converts, is a value no literal spells.
     write([
