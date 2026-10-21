@@ -72,7 +72,7 @@ describe('engineApi transformFile adapter', () => {
       nativeTransformingWith((p) => {
         calls.push(p);
         throw new Error(
-          `transformFile('${p}'): path not present in the last analyze() call`
+          `transformFile('${p}'): path not present in the last analyzePrepared() call`
         );
       })
     );

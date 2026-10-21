@@ -368,10 +368,10 @@ pub struct ExtractEngine {
     opts: ResolvedOptions,
     facts: BTreeMap<String, facts::FileFacts>,
     sources: BTreeMap<String, String>,
-    /// The files of the last analyze(), by path: the canonical order every
-    /// order-sensitive choice reads (registration collisions, first-wins
-    /// utility dedup, composed-family rules, report examples), never the
-    /// caller's.
+    /// The files of the last `analyzePrepared`, by path: the canonical
+    /// order every order-sensitive choice reads (registration collisions,
+    /// first-wins utility dedup, composed-family rules, report examples),
+    /// never the caller's.
     order: Vec<String>,
     css: Option<analyze_css::CssOutput>,
     parse_count: usize,
@@ -1628,7 +1628,7 @@ impl ExtractEngine {
     #[napi]
     pub fn manifest_section(&self, name: String) -> napi::Result<String> {
         let Some(css) = &self.css else {
-            return Err(napi::Error::from_reason("manifestSection: analyze() must run first".to_string()));
+            return Err(napi::Error::from_reason("manifestSection: prepare() and analyzePrepared() must run first".to_string()));
         };
         let out = match name.as_str() {
             "fileFacts" => serde_json::to_string(&self.facts),
@@ -1649,7 +1649,7 @@ impl ExtractEngine {
     /// The last `analyzePrepared`'s manifest: the full one, or the host's.
     fn manifest_json(&self, full: bool) -> napi::Result<String> {
         let Some(css) = &self.css else {
-            return Err(napi::Error::from_reason("manifest: analyze() must run first".to_string()));
+            return Err(napi::Error::from_reason("manifest: prepare() and analyzePrepared() must run first".to_string()));
         };
         let cross = full.then(|| self.cross_file(css));
         let builder_files: Vec<&str> = self
@@ -1718,14 +1718,14 @@ impl ExtractEngine {
         let (Some(source), Some(file_facts)) = (self.sources.get(&path), self.facts.get(&path))
         else {
             return Err(napi::Error::from_reason(format!(
-                "transformFile('{path}'): path not present in the last analyze() call — \
+                "transformFile('{path}'): path not present in the last analyzePrepared() call — \
                  analyze the project first (engine state is per-instance, not global)."
             )));
         };
 
         if self.css.is_none() {
             return Err(napi::Error::from_reason(
-                "transformFile: analyze() must run first".to_string(),
+                "transformFile: prepare() and analyzePrepared() must run first".to_string(),
             ));
         }
         // Payload presence is the survival record; re-deriving it from
