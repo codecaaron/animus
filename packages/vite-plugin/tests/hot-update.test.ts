@@ -18,7 +18,7 @@ import { join, resolve } from 'path';
 import { resolveConfig } from 'vite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { nativeFunctions } from '../../extract/tests/native-functions';
+import { fakeEngineApi } from '../../extract/tests/native-functions';
 import {
   createKitWorkspace,
   disposeTempRoots,
@@ -550,7 +550,7 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
     const ctx = new PluginContext(
       { system: './src/system.ts', exclude },
       () => ({
-        ...nativeFunctions(),
+        ...fakeEngineApi(),
         loadSystemModule: () => {
           state.systemLoads += 1;
           if (state.systemLoadFails) throw new Error('planned system failure');
@@ -560,6 +560,7 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
             scalesJson: '{}',
             variableMapJson: '{}',
             variableCss: '',
+            contextualVarsJson: '',
             dependencies: [],
           };
         },
@@ -798,7 +799,7 @@ describe('hotUpdate reads through the retry-guarded read helper', () => {
 /** A context with its own Session, whose watch updates publish the given
  *  manifests through the context's real outcome observation. */
 function observedContext(root: string) {
-  const ctx = new PluginContext({ system: './ds.ts' }, () => ({}));
+  const ctx = new PluginContext({ system: './ds.ts' }, () => fakeEngineApi());
   ctx.rootDir = root;
   ctx.excludeMatcher = createExcludeMatcher(undefined);
   const session = ctx.createSession();

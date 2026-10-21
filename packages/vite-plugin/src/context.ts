@@ -52,9 +52,12 @@ import type {
   HostExtensionPolicy,
   HostLoadExpander,
   DiagnosticPolicy,
+  EngineApi,
   ManifestDiagnostic,
   ProjectManifest,
   SystemConfig,
+  sourceKitDependencies,
+  systemKitDependencies,
 } from '@animus-ui/extract/pipeline';
 import type {
   SessionKey,
@@ -63,6 +66,10 @@ import type {
   WatchChanges,
 } from '@animus-ui/extract/session';
 import type { Logger, ResolvedConfig } from 'vite';
+
+/** What the kit discovery reads of the engine: its stateless lookups. */
+export type KitEngine = Parameters<typeof sourceKitDependencies>[1] &
+  Parameters<typeof systemKitDependencies>[2];
 
 function emptySystemConfig(): SystemConfig {
   return {
@@ -318,12 +325,10 @@ export class PluginContext {
   // one process must not share an engine.
 
   /** Every native extraction call goes through this one accessor. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly engineApi: () => any;
+  readonly engineApi: () => EngineApi;
   /** The native module's stateless lookups, before the root resolves: the
    *  shared factory, which registers no handle. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly kitEngine: () => any = engineFactory;
+  readonly kitEngine: () => KitEngine = engineFactory;
   private engineKey: SessionKey | null = null;
   /** This context's build: one Vite config instance, one build. */
   readonly build = createBuildId();
@@ -336,8 +341,7 @@ export class PluginContext {
     options: AnimusExtractOptions,
     // Test seam: `vi.mock` is a no-op in this repo's setup, so behavioral
     // tests inject a canned engine instead of loading the NAPI binary.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    engineApiOverride?: () => any
+    engineApiOverride?: () => EngineApi
   ) {
     this.options = options;
     const verbosity = resolveVerbosity(

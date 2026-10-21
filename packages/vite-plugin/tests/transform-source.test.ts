@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 
+import { fakeEngineApi } from '../../extract/tests/native-functions';
 import {
   RESOLVED_BRIDGE_ID,
   RESOLVED_COMPONENTS_ID,
@@ -53,6 +54,7 @@ function makeProbe(
     storedManifestJson: '{}',
     storedSheets: SHEETS,
     engineApi: () => ({
+      ...fakeEngineApi(),
       transformFile: () => ({
         hasComponents: true,
         code: options.engineOutput ?? 'TRANSFORMED',
@@ -204,6 +206,7 @@ describe('transform: a dropped extension is never served raw', () => {
       const probe = makeContextProbe(ROOT, {
         isProd,
         engineApi: () => ({
+          ...fakeEngineApi(),
           transformFile: () => ({ hasComponents: true, code: 'TRANSFORMED' }),
         }),
         storedManifest: makeManifest({
@@ -444,6 +447,7 @@ describe('transform: new-file invalidation is unconditional', () => {
         storedManifestJson: '{}',
         storedSheets: SHEETS,
         engineApi: () => ({
+          ...fakeEngineApi(),
           transformFile: () => ({ hasComponents: true, code: 'TRANSFORMED' }),
         }),
       });

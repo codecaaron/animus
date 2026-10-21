@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { resolveConfig } from 'vite';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { nativeFunctions } from '../../extract/tests/native-functions';
+import { fakeEngineApi } from '../../extract/tests/native-functions';
 import {
   createKitWorkspace,
   disposeTempRoots,
@@ -50,13 +50,14 @@ async function serveWithAsset(options: ServeOptions = {}) {
   const specifier = options.outsideRoot ? '../logo.svg' : './logo.svg';
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   const ctx = new PluginContext({ system: './src/system.ts' }, () => ({
-    ...nativeFunctions(),
+    ...fakeEngineApi(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
       scalesJson: '{}',
       variableMapJson: '{}',
       variableCss: '',
+      contextualVarsJson: '',
       dependencies: [],
     }),
     extractModuleFacts: factsExtractor({

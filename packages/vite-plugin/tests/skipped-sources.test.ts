@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { createLogger, resolveConfig } from 'vite';
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { nativeFunctions } from '../../extract/tests/native-functions';
+import { fakeEngineApi } from '../../extract/tests/native-functions';
 import {
   disposeTempRoots,
   makeTempRoot,
@@ -35,13 +35,14 @@ async function productionBuild() {
   );
   const contexts: AnalysisContextWire[] = [];
   const ctx = new PluginContext({ system: './src/ds.ts' }, () => ({
-    ...nativeFunctions(),
+    ...fakeEngineApi(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
       scalesJson: '{}',
       variableMapJson: '{}',
       variableCss: '',
+      contextualVarsJson: '',
       dependencies: [],
     }),
     extractModuleFacts: factsExtractor({}),

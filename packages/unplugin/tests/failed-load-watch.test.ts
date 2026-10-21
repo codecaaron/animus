@@ -3,7 +3,10 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { setEngineApiOverride } from '../../extract/session/singleton';
-import { nativeFunctions } from '../../extract/tests/native-functions';
+import {
+  fakeEngineApi,
+  nativeFunctions,
+} from '../../extract/tests/native-functions';
 import {
   buildManifest,
   createProject,
@@ -31,7 +34,7 @@ describe("a failed load's observations are watched", () => {
     const palette = join(root, 'src', 'palette.ts');
     const absent = join(root, 'src', 'theme.ts');
     setEngineApiOverride(() => ({
-      ...nativeFunctions(),
+      ...fakeEngineApi(),
       extractModuleFacts: () => '{"files":{},"parseCount":0}',
       loadSystemModule: () => {
         throw Object.assign(new Error('SyntaxError in palette.ts'), {

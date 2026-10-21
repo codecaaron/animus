@@ -129,6 +129,7 @@ describe('no name is renamed twice', () => {
 });
 
 const SYSTEM = {
+  dependencies: [],
   propConfig: '{}',
   groupRegistry: '{}',
   variableCss:
@@ -364,7 +365,7 @@ describe('the map reaches the extractor', () => {
       label: 'property-names-test',
       loadNativeEngine: () => ({
         ...nativeFunctions(),
-        loadSystemModule: () => ({ ...SYSTEM, dependencies: [] }),
+        loadSystemModule: () => SYSTEM,
         ExtractEngine: class {
           constructor(options: EngineOptions) {
             constructed.push(options);

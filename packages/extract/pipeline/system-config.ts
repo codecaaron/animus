@@ -178,8 +178,10 @@ function evaluateSystemModule(
  * variable name. Error handling stays at the call site.
  */
 export function loadSystemConfig(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  engineApi: () => any,
+  engineApi: () => Pick<
+    EngineApi,
+    'loadSystemModule' | 'extractModuleFacts' | 'engineBuildId'
+  >,
   opts: {
     systemPath: string;
     /** The system's export name; the loader infers it when absent. */

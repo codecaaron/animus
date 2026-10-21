@@ -6,6 +6,7 @@ import { join } from 'path';
 import { resolveConfig } from 'vite';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { fakeEngineApi } from '../../extract/tests/native-functions';
 import { applyResolvedConfig } from '../src/config';
 import { PluginContext } from '../src/context';
 
@@ -30,7 +31,7 @@ async function resolvedContext(
   }
   const ctx = new PluginContext(
     { system: './ds.ts', targets: options.targets },
-    () => ({})
+    () => fakeEngineApi()
   );
   applyResolvedConfig(
     ctx,

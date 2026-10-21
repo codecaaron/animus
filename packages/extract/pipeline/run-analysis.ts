@@ -17,6 +17,7 @@ import { applyUnitFallback } from './unit-fallback';
 
 import type { AnalyzeProjectInputs } from './analyze-project-args';
 import type { FontPreloadEntry } from './core-options';
+import type { EngineApi } from './engine-adapter';
 import type { HostAssetClassification } from './host-assets';
 import type { HostLoadExpander } from './host-expansions';
 import type { KitDescriptorRecord } from './kit-descriptor';
@@ -328,8 +329,14 @@ function systemDiagnostics(
  * the call site (strict-mode throw vs warn).
  */
 export function runProjectAnalysis(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  engineApi: () => any,
+  engineApi: () => Pick<
+    EngineApi,
+    | 'analysisTimings'
+    | 'analyzeProject'
+    | 'diagnosticCodes'
+    | 'fullManifestJson'
+    | 'packageLoads'
+  >,
   opts: AnalysisOptions & {
     warn: (message: string) => void;
     /** Receives info-severity diagnostics; pass a verbose-tier logger. */
@@ -449,8 +456,9 @@ export function runProjectAnalysis(
  * Clear the engine's per-file analysis cache so stale results never bleed
  * into a fresh run. Engines without the capability are tolerated.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function clearEngineCache(engineApi: () => any): void {
+export function clearEngineCache(
+  engineApi: () => Pick<EngineApi, 'clearAnalysisCache'>
+): void {
   try {
     const { clearAnalysisCache } = engineApi();
     clearAnalysisCache();

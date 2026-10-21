@@ -58,7 +58,16 @@ function analyze(files: Array<[string, string]>): void {
     '{}',
     '{}',
     false,
-    '{}'
+    '{}',
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
   );
 }
 

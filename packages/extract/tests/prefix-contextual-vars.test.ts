@@ -95,6 +95,7 @@ function analyze(prefix?: string, prefixContextualVars?: boolean) {
         ...serialized,
         propConfig: config.propConfig,
         groupRegistry: config.groupRegistry,
+        dependencies: [],
       }),
     }),
     { systemPath: 'ds.ts', rootDir: '/', prefix, prefixContextualVars }

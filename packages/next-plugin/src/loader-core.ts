@@ -6,6 +6,7 @@ import {
 import { ANIMUS_CSS_MODULE_ID } from '@animus-ui/extract/session';
 
 import type {
+  EngineApi,
   ProjectManifest,
   PublishedManifest,
   ServedFiles,
@@ -141,8 +142,7 @@ export function transformWithManifest(args: {
   /** Project-root-relative path of the file being transformed. */
   filename: string;
   manifestJson: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  engineApi: () => any;
+  engineApi: () => Pick<EngineApi, 'transformFile'>;
   opts: LoaderPolicyOptions;
 }): string {
   const { source, filename, manifestJson, engineApi, opts } = args;

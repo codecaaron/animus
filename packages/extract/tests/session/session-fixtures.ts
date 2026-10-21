@@ -140,10 +140,7 @@ export const SYSTEM_CONFIG = {
   scalesJson: '{"space":{}}',
   variableMapJson: '{"map":{}}',
   variableCss: ':root{--anm-space-1: 4px}',
-  contextualVarsJson: null,
-  selectorAliases: null,
-  globalStyleBlocks: null,
-  keyframesBlocks: null,
+  contextualVarsJson: '',
 };
 
 export const BUTTON_SOURCE =

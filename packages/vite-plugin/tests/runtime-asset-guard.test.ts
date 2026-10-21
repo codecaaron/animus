@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { createLogger, resolveConfig } from 'vite';
 import { afterEach, expect, test } from 'vitest';
 
-import { nativeFunctions } from '../../extract/tests/native-functions';
+import { fakeEngineApi } from '../../extract/tests/native-functions';
 import {
   disposeTempRoots,
   makeTempRoot,
@@ -51,13 +51,14 @@ async function build(manifest: ProjectManifest, strict: boolean) {
     warnings.push(message);
   };
   const ctx = new PluginContext({ system: './src/ds.ts', strict }, () => ({
-    ...nativeFunctions(),
+    ...fakeEngineApi(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
       scalesJson: '{}',
       variableMapJson: '{}',
       variableCss: '',
+      contextualVarsJson: '',
       dependencies: [],
     }),
     extractModuleFacts: () => JSON.stringify({ files: {}, parseCount: 0 }),

@@ -8,7 +8,7 @@ import {
 import { join, relative } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { nativeFunctions } from '../native-functions';
+import { fakeEngineApi } from '../native-functions';
 import {
   BUTTON_SOURCE,
   BUTTON_STYLE_EDIT,
@@ -36,7 +36,7 @@ import { setEngineApiOverride } from '../../session/singleton';
 // Injection through the singleton's globalThis seam reaches every copy of
 // the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
-  ...nativeFunctions(),
+  ...fakeEngineApi(),
   extractModuleFacts: () => '{"files":{},"parseCount":0}',
   resolveSpecifier: requireResolveSpecifier,
   loadSystemModule: mocks.loadSystemModule,

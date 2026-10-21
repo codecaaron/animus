@@ -15,7 +15,7 @@ import { createEngineApi } from '../pipeline/engine-adapter';
 import { ExtractionSession } from '../session/extraction-session';
 import { getSharedCss, setEngineApiOverride } from '../session/singleton';
 
-import type { ExtractorEngine } from '../pipeline/engine-adapter';
+import type { EngineApi, ExtractorEngine } from '../pipeline/engine-adapter';
 import type { HostLoadExpander, ListedLoad } from '../pipeline/host-expansions';
 
 const NATIVE = join(__dirname, '../extractor.js');
@@ -32,7 +32,7 @@ const FAILING = {
 /** The native engine, with the system served in-process: a temp project
  *  cannot resolve `@animus-ui/system` for the engine's own system loader.
  *  `failing` adds the `w` prop, whose transform fails. */
-function nativeApiServing(failing = false): () => object {
+function nativeApiServing(failing = false): () => EngineApi {
   let engine: ExtractorEngine | null = null;
   let sentSources: Map<string, string> | null = null;
   let driftWarned = false;
@@ -66,6 +66,7 @@ function nativeApiServing(failing = false): () => object {
     ...theme.serialize(),
     propConfig,
     groupRegistry: config.groupRegistry,
+    dependencies: [],
   };
   const system = failing
     ? { ...served, transformSources: JSON.stringify(FAILING.transformSources) }

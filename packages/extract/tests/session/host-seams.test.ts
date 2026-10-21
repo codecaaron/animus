@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { nativeFunctions } from '../native-functions';
+import { fakeEngineApi, nativeFunctions } from '../native-functions';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
@@ -73,7 +73,7 @@ export const system = createSystem({}).extend(kit);
   const { parent, app, kit } = createKitWorkspace(systemSource);
   const systemPath = join(app, 'src', 'system.ts');
   setEngineApiOverride(() => ({
-    ...nativeFunctions(),
+    ...fakeEngineApi(),
     extractModuleFacts: factsExtractor({
       [systemPath]: {
         ...emptyFacts(systemPath),
@@ -85,13 +85,13 @@ export const system = createSystem({}).extend(kit);
     // The stand-in table: the kit's `src/`, and its index as the guessed
     // entry, which a loader-only kit needs as its source entry.
     resolveKitSourceRoot: (
-      _specifier: string,
-      _fromDir: string,
-      _conditions?: readonly string[],
-      _workspaces?: Record<string, string>,
-      _extensionPolicyJson?: string,
-      _hostEntry?: string,
-      packageDir?: string
+      _specifier,
+      _fromDir,
+      _conditions,
+      _workspaces,
+      _extensionPolicyJson,
+      _hostEntry,
+      packageDir
     ) =>
       JSON.stringify({
         rule: 'src',
@@ -189,7 +189,7 @@ describe('host-first discovery', () => {
 describe('a host runtime import', () => {
   test('reaches the emitter, and an override that cannot supply a terminal fails', async () => {
     setEngineApiOverride(() => ({
-      ...nativeFunctions(),
+      ...fakeEngineApi(),
       extractModuleFacts: () => '{"files":{},"parseCount":0}',
       loadSystemModule: mocks.loadSystemModule,
       analyzeProject: mocks.analyzeProject,
@@ -221,7 +221,7 @@ describe('a host runtime import', () => {
 describe('a session that keeps its artifacts in memory', () => {
   test('publishes every result and writes no session directory', async () => {
     setEngineApiOverride(() => ({
-      ...nativeFunctions(),
+      ...fakeEngineApi(),
       extractModuleFacts: () => '{"files":{},"parseCount":0}',
       loadSystemModule: mocks.loadSystemModule,
       analyzeProject: mocks.analyzeProject,
@@ -242,7 +242,7 @@ describe('a session that keeps its artifacts in memory', () => {
 describe('a session that keeps its artifacts in memory', () => {
   test('leaves asset placeholders to its host and a sibling epoch alone', async () => {
     setEngineApiOverride(() => ({
-      ...nativeFunctions(),
+      ...fakeEngineApi(),
       extractModuleFacts: () => '{"files":{},"parseCount":0}',
       loadSystemModule: mocks.loadSystemModule,
       analyzeProject: mocks.analyzeProject,
@@ -463,7 +463,7 @@ describe("a host's engine and logger", () => {
 describe('a host that substitutes asset URLs itself', () => {
   async function publishWithAsset(hostSubstitutesAssets: boolean) {
     setEngineApiOverride(() => ({
-      ...nativeFunctions(),
+      ...fakeEngineApi(),
       extractModuleFacts: () => '{"files":{},"parseCount":0}',
       loadSystemModule: mocks.loadSystemModule,
       analyzeProject: mocks.analyzeProject,

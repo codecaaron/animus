@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { createLogger, resolveConfig } from 'vite';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { nativeFunctions } from '../../extract/tests/native-functions';
+import { fakeEngineApi } from '../../extract/tests/native-functions';
 import {
   createKitWorkspace,
   disposeTempRoots,
@@ -69,13 +69,14 @@ async function buildWithUserExcludes(excludeOrLayout: string[] | BuildLayout) {
   const ctx = new PluginContext(
     { system: './src/system.ts', exclude, verbose: layout.verbose },
     () => ({
-      ...nativeFunctions(),
+      ...fakeEngineApi(),
       loadSystemModule: () => ({
         propConfig: '{}',
         groupRegistry: '{}',
         scalesJson: '{}',
         variableMapJson: '{}',
         variableCss: '',
+        contextualVarsJson: '',
         dependencies: [],
       }),
       extractModuleFacts: factsExtractor({

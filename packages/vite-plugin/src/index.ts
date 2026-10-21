@@ -42,6 +42,7 @@ import {
 } from './virtual-modules';
 import { kitWatchNegations } from './watch-ignored';
 
+import type { KitEngine } from './context';
 import type {
   AnimusQuarantineOptions,
   ClosedDynamicImport,
@@ -84,8 +85,7 @@ interface SourceKitConfig {
 async function sourceKitConfig(
   rootDir: string,
   systemPath: string,
-  engine: Parameters<typeof sourceKitDependencies>[1] &
-    Parameters<typeof systemKitDependencies>[2]
+  engine: KitEngine
 ): Promise<SourceKitConfig | undefined> {
   const kits = new Map<string, SourceKitDependency>();
   for (const kit of [

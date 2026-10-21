@@ -15,7 +15,7 @@ import {
 import { join, relative } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { nativeFunctions } from '../native-functions';
+import { fakeEngineApi } from '../native-functions';
 
 /** An engine's fingerprints, where a row gives the stub them. */
 interface Fingerprints {
@@ -38,7 +38,7 @@ import { getSharedCss, setEngineApiOverride } from '../../session/singleton';
 // Injection through the singleton's globalThis seam reaches every copy of
 // the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
-  ...nativeFunctions(),
+  ...fakeEngineApi(),
   extractModuleFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,

@@ -462,6 +462,8 @@ describe('invalid @property registrations', () => {
           scalesJson: '{}',
           variableMapJson: '{}',
           variableCss: `${registrations}\n\n:root { --ok: red; }`,
+          contextualVarsJson: '',
+          dependencies: [],
         }),
       }),
       { systemPath: 'ds.ts', rootDir: '/', prefix }
@@ -534,6 +536,7 @@ describe('invalid @property registrations', () => {
           variableCss: '',
           contextualVarsJson: '{"colors":["tone"]}',
           propertyRecordsJson: records,
+          dependencies: [],
         }),
       }),
       { systemPath: 'ds.ts', rootDir: '/', prefix: 'acme' }

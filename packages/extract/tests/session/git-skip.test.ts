@@ -3,7 +3,7 @@ import { mkdirSync, realpathSync, writeFileSync } from 'fs';
 import { dirname, join, posix } from 'path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { nativeFunctions } from '../native-functions';
+import { fakeEngineApi, nativeFunctions } from '../native-functions';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
 import { setEngineApiOverride } from '../../session/singleton';
 
 setEngineApiOverride(() => ({
-  ...nativeFunctions(),
+  ...fakeEngineApi(),
   extractModuleFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,

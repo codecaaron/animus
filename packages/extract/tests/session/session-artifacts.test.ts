@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { contentHash } from '../../pipeline';
 import { artifactHash } from '../../session/session-paths';
-import { nativeFunctions } from '../native-functions';
+import { fakeEngineApi, nativeFunctions } from '../native-functions';
 
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
@@ -31,7 +31,7 @@ import { setEngineApiOverride } from '../../session/singleton';
 // Injection through the singleton's globalThis seam reaches every copy of
 // the module (source or dist); a module mock does not.
 setEngineApiOverride(() => ({
-  ...nativeFunctions(),
+  ...fakeEngineApi(),
   extractModuleFacts: () => '{"files":{},"parseCount":0}',
   loadSystemModule: mocks.loadSystemModule,
   analyzeProject: mocks.analyzeProject,

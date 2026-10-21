@@ -316,16 +316,14 @@ const ENGINE_API_OVERRIDE_KEY = '__animus_engine_api_override__';
 // SAFETY: this module is the sole owner of this fixed globalThis key, which
 // holds only the engine-API test seam.
 const overrideGlobal = globalThis as typeof globalThis & {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [ENGINE_API_OVERRIDE_KEY]?: () => any;
+  [ENGINE_API_OVERRIDE_KEY]?: () => EngineApi;
 };
 
 /**
  * Test seam, set once at module top level: it lives outside the session
  * registry so a per-test reset cannot strip the override.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function setEngineApiOverride(api: (() => any) | null): void {
+export function setEngineApiOverride(api: (() => EngineApi) | null): void {
   overrideGlobal[ENGINE_API_OVERRIDE_KEY] = api ?? undefined;
 }
 
@@ -428,8 +426,7 @@ export function releaseEngineHandle(key: SessionKey): void {
 /**
  * The build's engine API, from the one engine-handle store.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function engineApi(key: SessionKey): any {
+export function engineApi(key: SessionKey): EngineApi {
   const override = overrideGlobal[ENGINE_API_OVERRIDE_KEY];
   if (override) return override();
   joined(key);

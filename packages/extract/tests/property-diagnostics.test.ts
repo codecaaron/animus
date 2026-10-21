@@ -124,7 +124,7 @@ interface Analysis {
 function analyze(
   source: string,
   theme = registeredTheme(),
-  options: { strict?: boolean; keyframes?: string | null } = {}
+  options: { strict?: boolean; keyframes?: string } = {}
 ): Analysis {
   const serialized = theme.serialize();
   const config = ds.toConfig();
@@ -135,7 +135,8 @@ function analyze(
         ...serialized,
         propConfig: config.propConfig,
         groupRegistry: config.groupRegistry,
-        keyframesBlocks: options.keyframes ?? null,
+        keyframesBlocks: options.keyframes,
+        dependencies: [],
       }),
     }),
     { systemPath: 'ds.ts', rootDir: '/' }

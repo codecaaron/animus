@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { createLogger } from 'vite';
 import { afterEach, expect, test } from 'vitest';
 
-import { nativeFunctions } from '../../extract/tests/native-functions';
+import { fakeEngineApi } from '../../extract/tests/native-functions';
 import {
   createKitWorkspace,
   disposeTempRoots,
@@ -46,24 +46,20 @@ async function buildWithUnlinkedKit(
   const system = join(app, 'src', 'system.ts');
   let analysed = '';
   const ctx = new PluginContext({ system: './src/system.ts' }, () => ({
-    ...nativeFunctions(),
+    ...fakeEngineApi(),
     loadSystemModule: () => ({
       propConfig: '{}',
       groupRegistry: '{}',
       scalesJson: '{}',
       variableMapJson: '{}',
       variableCss: '',
+      contextualVarsJson: '',
       dependencies: [],
     }),
     extractModuleFacts: factsExtractor({
       [system]: { ...emptyFacts(system), imports: systemImportFacts(SYSTEM) },
     }),
-    resolveSpecifier: (
-      specifier: string,
-      _fromDir: string,
-      _conditions?: readonly string[],
-      workspaces?: Record<string, string>
-    ) => {
+    resolveSpecifier: (specifier, _fromDir, _conditions, workspaces) => {
       if (!workspaces || !Object.hasOwn(workspaces, specifier)) return {};
       const dir = workspaces[specifier];
       const { main } = JSON.parse(
@@ -81,13 +77,13 @@ async function buildWithUnlinkedKit(
     // The stand-in table: `src/` where the kit has one, with its index as
     // the root entry, else its runtime entry's directory.
     resolveKitSourceRoot: (
-      _specifier: string,
-      _fromDir: string,
-      _conditions?: readonly string[],
-      _workspaces?: Record<string, string>,
-      _extensionPolicyJson?: string,
-      hostEntry?: string,
-      packageDir?: string
+      _specifier,
+      _fromDir,
+      _conditions,
+      _workspaces,
+      _extensionPolicyJson,
+      hostEntry,
+      packageDir
     ) => {
       const src = join(packageDir ?? '', 'src');
       return JSON.stringify(
