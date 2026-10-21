@@ -493,7 +493,8 @@ test('a kept option with a dynamic site is never ranked, and no saving total cou
     write([[literal('lg')], [dynamic]]);
     const kept = await chipFinding();
     expect(kept?.title).toBe('Chip: 1 option unproven (size: sm)');
-    expect(kept?.belowFloor).toBe(true);
+    // Never ranked, nor counted below the floor, in the JSON either.
+    expect(kept?.belowFloor).toBe(false);
     expect(kept?.caveats[0]).toContain('kept by 1 dynamic site;');
     // The JSON says so too, with every site, not only its caveat's text.
     expect(kept?.unproven).toEqual({ dynamicSites: ['src/app.tsx:2'] });
@@ -509,6 +510,7 @@ test('a kept option with a dynamic site is never ranked, and no saving total cou
           {
             ...measured,
             title: 'measured',
+            belowFloor: true,
             saving: { raw: 7, gzip: null, brotli: null },
           },
         ],
@@ -526,7 +528,7 @@ test('a kept option with a dynamic site is never ranked, and no saving total cou
       [literal('lg')],
       [{ ...literal(''), staticValue: { toString: 0, valueOf: 0 } }],
     ]);
-    expect((await chipFinding())?.belowFloor).toBe(true);
+    expect((await chipFinding())?.unproven).toBeDefined();
 
     // Every site literal: the engine prunes, so there is nothing to list.
     // The `constructor` axis, which lists no options, reads no inherited one.

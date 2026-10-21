@@ -131,12 +131,16 @@ export interface Restructure {
   /** What keeps the confidence below high. */
   caveats: string[];
   saving: Saving;
+  /** It measures under the floor, so it is listed collapsed and counts in
+   *  their total. An unproven finding never is: it promises no saving. */
   belowFloor: boolean;
   /** Every component it changes is one `removeUnbundledComponents` would
    *  remove, so the delivery estimate already counts its saving. */
   removedByDelivery: boolean;
   /** Present where a site passing a value no literal spells holds the
-   *  finding back: it ranks below the floor whatever it measures. */
+   *  finding back: it is never ranked, nor counted below the floor,
+   *  whatever it measures; its saving is what pruning would remove if no
+   *  such site reaches the options. */
   unproven?: Unproven;
 }
 
@@ -1739,7 +1743,8 @@ async function measureCandidates(
       return {
         ...candidate.finding,
         saving: final,
-        belowFloor: unproven || final.brotli === null || final.brotli < floor,
+        belowFloor:
+          !unproven && (final.brotli === null || final.brotli < floor),
         removedByDelivery: false,
       };
     })
@@ -1771,7 +1776,11 @@ function withoutRemoved(
     const gone = finding.components.filter((id) => removed.has(id));
     if (gone.length === 0) return finding;
     if (gone.length === finding.components.length) {
-      return { ...finding, removedByDelivery: true, belowFloor: true };
+      return {
+        ...finding,
+        removedByDelivery: true,
+        belowFloor: finding.unproven === undefined,
+      };
     }
     return {
       ...finding,
@@ -2028,14 +2037,17 @@ export function formatCssAudit(report: CssAuditReport): string {
       );
     }
   }
-  const above = restructures.findings.filter((finding) => !finding.belowFloor);
+  const above = restructures.findings.filter(
+    (finding) => !finding.belowFloor && finding.unproven === undefined
+  );
   // A finding a dynamic site holds back saves nothing the audit can
   // promise: it is listed as kept, never in a saving or a total.
-  const listed = restructures.findings.filter(
+  const below = restructures.findings.filter(
     (finding) => finding.belowFloor && !finding.removedByDelivery
   );
-  const below = listed.filter((finding) => finding.unproven === undefined);
-  const unproven = listed.filter((finding) => finding.unproven !== undefined);
+  const unproven = restructures.findings.filter(
+    (finding) => finding.unproven !== undefined && !finding.removedByDelivery
+  );
   const removed = restructures.findings.filter(
     (finding) => finding.removedByDelivery
   );
