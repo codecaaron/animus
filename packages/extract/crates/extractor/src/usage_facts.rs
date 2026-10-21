@@ -1139,6 +1139,10 @@ pub(crate) enum SpreadArg {
     /// The props, or the rest of them, of the enclosing top-level component:
     /// its binding.
     Props(String),
+    /// What a call of the top-level function or import it names returns:
+    /// an object that cannot retarget the element, where its declaring
+    /// module lists the function in `FileFacts::bounded_returns`.
+    Returned(String),
     /// Anything else.
     Other,
 }
@@ -3858,18 +3862,10 @@ pub(crate) fn returned_function(name: &str, depth: usize) -> String {
     format!("{name}{}", "()".repeat(depth))
 }
 
-/// For each module-scope function (a declaration, or a `const` arrow or
-/// function expression), how each parameter treats its object: see
-/// `ParamReading`. So too for the function a call of one returns as its only
-/// result (`() => (parts) => parts`), keyed `name()`, at most four calls
-/// deep. Every parameter of a function whose parameter list has a default,
-/// a destructuring or a rest counts as unsafe, and so does every parameter
-/// of a function something reassigns.
-pub(crate) fn function_param_readings(
-    program: &Program<'_>,
-    scoping: &Scoping,
-    direct_eval: bool,
-) -> BTreeMap<String, Vec<ParamReading>> {
+/// Each module-scope function (a declaration, or a `const` arrow or
+/// function expression) with its name, and so too the function a call of one
+/// returns as its only result, keyed `name()`, at most four calls deep.
+fn module_functions<'b, 'a>(program: &'b Program<'a>) -> Vec<(String, String, FunctionParts<'b, 'a>)> {
     use oxc::ast::ast::{BindingPattern, Declaration, ExportDefaultDeclarationKind};
     // A function with no body (an ambient `declare function` or an overload
     // signature) may do anything with its arguments.
@@ -3913,6 +3909,49 @@ pub(crate) fn function_param_readings(
             _ => {}
         }
     }
+    functions
+}
+
+/// The module-scope functions, never reassigned, whose every return builds
+/// an object of only static keys holding plain data
+/// (`forwarding::literal_keys`), none of them `as` or `asChild`: a spread
+/// of what a call of one returns cannot retarget the element it is spread
+/// on.
+pub(crate) fn bounded_returns(program: &Program<'_>, scoping: &Scoping) -> BTreeSet<String> {
+    let unbound = |id: &oxc::ast::ast::IdentifierReference<'_>| symbol_of(scoping, id).is_none();
+    let bounded = |value: Option<&Expression<'_>>| {
+        let mut keys = Vec::new();
+        value.is_none_or(|value| forwarding::literal_keys(value, true, &mut keys, &unbound) && !keys.iter().any(|key| key == "as" || key == "asChild"))
+    };
+    module_functions(program)
+        .into_iter()
+        .filter(|(name, key, function)| {
+            name == key
+                && !scoping.get_root_binding(name.as_str().into()).is_some_and(|symbol| crate::identity::reassigned(scoping, symbol))
+                && match (function.concise, function.body) {
+                    (Some(result), _) => bounded(Some(result)),
+                    (None, Some(body)) => forwarding::every_return(ComponentBody::Function(body), &bounded),
+                    (None, None) => false,
+                }
+        })
+        .map(|(name, ..)| name)
+        .collect()
+}
+
+/// For each module-scope function (a declaration, or a `const` arrow or
+/// function expression), how each parameter treats its object: see
+/// `ParamReading`. So too for the function a call of one returns as its only
+/// result (`() => (parts) => parts`), keyed `name()`, at most four calls
+/// deep. Every parameter of a function whose parameter list has a default,
+/// a destructuring or a rest counts as unsafe, and so does every parameter
+/// of a function something reassigns.
+pub(crate) fn function_param_readings(
+    program: &Program<'_>,
+    scoping: &Scoping,
+    direct_eval: bool,
+) -> BTreeMap<String, Vec<ParamReading>> {
+    use oxc::ast::ast::BindingPattern;
+    let functions = module_functions(program);
     let mut readings: BTreeMap<String, Vec<ParamReading>> = BTreeMap::new();
     let mut params: FxHashMap<SymbolId, (String, usize)> = FxHashMap::default();
     // The functions that may do anything with every argument: reassigned,

@@ -510,6 +510,9 @@ struct Module<'s> {
     slot_renders: FxHashSet<SymbolId>,
     /// See `Records::child_cloners`.
     child_cloners: BTreeMap<String, bool>,
+    /// `Declarations::call_consts` whose every reference is a JSX spread's
+    /// argument, none exported.
+    call_consts: FxHashMap<SymbolId, SymbolId>,
     /// The function a binding is declared to.
     functions: FxHashMap<SymbolId, ScopeId>,
     /// Bindings a function body declares, and never reassigns, to an array
@@ -790,8 +793,14 @@ impl<'s> Module<'s> {
         untraced_stores.sort_unstable();
         let Declarations {
             params, param_inputs, functions, in_place, reshaped, reshaped_beyond_clones, setters, hook_states, classes, hookable_objects, keyed_stores,
-            rewrites_object, ..
+            rewrites_object, mut call_consts, beyond_spreads, ..
         } = declarations;
+        // An exported holder is any importer's to change, out of this
+        // module's sight.
+        call_consts.retain(|symbol, _| {
+            !beyond_spreads.contains(symbol)
+                && !(scoping.symbol_scope_id(*symbol) == scoping.root_scope_id() && exported.contains(scoping.symbol_name(*symbol)))
+        });
         Module {
             scoping,
             sources,
@@ -802,6 +811,7 @@ impl<'s> Module<'s> {
             params,
             slot_renders,
             child_cloners: BTreeMap::new(),
+            call_consts,
             props_params: FxHashSet::default(),
             as_types: FxHashSet::default(),
             caller_params: FxHashSet::default(),
@@ -1216,6 +1226,13 @@ struct Declarations<'r> {
     /// provably primitive by `primitive`'s forms other than such a call:
     /// each is added once the walk leaves its body.
     primitive_functions: FxHashSet<SymbolId>,
+    /// `const`s declared to a call of a top-level binding or an import
+    /// (`top_level_callee`), with the callee.
+    call_consts: FxHashMap<SymbolId, SymbolId>,
+    /// The bindings some reference uses other than as a JSX spread's
+    /// argument: a member read or call may run code of the object's with it
+    /// as `this`, and any other use may change it.
+    beyond_spreads: FxHashSet<SymbolId>,
     /// See `FileFacts::keyed_stores`.
     keyed_stores: Vec<(u32, String)>,
     /// Static-key stores into a binding, a static chain off one or a
@@ -1315,6 +1332,8 @@ impl<'r> Declarations<'r> {
             outside_let_goes: Vec::new(),
             primitive_consts: FxHashSet::default(),
             string_consts: FxHashMap::default(),
+            call_consts: FxHashMap::default(),
+            beyond_spreads: FxHashSet::default(),
             number_consts: FxHashSet::default(),
             primitive_functions: FxHashSet::default(),
             keyed_stores: Vec::new(),
@@ -2361,6 +2380,50 @@ fn built_in_name(name: &str) -> bool {
         || matches!(name, "constructor" | "call" | "apply" | "bind")
 }
 
+/// The binding `expression` calls, when it is a call of a top-level
+/// binding: one the module declares, or an import. Its declaring module
+/// decides what the call returns (`FileFacts::bounded_returns`, which lists
+/// no function anything reassigns).
+fn top_level_callee(scoping: &Scoping, expression: &Expression<'_>) -> Option<SymbolId> {
+    let Expression::CallExpression(call) = unwrap_type_assertions(expression) else { return None };
+    let Expression::Identifier(callee) = unwrap_type_assertions(&call.callee) else { return None };
+    super::symbol_of(scoping, callee).filter(|symbol| scoping.symbol_scope_id(*symbol) == scoping.root_scope_id())
+}
+
+/// Whether `expression` builds an object of only static keys, which it
+/// pushes onto `into`: object literals of plain or spread properties of
+/// such objects, a conditional or logical expression over them, or a
+/// value that spreads to nothing (`null`, a boolean, `undefined`, which
+/// names the global only where `unbound` says nothing binds it). A
+/// `__proto__` key, however it is spelled, is none: written as a shorthand
+/// or quoted it is an own key, which a props copy assigns as the props
+/// object's prototype. With `data_only`, each property also holds data
+/// that runs no code with the object as `this`: no function or class
+/// written as its value, which rules out getters, setters and methods too,
+/// whose functions are their values. An arrow binds no `this` of its own.
+pub(super) fn literal_keys(expression: &Expression<'_>, data_only: bool, into: &mut Vec<String>, unbound: &dyn Fn(&IdentifierReference<'_>) -> bool) -> bool {
+    let keys = |expression: &Expression<'_>, into: &mut Vec<String>| literal_keys(expression, data_only, into, unbound);
+    match unwrap_type_assertions(expression) {
+        Expression::ObjectExpression(object) => object.properties.iter().all(|property| match property {
+            ObjectPropertyKind::ObjectProperty(property) if !property.computed => {
+                let data = !matches!(unwrap_type_assertions(&property.value), Expression::FunctionExpression(_) | Expression::ClassExpression(_));
+                (data || !data_only)
+                    && crate::eval::property_name(&property.key)
+                        .filter(|name| name != "__proto__")
+                        .map(|name| into.push(name.to_string()))
+                        .is_some()
+            }
+            ObjectPropertyKind::SpreadProperty(spread) => keys(&spread.argument, into),
+            ObjectPropertyKind::ObjectProperty(_) => false,
+        }),
+        Expression::ConditionalExpression(conditional) => keys(&conditional.consequent, into) && keys(&conditional.alternate, into),
+        Expression::LogicalExpression(logical) => keys(&logical.right, into) && keys(&logical.left, into),
+        Expression::NullLiteral(_) | Expression::BooleanLiteral(_) => true,
+        Expression::Identifier(id) => id.name == "undefined" && unbound(id),
+        _ => false,
+    }
+}
+
 /// Whether `expression` names a built-in whose prototype every value of its
 /// kind shares, `unbound` saying which names no binding shadows: `Array`, or
 /// `globalThis.Array`.
@@ -2438,7 +2501,7 @@ fn own_function(ancestors: &[AstKind<'_>]) -> Option<ScopeId> {
 /// Whether `test` holds of every value a function returns: an arrow's
 /// concise body, or each of its body's own `return`s, and `None` for
 /// running off its end or a bare `return`.
-fn every_return(body: ComponentBody<'_, '_>, test: &dyn Fn(Option<&Expression<'_>>) -> bool) -> bool {
+pub(super) fn every_return(body: ComponentBody<'_, '_>, test: &dyn Fn(Option<&Expression<'_>>) -> bool) -> bool {
     // A `return` is a statement outside any nested function or class, so
     // the walk skips expressions, and stops at the first that fails.
     struct Returns<'t> {
@@ -2762,7 +2825,11 @@ impl<'a> Visit<'a> for Declarations<'a> {
         let symbol = self.symbol(id);
         if let Some(symbol) = symbol {
             let mut up = self.ancestors.iter().rev();
-            let plain = match super::peel_wrappers(id.span, &mut up) {
+            let (at, parent) = super::peel_wrappers(id.span, &mut up);
+            if !matches!(parent, Some(AstKind::JSXSpreadAttribute(spread)) if spread.argument.span() == at) {
+                self.beyond_spreads.insert(symbol);
+            }
+            let plain = match (at, parent) {
                 (current, Some(AstKind::JSXSpreadAttribute(spread))) => spread.argument.span() == current,
                 (current, Some(AstKind::StaticMemberExpression(member))) => {
                     member.object.span() == current && super::member_effect(member.span, up).is_none()
@@ -2878,6 +2945,9 @@ impl<'a> Visit<'a> for Declarations<'a> {
                     }
                     if let Some(string) = super::static_string(init).filter(|_| constant) {
                         self.string_consts.insert(symbol, string);
+                    }
+                    if let Some(callee) = top_level_callee(self.scoping, init).filter(|_| constant) {
+                        self.call_consts.insert(symbol, callee);
                     }
                     match init {
                         Expression::ArrayExpression(_) if constant && self.depth == 0 => {
@@ -4061,34 +4131,24 @@ impl<'a> Walk<'_, '_, 'a> {
         })
     }
 
-    /// What a spread of `argument` can carry: listed literal keys, the
-    /// enclosing top-level component's own props or rest, or anything.
+    /// What a spread of `argument` can carry: listed literal keys, what a
+    /// call of a top-level function returns (directly, or through a `const`
+    /// nothing changes), the enclosing top-level component's own props or
+    /// rest, or anything.
     fn spread_arg(&self, argument: &Expression<'a>) -> SpreadArg {
-        /// `undefined` names the global only where nothing binds it.
-        type Unbound<'f> = &'f dyn Fn(&IdentifierReference<'_>) -> bool;
-        fn keys(expression: &Expression<'_>, into: &mut Vec<String>, unbound: Unbound<'_>) -> bool {
-            match unwrap_type_assertions(expression) {
-                Expression::ObjectExpression(object) => object.properties.iter().all(|property| match property {
-                    ObjectPropertyKind::ObjectProperty(property) if !property.computed => {
-                        crate::eval::property_name(&property.key).map(|name| into.push(name.to_string())).is_some()
-                    }
-                    _ => false,
-                }),
-                Expression::ConditionalExpression(conditional) => {
-                    keys(&conditional.consequent, into, unbound) && keys(&conditional.alternate, into, unbound)
-                }
-                Expression::LogicalExpression(logical) => keys(&logical.right, into, unbound) && keys(&logical.left, into, unbound),
-                Expression::NullLiteral(_) | Expression::BooleanLiteral(_) => true,
-                Expression::Identifier(id) => id.name == "undefined" && unbound(id),
-                _ => false,
-            }
-        }
         let mut listed = Vec::new();
-        if keys(argument, &mut listed, &|id| self.module.symbol(id).is_none()) {
+        if literal_keys(argument, false, &mut listed, &|id| self.module.symbol(id).is_none()) {
             return SpreadArg::Keys(listed);
+        }
+        let returned = |callee: SymbolId| SpreadArg::Returned(self.module.scoping.symbol_name(callee).to_string());
+        if let Some(callee) = top_level_callee(self.module.scoping, argument) {
+            return returned(callee);
         }
         let Expression::Identifier(id) = unwrap_type_assertions(argument) else { return SpreadArg::Other };
         let Some(symbol) = self.module.symbol(id) else { return SpreadArg::Other };
+        if let Some(callee) = self.module.call_consts.get(&symbol) {
+            return returned(*callee);
+        }
         // The parameter, or its rest, of the top-level function the element
         // is in.
         let own = self.own_param().and_then(|pattern| match pattern {

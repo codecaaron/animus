@@ -35,6 +35,8 @@ pub(crate) struct Lowered {
     pub(crate) loads: Vec<crate::loads::Load>,
     /// How each of the module's functions treats an object passed to it.
     pub(crate) readings: crate::usage_facts::ParamReadings,
+    /// See `usage_facts::bounded_returns`.
+    pub(crate) bounded_returns: std::sync::Arc<std::collections::BTreeSet<String>>,
     /// How the module runs code from a string, if it does.
     pub(crate) dynamic_code: Option<&'static str>,
     /// Whether the module may call `eval` directly (`StringCode`).
@@ -72,6 +74,7 @@ impl Lowered {
         let record = copy_module_record(module_record, &bindings, program.source_text, program);
         let strings = crate::usage_facts::string_code(program, &scoping);
         let readings = std::sync::Arc::new(crate::usage_facts::function_param_readings(program, &scoping, strings.direct_eval));
+        let bounded_returns = std::sync::Arc::new(crate::usage_facts::bounded_returns(program, &scoping));
         let loader_escape = crate::usage_facts::loader_escape(program, &scoping);
         let (loads, listed) = crate::loads::collect_listed(program);
         let lowered = Self {
@@ -80,6 +83,7 @@ impl Lowered {
             record: std::sync::Arc::new(record),
             loads,
             readings,
+            bounded_returns,
             dynamic_code: strings.reads,
             direct_eval: strings.direct_eval,
             trusts_promise: strings.trusts_promise,

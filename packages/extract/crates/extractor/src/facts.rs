@@ -571,6 +571,9 @@ pub struct FileFacts {
     /// How each of the module's functions treats an object passed to it.
     #[serde(skip)]
     pub(crate) param_readings: crate::usage_facts::ParamReadings,
+    /// See `usage_facts::bounded_returns`.
+    #[serde(skip)]
+    pub(crate) bounded_returns: std::sync::Arc<BTreeSet<String>>,
     /// How the module runs code from a string (`reads eval`), which can
     /// load any module and change what it exports.
     #[serde(skip)]
@@ -1471,6 +1474,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         wrapped_uses,
         written_namespaces,
         param_readings: Arc::clone(&lowered.readings),
+        bounded_returns: Arc::clone(&lowered.bounded_returns),
         dynamic_code: lowered.dynamic_code,
         trusts_promise: lowered.trusts_promise,
         replaces_promise: lowered.replaces_promise,

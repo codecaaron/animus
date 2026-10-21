@@ -7530,6 +7530,9 @@ fn opaque_delivery(
         spreads.iter().all(|spread| match spread {
             SpreadArg::Keys(keys) => !keys.iter().any(|key| key == "as" || key == "asChild"),
             SpreadArg::Props(wrapper) => proven.contains(&(file.to_string(), wrapper.clone())),
+            SpreadArg::Returned(callee) => files.get(file).and_then(|ff| declaration(file, ff, callee)).is_some_and(|(declaring, binding, _)| {
+                files.get(&declaring).is_some_and(|declared| declared.bounded_returns.contains(&binding))
+            }),
             SpreadArg::Other => false,
         })
     };
@@ -15357,6 +15360,47 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
             ("const Base = ({ children, ...rest }) => <a {...rest}>{children}</a>;\nconst Render = ({ children, ...rest }) => <Base {...rest}>{children}</Base>;", "as={Foreign}", "", false),
             ("const Inner = ({ as: Tag = 'div', ...props }) => <Tag {...props} />;\nconst Render = ({ children, ...rest }) => <Inner {...rest}>{children}</Inner>;", "as={Foreign}", "", true),
             ("const Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children, ...rest }) => <Stack {...rest}>{children}</Stack>;", "as={Foreign}", "", true),
+            // A spread of what a top-level function returns carries only the
+            // static keys its every return builds: an Animus element given
+            // one renders in place where none is `as` or `asChild`, called
+            // directly, through a `const` nothing changes, or from another
+            // module.
+            ("import { scope } from './other';\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => { const attrs = scope(); return <Stack {...attrs}>{children}</Stack>; };", "", "export function scope() { return { 'data-mode': 'dark', ...(Math.random() > 0.5 ? { 'data-voice': 'calm' } : {}) }; }\n", false),
+            ("import { scope } from './other';\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...scope()}>{children}</Stack>;", "", "export const scope = () => ({ 'data-mode': 'dark' });\n", false),
+            ("function scope() { return { 'data-mode': 'dark' }; }\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...scope()}>{children}</Stack>;", "", "", false),
+            // Held: a returned key that retargets, a return the walk cannot
+            // list (a spread or a key it computes, on any path), a function
+            // reassigned, and a `const` some code changes or hands on.
+            ("import { scope } from './other';\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...scope()}>{children}</Stack>;", "", "import { Foreign } from 'outside';\nexport const scope = () => ({ as: Foreign });\n", true),
+            ("import { scope } from './other';\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...scope()}>{children}</Stack>;", "", "import { pad } from 'outside';\nexport const scope = () => ({ 'data-mode': 'dark', ...pad });\n", true),
+            ("import { scope } from './other';\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...scope()}>{children}</Stack>;", "", "import { pad } from 'outside';\nexport function scope() { if (pad) return pad; return { 'data-mode': 'dark' }; }\n", true),
+            ("import { scope } from './other';\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...scope()}>{children}</Stack>;", "", "import { pad } from 'outside';\nexport const scope = () => ({ [pad]: 'dark' });\n", true),
+            ("import { scope } from './other';\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...scope()}>{children}</Stack>;", "", "import { pad } from 'outside';\nexport function scope() { return { 'data-mode': 'dark' }; }\nscope = () => pad;\n", true),
+            ("import { scope } from './other';\nimport { Foreign } from 'outside';\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => { const attrs = scope(); attrs.as = Foreign; return <Stack {...attrs}>{children}</Stack>; };", "", "export const scope = () => ({ 'data-mode': 'dark' });\n", true),
+            ("import { scope } from './other';\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => { const attrs = scope(); decorate(attrs); return <Stack {...attrs}>{children}</Stack>; };", "", "export const scope = () => ({ 'data-mode': 'dark' });\n", true),
+            ("import { scope } from './other';\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => { const scope = () => ({ as: Foreign }); return <Stack {...scope()}>{children}</Stack>; };", "", "export const scope = () => ({ 'data-mode': 'dark' });\n", true),
+            // Held: a returned property that may run code with the object as
+            // `this` (a getter, a setter or a method, or a function or class
+            // as its value; an arrow, which binds none, is kept), a
+            // `__proto__` key however it is spelled, which a props copy
+            // assigns as the prototype, and a `const` some code reads a
+            // member of or calls through.
+            ("function scope() { return { get mode() { decorate(this); return 'dark'; } }; }\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => { const attrs = scope(); attrs.mode; return <Stack {...attrs}>{children}</Stack>; };", "", "", true),
+            ("function scope() { return { get mode() { decorate(this); return 'dark'; } }; }\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => { const attrs = scope(); return <Stack {...attrs} {...attrs}>{children}</Stack>; };", "", "", true),
+            ("const __proto__ = { as: Foreign };\nfunction scope() { return { key: 'x', __proto__ }; }\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...scope()}>{children}</Stack>;", "", "", true),
+            ("function scope() { return { key: 'x', '__proto__': { as: Foreign } }; }\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...scope()}>{children}</Stack>;", "", "", true),
+            ("function scope() { return { key: 'x', __proto__: { as: Foreign } }; }\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...scope()}>{children}</Stack>;", "", "", true),
+            ("function scope() { return { mode() { decorate(this); } }; }\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...scope()}>{children}</Stack>;", "", "", true),
+            ("function scope() { return { mode: () => 'dark' }; }\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...scope()}>{children}</Stack>;", "", "", false),
+            ("function scope() { return { mode: class {} }; }\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...scope()}>{children}</Stack>;", "", "", true),
+            ("function mark() { decorate(this); }\nfunction scope() { return { mark }; }\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => { const attrs = scope(); attrs.mark(); return <Stack {...attrs}>{children}</Stack>; };", "", "", true),
+            // Held: a module-scope holder another module may change, through
+            // its export in any form, a global or an import it is handed to.
+            ("import { alter } from './other';\nfunction scope() { return { 'data-mode': 'dark' }; }\nexport const attrs = scope();\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => { alter(); return <Stack {...attrs}>{children}</Stack>; };", "", "import { attrs } from './a';\nimport { decorate } from 'outside';\nexport function alter() { decorate(attrs); }\n", true),
+            ("import { alter } from './other';\nfunction scope() { return { 'data-mode': 'dark' }; }\nconst attrs = scope();\nexport { attrs as shared };\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => { alter(); return <Stack {...attrs}>{children}</Stack>; };", "", "import { shared } from './a';\nimport { decorate } from 'outside';\nexport function alter() { decorate(shared); }\n", true),
+            ("function scope() { return { 'data-mode': 'dark' }; }\nconst attrs = scope();\nglobalThis.attrs = attrs;\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...attrs}>{children}</Stack>;", "", "", true),
+            ("function scope() { return { 'data-mode': 'dark' }; }\nconst attrs = scope();\ndecorate(attrs);\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...attrs}>{children}</Stack>;", "", "", true),
+            ("function scope() { return { 'data-mode': 'dark' }; }\nconst attrs = scope();\nconst Stack = ds.system({ display: true }).asElement('div');\nconst Render = ({ children }) => <Stack {...attrs}>{children}</Stack>;", "", "", false),
             ("import { createElement } from 'react';\nconst Render = ({ children, ...rest }) => createElement(rest.as ?? 'div', rest, children);", "as={Foreign}", "", true),
             ("const Inner = ({ tag: Tag = 'div', children }) => <Tag>{children}</Tag>;\nconst Render = ({ children, ...rest }) => <Inner tag={rest.as}>{children}</Inner>;", "as={Foreign}", "", true),
             // Forwarding is decided per input: an input handed to unknown
