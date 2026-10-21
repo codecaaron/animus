@@ -628,6 +628,20 @@ fn record_style_changes(
     flow: &mut crate::flow::FlowBuilder,
 ) {
     analyze_css::note_build_chunks(structural, inputs);
+    // Each module's first import of each local: a module may import
+    // thousands of names, and each lookup below asks one.
+    let first_imports: Vec<rustc_hash::FxHashMap<LocalId, usize>> = (0..links.paths.len())
+        .map(|module| {
+            let mut first = rustc_hash::FxHashMap::default();
+            for (at, import) in links.table.record(module).imports.iter().enumerate() {
+                first.entry(import.local).or_insert(at);
+            }
+            first
+        })
+        .collect();
+    let import_of = |module: ModuleIndex, local: LocalId| {
+        first_imports[module].get(&local).map(|&at| &links.table.record(module).imports[at])
+    };
     // The declarations a binding names: itself or, for `export default
     // X`'s cell, X, whose object the cell shares, through each binding X's
     // import may be.
@@ -640,8 +654,7 @@ fn record_style_changes(
             let path = &links.paths[module];
             let bindings = &lowered[path].bindings;
             let held = bindings.held(binding);
-            let imports = &links.table.record(module).imports;
-            match imports.iter().find(|import| held != binding && import.local == held) {
+            match import_of(module, held).filter(|_| held != binding) {
                 Some(import) => {
                     work.extend(possible_bindings(links, links.table.resolve_request(module, import.request, &import.name), false))
                 }
@@ -655,7 +668,7 @@ fn record_style_changes(
     let possible = |file: &str, name: &str| -> Vec<(String, String)> {
         let imported = links.module(file).and_then(|module| {
             let local = lowered[file].bindings.module_binding(name)?;
-            let import = links.table.record(module).imports.iter().find(|import| import.local == local)?;
+            let import = import_of(module, local)?;
             Some(links.table.resolve_request(module, import.request, &import.name))
         });
         match imported {
@@ -670,7 +683,7 @@ fn record_style_changes(
         let module = links.module(file)?;
         let local = lowered[file].bindings.module_binding(name)?;
         let record = links.table.record(module);
-        let import = record.imports.iter().find(|import| import.local == local)?;
+        let import = import_of(module, local)?;
         if import.name == ImportName::Namespace {
             return Some(record.requests[import.request].clone());
         }
