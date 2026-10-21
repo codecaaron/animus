@@ -20,16 +20,16 @@
  * `.d.ts` as JS); TypeScript sibling-declaration substitution supplies these
  * types from the `.js` entry instead.
  */
-import type * as ExtractV2 from './crates/extractor/index';
+import type * as Native from './crates/extractor/index';
 
-declare namespace engineV2 {
-  export type ExtractEngine = ExtractV2.ExtractEngine;
-  export type EngineOptions = ExtractV2.EngineOptions;
-  export type NapiSystemConfig = ExtractV2.NapiSystemConfig;
+declare namespace extractor {
+  export type ExtractEngine = Native.ExtractEngine;
+  export type EngineOptions = Native.EngineOptions;
+  export type NapiSystemConfig = Native.NapiSystemConfig;
   /** The whole native module, as `require` returns it. */
-  export type NativeModule = typeof ExtractV2;
+  export type NativeModule = typeof Native;
 }
 
-declare const engineV2: unknown;
+declare const extractor: unknown;
 
-export = engineV2;
+export = extractor;

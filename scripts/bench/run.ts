@@ -173,7 +173,7 @@ function requireRelease(version: string): void {
  *  sources. */
 function requireFreshCheckout(root: string, packages: readonly string[]): void {
   const checks = [
-    'require_fresh_napi_v2',
+    'require_fresh_napi',
     ...packages.map((name) => `require_fresh_package_dist ${name}`),
   ];
   const result = sh(

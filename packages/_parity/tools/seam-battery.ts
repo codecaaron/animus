@@ -10,7 +10,7 @@ import type { JsonObject } from '@animus-ui/assertions';
 
 const ROOT = join(import.meta.dirname, '../../..');
 const require_ = createRequire(import.meta.url);
-const v2 = require_(join(ROOT, 'packages/extract/extractor.js'));
+const extractor = require_(join(ROOT, 'packages/extract/extractor.js'));
 
 const { ds, tokens } = await import(
   join(ROOT, 'packages/extract/tests/test-system.ts')
@@ -168,14 +168,14 @@ const CASES: Case[] = [
   },
 ];
 
-function runV2(c: Case): SeamCaseResult {
+function runExtractor(c: Case): SeamCaseResult {
   const configJson = c.configOverride
     ? JSON.stringify({
         ...JSON.parse(config.propConfig),
         ...c.configOverride,
       })
     : config.propConfig;
-  const engine = new v2.ExtractEngine({
+  const engine = new extractor.ExtractEngine({
     themeJson: theme.scalesJson,
     variableMapJson: theme.variableMapJson,
     contextualVarsJson: theme.contextualVarsJson || undefined,
@@ -211,7 +211,7 @@ if (record) {
 
 const results: Record<string, SeamCaseResult> = {};
 for (const c of CASES) {
-  results[c.id] = runV2(c);
+  results[c.id] = runExtractor(c);
 }
 
 if (record) {

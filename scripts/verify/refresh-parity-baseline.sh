@@ -10,7 +10,7 @@ if [ -z "$intent" ]; then
   echo "ERROR: refresh intent missing. Record a checked entry in packages/_parity/baseline-intents.md, then pass its id."; exit 1
 fi
 source scripts/verify/_preconditions.sh
-require_fresh_napi_v2
+require_fresh_napi
 
 cd packages/_parity
 bun run src/cli.ts --refresh-baseline "$intent"

@@ -11,7 +11,7 @@ cd "$ROOT"
 
 source "$ROOT/scripts/verify/_preconditions.sh"
 
-require_fresh_napi_v2
+require_fresh_napi
 require_fresh_package_dist extract
 require_fresh_package_dist system
 

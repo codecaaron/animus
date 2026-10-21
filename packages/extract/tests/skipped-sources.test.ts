@@ -11,11 +11,11 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createV2EngineApi } from '../pipeline/engine-adapter';
+import { createEngineApi } from '../pipeline/engine-adapter';
 import { ExtractionSession } from '../session/extraction-session';
 import { getSharedCss, setEngineApiOverride } from '../session/singleton';
 
-import type { V2ExtractEngine } from '../pipeline/engine-adapter';
+import type { ExtractorEngine } from '../pipeline/engine-adapter';
 import type { HostLoadExpander, ListedLoad } from '../pipeline/host-expansions';
 
 const NATIVE = join(__dirname, '../extractor.js');
@@ -33,10 +33,10 @@ const FAILING = {
  *  cannot resolve `@animus-ui/system` for the engine's own system loader.
  *  `failing` adds the `w` prop, whose transform fails. */
 function nativeApiServing(failing = false): () => object {
-  let engine: V2ExtractEngine | null = null;
+  let engine: ExtractorEngine | null = null;
   let sentSources: Map<string, string> | null = null;
   let driftWarned = false;
-  const native = createV2EngineApi({
+  const native = createEngineApi({
     label: 'skipped-sources-test',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     loadNativeEngine: () => require(NATIVE),

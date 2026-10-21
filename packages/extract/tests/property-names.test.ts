@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createV2EngineApi } from '../pipeline/engine-adapter';
+import { createEngineApi } from '../pipeline/engine-adapter';
 import {
   PREFIX_NAME_CONFLICT,
   PROPERTY_UNREGISTERED_ANIMATION,
@@ -360,7 +360,7 @@ describe('the map reaches the extractor', () => {
 
   function engineOptions(prefixContextualVars: boolean): EngineOptions {
     const constructed: EngineOptions[] = [];
-    const engineApi = createV2EngineApi({
+    const engineApi = createEngineApi({
       label: 'property-names-test',
       loadNativeEngine: () => ({
         ...nativeFunctions(),

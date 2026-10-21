@@ -22,11 +22,11 @@ export { buildAnalyzeProjectArgs } from './analyze-project-args';
 export type {
   EngineApi,
   TransformFileResult,
-  V2EngineAdapterDeps,
-  V2EngineStateStore,
-  V2ExtractEngine,
+  EngineAdapterDeps,
+  EngineStateStore,
+  ExtractorEngine,
 } from './engine-adapter';
-export { createV2EngineApi } from './engine-adapter';
+export { createEngineApi } from './engine-adapter';
 export {
   assertSupportedEngine,
   RETIRED_ENGINE_MESSAGE,

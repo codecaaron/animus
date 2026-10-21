@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 /// Everything compiled into the engine that its behaviour can depend on: both
 /// crates' sources (data files included), manifests, lockfiles and
-/// toolchains, as `require_fresh_napi_v2` (scripts/verify/_preconditions.sh)
+/// toolchains, as `require_fresh_napi` (scripts/verify/_preconditions.sh)
 /// lists the engine's inputs.
 const INPUTS: &[&str] = &[
     "src",

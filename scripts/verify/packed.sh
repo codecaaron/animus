@@ -42,7 +42,7 @@ MODE=$(printf '%s\n' "$RESOLUTION" | awk -F '\t' '$1 == "mode" { print $2 }')
 
 require_fresh_package_dist _assertions
 if [ "$MODE" = local ]; then
-  require_fresh_napi_v2
+  require_fresh_napi
   for p in "${PKGS[@]}"; do require_fresh_package_dist "$p"; done
 fi
 if ! command -v npm >/dev/null 2>&1; then

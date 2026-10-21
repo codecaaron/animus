@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'vitest';
 
-import { createV2EngineApi, parseFilesJson } from '../pipeline';
+import { createEngineApi, parseFilesJson } from '../pipeline';
 import { nativeFunctions } from './native-functions';
 
-import type { V2EngineStateStore, V2ExtractEngine } from '../pipeline';
+import type { EngineStateStore, ExtractorEngine } from '../pipeline';
 
 const WELL_FORMED = JSON.stringify([
   { path: 'a.tsx', source: 'export const a = 1;\n' },
@@ -54,8 +54,8 @@ describe('parseFilesJson', () => {
   });
 });
 
-function makeStore(): V2EngineStateStore & { engine: V2ExtractEngine | null } {
-  let engine: V2ExtractEngine | null = null;
+function makeStore(): EngineStateStore & { engine: ExtractorEngine | null } {
+  let engine: ExtractorEngine | null = null;
   let sentSources: Map<string, string> | null = null;
   let driftWarned = false;
   return {
@@ -84,7 +84,7 @@ describe('engine adapter analyzeProject', () => {
   ])('refuses %s before constructing the engine', (_case, filesJson) => {
     const store = makeStore();
     let constructed = 0;
-    const api = createV2EngineApi({
+    const api = createEngineApi({
       label: 'adapter-policy-test',
       loadNativeEngine: () => ({
         ...nativeFunctions(),

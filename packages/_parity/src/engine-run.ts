@@ -8,7 +8,7 @@ import {
 } from '@animus-ui/assertions';
 import {
   buildAnalyzeProjectArgs,
-  createV2EngineApi,
+  createEngineApi,
 } from '@animus-ui/extract/pipeline';
 import { createRequire } from 'module';
 import { join } from 'path';
@@ -24,7 +24,7 @@ import type {
   EngineApi,
   ManifestDiagnostic,
   ProjectManifest,
-  V2ExtractEngine,
+  ExtractorEngine,
 } from '@animus-ui/extract/pipeline';
 
 const ROOT = join(import.meta.dirname, '../../..');
@@ -68,10 +68,10 @@ function loadEngine(name: string): EngineApi {
     const native = parseNativeEngineModule(
       require_(join(ROOT, 'packages/extract/extractor.js'))
     );
-    let instance: V2ExtractEngine | null = null;
+    let instance: ExtractorEngine | null = null;
     let sentSources: Map<string, string> | null = null;
     let driftWarned = false;
-    return createV2EngineApi({
+    return createEngineApi({
       label: 'animus-parity',
       loadNativeEngine: () => native,
       store: {

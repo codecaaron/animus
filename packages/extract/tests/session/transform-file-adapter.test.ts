@@ -11,7 +11,7 @@ import {
 import { nativeFunctions } from '../native-functions';
 import { resetAnimusGlobals } from './session-fixtures';
 
-import type { V2ExtractEngine } from '../../pipeline';
+import type { ExtractorEngine } from '../../pipeline';
 import type { SessionKey } from '../../session/singleton';
 
 let restoreGlobals: () => void;
@@ -20,7 +20,7 @@ let key: SessionKey;
 /** A native module whose engine only transforms: an analyze returns an
  *  empty manifest, so the store records the sent sources and nothing else. */
 function nativeTransformingWith(
-  transformFile: V2ExtractEngine['transformFile']
+  transformFile: ExtractorEngine['transformFile']
 ) {
   return {
     ...nativeFunctions(),

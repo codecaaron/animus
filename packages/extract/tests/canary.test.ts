@@ -22,14 +22,14 @@ import { gatherProbeEvidence } from '../pipeline/probe-evidence';
 import { analysisContextJson } from '../pipeline/run-analysis';
 import { ingestSourceEntries } from '../pipeline/source-ingestion';
 
-const v2 = require('../extractor.js');
+const extractor = require('../extractor.js');
 
 describe('v2 system loader NAPI boundary', () => {
   const root = join(__dirname, '../../..');
   const systemPath = join(__dirname, 'test-system.ts');
 
   test('loadSystemModule returns a fully-populated NapiSystemConfig', () => {
-    const config = v2.loadSystemModule(systemPath, root);
+    const config = extractor.loadSystemModule(systemPath, root);
 
     // NAPI class instances expose fields as getters, not own enumerable
     // properties, so toMatchObject cannot see them; pick explicitly.
@@ -60,7 +60,7 @@ describe('v2 system loader NAPI boundary', () => {
 
     let message = '';
     try {
-      v2.loadSystemModule(missing, root);
+      extractor.loadSystemModule(missing, root);
     } catch (error) {
       message = String(error);
     }
@@ -236,7 +236,7 @@ test("a configured Vite extension list is unreadable, and './only' still finds o
     root,
     policy
   );
-  const native = v2.resolveSpecifier(
+  const native = extractor.resolveSpecifier(
     './only',
     root,
     [],
@@ -291,7 +291,7 @@ test.each([
       source,
     }));
     const filesJson = JSON.stringify(files);
-    const engine = new v2.ExtractEngine({});
+    const engine = new extractor.ExtractEngine({});
     const prepared = JSON.parse(engine.prepare(filesJson));
     const evidence = gatherProbeEvidence(
       root,
@@ -349,9 +349,12 @@ test('a mismatched Svelte resolver call keeps the variant it renders', async () 
 
   const ingested = await ingestSourceEntries(
     Object.entries(sources).map(([path, source]) => ({ path, source })),
-    { extractFacts: (filesJson) => v2.extractFacts(filesJson), rootDir: root }
+    {
+      extractFacts: (filesJson) => extractor.extractFacts(filesJson),
+      rootDir: root,
+    }
   );
-  const engine = new v2.ExtractEngine({
+  const engine = new extractor.ExtractEngine({
     analysisContextJson: analysisContextJson({ openings: ingested.openings }),
   });
   const filesJson = JSON.stringify(ingested.analysisEntries);
@@ -417,7 +420,7 @@ test.each([
       source,
     }));
     const filesJson = JSON.stringify(files);
-    const engine = new v2.ExtractEngine(
+    const engine = new extractor.ExtractEngine(
       order === undefined
         ? {}
         : { analysisContextJson: JSON.stringify({ extensions: order }) }
@@ -472,12 +475,12 @@ test('a Svelte resolver call stops at an unanalysed host-first file', async () =
   const ingested = await ingestSourceEntries(
     Object.entries(sources).map(([path, source]) => ({ path, source })),
     {
-      extractFacts: (filesJson) => v2.extractFacts(filesJson),
+      extractFacts: (filesJson) => extractor.extractFacts(filesJson),
       rootDir: root,
       extensions: order,
     }
   );
-  const engine = new v2.ExtractEngine({
+  const engine = new extractor.ExtractEngine({
     analysisContextJson: JSON.stringify({
       extensions: order,
       openings: ingested.openings ?? [],
@@ -535,7 +538,7 @@ test.each([
   const filesJson = JSON.stringify(
     Object.entries(analysed).map(([path, source]) => ({ path, source }))
   );
-  const engine = new v2.ExtractEngine({});
+  const engine = new extractor.ExtractEngine({});
   const prepared = JSON.parse(engine.prepare(filesJson));
   const evidence = gatherProbeEvidence(
     root,
@@ -575,7 +578,7 @@ test.each([
   const filesJson = JSON.stringify(
     Object.entries(analysed).map(([path, source]) => ({ path, source }))
   );
-  const engine = new v2.ExtractEngine({});
+  const engine = new extractor.ExtractEngine({});
   const prepared = JSON.parse(engine.prepare(filesJson));
   const evidence = gatherProbeEvidence(
     root,
@@ -779,7 +782,7 @@ test.each([
     const aliases = {
       aliases: [{ pattern: 'react', replacement: 'tokens', type: 'exact' }],
     };
-    const engine = new v2.ExtractEngine(
+    const engine = new extractor.ExtractEngine(
       layout.aliased ? { pathAliasesJson: JSON.stringify(aliases) } : {}
     );
     const prepared = JSON.parse(engine.prepare(filesJson));
@@ -787,7 +790,7 @@ test.each([
       root,
       new Set(Object.keys(analysed)),
       undefined,
-      { packageLoads: v2.packageLoads }
+      { packageLoads: extractor.packageLoads }
     )(prepared.bases, prepared.identity, prepared.loads, prepared.packages);
     const css = JSON.parse(engine.analyzePrepared(evidence)).css;
     rmSync(root, { recursive: true, force: true });
@@ -826,7 +829,7 @@ test('a registry package that gains a local dependency reaches it in the next an
     Object.entries(analysed).map(([path, source]) => ({ path, source }))
   );
   const analyse = () => {
-    const engine = new v2.ExtractEngine({});
+    const engine = new extractor.ExtractEngine({});
     const prepared = JSON.parse(engine.prepare(filesJson));
     const evidence = gatherProbeEvidence(
       root,

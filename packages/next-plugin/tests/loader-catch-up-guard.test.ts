@@ -22,7 +22,7 @@ import {
 import animusLoader from '../src/loader';
 
 import type { SessionState } from '../../extract/session/singleton';
-import type { V2ExtractEngine } from '@animus-ui/extract/pipeline';
+import type { ExtractorEngine } from '@animus-ui/extract/pipeline';
 
 const SESSION_ID = 'loader-epoch-session';
 
@@ -33,7 +33,7 @@ let state: SessionState;
 /** A native module whose engine analyzed nothing and is never called for
  *  a path outside that analysis. */
 const unreachableNative = {
-  ExtractEngine: class implements V2ExtractEngine {
+  ExtractEngine: class implements ExtractorEngine {
     prepare(): string {
       return '{}';
     }

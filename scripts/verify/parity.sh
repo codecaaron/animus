@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 source scripts/verify/_preconditions.sh
-require_fresh_napi_v2
+require_fresh_napi
 
 cd packages/_parity
 bun run src/cli.ts --self-check --both

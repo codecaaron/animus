@@ -68,7 +68,7 @@ function arg(name: string): string | null {
 
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
 
-function runV2(
+function runExtractor(
   devMode: boolean,
   env: Record<string, string> = {}
 ): Record<string, UnitSurface> {
@@ -172,8 +172,8 @@ async function selfCheckPass(
   threads: string[]
 ): Promise<{ scoreboard: string; failed: boolean }> {
   const [ta, tb] = threads.length === 2 ? threads : [null, null];
-  const baseline = runV2(devMode, ta ? { RAYON_NUM_THREADS: ta } : {});
-  const candidate = runV2(devMode, tb ? { RAYON_NUM_THREADS: tb } : {});
+  const baseline = runExtractor(devMode, ta ? { RAYON_NUM_THREADS: ta } : {});
+  const candidate = runExtractor(devMode, tb ? { RAYON_NUM_THREADS: tb } : {});
   const divergences = selfCheckDivergences(baseline, candidate);
   const unitIds = [
     ...new Set([...Object.keys(baseline), ...Object.keys(candidate)]),
@@ -199,7 +199,7 @@ async function baselinePass(
 ): Promise<{ scoreboard: string; failed: boolean }> {
   const mode = modeOf(devMode);
   const baseline = loadBaseline(mode);
-  const candidate = runV2(devMode);
+  const candidate = runExtractor(devMode);
   const envelopeErrors = validateBaselineEnvelope(baseline, {
     mode,
     corpusSha256: corpusDigest,
@@ -260,8 +260,8 @@ async function refreshBaselines(intent: string): Promise<void> {
    *  production first, then development. */
   const refreshMode = async (devMode: boolean) => {
     const mode = modeOf(devMode);
-    const first = runV2(devMode, { RAYON_NUM_THREADS: '1' });
-    const second = runV2(devMode, { RAYON_NUM_THREADS: '8' });
+    const first = runExtractor(devMode, { RAYON_NUM_THREADS: '1' });
+    const second = runExtractor(devMode, { RAYON_NUM_THREADS: '8' });
     const checks: BaselineRefreshChecks = {
       determinism: selfCheckDivergences(first, second),
       cssValidity: await cssValidityDivergences(first),

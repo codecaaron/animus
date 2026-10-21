@@ -6,8 +6,8 @@ export interface HostTargetInput {
   libc?: HostLibc;
 }
 
-export const V2_BINARY_PREFIX = 'animus-extractor';
-export const V2_CRATE_DIR = 'packages/extract/crates/extractor';
+export const BINARY_PREFIX = 'animus-extractor';
+export const CRATE_DIR = 'packages/extract/crates/extractor';
 
 export class UnsupportedHostError extends Error {
   constructor(input: HostTargetInput) {
@@ -32,12 +32,12 @@ export function resolveNapiTarget(input: HostTargetInput): string {
   throw new UnsupportedHostError(input);
 }
 
-export function resolveV2BinaryFilename(input: HostTargetInput): string {
-  return `${V2_BINARY_PREFIX}.${resolveNapiTarget(input)}.node`;
+export function resolveBinaryFilename(input: HostTargetInput): string {
+  return `${BINARY_PREFIX}.${resolveNapiTarget(input)}.node`;
 }
 
-export function resolveV2BinaryPath(input: HostTargetInput): string {
-  return `${V2_CRATE_DIR}/${resolveV2BinaryFilename(input)}`;
+export function resolveBinaryPath(input: HostTargetInput): string {
+  return `${CRATE_DIR}/${resolveBinaryFilename(input)}`;
 }
 
 interface HostDiagnosticReport {
@@ -66,8 +66,8 @@ export function detectHostLibc(platform: string = process.platform): HostLibc {
   return null;
 }
 
-export function resolveHostV2BinaryPath(): string {
-  return resolveV2BinaryPath({
+export function resolveHostBinaryPath(): string {
+  return resolveBinaryPath({
     platform: process.platform,
     arch: process.arch,
     libc: detectHostLibc(),
@@ -76,7 +76,7 @@ export function resolveHostV2BinaryPath(): string {
 
 if (import.meta.main) {
   try {
-    process.stdout.write(`${resolveHostV2BinaryPath()}\n`);
+    process.stdout.write(`${resolveHostBinaryPath()}\n`);
   } catch (error) {
     // SAFETY: the only throw reachable here is `UnsupportedHostError`, which
     // extends Error; the report probe swallows its own failures.

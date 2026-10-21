@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { realpathSync } from 'fs';
 import { resolve } from 'path';
 
-import { createV2EngineApi, stableStringify } from '../pipeline/index';
+import { createEngineApi, stableStringify } from '../pipeline/index';
 import { requireNativeEngine } from '../pipeline/native-resolution';
 
 import type { PackageReadRecord } from '../pipeline/alias-agreement';
@@ -11,7 +11,7 @@ import type { NativeEngineModule } from '../pipeline/engine-adapter';
 import type {
   EngineApi,
   FontPreload,
-  V2ExtractEngine,
+  ExtractorEngine,
 } from '../pipeline/index';
 import type { NativeModule } from '@animus-ui/extract';
 
@@ -393,10 +393,10 @@ export function engineHandle(
   const id = sessionKeyId(key);
   let api = engines.get(id);
   if (api === undefined) {
-    let engine: V2ExtractEngine | null = null;
+    let engine: ExtractorEngine | null = null;
     let sentSources: Map<string, string> | null = null;
     let driftWarned = false;
-    api = createV2EngineApi({
+    api = createEngineApi({
       ...options,
       loadNativeEngine: engineFactory,
       store: {

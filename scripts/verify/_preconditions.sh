@@ -18,7 +18,7 @@
 # convention and preserve the "ERROR: ... Run: ..." stderr message shape.
 #
 # Helper families:
-#   require_bun_install, require_fresh_napi_v2, require_fresh_package_dist,
+#   require_bun_install, require_fresh_napi, require_fresh_package_dist,
 #   require_dir — used by scripts/verify/* tiers.
 #   require_cargo_machete — used by Rust hygiene tiers.
 #   require_vp_lint, require_knip_binary, require_hygiene_parser,
@@ -38,7 +38,7 @@ require_bun_install() {
   fi
 }
 
-require_fresh_napi_v2() {
+require_fresh_napi() {
   # Resolve the EXACT binary this host's loader executes (design decision D7),
   # never the lexically-first *.node — a foreign-target artifact's timestamp
   # says nothing about the code the host runs. napi-target.ts prints the

@@ -16,7 +16,7 @@ import type {
 } from '@animus-ui/extract';
 
 /** The stateful engine handle produced by `new native.ExtractEngine(...)`. */
-export type V2ExtractEngine = Pick<
+export type ExtractorEngine = Pick<
   ExtractEngine,
   | 'prepare'
   | 'analyzePrepared'
@@ -109,9 +109,9 @@ export interface EngineApi extends NativeFunctions {
  * Per-run storage for the engine instance, the analyze-time sources drift
  * detection compares against, and the one-shot drift flag.
  */
-export interface V2EngineStateStore {
-  getEngine(): V2ExtractEngine | null;
-  setEngine(engine: V2ExtractEngine | null): void;
+export interface EngineStateStore {
+  getEngine(): ExtractorEngine | null;
+  setEngine(engine: ExtractorEngine | null): void;
   getSentSources(): Map<string, string> | null;
   setSentSources(sources: Map<string, string> | null): void;
   getDriftWarned(): boolean;
@@ -120,16 +120,16 @@ export interface V2EngineStateStore {
 
 /** The native engine module the adapter reads. */
 export interface NativeEngineModule extends NativeFunctions {
-  ExtractEngine: new (options?: EngineOptions) => V2ExtractEngine;
+  ExtractEngine: new (options?: EngineOptions) => ExtractorEngine;
 }
 
-export interface V2EngineAdapterDeps {
+export interface EngineAdapterDeps {
   /** Log label for the drift warning and the fail-loud transform error. */
   label: string;
   /** Requires the native module; loading semantics live at the call site. */
   loadNativeEngine(): NativeEngineModule;
   /** Per-run state storage (globalThis for next, closure for vite). */
-  store: V2EngineStateStore;
+  store: EngineStateStore;
   /** Passes paths absent from the last `analyze()` set through unchanged —
    *  the webpack loader hands over files outside the analysis universe. */
   passThroughUnknownPaths?: boolean;
@@ -142,7 +142,7 @@ export interface V2EngineAdapterDeps {
  * Returns a function, invoked per call site, so `loadNativeEngine()`
  * re-evaluates each time instead of being captured.
  */
-export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
+export function createEngineApi(deps: EngineAdapterDeps): () => EngineApi {
   const { label, loadNativeEngine, store } = deps;
   return (): EngineApi => {
     const native = loadNativeEngine();

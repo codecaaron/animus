@@ -11,7 +11,7 @@ cd "$ROOT"
 
 source "$ROOT/scripts/verify/_preconditions.sh"
 
-require_fresh_napi_v2
+require_fresh_napi
 
 # static-css-overrides and property-diagnostics share the canary's precondition
 # (they drive the REAL v2 engine), so they run in this NAPI-gated lane, not

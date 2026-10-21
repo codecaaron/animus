@@ -2,9 +2,9 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { beforeAll, describe, expect, test } from 'vitest';
 
-import { createV2EngineApi } from '../pipeline/engine-adapter';
+import { createEngineApi } from '../pipeline/engine-adapter';
 
-import type { V2ExtractEngine } from '../pipeline/engine-adapter';
+import type { ExtractorEngine } from '../pipeline/engine-adapter';
 import type { ProjectManifest } from '../pipeline/manifest-schema';
 
 const ROOT = join(__dirname, '../../..');
@@ -16,10 +16,10 @@ const FIXTURE = readFileSync(
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeApi(): any {
-  let engine: V2ExtractEngine | null = null;
+  let engine: ExtractorEngine | null = null;
   let sentSources: Map<string, string> | null = null;
   let driftWarned = false;
-  return createV2EngineApi({
+  return createEngineApi({
     label: 'static-css-test',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     loadNativeEngine: () => require(NATIVE),

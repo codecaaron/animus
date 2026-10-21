@@ -11,7 +11,7 @@ Re-exported via `fixtures/setup.ts` → imports from `extract/tests/test-system.
 ## Pipeline Helper
 
 `__tests__/run-pipeline.ts` drives the stateful v2 `ExtractEngine` through the
-same adapter the production plugins use (`createV2EngineApi` from
+same adapter the production plugins use (`createEngineApi` from
 `extract/pipeline/engine-adapter.ts`, with the engine handle stored in closure
 variables):
 

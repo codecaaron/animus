@@ -24,7 +24,7 @@ require_bun_install
 
 failed=0
 recipe=()
-if ! require_fresh_napi_v2; then
+if ! require_fresh_napi; then
   failed=1
   recipe+=("vp run build:extract-v2")
 fi

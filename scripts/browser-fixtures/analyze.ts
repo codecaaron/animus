@@ -8,10 +8,10 @@ import { fileURLToPath } from 'node:url';
 
 import {
   buildAnalyzeProjectArgs,
-  createV2EngineApi,
+  createEngineApi,
 } from '../../packages/extract/pipeline/index';
 
-import type { V2ExtractEngine } from '../../packages/extract/pipeline/index';
+import type { ExtractorEngine } from '../../packages/extract/pipeline/index';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const require = createRequire(import.meta.url);
@@ -34,10 +34,10 @@ export function analyzeFixture({
   theme,
   config,
 }: FixtureProject) {
-  let engine: V2ExtractEngine | null = null;
+  let engine: ExtractorEngine | null = null;
   let sentSources: Map<string, string> | null = null;
   let driftWarned = false;
-  const engineApi = createV2EngineApi({
+  const engineApi = createEngineApi({
     label: 'browser-fixtures',
     loadNativeEngine: () =>
       require(resolve(ROOT, 'packages', 'extract', 'extractor.js')),

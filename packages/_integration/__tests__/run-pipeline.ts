@@ -1,7 +1,7 @@
 import {
   applyUnitFallback,
   buildAnalyzeProjectArgs,
-  createV2EngineApi,
+  createEngineApi,
 } from '@animus-ui/extract/pipeline';
 
 import { config, theme } from '../fixtures/setup';
@@ -9,7 +9,7 @@ import { config, theme } from '../fixtures/setup';
 import type {
   AnalyzeProjectInputs,
   ProjectManifest,
-  V2ExtractEngine,
+  ExtractorEngine,
 } from '@animus-ui/extract/pipeline';
 import type { KeyframeFrameMap } from '@animus-ui/system';
 
@@ -30,11 +30,11 @@ export type KeyframesBlocks = {
 // pick the `types` condition and load a `.d.ts`, leaving exports undefined.
 const native = require('../../extract/extractor.js');
 
-let engine: V2ExtractEngine | null = null;
+let engine: ExtractorEngine | null = null;
 let sentSources: Map<string, string> | null = null;
 let driftWarned = false;
 
-const engineApi = createV2EngineApi({
+const engineApi = createEngineApi({
   label: 'animus-integration',
   loadNativeEngine: () => native,
   store: {

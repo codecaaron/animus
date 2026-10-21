@@ -3,21 +3,21 @@ import { color, layout, transitions } from '@animus-ui/system/groups';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 
-import { createV2EngineApi } from '../pipeline/engine-adapter';
+import { createEngineApi } from '../pipeline/engine-adapter';
 import { runProjectAnalysis } from '../pipeline/run-analysis';
 import { loadSystemConfig } from '../pipeline/system-config';
 import { nativeFunctions } from './native-functions';
 
-import type { V2ExtractEngine } from '../pipeline/engine-adapter';
+import type { ExtractorEngine } from '../pipeline/engine-adapter';
 
 const NATIVE = join(__dirname, '../extractor.js');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeApi(): any {
-  let engine: V2ExtractEngine | null = null;
+  let engine: ExtractorEngine | null = null;
   let sentSources: Map<string, string> | null = null;
   let driftWarned = false;
-  return createV2EngineApi({
+  return createEngineApi({
     label: 'prefix-contextual-vars-test',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     loadNativeEngine: () => require(NATIVE),

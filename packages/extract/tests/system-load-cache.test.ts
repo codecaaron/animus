@@ -14,7 +14,7 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { createV2EngineApi } from '../pipeline/engine-adapter';
+import { createEngineApi } from '../pipeline/engine-adapter';
 import { loadSystemConfig } from '../pipeline/system-config';
 import {
   SYSTEM_LOAD_CACHE_ENTRIES_PER_KEY,
@@ -22,15 +22,15 @@ import {
 } from '../pipeline/system-load-cache';
 import { REPO_ROOT } from './engine-prerequisites';
 
-import type { EngineApi, V2ExtractEngine } from '../pipeline/engine-adapter';
+import type { EngineApi, ExtractorEngine } from '../pipeline/engine-adapter';
 
 const NATIVE = join(__dirname, '../extractor.js');
 
 function nativeApi(): EngineApi {
-  let engine: V2ExtractEngine | null = null;
+  let engine: ExtractorEngine | null = null;
   let sentSources: Map<string, string> | null = null;
   let driftWarned = false;
-  return createV2EngineApi({
+  return createEngineApi({
     label: 'system-load-cache-test',
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     loadNativeEngine: () => require(NATIVE),

@@ -59,9 +59,9 @@ fi
 tar -xzf "$TARBALL" -C "$UNPACK_DIR"
 
 if [ "$EXPECT_FULL_MATRIX" = 1 ]; then
-  v2_count=$(ls "$UNPACK_DIR"/package/crates/extractor/*.node 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$v2_count" -lt 3 ]; then
-    echo "ERROR: packed tarball is missing v2 engine binaries (v2=$v2_count; expected >=3). Release matrix incomplete." >&2
+  binary_count=$(ls "$UNPACK_DIR"/package/crates/extractor/*.node 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$binary_count" -lt 3 ]; then
+    echo "ERROR: packed tarball is missing extractor binaries (found $binary_count; expected >=3). Release matrix incomplete." >&2
     exit 1
   fi
 fi
