@@ -424,6 +424,11 @@ pub struct FileFacts {
     /// above stays the raw syntax classification.
     #[serde(skip)]
     pub(crate) usage_enriched: Option<Vec<UsageFact>>,
+    /// Each attribute whose value is a parameter a literal-union type
+    /// annotation declares: what would close its slot were annotations
+    /// trusted, which slot provenance names and nothing else reads.
+    #[serde(skip)]
+    pub(crate) declared_hints: Vec<crate::usage_facts::DeclaredHint>,
     /// The identity of every binding and reference, from the semantic build
     /// the enriched usage reads.
     #[serde(skip)]
@@ -1405,6 +1410,7 @@ pub(crate) fn structural_facts(ast: &OwnedAst, lowered: &crate::link::Lowered, o
         statics: BTreeMap::new(),
         usage: Vec::new(),
         usage_enriched: None,
+        declared_hints: Vec::new(),
         bindings: Arc::clone(&lowered.bindings),
         module_record: Arc::clone(&lowered.record),
         compose,
@@ -2156,6 +2162,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
     let usage = crate::usage_facts::collect_usage_facts(program);
     let crate::usage_facts::EnrichedUsage {
         usage: usage_enriched,
+        declared_hints,
         confined: confined_components,
         escapes: value_escapes,
         terminal_escapes,
@@ -2212,6 +2219,7 @@ pub(crate) fn extract_file_facts_from_static_maps(
             .collect(),
         usage,
         usage_enriched: Some(usage_enriched),
+        declared_hints,
         builder_import_references,
         first_that_works_uses,
         synthesized_components: BTreeSet::new(),

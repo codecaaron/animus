@@ -7171,6 +7171,19 @@ impl Uncovered<'_> {
     }
 }
 
+/// A runtime value's opening with what would close it were annotations
+/// trusted: the literal union a parameter at its site is declared with.
+fn with_declared_hint(opening: SlotOpening, prop: &str, files: &BTreeMap<String, FileFacts>) -> SlotOpening {
+    let (Some(file), Some(at)) = (opening.file.clone(), opening.at) else { return opening };
+    if opening.rule != "runtime-value" {
+        return opening;
+    }
+    match files.get(&file).and_then(|ff| ff.declared_hints.iter().find(|hint| hint.at == at && hint.prop == prop)) {
+        Some(hint) => opening.detail(hint.detail(&file)),
+        None => opening,
+    }
+}
+
 /// Joins `conditions` into `entry`: an unknown set on either side leaves
 /// the union unknown.
 fn join_conditions(entry: &mut Option<BTreeSet<String>>, conditions: Option<BTreeSet<String>>) {
@@ -10492,7 +10505,14 @@ fn run_with_system_floor(
             }
             for usage in &custom_scan.dynamic_usages {
                 keep_component_slot(&mut component_slot_reasons, &usage.binding, &usage.prop_name, || {
-                    SlotOpening::rule("runtime-value").in_file(path)
+                    let opening = SlotOpening::rule("runtime-value").in_file(path);
+                    // The hint of an element of this component that writes the prop.
+                    let binding = usage.binding.rsplit_once("::").map_or(usage.binding.as_str(), |(_, binding)| binding);
+                    let hint = ff.declared_hints.iter().find(|hint| hint.prop == usage.prop_name && hint.tag == binding);
+                    match hint {
+                        Some(hint) => opening.detail(hint.detail(path)),
+                        None => opening,
+                    }
                 });
             }
             // A render that can deliver any custom prop, by its own kind.
@@ -11260,6 +11280,7 @@ fn run_with_system_floor(
                 uncovered.insert(prop);
                 if let Some(keepers) = keepers.as_deref_mut() {
                     let opening = keeping.map_or_else(|| SlotOpening::rule("unproven-owner"), |uncovered| uncovered.opening());
+                    let opening = with_declared_hint(opening, prop, files);
                     keepers.entry(prop.clone()).or_default().push(SlotKeeper { owner: component_id.clone(), opening });
                 }
             }
@@ -15546,6 +15567,30 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
         }
     }
 
+    /// Contract: a parameter's type annotation never closes a slot. A
+    /// literal union proves nothing of a runtime value (a strict program can
+    /// still pass any), so a system prop and a custom prop written through
+    /// annotated parameters keep their runtime slot, and the union shows
+    /// only as what would close it were annotations trusted.
+    #[test]
+    fn a_parameters_type_annotation_never_closes_a_slot() {
+        let source = "const Box = ds.system({ space: true }).asElement('div');\n\
+                      const Tinted = ds.props({ tone: { property: 'color' } }).asElement('div');\n\
+                      type Gap = 4 | 8;\n\
+                      const Card = ({ gap, tone }: { gap: Gap; tone: 'red' | 'blue' }) => <><Box p={gap} /><Tinted tone={tone} /></>;\n\
+                      export const App = ({ d }: { d: any }) => <Card gap={d} tone={d} />;\n";
+        let out = analyze(&[("a.tsx", source)], &inputs_with_provenance());
+        assert!(out.dynamic_props.contains_key("p"), "{:?}", out.dynamic_props.keys());
+        let tinted = &out.replacement_configs["a.tsx::Tinted"];
+        assert!(tinted.custom_dynamic_config.as_ref().is_some_and(|config| config.contains_key("tone")), "{tinted:?}");
+        let provenance = out.slot_provenance.unwrap();
+        let gap = provenance.props["p"].iter().find(|keeper| keeper.owner == "a.tsx::Box").unwrap();
+        assert_eq!(gap.opening.rule, "runtime-value");
+        assert_eq!(gap.opening.detail.as_deref(), Some("would close if trusted: a.tsx:4 declares 4 | 8"));
+        let tone = &provenance.components["a.tsx::Tinted"]["tone"];
+        assert_eq!(tone[0].detail.as_deref(), Some("would close if trusted: a.tsx:4 declares 'red' | 'blue'"), "{tone:?}");
+    }
+
     /// Contract: every slot the floor keeps, a system prop's or a
     /// component's, names what keeps it: each owner, and the rule or site
     /// that keeps that owner open.
@@ -17682,13 +17727,15 @@ export const App = ({ n }) => <Box bgImage={n} texture={n} />;
             (keys, slots)
         };
         let cases: [(&str, &[&str], &[&str]); 9] = [
-            // Literals, `const`s and literal-union parameters, through
-            // conditionals, `||` and `??`, and object leaves at breakpoints.
+            // Literals and `const`s, through conditionals, `||` and `??`, and
+            // object leaves at breakpoints.
             ("const k = 20;\nexport const App = ({ c }) => <Box p={c ? k : 16} />;\n", &["16", "20"], &[]),
-            ("export const App = ({ c }: { c?: 4 | 0 }) => <Box p={c || 8} />;\n", &["4", "8"], &[]),
-            ("type S = 4 | 8;\ninterface P { s?: S }\nexport const App = ({ s = 2 }: P) => <Box p={s} />;\n", &["2", "4", "8"], &[]),
-            ("export function App(t: 'red' | 'blue') { return <Box tone={t} />; }\n", &["blue", "red"], &[]),
             ("export const App = ({ c }) => <Box p={{ _: c ? 4 : 8, sm: 16 }} />;\n", &["4", "8", "sm:16"], &[]),
+            // A parameter's literal-union annotation proves nothing, so it
+            // keeps its slot (a literal beside it still takes its class).
+            ("export const App = ({ c }: { c?: 4 | 0 }) => <Box p={c || 8} />;\n", &["8"], &["p_", "p_-sm"]),
+            ("type S = 4 | 8;\ninterface P { s?: S }\nexport const App = ({ s = 2 }: P) => <Box p={s} />;\n", &[], &["p_", "p_-sm"]),
+            ("export function App(t: 'red' | 'blue') { return <Box tone={t} />; }\n", &[], &["tone_Box_091638e9", "tone_Box_091638e9-sm"]),
             // A wide, opaque or reassigned value keeps its slot.
             ("export const App = ({ c, n }) => <Box p={c ? 8 : n} />;\n", &[], &["p_", "p_-sm"]),
             ("export const App = ({ s }: { s: number }) => <Box p={s} />;\n", &[], &["p_", "p_-sm"]),

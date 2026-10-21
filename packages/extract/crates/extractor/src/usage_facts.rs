@@ -925,6 +925,8 @@ pub fn collect_export_facts(program: &Program<'_>) -> Vec<ExportFact> {
 /// What `collect_enriched_usage` reads from one semantic build of a module.
 pub(crate) struct EnrichedUsage {
     pub usage: Vec<UsageFact>,
+    /// See `FileFacts::declared_hints`.
+    pub declared_hints: Vec<DeclaredHint>,
     /// See `FileFacts::confined_components`.
     pub confined: BTreeSet<String>,
     /// See `FileFacts::value_escapes`.
@@ -1291,8 +1293,9 @@ pub(crate) fn collect_enriched_usage(
         None => ReactNames::by_name(),
     };
     let origins = scoping.as_ref().or(tag_scoping.as_ref());
-    // Only TypeScript annotates parameters.
-    let finite_params = origins
+    // Only TypeScript annotates parameters; an annotation proves nothing,
+    // so its unions only explain a slot they would close.
+    let declared_params = origins
         .filter(|_| program.source_type.is_typescript())
         .map(|scoping| literal_union_parameters(program, scoping))
         .unwrap_or_default();
@@ -1303,7 +1306,8 @@ pub(crate) fn collect_enriched_usage(
         static_values,
         scoping: scoping.as_ref().filter(|_| !static_values.is_empty()),
         enrich: true,
-        finite_params,
+        declared_params,
+        declared_hints: Vec::new(),
         react: react.clone(),
         clones: Some(CloneScan {
             scoping: scoping.as_ref(),
@@ -1317,6 +1321,7 @@ pub(crate) fn collect_enriched_usage(
         declaring: oxc::ast::ast::VariableDeclarationKind::Var,
     };
     collector.visit_program(program);
+    let declared_hints = std::mem::take(&mut collector.declared_hints);
     let usage = collector.finish();
     // Only a tag bound inside a function may name an alias.
     let nested_tag = usage.iter().any(|fact| matches!(fact, UsageFact::Element { origin: Some(TagOrigin::Nested), .. }));
@@ -1447,6 +1452,7 @@ pub(crate) fn collect_enriched_usage(
     let builder_proof = origins.and_then(|scoping| crate::pure_builders::prove(program, module, scoping));
     EnrichedUsage {
         usage,
+        declared_hints,
         confined,
         escapes,
         terminal_escapes,
@@ -6461,8 +6467,10 @@ struct FactCollector<'a, 's> {
     /// Enriched collection only: the scopes a tag's origin is read from.
     origins: Option<&'s Scoping>,
     /// Enriched collection only: the values a parameter's literal-union type
-    /// annotation admits.
-    finite_params: FxHashMap<SymbolId, FiniteSet>,
+    /// annotation declares, which prove nothing.
+    declared_params: FxHashMap<SymbolId, DeclaredUnion>,
+    /// Each attribute whose value is such a parameter (`DeclaredHint`).
+    declared_hints: Vec<DeclaredHint>,
     /// Enriched collection only: each rest parameter a `createElement`
     /// props object may spread, with the keys it can never carry.
     rests: FxHashMap<SymbolId, BTreeSet<String>>,
@@ -6645,6 +6653,19 @@ impl<'a> FactCollector<'a, '_> {
                             Some(_) => literal = true,
                             None => {}
                         }
+                        if dynamic {
+                            if let Some(declared) = self.declared_union(expression) {
+                                self.declared_hints.push(DeclaredHint {
+                                    at: attr.span.start,
+                                    prop: id.name.to_string(),
+                                    tag: match &tag {
+                                        TagFact::Ident(name) | TagFact::Member(name) => name.clone(),
+                                    },
+                                    set: declared.set.clone(),
+                                    line: crate::facts::line_column(self.source, declared.at).0,
+                                });
+                            }
+                        }
                     }
                 }
                 // A nullish breakpoint is absent, as at runtime, and a value
@@ -6822,6 +6843,42 @@ fn listed_spread(expression: &Expression<'_>, origins: Option<&Scoping>) -> Opti
 
 /// The values a runtime value can take, when it is proven to be one of a
 /// few: string and number literals, and whether it may also be absent.
+/// A parameter's literal-union type annotation, which proves nothing: the
+/// values it declares and where it is written.
+#[derive(Debug, Clone)]
+struct DeclaredUnion {
+    set: FiniteSet,
+    at: u32,
+}
+
+/// An attribute whose value is a parameter a literal union annotates: what
+/// would close its slot were annotations trusted, for slot provenance only.
+#[derive(Debug, Clone)]
+pub(crate) struct DeclaredHint {
+    /// The attribute's offset, as `AttrFact::at`.
+    pub at: u32,
+    pub prop: String,
+    /// The element's tag as written: a name or a member path.
+    pub tag: String,
+    set: FiniteSet,
+    /// The annotation's line.
+    pub line: usize,
+}
+
+impl DeclaredHint {
+    /// The slot opening's detail: the annotation in `file` and what it declares.
+    pub(crate) fn detail(&self, file: &str) -> String {
+        let mut values: Vec<String> = self.set.values.iter().map(|value| match value {
+            Value::String(text) => format!("'{text}'"),
+            other => other.to_string(),
+        }).collect();
+        if self.set.absent {
+            values.push("undefined".to_string());
+        }
+        format!("would close if trusted: {file}:{} declares {}", self.line, values.join(" | "))
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct FiniteSet {
     values: Vec<Value>,
@@ -6917,11 +6974,19 @@ impl FactCollector<'_, '_> {
         })
     }
 
+    /// The literal union a parameter `expression` names is declared with,
+    /// which proves nothing of its value.
+    fn declared_union(&self, expression: &Expression<'_>) -> Option<&DeclaredUnion> {
+        let Expression::Identifier(ident) = crate::chain_walk::unwrap_type_assertions(expression) else { return None };
+        let symbol = self.origins?.get_reference(ident.reference_id.get()?).symbol_id()?;
+        self.declared_params.get(&symbol)
+    }
+
     /// The values `expression` can take, when they are proven few: an
     /// explicitly absent value, a string or number literal, a `const` one
-    /// named directly (imported ones included), a parameter whose type
-    /// annotation is a union of literals, and a conditional, `||` or `??` of
-    /// such values.
+    /// named directly (imported ones included), and a conditional, `||` or
+    /// `??` of such values. A parameter's type annotation proves none: a
+    /// strict program can still pass any value at runtime.
     fn finite_set(&self, expression: &Expression<'_>) -> Option<FiniteSet> {
         let expression = crate::chain_walk::unwrap_type_assertions(expression);
         if is_absent(expression, self.origins) || matches!(expression, Expression::NullLiteral(_)) {
@@ -6941,13 +7006,7 @@ impl FactCollector<'_, '_> {
                 let kept = FiniteSet { values, absent: false };
                 Some(if reaches_right { kept.union(right) } else { kept })
             }
-            Expression::Identifier(ident) => {
-                let symbol = self
-                    .origins
-                    .and_then(|scoping| scoping.get_reference(ident.reference_id.get()?).symbol_id());
-                if let Some(set) = symbol.and_then(|symbol| self.finite_params.get(&symbol)) {
-                    return Some(set.clone());
-                }
+            Expression::Identifier(_) => {
                 let value = evaluate_with_statics(expression, self.static_values, self.scoping)?;
                 is_class_value(&value).then(|| FiniteSet { values: vec![value], absent: false })
             }
@@ -6994,8 +7053,9 @@ impl FactCollector<'_, '_> {
 /// own annotation, or a destructured property's, written inline or through
 /// a type alias or interface the module declares. Its default joins the
 /// values; an optional one may be absent. A binding something writes is
-/// left out.
-fn literal_union_parameters(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<SymbolId, FiniteSet> {
+/// left out. An annotation proves nothing of a value, so these unions only
+/// say what would close a slot were annotations trusted (`DeclaredHint`).
+fn literal_union_parameters(program: &Program<'_>, scoping: &Scoping) -> FxHashMap<SymbolId, DeclaredUnion> {
     use oxc::ast::ast::{Declaration, TSType};
     let mut scan = ParameterScan {
         scoping,
@@ -7043,7 +7103,7 @@ struct ParameterScan<'s> {
     objects: FxHashMap<SymbolId, FxHashMap<String, Option<FiniteSet>>>,
     /// The module's type aliases of a literal union.
     unions: FxHashMap<SymbolId, FiniteSet>,
-    sets: FxHashMap<SymbolId, FiniteSet>,
+    sets: FxHashMap<SymbolId, DeclaredUnion>,
 }
 
 impl ParameterScan<'_> {
@@ -7115,6 +7175,7 @@ impl ParameterScan<'_> {
         id: &oxc::ast::ast::BindingIdentifier<'_>,
         set: Option<FiniteSet>,
         default: Option<&Expression<'_>>,
+        at: u32,
     ) {
         let (Some(mut set), Some(symbol)) = (set, id.symbol_id.get()) else {
             return;
@@ -7128,7 +7189,7 @@ impl ParameterScan<'_> {
             };
             push_unique(&mut set.values, value);
         }
-        self.sets.insert(symbol, set);
+        self.sets.insert(symbol, DeclaredUnion { set, at });
     }
 }
 
@@ -7142,7 +7203,7 @@ impl<'a> Visit<'a> for ParameterScan<'_> {
                         set.absent |= parameter.optional;
                         set
                     });
-                    self.record(id, set, parameter.initializer.as_deref());
+                    self.record(id, set, parameter.initializer.as_deref(), annotation.span.start);
                 }
                 BindingPattern::ObjectPattern(object) => {
                     let properties = match &annotation.type_annotation {
@@ -7153,10 +7214,10 @@ impl<'a> Visit<'a> for ParameterScan<'_> {
                         let Some(key) = eval_property_key(&property.key) else { continue };
                         let set = properties.as_ref().and_then(|properties| properties.get(&key).cloned().flatten());
                         match &property.value {
-                            BindingPattern::BindingIdentifier(id) => self.record(id, set, None),
+                            BindingPattern::BindingIdentifier(id) => self.record(id, set, None, annotation.span.start),
                             BindingPattern::AssignmentPattern(assignment) => {
                                 if let BindingPattern::BindingIdentifier(id) = &assignment.left {
-                                    self.record(id, set, Some(&assignment.right));
+                                    self.record(id, set, Some(&assignment.right), annotation.span.start);
                                 }
                             }
                             _ => {}
@@ -8273,7 +8334,8 @@ pub fn collect_usage_facts(program: &Program<'_>) -> Vec<UsageFact> {
         react: ReactNames::by_name(),
         clones: None,
         origins: None,
-        finite_params: FxHashMap::default(),
+        declared_params: FxHashMap::default(),
+        declared_hints: Vec::new(),
         provided: FxHashSet::default(),
         rests: FxHashMap::default(),
         declaring: oxc::ast::ast::VariableDeclarationKind::Var,
