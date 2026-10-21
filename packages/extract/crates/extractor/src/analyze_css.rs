@@ -1262,6 +1262,32 @@ pub fn resolve_import_source<T>(
     files: &BTreeMap<String, T>,
     inputs: &CssInputs,
 ) -> Option<String> {
+    // Within a probe scope the answer is the scope's: it reads the
+    // importer, the specifier, the inputs' aliases and package map and the
+    // analysed paths, which hold still while the scope is open, and what it
+    // records the first answer recorded.
+    let kept = in_scope(files, inputs, |probes| probes.resolved.get(from_file)?.get(spec).cloned()).flatten();
+    if let Some(module) = kept {
+        debug_assert_eq!(
+            module,
+            resolve_import_source_uncached(from_file, spec, files, inputs),
+            "the probe scope's resolution of {spec:?} from {from_file:?} is the uncached one"
+        );
+        return module;
+    }
+    let module = resolve_import_source_uncached(from_file, spec, files, inputs);
+    in_scope(files, inputs, |probes| {
+        probes.resolved.entry(from_file.to_string()).or_default().insert(spec.to_string(), module.clone())
+    });
+    module
+}
+
+fn resolve_import_source_uncached<T>(
+    from_file: &str,
+    spec: &str,
+    files: &BTreeMap<String, T>,
+    inputs: &CssInputs,
+) -> Option<String> {
     let Some(base) = probe_base(from_file, spec, inputs) else {
         return inputs.package_map.get(spec).cloned();
     };
@@ -1443,8 +1469,9 @@ thread_local! {
 /// which hold still while the scope is open, so its outcome holds for every
 /// map with exactly those keys. A map is admitted by address once its keys
 /// are checked; it stays alive and keyed alike while it is probed, and its
-/// length is checked again at each probe. What a probe records,
-/// `resolve_import_source` records on every call as before.
+/// length is checked again at each probe. An import resolved in the scope,
+/// by importer and specifier, is answered again from it: the probe sets
+/// already hold what its first resolution recorded.
 struct Probes {
     /// The address of the inputs the scope's probes read.
     inputs: usize,
@@ -1453,6 +1480,19 @@ struct Probes {
     /// The admitted maps, by address and length.
     maps: Vec<(usize, usize)>,
     outcomes: FxHashMap<String, ProbeOutcome>,
+    /// Each import's module, by importer and specifier.
+    resolved: FxHashMap<String, FxHashMap<String, Option<String>>>,
+}
+
+/// `answer` of the open probe scope, where it answers for `files` over
+/// `inputs`: their keys are its paths and the inputs its own.
+fn in_scope<T, R>(files: &BTreeMap<String, T>, inputs: &CssInputs, answer: impl FnOnce(&mut Probes) -> R) -> Option<R> {
+    PROBES.with_borrow_mut(|probes| match probes {
+        Some(probes) if probes.inputs == address(inputs) && probes.maps.contains(&(address(files), files.len())) => {
+            Some(answer(probes))
+        }
+        _ => None,
+    })
 }
 
 thread_local! {
@@ -1474,6 +1514,7 @@ impl ProbeScope {
             paths: files.keys().cloned().collect(),
             maps: vec![(address(files), files.len())],
             outcomes: FxHashMap::default(),
+            resolved: FxHashMap::default(),
         };
         Some(Self(PROBES.replace(Some(probes))))
     }
@@ -1509,19 +1550,15 @@ fn address<T>(value: &T) -> usize {
 /// The analyzed file `base` names, through the host's extension order.
 fn probe_files<T>(base: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> ProbeOutcome {
     // The uncached probe never reads the scope, so the borrow holds.
-    PROBES.with_borrow_mut(|probes| match probes {
-        Some(probes)
-            if probes.inputs == address(inputs) && probes.maps.contains(&(address(files), files.len())) =>
-        {
-            if let Some(outcome) = probes.outcomes.get(base) {
-                return outcome.clone();
-            }
-            let outcome = probe_files_uncached(base, files, inputs);
-            probes.outcomes.insert(base.to_string(), outcome.clone());
-            outcome
+    in_scope(files, inputs, |probes| {
+        if let Some(outcome) = probes.outcomes.get(base) {
+            return outcome.clone();
         }
-        _ => probe_files_uncached(base, files, inputs),
+        let outcome = probe_files_uncached(base, files, inputs);
+        probes.outcomes.insert(base.to_string(), outcome.clone());
+        outcome
     })
+    .unwrap_or_else(|| probe_files_uncached(base, files, inputs))
 }
 
 fn probe_files_uncached<T>(base: &str, files: &BTreeMap<String, T>, inputs: &CssInputs) -> ProbeOutcome {
