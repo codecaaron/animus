@@ -71,6 +71,14 @@ export interface AnimusCoreOptions {
    * with `*`/`?` are globs on the root-relative path; others are substrings.
    */
   exclude?: string[];
+  /**
+   * Paths analysed although git keeps them out of the analysis: a path git
+   * ignores, or a directory below the root that is a git checkout of its own
+   * (a worktree or a nested clone). Either is analysed anyway where an
+   * analysed file imports it; this names the others to analyse. Patterns
+   * as `exclude`; `['**']` analyses everything git would keep out.
+   */
+  analyzeIgnored?: string[];
   /** File extensions to scan; replaces the default list entirely. */
   extensions?: string[];
   /** When true, error-severity diagnostics — lost configured inputs and
@@ -187,6 +195,7 @@ export const CORE_OPTION_KEYS: ReadonlySet<string> = new Set([
   'system',
   'systemExport',
   'exclude',
+  'analyzeIgnored',
   'extensions',
   'strict',
   'diagnostics',
@@ -379,6 +388,11 @@ const CORE_VALUE_GATES: ReadonlyArray<{
     expected: 'an array of string patterns',
   },
   {
+    key: 'analyzeIgnored',
+    ok: isStringArray,
+    expected: 'an array of string patterns',
+  },
+  {
     key: 'extensions',
     ok: isStringArray,
     expected: 'an array of string extensions',
@@ -472,6 +486,9 @@ export interface ExcludeMatcher {
   /** True when the path is excluded; both path forms are tested. */
   matches(fullPath: string, relativePath: string): boolean;
   explain(fullPath: string, relativePath: string): string | null;
+  /** True when discovery leaves out a directory it has entered the
+   *  listing of: asked once per directory, after `matches` kept it. */
+  skipsDirectory?(fullPath: string, relativePath: string): boolean;
 }
 
 const GLOB_META = /[*?]/;
@@ -500,6 +517,15 @@ function compilePattern(raw: string): (full: string, rel: string) => boolean {
     }
     return false;
   };
+}
+
+/** Whether a path matches any of `patterns`, each read as an `exclude`
+ *  pattern. */
+export function matchesAnyPattern(
+  patterns: readonly string[]
+): (fullPath: string, relativePath: string) => boolean {
+  const tests = patterns.map(compilePattern);
+  return (full, rel) => tests.some((test) => test(full, rel));
 }
 
 /** Minimal glob → RegExp: `**` spans segments, `*`/`?` stay within one. */

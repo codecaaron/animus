@@ -527,6 +527,7 @@ const OPTION_CLASSES = {
   system: digestOf('system'),
   systemExport: digestOf('systemExport'),
   exclude: digestOf('exclude'),
+  analyzeIgnored: digestOf('analyzeIgnored'),
   extensions: digestOf('extensions'),
   strict: digestOf('strict'),
   diagnostics: digestOf('diagnostics'),

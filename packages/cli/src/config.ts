@@ -273,6 +273,9 @@ function parseLoadedCliConfig(raw: ConfigRecord): LoadedCliConfig {
       minify: isConfigBoolean(raw.minify) ? raw.minify : undefined,
       staticCss: configStaticCss(raw.staticCss),
       layers: isConfigStringArray(raw.layers) ? raw.layers : undefined,
+      analyzeIgnored: isConfigStringArray(raw.analyzeIgnored)
+        ? raw.analyzeIgnored
+        : undefined,
       runtimeImport: isConfigString(raw.runtimeImport)
         ? raw.runtimeImport
         : undefined,
@@ -503,6 +506,7 @@ export async function resolveCliConfig(
     minify: pick('minify', undefined),
     staticCss: pick('staticCss', undefined),
     layers: pick('layers', undefined),
+    analyzeIgnored: pick('analyzeIgnored', undefined),
     runtimeImport: pick('runtimeImport', undefined),
     closedDynamicImports: pick('closedDynamicImports', undefined),
     fontPreloads: pick('fontPreloads', undefined),
@@ -567,6 +571,7 @@ export function projectResolvedConfig(config: ResolvedCliConfig) {
     fontPreloads: config.options.fontPreloads ?? null,
     stylesheets: config.options.stylesheets ?? 'single',
     exclude: config.excludePatterns,
+    analyzeIgnored: config.options.analyzeIgnored ?? null,
     provenance: config.provenance,
   };
 }

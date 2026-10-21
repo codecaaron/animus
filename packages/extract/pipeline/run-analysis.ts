@@ -9,6 +9,7 @@ import {
 } from './manifest-diagnostics';
 import {
   gatherProbeEvidence,
+  type HostReadings,
   type ProbeEvidenceGatherer,
 } from './probe-evidence';
 import { checkCustomProperties } from './property-diagnostics';
@@ -93,6 +94,9 @@ export interface AnalysisOptions {
   /** How the host's bundler expands computed loads (spec §6.3); without
    *  one, every computed load keeps its widest reading. */
   loadExpander?: HostLoadExpander;
+  /** Whether git keeps a root-relative file out of the analysis, and where
+   *  to report each probe base no file opens (`HostReadings`). */
+  gitSkip?: Pick<HostReadings, 'skipped' | 'missing'>;
   /** Diagnostics gathered outside analysis, surfaced through the same
    *  policy point as the manifest's own. */
   extraDiagnostics?: import('./manifest-diagnostics').ManifestDiagnostic[];
@@ -362,6 +366,7 @@ export function runProjectAnalysis(
             adapted: opts.adapted,
             expander: opts.loadExpander,
             packageLoads,
+            ...opts.gitSkip,
           }
         );
   let probeEvidence = 0;

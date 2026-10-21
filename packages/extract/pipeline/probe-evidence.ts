@@ -38,6 +38,21 @@ export interface HostReadings {
    *  loads (`packageLoads`). Without it, a local package may reach any
    *  module. */
   packageLoads?: (filesJson: string) => string;
+  /** Whether git keeps a root-relative file out of the analysis. An import
+   *  or load the host opens as one is analysed after all: the gatherer
+   *  throws `SkippedSourcesWanted` naming each, before any evidence. */
+  skipped?(relativePath: string): boolean;
+  /** Called with each probe base no file opens: a file created later at one
+   *  of its candidates is one an analysed file imports. */
+  missing?(base: string): void;
+}
+
+/** Files git kept out of the analysis that an analysed file imports or
+ *  loads: the analysis is run again with them. */
+export class SkippedSourcesWanted extends Error {
+  constructor(readonly paths: readonly string[]) {
+    super(`imported files git keeps out of the analysis: ${paths.join(', ')}`);
+  }
 }
 
 /** The session's evidence for the probe bases, computed loads and unread
@@ -157,6 +172,7 @@ export function gatherProbeEvidence(
         root
       );
       if (host !== null) byBase[base] = host;
+      else readings.missing?.(base);
     }
     const expansions =
       readings.expander === undefined
@@ -168,6 +184,24 @@ export function gatherProbeEvidence(
             readings.expander,
             readings.isAsset
           );
+    if (readings.skipped !== undefined) {
+      const wanted = new Set<string>();
+      for (const host of Object.values(byBase)) {
+        if (host.reading !== 'unanalysed') continue;
+        const at = host.candidate.indexOf('?');
+        const file = at === -1 ? host.candidate : host.candidate.slice(0, at);
+        if (readings.skipped(file)) wanted.add(file);
+      }
+      for (const expansion of expansions) {
+        for (const file of expansion.files) {
+          const path = file.path.split('?')[0];
+          if (file.status === 'unanalysed' && readings.skipped(path)) {
+            wanted.add(path);
+          }
+        }
+      }
+      if (wanted.size > 0) throw new SkippedSourcesWanted([...wanted].sort());
+    }
     const reaches = packageReaches(
       root,
       packages,

@@ -72,6 +72,7 @@ function walkFiles(
     }
 
     if (stat.isDirectory()) {
+      if (exclude?.skipsDirectory?.(fullPath, relativePath)) continue;
       results.push(
         ...walkFiles(
           fullPath,

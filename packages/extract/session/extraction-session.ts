@@ -36,6 +36,7 @@ import {
   realPath,
   taggedPackages,
 } from '../pipeline/discover-packages';
+import { GIT_SKIPPED, GitSkip } from '../pipeline/git-skip';
 import { nativeLoaderResolution } from '../pipeline/host-package-resolver';
 import {
   adaptedOriginals,
@@ -116,6 +117,10 @@ import {
   effectiveLevel,
   SYSTEM_INSTANCE_MISMATCH,
 } from '../pipeline/manifest-diagnostics';
+import {
+  hostCandidate,
+  SkippedSourcesWanted,
+} from '../pipeline/probe-evidence';
 import { foreignPackages } from '../pipeline/registry-packages';
 import { slotProvenanceLines } from '../pipeline/slot-provenance';
 import { systemInstanceMismatches } from '../pipeline/system-instances';
@@ -289,6 +294,9 @@ import type {
 } from './session-paths';
 
 const SESSION_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** The most full-pass rounds that pull back files git keeps out before a
+ *  pass fails open and analyses all of them. */
+const GIT_SKIP_ROUNDS = 4;
 
 /** A file's text, or null when it cannot be read. */
 function readTextOrNull(path: string): string | null {
@@ -897,6 +905,10 @@ export class ExtractionSession {
    *  levels and strictness, as it makes them: an error-severity record
    *  fails a strict build. */
   private surfaceHostDiagnostics(diagnostics: ManifestDiagnostic[]): void {
+    if (this.heldHostReports !== null) {
+      this.heldHostReports.push(() => this.surfaceHostDiagnostics(diagnostics));
+      return;
+    }
     surfaceManifestDiagnostics(
       { diagnostics },
       (message) => this.warn(message),
@@ -974,6 +986,10 @@ export class ExtractionSession {
   }
 
   private warn(msg: string): void {
+    if (this.heldHostReports !== null) {
+      this.heldHostReports.push(() => this.warn(msg));
+      return;
+    }
     this.logger.warn(`[animus] ${msg}`);
   }
 
@@ -1032,7 +1048,20 @@ export class ExtractionSession {
   private scanConfigMemo: {
     excludeMatcher: ExcludeMatcher;
     extensionsSet: ReadonlySet<string>;
+    /** What git keeps out of the walk, and lets back in. */
+    git: GitSkip;
+    /** The user's and structural exclusions, uncounted: a path a probe
+     *  reaches is no walk's match. */
+    excluded: (fullPath: string, relativePath: string) => boolean;
   } | null = null;
+
+  /** Reports a full-pass round holds until it completes (`holdHostReports`);
+   *  null where nothing holds them. */
+  private heldHostReports: Array<() => void> | null = null;
+
+  /** Files git keeps out that the next full pass starts with let back in:
+   *  an incremental pass found them imported. */
+  private pullOnNextPass: readonly string[] = [];
 
   /** Resolve the scan configuration from options — the single source of the
    *  exclude/extension policy shared by the full and incremental pipelines,
@@ -1040,17 +1069,37 @@ export class ExtractionSession {
   get scanConfig(): {
     excludeMatcher: ExcludeMatcher;
     extensionsSet: ReadonlySet<string>;
+    git: GitSkip;
+    excluded: (fullPath: string, relativePath: string) => boolean;
   } {
     if (this.scanConfigMemo === null) {
       const extensionsSet: ReadonlySet<string> = new Set(
         this.options.extensions ?? DEFAULT_EXTENSIONS
       );
+      const excludes = createExcludeMatcher(
+        this.options.exclude,
+        this.structuralExclude
+      );
+      const uncounted = createExcludeMatcher(
+        this.options.exclude,
+        this.structuralExclude
+      );
+      const git = new GitSkip(this.options.analyzeIgnored, extensionsSet);
       this.scanConfigMemo = {
-        excludeMatcher: createExcludeMatcher(
-          this.options.exclude,
-          this.structuralExclude
-        ),
+        excludeMatcher: {
+          patterns: excludes.patterns,
+          stats: () => excludes.stats(),
+          unmatched: () => excludes.unmatched(),
+          matches: (full, rel) =>
+            excludes.matches(full, rel) || git.skips(full, rel),
+          explain: (full, rel) =>
+            excludes.explain(full, rel) ??
+            (git.skips(full, rel) ? GIT_SKIPPED : null),
+          skipsDirectory: (full, rel) => git.skipsDirectory(full, rel),
+        },
         extensionsSet,
+        git,
+        excluded: (full, rel) => uncounted.explain(full, rel) !== null,
       };
     }
     return this.scanConfigMemo;
@@ -1413,6 +1462,8 @@ export class ExtractionSession {
         if (classified) targets.push({ abs: modifiedPath, ...classified });
       }
     } else {
+      const { git } = this.scanConfig;
+      git.beginWalk();
       targets = discoverFiles(
         rootDir,
         rootDir,
@@ -1420,6 +1471,7 @@ export class ExtractionSession {
         extensionsSet,
         this.reportUndiscoverable(rootDir)
       ).map((abs) => ({ abs, key: relative(rootDir, abs), owningRoot: null }));
+      git.endWalk(targets.map((target) => target.key));
     }
 
     const changedPaths: string[] = [];
@@ -1558,7 +1610,19 @@ export class ExtractionSession {
           pending
         );
         setAnalysisStartedPromise(this.key, promise);
-        await promise;
+        try {
+          await promise;
+        } catch (err) {
+          if (!(err instanceof SkippedSourcesWanted)) throw err;
+          // An edit imports a file git keeps out: a full read takes it,
+          // with the bytes the host supplied.
+          this.pullOnNextPass = this.withSkippedImports(
+            err.paths,
+            changes.sources
+          );
+          await this.runFullPipeline(pending, changes.sources);
+          return;
+        }
       } catch (err) {
         if (
           err instanceof AbortedParseRejection ||
@@ -1826,6 +1890,8 @@ export class ExtractionSession {
     this.configInputPaths = [
       join(rootDir, 'package.json'),
       ...tsconfigChainPaths(rootDir),
+      // An edit to what git ignores changes what the walk reads.
+      ...this.scanConfig.git.inputs,
     ];
     this.configInputKeys = new Set(
       this.configInputPaths.flatMap((path) => toWatchKeys(path))
@@ -1898,7 +1964,123 @@ export class ExtractionSession {
     });
   }
 
+  /** A full pass, run again with each file git keeps out that an analysed
+   *  file turns out to import, and the files those import, until none is
+   *  new. Past `GIT_SKIP_ROUNDS` it fails open: the last round analyses
+   *  everything git keeps out. A round that wants more surfaces nothing. */
   private async runPipelineTransaction(
+    pending: Array<[string, string]>,
+    hostSources: ReadonlyMap<string, string>
+  ): Promise<void> {
+    const { git } = this.scanConfig;
+    const repository = git.beginPass(this.rootDir!, this.pullOnNextPass);
+    this.pullOnNextPass = [];
+    if (!repository) {
+      this.log(
+        `no git repository holds the root, so nothing under it is skipped ` +
+          `as ignored: a build without .git analyses every file a ` +
+          `checkout's build skips as ignored, and its output can differ`
+      );
+    }
+    const started = this.now();
+    for (let round = 1; ; round += 1) {
+      const roundStarted = this.now();
+      const held = this.holdHostReports();
+      try {
+        await this.runPipelineRound(pending, hostSources);
+      } catch (error) {
+        if (!(error instanceof SkippedSourcesWanted)) {
+          held.release();
+          throw error;
+        }
+        git.pull(this.withSkippedImports(error.paths, hostSources));
+        if (round + 1 >= GIT_SKIP_ROUNDS) git.failOpen();
+        continue;
+      }
+      held.release();
+      const note = git.summary(round, roundStarted - started);
+      if (note !== null) this.log(note);
+      return;
+    }
+  }
+
+  /** Holds the warnings and host diagnostics reported until `release`, which
+   *  reports them; dropped where the holder never releases them. */
+  private holdHostReports() {
+    const outer = this.heldHostReports;
+    const held: Array<() => void> = [];
+    this.heldHostReports = held;
+    return {
+      release: () => {
+        this.heldHostReports = outer;
+        for (const report of held) {
+          if (outer === null) report();
+          else outer.push(report);
+        }
+      },
+    };
+  }
+
+  /** `paths` and each file git keeps out that they import, transitively, as
+   *  the engine names a file's specifiers and the host opens them: a chain
+   *  of generated files costs one more round, not one per link. A load the
+   *  engine computes is left to the next round. */
+  private withSkippedImports(
+    paths: readonly string[],
+    hostSources: ReadonlyMap<string, string> = new Map()
+  ): string[] {
+    const found = new Set(paths);
+    const { moduleSpecifiers } = this.engine();
+    if (moduleSpecifiers === undefined) return [...found];
+    const rootDir = this.rootDir!;
+    const { git, excluded } = this.scanConfig;
+    for (let next = [...paths]; next.length > 0;) {
+      const entries = next.flatMap((path) => {
+        const abs = resolve(rootDir, path);
+        const source = hostSources.get(abs) ?? readTextOrNull(abs);
+        return source === null ? [] : [{ path, source }];
+      });
+      next = [];
+      const { files, bases } = parseInternalWire<{
+        files: Record<string, string[]>;
+        bases?: Record<string, Record<string, string>>;
+      }>(
+        moduleSpecifiers(
+          JSON.stringify(entries),
+          this.pathAliasesJson ?? undefined
+        ),
+        'moduleSpecifiers'
+      );
+      for (const [importer, specifiers] of Object.entries(files)) {
+        for (const specifier of specifiers) {
+          const base = specifier.startsWith('.')
+            ? posix.join(posix.dirname(importer), specifier)
+            : bases?.[importer]?.[specifier];
+          if (base === undefined) continue;
+          const host = hostCandidate(
+            rootDir,
+            base,
+            found,
+            this.extensionPolicy
+          );
+          if (host?.reading !== 'unanalysed') continue;
+          const file = host.candidate.split('?')[0];
+          const abs = resolve(rootDir, file);
+          if (
+            !found.has(file) &&
+            !excluded(abs, file) &&
+            git.skips(abs, file)
+          ) {
+            found.add(file);
+            next.push(file);
+          }
+        }
+      }
+    }
+    return [...found];
+  }
+
+  private async runPipelineRound(
     pending: Array<[string, string]>,
     hostSources: ReadonlyMap<string, string>
   ): Promise<void> {
@@ -1951,7 +2133,8 @@ export class ExtractionSession {
     this.systemLoadMs = bt.systemLoad;
 
     t = this.now();
-    const { excludeMatcher, extensionsSet } = this.scanConfig;
+    const { excludeMatcher, extensionsSet, git } = this.scanConfig;
+    git.beginWalk();
     const files = discoverFiles(
       rootDir,
       rootDir,
@@ -1959,12 +2142,21 @@ export class ExtractionSession {
       extensionsSet,
       this.reportUndiscoverable(rootDir)
     );
+    git.endWalk(files.map((file) => relative(rootDir, file)));
     // The system load's own modules outside the root (a system file in the
     // app root's parent, and the files of its package it reads) are analysed
     // too, so a write they make to the root's modules is seen as any
     // module's is. A root with no modules has nothing for them to write.
     const systemPackageRoot = findPackageRoot(resolvedSystemPath);
     const discovered = new Set(files);
+    // Each file git keeps out that an analysed file imports.
+    for (const rel of git.pulledFiles()) {
+      const pulled = resolve(rootDir, rel);
+      if (!discovered.has(pulled) && existsSync(pulled)) {
+        discovered.add(pulled);
+        files.push(pulled);
+      }
+    }
     const outsideRoot =
       files.length === 0
         ? []
@@ -2853,8 +3045,11 @@ export class ExtractionSession {
     } catch (err) {
       // A failed attempt commits no publication, and the status carries the
       // diagnostic. The shared registry is written during analysis, so it
-      // can already hold this attempt's values.
-      this.writeAnalysisStatus('failed', pending, String(err));
+      // can already hold this attempt's values. One that wants a file git
+      // kept out is run again.
+      if (!(err instanceof SkippedSourcesWanted)) {
+        this.writeAnalysisStatus('failed', pending, String(err));
+      }
       throw err;
     }
   }
@@ -2901,6 +3096,10 @@ export class ExtractionSession {
       assets: this.assetClassification,
       adapted: this.ingestionAdapted,
       loadExpander: this.loadExpander,
+      gitSkip: this.scanConfig.git.readings(
+        this.extensionPolicy,
+        this.scanConfig.excluded
+      ),
       devMode: this.engineDevMode(devMode),
       // A skipped or unreadable file may render any option, so nothing is
       // pruned while one is.

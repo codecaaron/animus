@@ -193,6 +193,8 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           ? deps.rehydrateFilesJson(filesJsonRaw)
           : filesJsonRaw;
 
+        const priorEngine = store.getEngine();
+        const priorSent = store.getSentSources();
         const sent = new Map<string, string>();
         for (const entry of parseFilesJson(filesJson, label)) {
           sent.set(entry.path, entry.source);
@@ -258,14 +260,22 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
           loads: ListedLoad[];
           packages: PreparedPackage[];
         }>(preparedJson, 'ExtractEngine.prepare');
-        return engine.analyzePrepared(
-          probeEvidence(
+        let evidence: string;
+        try {
+          evidence = probeEvidence(
             prepared.bases,
             prepared.identity,
             prepared.loads,
             prepared.packages
-          )
-        );
+          );
+        } catch (error) {
+          // A gatherer that refuses this input leaves the analysis that
+          // last ran serving.
+          store.setEngine(priorEngine);
+          store.setSentSources(priorSent);
+          throw error;
+        }
+        return engine.analyzePrepared(evidence);
       },
       transformFile: (source, path, _manifest) => {
         const engine = store.getEngine();
