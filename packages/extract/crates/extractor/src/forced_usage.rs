@@ -310,6 +310,7 @@ pub fn build_forced_injection(
             out.custom_dynamic.push(DynamicPropUsage {
                 prop_name: prop.clone(),
                 binding: name.clone(),
+                at: None,
             });
         }
     }

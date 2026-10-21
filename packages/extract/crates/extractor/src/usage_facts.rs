@@ -6658,9 +6658,6 @@ impl<'a> FactCollector<'a, '_> {
                                 self.declared_hints.push(DeclaredHint {
                                     at: attr.span.start,
                                     prop: id.name.to_string(),
-                                    tag: match &tag {
-                                        TagFact::Ident(name) | TagFact::Member(name) => name.clone(),
-                                    },
                                     set: declared.set.clone(),
                                     line: crate::facts::line_column(self.source, declared.at).0,
                                 });
@@ -6847,8 +6844,28 @@ fn listed_spread(expression: &Expression<'_>, origins: Option<&Scoping>) -> Opti
 /// values it declares and where it is written.
 #[derive(Debug, Clone)]
 struct DeclaredUnion {
-    set: FiniteSet,
+    set: DeclaredSet,
     at: u32,
+}
+
+/// A declared literal union's values, and which nullish members it
+/// writes: an optional parameter or property may be `undefined`.
+#[derive(Debug, Clone, Default)]
+struct DeclaredSet {
+    values: Vec<Value>,
+    null: bool,
+    undefined: bool,
+}
+
+impl DeclaredSet {
+    fn union(mut self, other: DeclaredSet) -> DeclaredSet {
+        for value in other.values {
+            push_unique(&mut self.values, value);
+        }
+        self.null |= other.null;
+        self.undefined |= other.undefined;
+        self
+    }
 }
 
 /// An attribute whose value is a parameter a literal union annotates: what
@@ -6858,9 +6875,7 @@ pub(crate) struct DeclaredHint {
     /// The attribute's offset, as `AttrFact::at`.
     pub at: u32,
     pub prop: String,
-    /// The element's tag as written: a name or a member path.
-    pub tag: String,
-    set: FiniteSet,
+    set: DeclaredSet,
     /// The annotation's line.
     pub line: usize,
 }
@@ -6872,9 +6887,8 @@ impl DeclaredHint {
             Value::String(text) => format!("'{text}'"),
             other => other.to_string(),
         }).collect();
-        if self.set.absent {
-            values.push("undefined".to_string());
-        }
+        values.extend(self.set.null.then(|| "null".to_string()));
+        values.extend(self.set.undefined.then(|| "undefined".to_string()));
         format!("would close if trusted: {file}:{} declares {}", self.line, values.join(" | "))
     }
 }
@@ -7100,9 +7114,9 @@ struct ParameterScan<'s> {
     scoping: &'s Scoping,
     /// The module's interfaces and object type aliases: each property's
     /// literal union, `None` for another type.
-    objects: FxHashMap<SymbolId, FxHashMap<String, Option<FiniteSet>>>,
+    objects: FxHashMap<SymbolId, FxHashMap<String, Option<DeclaredSet>>>,
     /// The module's type aliases of a literal union.
-    unions: FxHashMap<SymbolId, FiniteSet>,
+    unions: FxHashMap<SymbolId, DeclaredSet>,
     sets: FxHashMap<SymbolId, DeclaredUnion>,
 }
 
@@ -7121,16 +7135,17 @@ impl ParameterScan<'_> {
     /// The values a union of string and number literal types admits, a
     /// literal-union alias among them; `null` and `undefined` members make
     /// the value possibly absent.
-    fn literal_union(&self, annotation: &oxc::ast::ast::TSType<'_>) -> Option<FiniteSet> {
+    fn literal_union(&self, annotation: &oxc::ast::ast::TSType<'_>) -> Option<DeclaredSet> {
         use oxc::ast::ast::{TSLiteral, TSType};
         let members: Vec<&TSType<'_>> = match annotation {
             TSType::TSUnionType(union) => union.types.iter().collect(),
             other => vec![other],
         };
-        let mut set = FiniteSet::default();
+        let mut set = DeclaredSet::default();
         for member in members {
             match member {
-                TSType::TSUndefinedKeyword(_) | TSType::TSNullKeyword(_) => set.absent = true,
+                TSType::TSUndefinedKeyword(_) => set.undefined = true,
+                TSType::TSNullKeyword(_) => set.null = true,
                 TSType::TSLiteralType(literal) => {
                     let value = match &literal.literal {
                         TSLiteral::StringLiteral(text) => Value::String(crate::eval::literal_string(text)?.to_string()),
@@ -7148,11 +7163,11 @@ impl ParameterScan<'_> {
                 other => set = set.union(self.unions.get(&self.named(other)?)?.clone()),
             }
         }
-        (!set.values.is_empty() || set.absent).then_some(set)
+        (!set.values.is_empty() || set.null || set.undefined).then_some(set)
     }
 
     /// Each property signature's literal union, `None` when it has another type.
-    fn property_unions(&self, members: &[oxc::ast::ast::TSSignature<'_>]) -> FxHashMap<String, Option<FiniteSet>> {
+    fn property_unions(&self, members: &[oxc::ast::ast::TSSignature<'_>]) -> FxHashMap<String, Option<DeclaredSet>> {
         use oxc::ast::ast::TSSignature;
         members
             .iter()
@@ -7160,7 +7175,7 @@ impl ParameterScan<'_> {
                 TSSignature::TSPropertySignature(signature) if !signature.computed => {
                     let set = signature.type_annotation.as_ref().and_then(|annotation| {
                         let mut set = self.literal_union(&annotation.type_annotation)?;
-                        set.absent |= signature.optional;
+                        set.undefined |= signature.optional;
                         Some(set)
                     });
                     Some((eval_property_key(&signature.key)?, set))
@@ -7173,7 +7188,7 @@ impl ParameterScan<'_> {
     fn record(
         &mut self,
         id: &oxc::ast::ast::BindingIdentifier<'_>,
-        set: Option<FiniteSet>,
+        set: Option<DeclaredSet>,
         default: Option<&Expression<'_>>,
         at: u32,
     ) {
@@ -7200,7 +7215,7 @@ impl<'a> Visit<'a> for ParameterScan<'_> {
             match &parameter.pattern {
                 BindingPattern::BindingIdentifier(id) => {
                     let set = self.literal_union(&annotation.type_annotation).map(|mut set| {
-                        set.absent |= parameter.optional;
+                        set.undefined |= parameter.optional;
                         set
                     });
                     self.record(id, set, parameter.initializer.as_deref(), annotation.span.start);
@@ -8768,6 +8783,7 @@ pub fn filter_custom_prop_scan(
                         dynamic_results.push(DynamicPropUsage {
                             prop_name: attr.name.clone(),
                             binding: binding.clone(),
+                            at: Some(attr.at),
                         });
                     }
                 }
@@ -8799,7 +8815,7 @@ pub fn uncertain_custom_renders(
             for (binding, custom) in component_props.sorted_entries() {
                 for (prop, _) in props.iter().filter(|(prop, _)| custom.contains(prop)) {
                     if seen.insert((binding.as_str(), prop)) {
-                        usages.push((DynamicPropUsage { prop_name: prop.clone(), binding: binding.clone() }, "clone"));
+                        usages.push((DynamicPropUsage { prop_name: prop.clone(), binding: binding.clone(), at: None }, "clone"));
                     }
                 }
             }
@@ -8821,7 +8837,7 @@ pub fn uncertain_custom_renders(
         };
         for prop in component_props.get(binding).into_iter().flatten() {
             if seen.insert((binding, prop)) {
-                usages.push((DynamicPropUsage { prop_name: prop.clone(), binding: binding.to_string() }, kind));
+                usages.push((DynamicPropUsage { prop_name: prop.clone(), binding: binding.to_string(), at: None }, kind));
             }
         }
     }
@@ -9051,6 +9067,7 @@ pub fn filter_usage_scan(
                                         result.dynamic_prop_usages.push(DynamicPropUsage {
                                             prop_name: attr.name.clone(),
                                             binding: binding.clone(),
+                                            at: Some(attr.at),
                                         });
                                     }
                                 }
@@ -9179,6 +9196,7 @@ pub fn filter_usage_scan(
                                     result.dynamic_prop_usages.push(DynamicPropUsage {
                                         prop_name: prop.clone(),
                                         binding: binding.clone(),
+                                        at: None,
                                     });
                                 }
                             }

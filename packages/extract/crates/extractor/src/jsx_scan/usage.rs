@@ -260,6 +260,7 @@ impl<'a> UsageScanner<'a, '_> {
                                         self.result.dynamic_prop_usages.push(DynamicPropUsage {
                                             prop_name: prop_name.to_string(),
                                             binding: binding.clone(),
+                                            at: Some(attr.span.start),
                                         });
                                     }
                                 }

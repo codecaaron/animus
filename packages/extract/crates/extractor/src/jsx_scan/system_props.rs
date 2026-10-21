@@ -113,6 +113,7 @@ impl<'a> SystemPropScanner<'a, '_> {
                                 self.dynamic_results.push(DynamicPropUsage {
                                     prop_name: prop_name.to_string(),
                                     binding: binding.clone(),
+                                    at: Some(attr.span.start),
                                 });
                             }
                         }

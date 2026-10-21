@@ -59,6 +59,10 @@ pub(crate) fn record_written(
 pub struct DynamicPropUsage {
     pub prop_name: String,
     pub binding: String,
+    /// The attribute that writes the runtime value, where one does: the
+    /// first site the scan reads for this binding and prop.
+    #[serde(skip)]
+    pub at: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]

@@ -8398,11 +8398,11 @@ impl UsageIdentityPolicy {
     ) {
         let taken = std::mem::take(usages);
         for usage in taken {
-            for binding in self.resolve_all(&usage.binding, attribution) {
-                usages.push(DynamicPropUsage {
-                    prop_name: usage.prop_name.clone(),
-                    binding,
-                });
+            let bindings = self.resolve_all(&usage.binding, attribution);
+            // The site stays its component's only where the tag names one.
+            let at = usage.at.filter(|_| bindings.len() == 1);
+            for binding in bindings {
+                usages.push(DynamicPropUsage { prop_name: usage.prop_name.clone(), binding, at });
             }
         }
     }
@@ -10506,9 +10506,11 @@ fn run_with_system_floor(
             for usage in &custom_scan.dynamic_usages {
                 keep_component_slot(&mut component_slot_reasons, &usage.binding, &usage.prop_name, || {
                     let opening = SlotOpening::rule("runtime-value").in_file(path);
-                    // The hint of an element of this component that writes the prop.
-                    let binding = usage.binding.rsplit_once("::").map_or(usage.binding.as_str(), |(_, binding)| binding);
-                    let hint = ff.declared_hints.iter().find(|hint| hint.prop == usage.prop_name && hint.tag == binding);
+                    // The hint at the site that writes the runtime value, as the
+                    // system prop's is found; a usage with no site has none.
+                    let hint = usage
+                        .at
+                        .and_then(|at| ff.declared_hints.iter().find(|hint| hint.at == at && hint.prop == usage.prop_name));
                     match hint {
                         Some(hint) => opening.detail(hint.detail(path)),
                         None => opening,
@@ -10519,7 +10521,7 @@ fn run_with_system_floor(
             for (usage, kind) in renders {
                 for binding in identity_policy.resolve_all(&usage.binding, &lookup.attribution) {
                     keep_component_slot(&mut component_slot_reasons, &binding, &usage.prop_name, || SlotOpening::rule(kind).in_file(path));
-                    custom_scan.dynamic_usages.push(DynamicPropUsage { prop_name: usage.prop_name.clone(), binding });
+                    custom_scan.dynamic_usages.push(DynamicPropUsage { prop_name: usage.prop_name.clone(), binding, at: None });
                 }
             }
             all_custom_dynamic_usages.extend(custom_scan.dynamic_usages.iter().cloned());
@@ -10951,6 +10953,7 @@ fn run_with_system_floor(
             all_custom_dynamic_usages.push(DynamicPropUsage {
                 prop_name: prop_name.clone(),
                 binding: component_id.clone(),
+                at: None,
             });
         }
         opened_usage.rendered_components.insert(component_id.clone());
@@ -11051,6 +11054,7 @@ fn run_with_system_floor(
                 all_custom_dynamic_usages.push(DynamicPropUsage {
                     prop_name: usage.prop_name.clone(),
                     binding: component_id.clone(),
+                    at: None,
                 });
             }
         }
@@ -15589,6 +15593,26 @@ export const Use = () => createElement(Render, { as: Foreign }, <Box p={4} />);"
         assert_eq!(gap.opening.detail.as_deref(), Some("would close if trusted: a.tsx:4 declares 4 | 8"));
         let tone = &provenance.components["a.tsx::Tinted"]["tone"];
         assert_eq!(tone[0].detail.as_deref(), Some("would close if trusted: a.tsx:4 declares 'red' | 'blue'"), "{tone:?}");
+        // The hint is the site's own: a shadowed local tag lends none to the
+        // real component, an import alias keeps its own, and the union reads
+        // as written.
+        let tinted = "export const Tinted = ds.props({ tone: { property: 'color' } }).asElement('div');\n";
+        let detail = |files: &[(&str, &str)], id: &str| {
+            let provenance = analyze(files, &inputs_with_provenance()).slot_provenance.unwrap();
+            provenance.components[id]["tone"].iter().find_map(|opening| opening.detail.clone())
+        };
+        let shadowed = format!(
+            "{tinted}const Fake = ({{ tone }}: {{ tone: 'red' | 'blue' }}) => {{ const Tinted = () => null; return <Tinted tone={{tone}} />; }};\n\
+             export const App = ({{ x }}) => <><Fake tone={{x}} /><Tinted tone={{x}} /></>;\n"
+        );
+        assert_eq!(detail(&[("a.tsx", &shadowed)], "a.tsx::Tinted"), None);
+        let aliased = "import { Tinted as Ink } from './kit';\nexport const App = ({ tone }: { tone: 'red' | 'blue' }) => <Ink tone={tone} />;\n";
+        assert_eq!(
+            detail(&[("kit.tsx", tinted), ("a.tsx", aliased)], "kit.tsx::Tinted").as_deref(),
+            Some("would close if trusted: a.tsx:2 declares 'red' | 'blue'")
+        );
+        let nullable = format!("{tinted}export function App(tone: 'red' | null) {{ return <Tinted tone={{tone}} />; }}\n");
+        assert_eq!(detail(&[("a.tsx", &nullable)], "a.tsx::Tinted").as_deref(), Some("would close if trusted: a.tsx:2 declares 'red' | null"));
     }
 
     /// Contract: every slot the floor keeps, a system prop's or a
