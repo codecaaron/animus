@@ -15,41 +15,36 @@ import type {
   NativeModule,
 } from '@animus-ui/extract';
 
-/** The stateful engine handle produced by `new native.ExtractEngine(...)`;
- *  `analyzePrepared` is absent from engines before 0.1.81. */
+/** The stateful engine handle produced by `new native.ExtractEngine(...)`. */
 export type V2ExtractEngine = Pick<
   ExtractEngine,
   | 'prepare'
-  | 'analyze'
+  | 'analyzePrepared'
   | 'fullManifestJson'
   | 'analysisTimings'
   | 'transformFile'
   | 'clearCache'
-> &
-  Partial<Pick<ExtractEngine, 'analyzePrepared'>>;
+>;
 
 /** The native functions the engine API passes through, as the engine
- *  declares them. An engine that predates one lacks it, and its callers
- *  say so; nothing caches for an engine without `engineBuildId`. */
-type NativeFunctions = Pick<NativeModule, 'loadSystemModule'> &
-  Partial<
-    Pick<
-      NativeModule,
-      | 'extractFacts'
-      | 'extractModuleFacts'
-      | 'packageLoads'
-      | 'moduleSpecifiers'
-      | 'systemMembership'
-      | 'engineBuildId'
-      | 'diagnosticCodes'
-      | 'resolveSpecifier'
-      | 'fingerprintFile'
-      | 'fingerprintBytes'
-      | 'declaresKitSource'
-      | 'locatePackage'
-      | 'resolveKitSourceRoot'
-    >
-  >;
+ *  declares them. */
+type NativeFunctions = Pick<
+  NativeModule,
+  | 'loadSystemModule'
+  | 'extractFacts'
+  | 'extractModuleFacts'
+  | 'packageLoads'
+  | 'moduleSpecifiers'
+  | 'systemMembership'
+  | 'engineBuildId'
+  | 'diagnosticCodes'
+  | 'resolveSpecifier'
+  | 'fingerprintFile'
+  | 'fingerprintBytes'
+  | 'declaresKitSource'
+  | 'locatePackage'
+  | 'resolveKitSourceRoot'
+>;
 
 export interface TransformFileResult {
   code: string;
@@ -123,8 +118,7 @@ export interface V2EngineStateStore {
   setDriftWarned(value: boolean): void;
 }
 
-/** The native engine module the adapter reads: an engine that predates
- *  one of `NativeFunctions`' optional members lacks it. */
+/** The native engine module the adapter reads. */
 export interface NativeEngineModule extends NativeFunctions {
   ExtractEngine: new (options?: EngineOptions) => V2ExtractEngine;
 }
@@ -154,7 +148,6 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
     const native = loadNativeEngine();
     return {
       loadSystemModule: native.loadSystemModule,
-      // Absent where the native module lacks them, so callers can say so.
       extractFacts: native.extractFacts,
       extractModuleFacts: native.extractModuleFacts,
       packageLoads: native.packageLoads,
@@ -257,25 +250,22 @@ export function createV2EngineApi(deps: V2EngineAdapterDeps): () => EngineApi {
         store.setEngine(engine);
         // The session answers the probes the parse names, and analysis
         // reads that parse, so the files cross once.
-        if (probeEvidence !== undefined) {
-          const prepared = parseInternalWire<{
-            identity: string;
-            bases: string[];
-            loads: ListedLoad[];
-            packages: PreparedPackage[];
-          }>(engine.prepare(filesJson), 'ExtractEngine.prepare');
-          const evidence = probeEvidence(
+        const preparedJson = engine.prepare(filesJson);
+        if (probeEvidence === undefined) return engine.analyzePrepared();
+        const prepared = parseInternalWire<{
+          identity: string;
+          bases: string[];
+          loads: ListedLoad[];
+          packages: PreparedPackage[];
+        }>(preparedJson, 'ExtractEngine.prepare');
+        return engine.analyzePrepared(
+          probeEvidence(
             prepared.bases,
             prepared.identity,
             prepared.loads,
             prepared.packages
-          );
-          return (
-            engine.analyzePrepared?.(evidence) ??
-            engine.analyze(filesJson, evidence)
-          );
-        }
-        return engine.analyze(filesJson);
+          )
+        );
       },
       transformFile: (source, path, _manifest) => {
         const engine = store.getEngine();

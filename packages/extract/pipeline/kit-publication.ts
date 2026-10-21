@@ -25,7 +25,7 @@ import type { JsonValue } from './tsconfig-paths';
 
 /** The engine's run-time module specifiers per file. */
 export interface ModuleSpecifierReader {
-  moduleSpecifiers?: (fileEntriesJson: string) => string;
+  moduleSpecifiers: (fileEntriesJson: string) => string;
 }
 
 /** Source a kit publishes and the loader or a bundler parses for imports. */
@@ -181,11 +181,6 @@ export function kitPublicationFailures(
   const { targets, unreadable } = animusTargets(manifest);
   if (targets.length === 0 && unreadable.length === 0) return [];
   const { moduleSpecifiers } = engine;
-  if (moduleSpecifiers === undefined) {
-    throw new Error(
-      'the native engine does not expose moduleSpecifiers, which the kit publication check needs — rebuild @animus-ui/extract'
-    );
-  }
 
   const publication = npmPublishedFiles(pkgRoot);
   if (publication.kind === 'failed') {

@@ -8,14 +8,6 @@ import {
 } from './source-ingestion-fixtures';
 
 describe('createSourceIngestor', () => {
-  test('an engine without extractFacts fails loud at ingestion, naming the host', async () => {
-    const ingestor = createSourceIngestor(makeHost());
-
-    await expect(ingestor.ingest([])).rejects.toThrow(
-      '[animus-test] native engine does not expose extractModuleFacts or extractFacts required for source adaptation'
-    );
-  });
-
   test('fatal diagnostics quarantine and warn once per original in non-strict mode', () => {
     const warnings: string[] = [];
     const ingestor = createSourceIngestor(makeHost({ warnings }));

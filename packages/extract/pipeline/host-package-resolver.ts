@@ -53,14 +53,8 @@ export function nativeLoaderResolution(
   specifier: string,
   fromDir: string
 ) => { path?: string | null; unresolved?: string | null } {
-  return (specifier, fromDir) => {
-    const native = engine.resolveSpecifier;
-    if (native === undefined) {
-      throw new Error(
-        'the native engine does not expose resolveSpecifier, which package resolution needs — rebuild @animus-ui/extract'
-      );
-    }
-    return native(
+  return (specifier, fromDir) =>
+    engine.resolveSpecifier(
       specifier,
       fromDir,
       [...context.conditions],
@@ -68,7 +62,6 @@ export function nativeLoaderResolution(
       extensionPolicyJson(context.extensions),
       context.instances
     );
-  };
 }
 
 /**

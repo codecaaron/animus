@@ -118,7 +118,6 @@ import {
 } from '../pipeline/manifest-diagnostics';
 import { foreignPackages } from '../pipeline/registry-packages';
 import { slotProvenanceLines } from '../pipeline/slot-provenance';
-import { moduleFactsCall } from '../pipeline/source-ingestion';
 import { systemInstanceMismatches } from '../pipeline/system-instances';
 import { writeAtomically } from '../pipeline/write-atomically';
 import { COALESCING_WINDOW_MS } from './coalescing-window';
@@ -179,7 +178,6 @@ import {
   getSharedPackageReadRecord,
   setSessionArtifactDir,
   setWatchTransaction,
-  requireEngine,
 } from './singleton';
 import { logBuildTimings, timingRequested } from './timing';
 
@@ -2420,12 +2418,7 @@ export class ExtractionSession {
     const systemPackageRoot = findPackageRoot(systemPath);
     const packageNames = await extractSystemFilePackages(
       systemPath,
-      // A stateless native read of the system file, like the system loader:
-      // the native module answers where a host's engine supplies none.
-      {
-        systemMembership:
-          this.engine().systemMembership ?? requireEngine().systemMembership,
-      },
+      this.engine(),
       (diagnostic) => diagnostics.push(diagnostic),
       // The application's modules import as discovery resolves, from the
       // root; a kit's, from its own directory, as the system loader
@@ -3271,8 +3264,7 @@ export class ExtractionSession {
    *  empty classes. One the engine cannot read counts as one that does. */
   private rendersBuilder(file: string): boolean {
     if (!isEngineTransformExtension(file)) return false;
-    const extract = moduleFactsCall(this.engine());
-    if (extract === undefined) return true;
+    const extract = this.engine().extractModuleFacts;
     const path = relative(this.rootDir!, file);
     try {
       const facts = parseInternalWire<ExtractModuleFactsResult>(
@@ -3763,20 +3755,13 @@ export class ExtractionSession {
   }
 
   /** How an asset's bytes are fingerprinted, of a file or of bytes read:
-   *  the engine's fast fingerprint where it has both, the content hash
-   *  otherwise, so the two always agree. */
+   *  the engine's fast fingerprint. */
   private assetFingerprints(): AssetFingerprints {
     const { fingerprintFile, fingerprintBytes } = this.engine();
-    if (fingerprintFile && fingerprintBytes) {
-      return {
-        ofFile: (path) =>
-          fingerprintFile(path) ?? contentHash(readFileSync(path)),
-        ofBytes: fingerprintBytes,
-      };
-    }
     return {
-      ofFile: (path) => contentHash(readFileSync(path)),
-      ofBytes: contentHash,
+      ofFile: (path) =>
+        fingerprintFile(path) ?? contentHash(readFileSync(path)),
+      ofBytes: fingerprintBytes,
     };
   }
 

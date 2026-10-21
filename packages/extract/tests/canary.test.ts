@@ -298,7 +298,7 @@ test.each([
       new Set(Object.keys(sources)),
       undefined
     )(prepared.bases, prepared.identity);
-    const manifest = JSON.parse(engine.analyze(filesJson, evidence));
+    const manifest = JSON.parse(engine.analyzePrepared(evidence));
     rmSync(root, { recursive: true, force: true });
 
     expect({
@@ -361,7 +361,7 @@ test('a mismatched Svelte resolver call keeps the variant it renders', async () 
     new Set(ingested.analysisEntries.map((entry) => entry.path)),
     undefined
   )(prepared.bases, prepared.identity);
-  const manifest = JSON.parse(engine.analyze(filesJson, evidence));
+  const manifest = JSON.parse(engine.analyzePrepared(evidence));
   rmSync(root, { recursive: true, force: true });
   // The badge the loud call reaches: `Definition.ts`'s where the
   // filesystem opens the variant, else the exact `definition.tsx`'s.
@@ -429,7 +429,7 @@ test.each([
       order,
       { isAsset: builtInAssetClassification('noHost').isAsset }
     )(prepared.bases, prepared.identity);
-    const manifest = JSON.parse(engine.analyze(filesJson, evidence));
+    const manifest = JSON.parse(engine.analyzePrepared(evidence));
     rmSync(root, { recursive: true, force: true });
 
     expect({
@@ -483,9 +483,8 @@ test('a Svelte resolver call stops at an unanalysed host-first file', async () =
       openings: ingested.openings ?? [],
     }),
   });
-  const manifest = JSON.parse(
-    engine.analyze(JSON.stringify(ingested.analysisEntries))
-  );
+  engine.prepare(JSON.stringify(ingested.analysisEntries));
+  const manifest = JSON.parse(engine.analyzePrepared());
   rmSync(root, { recursive: true, force: true });
 
   expect({
@@ -544,7 +543,7 @@ test.each([
     undefined,
     { isAsset: builtInAssetClassification('noHost').isAsset }
   )(prepared.bases, prepared.identity);
-  const manifest = JSON.parse(engine.analyze(filesJson, evidence));
+  const manifest = JSON.parse(engine.analyzePrepared(evidence));
   rmSync(root, { recursive: true, force: true });
 
   expect({
@@ -584,7 +583,7 @@ test.each([
     undefined,
     { isAsset: builtInAssetClassification('noHost').isAsset }
   )(prepared.bases, prepared.identity);
-  const manifest = JSON.parse(engine.analyze(filesJson, evidence));
+  const manifest = JSON.parse(engine.analyzePrepared(evidence));
   rmSync(root, { recursive: true, force: true });
 
   expect({
@@ -790,7 +789,7 @@ test.each([
       undefined,
       { packageLoads: v2.packageLoads }
     )(prepared.bases, prepared.identity, prepared.loads, prepared.packages);
-    const css = JSON.parse(engine.analyze(filesJson, evidence)).css;
+    const css = JSON.parse(engine.analyzePrepared(evidence)).css;
     rmSync(root, { recursive: true, force: true });
 
     expect(css.includes('padding')).toBe(extracts);
@@ -834,9 +833,7 @@ test('a registry package that gains a local dependency reaches it in the next an
       new Set(Object.keys(analysed)),
       undefined
     )(prepared.bases, prepared.identity, prepared.loads, prepared.packages);
-    return JSON.parse(engine.analyze(filesJson, evidence)).css.includes(
-      'padding'
-    );
+    return JSON.parse(engine.analyzePrepared(evidence)).css.includes('padding');
   };
   const before = analyse();
   manifest('node_modules/@reg/pkg', '@reg/pkg', { '@local/kit': '1.0.0' });

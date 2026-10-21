@@ -21,7 +21,7 @@ fn derive_compose_context_import(runtime_import: &str) -> String {
     format!("{}/compose-with-context", runtime_import)
 }
 
-/// The manifest. The host manifest `analyze` returns leaves out
+/// The manifest. The host manifest `analyzePrepared` returns leaves out
 /// `fileFacts`, `crossFile`, `usageResidue` and `component_fragments`, which
 /// no host reads, and carries `chainBindings` in place of `fileFacts`; the
 /// full manifest (`fullManifestJson`) holds every section but `chainBindings`.
@@ -375,12 +375,12 @@ pub struct ExtractEngine {
     order: Vec<String>,
     css: Option<analyze_css::CssOutput>,
     parse_count: usize,
-    /// What `prepare` read of its files, which the next `analyze` of the
-    /// same files reads instead of parsing them again.
+    /// What `prepare` read of its files, which the next `analyzePrepared`
+    /// reads instead of parsing them again.
     prepared: Option<Prepared>,
-    /// What each phase of the last `prepare` and `analyze` took, in order
-    /// (`analysisTimings`): kept beside the manifest, never in it, so the
-    /// manifest's bytes stay the same run to run.
+    /// What each phase of the last `prepare` and `analyzePrepared` took, in
+    /// order (`analysisTimings`): kept beside the manifest, never in it, so
+    /// the manifest's bytes stay the same run to run.
     timings: Vec<(&'static str, f64)>,
 }
 
@@ -1108,11 +1108,11 @@ impl ExtractEngine {
         })
     }
 
-    /// Parses `file_entries_json` for the next `analyze` of the same files,
-    /// and returns their input identity, the path each of their specifiers
-    /// probes (`probe_base`), sorted, and their computed loads: the bases a
-    /// session gathers host-candidate evidence for, and the loads it lists
-    /// the host's expansions of (spec §6.3), which carry that identity.
+    /// Parses `file_entries_json` for the next `analyzePrepared`, and returns
+    /// the files' input identity, the path each of their specifiers probes
+    /// (`probe_base`), sorted, and their computed loads: the bases a session
+    /// gathers host-candidate evidence for, and the loads it lists the
+    /// host's expansions of (spec §6.3), which carry that identity.
     #[napi]
     pub fn prepare(&mut self, file_entries_json: String) -> napi::Result<String> {
         let mut clock = PhaseClock::start();
@@ -1164,44 +1164,17 @@ impl ExtractEngine {
         .map_err(|e| napi::Error::from_reason(format!("probe bases: {e}")))
     }
 
-    /// Analyzes `file_entries_json`, reading `probe_evidence_json`, the
-    /// session's host-candidate evidence for this ingest generation, where
-    /// given. A `prepare` of the same files lends its parse.
-    #[napi]
-    pub fn analyze(&mut self, file_entries_json: String, probe_evidence_json: Option<String>) -> napi::Result<String> {
-        self.analyze_files(Some(file_entries_json), probe_evidence_json)
-    }
-
-    /// `analyze` of the files the last `prepare` read, so a host that
-    /// prepares sends them once. The preparation is consumed; without one,
-    /// it fails.
+    /// The files the last `prepare` read: analyzes them, reading
+    /// `probe_evidence_json`, the session's host-candidate evidence for this
+    /// ingest generation, where given. The preparation is consumed; without
+    /// one, it fails.
     #[napi]
     pub fn analyze_prepared(&mut self, probe_evidence_json: Option<String>) -> napi::Result<String> {
-        self.analyze_files(None, probe_evidence_json)
-    }
-
-    fn analyze_files(&mut self, file_entries_json: Option<String>, probe_evidence_json: Option<String>) -> napi::Result<String> {
         let mut clock = PhaseClock::start();
-        // A preparation of the same paths and sources lends its parse.
-        let (entries, mut synthesized, prepared) = match file_entries_json {
-            Some(json) => {
-                let entries = canonical_entries(&json)?;
-                let prepared = self.prepared.take().filter(|prepared| {
-                    prepared.store.len() == entries.len()
-                        && prepared.store.iter().zip(&entries).all(|(ast, e)| ast.path == e.path && ast.source() == e.source)
-                });
-                let synthesized = synthesized_of(&entries);
-                (entries, synthesized, prepared)
-            }
-            None => {
-                let mut prepared = self
-                    .prepared
-                    .take()
-                    .ok_or_else(|| napi::Error::from_reason("analyzePrepared needs a prepare first, once per analysis"))?;
-                let synthesized = std::mem::take(&mut prepared.synthesized);
-                (Vec::new(), synthesized, Some(prepared))
-            }
-        };
+        let Prepared { identity, mut synthesized, store, lowered } = self
+            .prepared
+            .take()
+            .ok_or_else(|| napi::Error::from_reason("analyzePrepared needs a prepare first, once per analysis"))?;
         if let Ok(mut shadowing) = self.opts.css_inputs.shadowing_probes.lock() {
             shadowing.clear();
         }
@@ -1231,11 +1204,7 @@ impl ExtractEngine {
             }
         }
         // Evidence gathered for other files (a same-count edit since the
-        // `prepare`) is not this input's, so the probes ask the file set.
-        let identity = match &prepared {
-            Some(prepared) => prepared.identity.clone(),
-            None => input_identity(&entries, &self.opts.css_inputs),
-        };
+        // `prepare`) is not this preparation's, so the probes ask the file set.
         self.opts.css_inputs.probe_evidence = match probe_evidence_json {
             Some(json) => Some(
                 serde_json::from_str::<analyze_css::ProbeEvidence>(&json)
@@ -1248,18 +1217,9 @@ impl ExtractEngine {
         self.sources.clear();
         self.order.clear();
 
-        // A `prepare` that lent its parse lends its phases too.
-        if prepared.is_some() {
-            clock.phases = std::mem::take(&mut self.timings);
-        }
+        // The `prepare` that parsed the files leads the phases.
+        clock.phases = std::mem::take(&mut self.timings);
         clock.mark("input");
-        let (store, lowered) = match prepared {
-            Some(prepared) => (prepared.store, prepared.lowered),
-            None => ast_store::AstStore::build_with(
-                entries.into_iter().map(|e| ast_store::FileEntry { path: e.path, source: e.source }).collect(),
-                crate::link::Lowered::of,
-            ),
-        };
         self.parse_count = store.parse_count();
         clock.mark("parse");
 
@@ -1632,8 +1592,8 @@ impl ExtractEngine {
         manifest
     }
 
-    /// What each phase of the last `analyze` took, in milliseconds, as a JSON
-    /// object in phase order, with a `prepare` that lent its parse first:
+    /// What each phase of the last `analyzePrepared` took, in milliseconds,
+    /// as a JSON object in phase order, with its `prepare` first:
     /// `cssResolution` is the CSS resolution `rust-extract` holds. Hosts
     /// print it as timing; it is never part of the manifest.
     #[napi]
@@ -1646,7 +1606,7 @@ impl ExtractEngine {
         serde_json::Value::Object(phases).to_string()
     }
 
-    /// The full manifest of the last `analyze`: every section but
+    /// The full manifest of the last `analyzePrepared`: every section but
     /// `chainBindings`. A host that persists the manifest, and tooling, ask
     /// for it.
     #[napi]
@@ -1663,8 +1623,8 @@ impl ExtractEngine {
     }
 
     /// One section the host manifest leaves out (`fileFacts`, `crossFile`,
-    /// `usageResidue` or `component_fragments`) of the last `analyze`, as
-    /// JSON.
+    /// `usageResidue` or `component_fragments`) of the last
+    /// `analyzePrepared`, as JSON.
     #[napi]
     pub fn manifest_section(&self, name: String) -> napi::Result<String> {
         let Some(css) = &self.css else {
@@ -1680,13 +1640,13 @@ impl ExtractEngine {
         out.map_err(|e| napi::Error::from_reason(format!("serialize failed: {e}")))
     }
 
-    /// The cross-file facts of the last `analyze`, which only the full
+    /// The cross-file facts of the last `analyzePrepared`, which only the full
     /// manifest carries.
     fn cross_file(&self, css: &analyze_css::CssOutput) -> cross_file::CrossFileFacts {
         cross_file::resolve_cross_file(&self.facts, css.member_bindings.clone())
     }
 
-    /// The last `analyze`'s manifest: the full one, or the host's.
+    /// The last `analyzePrepared`'s manifest: the full one, or the host's.
     fn manifest_json(&self, full: bool) -> napi::Result<String> {
         let Some(css) = &self.css else {
             return Err(napi::Error::from_reason("manifest: analyze() must run first".to_string()));
@@ -2043,6 +2003,14 @@ pub(crate) fn note_openings(relation: &'static str, changes: &crate::flow::Value
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl ExtractEngine {
+        /// A host's analysis of `files`: `prepare`, then `analyzePrepared`.
+        pub(super) fn analyze(&mut self, files: String, evidence: Option<String>) -> napi::Result<String> {
+            self.prepare(files)?;
+            self.analyze_prepared(evidence)
+        }
+    }
 
     fn import_needs_for(
         source: &str,
@@ -4382,11 +4350,11 @@ export const App = () => <Box tone="red" />;
         }
     }
 
-    /// Contract: the host manifest `analyze` returns omits the sections no
-    /// host reads (fileFacts, crossFile, usageResidue, component_fragments)
-    /// and carries each file's chain bindings in their place; the full
-    /// manifest holds every section and is otherwise the host manifest, and
-    /// each section on its own is the full manifest's.
+    /// Contract: the host manifest `analyzePrepared` returns omits the
+    /// sections no host reads (fileFacts, crossFile, usageResidue,
+    /// component_fragments) and carries each file's chain bindings in their
+    /// place; the full manifest holds every section and is otherwise the
+    /// host manifest, and each section on its own is the full manifest's.
     #[test]
     fn the_host_manifest_omits_sections_and_the_full_manifest_holds_them() {
         let mut engine = ExtractEngine::new(None).unwrap();
@@ -4426,9 +4394,9 @@ export const App = () => <Box tone="red" />;
     }
 
     /// Contract: `analysisTimings` names each phase of the last analysis in
-    /// order, CSS resolution as `cssResolution`, with a `prepare` that lent
-    /// its parse first; the manifest's own timing is only its parse count,
-    /// so its bytes stay the same run to run.
+    /// order, CSS resolution as `cssResolution`, with its `prepare` first;
+    /// the manifest's own timing is only its parse count, so its bytes stay
+    /// the same run to run.
     #[test]
     fn analysis_timings_name_each_phase_and_stay_out_of_the_manifest() {
         let files = serde_json::json!([
@@ -4446,12 +4414,8 @@ export const App = () => <Box tone="red" />;
             "cssResolution", "post", "serialize",
         ];
         let mut engine = ExtractEngine::new(None).unwrap();
-        let manifest: serde_json::Value = serde_json::from_str(&engine.analyze(files.clone(), None).unwrap()).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&engine.analyze(files, None).unwrap()).unwrap();
         assert_eq!(manifest["timing"], serde_json::json!({ "parseCount": 1 }));
-        assert_eq!(phases(&engine), analysed);
-        let mut engine = ExtractEngine::new(None).unwrap();
-        engine.prepare(files.clone()).unwrap();
-        engine.analyze(files, None).unwrap();
         assert_eq!(phases(&engine), [&["prepareParse", "prepareProbes"][..], &analysed].concat());
     }
 

@@ -17,7 +17,6 @@ import { systemImportFacts } from '../source-ingestion-fixtures';
 const mocks = vi.hoisted(() => ({
   loadSystemModule: vi.fn(),
   extractFacts: vi.fn<(filesJson: string) => string>(),
-  extractFactsEnabled: true,
   analyzeProject: vi.fn<(...args: AnalyzeProjectArgs) => string>(),
   transformFile: vi.fn(),
   clearAnalysisCache: vi.fn(),
@@ -44,9 +43,7 @@ setEngineApiOverride(() => {
     // The fixtures install no package.
     locatePackage: () => null,
   };
-  return mocks.extractFactsEnabled
-    ? { ...api, extractFacts: mocks.extractFacts }
-    : api;
+  return { ...api, extractFacts: mocks.extractFacts };
 });
 
 type EngineFileEntry = Pick<AnalysisSourceEntry, 'path' | 'source'>;
@@ -199,7 +196,6 @@ beforeEach(() => {
   restoreGlobals = resetAnimusGlobals();
   activeTransformSources = new Map();
   mocks.loadSystemModule.mockReset().mockReturnValue({ ...SYSTEM_CONFIG });
-  mocks.extractFactsEnabled = true;
   mocks.extractFacts.mockReset().mockImplementation(factsFor);
   mocks.analyzeProject.mockReset().mockImplementation((filesJson: string) => {
     activeTransformSources = new Map(
@@ -227,16 +223,6 @@ afterEach(() => {
 });
 
 describe('opted-in Svelte source ownership', () => {
-  test('fails loud when a source-compatible legacy engine lacks extractFacts', async () => {
-    const workspace = createWorkspace();
-    workspaces.push(workspace);
-    mocks.extractFactsEnabled = false;
-
-    await expect(makeSession(workspace.app).runFullPipeline()).rejects.toThrow(
-      '[animus-next] native engine does not expose extractModuleFacts or extractFacts required for source adaptation'
-    );
-  });
-
   test('full pipeline owns raw local and external sources but analyzes generated children', async () => {
     const workspace = createWorkspace();
     workspaces.push(workspace);

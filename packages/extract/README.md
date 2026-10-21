@@ -27,7 +27,8 @@ const engine = new ExtractEngine({
   variableMapJson,
   devMode: false,
 });
-const manifest = engine.analyze(fileEntriesJson);
+engine.prepare(fileEntriesJson);
+const manifest = engine.analyzePrepared();
 const { code, hasComponents } = JSON.parse(engine.transformFile(path));
 ```
 

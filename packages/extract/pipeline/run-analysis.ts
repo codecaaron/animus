@@ -419,7 +419,7 @@ export function runProjectAnalysis(
     reportErrors: opts.reportErrors,
     levels: opts.diagnostics,
     knownCodes: opts.diagnostics
-      ? knownDiagnosticCodes(diagnosticCodes?.())
+      ? knownDiagnosticCodes(diagnosticCodes())
       : undefined,
     prepend: [
       ...systemDiagnostics(opts.system, opts.strict, opts.diagnostics),

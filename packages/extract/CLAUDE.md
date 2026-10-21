@@ -44,9 +44,13 @@ wrapper or its loader-only metadata exports.
   `staticCssJson`, `externalDirsJson`, `runtimeImport`, `cssModuleId`,
   `systemPropsModuleId`, `devMode`. NAPI `Option<String>` fields reject `null`
   (coerce with `?? undefined`). No selector-order field (retired).
-- `analyze(fileEntriesJson) → string` — parse-once fact extraction over the
-  file set; retains facts+sources on the handle. Returns the JSON host
-  manifest (resolved components, merged configs, complete CSS, `sheets`,
+- `prepare(fileEntriesJson) → string` — parses the file set once and returns
+  its input identity, probe bases and computed loads, for the host to gather
+  probe evidence.
+- `analyzePrepared(probeEvidenceJson?) → string` — the one analysis entry:
+  analyzes what the last `prepare` parsed (consumed; without one it fails)
+  and retains facts+sources on the handle. Returns the JSON host manifest
+  (resolved components, merged configs, complete CSS, `sheets`,
   `system_prop_map`, `report`, provenance, `chainBindings`), without the
   sections no host reads.
 - `fullManifestJson() → string` — the last analysis's full manifest: every
@@ -111,7 +115,7 @@ bun run build:v2:debug        # debug NAPI
 - **Per-property skip model:** a non-static value (identifier, call, ternary) skips THAT PROPERTY only and continues; skipped props become dynamic prop candidates. Graceful degradation, not all-or-nothing bail.
 - **Class names:** in production, and for installed kits in development, from the system and definition fingerprints, so copies of one definition share a class. In development, a project's own files and linked kits are named from the `filename::binding` hash, NOT from style values, so editing a style value keeps the class (critical for HMR).
 - **Two AST passes per file:** one for chain walking, one for JSX scanning (different traversals).
-- **Parse-once engine:** `ExtractEngine.analyze()` parses each file once and retains facts+sources on the handle; `clearCache()` resets.
+- **Parse-once engine:** `ExtractEngine.prepare()` parses each file once, `analyzePrepared()` analyzes that parse and retains facts+sources on the handle; `clearCache()` resets.
 
 ## Known Failure Modes
 

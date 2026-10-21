@@ -130,7 +130,7 @@ function reportFindingsOn<Thrown>(error: Thrown): void {
 function evaluateSystemModule(
   engine: Pick<
     EngineApi,
-    'loadSystemModule' | 'extractFacts' | 'extractModuleFacts' | 'engineBuildId'
+    'loadSystemModule' | 'extractModuleFacts' | 'engineBuildId'
   >,
   systemPath: string,
   systemExport: string | undefined,
@@ -152,7 +152,7 @@ function evaluateSystemModule(
   ] satisfies Parameters<EngineApi['loadSystemModule']>;
   try {
     return cachedSystemLoad(
-      engine.engineBuildId?.(),
+      engine.engineBuildId(),
       rootDir,
       args,
       () => engine.loadSystemModule(...args),
@@ -166,7 +166,7 @@ function evaluateSystemModule(
     } catch {
       throw error;
     }
-    const record = engineModuleParser(engine)?.(source, systemPath);
+    const record = engineModuleParser(engine)(source, systemPath);
     const call = record && unimportedCreateSystemCall(systemPath, record);
     if (!call) throw error;
     throw new Error(`${warnLine(call)}\n${String(error)}`, { cause: error });

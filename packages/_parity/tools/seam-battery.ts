@@ -186,7 +186,8 @@ function runV2(c: Case): SeamCaseResult {
       ? JSON.stringify(c.transformSources)
       : undefined,
   });
-  const m = JSON.parse(engine.analyze(JSON.stringify(c.files)));
+  engine.prepare(JSON.stringify(c.files));
+  const m = JSON.parse(engine.analyzePrepared());
   return { css: m.css ?? '', diagnostics: m.diagnostics ?? [] };
 }
 

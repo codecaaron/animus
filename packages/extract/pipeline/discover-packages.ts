@@ -39,7 +39,7 @@ import {
   specifierCandidates,
 } from './native-resolution';
 import { isPathWithinRoot } from './source-identity';
-import { moduleFactsCall, relativeSourceCandidates } from './source-ingestion';
+import { relativeSourceCandidates } from './source-ingestion';
 import { isJsonBlock, isJsonString } from './tsconfig-paths';
 import { declaredWorkspacePackages } from './workspace-packages';
 
@@ -224,15 +224,7 @@ export function nativePackageLocator(
   engine: Pick<EngineApi, 'locatePackage'>,
   workspaces: WorkspacePackages
 ): PackageLocator {
-  const native = engine.locatePackage;
-  return (name, fromDir) => {
-    if (native === undefined) {
-      throw new Error(
-        'the native engine does not expose locatePackage, which kit discovery needs — rebuild @animus-ui/extract'
-      );
-    }
-    return native(name, fromDir, workspaces);
-  };
+  return (name, fromDir) => engine.locatePackage(name, fromDir, workspaces);
 }
 
 /** The native table's kit source roots under one resolution context. */
@@ -243,15 +235,9 @@ export function nativeKitSourceRoot(
   workspaces: WorkspacePackages,
   policyJson: string
 ): KitSourceRootResolver {
-  const native = engine.resolveKitSourceRoot;
   return (specifier, packageDir, hostEntry, sources) => {
-    if (native === undefined) {
-      throw new Error(
-        'the native engine does not expose resolveKitSourceRoot, which kit discovery needs — rebuild @animus-ui/extract'
-      );
-    }
     const answer = parseInternalWire<Partial<KitSourceSelection>>(
-      native(
+      engine.resolveKitSourceRoot(
         specifier,
         fromDir,
         [...conditions],
@@ -1174,11 +1160,6 @@ function declaresKitSource(
   engine: Pick<EngineApi, 'declaresKitSource'>,
   pkgRoot: string
 ): boolean {
-  if (engine.declaresKitSource === undefined) {
-    throw new Error(
-      'the native engine does not expose declaresKitSource, which kit discovery needs — rebuild @animus-ui/extract'
-    );
-  }
   return engine.declaresKitSource(pkgRoot);
 }
 
@@ -1238,7 +1219,7 @@ export async function systemKitDependencies(
     engine,
     undefined,
     (specifier, importer) =>
-      resolveSpecifier?.(
+      resolveSpecifier(
         specifier,
         findPackageRoot(importer) === systemPackageRoot
           ? rootDir
@@ -1651,13 +1632,11 @@ export type ModuleParser = (
 ) => ModuleRecord | null;
 
 /** The engine's own parse of a module's bindings, through its
- *  `extractModuleFacts` (or `extractFacts`); undefined for an engine without
- *  either. A parse that panicked counts as no parse. */
+ *  `extractModuleFacts`. A parse that panicked counts as no parse. */
 export function engineModuleParser(
-  engine: Pick<EngineApi, 'extractFacts' | 'extractModuleFacts'>
-): ModuleParser | undefined {
-  const extract = moduleFactsCall(engine);
-  if (!extract) return undefined;
+  engine: Pick<EngineApi, 'extractModuleFacts'>
+): ModuleParser {
+  const extract = engine.extractModuleFacts;
   return (source, path) => {
     try {
       const facts = parseInternalWire<ExtractModuleFactsResult>(
@@ -1790,11 +1769,6 @@ export async function extractSystemFilePackages(
   kitMembers?: Map<string, string>
 ): Promise<string[]> {
   const { systemMembership } = engine;
-  if (systemMembership === undefined) {
-    throw new Error(
-      'the native engine does not expose systemMembership, which discovery needs — rebuild @animus-ui/extract'
-    );
-  }
   const files: Record<string, string> = {};
   try {
     files[systemFilePath] = readFileSync(systemFilePath, 'utf-8');

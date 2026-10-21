@@ -14,6 +14,7 @@ import {
   type SvelteResolverAttributionRequest,
 } from './svelte-source-adapter';
 
+import type { EngineApi } from './engine-adapter';
 import type { ExtensionOrder } from './native-resolution';
 
 export interface RawSourceEntry {
@@ -167,16 +168,6 @@ export interface ExtractFactsResult {
 export interface ExtractModuleFactsResult {
   files: Record<string, ExtractModuleFacts>;
   parseCount: number;
-}
-
-/** The engine's module-facts call (`ExtractModuleFactsResult` wire):
- *  `extractModuleFacts`, or `extractFacts`, whose wire is its superset;
- *  undefined for an engine with neither. */
-export function moduleFactsCall(engine: {
-  extractFacts?: (filesJson: string) => string;
-  extractModuleFacts?: (filesJson: string) => string;
-}): ((filesJson: string) => string) | undefined {
-  return engine.extractModuleFacts ?? engine.extractFacts;
 }
 
 export interface NativeSourceDiagnostic {
@@ -895,11 +886,8 @@ export function projectExternalFileOwners(
 }
 
 export interface SourceIngestorHost {
-  engineApi(): {
-    extractFacts?: (filesJson: string) => string;
-    extractModuleFacts?: (filesJson: string) => string;
-  };
-  /** Host log prefix for the ingestor's own errors, e.g.
+  engineApi(): Pick<EngineApi, 'extractModuleFacts'>;
+  /** Host log prefix for the corpus's own errors, e.g.
    *  `[animus-extract]`. Finding lines carry `[animus]` instead. */
   prefix: string;
   strict(): boolean;
@@ -952,15 +940,8 @@ export function createSourceIngestor(host: SourceIngestorHost): SourceIngestor {
   /** Non-strict dedupe: a quarantined original re-ingests on every later
    *  corpus pass, so re-warning it on each save is noise. */
   const warnedByOriginal = new Map<string, Set<string>>();
-  const extractFacts = (): ((filesJson: string) => string) => {
-    const extract = moduleFactsCall(host.engineApi());
-    if (extract === undefined) {
-      throw new Error(
-        `${host.prefix} native engine does not expose extractModuleFacts or extractFacts required for source adaptation`
-      );
-    }
-    return extract;
-  };
+  const extractFacts = (): ((filesJson: string) => string) =>
+    host.engineApi().extractModuleFacts;
   return {
     async ingest(entries) {
       return ingestSourceEntries(entries, {

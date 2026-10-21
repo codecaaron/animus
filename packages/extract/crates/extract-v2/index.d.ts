@@ -4,42 +4,37 @@
 export declare class ExtractEngine {
   constructor(options?: EngineOptions | undefined | null)
   /**
-   * Parses `file_entries_json` for the next `analyze` of the same files,
-   * and returns their input identity, the path each of their specifiers
-   * probes (`probe_base`), sorted, and their computed loads: the bases a
-   * session gathers host-candidate evidence for, and the loads it lists
-   * the host's expansions of (spec §6.3), which carry that identity.
+   * Parses `file_entries_json` for the next `analyzePrepared`, and returns
+   * the files' input identity, the path each of their specifiers probes
+   * (`probe_base`), sorted, and their computed loads: the bases a session
+   * gathers host-candidate evidence for, and the loads it lists the
+   * host's expansions of (spec §6.3), which carry that identity.
    */
   prepare(fileEntriesJson: string): string
   /**
-   * Analyzes `file_entries_json`, reading `probe_evidence_json`, the
-   * session's host-candidate evidence for this ingest generation, where
-   * given. A `prepare` of the same files lends its parse.
-   */
-  analyze(fileEntriesJson: string, probeEvidenceJson?: string | undefined | null): string
-  /**
-   * `analyze` of the files the last `prepare` read, so a host that
-   * prepares sends them once. The preparation is consumed; without one,
-   * it fails.
+   * The files the last `prepare` read: analyzes them, reading
+   * `probe_evidence_json`, the session's host-candidate evidence for this
+   * ingest generation, where given. The preparation is consumed; without
+   * one, it fails.
    */
   analyzePrepared(probeEvidenceJson?: string | undefined | null): string
   /**
-   * What each phase of the last `analyze` took, in milliseconds, as a JSON
-   * object in phase order, with a `prepare` that lent its parse first:
+   * What each phase of the last `analyzePrepared` took, in milliseconds,
+   * as a JSON object in phase order, with its `prepare` first:
    * `cssResolution` is the CSS resolution `rust-extract` holds. Hosts
    * print it as timing; it is never part of the manifest.
    */
   analysisTimings(): string
   /**
-   * The full manifest of the last `analyze`: every section but
+   * The full manifest of the last `analyzePrepared`: every section but
    * `chainBindings`. A host that persists the manifest, and tooling, ask
    * for it.
    */
   fullManifestJson(): string
   /**
    * One section the host manifest leaves out (`fileFacts`, `crossFile`,
-   * `usageResidue` or `component_fragments`) of the last `analyze`, as
-   * JSON.
+   * `usageResidue` or `component_fragments`) of the last
+   * `analyzePrepared`, as JSON.
    */
   manifestSection(name: string): string
   clearCache(): void

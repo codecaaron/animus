@@ -1,7 +1,5 @@
 import { join } from 'path';
 
-import { contentHash } from '../pipeline/content-hash';
-
 import type { EngineApi } from '../pipeline/engine-adapter';
 
 /**
@@ -161,14 +159,12 @@ export interface SessionEnvelope {
 
 /** The hash an analysis commit records of an artifact's disk bytes, and
  *  that every reader checks the bytes it read against: the engine's fast
- *  fingerprint, or the content hash for an engine without one. */
+ *  fingerprint. */
 export function artifactHash(
   engine: Pick<EngineApi, 'fingerprintBytes'>,
   bytes: string
 ): string {
-  return engine.fingerprintBytes
-    ? engine.fingerprintBytes(Buffer.from(bytes))
-    : contentHash(bytes);
+  return engine.fingerprintBytes(Buffer.from(bytes));
 }
 
 /** Splices the envelope in as a leading `__animusSession` field without

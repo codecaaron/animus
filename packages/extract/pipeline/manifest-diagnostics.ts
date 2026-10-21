@@ -165,16 +165,14 @@ export function effectiveLevel(
  *  code. The system package mints vocabulary codes at run time, so a valid
  *  code can be missing. */
 export function knownDiagnosticCodes(
-  engineCodesJson: string | undefined
+  engineCodesJson: string
 ): ReadonlySet<string> {
-  const engineCodes = engineCodesJson
-    ? Object.keys(
-        parseInternalWire<Record<string, string>>(
-          engineCodesJson,
-          'diagnosticCodes (the engine code table)'
-        )
-      )
-    : [];
+  const engineCodes = Object.keys(
+    parseInternalWire<Record<string, string>>(
+      engineCodesJson,
+      'diagnosticCodes (the engine code table)'
+    )
+  );
   return new Set([...engineCodes, ...DIAGNOSTIC_SEVERITY.keys()]);
 }
 

@@ -318,24 +318,6 @@ afterEach(() => {
 });
 
 describe('opted-in Svelte source ownership in the Vite lifecycle', () => {
-  test('the context wires its corpus with the vite prefix and fails loud without extractFacts', async () => {
-    const legacyEngine = {
-      loadSystemModule: () => {
-        throw new Error('the corpus fails before the system loads');
-      },
-      analyzeProject: () => '{}',
-      transformFile: () => ({ code: '', hasComponents: false }),
-      clearAnalysisCache: () => {},
-      // The fixtures install no package.
-      locatePackage: () => null,
-    } satisfies EngineApi;
-    const ctx = new PluginContext({ system: 'src/ds.ts' }, () => legacyEngine);
-
-    await expect(ctx.createSession().corpus.prepare([])).rejects.toThrow(
-      '[animus-extract] native engine does not expose extractModuleFacts or extractFacts required for source adaptation'
-    );
-  });
-
   test('initial local and external sources project while raw paths own the cache', async () => {
     const root = mkdtempSync(join(tmpdir(), 'animus-vite-svelte-initial-'));
     scratchRoots.push(root);
